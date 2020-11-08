@@ -1,0 +1,53 @@
+{% extends 'base.html' %}
+
+{% load static %}
+
+
+{% block content %}
+    <h1>Systems</h1>
+
+    {% for system in systems %}
+
+        <h2>{{ system.name }}</h2>
+
+        <p>Formula RegEx:</p>
+        <p class="pattern formula-regex" data-id="{{ system.id }}">{{ system.regex }}</p>
+
+        <h3>Formula Definitions</h3>
+
+        <p>Use <span class="pattern">(?&lt;<span style="color: #F00;">subformula_name</span>&gt;(?&formula))</span> to recursively include subformulae.</p>
+
+        {% for fd in system.formula_definitions %}
+            <p class="pattern">{{ fd.string_pattern.slug }}</p>
+            <!--<input type="text" class="pattern fd" data-id="{{ fd.id }}" value="{{ fd.pattern }}"/>-->
+
+        {% endfor %}
+
+        <h3>Test Formula</h3>
+        <input type="text" class="pattern test-formula" data-id="{{ system.id }}"/>
+
+        <p class="pattern test-formula-output" data-id="{{ system.id }}">...</p>
+
+    {% endfor %}
+
+    <h1>String Patterns</h1>
+
+    {% for sp in string_patterns %}
+
+        <h2 class="pattern">{{ sp.slug }}</h2>
+
+        <p>Pattern: <span class="pattern">{{ sp.pattern }}</span></p>
+
+        <h3>Dependents</h3>
+        {% for label in sp.labels %}
+            <p class="pattern">{{ label.slug }}: {{ label.dependent.slug }}</p>
+        {% endfor %}
+
+    {% endfor %}
+
+{% endblock %}
+
+
+{% block notjs %}
+    <script src="{% static 'website/index.js' %}"></script>
+{% endblock %}

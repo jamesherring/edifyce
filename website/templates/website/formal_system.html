@@ -1,0 +1,52 @@
+{% extends 'base.html' %}
+
+{% load static %}
+
+
+{% block content %}
+
+    <h1>{{ system.name }}</h1>
+
+    <p>Base RegEx:</p>
+    <p class="pattern formula-regex" data-id="{{ system.id }}">{{ system.regex }}</p>
+
+    <h3>Formula Definitions</h3>
+
+    <p>Use <span class="pattern">(?&lt;<span style="color: #F00;">subformula_name</span>&gt;(?&formula))</span> to recursively include subformulae.</p>
+
+    {% for fd in system.formula_definitions %}
+        <strong class="pattern">{{ fd.string_pattern.slug }}</strong>
+        <p class="pattern">{{ fd.string_pattern.pattern }}</p>
+        <!--<input type="text" class="pattern fd" data-id="{{ fd.id }}" value="{{ fd.pattern }}"/>-->
+
+    {% endfor %}
+
+    <h3>Test Formula</h3>
+    <input type="text" class="pattern test-formula" data-id="{{ system.id }}"/>
+
+    <p class="pattern test-formula-output" data-id="{{ system.id }}">...</p>
+
+
+    <h2>Definitions</h2>
+
+    {% for defn in system.definitions %}
+        <strong class="pattern">{{ defn.lower_pattern.slug }}</strong>
+        <p>Higher: <span class="pattern">{{ defn.higher_pattern.pattern }}</span></p>
+        <p>Lower: <span class="pattern">{{ defn.lower_pattern.pattern }}</span></p>
+    {% endfor %}
+
+    <h2>Required Patterns</h2>
+
+    {% for defn in system.required_patterns %}
+        <strong class="pattern">{{ defn.slug }}</strong>
+        <p class="pattern">{{ defn.pattern }}</p>
+    {% endfor %}
+
+
+
+{% endblock %}
+
+
+{% block notjs %}
+    <script src="{% static 'website/index.js' %}"></script>
+{% endblock %}

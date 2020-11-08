@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+
+{% load static %}
+
+<html lang="en">
+    <head>
+        <meta charset="utf-8"/>
+
+        {% block meta %}
+        {% endblock %}
+
+        <!--<link rel="shortcut icon" type="image/png" href="{% static '/website/images/favicon.ico' %}"/>-->
+        <link rel="stylesheet" href="{% static '/website/styles.css' %}">
+
+        <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+        <script src="{% static 'website/base.js' %}"></script>
+
+        {% block css %}
+        {% endblock %}
+
+        {% block js %}
+        {% endblock %}
+
+        <title>{{ title }}</title>
+
+    </head>
+
+    <body class="mathjax_ignore">
+
+        <div id="is-mobile"></div>
+
+        <div class="page-header">
+        </div>
+
+
+
+        <div class="content">
+
+
+            {% block content %}
+            {% endblock %}
+
+
+        </div>
+
+
+    </body>
+
+</html>

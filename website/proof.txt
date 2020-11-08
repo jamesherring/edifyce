@@ -1,0 +1,12 @@
+import something
+
+# Yay it's a comment
+
+with "\alpha", "\beta" as formula:
+    # Indenting test
+
+    [A1] \alpha
+
+    [A1] (\alpha \rightarrow \beta)
+
+    [MP, 8, 10] \beta
