@@ -1,10 +1,10 @@
-from edifyce.website.context import Context
+from website.context import Context
 
 
 class FormalSystem(object):
     # A formal system
 
-    def __init__(self, name, axioms=None, line_types=None, inference_rules=None):
+    def __init__(self, name, axioms=None, line_types=None, inference_rules=None, context_variables=None):
 
         # The name of the system
         self.name = name
@@ -34,6 +34,9 @@ class FormalSystem(object):
         for ir in self.inference_rules:
             self.inference_rule_dict[ir.label] = ir
 
+        # Default context variables
+        self.context_variables = context_variables
+
     def parse(self, text, proof=None, context=None, line_number_offset=0):
         # Parse the text into a proof
 
@@ -46,6 +49,8 @@ class FormalSystem(object):
         if context is None:
             # Create a new context instance
             context = Context()
+
+            context.variables = self.context_variables
 
         i = 0
         while i < len(lines):
@@ -69,6 +74,7 @@ class FormalSystem(object):
 
                 # Record the line_type of this line
                 proof_line.line_type = line_type
+                proof_line.match = result
 
                 if line_type.behaviour == "indent":
                     # Parse the block with a copied context
@@ -84,10 +90,14 @@ class FormalSystem(object):
                         # Get the keys
                         keys = result.get_by_path(key_path, context)
 
+                        if type(keys) is not list:
+                            # Make a singleton list
+                            keys = [keys]
+
                         for key in keys:
                             key_string = key.get_value(context)
 
-                            # Get the value using the relative value path
+                            # Get the value using the value path - relative to the key
                             value = key.get_by_path(value_path, context).get_value(context)
 
                             # Add to context
@@ -100,7 +110,7 @@ class FormalSystem(object):
 
                         if len(block_line) - len(block_line.lstrip()) <= proof_line.indent and \
                                 len(block_line.lstrip()) > 0:
-                            # This is the outdenting line
+                            # This is the out-denting line
                             break
 
                         j += 1
@@ -188,7 +198,7 @@ class FormalSystem(object):
             if line_number_offset == 0:
                 for line in proof.proof_lines:
                     if line.line_type.behaviour == "logical":
-                        print(line.text, line.valid)
+                        print(line.text.lstrip(), line.valid)
 
     def __str__(self):
         return self.name
@@ -224,7 +234,7 @@ class LineType(object):
 class InferenceRule(object):
     # Inference rules for deduction
 
-    def __init__(self, name, label, antecedents, deduction, indent=0):
+    def __init__(self, name, label, antecedents, deduction, condition=None, indent=0):
 
         # The inference rule name
         self.name = name
@@ -232,15 +242,14 @@ class InferenceRule(object):
         # The inference rule label
         self.label = label
 
-        # List of antecedent dictionaries - each of the form
-        # {
-        #     "pattern": some_pattern_instance,
-        #     "indent": (optional) some_indent_pattern
-        # }
+        # List of antecedent line patterns
         self.antecedents = antecedents
 
-        # Deduction pattern
+        # Deduction line pattern
         self.deduction = deduction
+
+        # Condition for the rule to apply
+        self.condition = condition
 
         # Deduction indentation relative to antecedents
         self.indent = indent
@@ -249,63 +258,32 @@ class InferenceRule(object):
         # Check to see if the proposed proof lines are valid under this inference rule
 
         # First check if the deductions matches
-        deduction_match = self.deduction.match(deduction.formula.string, context)
+        deduction.inference_match = self.deduction.match(deduction.text, context)
 
-        if deduction_match is None:
+        if deduction.inference_match is None:
             # No match
             return False
 
         # Check if the antecedents match
-        ant_matches = [deduction_match]
-        for ant_patterns, ant in zip(self.antecedents, antecedents):
-
-            if type(ant_patterns) is dict:
-                pattern = ant_patterns["pattern"]
-            else:
-                pattern = ant_patterns
-
-            ant_match = pattern.match(ant.formula.string, context)
-
-            if ant_match is None:
+        for pattern, ant in zip(self.antecedents, antecedents):
+            ant.inference_match = pattern.match(ant.text, context)
+            if ant.inference_match is None:
                 # No match
                 return False
 
-            # Add the match to ant_matches
-            ant_matches.append(ant_match)
+        # Check the rule condition
+        if self.condition is not None:
 
-            # Check the indent if it's present
-            if type(ant_patterns) is not dict or "indent" not in ant_patterns:
-                continue
+            # Make a copy of context to add deduction and antecedents
+            context_copy = context.get_copy()
 
-            indent_line = ant.indent_line()
-            if indent_line is None:
-                # There should be an indent line
+            # Get a list of antecedent proof lines
+            context_copy.variables["antecedents"] = antecedents
+            context_copy.variables["deduction"] = deduction
+
+            if not self.condition.check(match=None, context=context_copy):
+                # Doesn't meet the condition
                 return False
-
-            indent_pattern = ant_patterns["indent"]
-            indent_match = indent_pattern.match(indent_line.text, context)
-
-            if indent_match is None:
-                # No match
-                return False
-
-            # Add the match to ant_matches
-            ant_matches.append(indent_match)
-
-        # Check the ant_matches have consistent variables
-        variables = dict()
-        for match in ant_matches:
-            subs = match.get_sub_matches()
-
-            for key, submatch in subs.items():
-                if key not in variables:
-                    variables[key] = submatch
-                    continue
-
-                # Otherwise, check consistent
-                if not submatch.equivalent(variables[key], context):
-                    # Not consistent
-                    return False
 
         # Otherwise ok
         deduction.antecedents = antecedents
@@ -362,6 +340,9 @@ class ProofLine(object):
         # The LineType used for this line
         self.line_type = None
 
+        # The match with the line type pattern
+        self.match = None
+
         # The indentation of this line
         self.indent = len(self.text) - len(self.text.lstrip())
 
@@ -383,6 +364,9 @@ class ProofLine(object):
         # Invalid message
         self.invalid_message = None
 
+        # Temporary match for use in inference rules
+        self.inference_match = None
+
     def index(self):
         # Get the index of this line in the proof
         return self.proof.proof_lines.index(self)
@@ -396,12 +380,24 @@ class ProofLine(object):
         index = self.index()
         line = self
 
-        while line.indent >= self.indent:
+        while line.indent >= self.indent or line.line_type.behaviour == "none":
             index -= 1
             line = self.proof.proof_lines[index]
 
         # Now line.indent < self.indent
         return line
+
+    def indent_lines(self):
+        # Get a set of all indent lines above this one
+
+        indent = self.indent_line()
+        if indent is None:
+            return set()
+
+        result = indent.indent_lines()
+        result.add(indent)
+
+        return result
 
     def __str__(self):
         return self.text
