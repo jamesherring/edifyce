@@ -1,7 +1,7 @@
 import regex as re
 import inspect
-from edifyce.website.formal_system import FormalSystem, LineType, InferenceRule
-from edifyce.website.context import Context
+from website.formal_system import FormalSystem, LineType, InferenceRule, ProofLine
+from website.context import Context
 
 
 class Match(object):
@@ -126,6 +126,27 @@ class Match(object):
         if path == "empty_list()":
             # Return an empty list
             return []
+
+        if path == "dict()":
+            # Return a dictionary
+            dct = dict()
+
+            parts = subs["part"]
+            if type(parts) is not list:
+                parts = [parts]
+
+            for part in parts:
+                part_subs = part.get_sub_matches()
+
+                key = part_subs["key"].get_value(context)
+                value = part_subs["value"].get_value(context)
+
+                dct[key] = value
+
+            return dct
+
+        if path == "empty_dict()":
+            return dict()
 
         if path == "item()":
             # Return an item according to the data type
@@ -269,7 +290,7 @@ class Match(object):
 
             return match.get_attribute(attribute, context)
 
-        # Calculation paths
+        # Instances path
         if path[:10] == "instances(" and path[-1] == ")":
             # Collect a set of instances, possibly meeting some condition
 
@@ -281,16 +302,10 @@ class Match(object):
 
                 sub_condition = path_match.get_sub_matches()["a"][1].get_value(context)
 
-                assert pattern_name in context.variables
-                pattern = context.variables[pattern_name]
+                return self.get_instances(pattern_name, context, sub_condition, attribute_name)
 
-                return self.get_instances(pattern, context, sub_condition, attribute_name)
-
-            # Otherwise, just a pattern name
-            assert inner in context.variables
-            pattern = context.variables[inner]
-
-            return self.get_instances(pattern, context)
+            # Otherwise, just a pattern name or path
+            return self.get_instances(inner, context)
 
         if self.definition_mapping is not None and path in self.definition_mapping:
             return self.get_by_path(
@@ -408,6 +423,10 @@ class Match(object):
     def get_instances(self, pattern, context, condition=None, attribute_name=None):
         # Get instances of the pattern in nested sub matches, which meet the specified condition.
         # Optionally specify the attribute we are searching for
+
+        if type(pattern) is str:
+            # Need to get the correct pattern
+            pattern = context.variables[pattern]
 
         instances = set()
         negatives = set()
@@ -807,6 +826,7 @@ class Condition(object):
         # Get an item s given a match, context and condition context
 
         if type(s) is str:
+
             if s == "self":
                 return condition_context["origin"]
 
@@ -816,6 +836,15 @@ class Condition(object):
             if s in context.variables:
                 return context.variables[s]
 
+            if s[-1] == "]" and "[" in s:
+                # Looks like a list index
+                initial = s[:s.index("[")]
+                index = int(s[s.index("[") + 1:-1])
+
+                initial = self.get_item(initial, match, context, condition_context)
+
+                return initial[index]
+
             if "." in s:
 
                 index = s.index(".")
@@ -823,6 +852,14 @@ class Condition(object):
                 remainder = s[index + 1:]
 
                 initial = self.get_item(initial, match, context, condition_context)
+
+                if remainder == "indent_lines()":
+                    # Proof line function - return with the same signature as get_instances()
+                    return set(line.match for line in initial.indent_lines()), set(), True
+
+                if type(initial) is ProofLine:
+                    # It's a proof line - get the inference match
+                    initial = initial.inference_match
 
                 return initial.get_by_path(remainder, context)
 
@@ -866,6 +903,10 @@ class Condition(object):
 
             item = self.get_item(membership_subs["item"].string, match, context, condition_context)
             instances, negatives, complete = self.get_item(membership_subs["set"].string, match, context, condition_context)
+
+            if type(item) is ProofLine:
+                # Get the inference match
+                item = item.inference_match
 
             for inst in instances:
                 if item.equivalent(inst, context):
@@ -1227,6 +1268,47 @@ class StringPattern(Pattern):
         # Record the last definition this pattern has seen
         self.definition_context = None
 
+        # Record the variable locations for speed
+        self.variable_locations = dict()
+
+        for i in range(0, len(self.pattern)):
+            for var, sub_pattern in self.variables.items():
+                if self.pattern[i:i + len(var)] == var:
+                    # Add the location
+                    self.variable_locations[i] = {
+                        "label": var,
+                        "pattern": sub_pattern
+                    }
+
+        # Build the non-variable locations
+        self.non_variable_locations = None
+        self.get_non_variable_locations()
+
+    def get_non_variable_locations(self):
+
+        var_locations = [index for index in self.variable_locations]
+
+        self.non_variable_locations = dict()
+        i = 0
+        while i < len(self.pattern):
+            if i in self.variable_locations:
+                i += len(self.variable_locations[i]["label"])
+                continue
+
+            # Otherwise, i will be in non_var_locations
+
+            # Get the next variable location
+            var_locations = [j for j in var_locations if j > i]
+            if len(var_locations) == 0:
+                # There are none left - go until the end
+                self.non_variable_locations[i] = self.pattern[i:]
+                break
+
+            else:
+                end = min(var_locations)
+                self.non_variable_locations[i] = self.pattern[i:end]
+                i = end
+
     def make_replacements(self, s):
         # Make replacements on a string s
 
@@ -1316,23 +1398,56 @@ class StringPattern(Pattern):
             # Use the regex match function
             return self.match_regex(s)
 
+        # Rule out a match if the sequence of non-variable characters does not exist in s
+        index = 0
+
+        # Build a non-variable mapping - so we know where the possible positions are for each non-variable string
+        non_variable_mapping = []
+
+        for part_index, pattern_part in self.non_variable_locations.items():
+
+            if part_index < pattern_offset:
+                # Ignore this part
+                continue
+
+            # Find the next occurrence of s_part in s, starting from the previous index
+            next_index = s[index:].find(pattern_part)
+
+            # Add to non variable mapping
+            non_variable_mapping.append([pattern_part, [index + next_index]])
+
+            if next_index == -1:
+                return None
+
+            index = index + next_index + 1
+
+        if pattern_offset in self.variable_locations:
+            # Add any other legal non variable mappings
+            for i in range(0, len(non_variable_mapping)):
+                pattern_part, lst = non_variable_mapping[i]
+                start_index = lst[0]
+
+                max_index = len(s)
+                if i < len(non_variable_mapping) - 1:
+                    # There is a next item
+                    max_index = non_variable_mapping[i + 1][1][0]
+
+                # Search for further instances of pattern_part in s, and add the index of these to lst
+                next_index = start_index + 1
+                while next_index < max_index:
+                    increment = s[next_index:].find(pattern_part)
+                    next_index += increment
+
+                    if increment > -1:
+                        lst.append(next_index)
+                        next_index += 1
+                    else:
+                        break
+
+        # Convert to a dictionary
+        non_variable_mapping = {item[0]: item[1] for item in non_variable_mapping}
+
         if pattern_offset == 0:
-
-            # Rule out a match if the sequence of non-variable characters does not exist in s
-            non_variable_chars = self.pattern
-            for var in self.variables:
-                non_variable_chars = non_variable_chars.replace(var, "")
-
-            index = 0
-            for char in non_variable_chars:
-                # Find the next occurence of char in s, starting from the previous index
-                next_index = s[index:].find(char)
-
-                if next_index == -1:
-                    # Next occurrence does not exist
-                    return None
-
-                index = index + next_index + 1
 
             # Get the definitions for this pattern
             self.get_definitions(context)
@@ -1380,10 +1495,11 @@ class StringPattern(Pattern):
             return None
 
         # Check if this is a variable
-        for var, sub_pattern in self.variables.items():
+        if pattern_offset in self.variable_locations:
+            # Looks like a variable
 
-            if not pattern[:len(var)] == var:
-                continue
+            var = self.variable_locations[pattern_offset]["label"]
+            sub_pattern = self.variable_locations[pattern_offset]["pattern"]
 
             # Check if there is a matching string variable in s
             for string_var, str_pattern in string_variables.items():
@@ -1428,9 +1544,29 @@ class StringPattern(Pattern):
 
                     return m
 
+            # Check what comes after the variable in the pattern to filter what to do
+            next_offset = pattern_offset + len(var)
+            if next_offset == len(self.pattern):
+                # This is the final part of the pattern
+                possible_js = [len(s)]
+
+            elif next_offset in self.variable_locations:
+                # There is another variable immediately following this one
+
+                # Loop through the possibilities for the variable in s
+                possible_js = range(0, len(s) + 1)
+
+            else:
+                # Must be a non-variable string
+                assert next_offset in self.non_variable_locations
+
+                pattern_part = self.non_variable_locations[next_offset]
+
+                # Get the possible positions of the pattern part in s
+                possible_js = non_variable_mapping[pattern_part]
+
             # Loop through the possibilities for the variable in s
-            j = 0
-            while j <= len(s):
+            for j in possible_js:
 
                 # Get the substring of s
                 sub_s = s[:j]
@@ -1479,10 +1615,21 @@ class StringPattern(Pattern):
                 return m
 
         # Not a variable - check for literal character match
-        if pattern[0] == s[0]:
-            # Go to the next character
+        if pattern_offset not in self.non_variable_locations:
+            # No match
+            return None
 
-            remainder_match = self.match(s[1:], context, pattern_offset=pattern_offset + 1, pattern_match=pattern_match)
+        part = self.non_variable_locations[pattern_offset]
+
+        if part == s[:len(part)]:
+            # Skip past the part in s and in the pattern
+
+            remainder_match = self.match(
+                s[len(part):],
+                context,
+                pattern_offset=pattern_offset + len(part),
+                pattern_match=pattern_match
+            )
 
             if remainder_match is not None:
                 # Success
@@ -1519,6 +1666,17 @@ class StringPattern(Pattern):
     def add_variable(self, name, pattern):
         # Add a variable
         self.variables[name] = pattern
+
+        # Update the variable locations
+        for i in range(0, len(self.pattern)):
+            if self.pattern[i:i + len(name)] == name:
+                # Add the location
+                self.variable_locations[i] = {
+                    "label": name,
+                    "pattern": pattern
+                }
+
+        self.get_non_variable_locations()
 
     def get_definitions(self, context):
         # Get the relevant definitions for this pattern
@@ -1847,14 +2005,17 @@ class LatticeCompiler(object):
                 StringPattern(
                     name="single",
                     pattern="part",
-                    variables={"part": dictionary_part}
+                    variables={"part": dictionary_part},
+                    skip_node=True
                 ),
                 StringPattern(
                     name="join",
                     pattern="j, part",
-                    variables={"part": dictionary_part}
+                    variables={"part": dictionary_part},
+                    skip_node=True
                 )
-            ]
+            ],
+            skip_node=True
         )
         csdp.patterns[1].add_variable("j", csdp)
 
@@ -1863,12 +2024,14 @@ class LatticeCompiler(object):
             patterns=[
                 StringPattern(
                     name="empty_dictionary",
-                    pattern="{}"
+                    pattern="{}",
+                    value_path="empty_dict()"
                 ),
                 StringPattern(
                     name="dictionary",
                     pattern="{csdp}",
-                    variables={"csdp": csdp}
+                    variables={"csdp": csdp},
+                    value_path="dict()"
                 ),
                 StringPattern(
                     name="variable_dictionary",
@@ -1876,7 +2039,7 @@ class LatticeCompiler(object):
                     variables={"var": variable_name}
                 )
 
-            ]
+            ],
         )
 
         # Dictionary is an object
@@ -2037,6 +2200,17 @@ class LatticeCompiler(object):
         # System lookups are objects
         obj.patterns.append(system_lookup)
 
+        # System assignment
+        system_assignment = StringPattern(
+            name="system_assignment",
+            pattern="system[key] = value",
+            variables={
+                "key": string,
+                "value": obj
+            },
+            value_path="system_assignment()"
+        )
+
         # Matches
         match = UnionPattern(
             name="match",
@@ -2077,12 +2251,16 @@ class LatticeCompiler(object):
         # Conditions for matching
 
         # Items
-        simple_item = StringPattern(name="simple_item", pattern="^[a-zA-Z_\.][[:alnum:]_\.]*$", is_regex=True)
+        simple_item = StringPattern(name="simple_item", pattern="^[a-zA-Z_\.][[:alnum:]_\.\[\]]*$", is_regex=True)
+        pattern_or_item = UnionPattern(
+            name="pattern_or_item",
+            patterns=[pattern]
+        )
         instances = StringPattern(
             name="instances",
             pattern="item.instances(pattern)",
             variables={
-                "pattern": pattern
+                "pattern": pattern_or_item
             }
         )
 
@@ -2090,6 +2268,7 @@ class LatticeCompiler(object):
             name="item",
             patterns=[simple_item, instances]
         )
+        pattern_or_item.patterns.append(item)
 
         instances.add_variable("item", item)
 
@@ -2129,6 +2308,7 @@ class LatticeCompiler(object):
         condition_args = UnionPattern(
             name="condition_args",
             patterns=[
+                StringPattern(name="empty", pattern=""),
                 item,
                 item_and_condition
             ]
@@ -2140,9 +2320,12 @@ class LatticeCompiler(object):
             variables={
                 "item": item,
                 "args": condition_args,
-                "func": StringPattern(name="function_name", pattern="^(has_parent|equal_any)$", is_regex=True)
+                "func": StringPattern(name="function_name", pattern="^(has_parent|equal_any|instances|indent_lines)$", is_regex=True)
             }
         )
+
+        # Function can also be an item
+        item.patterns.append(function)
 
         each = StringPattern(
             name="each",
@@ -2324,167 +2507,157 @@ class LatticeCompiler(object):
         }
 
         self.line_options = {
-            "empty": {
-                "pattern": StringPattern(
-                    name="empty",
-                    pattern="^ *$",
-                    is_regex=True
-                )
-            },
+            "empty": StringPattern(
+                name="empty",
+                pattern="^ *$",
+                is_regex=True
+            ),
 
-            "comment": {
-                "pattern": StringPattern(
-                    name="comment",
-                    pattern=r"^ *#.*$",
-                    is_regex=True
-                )
-            },
+            "comment": StringPattern(
+                name="comment",
+                pattern=r"^ *#.*$",
+                is_regex=True
+            ),
 
-            "print": {
-                "pattern": StringPattern(
-                    name="print",
-                    pattern="Sprint(obj)",
-                    variables={
-                        "S": spaces,
-                        "obj": self.system["object"]
-                    }
-                ),
-                "paths": {
-                    "object": "obj.value()"
+            "print": StringPattern(
+                name="print",
+                pattern="Sprint(obj)",
+                variables={
+                    "S": spaces,
+                    "obj": self.system["object"]
                 }
-            },
+            ),
 
-            "assignment": {
-                "pattern": StringPattern(
-                    name="assignment",
-                    pattern="Svar = obj",
-                    variables={
-                        "S": spaces,
-                        "var": self.system["variable_name"],
-                        "obj": self.system["object"]
-                    }
-                ),
-                "paths": {
-                    "variable": "var.string()",
-                    "value": "obj.value()"
+            "assignment": StringPattern(
+                name="assignment",
+                pattern="Svar = obj",
+                variables={
+                    "S": spaces,
+                    "var": self.system["variable_name"],
+                    "obj": self.system["object"]
                 }
-            },
+            ),
 
-            "sub_pattern_assignment": {
-                "pattern": StringPattern(
-                    name="sub_pattern_assignment",
-                    pattern="Spattern.label = sub",
-                    variables={
-                        "S": spaces,
-                        "pattern": UnionPattern(
-                            name="pattern_or_defn",
-                            patterns=[
-                                self.system["variable_name"]
-                            ]
-                        ),
-                        "label": self.system["variable_name"],
-                        "sub": self.system["pattern"]
-                    }
-                ),
-                "paths": {
-                    "pattern": "pattern.value()",
-                    "label": "label.string()",
-                    "sub_pattern": "sub.value()"
+            "system_assignment": StringPattern(
+                name="system_assignment",
+                pattern="Ssystem[var] = obj",
+                variables={
+                    "S": spaces,
+                    "var": self.system["string"],
+                    "obj": self.system["object"]
                 }
-            },
+            ),
 
-            "add_pattern_attribute": {
-                "pattern": StringPattern(
-                    name="add_pattern_attribute",
-                    pattern="Spattern.add_attribute(csa)",
-                    variables={
-                        "S": self.system["spaces"],
-                        "pattern": self.system["variable_name"],
-                        "csa": self.system["comma_separated_arguments"]
-                    }
-                ),
-                "paths": {
-                    "pattern": "pattern.value()",
-                    "csa": "csa.a"
+            "sub_pattern_assignment": StringPattern(
+                name="sub_pattern_assignment",
+                pattern="Spattern.label = sub",
+                variables={
+                    "S": spaces,
+                    "pattern": UnionPattern(
+                        name="pattern_or_defn",
+                        patterns=[self.system["variable_name"]]
+                    ),
+                    "label": self.system["variable_name"],
+                    "sub": self.system["pattern"]
                 }
-            },
+            ),
 
-            "set_pattern_condition": {
-                "pattern": StringPattern(
-                    name="set_pattern_condition",
-                    pattern="Spattern.set_condition(x)",
-                    variables={
-                        "S": self.system["spaces"],
-                        "pattern": self.system["variable_name"],
-                        "x": self.system["condition"]
-                    }
-                )
-            },
-
-            "string_variable_definition": {
-                "pattern": StringPattern(
-                    name="string_variable_definition",
-                    pattern="Swith cswp:",
-                    variables={
-                        "S": spaces,
-                        "cswp": cswp
-                    }
-                ),
-                "paths": {
-                    "parts": "wp"
+            "sub_pattern_dict_assignment": StringPattern(
+                name="sub_pattern_dict_assignment",
+                pattern="Spattern.add_variable(label, sub)",
+                variables={
+                    "S": spaces,
+                    "pattern": self.system["pattern"],
+                    "label": self.system["string"],
+                    "sub": self.system["pattern"]
                 }
-            },
+            ),
 
-            "string_variable_restriction": {
-                "pattern": StringPattern(
-                    name="string_variable_restriction",
-                    pattern="Ssuppose R",
-                    variables={
-                        "S": spaces,
-                        "R": string
-                    }
-                )
-            }
+            "add_pattern_attribute": StringPattern(
+                name="add_pattern_attribute",
+                pattern="Spattern.add_attribute(csa)",
+                variables={
+                    "S": self.system["spaces"],
+                    "pattern": self.system["variable_name"],
+                    "csa": self.system["comma_separated_arguments"]
+                }
+            ),
 
+            "set_pattern_condition": StringPattern(
+                name="set_pattern_condition",
+                pattern="Spattern.set_condition(x)",
+                variables={
+                    "S": self.system["spaces"],
+                    "pattern": self.system["variable_name"],
+                    "x": self.system["condition"]
+                }
+            ),
+
+            "string_variable_definition": StringPattern(
+                name="string_variable_definition",
+                pattern="Swith cswp:",
+                variables={
+                    "S": spaces,
+                    "cswp": cswp
+                }
+            ),
+
+            "string_variable_restriction": StringPattern(
+                name="string_variable_restriction",
+                pattern="Ssuppose R",
+                variables={
+                    "S": spaces,
+                    "R": string
+                }
+            )
         }
 
     @staticmethod
-    def parse_match(key, option, match, context):
+    def parse_match(key, match, context):
 
-        # Get the paths
-        paths = None
-        if "paths" in option:
-            paths = option["paths"]
-
-        if key == "assignment":
-            # Make the assignment
-
-            # Get the variable name
-            variable = match.get_by_path(paths["variable"], context)
-
-            # Get the assigned value
-            value = match.get_by_path(paths["value"], context)
-
-            context.variables[variable] = value
-
-        elif key == "print":
+        if key == "print":
             # Print something
 
             # Get the object
-            obj = match.get_by_path(paths["object"], context)
+            obj = match.get_by_path("obj.value()", context)
             print(obj)
 
-        elif key == "sub_pattern_assignment":
+        elif key == "assignment":
+            # Make the assignment
+
+            # Get the variable name
+            variable = match.get_by_path("var.string()", context)
+
+            # Get the assigned value
+            value = match.get_by_path("obj.value()", context)
+
+            context.variables[variable] = value
+
+        elif key == "system_assignment":
+            # Make an assignment to the system context variable
+
+            # Get the variable name
+            variable = match.get_by_path("var.value()", context)
+
+            # Get the assigned value
+            value = match.get_by_path("obj.value()", context)
+
+            context.system[variable] = value
+
+        elif key in ("sub_pattern_assignment", "sub_pattern_dict_assignment"):
             # Sub assignment
 
             # Get the pattern (or definition) instance
-            pattern_instance = match.get_by_path(paths["pattern"], context)
+            pattern_instance = match.get_by_path("pattern.value()", context)
 
             # Get the label
-            label = match.get_by_path(paths["label"], context)
+            if key == "sub_pattern_assignment":
+                label = match.get_by_path("label.string()", context)
+            else:
+                label = match.get_by_path("label.value()", context)
 
             # Get the sub pattern
-            sub_pattern = match.get_by_path(paths["sub_pattern"], context)
+            sub_pattern = match.get_by_path("sub.value()", context)
 
             # Add the sub_match
             pattern_instance.add_variable(label, sub_pattern)
@@ -2492,10 +2665,10 @@ class LatticeCompiler(object):
         elif key == "add_pattern_attribute":
             # Add pattern attribute
 
-            pattern = match.get_by_path(paths["pattern"], context)
+            pattern = match.get_by_path("pattern.value()", context)
 
             # Get the arguments
-            args = match.get_by_path(paths["csa"], context)
+            args = match.get_by_path("csa.a", context)
 
             # Handle cases regardless of labelling
             arg_dict = {}
@@ -2529,7 +2702,7 @@ class LatticeCompiler(object):
             # A new string variable
 
             # Get each of the pattern parts
-            parts = match.get_by_path(paths["parts"], context)
+            parts = match.get_by_path("wp", context)
 
             if type(parts) is not list:
                 # Encourage the parts to be a list
@@ -2582,7 +2755,7 @@ class LatticeCompiler(object):
             for key, option in self.line_options.items():
 
                 # Try to make the match
-                match = option["pattern"].match(line, context)
+                match = option.match(line, context)
 
                 if match is None:
                     continue
@@ -2611,17 +2784,17 @@ class LatticeCompiler(object):
                     new_context = context.get_copy()
 
                     # Parse this line in the new scope
-                    self.parse_match(key, option, match, new_context)
+                    self.parse_match(key, match, new_context)
 
                     # Compile the block
                     block = "\n".join(lines[i + 1:j])
-                    self.compile(block, new_context, line_number_offset=i + 1)
+                    self.parse(block, new_context, line_number_offset=i + 1)
 
                     # Continue from after the block
                     i = j - 1
                     break
 
-                self.parse_match(key, option, match, context)
+                self.parse_match(key, match, context)
 
                 # Found a match
                 break
@@ -2641,15 +2814,8 @@ if __name__ == "__main__":
     with open("propositional.py") as f:
         context = lc.parse(f.read())
 
-    system = context.variables["system"]
+    if "formal_system" in context.system:
+        system = context.system["formal_system"]
 
-    with open("proof.txt") as f:
-
-        # Create a new context, keeping the system variables
-        new_context = Context()
-        new_context.system = context.system
-
-        # Also keep the formula
-        new_context.variables["formula"] = context.variables["formula"]
-
-        system.parse(f.read(), context=new_context)
+        with open("proof.txt") as f:
+            system.parse(f.read())

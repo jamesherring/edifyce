@@ -1,12 +1,8 @@
-import something
-
-# Yay it's a comment
-
 with "\alpha", "\beta" as formula:
-    # Indenting test
+    if \alpha:
+        with "\gamma" as formula:
+            [DT, 2] \alpha
 
-    [A1] \alpha
+        [A1] (\alpha \rightarrow (\beta \rightarrow \alpha))
 
-    [A1] (\alpha \rightarrow \beta)
-
-    [MP, 8, 10] \beta
+        [MP, 4, 6] (\beta \rightarrow \alpha)
