@@ -5,18 +5,18 @@ integer = StringPattern(name="integer", pattern="^(?:0|[1-9][0-9]*)$", is_regex=
 pv = StringPattern(name="variable", pattern="p_i")
 pv.i = integer
 
-ra = StringPattern(name="rightarrow", pattern="(left \\rightarrow notleft)")
+ra = StringPattern(name="rightarrow", pattern="(left \\rightarrow east)")
 neg = StringPattern(name="negation", pattern="\\neg f")
 
 formula = UnionPattern(name="formula", patterns=[pv, ra, neg])
 
 ra.left = formula
-ra.notleft = formula
+ra.east = formula
 neg.f = formula
 
-a1 = StringPattern(name="A1", pattern="(\\alpha \\rightarrow (beta \\rightarrow \\alpha))")
-a1.add_variable("\\alpha", formula)
-a1.add_variable("\\beta", formula)
+a1 = StringPattern(name="A1", pattern="(alpha \\rightarrow (beta \\rightarrow alpha))")
+a1.add_variable("alpha", formula)
+a1.add_variable("beta", formula)
 
 a2 = StringPattern(name="A2", pattern="((alpha \\rightarrow (beta \\rightarrow gamma)) \\rightarrow ((alpha \\rightarrow beta) \\rightarrow (alpha \\rightarrow gamma)))")
 a2.alpha = formula

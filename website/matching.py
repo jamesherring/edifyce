@@ -1321,9 +1321,11 @@ class StringPattern(Pattern):
 
         return s
 
-    def match(self, s, context, pattern_offset=0, pattern_match=None):
+    def match(self, s, context, pattern_offset=0, pattern_match=None, non_variable_mapping=None):
         # Match a string s against this pattern with the given context.
         # Optionally offset the pattern string, to start at an index > 0. This is used recursively.
+
+        # Optionally specify non variable mapping
 
         parent_pattern_match = None
         if self.parent is not None:
@@ -1350,8 +1352,6 @@ class StringPattern(Pattern):
                 parent_pattern_match=parent_pattern_match
             )
 
-        string_variables = context.string_variables
-
         if type(s) is StringPattern:
             # Need to ensure this pattern matches.
 
@@ -1371,6 +1371,8 @@ class StringPattern(Pattern):
 
             # Use the pattern string
             s = s.pattern
+
+        string_variables = context.string_variables
 
         if pattern_match is not None:
             # This is also a pattern match
@@ -1399,55 +1401,56 @@ class StringPattern(Pattern):
             return self.match_regex(s)
 
         # Rule out a match if the sequence of non-variable characters does not exist in s
-        index = 0
-
-        # Build a non-variable mapping - so we know where the possible positions are for each non-variable string
-        non_variable_mapping = []
-
-        for part_index, pattern_part in self.non_variable_locations.items():
-
-            if part_index < pattern_offset:
-                # Ignore this part
-                continue
-
-            # Find the next occurrence of s_part in s, starting from the previous index
-            next_index = s[index:].find(pattern_part)
-
-            # Add to non variable mapping
-            non_variable_mapping.append([pattern_part, [index + next_index]])
-
-            if next_index == -1:
-                return None
-
-            index = index + next_index + 1
-
-        if pattern_offset in self.variable_locations:
-            # Add any other legal non variable mappings
-            for i in range(0, len(non_variable_mapping)):
-                pattern_part, lst = non_variable_mapping[i]
-                start_index = lst[0]
-
-                max_index = len(s)
-                if i < len(non_variable_mapping) - 1:
-                    # There is a next item
-                    max_index = non_variable_mapping[i + 1][1][0]
-
-                # Search for further instances of pattern_part in s, and add the index of these to lst
-                next_index = start_index + 1
-                while next_index < max_index:
-                    increment = s[next_index:].find(pattern_part)
-                    next_index += increment
-
-                    if increment > -1:
-                        lst.append(next_index)
-                        next_index += 1
-                    else:
-                        break
-
-        # Convert to a dictionary
-        non_variable_mapping = {item[0]: item[1] for item in non_variable_mapping}
+        if non_variable_mapping is None:
+            # Build a non-variable mapping - so we know where the possible positions are for each non-variable string
+            non_variable_mapping = []
 
         if pattern_offset == 0:
+            index = 0
+            for part_index, pattern_part in self.non_variable_locations.items():
+
+                if part_index < pattern_offset:
+                    # Ignore this part
+                    continue
+
+                # Find the next occurrence of s_part in s, starting from the previous index
+                next_index = s[index:].find(pattern_part)
+
+                if type(non_variable_mapping) is list:
+                    # Add to non variable mapping
+                    non_variable_mapping.append([pattern_part, [index + next_index]])
+
+                if next_index == -1:
+                    return None
+
+                index = index + next_index + 1
+
+            if type(non_variable_mapping) is list:
+                # Add any other legal non variable mappings
+                for i in range(0, len(non_variable_mapping)):
+                    pattern_part, lst = non_variable_mapping[i]
+                    start_index = lst[0]
+
+                    max_index = len(s)
+                    if i < len(non_variable_mapping) - 1:
+                        # There is a next item
+                        max_index = non_variable_mapping[i + 1][1][0]
+
+                    # Search for further instances of pattern_part in s, and add the index of these to lst
+                    next_index = start_index + 1
+                    while next_index < max_index:
+                        increment = s[next_index:].find(pattern_part)
+                        next_index += increment
+
+                        if increment > -1:
+                            lst.append(next_index)
+                            next_index += 1
+                        else:
+                            break
+
+            if type(non_variable_mapping) is list:
+                # Convert to a dictionary
+                non_variable_mapping = {item[0]: item[1] for item in non_variable_mapping}
 
             # Get the definitions for this pattern
             self.get_definitions(context)
@@ -1514,11 +1517,17 @@ class StringPattern(Pattern):
                     # Check the remainder of s also matches
                     remainder = s[len(string_var):]
 
+                    new_non_variable_mapping = {
+                        key: [entry - len(string_var) for entry in non_variable_mapping[key]]
+                        for key in non_variable_mapping
+                    }
+
                     remainder_match = self.match(
                         remainder,
                         context,
                         pattern_offset=pattern_offset + len(var),
-                        pattern_match=pattern_match
+                        pattern_match=pattern_match,
+                        non_variable_mapping=new_non_variable_mapping
                     )
 
                     if remainder_match is None:
@@ -1546,6 +1555,7 @@ class StringPattern(Pattern):
 
             # Check what comes after the variable in the pattern to filter what to do
             next_offset = pattern_offset + len(var)
+
             if next_offset == len(self.pattern):
                 # This is the final part of the pattern
                 possible_js = [len(s)]
@@ -1567,21 +1577,40 @@ class StringPattern(Pattern):
 
             # Loop through the possibilities for the variable in s
             for j in possible_js:
-
-                # Get the substring of s
-                sub_s = s[:j]
-
-                # Check if the remainder of the string is a match
-                remainder_match = self.match(
-                    s[j:],
-                    context,
-                    pattern_offset=pattern_offset + len(var),
-                    pattern_match=pattern_match
-                )
-
-                if remainder_match is None:
-                    j += 1
+                if j < 0:
                     continue
+
+                # Get the substring and remainder of s
+                sub_s = s[:j]
+                remainder = s[j:]
+
+                remainder_match = None
+
+                if len(remainder) == 0:
+                    if next_offset < len(self.pattern) and next_offset not in self.variable_locations:
+                        # Pattern still has a string left with nothing to match in s (and it's not a variable,
+                        # which could match an empty string)
+                        continue
+
+                else:
+                    # Remainder is not empty - need to check
+
+                    new_non_variable_mapping = {
+                        key: [entry - j for entry in non_variable_mapping[key]]
+                        for key in non_variable_mapping
+                    }
+
+                    # Check if the remainder of the string is a match
+                    remainder_match = self.match(
+                        remainder,
+                        context,
+                        pattern_offset=pattern_offset + len(var),
+                        pattern_match=pattern_match,
+                        non_variable_mapping=new_non_variable_mapping
+                    )
+
+                    if remainder_match is None:
+                        continue
 
                 # The remainder matches
 
@@ -1589,22 +1618,21 @@ class StringPattern(Pattern):
                 sub_match = sub_pattern.match(sub_s, context, pattern_match=pattern_match)
 
                 if sub_match is None:
-                    j += 1
                     continue
 
                 # Match!
 
                 # Check for conflicts with the sub_matches
-                if var in remainder_match.sub_matches:
-                    remainder_sub = remainder_match.sub_matches[var]
-                    if not (remainder_sub.pattern == sub_pattern and remainder_sub.string == sub_s):
-                        # There's a conflict with this variable later in the string
-                        j += 1
-                        continue
+                if remainder_match is not None:
+                    if var in remainder_match.sub_matches:
+                        remainder_sub = remainder_match.sub_matches[var]
+                        if not (remainder_sub.pattern == sub_pattern and remainder_sub.string == sub_s):
+                            # There's a conflict with this variable later in the string
+                            continue
 
-                # Otherwise, copy the sub_matches to m and return
-                for name, sub in remainder_match.sub_matches.items():
-                    m.add_submatch(name, sub)
+                    # Otherwise, copy the sub_matches to m and return
+                    for name, sub in remainder_match.sub_matches.items():
+                        m.add_submatch(name, sub)
 
                 # Add the string variable
                 m.add_submatch(var, sub_match)
@@ -1624,11 +1652,17 @@ class StringPattern(Pattern):
         if part == s[:len(part)]:
             # Skip past the part in s and in the pattern
 
+            new_non_variable_mapping = {
+                key: [entry - len(part) for entry in non_variable_mapping[key]]
+                for key in non_variable_mapping
+            }
+
             remainder_match = self.match(
                 s[len(part):],
                 context,
                 pattern_offset=pattern_offset + len(part),
-                pattern_match=pattern_match
+                pattern_match=pattern_match,
+                non_variable_mapping=new_non_variable_mapping
             )
 
             if remainder_match is not None:
@@ -1788,14 +1822,7 @@ class UnionPattern(Pattern):
 
         for pattern in self.patterns:
 
-            match = None
-
-            try:
-                match = pattern.match(s, context, pattern_match=pattern_match)
-
-            except Exception as e:
-                # No match here
-                pass
+            match = pattern.match(s, context, pattern_match=pattern_match)
 
             if match is not None:
                 # Looks like a successful match
