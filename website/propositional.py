@@ -1,3 +1,4 @@
+print("0")
 # Propositional Calculus
 
 integer = StringPattern(name="integer", pattern="^(?:0|[1-9][0-9]*)$", is_regex=True)
@@ -14,79 +15,123 @@ ra.left = formula
 ra.east = formula
 neg.f = formula
 
-a1 = StringPattern(name="A1", pattern="(alpha \\rightarrow (beta \\rightarrow alpha))")
+# Dollar formulas - for TeX parsing
+dollar_formula = StringPattern(name="dollar_formula", pattern="$formula$", skip_node=True)
+dollar_formula.formula = formula
+
+# Dollar formula or a formula
+any_formula = UnionPattern(name="formula", patterns=[formula, dollar_formula], skip_node=True)
+
+a1 = StringPattern(name="A1", pattern="(alpha \\rightarrow (beta \\rightarrow alpha))", parent=formula)
 a1.add_variable("alpha", formula)
 a1.add_variable("beta", formula)
 
-a2 = StringPattern(name="A2", pattern="((alpha \\rightarrow (beta \\rightarrow gamma)) \\rightarrow ((alpha \\rightarrow beta) \\rightarrow (alpha \\rightarrow gamma)))")
+a2 = StringPattern(name="A2", pattern="((alpha \\rightarrow (beta \\rightarrow gamma)) \\rightarrow ((alpha \\rightarrow beta) \\rightarrow (alpha \\rightarrow gamma)))", parent=formula)
 a2.alpha = formula
 a2.beta = formula
 a2.gamma = formula
 
-a3 = StringPattern(name="A3", pattern="((\\neg beta \\rightarrow \\neg alpha) \\rightarrow (alpha \\rightarrow beta))")
+a3 = StringPattern(name="A3", pattern="((\\neg beta \\rightarrow \\neg alpha) \\rightarrow (alpha \\rightarrow beta))", parent=formula)
 a3.alpha = formula
 a3.beta = formula
 
+# Make the import line
 import_pattern = StringPattern(name="import", pattern="^import [a-zA-Z0-9\.]+$", is_regex=True)
 import_line = LineType(name="import", pattern=import_pattern, behaviour="import")
 
+# Allow empty lines
 empty_pattern = StringPattern(name="empty", pattern="^(?>    )*$", is_regex=True)
 empty_line = LineType(name="empty", pattern=empty_pattern, behaviour="none")
 
+# Allow comments
 comment_pattern = StringPattern(name="comment", pattern="^(?>    )*#.*$", is_regex=True)
 comment_line = LineType(name="comment", pattern=comment_pattern, behaviour="none")
 
-reference = StringPattern(name="reference", pattern="^[a-zA-Z0-9 ,]+", is_regex=True)
+# Create references
+reference = StringPattern(name="reference", pattern="^[a-zA-Z0-9 ,]+$", is_regex=True)
 
-logical_pattern = StringPattern(name="logical", pattern="S[ref] formula")
-logical_pattern.ref = reference
+reference_pattern = StringPattern(name="reference_pattern", pattern="S[ref] formula")
+reference_pattern.S = empty_pattern
+reference_pattern.ref = reference
+reference_pattern.formula = any_formula
+reference_line = LineType(name="Reference", pattern=reference_pattern, behaviour="logical")
+
+logical_pattern = StringPattern(name="logical", pattern="Sformula")
 logical_pattern.S = empty_pattern
-logical_pattern.formula = formula
+logical_pattern.formula = any_formula
 logical_line = LineType(name="logical", pattern=logical_pattern, behaviour="logical")
 
-cswp = system["comma_separated_with_parts"]
+# Build comma separated formulae
+join = StringPattern(name="join_formula", pattern="j, formula", skip_node=True)
+join.formula = formula
+comma_separated_formula = UnionPattern(name="csf", patterns=[any_formula, join], skip_node=True)
+join.j = comma_separated_formula
+
+# Variables for with parts
+variable = StringPattern(name="formula_variable_name", pattern="^[a-zA-Z0-9\\.\\\\]+$", is_regex=True)
+dollar_variable = StringPattern(name="dollar_variable", pattern="$v$", skip_node=True)
+dollar_variable.v = variable
+
+# Build comma separated variables
+join = StringPattern(name="join_variable", pattern="j, variable", skip_node=True)
+join.variable = dollar_variable
+csv = UnionPattern(name="comma_separated_variables", patterns=[join, dollar_variable], skip_node=True)
+join.j = csv
+
+with_part = StringPattern(name="with_part", pattern="csv as pattern")
+with_part.csv = csv
+with_part.pattern = system["variable_name"]
+
+join_wp = StringPattern(name="join_wp", pattern="j, with_part", skip_node=True)
+join_wp.with_part = with_part
+
+cswp = UnionPattern(name="cswp", patterns=[join_wp, with_part], skip_node=True)
+join_wp.j = cswp
+
+# Build with line - for introducing variable patterns
 with_pattern = StringPattern(name="with", pattern="Swith cswp:")
 with_pattern.S = empty_pattern
 with_pattern.cswp = cswp
-with_line = LineType(name="with", pattern=with_pattern, behaviour="indent", add_context_key_path="self.wp.s", add_context_value_path="non_skip_parent().pattern")
-
-# Build comma separated formulae
-join = StringPattern(name="join", pattern="j, formula", skip_node=True)
-join.formula = formula
-comma_separated_formula = UnionPattern(name="csf", patterns=[formula, join])
-join.j = comma_separated_formula
+with_line = LineType(name="with", pattern=with_pattern, behaviour="indent", add_context_key_path="self.with_part.v", add_context_value_path="non_skip_parent().pattern")
 
 if_pattern = StringPattern(name="if", pattern="Sif csf:")
 if_pattern.S = empty_pattern
 if_pattern.csf = comma_separated_formula
 suppose_line = LineType(name="suppose", pattern=if_pattern, behaviour="indent")
 
-mp_1 = StringPattern(name="mp_1", pattern="S[ref] alpha")
-mp_1.S = empty_pattern
-mp_1.ref = reference
+# Now make the inference rules
+
+# Make modus ponens
+mp_0 = formula
+
+mp_1 = StringPattern(name="mp_2", pattern="(alpha \\rightarrow beta)", parent=formula)
 mp_1.alpha = formula
+mp_1.beta = formula
 
-mp_2 = StringPattern(name="mp_2", pattern="S[ref] (alpha \\rightarrow beta)")
-mp_2.S = empty_pattern
-mp_2.ref = reference
-mp_2.alpha = formula
-mp_2.beta = formula
+print("1")
+c = Condition(deduction.formula() == antecedents[1].formula().beta and antecedents[0].formula() == antecedents[1].formula().alpha and deduction.indent_line() == antecedents[0].indent_line() and deduction.indent_line() == antecedents[1].indent_line())
+print("2")
+mp = InferenceRule(name="Modus Ponens", label="MP", antecedents=[mp_0, mp_1], deduction=formula)
 
-mp_result = StringPattern(name="mp_result", pattern="S[ref] beta")
-mp_result.S = empty_pattern
-mp_result.ref = reference
-mp_result.beta = formula
+# Deduction theorem has two directions, requires two inference rules
+# deduction = formula
+# c = Condition(deduction.formula in antecedents[0].instances(formula) and antecedents[0] in deduction.indent_lines())
+# dt_1 = InferenceRule(name="Deduction Theorem 1", label="DT1", antecedents=[if_pattern], deduction=deduction, condition=c)
 
-c = Condition(deduction.beta == antecedents[1].beta and antecedents[0].alpha == antecedents[1].alpha)
-mp = InferenceRule(name="Modus Ponens", label="MP", antecedents=[mp_1, mp_2], deduction=mp_result, condition=c)
+# Other direction for DT
+# ant_0 = if_pattern
+# ant_1 = logical_pattern
+# deduction = mp_1
+# c = Condition(deduction.alpha in antecedents[0].instances(formula) and deduction.beta == antecedents[1].formula and deduction.indent_line() == antecedents[0].indent_line() and antecedents[1].indent_line() == antecedents[0])
+# dt_2 = InferenceRule(name="Deduction Theorem 2", label="DT2", antecedents=[ant_0, ant_1], deduction=deduction, condition=c)
 
-dt_1 = if_pattern
-dt_deduction = logical_pattern
-c = Condition(deduction.formula in antecedents[0].instances(formula) and antecedents[0] in deduction.indent_lines())
-deduce_supposed = InferenceRule(name="Deduction Theorem", label="DT", antecedents=[dt_1], deduction=dt_deduction, condition=c)
+# Rewrite an earlier line in the proof
+c = Condition(deduction.formula() == antecedents[0].formula() and (antecedents[0].is_root() or antecedents[0].indent_line() in deduction.indent_lines()))
+rewrite = InferenceRule(name="Rewrite", label="R", antecedents=[formula], deduction=formula)
 
-line_types = [import_line, empty_line, comment_line, logical_line, with_line, suppose_line]
+# Create the formal system
+line_types = [import_line, empty_line, comment_line, logical_line, reference_line, with_line, suppose_line]
+rules = [mp, rewrite]
 context_variables = {"formula": formula}
-propositional = FormalSystem(name="propositional_logic", axioms=[a1, a2, a3], line_types=line_types, inference_rules=[mp, deduce_supposed], context_variables=context_variables)
-
-system["formal_system"] = propositional
+# propositional = FormalSystem(name="propositional_logic", axioms=[a1, a2, a3], line_types=line_types, inference_rules=rules, context_variables=context_variables)
+# system["formal_system"] = propositional

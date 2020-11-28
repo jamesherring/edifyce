@@ -4,7 +4,7 @@ from website.context import Context
 class FormalSystem(object):
     # A formal system
 
-    def __init__(self, name, axioms=None, line_types=None, inference_rules=None, context_variables=None):
+    def __init__(self, name, axioms=None, line_types=None, inference_rules=None, context_variables=None, context=None):
 
         # The name of the system
         self.name = name
@@ -36,6 +36,13 @@ class FormalSystem(object):
 
         # Default context variables
         self.context_variables = context_variables
+        if self.context_variables is None:
+            self.context_variables = dict()
+
+        # Default system variables
+        self.context_system = dict()
+        if context is not None:
+            self.context_system = context.system
 
     def parse(self, text, proof=None, context=None, line_number_offset=0):
         # Parse the text into a proof
@@ -50,7 +57,9 @@ class FormalSystem(object):
             # Create a new context instance
             context = Context()
 
+            # Provide the default variables and system variables
             context.variables = self.context_variables
+            context.system = self.context_system
 
         i = 0
         while i < len(lines):
@@ -95,7 +104,7 @@ class FormalSystem(object):
                             keys = [keys]
 
                         for key in keys:
-                            key_string = key.get_value(context)
+                            key_string = key.string
 
                             # Get the value using the value path - relative to the key
                             value = key.get_by_path(value_path, context).get_value(context)
@@ -125,62 +134,89 @@ class FormalSystem(object):
                     break
 
                 elif line_type.behaviour == "logical":
-                    # Logical lines must include a ref and a formula
+                    # Logical lines for parsing
 
                     subs = result.get_sub_matches()
 
-                    ref = subs["ref"].string
-                    formula = subs["formula"]
+                    if "ref" in subs:
+                        # Use the given reference and formula
+                        ref = subs["ref"].string
+                        formula = subs["formula"]
 
-                    proof_line.formula = formula
+                        proof_line.formula = formula
 
-                    # Split the ref into parts
-                    ref_parts = ref.split(", ")
-                    key = ref_parts[0]
+                        # Split the ref into parts
+                        ref_parts = ref.split(", ")
+                        key = ref_parts[0]
 
-                    if key in self.axiom_dict:
+                        if key in self.axiom_dict:
 
-                        # Get the axiom pattern
-                        axiom = self.axiom_dict[key]
+                            # Get the axiom pattern
+                            axiom = self.axiom_dict[key]
 
-                        # Check the formula is an instance of this axiom
-                        if axiom.match(formula.string, context) is None:
-                            # Doesn't fit this axiom - step is invalid
+                            # Check the formula is an instance of this axiom
+                            if axiom.match(formula.string, context) is None:
+                                # Doesn't fit this axiom - step is invalid
 
-                            proof_line.invalid_message = "Line " + str(line_number) + ": " + formula.string + \
-                                                         " is not an instance of " + key + "."
+                                proof_line.invalid_message = "Line " + str(line_number) + ": " + formula.string + \
+                                                             " is not an instance of " + key + "."
 
-                        else:
-                            # Otherwise, axiom matches
-                            proof_line.valid = True
-                            proof_line.axiom = axiom
+                            else:
+                                # Otherwise, axiom matches
+                                proof_line.valid = True
+                                proof_line.axiom = axiom
 
-                    elif key in self.inference_rule_dict:
-                        # It's an inference rule
+                        elif key in self.inference_rule_dict:
+                            # It's an inference rule
 
-                        inference_rule = self.inference_rule_dict[key]
+                            inference_rule = self.inference_rule_dict[key]
 
-                        # Get the antecedent lines
-                        antecedents = []
-                        for ant_line_no in ref_parts[1:]:
-                            ant_line_no = int(ant_line_no)
-                            antecedents.append(proof.get_proof_line(ant_line_no))
+                            # Get the antecedent lines
+                            antecedents = []
+                            for ant_line_no in ref_parts[1:]:
+                                ant_line_no = int(ant_line_no)
+                                antecedents.append(proof.get_proof_line(ant_line_no))
 
-                        if inference_rule.check(antecedents=antecedents, deduction=proof_line, context=context):
-                            # It's a valid step
+                            if inference_rule.check(antecedents=antecedents, deduction=proof_line, context=context):
+                                # It's a valid step
 
-                            proof_line.valid = True
-                            proof_line.antecedents = antecedents
-                            proof_line.inference_rule = inference_rule
+                                proof_line.valid = True
+                                proof_line.antecedents = antecedents
+                                proof_line.inference_rule = inference_rule
 
-                        else:
-                            # Not a valid line
-                            antecedent_lines = []
-                            for ant in antecedents:
-                                antecedent_lines = ant.text.lstrip()
+                            else:
+                                # Not a valid line
+                                antecedent_lines = []
+                                for ant in antecedents:
+                                    if ant is None:
+                                        proof_line.invalid_message = "Invalid antecedents"
+                                        continue
 
-                            proof_line.invalid_message = key + " does not apply with antecedents: " + \
-                                                         ",".join(antecedent_lines)
+                                    antecedent_lines = ant.text.lstrip()
+
+                                proof_line.invalid_message = key + " does not apply with antecedents: " + \
+                                                             ",".join(antecedent_lines)
+
+                    else:
+                        # Must have a formula
+                        formula = subs["formula"]
+
+                        valid = False
+
+                        # Try to work out the deduction. First try the axioms
+                        for axiom in self.axioms:
+                            if axiom.match(formula.string, context) is not None:
+                                # It's a match
+                                proof_line.valid = True
+                                proof_line.axiom = axiom
+                                valid = True
+                                break
+
+                        if valid:
+                            # No need to carry on
+                            break
+
+                        # No axioms work, need to try inference rules
 
                 elif line_type.behaviour == "none":
                     # Don't need to do anything :)
@@ -242,10 +278,10 @@ class InferenceRule(object):
         # The inference rule label
         self.label = label
 
-        # List of antecedent line patterns
+        # List of antecedent patterns
         self.antecedents = antecedents
 
-        # Deduction line pattern
+        # Deduction pattern
         self.deduction = deduction
 
         # Condition for the rule to apply
@@ -257,8 +293,21 @@ class InferenceRule(object):
     def check(self, antecedents, deduction, context):
         # Check to see if the proposed proof lines are valid under this inference rule
 
+        if deduction is None:
+            # Deduction doesn't point to a valid proof line
+            return False
+
+        # Deduction must be after the antecedents
+        for ant in antecedents:
+            if ant is None:
+                # antecedent isn't a proof line
+                return False
+
+            if deduction.index() < ant.index():
+                return False
+
         # First check if the deductions matches
-        deduction.inference_match = self.deduction.match(deduction.text, context)
+        deduction.inference_match = self.deduction.match(deduction.formula.string, context)
 
         if deduction.inference_match is None:
             # No match
@@ -266,7 +315,10 @@ class InferenceRule(object):
 
         # Check if the antecedents match
         for pattern, ant in zip(self.antecedents, antecedents):
-            ant.inference_match = pattern.match(ant.text, context)
+
+            # Set the inference match - can be used in the Condition
+            ant.inference_match = pattern.match(ant.formula.string, context)
+
             if ant.inference_match is None:
                 # No match
                 return False
@@ -312,6 +364,9 @@ class Proof(object):
 
     def get_proof_line(self, line_number):
         # Get a proof line by line number
+        if not 0 <= line_number < len(self.proof_lines):
+            return None
+
         return self.proof_lines[line_number - 1]
 
     def add_proof_line(self, text):
@@ -398,6 +453,10 @@ class ProofLine(object):
         result.add(indent)
 
         return result
+
+    def is_root(self):
+        # Whether the line has no indent line
+        return self.indent_line() is None
 
     def __str__(self):
         return self.text

@@ -23,6 +23,10 @@ class Context(object):
         if system is None:
             self.system = dict()
 
+        # Keep a match history, so we can quick match strings with patterns. Needs to cleared whenever context changes
+        self.history = dict()
+        self.negative_history = dict()
+
     def add_restriction(self, r):
         # Parse a restriction r and add to context
 
@@ -72,3 +76,7 @@ class Context(object):
 
     def get_copy(self):
         return Context(self.variables.copy(), self.string_variables.copy(), self.restrictions.copy(), self.system.copy())
+
+    def add_to_history(self, key, pattern, match):
+        # Add a match to a key, pattern pair in history (match may be None)
+        self.history[(key, pattern)] = match

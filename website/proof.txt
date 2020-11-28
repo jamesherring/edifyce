@@ -1,8 +1,12 @@
-with "\alpha", "\beta" as formula:
-    if \alpha:
-        with "\gamma" as formula:
-            [DT, 2] \alpha
+with $\alpha$, $\beta$ as formula:
+    if $\alpha$:
 
-        [A1] (\alpha \rightarrow (\beta \rightarrow \alpha))
+        [DT1, 2] $\alpha$
 
-        [MP, 4, 6] (\beta \rightarrow \alpha)
+        [A1] $(\alpha \rightarrow (\beta \rightarrow \alpha))$
+
+        [MP, 4, 6] $(\beta \rightarrow \alpha)$
+
+        [R, 4] $\alpha$
+
+    # [DT2, 2, 4] $(\alpha \rightarrow \alpha)$
