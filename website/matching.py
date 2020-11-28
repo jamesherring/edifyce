@@ -2,6 +2,8 @@ import regex as re
 import inspect
 from website.formal_system import FormalSystem, LineType, InferenceRule, ProofLine
 from website.context import Context
+import random
+import string
 
 
 class Match(object):
@@ -261,7 +263,13 @@ class Match(object):
             correct_args = list(inspect.signature(FormalSystem.__init__).parameters)[1:]
             unlabelled_args, labelled_args = self.get_function_args(context, correct_args)
 
-            return FormalSystem(*unlabelled_args, **labelled_args)
+            # Create the formal system
+            fs = FormalSystem(*unlabelled_args, **labelled_args)
+
+            # Provide the context system variables
+            fs.context_system = context.system
+
+            return fs
 
         if path == "make_line_type()":
             # Make a line type
@@ -857,9 +865,28 @@ class Condition(object):
                     # Proof line function - return with the same signature as get_instances()
                     return set(line.match for line in initial.indent_lines()), set(), True
 
-                if type(initial) is ProofLine:
-                    # It's a proof line - get the inference match
-                    initial = initial.inference_match
+                if remainder == "indent_line()":
+                    # Get the indenting line for this proof line (may be None)
+                    return initial.indent_line()
+
+                if remainder == "is_root()":
+                    # Return a boolean for the proof line
+                    return initial.is_root()
+
+                if remainder[:9] == "formula()":
+                    # Get the inference match for a proof line
+
+                    if len(remainder) == 9:
+                        return initial.inference_match
+
+                    assert remainder[9] == "."
+                    final_remainder = remainder[10:]
+
+                    return initial.inference_match.get_by_path(final_remainder, context)
+
+                # if type(initial) is ProofLine:
+                #     It's a proof line - get the inference match
+                    # initial = initial.inference_match
 
                 return initial.get_by_path(remainder, context)
 
@@ -888,6 +915,10 @@ class Condition(object):
             left = self.get_item(equal_subs["left"].string, match, context, condition_context)
             right = self.get_item(equal_subs["right"].string, match, context, condition_context)
 
+            if type(left) is not Match:
+                # Items are not match instances - just test direct equality
+                return left == right
+
             return left.equivalent(right, context)
 
         if "membership" in subs or "negative_membership" in subs:
@@ -905,8 +936,8 @@ class Condition(object):
             instances, negatives, complete = self.get_item(membership_subs["set"].string, match, context, condition_context)
 
             if type(item) is ProofLine:
-                # Get the inference match
-                item = item.inference_match
+                # Get the line match
+                item = item.match
 
             for inst in instances:
                 if item.equivalent(inst, context):
@@ -1036,8 +1067,7 @@ class Condition(object):
             return self.check(match, context, condition_match=inner, condition_context=condition_context)
 
         if "item" in subs:
-            path = subs["item"].string
-            return match.get_by_path(path, context)
+            return self.get_item(subs["item"].string, match, context, condition_context)
 
         if "each" in subs:
             # Test a condition against each of the items
@@ -1184,15 +1214,25 @@ class Pattern(object):
         # Otherwise, error
         raise Exception(self.name + " does not have attribute: " + name)
 
-    def meets_condition(self, match, context):
+    def meets_condition(self, match, context, update_history=True):
         # Check that a given match meets the condition for this Pattern
+        # Optionally update the context history
 
         if self.condition is None:
+            # Successful match
+
+            if update_history:
+                context.add_to_history(match.string, self, match)
             return match
 
         if not self.condition.check(match, context):
+
+            if update_history:
+                context.add_to_history(match.string, self, None)
             return None
 
+        if update_history:
+            context.add_to_history(match.string, self, match)
         return match
 
     def may_contain(self, other, ignore=None):
@@ -1229,6 +1269,25 @@ class Pattern(object):
 
         # No variable works
         return False
+
+    def build_regex_string(self):
+        # Make a regex string which can be used to rule out matches when self.is_regex == False.
+
+        if type(self) is StringPattern and self.is_regex:
+            # This is a regex pattern - just use the whole string
+            self.regex_string = self.pattern
+            return
+
+        # Otherwise, create definitions part of the string
+        defns = "(?(DEFINE)"
+        for sub_pattern in self.nested_dependents():
+            # Use the regex pattern parts
+            defns += "(?P<p" + sub_pattern.regex_id + ">" + sub_pattern.regex_pattern_part() + ")"
+
+        defns += ")"
+
+        # Add on the the main part - just a reference to the definition of self
+        self.regex_string = defns + "^(?&p" + str(self.regex_id) + ")$"
 
 
 class StringPattern(Pattern):
@@ -1268,21 +1327,46 @@ class StringPattern(Pattern):
         # Record the last definition this pattern has seen
         self.definition_context = None
 
+        # Is this a fast or a slow match? Updated in self.get_non_variable_locations()
+        self.speedy = self.is_regex
+
         # Record the variable locations for speed
         self.variable_locations = dict()
 
-        for i in range(0, len(self.pattern)):
-            for var, sub_pattern in self.variables.items():
-                if self.pattern[i:i + len(var)] == var:
-                    # Add the location
-                    self.variable_locations[i] = {
-                        "label": var,
-                        "pattern": sub_pattern
-                    }
+        if self.is_regex:
+            # Pattern must start with ^ and end with $
+            assert self.pattern[0] == "^" and self.pattern[-1] == "$"
+
+        else:
+            # Get the variable locations
+            for i in range(0, len(self.pattern)):
+                for var, sub_pattern in self.variables.items():
+                    if self.pattern[i:i + len(var)] == var:
+                        # Add the location
+                        self.variable_locations[i] = {
+                            "label": var,
+                            "pattern": sub_pattern
+                        }
 
         # Build the non-variable locations
         self.non_variable_locations = None
-        self.get_non_variable_locations()
+
+        if not self.is_regex:
+            self.get_non_variable_locations()
+
+        # Build a quick regex - can be quick to rule out non-matches
+        self.quick_regex = self.pattern
+
+        # Replace special chars
+        regex_special_chars = "\\^$.+*?()[]{}<>/"
+        for char in regex_special_chars:
+            self.quick_regex = self.quick_regex.replace(char, "\\" + char)
+
+        # Replace variables with anything
+        for var in self.variables:
+            self.quick_regex = self.quick_regex.replace(var, "(.*?)")
+
+        self.quick_regex = "^" + self.quick_regex + "$"
 
     def get_non_variable_locations(self):
 
@@ -1309,6 +1393,9 @@ class StringPattern(Pattern):
                 self.non_variable_locations[i] = self.pattern[i:end]
                 i = end
 
+        # Update the speed
+        self.speedy = 0 in self.non_variable_locations
+
     def make_replacements(self, s):
         # Make replacements on a string s
 
@@ -1321,11 +1408,24 @@ class StringPattern(Pattern):
 
         return s
 
-    def match(self, s, context, pattern_offset=0, pattern_match=None, non_variable_mapping=None):
+    def match(self, s, context, pattern_offset=0, pattern_match=None, non_variable_mapping=None, debug=None):
         # Match a string s against this pattern with the given context.
         # Optionally offset the pattern string, to start at an index > 0. This is used recursively.
 
         # Optionally specify non variable mapping
+
+        if pattern_offset == 0 and (s, self) in context.history:
+            return context.history[(s, self)]
+
+        printing = False
+        next_debug = None
+        if debug is not None:
+            # Debugging
+            spaces = debug * 4 * " "
+
+            if pattern_offset == 0:
+                print(spaces, "Attempting to match", s, " in ", self.name, ", with pattern: ", self.pattern)
+            next_debug = debug + 1
 
         parent_pattern_match = None
         if self.parent is not None:
@@ -1334,36 +1434,41 @@ class StringPattern(Pattern):
             new_context = context.get_copy()
             new_context.string_variables.update(self.variables)
 
-            parent_pattern_match = self.parent.match(s, new_context, pattern_match=pattern_match)
+            parent_pattern_match = self.parent.match(s, new_context, pattern_match=pattern_match, debug=next_debug)
 
         if type(s) is UnionPattern:
             # We'd need every pattern in the union to match self. Would be unusual as unions don't normally intersect
 
             for sub in s.patterns:
-                result = self.match(sub, context)
+                result = self.match(sub, context, debug=next_debug)
                 if result is None:
                     # No match for this sub pattern
                     return None
 
             # All sub patterns match
-            return Match(
+            m = Match(
                 pattern=self,
                 string=s,
                 parent_pattern_match=parent_pattern_match
             )
+            context.add_to_history(s, self, m)
+            return m
 
         if type(s) is StringPattern:
             # Need to ensure this pattern matches.
 
             if s is self:
-                return Match(
+                m = Match(
                     pattern=self,
                     string=self,
                     parent_pattern_match=parent_pattern_match
                 )
+                context.add_to_history(self, self, m)
+                return m
 
             if s.is_regex or self.is_regex:
                 # Can't mix with regex
+                context.add_to_history(s, self, None)
                 return None
 
             # Store the pattern
@@ -1390,67 +1495,21 @@ class StringPattern(Pattern):
 
         if pattern_offset == 0:
 
+            if len(self.variables) == 0 and s == self.pattern:
+                # Match
+                return self.meets_condition(m, context)
+
             # Check if the whole string is a variable
             for svar, sub_pattern in string_variables.items():
-                if s == svar and self.match(sub_pattern, context):
+                if s == svar and self.match(sub_pattern, context, debug=next_debug):
                     # Match!
                     return self.meets_condition(m, context)
 
         if self.is_regex:
             # Use the regex match function
-            return self.match_regex(s)
-
-        # Rule out a match if the sequence of non-variable characters does not exist in s
-        if non_variable_mapping is None:
-            # Build a non-variable mapping - so we know where the possible positions are for each non-variable string
-            non_variable_mapping = []
+            return self.match_regex(s, context)
 
         if pattern_offset == 0:
-            index = 0
-            for part_index, pattern_part in self.non_variable_locations.items():
-
-                if part_index < pattern_offset:
-                    # Ignore this part
-                    continue
-
-                # Find the next occurrence of s_part in s, starting from the previous index
-                next_index = s[index:].find(pattern_part)
-
-                if type(non_variable_mapping) is list:
-                    # Add to non variable mapping
-                    non_variable_mapping.append([pattern_part, [index + next_index]])
-
-                if next_index == -1:
-                    return None
-
-                index = index + next_index + 1
-
-            if type(non_variable_mapping) is list:
-                # Add any other legal non variable mappings
-                for i in range(0, len(non_variable_mapping)):
-                    pattern_part, lst = non_variable_mapping[i]
-                    start_index = lst[0]
-
-                    max_index = len(s)
-                    if i < len(non_variable_mapping) - 1:
-                        # There is a next item
-                        max_index = non_variable_mapping[i + 1][1][0]
-
-                    # Search for further instances of pattern_part in s, and add the index of these to lst
-                    next_index = start_index + 1
-                    while next_index < max_index:
-                        increment = s[next_index:].find(pattern_part)
-                        next_index += increment
-
-                        if increment > -1:
-                            lst.append(next_index)
-                            next_index += 1
-                        else:
-                            break
-
-            if type(non_variable_mapping) is list:
-                # Convert to a dictionary
-                non_variable_mapping = {item[0]: item[1] for item in non_variable_mapping}
 
             # Get the definitions for this pattern
             self.get_definitions(context)
@@ -1463,7 +1522,14 @@ class StringPattern(Pattern):
                     result = defn["definition"].apply(s, self, context)
 
                     if result is not None:
+                        context.add_to_history(s, self, result)
                         return result
+
+            # Try the quick regex
+            if re.match(self.quick_regex, s) is None:
+                # No match
+                context.add_to_history(s, self, None)
+                return None
 
         # Get the pattern string, excluding any initial offset
         pattern = self.pattern[pattern_offset:]
@@ -1495,7 +1561,56 @@ class StringPattern(Pattern):
 
         if (len(pattern) == 0 and len(s) > 0) or (len(pattern) > 0 and len(s) == 0):
             # No match
+            if pattern_offset == 0:
+                context.add_to_history(s, self, None)
             return None
+
+        if non_variable_mapping is None:
+            # Build a non-variable mapping - so we know where the possible positions are for each non-variable string
+            non_variable_mapping = []
+
+        if pattern_offset == 0 and type(non_variable_mapping) is list:
+
+            index = 0
+            for part_index, pattern_part in self.non_variable_locations.items():
+
+                # Find the next occurrence of s_part in s, starting from the previous index
+                next_index = s[index:].find(pattern_part)
+
+                # Add to non variable mapping
+                non_variable_mapping.append([part_index, [index + next_index]])
+
+                if next_index == -1:
+                    context.add_to_history(s, self, None)
+                    return None
+
+                index = index + next_index + 1
+
+            # Add any other legal non variable mappings
+            for i in range(0, len(non_variable_mapping)):
+                part_index, lst = non_variable_mapping[i]
+                start_index = lst[0]
+                pattern_part = self.non_variable_locations[part_index]
+
+                max_index = len(s)
+                if i < len(non_variable_mapping) - 1:
+                    # There is a next item
+                    max_index = non_variable_mapping[i + 1][1][0]
+
+                # Search for further instances of pattern_part in s, and add the index of these to lst
+                next_index = start_index + 1
+                while next_index < max_index:
+                    increment = s[next_index:].find(pattern_part)
+                    next_index += increment
+
+                    if increment > -1:
+                        lst.append(next_index)
+                        next_index += 1
+                    else:
+                        break
+
+            # Convert to a dictionary
+            non_variable_mapping = {item[0]: item[1] for item in non_variable_mapping}
 
         # Check if this is a variable
         if pattern_offset in self.variable_locations:
@@ -1527,7 +1642,8 @@ class StringPattern(Pattern):
                         context,
                         pattern_offset=pattern_offset + len(var),
                         pattern_match=pattern_match,
-                        non_variable_mapping=new_non_variable_mapping
+                        non_variable_mapping=new_non_variable_mapping,
+                        debug=next_debug
                     )
 
                     if remainder_match is None:
@@ -1546,7 +1662,7 @@ class StringPattern(Pattern):
                         m.add_submatch(name, sub)
 
                     # Add the string variable
-                    m.add_submatch(var, sub_pattern.match(string_var, context))
+                    m.add_submatch(var, sub_pattern.match(string_var, context, debug=next_debug))
 
                     if pattern_offset == 0:
                         return self.meets_condition(m, context)
@@ -1561,24 +1677,30 @@ class StringPattern(Pattern):
                 possible_js = [len(s)]
 
             elif next_offset in self.variable_locations:
-                # There is another variable immediately following this one
+                # There is another variable immediately following this one (generally not recommended as it's slower)
 
                 # Loop through the possibilities for the variable in s
-                possible_js = range(0, len(s) + 1)
+                possible_js = list(range(0, len(s) + 1))
 
             else:
                 # Must be a non-variable string
                 assert next_offset in self.non_variable_locations
 
-                pattern_part = self.non_variable_locations[next_offset]
-
                 # Get the possible positions of the pattern part in s
-                possible_js = non_variable_mapping[pattern_part]
+                possible_js = non_variable_mapping[next_offset]
+
+            # Find max j - the position of the next non-variable part
+            max_j = len(s)
+            keys = tuple(key for key in self.non_variable_locations if key - pattern_offset >= 0)
+
+            if len(keys) > 0:
+                min_key = min(keys)
+                max_j = max(non_variable_mapping[min_key])
+
+            possible_js = [j for j in possible_js if 0 <= j <= max_j]
 
             # Loop through the possibilities for the variable in s
             for j in possible_js:
-                if j < 0:
-                    continue
 
                 # Get the substring and remainder of s
                 sub_s = s[:j]
@@ -1606,7 +1728,8 @@ class StringPattern(Pattern):
                         context,
                         pattern_offset=pattern_offset + len(var),
                         pattern_match=pattern_match,
-                        non_variable_mapping=new_non_variable_mapping
+                        non_variable_mapping=new_non_variable_mapping,
+                        debug=next_debug
                     )
 
                     if remainder_match is None:
@@ -1615,7 +1738,7 @@ class StringPattern(Pattern):
                 # The remainder matches
 
                 # Test if this sub_match is valid
-                sub_match = sub_pattern.match(sub_s, context, pattern_match=pattern_match)
+                sub_match = sub_pattern.match(sub_s, context, pattern_match=pattern_match, debug=next_debug)
 
                 if sub_match is None:
                     continue
@@ -1645,6 +1768,8 @@ class StringPattern(Pattern):
         # Not a variable - check for literal character match
         if pattern_offset not in self.non_variable_locations:
             # No match
+            if pattern_offset == 0:
+                context.add_to_history(s, self, None)
             return None
 
         part = self.non_variable_locations[pattern_offset]
@@ -1662,7 +1787,8 @@ class StringPattern(Pattern):
                 context,
                 pattern_offset=pattern_offset + len(part),
                 pattern_match=pattern_match,
-                non_variable_mapping=new_non_variable_mapping
+                non_variable_mapping=new_non_variable_mapping,
+                debug=next_debug
             )
 
             if remainder_match is not None:
@@ -1678,9 +1804,12 @@ class StringPattern(Pattern):
                 return m
 
         # Otherwise, no match
+        if pattern_offset == 0:
+            context.add_to_history(s, self, None)
+
         return None
 
-    def match_regex(self, s):
+    def match_regex(self, s, context):
         # Try to match a string s with the pattern
 
         for re_match in re.finditer(self.pattern, s, overlapped=True):
@@ -1689,12 +1818,15 @@ class StringPattern(Pattern):
                 # No match
                 continue
 
-            return Match(
+            m = Match(
                 pattern=self,
                 string=self.make_replacements(s)
             )
+            context.add_to_history(s, self, m)
+            return m
 
         # No matches
+        context.add_to_history(s, self, None)
         return None
 
     def add_variable(self, name, pattern):
@@ -1709,6 +1841,9 @@ class StringPattern(Pattern):
                     "label": name,
                     "pattern": pattern
                 }
+
+        # Update quick regex
+        self.quick_regex = self.quick_regex.replace(name, "(.*)")
 
         self.get_non_variable_locations()
 
@@ -1793,47 +1928,104 @@ class UnionPattern(Pattern):
         # Skip the node in matches
         self.skip_node = skip_node
 
-    def match(self, s, context, pattern_match=None):
-        # Match s against one of the patterns
+        # Unions patterns are all speedy
+        self.speedy = True
+
+    def match(self, s, context, pattern_match=None, speeds="all", debug=None):
+        # Match s against one of the patterns. Optionally specify only speedy/non-speedy/all patterns.
+
+        next_debug = None
+        if debug is not None:
+            # Debugging
+            spaces = debug * 4 * " "
+            print(spaces, "Attempting to match", s, " in ", self.name, ", a UnionPattern.")
+            next_debug = debug + 1
 
         if type(s) is StringPattern:
             # This could match the union pattern.
 
             if s is self:
-                return Match(
+                m = Match(
                     pattern=self,
                     string=self
                 )
+                context.add_to_history(self, self, m)
+                return m
 
         if s in context.string_variables:
             pattern = context.string_variables[s]
 
             if pattern is self:
-                return Match(
+                m = Match(
                     pattern=self,
                     string=s
                 )
+                context.add_to_history(s, self, m)
+                return m
 
-        # Create an optimistic match object
-        union_match = Match(
-            pattern=self,
-            string=s
-        )
+        # Separate the faster patterns - and check these ones first
+        speedy_patterns = [pattern for pattern in self.patterns if pattern.speedy]
+        non_speedy_patterns = [pattern for pattern in self.patterns if not pattern.speedy]
 
-        for pattern in self.patterns:
+        if speeds == "speedy":
+            # Include only speedy patterns
+            patterns = speedy_patterns
 
-            match = pattern.match(s, context, pattern_match=pattern_match)
+        elif speeds == "non-speedy":
+            # Include only non-speedy
+            patterns = non_speedy_patterns
 
-            if match is not None:
-                # Looks like a successful match
+        else:
+            # Include both
+            patterns = speedy_patterns + non_speedy_patterns
 
-                # Check the condition
-                if self.meets_condition(match, context) is not None:
-                    # Success!
-                    union_match.add_submatch(pattern.name, match)
-                    return union_match
+        def check_match(self, m):
+            if m is None:
+                return None
+
+            # Otherwise looks like a successful match
+
+            # Check the condition
+            if self.meets_condition(m, context, update_history=False) is not None:
+                # Success!
+
+                # Create a match object
+                union_match = Match(
+                    pattern=self,
+                    string=s
+                )
+                union_match.add_submatch(pattern.name, match)
+
+                return union_match
+
+        # Check each of the patterns in turn
+        for pattern in patterns:
+
+            if type(pattern) is UnionPattern:
+                # Check speedy first - come back later for non-speedy if there's no matches
+                match = pattern.match(s, context, pattern_match=pattern_match, speeds="speedy", debug=next_debug)
+
+            else:
+                match = pattern.match(s, context, pattern_match=pattern_match, debug=next_debug)
+
+            result = check_match(self, match)
+            if result is not None:
+                # Successful match - result is a union match
+                return result
+
+        # Try the non-speedy union patterns
+        for pattern in [pattern for pattern in patterns if type(pattern) is UnionPattern]:
+
+            # Check non-speedy
+            match = pattern.match(s, context, pattern_match=pattern_match, speeds="non-speedy", debug=next_debug)
+
+            result = check_match(self, match)
+            if result is not None:
+                # Successful match - result is a union match
+                return result
 
         # No match
+        context.add_to_history(s, self, None)
         return None
 
     def nested_options(self, found=None):
@@ -2227,17 +2419,6 @@ class LatticeCompiler(object):
         # System lookups are objects
         obj.patterns.append(system_lookup)
 
-        # System assignment
-        system_assignment = StringPattern(
-            name="system_assignment",
-            pattern="system[key] = value",
-            variables={
-                "key": string,
-                "value": obj
-            },
-            value_path="system_assignment()"
-        )
-
         # Matches
         match = UnionPattern(
             name="match",
@@ -2278,7 +2459,7 @@ class LatticeCompiler(object):
         # Conditions for matching
 
         # Items
-        simple_item = StringPattern(name="simple_item", pattern="^[a-zA-Z_\.][[:alnum:]_\.\[\]]*$", is_regex=True)
+        simple_item = StringPattern(name="simple_item", pattern="^[a-zA-Z_][[:alnum:]_\[\]]*$", is_regex=True)
         pattern_or_item = UnionPattern(
             name="pattern_or_item",
             patterns=[pattern]
@@ -2298,6 +2479,17 @@ class LatticeCompiler(object):
         pattern_or_item.patterns.append(item)
 
         instances.add_variable("item", item)
+
+        # Dotted items
+        dotted_items = StringPattern(
+            name="dotted_items",
+            pattern="first.second",
+            variables={
+                "first": item,
+                "second": item
+            }
+        )
+        item.patterns.append(dotted_items)
 
         # Atomic conditions
         equal = StringPattern(
@@ -2341,13 +2533,18 @@ class LatticeCompiler(object):
             ]
         )
 
+        func_names = ("has_parent", "equal_any", "instances", "indent_lines", "indent_line", "is_root", "formula")
         function = StringPattern(
             name="function",
             pattern="item.func(args)",
             variables={
                 "item": item,
                 "args": condition_args,
-                "func": StringPattern(name="function_name", pattern="^(has_parent|equal_any|instances|indent_lines)$", is_regex=True)
+                "func": StringPattern(
+                    name="function_name",
+                    pattern="^(" + "|".join(func_names) + ")$",
+                    is_regex=True
+                )
             }
         )
 
@@ -2528,7 +2725,7 @@ class LatticeCompiler(object):
             "spaces": spaces,
             "condition": condition_object,
             "attribute": attribute,
-            "formal_system": fs,
+            "formal_system_pattern": fs,
             "line_type": line_type,
             "inference_rule": inference_rule
         }
@@ -2580,12 +2777,9 @@ class LatticeCompiler(object):
                 pattern="Spattern.label = sub",
                 variables={
                     "S": spaces,
-                    "pattern": UnionPattern(
-                        name="pattern_or_defn",
-                        patterns=[self.system["variable_name"]]
-                    ),
+                    "pattern": self.system["variable_name"],
                     "label": self.system["variable_name"],
-                    "sub": self.system["pattern"]
+                    "sub": self.system["object"]
                 }
             ),
 
@@ -2686,6 +2880,8 @@ class LatticeCompiler(object):
             # Get the sub pattern
             sub_pattern = match.get_by_path("sub.value()", context)
 
+            assert type(sub_pattern) in (StringPattern, UnionPattern)
+
             # Add the sub_match
             pattern_instance.add_variable(label, sub_pattern)
 
@@ -2777,6 +2973,9 @@ class LatticeCompiler(object):
             line_number = line_number_offset + i + 1
 
             valid = False
+
+            # Clear context history
+            context.history = dict()
 
             # Check the inbuilt language options
             for key, option in self.line_options.items():
