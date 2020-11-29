@@ -1,4 +1,4 @@
-print("0")
+print("1")
 # Propositional Calculus
 
 integer = StringPattern(name="integer", pattern="^(?:0|[1-9][0-9]*)$", is_regex=True)
@@ -108,9 +108,7 @@ mp_1 = StringPattern(name="mp_2", pattern="(alpha \\rightarrow beta)", parent=fo
 mp_1.alpha = formula
 mp_1.beta = formula
 
-print("1")
 c = Condition(deduction.formula() == antecedents[1].formula().beta and antecedents[0].formula() == antecedents[1].formula().alpha and deduction.indent_line() == antecedents[0].indent_line() and deduction.indent_line() == antecedents[1].indent_line())
-print("2")
 mp = InferenceRule(name="Modus Ponens", label="MP", antecedents=[mp_0, mp_1], deduction=formula)
 
 # Deduction theorem has two directions, requires two inference rules
@@ -135,3 +133,4 @@ rules = [mp, rewrite]
 context_variables = {"formula": formula}
 # propositional = FormalSystem(name="propositional_logic", axioms=[a1, a2, a3], line_types=line_types, inference_rules=rules, context_variables=context_variables)
 # system["formal_system"] = propositional
+print("2")
