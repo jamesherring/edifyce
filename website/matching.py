@@ -2,8 +2,7 @@ import regex as re
 import inspect
 from website.formal_system import FormalSystem, LineType, InferenceRule, ProofLine
 from website.context import Context
-import random
-import string
+import copy
 
 
 class Match(object):
@@ -818,6 +817,22 @@ class Match(object):
         # Otherwise ok
         return True
 
+    def make_copy(self):
+        # Make a copy of self and the sub-match structure. Quicker than copy.deepcopy()
+
+        # Create the initial match
+        m = Match(
+            pattern=self.pattern,
+            string=self.string
+        )
+
+        # Add the sub matches with recursive copying
+        for name, sub in self.sub_matches.items():
+            sub_copy = sub.make_copy()
+            m.add_submatch(name, sub_copy)
+
+        return m
+
     def __str__(self):
         return str(self.string)
 
@@ -1270,24 +1285,19 @@ class Pattern(object):
         # No variable works
         return False
 
-    def build_regex_string(self):
-        # Make a regex string which can be used to rule out matches when self.is_regex == False.
+    def context_history_match(self, s, context):
+        # Return a copy of the match in context.history for this (string, pattern) tuple, if it exists.
 
-        if type(self) is StringPattern and self.is_regex:
-            # This is a regex pattern - just use the whole string
-            self.regex_string = self.pattern
-            return
+        if (s, self) not in context.history:
+            return None
 
-        # Otherwise, create definitions part of the string
-        defns = "(?(DEFINE)"
-        for sub_pattern in self.nested_dependents():
-            # Use the regex pattern parts
-            defns += "(?P<p" + sub_pattern.regex_id + ">" + sub_pattern.regex_pattern_part() + ")"
+        entry = context.history[(s, self)]
 
-        defns += ")"
+        if entry is None:
+            return None
 
-        # Add on the the main part - just a reference to the definition of self
-        self.regex_string = defns + "^(?&p" + str(self.regex_id) + ")$"
+        # Otherwise, return a deep copy of the new match (which will include submatches etc)
+        return entry.make_copy()
 
 
 class StringPattern(Pattern):
@@ -1415,9 +1425,8 @@ class StringPattern(Pattern):
         # Optionally specify non variable mapping
 
         if pattern_offset == 0 and (s, self) in context.history:
-            return context.history[(s, self)]
+            return self.context_history_match(s, context)
 
-        printing = False
         next_debug = None
         if debug is not None:
             # Debugging
@@ -1425,6 +1434,7 @@ class StringPattern(Pattern):
 
             if pattern_offset == 0:
                 print(spaces, "Attempting to match", s, " in ", self.name, ", with pattern: ", self.pattern)
+
             next_debug = debug + 1
 
         parent_pattern_match = None
@@ -1934,6 +1944,10 @@ class UnionPattern(Pattern):
     def match(self, s, context, pattern_match=None, speeds="all", debug=None):
         # Match s against one of the patterns. Optionally specify only speedy/non-speedy/all patterns.
 
+        # Check history
+        if (s, self) in context.history:
+            return self.context_history_match(s, context)
+
         next_debug = None
         if debug is not None:
             # Debugging
@@ -2011,6 +2025,7 @@ class UnionPattern(Pattern):
             result = check_match(self, match)
             if result is not None:
                 # Successful match - result is a union match
+                context.add_to_history(s, self, result)
                 return result
 
         # Try the non-speedy union patterns
@@ -2022,10 +2037,12 @@ class UnionPattern(Pattern):
             result = check_match(self, match)
             if result is not None:
                 # Successful match - result is a union match
+                context.add_to_history(s, self, result)
                 return result
 
         # No match
-        context.add_to_history(s, self, None)
+        if speeds == "all":
+            context.add_to_history(s, self, None)
         return None
 
     def nested_options(self, found=None):
