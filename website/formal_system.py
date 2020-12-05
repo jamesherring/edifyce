@@ -69,6 +69,9 @@ class FormalSystem(object):
             # Create a proof line for this line
             proof_line = proof.add_proof_line(line)
 
+            # Clear the context history
+            context.clear_history()
+
             # Check the line is of a given line type
             found = False
             for line_type in self.line_types:
@@ -140,8 +143,9 @@ class FormalSystem(object):
 
                     if "ref" in subs:
                         # Use the given reference and formula
+
                         ref = subs["ref"].string
-                        formula = subs["formula"]
+                        formula = subs["f"]
 
                         proof_line.formula = formula
 
@@ -197,6 +201,9 @@ class FormalSystem(object):
                                 proof_line.invalid_message = key + " does not apply with antecedents: " + \
                                                              ",".join(antecedent_lines)
 
+                        else:
+                            raise Exception("Did not recognise logical key '" + key + "' on line " + str(line_number))
+
                     else:
                         # Must have a formula
                         formula = subs["formula"]
@@ -231,10 +238,14 @@ class FormalSystem(object):
 
             i += 1
 
-            if line_number_offset == 0:
-                for line in proof.proof_lines:
-                    if line.line_type.behaviour == "logical":
-                        print(line.text.lstrip(), line.valid)
+        if line_number_offset == 0:
+            valid_proof = True
+            for line in proof.proof_lines:
+                if line.line_type.behaviour == "logical":
+                    print(line.text.lstrip(), line.valid)
+                    valid_proof = valid_proof and line.valid
+
+            print("\nValid proof: ", valid_proof)
 
     def __str__(self):
         return self.name
@@ -326,14 +337,13 @@ class InferenceRule(object):
         # Check the rule condition
         if self.condition is not None:
 
-            # Make a copy of context to add deduction and antecedents
-            context_copy = context.get_copy()
+            # Make a condition context with antecedents and deduction
+            condition_context = {
+                "antecedents": antecedents,
+                "deduction": deduction
+            }
 
-            # Get a list of antecedent proof lines
-            context_copy.variables["antecedents"] = antecedents
-            context_copy.variables["deduction"] = deduction
-
-            if not self.condition.check(match=None, context=context_copy):
+            if not self.condition.check(match=None, context=context, condition_context=condition_context):
                 # Doesn't meet the condition
                 return False
 
@@ -457,6 +467,83 @@ class ProofLine(object):
     def is_root(self):
         # Whether the line has no indent line
         return self.indent_line() is None
+
+    def get_by_path(self, s, context):
+        # Get an attribute of the proofline given a path s
+
+        if s[:13] == "indent_line()":
+            # Get the indent line
+
+            if len(s) == 13:
+                return self.indent_line()
+
+            assert s[13] == "."
+
+            return self.indent_line().get_by_path(s[14:], context)
+
+        if s[:14] == "indent_lines()":
+
+            if len(s) == 14:
+                return set(line.match for line in self.indent_lines()), set(), True
+
+            assert s[14] == "."
+            remainder = s[15:]
+
+            instances = set()
+            negatives = set()
+            complete = True
+
+            for m in set(line.match for line in self.indent_lines()):
+                result = m.get_by_path(remainder, context)
+
+                if type(result) is tuple:
+                    # This is a tuple result with negatives and completeness
+
+                    sub_instances, sub_negatives, sub_complete = result
+
+                    instances = instances.union(sub_instances)
+                    negatives = negatives.union(sub_negatives)
+                    complete = complete and sub_complete
+
+                    continue
+
+                # Otherwise, just an instances
+                instances.add(result)
+
+            return instances, negatives, complete
+
+        if s[:9] == "formula()":
+            # Get the formula match
+
+            if len(s) == 9:
+                return self.formula
+
+            assert s[9] == "."
+
+            return self.formula.get_by_path(s[10:], context)
+
+        if s[:7] == "match()":
+            # Get the inference match
+
+            if len(s) == 7:
+                return self.match
+
+            assert s[7] == "."
+
+            return self.match.get_by_path(s[8:], context)
+
+        if s[:11] == "inf_match()":
+            # Get the inference match
+
+            if len(s) == 11:
+                return self.inference_match
+
+            assert s[11] == "."
+
+            return self.inference_match.get_by_path(s[12:], context)
+
+        if s == "is_root()":
+            return self.is_root()
 
     def __str__(self):
         return self.text

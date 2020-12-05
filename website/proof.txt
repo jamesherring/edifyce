@@ -1,12 +1,27 @@
-with $\alpha$, $\beta$ as formula:
-    if $\alpha$:
+with $A$, $B$ as formula:
 
-        [DT1, 2] $\alpha$
+    [A1] $(\neg A \rightarrow (\neg B \rightarrow \neg A))$
 
-        [A1] $(\alpha \rightarrow (\beta \rightarrow \alpha))$
+    if $\neg A$:
 
-        [MP, 4, 6] $(\beta \rightarrow \alpha)$
+        [DT1] $\neg A$
 
-        [R, 4] $\alpha$
+        [A1] $(\neg A \rightarrow (\neg B \rightarrow \neg A))$
 
-    # [DT2, 2, 4] $(\alpha \rightarrow \alpha)$
+        [MP, 7, 9] $(\neg B \rightarrow \neg A)$
+
+        [A3] $((\neg B \rightarrow \neg A) \rightarrow (A \rightarrow B))$
+
+        [MP, 11, 13] $(A \rightarrow B)$
+
+        if $A$:
+
+            [DT1] $A$
+
+            [R, 15] $(A \rightarrow B)$
+
+            [MP, 19, 21] $B$
+
+        [DT2, 23] $(A \rightarrow B)$
+
+    [DT2, 25] $(\neg A \rightarrow (A \rightarrow B))$
