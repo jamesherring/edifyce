@@ -2,7 +2,6 @@ import regex as re
 import inspect
 from website.formal_system import FormalSystem, LineType, InferenceRule, ProofLine
 from website.context import Context
-import copy
 
 
 class Match(object):
@@ -314,6 +313,22 @@ class Match(object):
             # Otherwise, just a pattern name or path
             return self.get_instances(inner, context)
 
+        if path[:18] == "shallow_instances(" and path[-1] == ")":
+            # Collect a set of shallow instances, possibly meeting some condition
+
+            inner = path[18:-1]
+
+            if ", " in inner:
+                index = inner.index(",")
+                pattern_name = inner[:index]
+
+                sub_condition = path_match.get_sub_matches()["a"][1].get_value(context)
+
+                return self.get_instances(pattern_name, context, sub_condition, attribute_name, shallow=True)
+
+            # Otherwise, just a pattern name or path
+            return self.get_instances(inner, context, shallow=True)
+
         if self.definition_mapping is not None and path in self.definition_mapping:
             return self.get_by_path(
                 path=self.definition_mapping[path],
@@ -427,10 +442,30 @@ class Match(object):
 
         return subs
 
-    def get_instances(self, pattern, context, condition=None, attribute_name=None):
+    def get_instances(self, pattern, context, condition=None, attribute_name=None, shallow=False):
         # Get instances of the pattern in nested sub matches, which meet the specified condition.
         # Optionally specify the attribute we are searching for
 
+        def add_to_set(instance, _set):
+            # Add the given instance to the set, if it's not equivalent to an existing member
+
+            for item in _set:
+                if instance.equivalent(item, context):
+                    return
+
+            _set.add(instance)
+
+        def set_union(a, b):
+            # Union two set a and b into a third set, union
+
+            union = a.copy()
+
+            for item in b:
+                add_to_set(item, union)
+
+            return union
+
+        # If shallow - don't look for nested instances of pattern deeper than instances found
         if type(pattern) is str:
             # Need to get the correct pattern
             pattern = context.variables[pattern]
@@ -449,49 +484,68 @@ class Match(object):
             # Include self
 
             if condition is None or condition.check(self, context):
-                instances.add(self)
+                add_to_set(self, instances)
 
-        # Union with any sub matches
-        for key, sub_match in self.get_sub_matches().items():
-            sub_instances, sub_negatives, sub_complete = sub_match.get_instances(pattern, context, condition, attribute_name)
+        if shallow and self.pattern is pattern:
+            # Don't check sub matches
+            pass
 
-            instances = instances.union(sub_instances)
-            negatives = negatives.union(sub_negatives)
+        else:
+            # Union with any sub matches
+            for key, sub_match_list in self.get_sub_matches().items():
 
-            # The result is only complete if all sub matches return a complete set
-            complete = complete and sub_complete
+                # Coerce the sub_matches into a list
+                if type(sub_match_list) is not list:
+                    sub_match_list = [sub_match_list]
 
-        # Check the negatives
-        false_negatives = set()
-        for key, sub_match in self.get_sub_matches().items():
-            sub_instances, sub_negatives, sub_complete = sub_match.get_instances(pattern, context, condition, attribute_name)
+                for sub_match in sub_match_list:
+                    sub_instances, sub_negatives, sub_complete = sub_match.get_instances(pattern, context, condition, attribute_name, shallow)
 
-            for neg in negatives:
+                    # instances = instances.union(sub_instances)
+                    # negatives = negatives.union(sub_negatives)
+                    instances = set_union(instances, sub_instances)
+                    negatives = set_union(negatives, sub_negatives)
 
-                keep = False
-                for item in sub_negatives:
-                    if item.equivalent(neg, context) is True:
-                        # Ok to keep
-                        keep = True
-                        break
+                    # The result is only complete if all sub matches return a complete set
+                    complete = complete and sub_complete
 
-                if keep:
-                    continue
+            # Check the negatives
+            false_negatives = set()
+            for key, sub_match_list in self.get_sub_matches().items():
 
-                if not sub_complete:
-                    # Not a negative
-                    false_negatives.add(neg)
-                    continue
+                # Coerce the sub_matches into a list
+                if type(sub_match_list) is not list:
+                    sub_match_list = [sub_match_list]
 
-                # Check each item
-                for item in sub_instances:
-                    if not (item.equivalent(neg, context) is False):
-                        # Not a negative
-                        false_negatives.add(neg)
-                        break
+                for sub_match in sub_match_list:
+                    sub_instances, sub_negatives, sub_complete = sub_match.get_instances(pattern, context, condition, attribute_name, shallow)
 
-        # Remove the false negatives
-        negatives = negatives - false_negatives
+                    for neg in negatives:
+
+                        keep = False
+                        for item in sub_negatives:
+                            if item.equivalent(neg, context) is True:
+                                # Ok to keep
+                                keep = True
+                                break
+
+                        if keep:
+                            continue
+
+                        if not sub_complete:
+                            # Not a negative
+                            false_negatives.add(neg)
+                            continue
+
+                        # Check each item
+                        for item in sub_instances:
+                            if not (item.equivalent(neg, context) is False):
+                                # Not a negative
+                                false_negatives.add(neg)
+                                break
+
+            # Remove the false negatives
+            negatives = negatives - false_negatives
 
         # Check context for extra restrictions
         if attribute_name is not None:
@@ -501,11 +555,13 @@ class Match(object):
 
                     if not r["negated"]:
                         # Positive membership
-                        instances.add(pattern.match(r["member"], context))
+                        # instances.add(pattern.match(r["member"], context))
+                        add_to_set(pattern.match(r["member"], context), instances)
 
                     else:
                         # Negative membership
-                        negatives.add(pattern.match(r["member"], context))
+                        # negatives.add(pattern.match(r["member"], context))
+                        add_to_set(pattern.match(r["member"], context), negatives)
 
         return instances, negatives, complete
 
@@ -563,7 +619,7 @@ class Match(object):
             return ""
 
         spaces = " " * depth * 4
-        s = spaces + str(self) + ": " + str(self.pattern.name) + "\n"
+        s = spaces + "> " + str(self) + ": " + str(self.pattern.name) + "\n"
 
         subs = self.get_sub_matches(include_skipped)
         for key in subs:
@@ -848,62 +904,45 @@ class Condition(object):
     def get_item(self, s, match, context, condition_context):
         # Get an item s given a match, context and condition context
 
-        if type(s) is str:
+        if s == "self":
+            return condition_context["origin"]
 
-            if s == "self":
-                return condition_context["origin"]
+        if s in condition_context:
+            return condition_context[s]
 
-            if s in condition_context:
-                return condition_context[s]
+        if s in context.variables:
+            return context.variables[s]
 
-            if s in context.variables:
-                return context.variables[s]
+        if s[:4] == "set(" and s[-1] == ")":
+            # Return a set with the given contents
+            inner = s[4:-1]
+            result = self.get_item(inner, match, context, condition_context)
 
-            if s[-1] == "]" and "[" in s:
-                # Looks like a list index
-                initial = s[:s.index("[")]
-                index = int(s[s.index("[") + 1:-1])
+            if type(result) is tuple:
+                # Already a triple
+                return result
 
-                initial = self.get_item(initial, match, context, condition_context)
+            # Return a new triple
+            return {result}, set(), True
 
-                return initial[index]
+        if s[-1] == "]" and "[" in s:
+            # Looks like a list index
+            initial = s[:s.index("[")]
+            index = int(s[s.index("[") + 1:-1])
 
-            if "." in s:
+            initial = self.get_item(initial, match, context, condition_context)
 
-                index = s.index(".")
-                initial = s[:index]
-                remainder = s[index + 1:]
+            return initial[index]
 
-                initial = self.get_item(initial, match, context, condition_context)
+        if "." in s:
 
-                if remainder == "indent_lines()":
-                    # Proof line function - return with the same signature as get_instances()
-                    return set(line.match for line in initial.indent_lines()), set(), True
+            index = s.index(".")
+            initial = s[:index]
+            remainder = s[index + 1:]
 
-                if remainder == "indent_line()":
-                    # Get the indenting line for this proof line (may be None)
-                    return initial.indent_line()
+            initial = self.get_item(initial, match, context, condition_context)
 
-                if remainder == "is_root()":
-                    # Return a boolean for the proof line
-                    return initial.is_root()
-
-                if remainder[:9] == "formula()":
-                    # Get the inference match for a proof line
-
-                    if len(remainder) == 9:
-                        return initial.inference_match
-
-                    assert remainder[9] == "."
-                    final_remainder = remainder[10:]
-
-                    return initial.inference_match.get_by_path(final_remainder, context)
-
-                # if type(initial) is ProofLine:
-                #     It's a proof line - get the inference match
-                    # initial = initial.inference_match
-
-                return initial.get_by_path(remainder, context)
+            return initial.get_by_path(remainder, context)
 
         return match.get_by_path(s, context)
 
@@ -916,9 +955,10 @@ class Condition(object):
 
         if condition_context is None:
             # Keep at least the origin match
-            condition_context = {
-                "origin": match
-            }
+            condition_context = dict()
+
+        if "origin" not in condition_context:
+            condition_context["origin"] = match
 
         subs = condition_match.get_sub_matches()
 
@@ -929,6 +969,49 @@ class Condition(object):
 
             left = self.get_item(equal_subs["left"].string, match, context, condition_context)
             right = self.get_item(equal_subs["right"].string, match, context, condition_context)
+
+            if type(left) is tuple and type(right) is tuple:
+                # Need to compare triples
+
+                left_instances, left_negatives, left_complete = left
+                right_instances, right_negatives, right_complete = right
+
+                if not (left_complete and right_complete):
+                    # Not identical
+                    return False
+
+                if not (len(left_instances) == len(right_instances) and len(left_negatives) == len(right_negatives)):
+                    # Size of the sets don't align
+                    return False
+
+                # Check the match items in instances
+                for left_item in left_instances:
+
+                    # Try to find this item in RHS
+                    found = False
+                    for right_item in right_instances:
+                        if left_item.equivalent(right_item, context):
+                            found = True
+                            break
+
+                    if not found:
+                        return False
+
+                # Every item in left_instances is in right_instances. Do the same with negatives
+                for left_item in left_negatives:
+
+                    # Try to find this item in RHS
+                    found = False
+                    for right_item in right_negatives:
+                        if left_item.equivalent(right_item, context):
+                            found = True
+                            break
+
+                    if not found:
+                        return False
+
+                # Every item in left_negatives is in right_negatives.
+                return True
 
             if type(left) is not Match:
                 # Items are not match instances - just test direct equality
@@ -948,7 +1031,13 @@ class Condition(object):
                 membership_subs = subs["negative_membership"].get_sub_matches()
 
             item = self.get_item(membership_subs["item"].string, match, context, condition_context)
-            instances, negatives, complete = self.get_item(membership_subs["set"].string, match, context, condition_context)
+            triple = self.get_item(membership_subs["set"].string, match, context, condition_context)
+
+            if triple is None:
+                # Set is empty
+                return negated
+
+            instances, negatives, complete = triple
 
             if type(item) is ProofLine:
                 # Get the line match
@@ -985,8 +1074,10 @@ class Condition(object):
             left = and_subs["left"]
             right = and_subs["right"]
 
-            return self.check(match, context, condition_match=left, condition_context=condition_context) and \
-                self.check(match, context, condition_match=right, condition_context=condition_context)
+            left_result = self.check(match, context, condition_match=left, condition_context=condition_context)
+            right_result = self.check(match, context, condition_match=right, condition_context=condition_context)
+
+            return left_result and right_result
 
         if "or" in subs:
             # Either sub-condition
@@ -1504,7 +1595,6 @@ class StringPattern(Pattern):
         )
 
         if pattern_offset == 0:
-
             if len(self.variables) == 0 and s == self.pattern:
                 # Match
                 return self.meets_condition(m, context)
@@ -1672,7 +1762,10 @@ class StringPattern(Pattern):
                         m.add_submatch(name, sub)
 
                     # Add the string variable
-                    m.add_submatch(var, sub_pattern.match(string_var, context, debug=next_debug))
+                    m.add_submatch(
+                        name=var,
+                        sub=sub_pattern.match(string_var, context, pattern_match=pattern_match, debug=next_debug)
+                    )
 
                     if pattern_offset == 0:
                         return self.meets_condition(m, context)
@@ -1966,8 +2059,16 @@ class UnionPattern(Pattern):
                 context.add_to_history(self, self, m)
                 return m
 
-        if s in context.string_variables:
-            pattern = context.string_variables[s]
+        string_variables = context.string_variables
+        if pattern_match is not None:
+            # This is also a pattern match
+
+            # Edit the context string variables to include the pattern
+            string_variables = context.string_variables.copy()
+            string_variables.update(pattern_match.variables)
+
+        if s in string_variables:
+            pattern = string_variables[s]
 
             if pattern is self:
                 m = Match(
@@ -2550,12 +2651,24 @@ class LatticeCompiler(object):
             ]
         )
 
-        func_names = ("has_parent", "equal_any", "instances", "indent_lines", "indent_line", "is_root", "formula")
+        func_names = (
+            "has_parent",
+            "equal_any",
+            "instances",
+            "shallow_instances",
+            "indent_lines",
+            "indent_line",
+            "is_root",
+            "formula",
+            "match",
+            "inf_match",
+            "set"
+        )
+
         function = StringPattern(
             name="function",
-            pattern="item.func(args)",
+            pattern="func(args)",
             variables={
-                "item": item,
                 "args": condition_args,
                 "func": StringPattern(
                     name="function_name",
@@ -2992,7 +3105,7 @@ class LatticeCompiler(object):
             valid = False
 
             # Clear context history
-            context.history = dict()
+            context.clear_history()
 
             # Check the inbuilt language options
             for key, option in self.line_options.items():

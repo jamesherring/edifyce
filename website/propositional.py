@@ -1,4 +1,3 @@
-print("1")
 # Propositional Calculus
 
 integer = StringPattern(name="integer", pattern="^(?:0|[1-9][0-9]*)$", is_regex=True)
@@ -16,8 +15,8 @@ ra.east = formula
 neg.f = formula
 
 # Dollar formulas - for TeX parsing
-dollar_formula = StringPattern(name="dollar_formula", pattern="$formula$", skip_node=True)
-dollar_formula.formula = formula
+dollar_formula = StringPattern(name="dollar_formula", pattern="$f$", skip_node=True)
+dollar_formula.f = formula
 
 # Dollar formula or a formula
 any_formula = UnionPattern(name="formula", patterns=[formula, dollar_formula], skip_node=True)
@@ -62,10 +61,10 @@ logical_pattern.formula = any_formula
 logical_line = LineType(name="logical", pattern=logical_pattern, behaviour="logical")
 
 # Build comma separated formulae
-join = StringPattern(name="join_formula", pattern="j, formula", skip_node=True)
-join.formula = formula
-comma_separated_formula = UnionPattern(name="csf", patterns=[any_formula, join], skip_node=True)
-join.j = comma_separated_formula
+f_join = StringPattern(name="join_formula", pattern="j, formula", skip_node=True)
+f_join.formula = any_formula
+comma_separated_formula = UnionPattern(name="csf", patterns=[any_formula, f_join], skip_node=True)
+f_join.j = comma_separated_formula
 
 # Variables for with parts
 variable = StringPattern(name="formula_variable_name", pattern="^[a-zA-Z0-9\\.\\\\]+$", is_regex=True)
@@ -97,40 +96,34 @@ with_line = LineType(name="with", pattern=with_pattern, behaviour="indent", add_
 if_pattern = StringPattern(name="if", pattern="Sif csf:")
 if_pattern.S = empty_pattern
 if_pattern.csf = comma_separated_formula
-suppose_line = LineType(name="suppose", pattern=if_pattern, behaviour="indent")
+if_line = LineType(name="if line", pattern=if_pattern, behaviour="indent")
 
 # Now make the inference rules
 
 # Make modus ponens
 mp_0 = formula
 
-mp_1 = StringPattern(name="mp_2", pattern="(alpha \\rightarrow beta)", parent=formula)
+mp_1 = StringPattern(name="mp_1", pattern="(alpha \\rightarrow beta)", parent=formula)
 mp_1.alpha = formula
 mp_1.beta = formula
 
-c = Condition(deduction.formula() == antecedents[1].formula().beta and antecedents[0].formula() == antecedents[1].formula().alpha and deduction.indent_line() == antecedents[0].indent_line() and deduction.indent_line() == antecedents[1].indent_line())
-mp = InferenceRule(name="Modus Ponens", label="MP", antecedents=[mp_0, mp_1], deduction=formula)
+c = Condition(deduction.formula() == antecedents[1].inf_match().beta and antecedents[0].formula() == antecedents[1].inf_match().alpha and deduction.indent_line() == antecedents[0].indent_line() and deduction.indent_line() == antecedents[1].indent_line())
+mp = InferenceRule(name="Modus Ponens", label="MP", antecedents=[mp_0, mp_1], deduction=formula, condition=c)
 
 # Deduction theorem has two directions, requires two inference rules
-# deduction = formula
-# c = Condition(deduction.formula in antecedents[0].instances(formula) and antecedents[0] in deduction.indent_lines())
-# dt_1 = InferenceRule(name="Deduction Theorem 1", label="DT1", antecedents=[if_pattern], deduction=deduction, condition=c)
+c = Condition(deduction.formula() in deduction.indent_lines().shallow_instances(formula))
+dt_1 = InferenceRule(name="Deduction Theorem 1", label="DT1", antecedents=[], deduction=formula, condition=c)
 
-# Other direction for DT
-# ant_0 = if_pattern
-# ant_1 = logical_pattern
-# deduction = mp_1
-# c = Condition(deduction.alpha in antecedents[0].instances(formula) and deduction.beta == antecedents[1].formula and deduction.indent_line() == antecedents[0].indent_line() and antecedents[1].indent_line() == antecedents[0])
-# dt_2 = InferenceRule(name="Deduction Theorem 2", label="DT2", antecedents=[ant_0, ant_1], deduction=deduction, condition=c)
+c = Condition(deduction.indent_line() == antecedents[0].indent_line().indent_line() and set(deduction.inf_match().alpha) == antecedents[0].indent_line().match().shallow_instances(formula) and deduction.inf_match().beta == antecedents[0].formula())
+dt_2 = InferenceRule(name="Deduction Theorem 2", label="DT2", antecedents=[formula], deduction=mp_1, condition=c)
 
 # Rewrite an earlier line in the proof
 c = Condition(deduction.formula() == antecedents[0].formula() and (antecedents[0].is_root() or antecedents[0].indent_line() in deduction.indent_lines()))
-rewrite = InferenceRule(name="Rewrite", label="R", antecedents=[formula], deduction=formula)
+rewrite = InferenceRule(name="Rewrite", label="R", antecedents=[formula], deduction=formula, condition=c)
 
 # Create the formal system
-line_types = [import_line, empty_line, comment_line, logical_line, reference_line, with_line, suppose_line]
-rules = [mp, rewrite]
+line_types = [import_line, empty_line, comment_line, logical_line, reference_line, with_line, if_line]
+rules = [mp, dt_1, dt_2, rewrite]
 context_variables = {"formula": formula}
-# propositional = FormalSystem(name="propositional_logic", axioms=[a1, a2, a3], line_types=line_types, inference_rules=rules, context_variables=context_variables)
-# system["formal_system"] = propositional
-print("2")
+propositional = FormalSystem(name="propositional_logic", axioms=[a1, a2, a3], line_types=line_types, inference_rules=rules, context_variables=context_variables)
+system["formal_system"] = propositional

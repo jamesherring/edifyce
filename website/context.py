@@ -25,7 +25,6 @@ class Context(object):
 
         # Keep a match history, so we can quick match strings with patterns. Needs to cleared whenever context changes
         self.history = dict()
-        self.negative_history = dict()
 
     def add_restriction(self, r):
         # Parse a restriction r and add to context
@@ -80,3 +79,7 @@ class Context(object):
     def add_to_history(self, key, pattern, match):
         # Add a match to a key, pattern pair in history (match may be None)
         self.history[(key, pattern)] = match
+
+    def clear_history(self):
+        # Clear context history
+        self.history = dict()
