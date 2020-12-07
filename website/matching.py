@@ -2839,6 +2839,47 @@ class LatticeCompiler(object):
         # Inference rules are object
         obj.patterns.append(inference_rule)
 
+        # Line continuation
+        inner_pattern = StringPattern(
+            name="inner",
+            pattern="^(.*)$",
+            is_regex=True
+        )
+
+        line_continuation = UnionPattern(
+            name="line_continuation",
+            patterns=[
+                StringPattern(
+                    name="ending_slash",
+                    pattern="inner \\",
+                    variables={"inner": inner_pattern, "append": " "},
+                    skip_node=True
+                ),
+                StringPattern(
+                    name="ending_open_bracket",
+                    pattern="inner(",
+                    variables={"inner": inner_pattern, "append": "("},
+                    skip_node=True
+                ),
+                StringPattern(
+                    name="ending_comma",
+                    pattern="inner,",
+                    variables={"inner": inner_pattern, "append": ", "},
+                    skip_node=True
+                )
+            ]
+        )
+        end_line_continuation = UnionPattern(
+            name="end_line_continuation",
+            patterns=[
+                StringPattern(
+                    name="close_bracket",
+                    pattern="S)",
+                    variables={"S": spaces}
+                )
+            ]
+        )
+
         # Build the system dictionary
         self.system = {
             "boolean": boolean,
@@ -2857,7 +2898,9 @@ class LatticeCompiler(object):
             "attribute": attribute,
             "formal_system_pattern": fs,
             "line_type": line_type,
-            "inference_rule": inference_rule
+            "inference_rule": inference_rule,
+            "line_continuation": line_continuation,
+            "end_line_continuation": end_line_continuation
         }
 
         self.line_options = {
@@ -3107,6 +3150,46 @@ class LatticeCompiler(object):
             # Clear context history
             context.clear_history()
 
+            # First check for line continuation
+            continuation = self.system["line_continuation"]
+            end_continuation = self.system["end_line_continuation"]
+            lines_combined = 1
+
+            while True:
+                if i + lines_combined >= len(lines):
+                    # No more lines to add
+                    break
+
+                result = continuation.match(line, context)
+
+                if result is None:
+                    # Not an extended line. Check the end continuation
+
+                    final_line = lines[i + lines_combined]
+                    result = end_continuation.match(final_line, context)
+
+                    if result is not None:
+                        # Final line needs to be included
+                        line = line + final_line.lstrip()
+                        lines_combined += 1
+
+                    break
+
+                # Otherwise, get the inner string
+                subs = result.get_sub_matches()
+                inner = subs["inner"]
+
+                line = inner.string
+
+                if "append" in inner.parent_match.pattern.variables:
+                    # Add the append string
+                    line += inner.parent_match.pattern.variables["append"]
+
+                # Append the next line, stripping leading spaces
+                line += lines[i + lines_combined].lstrip()
+
+                lines_combined += 1
+
             # Check the inbuilt language options
             for key, option in self.line_options.items():
 
@@ -3159,7 +3242,7 @@ class LatticeCompiler(object):
                 # Couldn't parse this line
                 raise Exception("Could not parse line " + str(line_number) + ": " + line)
 
-            i += 1
+            i += lines_combined
 
         return context
 
