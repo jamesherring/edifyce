@@ -21,16 +21,28 @@ dollar_formula.f = formula
 # Dollar formula or a formula
 any_formula = UnionPattern(name="formula", patterns=[formula, dollar_formula], skip_node=True)
 
-a1 = StringPattern(name="A1", pattern="(alpha \\rightarrow (beta \\rightarrow alpha))", parent=formula)
+a1 = StringPattern(
+    name="A1",
+    pattern="(alpha \\rightarrow (beta \\rightarrow alpha))",
+    parent=formula
+)
 a1.add_variable("alpha", formula)
 a1.add_variable("beta", formula)
 
-a2 = StringPattern(name="A2", pattern="((alpha \\rightarrow (beta \\rightarrow gamma)) \\rightarrow ((alpha \\rightarrow beta) \\rightarrow (alpha \\rightarrow gamma)))", parent=formula)
+a2 = StringPattern(
+    name="A2",
+    pattern="((alpha \\rightarrow (beta \\rightarrow gamma)) \\rightarrow ((alpha \\rightarrow beta) \\rightarrow (alpha \\rightarrow gamma)))",
+    parent=formula
+)
 a2.alpha = formula
 a2.beta = formula
 a2.gamma = formula
 
-a3 = StringPattern(name="A3", pattern="((\\neg beta \\rightarrow \\neg alpha) \\rightarrow (alpha \\rightarrow beta))", parent=formula)
+a3 = StringPattern(
+    name="A3",
+    pattern="((\\neg beta \\rightarrow \\neg alpha) \\rightarrow (alpha \\rightarrow beta))",
+    parent=formula
+)
 a3.alpha = formula
 a3.beta = formula
 
@@ -86,7 +98,13 @@ join_wp.j = cswp
 with_pattern = StringPattern(name="with", pattern="Swith cswp:")
 with_pattern.S = empty_pattern
 with_pattern.cswp = cswp
-with_line = LineType(name="with", pattern=with_pattern, behaviour="indent", add_context_key_path="self.with_part.v", add_context_value_path="non_skip_parent().pattern")
+with_line = LineType(
+    name="with",
+    pattern=with_pattern,
+    behaviour="indent",
+    add_context_key_path="self.with_part.v",
+    add_context_value_path="non_skip_parent().pattern"
+)
 
 if_pattern = StringPattern(name="if", pattern="Sif csf:")
 if_pattern.S = empty_pattern
@@ -102,7 +120,12 @@ mp_1 = StringPattern(name="mp_1", pattern="(alpha \\rightarrow beta)", parent=fo
 mp_1.alpha = formula
 mp_1.beta = formula
 
-c = Condition(deduction.formula() == antecedents[1].inf_match().beta and antecedents[0].formula() == antecedents[1].inf_match().alpha and deduction.indent_line() == antecedents[0].indent_line() and deduction.indent_line() == antecedents[1].indent_line())
+c = Condition(
+    deduction.formula() == antecedents[1].inf_match().beta and \
+    antecedents[0].formula() == antecedents[1].inf_match().alpha and \
+    deduction.indent_line() == antecedents[0].indent_line() and \
+    deduction.indent_line() == antecedents[1].indent_line()
+)
 mp = InferenceRule(name="Modus Ponens", label="MP", antecedents=[mp_0, mp_1], deduction=formula, condition=c)
 
 # A formula in the given set can be deduced
@@ -110,19 +133,33 @@ c = Condition(deduction.formula() in deduction.indent_lines().shallow_instances(
 if_rule = InferenceRule(name="If", label="IF", antecedents=[], deduction=formula, condition=c)
 
 # Deduction theorem has two directions, requires two inference rules
-c = Condition(deduction.formula() == antecedents[0].inf_match().beta and deduction.indent_line().match().shallow_instances(formula) == set(antecedents[0].inf_match().alpha) and deduction.indent_line().indent_line() == antecedents[0].indent_line())
+c = Condition(
+    deduction.formula() == antecedents[0].inf_match().beta and \
+    deduction.indent_line().match().shallow_instances(formula) == set(antecedents[0].inf_match().alpha) and \
+    deduction.indent_line().indent_line() == antecedents[0].indent_line()
+)
 dt_1 = InferenceRule(name="Deduction Theorem 1", label="DT1", antecedents=[mp_1], deduction=formula, condition=c)
 
-c = Condition(deduction.indent_line() == antecedents[0].indent_line().indent_line() and set(deduction.inf_match().alpha) == antecedents[0].indent_line().match().shallow_instances(formula) and deduction.inf_match().beta == antecedents[0].formula())
+c = Condition(
+    deduction.indent_line() == antecedents[0].indent_line().indent_line() and \
+    set(deduction.inf_match().alpha) == antecedents[0].indent_line().match().shallow_instances(formula) and \
+    deduction.inf_match().beta == antecedents[0].formula()
+)
 dt_2 = InferenceRule(name="Deduction Theorem 2", label="DT2", antecedents=[formula], deduction=mp_1, condition=c)
 
 # Rewrite an earlier line in the proof
-c = Condition(deduction.formula() == antecedents[0].formula() and (antecedents[0].is_root() or antecedents[0].indent_line() in deduction.indent_lines()))
+c = Condition(
+    deduction.formula() == antecedents[0].formula() and \
+    (antecedents[0].is_root() or antecedents[0].indent_line() in deduction.indent_lines())
+)
 thinning = InferenceRule(name="Thinning", label="T", antecedents=[formula], deduction=formula, condition=c)
 
 # Create the formal system
-line_types = [import_line, empty_line, comment_line, reference_line, with_line, if_line]
-rules = [mp, if_rule, dt_1, dt_2, thinning]
-context_variables = {"formula": formula}
-propositional = FormalSystem(name="Propositional Logic", axioms=[a1, a2, a3], line_types=line_types, inference_rules=rules, context_variables=context_variables)
+propositional = FormalSystem(
+    name="Propositional Logic",
+    axioms=[a1, a2, a3],
+    line_types=[import_line, empty_line, comment_line, reference_line, with_line, if_line],
+    inference_rules=[mp, if_rule, dt_1, dt_2, thinning],
+    context_variables={"formula": formula}
+)
 system["formal_system"] = propositional
