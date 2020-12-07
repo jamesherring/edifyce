@@ -76,9 +76,9 @@ class Context(object):
     def get_copy(self):
         return Context(self.variables.copy(), self.string_variables.copy(), self.restrictions.copy(), self.system.copy())
 
-    def add_to_history(self, key, pattern, match):
-        # Add a match to a key, pattern pair in history (match may be None)
-        self.history[(key, pattern)] = match
+    def add_to_history(self, key, pattern, pattern_match, match):
+        # Add a match to a key, pattern, pattern_match tuple in history (match may be None)
+        self.history[(key, pattern, pattern_match)] = match
 
     def clear_history(self):
         # Clear context history

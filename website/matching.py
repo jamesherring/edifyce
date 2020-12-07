@@ -1320,7 +1320,7 @@ class Pattern(object):
         # Otherwise, error
         raise Exception(self.name + " does not have attribute: " + name)
 
-    def meets_condition(self, match, context, update_history=True):
+    def meets_condition(self, match, pattern_match, context, update_history=True):
         # Check that a given match meets the condition for this Pattern
         # Optionally update the context history
 
@@ -1328,17 +1328,17 @@ class Pattern(object):
             # Successful match
 
             if update_history:
-                context.add_to_history(match.string, self, match)
+                context.add_to_history(match.string, self, pattern_match, match)
             return match
 
         if not self.condition.check(match, context):
 
             if update_history:
-                context.add_to_history(match.string, self, None)
+                context.add_to_history(match.string, self, pattern_match, None)
             return None
 
         if update_history:
-            context.add_to_history(match.string, self, match)
+            context.add_to_history(match.string, self, pattern_match, match)
         return match
 
     def may_contain(self, other, ignore=None):
@@ -1376,13 +1376,13 @@ class Pattern(object):
         # No variable works
         return False
 
-    def context_history_match(self, s, context):
+    def context_history_match(self, s, pattern_match, context):
         # Return a copy of the match in context.history for this (string, pattern) tuple, if it exists.
 
-        if (s, self) not in context.history:
+        if (s, self, pattern_match) not in context.history:
             return None
 
-        entry = context.history[(s, self)]
+        entry = context.history[(s, self, pattern_match)]
 
         if entry is None:
             return None
@@ -1515,8 +1515,8 @@ class StringPattern(Pattern):
 
         # Optionally specify non variable mapping
 
-        if pattern_offset == 0 and (s, self) in context.history:
-            return self.context_history_match(s, context)
+        if pattern_offset == 0 and (s, self, pattern_match) in context.history:
+            return self.context_history_match(s, pattern_match, context)
 
         next_debug = None
         if debug is not None:
@@ -1552,7 +1552,7 @@ class StringPattern(Pattern):
                 string=s,
                 parent_pattern_match=parent_pattern_match
             )
-            context.add_to_history(s, self, m)
+            context.add_to_history(s, self, pattern_match, m)
             return m
 
         if type(s) is StringPattern:
@@ -1564,12 +1564,12 @@ class StringPattern(Pattern):
                     string=self,
                     parent_pattern_match=parent_pattern_match
                 )
-                context.add_to_history(self, self, m)
+                context.add_to_history(self, self, pattern_match, m)
                 return m
 
             if s.is_regex or self.is_regex:
                 # Can't mix with regex
-                context.add_to_history(s, self, None)
+                context.add_to_history(s, self, pattern_match, None)
                 return None
 
             # Store the pattern
@@ -1597,13 +1597,13 @@ class StringPattern(Pattern):
         if pattern_offset == 0:
             if len(self.variables) == 0 and s == self.pattern:
                 # Match
-                return self.meets_condition(m, context)
+                return self.meets_condition(m, pattern_match, context)
 
             # Check if the whole string is a variable
             for svar, sub_pattern in string_variables.items():
                 if s == svar and self.match(sub_pattern, context, debug=next_debug):
                     # Match!
-                    return self.meets_condition(m, context)
+                    return self.meets_condition(m, pattern_match, context)
 
         if self.is_regex:
             # Use the regex match function
@@ -1622,13 +1622,13 @@ class StringPattern(Pattern):
                     result = defn["definition"].apply(s, self, context)
 
                     if result is not None:
-                        context.add_to_history(s, self, result)
+                        context.add_to_history(s, self, pattern_match, result)
                         return result
 
             # Try the quick regex
             if re.match(self.quick_regex, s) is None:
                 # No match
-                context.add_to_history(s, self, None)
+                context.add_to_history(s, self, pattern_match, None)
                 return None
 
         # Get the pattern string, excluding any initial offset
@@ -1640,7 +1640,7 @@ class StringPattern(Pattern):
             if s == pattern:
                 # Valid match
                 if pattern_offset == 0:
-                    return self.meets_condition(m, context)
+                    return self.meets_condition(m, pattern_match, context)
 
                 return m
 
@@ -1655,14 +1655,14 @@ class StringPattern(Pattern):
         if len(pattern) == 0 and len(s) == 0:
             # Easy case
             if pattern_offset == 0:
-                return self.meets_condition(m, context)
+                return self.meets_condition(m, pattern_match, context)
 
             return m
 
         if (len(pattern) == 0 and len(s) > 0) or (len(pattern) > 0 and len(s) == 0):
             # No match
             if pattern_offset == 0:
-                context.add_to_history(s, self, None)
+                context.add_to_history(s, self, pattern_match, None)
             return None
 
         if non_variable_mapping is None:
@@ -1681,7 +1681,7 @@ class StringPattern(Pattern):
                 non_variable_mapping.append([part_index, [index + next_index]])
 
                 if next_index == -1:
-                    context.add_to_history(s, self, None)
+                    context.add_to_history(s, self, pattern_match, None)
                     return None
 
                 index = index + next_index + 1
@@ -1768,7 +1768,7 @@ class StringPattern(Pattern):
                     )
 
                     if pattern_offset == 0:
-                        return self.meets_condition(m, context)
+                        return self.meets_condition(m, pattern_match, context)
 
                     return m
 
@@ -1864,7 +1864,7 @@ class StringPattern(Pattern):
                 m.add_submatch(var, sub_match)
 
                 if pattern_offset == 0:
-                    return self.meets_condition(m, context)
+                    return self.meets_condition(m, pattern_match, context)
 
                 return m
 
@@ -1872,7 +1872,7 @@ class StringPattern(Pattern):
         if pattern_offset not in self.non_variable_locations:
             # No match
             if pattern_offset == 0:
-                context.add_to_history(s, self, None)
+                context.add_to_history(s, self, pattern_match, None)
             return None
 
         part = self.non_variable_locations[pattern_offset]
@@ -1902,13 +1902,13 @@ class StringPattern(Pattern):
                     m.add_submatch(name, sub)
 
                 if pattern_offset == 0:
-                    return self.meets_condition(m, context)
+                    return self.meets_condition(m, pattern_match, context)
 
                 return m
 
         # Otherwise, no match
         if pattern_offset == 0:
-            context.add_to_history(s, self, None)
+            context.add_to_history(s, self, pattern_match, None)
 
         return None
 
@@ -1925,11 +1925,11 @@ class StringPattern(Pattern):
                 pattern=self,
                 string=self.make_replacements(s)
             )
-            context.add_to_history(s, self, m)
+            context.add_to_history(s, self, None, m)
             return m
 
         # No matches
-        context.add_to_history(s, self, None)
+        context.add_to_history(s, self, None, None)
         return None
 
     def add_variable(self, name, pattern):
@@ -2038,8 +2038,8 @@ class UnionPattern(Pattern):
         # Match s against one of the patterns. Optionally specify only speedy/non-speedy/all patterns.
 
         # Check history
-        if (s, self) in context.history:
-            return self.context_history_match(s, context)
+        if (s, self, pattern_match) in context.history:
+            return self.context_history_match(s, pattern_match, context)
 
         next_debug = None
         if debug is not None:
@@ -2056,7 +2056,7 @@ class UnionPattern(Pattern):
                     pattern=self,
                     string=self
                 )
-                context.add_to_history(self, self, m)
+                context.add_to_history(self, self, pattern_match, m)
                 return m
 
         string_variables = context.string_variables
@@ -2075,7 +2075,7 @@ class UnionPattern(Pattern):
                     pattern=self,
                     string=s
                 )
-                context.add_to_history(s, self, m)
+                context.add_to_history(s, self, pattern_match, m)
                 return m
 
         # Separate the faster patterns - and check these ones first
@@ -2101,7 +2101,7 @@ class UnionPattern(Pattern):
             # Otherwise looks like a successful match
 
             # Check the condition
-            if self.meets_condition(m, context, update_history=False) is not None:
+            if self.meets_condition(m, pattern_match, context, update_history=False) is not None:
                 # Success!
 
                 # Create a match object
@@ -2126,7 +2126,7 @@ class UnionPattern(Pattern):
             result = check_match(self, match)
             if result is not None:
                 # Successful match - result is a union match
-                context.add_to_history(s, self, result)
+                context.add_to_history(s, self, pattern_match, result)
                 return result
 
         # Try the non-speedy union patterns
@@ -2138,12 +2138,12 @@ class UnionPattern(Pattern):
             result = check_match(self, match)
             if result is not None:
                 # Successful match - result is a union match
-                context.add_to_history(s, self, result)
+                context.add_to_history(s, self, pattern_match, result)
                 return result
 
         # No match
         if speeds == "all":
-            context.add_to_history(s, self, None)
+            context.add_to_history(s, self, pattern_match, None)
         return None
 
     def nested_options(self, found=None):

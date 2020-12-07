@@ -1,3 +1,4 @@
+print("1")
 # Propositional Calculus
 
 integer = StringPattern(name="integer", pattern="^(?:0|[1-9][0-9]*)$", is_regex=True)
@@ -163,3 +164,4 @@ propositional = FormalSystem(
     context_variables={"formula": formula}
 )
 system["formal_system"] = propositional
+print("2")
