@@ -1,13 +1,12 @@
-print("1")
 # Propositional Calculus
 
-integer = StringPattern(name="integer", pattern="^(?:0|[1-9][0-9]*)$", is_regex=True)
+integer = StringPattern(name="integer", pattern="^(?:0|[1-9][0-9]*)$", is_regex=True, proper_initial_segment="always")
 
 pv = StringPattern(name="variable", pattern="p_i")
 pv.i = integer
 
-ra = StringPattern(name="rightarrow", pattern="(left \\rightarrow east)")
-neg = StringPattern(name="negation", pattern="\\neg f")
+ra = StringPattern(name="rightarrow", pattern="(left \\rightarrow east)", proper_initial_segment="never")
+neg = StringPattern(name="negation", pattern="\\neg f", proper_initial_segment="never")
 
 formula = UnionPattern(name="formula", patterns=[pv, ra, neg])
 
@@ -16,7 +15,7 @@ ra.east = formula
 neg.f = formula
 
 # Dollar formulas - for TeX parsing
-dollar_formula = StringPattern(name="dollar_formula", pattern="$f$", skip_node=True)
+dollar_formula = StringPattern(name="dollar_formula", pattern="$f$", skip_node=True, proper_initial_segment="never")
 dollar_formula.f = formula
 
 # Dollar formula or a formula
@@ -25,7 +24,8 @@ any_formula = UnionPattern(name="formula", patterns=[formula, dollar_formula], s
 a1 = StringPattern(
     name="A1",
     pattern="(alpha \\rightarrow (beta \\rightarrow alpha))",
-    parent=formula
+    parent=formula,
+    proper_initial_segment="never"
 )
 a1.add_variable("alpha", formula)
 a1.add_variable("beta", formula)
@@ -33,7 +33,8 @@ a1.add_variable("beta", formula)
 a2 = StringPattern(
     name="A2",
     pattern="((alpha \\rightarrow (beta \\rightarrow gamma)) \\rightarrow ((alpha \\rightarrow beta) \\rightarrow (alpha \\rightarrow gamma)))",
-    parent=formula
+    parent=formula,
+    proper_initial_segment="never"
 )
 a2.alpha = formula
 a2.beta = formula
@@ -42,7 +43,8 @@ a2.gamma = formula
 a3 = StringPattern(
     name="A3",
     pattern="((\\neg beta \\rightarrow \\neg alpha) \\rightarrow (alpha \\rightarrow beta))",
-    parent=formula
+    parent=formula,
+    proper_initial_segment="never"
 )
 a3.alpha = formula
 a3.beta = formula
@@ -62,7 +64,7 @@ comment_line = LineType(name="comment", pattern=comment_pattern, behaviour="none
 # Create references
 reference = StringPattern(name="reference", pattern="^[a-zA-Z0-9 ,]+$", is_regex=True)
 
-reference_pattern = StringPattern(name="reference_pattern", pattern="S[ref] formula")
+reference_pattern = StringPattern(name="reference_pattern", pattern="S[ref] formula", proper_initial_segment="never")
 reference_pattern.S = empty_pattern
 reference_pattern.ref = reference
 reference_pattern.formula = any_formula
@@ -76,7 +78,7 @@ f_join.j = comma_separated_formula
 
 # Variables for with parts
 variable = StringPattern(name="formula_variable_name", pattern="^[a-zA-Z0-9\\.\\\\]+$", is_regex=True)
-dollar_variable = StringPattern(name="dollar_variable", pattern="$v$", skip_node=True)
+dollar_variable = StringPattern(name="dollar_variable", pattern="$v$", skip_node=True, proper_initial_segment="never")
 dollar_variable.v = variable
 
 # Build comma separated variables
@@ -85,7 +87,7 @@ join.variable = dollar_variable
 csv = UnionPattern(name="comma_separated_variables", patterns=[join, dollar_variable], skip_node=True)
 join.j = csv
 
-with_part = StringPattern(name="with_part", pattern="csv as pattern")
+with_part = StringPattern(name="with_part", pattern="csv as pattern", proper_initial_segment="never")
 with_part.csv = csv
 with_part.pattern = system["variable_name"]
 
@@ -96,7 +98,7 @@ cswp = UnionPattern(name="cswp", patterns=[join_wp, with_part], skip_node=True)
 join_wp.j = cswp
 
 # Build with line - for introducing variable patterns
-with_pattern = StringPattern(name="with", pattern="Swith cswp:")
+with_pattern = StringPattern(name="with", pattern="Swith cswp:", proper_initial_segment="never")
 with_pattern.S = empty_pattern
 with_pattern.cswp = cswp
 with_line = LineType(
@@ -107,7 +109,7 @@ with_line = LineType(
     add_context_value_path="non_skip_parent().pattern"
 )
 
-if_pattern = StringPattern(name="if", pattern="Sif csf:")
+if_pattern = StringPattern(name="if", pattern="Sif csf:", proper_initial_segment="never")
 if_pattern.S = empty_pattern
 if_pattern.csf = comma_separated_formula
 if_line = LineType(name="if line", pattern=if_pattern, behaviour="indent")
@@ -117,7 +119,7 @@ if_line = LineType(name="if line", pattern=if_pattern, behaviour="indent")
 # Make modus ponens
 mp_0 = formula
 
-mp_1 = StringPattern(name="mp_1", pattern="(alpha \\rightarrow beta)", parent=formula)
+mp_1 = StringPattern(name="mp_1", pattern="(alpha \\rightarrow beta)", parent=formula, proper_initial_segment="never")
 mp_1.alpha = formula
 mp_1.beta = formula
 
@@ -164,4 +166,3 @@ propositional = FormalSystem(
     context_variables={"formula": formula}
 )
 system["formal_system"] = propositional
-print("2")

@@ -1287,7 +1287,7 @@ class Definition(object):
 class Pattern(object):
     # Parent class for StringPattern and UnionPattern
 
-    def __init__(self, name, parent=None, condition=None):
+    def __init__(self, name, parent=None, condition=None, respect_brackets=None):
 
         # The pattern name
         self.name = name
@@ -1300,6 +1300,9 @@ class Pattern(object):
 
         # Keep a dictionary of attributes on the pattern
         self.attributes = dict()
+
+        # Note any bracket pairs that should be respected
+        self.respect_brackets = respect_brackets
 
     def add_attribute(self, name, value):
         # Add an attribute to this pattern
@@ -1390,14 +1393,59 @@ class Pattern(object):
         # Otherwise, return a deep copy of the new match (which will include submatches etc)
         return entry.make_copy()
 
+    def check_brackets(self, s):
+        # Return a boolean indicating if the string s respects brackets
+
+        if self.respect_brackets is None:
+            # Vacuously true
+            return True
+
+        i = 0
+        stack = []
+        while i < len(s):
+
+            found = False
+
+            for opening in self.respect_brackets:
+                closing = self.respect_brackets[opening]
+
+                if s[i:i + len(opening)] == opening:
+
+                    i += len(opening)
+                    stack.append(opening)
+                    found = True
+                    break
+
+                if s[i: i + len(closing)] == closing:
+
+                    if len(stack) == 0 or not stack[-1] == opening:
+                        # No corresponding opening bracket
+                        return False
+
+                    i += len(closing)
+                    stack.pop()
+                    found = True
+                    break
+
+            if not found:
+                i += 1
+
+        if len(stack) > 0:
+            # Stack left open at the end
+            return False
+
+        # All ok
+        return True
+
 
 class StringPattern(Pattern):
     """A string pattern created in compiling lattice"""
 
-    def __init__(self, name, pattern, condition=None, is_regex=False, variables=None, replacements=None,
-                 skip_node=False, value_path="", data_type=None, parent=None):
+    def __init__(self, name, pattern, condition=None, is_regex=False, proper_initial_segment=None,
+                 variables=None, replacements=None, skip_node=False, value_path="", data_type=None, parent=None,
+                 respect_brackets=None):
 
-        Pattern.__init__(self, name, parent, condition)
+        Pattern.__init__(self, name, parent, condition, respect_brackets)
 
         # The pattern string
         self.pattern = pattern
@@ -1449,10 +1497,15 @@ class StringPattern(Pattern):
                             "pattern": sub_pattern
                         }
 
+        # Give the pattern a certainty score - which reflects likelihood of a shallow match resulting in an actual match
+        self.certainty = 0
+
         # Build the non-variable locations
         self.non_variable_locations = None
 
         if not self.is_regex:
+            # Artificially infinite certainty
+            self.certainty = 10000
             self.get_non_variable_locations()
 
         # Build a quick regex - can be quick to rule out non-matches
@@ -1468,6 +1521,11 @@ class StringPattern(Pattern):
             self.quick_regex = self.quick_regex.replace(var, "(.*?)")
 
         self.quick_regex = "^" + self.quick_regex + "$"
+
+        # Whether proper initial segments match ("always", "never", or None - undetermined)
+        self.proper_initial_segment = proper_initial_segment
+
+        assert self.proper_initial_segment in ("always", "never", None)
 
     def get_non_variable_locations(self):
 
@@ -1497,6 +1555,9 @@ class StringPattern(Pattern):
         # Update the speed
         self.speedy = 0 in self.non_variable_locations
 
+        # Update the certainty - the number of non-variable characters
+        self.certainty = sum(len(self.non_variable_locations[i]) for i in self.non_variable_locations)
+
     def make_replacements(self, s):
         # Make replacements on a string s
 
@@ -1509,14 +1570,17 @@ class StringPattern(Pattern):
 
         return s
 
-    def match(self, s, context, pattern_offset=0, pattern_match=None, non_variable_mapping=None, debug=None):
+    def match(self, s, context, pattern_offset=0, pattern_match=None, non_variable_mapping=None, shallow=None,
+              debug=None):
         # Match a string s against this pattern with the given context.
         # Optionally offset the pattern string, to start at an index > 0. This is used recursively.
 
-        # Optionally specify non variable mapping
+        # Use pattern_match to indicate we are matching another StringPattern, which will change the string variables
 
-        if pattern_offset == 0 and (s, self, pattern_match) in context.history:
-            return self.context_history_match(s, pattern_match, context)
+        # Optionally specify non variable mapping.
+
+        # Use shallow=True to not perform nested pattern matching. Quicker to rule out false positives.
+        # Use shallow=False to not perform shallow checks (if already done).
 
         next_debug = None
         if debug is not None:
@@ -1527,6 +1591,11 @@ class StringPattern(Pattern):
                 print(spaces, "Attempting to match", s, " in ", self.name, ", with pattern: ", self.pattern)
 
             next_debug = debug + 1
+
+        if pattern_offset == 0 and (s, self, pattern_match) in context.history:
+            if debug is not None:
+                print((debug + 1) * 4 * " ", "Found in history.")
+            return self.context_history_match(s, pattern_match, context)
 
         parent_pattern_match = None
         if self.parent is not None:
@@ -1544,6 +1613,7 @@ class StringPattern(Pattern):
                 result = self.match(sub, context, debug=next_debug)
                 if result is None:
                     # No match for this sub pattern
+                    context.add_to_history(s, self, pattern_match, None)
                     return None
 
             # All sub patterns match
@@ -1587,6 +1657,11 @@ class StringPattern(Pattern):
             string_variables = context.string_variables.copy()
             string_variables.update(pattern_match.variables)
 
+        if pattern_offset == 0 and not self.check_brackets(s):
+            # Brackets don't match
+            context.add_to_history(s, self, pattern_match, None)
+            return None
+
         # Create an optimistic match
         m = Match(
             pattern=self,
@@ -1594,76 +1669,110 @@ class StringPattern(Pattern):
             parent_pattern_match=parent_pattern_match
         )
 
-        if pattern_offset == 0:
-            if len(self.variables) == 0 and s == self.pattern:
-                # Match
-                return self.meets_condition(m, pattern_match, context)
+        if shallow is not False:
 
-            # Check if the whole string is a variable
-            for svar, sub_pattern in string_variables.items():
-                if s == svar and self.match(sub_pattern, context, debug=next_debug):
-                    # Match!
+            if pattern_offset == 0:
+                if len(self.variables) == 0 and s == self.pattern:
+                    # Match
                     return self.meets_condition(m, pattern_match, context)
 
-        if self.is_regex:
-            # Use the regex match function
-            return self.match_regex(s, context)
+                # Check if the whole string is a variable
+                for svar, sub_pattern in string_variables.items():
+                    if s == svar and self.match(sub_pattern, context, debug=next_debug):
+                        # Match!
+                        return self.meets_condition(m, pattern_match, context)
 
-        if pattern_offset == 0:
+            if self.is_regex:
+                # Use the regex match function
+                return self.match_regex(s, context)
 
-            # Get the definitions for this pattern
-            self.get_definitions(context)
+            if pattern_offset == 0:
 
-            # Check if there is an applicable definition
-            for defn in self.definitions:
-                # Try the definition
+                # Get the definitions for this pattern
+                self.get_definitions(context)
 
-                if defn["valid"]:
-                    result = defn["definition"].apply(s, self, context)
+                # Check if there is an applicable definition
+                for defn in self.definitions:
+                    # Try the definition
 
-                    if result is not None:
-                        context.add_to_history(s, self, pattern_match, result)
-                        return result
+                    if defn["valid"]:
+                        result = defn["definition"].apply(s, self, context)
 
-            # Try the quick regex
-            if re.match(self.quick_regex, s) is None:
-                # No match
-                context.add_to_history(s, self, pattern_match, None)
+                        if result is not None:
+                            context.add_to_history(s, self, pattern_match, result)
+                            return result
+
+                # Check the non-variable parts all appear in order
+                indices = sorted(index for index in self.non_variable_locations)
+
+                i = 0
+                for index in indices:
+                    part = self.non_variable_locations[index]
+
+                    # Find the next occurrence of the part
+                    j = s[i:].find(part)
+
+                    if j == -1:
+                        # No match
+                        return None
+
+                    if index == 0 and j > 0:
+                        # Also no match
+                        return None
+
+                    i += j + len(part)
+
+                # Check the end of the pattern
+                if len(indices) > 0:
+                    last_non_variable = indices[-1]
+
+                    if len(self.variable_locations) == 0 or last_non_variable > max(i for i in self.variable_locations):
+                        # Pattern ends with a non-variable
+                        part = self.non_variable_locations[last_non_variable]
+
+                        if not s[-len(part):] == part:
+                            # No match at the end
+                            return None
+
+            # Get the pattern string, excluding any initial offset
+            pattern = self.pattern[pattern_offset:]
+
+            if len(self.variables) == 0:
+                # No variables
+
+                if s == pattern:
+                    # Valid match
+                    if pattern_offset == 0:
+                        return self.meets_condition(m, pattern_match, context)
+
+                    return m
+
+                # Otherwise, no match
+                if pattern_offset == 0:
+                    context.add_to_history(s, self, pattern_match, None)
                 return None
 
-        # Get the pattern string, excluding any initial offset
-        pattern = self.pattern[pattern_offset:]
+            # Otherwise, there are variables. Check the pattern character by character.
 
-        if len(self.variables) == 0:
-            # No variables
+            # NB this can't be done with regex - could be multiple matches with the same starting position only one of
+            # which is valid
 
-            if s == pattern:
-                # Valid match
+            if len(pattern) == 0 and len(s) == 0:
+                # Easy case
                 if pattern_offset == 0:
                     return self.meets_condition(m, pattern_match, context)
 
                 return m
 
-            # Otherwise, no match
-            return None
+            if (len(pattern) == 0 and len(s) > 0) or (len(pattern) > 0 and len(s) == 0):
+                # No match
+                if pattern_offset == 0:
+                    context.add_to_history(s, self, pattern_match, None)
+                return None
 
-        # Otherwise, there are variables. Check the pattern character by character.
-
-        # NB this can't be done with regex - could be multiple matches with the same starting position only one of
-        # which is valid
-
-        if len(pattern) == 0 and len(s) == 0:
-            # Easy case
-            if pattern_offset == 0:
-                return self.meets_condition(m, pattern_match, context)
-
-            return m
-
-        if (len(pattern) == 0 and len(s) > 0) or (len(pattern) > 0 and len(s) == 0):
-            # No match
-            if pattern_offset == 0:
-                context.add_to_history(s, self, pattern_match, None)
-            return None
+        # Here ends the shallow mapping
+        if shallow is True:
+            return True
 
         if non_variable_mapping is None:
             # Build a non-variable mapping - so we know where the possible positions are for each non-variable string
@@ -1743,7 +1852,7 @@ class StringPattern(Pattern):
                         pattern_offset=pattern_offset + len(var),
                         pattern_match=pattern_match,
                         non_variable_mapping=new_non_variable_mapping,
-                        debug=next_debug
+                        debug=debug
                     )
 
                     if remainder_match is None:
@@ -1780,7 +1889,7 @@ class StringPattern(Pattern):
                 possible_js = [len(s)]
 
             elif next_offset in self.variable_locations:
-                # There is another variable immediately following this one (generally not recommended as it's slower)
+                # There is another variable immediately following this one (generally not good as it's way slower)
 
                 # Loop through the possibilities for the variable in s
                 possible_js = list(range(0, len(s) + 1))
@@ -1791,6 +1900,14 @@ class StringPattern(Pattern):
 
                 # Get the possible positions of the pattern part in s
                 possible_js = non_variable_mapping[next_offset]
+
+                # Get the non-variable pattern part
+                pattern_part = self.non_variable_locations[next_offset]
+
+                # If the pattern part is final, it has to match the rest of the s exactly
+                if len(possible_js) > 1 and next_offset + len(pattern_part) == len(self.pattern):
+                    # The next pattern part is final. Keep only the final j
+                    possible_js = [possible_js[-1]]
 
             # Find max j - the position of the next non-variable part
             max_j = len(s)
@@ -1811,10 +1928,46 @@ class StringPattern(Pattern):
 
                 remainder_match = None
 
+                # Test if this sub_match is valid
+                if type(sub_pattern) is StringPattern:
+
+                    # Try a shallow match
+                    sub_match = sub_pattern.match(
+                        sub_s,
+                        context,
+                        pattern_match=pattern_match,
+                        shallow=True,
+                        debug=next_debug
+                    )
+
+                else:
+                    sub_match = sub_pattern.match(
+                        sub_s,
+                        context,
+                        pattern_match=pattern_match,
+                        debug=next_debug
+                    )
+
+                if sub_match is None:
+                    # No match here
+
+                    if pattern_offset == 0 and j > 0 and self.proper_initial_segment == "always":
+                        # This first segment didn't match - so no other possible_j will work either
+                        context.add_to_history(s, self, pattern_match, None)
+                        return None
+
+                    continue
+
                 if len(remainder) == 0:
                     if next_offset < len(self.pattern) and next_offset not in self.variable_locations:
                         # Pattern still has a string left with nothing to match in s (and it's not a variable,
-                        # which could match an empty string)
+                        # which could match an empty string). No match.
+
+                        if pattern_offset == 0 and j > 0 and self.proper_initial_segment == "never":
+                            # The sub_match is a matching proper initial segment - contradicting this rule
+                            context.add_to_history(s, self, pattern_match, None)
+                            return None
+
                         continue
 
                 else:
@@ -1832,19 +1985,38 @@ class StringPattern(Pattern):
                         pattern_offset=pattern_offset + len(var),
                         pattern_match=pattern_match,
                         non_variable_mapping=new_non_variable_mapping,
-                        debug=next_debug
+                        debug=debug
                     )
 
                     if remainder_match is None:
+                        # No match.
+
+                        if pattern_offset == 0 and j > 0 and self.proper_initial_segment == "never":
+                            # The sub_match is a matching proper initial segment - contradicting this rule
+                            context.add_to_history(s, self, pattern_match, None)
+                            return None
+
                         continue
 
                 # The remainder matches
 
-                # Test if this sub_match is valid
-                sub_match = sub_pattern.match(sub_s, context, pattern_match=pattern_match, debug=next_debug)
+                if sub_match is True:
+                    # Need to verify the sub_match with deeper check
+                    sub_match = sub_pattern.match(
+                        sub_s,
+                        context,
+                        pattern_match=pattern_match,
+                        shallow=False,
+                        debug=next_debug
+                    )
 
-                if sub_match is None:
-                    continue
+                    if sub_match is None:
+                        if pattern_offset == 0 and j > 0 and self.proper_initial_segment == "always":
+                            # The first segment didn't match - so no other possible_j will work either
+                            context.add_to_history(s, self, pattern_match, None)
+                            return None
+
+                        continue
 
                 # Match!
 
@@ -1891,7 +2063,7 @@ class StringPattern(Pattern):
                 pattern_offset=pattern_offset + len(part),
                 pattern_match=pattern_match,
                 non_variable_mapping=new_non_variable_mapping,
-                debug=next_debug
+                debug=debug
             )
 
             if remainder_match is not None:
@@ -2015,9 +2187,10 @@ class StringPattern(Pattern):
 class UnionPattern(Pattern):
     # A union of patterns
 
-    def __init__(self, name, patterns, condition=None, skip_node=False, value_path="union_value()", data_type=None, parent=None):
+    def __init__(self, name, patterns, condition=None, skip_node=False, value_path="union_value()", data_type=None,
+                 parent=None, respect_brackets=None):
 
-        Pattern.__init__(self, name, parent, condition)
+        Pattern.__init__(self, name, parent, condition, respect_brackets)
 
         # The list of patterns
         self.patterns = patterns
@@ -2031,10 +2204,7 @@ class UnionPattern(Pattern):
         # Skip the node in matches
         self.skip_node = skip_node
 
-        # Unions patterns are all speedy
-        self.speedy = True
-
-    def match(self, s, context, pattern_match=None, speeds="all", debug=None):
+    def match(self, s, context, pattern_match=None, shallow=None, debug=None):
         # Match s against one of the patterns. Optionally specify only speedy/non-speedy/all patterns.
 
         # Check history
@@ -2047,17 +2217,6 @@ class UnionPattern(Pattern):
             spaces = debug * 4 * " "
             print(spaces, "Attempting to match", s, " in ", self.name, ", a UnionPattern.")
             next_debug = debug + 1
-
-        if type(s) is StringPattern:
-            # This could match the union pattern.
-
-            if s is self:
-                m = Match(
-                    pattern=self,
-                    string=self
-                )
-                context.add_to_history(self, self, pattern_match, m)
-                return m
 
         string_variables = context.string_variables
         if pattern_match is not None:
@@ -2078,86 +2237,128 @@ class UnionPattern(Pattern):
                 context.add_to_history(s, self, pattern_match, m)
                 return m
 
-        # Separate the faster patterns - and check these ones first
-        speedy_patterns = [pattern for pattern in self.patterns if pattern.speedy]
-        non_speedy_patterns = [pattern for pattern in self.patterns if not pattern.speedy]
+        def attempt_match(pattern):
 
-        if speeds == "speedy":
-            # Include only speedy patterns
-            patterns = speedy_patterns
+            m = pattern.match(s, context, pattern_match=pattern_match, debug=next_debug, shallow=False)
 
-        elif speeds == "non-speedy":
-            # Include only non-speedy
-            patterns = non_speedy_patterns
-
-        else:
-            # Include both
-            patterns = speedy_patterns + non_speedy_patterns
-
-        def check_match(self, m):
             if m is None:
                 return None
 
-            # Otherwise looks like a successful match
+            if m is True:
+                return True
 
-            # Check the condition
-            if self.meets_condition(m, pattern_match, context, update_history=False) is not None:
-                # Success!
+            # Otherwise looks like a successful match. Check the chain of union patterns it has to match
+            for p in options[m.pattern]:
+                # Check this union condition
 
-                # Create a match object
-                union_match = Match(
-                    pattern=self,
+                if not p.meets_condition(m, pattern_match, context, update_history=False):
+                    # Match fails
+                    return None
+
+                # Otherwise, append the match
+                next_match = Match(
+                    pattern=p,
                     string=s
                 )
-                union_match.add_submatch(pattern.name, match)
+                next_match.add_submatch(m.pattern.name, m)
 
-                return union_match
+                # Prepare for the next pattern
+                m = next_match
 
-        # Check each of the patterns in turn
-        for pattern in patterns:
+            # Successful match - result is a union match
+            context.add_to_history(s, self, pattern_match, m)
+            return m
 
-            if type(pattern) is UnionPattern:
-                # Check speedy first - come back later for non-speedy if there's no matches
-                match = pattern.match(s, context, pattern_match=pattern_match, speeds="speedy", debug=next_debug)
+        if shallow is not False:
+            # shallow is None or True, need to perform shallow check
+            pass
+        
+        if not self.check_brackets(s):
+            # Brackets don't match
+            context.add_to_history(s, self, pattern_match, None)
+            return None
 
-            else:
-                match = pattern.match(s, context, pattern_match=pattern_match, debug=next_debug)
+        # Get the nested options which are string patterns directly
+        nested_options = self.nested_options(path_dict=True)
+        options = {p: nested_options[p] for p in nested_options if type(p) is StringPattern}
 
-            result = check_match(self, match)
+        deeper_check_patterns = []
+
+        for pattern in options:
+
+            # Try the pattern with shallow match first
+            result = pattern.match(s, context, pattern_match=pattern_match, debug=next_debug, shallow=True)
+
+            if result is None:
+                # No match
+                continue
+
+            if result is True:
+                # Looks ok, but needs deeper check
+                deeper_check_patterns.append(pattern)
+                continue
+
+            # Otherwise, it's a match
+            assert type(result) is Match
+
+            if not pattern.meets_condition(result, pattern_match, context, update_history=False):
+                # Match fails
+                continue
+
+            # Successful match - result is a union match
+            context.add_to_history(s, self, pattern_match, result)
+
+            return result
+
+        # Sort the deeper patterns by decreasing certainty
+        deeper_check_patterns.sort(key=lambda x: x.certainty, reverse=True)
+
+        # If we get here, need to evaluate the patterns more
+        for pattern in deeper_check_patterns:
+
+            result = attempt_match(pattern)
+
             if result is not None:
-                # Successful match - result is a union match
-                context.add_to_history(s, self, pattern_match, result)
-                return result
-
-        # Try the non-speedy union patterns
-        for pattern in [pattern for pattern in patterns if type(pattern) is UnionPattern]:
-
-            # Check non-speedy
-            match = pattern.match(s, context, pattern_match=pattern_match, speeds="non-speedy", debug=next_debug)
-
-            result = check_match(self, match)
-            if result is not None:
-                # Successful match - result is a union match
-                context.add_to_history(s, self, pattern_match, result)
+                # Successful match
                 return result
 
         # No match
-        if speeds == "all":
-            context.add_to_history(s, self, pattern_match, None)
+        context.add_to_history(s, self, pattern_match, None)
+
         return None
 
-    def nested_options(self, found=None):
-        # Get a set of all string patterns in this union - and any sub-unions
+    def nested_options(self, path_dict=False):
+        # Get a set of all patterns in this union - and any sub-unions
+        # Optionally return as a dictionary including the path to each option
 
-        if found is None:
-            # Start with an empty set
-            found = set()
+        # Start with an empty set
+        found = set()
+
+        if path_dict:
+            # It's a dictionary instead
+            found = dict()
 
         for p in self.patterns:
-            if type(p) is UnionPattern and p not in found:
-                found = found.union(p.nested_options())
 
-            found.add(p)
+            if type(p) is UnionPattern and p not in found:
+
+                sub_options = p.nested_options(path_dict)
+
+                if path_dict:
+
+                    # Append the sub paths to the dictionary, adding self
+                    for pattern in sub_options:
+                        found[pattern] = sub_options[pattern]
+                        found[pattern].append(self)
+
+                else:
+                    found = found.union(sub_options)
+
+            if path_dict:
+                found[p] = [self]
+
+            else:
+                found.add(p)
 
         return found
 
@@ -2175,7 +2376,8 @@ class LatticeCompiler(object):
             name="variable_name",
             pattern=r"^[a-zA-Z_][[:alnum:]_]*$",
             is_regex=True,
-            value_path="lookup()"
+            value_path="lookup()",
+            proper_initial_segment="always"
         )
 
         # Booleans
@@ -2186,20 +2388,17 @@ class LatticeCompiler(object):
                     name="True",
                     pattern="True",
                     data_type="boolean",
-                    value_path="item()"
+                    value_path="item()",
+                    proper_initial_segment="never"
                 ),
                 StringPattern(
                     name="False",
                     pattern="False",
                     data_type="boolean",
-                    value_path="item()"
+                    value_path="item()",
+                    proper_initial_segment="never"
                 ),
-                StringPattern(
-                    name="variable_boolean",
-                    pattern="var",
-                    variables={"var": variable_name},
-                    value_path="var.lookup()"
-                )
+                variable_name
             ]
         )
 
@@ -2232,20 +2431,17 @@ class LatticeCompiler(object):
                     name="double_quotes",
                     pattern='"value"',
                     variables={"value": double_quotes_inner},
-                    value_path="value.item()"
+                    value_path="value.item()",
+                    proper_initial_segment="never"
                 ),
                 StringPattern(
                     name="single_quotes",
                     pattern="'value'",
                     variables={"value": single_quotes_inner},
-                    value_path="value.item()"
+                    value_path="value.item()",
+                    proper_initial_segment="never"
                 ),
-                StringPattern(
-                    name="variable_string",
-                    pattern="var",
-                    variables={"var": variable_name},
-                    value_path="var.lookup()"
-                )
+                variable_name
             ]
         )
 
@@ -2309,20 +2505,18 @@ class LatticeCompiler(object):
                     name="empty_list",
                     pattern="[]",
                     value_path="empty_list()",
-                    data_type="list"
+                    data_type="list",
+                    proper_initial_segment="never"
                 ),
                 StringPattern(
                     name="literal_list",
                     pattern="[cso]",
                     variables={"cso": cso},
                     value_path="item()",
-                    data_type="list"
+                    data_type="list",
+                    proper_initial_segment="never"
                 ),
-                StringPattern(
-                    name="variable_list",
-                    pattern="var",
-                    variables={"var": variable_name}
-                )
+                variable_name
             ]
         )
 
@@ -2362,21 +2556,18 @@ class LatticeCompiler(object):
                 StringPattern(
                     name="empty_dictionary",
                     pattern="{}",
-                    value_path="empty_dict()"
+                    value_path="empty_dict()",
+                    proper_initial_segment="never"
                 ),
                 StringPattern(
                     name="dictionary",
                     pattern="{csdp}",
                     variables={"csdp": csdp},
-                    value_path="dict()"
+                    value_path="dict()",
+                    proper_initial_segment="never"
                 ),
-                StringPattern(
-                    name="variable_dictionary",
-                    pattern="var",
-                    variables={"var": variable_name}
-                )
-
-            ],
+                variable_name
+            ]
         )
 
         # Dictionary is an object
@@ -2430,14 +2621,10 @@ class LatticeCompiler(object):
                     name="string_pattern",
                     pattern="StringPattern(csa)",
                     variables={"csa": csa},
-                    value_path="csa.make_pattern()"
+                    value_path="csa.make_pattern()",
+                    proper_initial_segment="never"
                 ),
-                StringPattern(
-                    name="variable_string_pattern",
-                    pattern="var",
-                    variables={"var": variable_name},
-                    value_path="var.lookup()"
-                )
+                variable_name
             ]
         )
 
@@ -2449,14 +2636,10 @@ class LatticeCompiler(object):
                     name="union_pattern",
                     pattern="UnionPattern(csa)",
                     variables={"csa": csa},
-                    value_path="csa.make_union()"
+                    value_path="csa.make_union()",
+                    proper_initial_segment="never"
                 ),
-                StringPattern(
-                    name="variable_union_pattern",
-                    pattern="var",
-                    variables={"var": variable_name},
-                    value_path="var.lookup()"
-                )
+                variable_name
             ]
         )
 
@@ -2476,7 +2659,8 @@ class LatticeCompiler(object):
             variables={
                 "csa": csa
             },
-            value_path="make_defn()"
+            value_path="make_defn()",
+            proper_initial_segment="never"
         )
 
         # Definitions are objects
@@ -2489,7 +2673,8 @@ class LatticeCompiler(object):
             variables={
                 "css": css,
                 "pattern": string_pattern
-            }
+            },
+            proper_initial_segment="never"
         )
 
         # Comma separated with parts
@@ -2532,7 +2717,8 @@ class LatticeCompiler(object):
             name="system_lookup",
             pattern="system[key]",
             variables={"key": string},
-            value_path="key.system_lookup()"
+            value_path="key.system_lookup()",
+            proper_initial_segment="never"
         )
         # System lookups are objects
         obj.patterns.append(system_lookup)
@@ -2548,14 +2734,10 @@ class LatticeCompiler(object):
                         "p": pattern,
                         "s": string
                     },
-                    value_path="make_match()"
+                    value_path="make_match()",
+                    proper_initial_segment="never"
                 ),
-                StringPattern(
-                    name="variable_match",
-                    pattern="var",
-                    variables={"var": variable_name},
-                    value_path="var.lookup()"
-                )
+                variable_name
             ]
         )
 
@@ -2577,7 +2759,15 @@ class LatticeCompiler(object):
         # Conditions for matching
 
         # Items
-        simple_item = StringPattern(name="simple_item", pattern="^[a-zA-Z_][[:alnum:]_\[\]]*$", is_regex=True)
+        respect_brackets = {
+            "(": ")"
+        }
+
+        simple_item = StringPattern(
+            name="simple_item",
+            pattern="^[a-zA-Z_][[:alnum:]_\[\]]*$",
+            is_regex=True
+        )
         pattern_or_item = UnionPattern(
             name="pattern_or_item",
             patterns=[pattern]
@@ -2587,12 +2777,14 @@ class LatticeCompiler(object):
             pattern="item.instances(pattern)",
             variables={
                 "pattern": pattern_or_item
-            }
+            },
+            proper_initial_segment="never"
         )
 
         item = UnionPattern(
             name="item",
-            patterns=[simple_item, instances]
+            patterns=[simple_item, instances],
+            respect_brackets=respect_brackets
         )
         pattern_or_item.patterns.append(item)
 
@@ -2648,7 +2840,8 @@ class LatticeCompiler(object):
                 StringPattern(name="empty", pattern=""),
                 item,
                 item_and_condition
-            ]
+            ],
+            respect_brackets=respect_brackets
         )
 
         func_names = (
@@ -2675,7 +2868,8 @@ class LatticeCompiler(object):
                     pattern="^(" + "|".join(func_names) + ")$",
                     is_regex=True
                 )
-            }
+            },
+            proper_initial_segment="never"
         )
 
         # Function can also be an item
@@ -2686,7 +2880,8 @@ class LatticeCompiler(object):
             pattern="each(items, condition)",
             variables={
                 "items": item
-            }
+            },
+            proper_initial_segment="never"
         )
 
         replace_equivalent = StringPattern(
@@ -2697,30 +2892,32 @@ class LatticeCompiler(object):
                 "other": item,
                 "x": item,
                 "y": item
-            }
+            },
+            proper_initial_segment="never"
         )
 
         # Molecular conditions
         negation = StringPattern(name="negation", pattern="not condition")
         logical_and = StringPattern(name="and", pattern="left and right")
         logical_or = StringPattern(name="or", pattern="left or right")
-        brackets = StringPattern(name="brackets", pattern="(inner)")
+        brackets = StringPattern(name="brackets", pattern="(inner)", proper_initial_segment="never")
 
         condition = UnionPattern(
             name="condition",
-             patterns=[
-                 item,
-                 equal,
-                 membership,
-                 negative_membership,
-                 function,
-                 each,
-                 replace_equivalent,
-                 negation,
-                 logical_and,
-                 logical_or,
-                 brackets
-             ]
+            patterns=[
+                brackets,
+                negation,
+                logical_and,
+                logical_or,
+                equal,
+                membership,
+                negative_membership,
+                function,
+                each,
+                replace_equivalent,
+                item,
+            ],
+            respect_brackets=respect_brackets
         )
 
         item_and_condition.add_variable("condition", condition)
@@ -2741,14 +2938,10 @@ class LatticeCompiler(object):
                     name="condition",
                     pattern="Condition(x)",
                     variables={"x": condition},
-                    value_path="make_condition()"
+                    value_path="make_condition()",
+                    proper_initial_segment="never"
                 ),
-                StringPattern(
-                    name="variable_pattern",
-                    pattern="var",
-                    variables={"var": variable_name},
-                    value_path="var.lookup()"
-                )
+                variable_name
             ]
         )
 
@@ -2758,20 +2951,16 @@ class LatticeCompiler(object):
         attribute = UnionPattern(
             name="attribute_union",
             patterns=[
-                item,
+                # item,
                 StringPattern(
                     name="instances",
                     pattern="instances(args)",
                     variables={
                         "args": csa
-                    }
+                    },
+                    proper_initial_segment="never"
                 ),
-                StringPattern(
-                    name="variable_attribute",
-                    pattern="var",
-                    variables={"var": variable_name},
-                    value_path="var.lookup()"
-                )
+                variable_name
             ]
         )
         obj.patterns.append(attribute)
@@ -2784,14 +2973,10 @@ class LatticeCompiler(object):
                     name="formal_system",
                     pattern="FormalSystem(args)",
                     variables={"args": csa},
-                    value_path="make_formal_system()"
+                    value_path="make_formal_system()",
+                    proper_initial_segment="never"
                 ),
-                StringPattern(
-                    name="variable_formal_system",
-                    pattern="var",
-                    variables={"var": variable_name},
-                    value_path="var.lookup()"
-                )
+                variable_name
             ]
         )
         # Formal system is an object
@@ -2805,14 +2990,10 @@ class LatticeCompiler(object):
                     name="line_type",
                     pattern="LineType(args)",
                     variables={"args": csa},
-                    value_path="make_line_type()"
+                    value_path="make_line_type()",
+                    proper_initial_segment="never"
                 ),
-                StringPattern(
-                    name="variable_line_type",
-                    pattern="var",
-                    variables={"var": variable_name},
-                    value_path="var.lookup()"
-                )
+                variable_name
             ]
         )
         # Line type is an object
@@ -2826,14 +3007,10 @@ class LatticeCompiler(object):
                     name="inference_rule",
                     pattern="InferenceRule(args)",
                     variables={"args": csa},
-                    value_path="make_inference_rule()"
+                    value_path="make_inference_rule()",
+                    proper_initial_segment="never"
                 ),
-                StringPattern(
-                    name="variable_inference_rule",
-                    pattern="var",
-                    variables={"var": variable_name},
-                    value_path="var.lookup()"
-                )
+                variable_name
             ]
         )
         # Inference rules are object
@@ -2907,7 +3084,8 @@ class LatticeCompiler(object):
             "empty": StringPattern(
                 name="empty",
                 pattern="^ *$",
-                is_regex=True
+                is_regex=True,
+                proper_initial_segment="always"
             ),
 
             "comment": StringPattern(
@@ -2922,7 +3100,8 @@ class LatticeCompiler(object):
                 variables={
                     "S": spaces,
                     "obj": self.system["object"]
-                }
+                },
+                proper_initial_segment="never"
             ),
 
             "assignment": StringPattern(
@@ -2932,7 +3111,8 @@ class LatticeCompiler(object):
                     "S": spaces,
                     "var": self.system["variable_name"],
                     "obj": self.system["object"]
-                }
+                },
+                proper_initial_segment="never"
             ),
 
             "system_assignment": StringPattern(
@@ -2942,7 +3122,8 @@ class LatticeCompiler(object):
                     "S": spaces,
                     "var": self.system["string"],
                     "obj": self.system["object"]
-                }
+                },
+                proper_initial_segment="never"
             ),
 
             "sub_pattern_assignment": StringPattern(
@@ -2953,7 +3134,8 @@ class LatticeCompiler(object):
                     "pattern": self.system["variable_name"],
                     "label": self.system["variable_name"],
                     "sub": self.system["object"]
-                }
+                },
+                proper_initial_segment="never"
             ),
 
             "sub_pattern_dict_assignment": StringPattern(
@@ -2964,7 +3146,8 @@ class LatticeCompiler(object):
                     "pattern": self.system["pattern"],
                     "label": self.system["string"],
                     "sub": self.system["pattern"]
-                }
+                },
+                proper_initial_segment="never"
             ),
 
             "add_pattern_attribute": StringPattern(
@@ -2974,7 +3157,8 @@ class LatticeCompiler(object):
                     "S": self.system["spaces"],
                     "pattern": self.system["variable_name"],
                     "csa": self.system["comma_separated_arguments"]
-                }
+                },
+                proper_initial_segment="never"
             ),
 
             "set_pattern_condition": StringPattern(
@@ -2984,7 +3168,8 @@ class LatticeCompiler(object):
                     "S": self.system["spaces"],
                     "pattern": self.system["variable_name"],
                     "x": self.system["condition"]
-                }
+                },
+                proper_initial_segment="never"
             ),
 
             "string_variable_definition": StringPattern(
@@ -2993,7 +3178,8 @@ class LatticeCompiler(object):
                 variables={
                     "S": spaces,
                     "cswp": cswp
-                }
+                },
+                proper_initial_segment="never"
             ),
 
             "string_variable_restriction": StringPattern(
@@ -3002,7 +3188,8 @@ class LatticeCompiler(object):
                 variables={
                     "S": spaces,
                     "R": string
-                }
+                },
+                proper_initial_segment="never"
             )
         }
 
@@ -3193,8 +3380,16 @@ class LatticeCompiler(object):
             # Check the inbuilt language options
             for key, option in self.line_options.items():
 
+                debug = None
+                if False and line == r'c = Condition(deduction.indent_line() == antecedents[0].indent_line().indent_line() and ' \
+                           r'set(deduction.inf_match().alpha) == antecedents[0].indent_line().match().shallow_instance' \
+                           r's(formula) and deduction.inf_match().beta == antecedents[0].formula())':
+                    debug = 1
+
+                    print("\n\n", key, option)
+
                 # Try to make the match
-                match = option.match(line, context)
+                match = option.match(line, context, debug=debug)
 
                 if match is None:
                     continue
