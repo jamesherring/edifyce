@@ -1,4 +1,12 @@
 from website.context import Context
+from django.db import models
+import string
+import random
+
+
+def id_gen(length=12, chars=string.ascii_lowercase + string.ascii_uppercase + string.digits + "-_"):
+    # An id generator to uniquely identify objects
+    return "".join(random.SystemRandom().choice(chars) for _ in range(length))
 
 
 class FormalSystem(object):
@@ -259,7 +267,7 @@ class LineType(object):
         # The name of this line type
         self.name = name
 
-        # The pattern for these lines to match
+        # The pattern for these lines to match (Pattern instance)
         self.pattern = pattern
 
         # The behaviour of these lines

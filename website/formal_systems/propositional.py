@@ -23,31 +23,31 @@ any_formula = UnionPattern(name="formula", patterns=[formula, dollar_formula], s
 
 a1 = StringPattern(
     name="A1",
-    pattern="(alpha \\rightarrow (beta \\rightarrow alpha))",
+    pattern="(\\alpha \\rightarrow (\\beta \\rightarrow \\alpha))",
     parent=formula,
     proper_initial_segment="never"
 )
-a1.add_variable("alpha", formula)
-a1.add_variable("beta", formula)
+a1.add_variable("\\alpha", formula)
+a1.add_variable("\\beta", formula)
 
 a2 = StringPattern(
     name="A2",
-    pattern="((alpha \\rightarrow (beta \\rightarrow gamma)) \\rightarrow ((alpha \\rightarrow beta) \\rightarrow (alpha \\rightarrow gamma)))",
+    pattern="((\\alpha \\rightarrow (\\beta \\rightarrow \\gamma)) \\rightarrow ((\\alpha \\rightarrow \\beta) \\rightarrow (\\alpha \\rightarrow \\gamma)))",
     parent=formula,
     proper_initial_segment="never"
 )
-a2.alpha = formula
-a2.beta = formula
-a2.gamma = formula
+a2.add_variable("\\alpha", formula)
+a2.add_variable("\\beta", formula)
+a2.add_variable("\\gamma", formula)
 
 a3 = StringPattern(
     name="A3",
-    pattern="((\\neg beta \\rightarrow \\neg alpha) \\rightarrow (alpha \\rightarrow beta))",
+    pattern="((\\neg \\beta \\rightarrow \\neg \\alpha) \\rightarrow (\\alpha \\rightarrow \\beta))",
     parent=formula,
     proper_initial_segment="never"
 )
-a3.alpha = formula
-a3.beta = formula
+a3.add_variable("\\alpha", formula)
+a3.add_variable("\\beta", formula)
 
 # Make the import line
 import_pattern = StringPattern(name="import", pattern="^import [a-zA-Z0-9\.]+$", is_regex=True)
