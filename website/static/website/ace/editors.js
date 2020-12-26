@@ -122,7 +122,6 @@ var codeEditorClass = function(container) {
 
     this.editor = ace.edit($(this.container).attr("id"));
     this.editor.setTheme("ace/theme/monokai");
-    this.editor.session.setMode("ace/mode/latex");
 
     $(window).on("resize", function() {
         // Resize the editor with the window

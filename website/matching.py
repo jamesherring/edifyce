@@ -2180,6 +2180,19 @@ class StringPattern(Pattern):
                 dct["valid"] = True
                 dct["mapping"] = result
 
+    def reverse_variables(self):
+        # Get the reverse dictionary for variables
+
+        reverse = dict()
+        for var, subpattern in self.variables.items():
+            if subpattern not in reverse:
+                reverse[subpattern] = [var]
+
+            else:
+                reverse[subpattern].append(var)
+
+        return reverse
+
     def __str__(self):
         return self.name
 
@@ -3441,15 +3454,24 @@ class LatticeCompiler(object):
 
         return context
 
+    def initiate_formal_system(self, path_to_file):
+        # Create a formal system defined by the given file
+
+        with open(path_to_file) as f:
+            context = self.parse(f.read())
+
+        if "formal_system" not in context.system:
+            # No formal system defined
+            return None
+
+        # Get the system from the resulting context
+        return context.system["formal_system"]
+
 
 if __name__ == "__main__":
     lc = LatticeCompiler()
 
-    with open("propositional.py") as f:
-        context = lc.parse(f.read())
+    system = lc.initiate_formal_system(path_to_file="propositional.py")
 
-    if "formal_system" in context.system:
-        system = context.system["formal_system"]
-
-        with open("proof.txt") as f:
-            system.parse(f.read())
+    with open("proof.txt") as f:
+        system.parse(f.read())
