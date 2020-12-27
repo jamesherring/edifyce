@@ -329,6 +329,20 @@ class Match(object):
             # Otherwise, just a pattern name or path
             return self.get_instances(inner, context, shallow=True)
 
+        if path[:10] == "variables(" and path[-1] == ")":
+            # Get the variable in the string
+
+            inner = path[10:-1]
+            system_string = context.system["string"]
+            var = system_string.match(inner, context)
+
+            assert var is not None
+
+            # Get the value from the string
+            value = var.get_value(context)
+
+            return self.get_by_path(value, context, data_type=data_type, attribute_name=attribute_name)
+
         if self.definition_mapping is not None and path in self.definition_mapping:
             return self.get_by_path(
                 path=self.definition_mapping[path],
@@ -2852,7 +2866,8 @@ class LatticeCompiler(object):
             patterns=[
                 StringPattern(name="empty", pattern=""),
                 item,
-                item_and_condition
+                item_and_condition,
+                string
             ],
             respect_brackets=respect_brackets
         )
@@ -2868,7 +2883,8 @@ class LatticeCompiler(object):
             "formula",
             "match",
             "inf_match",
-            "set"
+            "set",
+            "variables"
         )
 
         function = StringPattern(
@@ -3471,7 +3487,7 @@ class LatticeCompiler(object):
 if __name__ == "__main__":
     lc = LatticeCompiler()
 
-    system = lc.initiate_formal_system(path_to_file="propositional.py")
+    system = lc.initiate_formal_system(path_to_file="formal_systems/propositional.py")
 
     with open("proof.txt") as f:
         system.parse(f.read())

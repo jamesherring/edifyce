@@ -5,6 +5,8 @@
 
 {% block content %}
 
+    <p id="slug" class="hidden">{{ system.slug }}</p>
+
     <h1>{{ system.name }}</h1>
 
     <a href="{% url 'website:formal_system' system.slug %}">Back</a><br/>
