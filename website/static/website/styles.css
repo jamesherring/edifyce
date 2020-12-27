@@ -11,6 +11,10 @@ body {
     padding: 1rem;
 }
 
+.hidden {
+    display: none;
+}
+
 .pattern {
     font-family: monospace;
 }

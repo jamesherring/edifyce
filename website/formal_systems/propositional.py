@@ -119,13 +119,13 @@ if_line = LineType(name="if line", pattern=if_pattern, behaviour="indent")
 # Make modus ponens
 mp_0 = formula
 
-mp_1 = StringPattern(name="mp_1", pattern="(alpha \\rightarrow beta)", parent=formula, proper_initial_segment="never")
-mp_1.alpha = formula
-mp_1.beta = formula
+mp_1 = StringPattern(name="mp_1", pattern="(\\alpha \\rightarrow \\beta)", parent=formula, proper_initial_segment="never")
+mp_1.add_variable("\\alpha", formula)
+mp_1.add_variable("\\beta", formula)
 
 c = Condition(
-    deduction.formula() == antecedents[1].inf_match().beta and \
-    antecedents[0].formula() == antecedents[1].inf_match().alpha and \
+    deduction.formula() == antecedents[1].inf_match().variables("\\beta") and \
+    antecedents[0].formula() == antecedents[1].inf_match().variables("\\alpha") and \
     deduction.indent_line() == antecedents[0].indent_line() and \
     deduction.indent_line() == antecedents[1].indent_line()
 )
@@ -133,20 +133,20 @@ mp = InferenceRule(name="Modus Ponens", label="MP", antecedents=[mp_0, mp_1], de
 
 # A formula in the given set can be deduced
 c = Condition(deduction.formula() in deduction.indent_lines().shallow_instances(formula))
-if_rule = InferenceRule(name="If", label="IF", antecedents=[], deduction=formula, condition=c)
+if_rule = InferenceRule(name="Given", label="IF", antecedents=[], deduction=formula, condition=c)
 
 # Deduction theorem has two directions, requires two inference rules
 c = Condition(
-    deduction.formula() == antecedents[0].inf_match().beta and \
-    deduction.indent_line().match().shallow_instances(formula) == set(antecedents[0].inf_match().alpha) and \
+    deduction.formula() == antecedents[0].inf_match().variables("\\beta") and \
+    deduction.indent_line().match().shallow_instances(formula) == set(antecedents[0].inf_match().variables("\\alpha")) and \
     deduction.indent_line().indent_line() == antecedents[0].indent_line()
 )
 dt_1 = InferenceRule(name="Deduction Theorem 1", label="DT1", antecedents=[mp_1], deduction=formula, condition=c)
 
 c = Condition(
     deduction.indent_line() == antecedents[0].indent_line().indent_line() and \
-    set(deduction.inf_match().alpha) == antecedents[0].indent_line().match().shallow_instances(formula) and \
-    deduction.inf_match().beta == antecedents[0].formula()
+    set(deduction.inf_match().variables("\\alpha")) == antecedents[0].indent_line().match().shallow_instances(formula) and \
+    deduction.inf_match().variables("\\beta") == antecedents[0].formula()
 )
 dt_2 = InferenceRule(name="Deduction Theorem 2", label="DT2", antecedents=[formula], deduction=mp_1, condition=c)
 

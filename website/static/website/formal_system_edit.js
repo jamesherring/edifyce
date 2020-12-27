@@ -5,8 +5,7 @@ $(function() {
     editor.editor.session.setMode("ace/mode/python");
 
     // Get the formal system slug
-    var parts = window.location.pathname.split("/");
-    var slug = parts[parts.length - 2];
+    var slug = $("#slug").text();
 
     $("#save").on("click", function() {
         AJAX(

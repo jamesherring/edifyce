@@ -18,15 +18,38 @@
     <h2>Axioms</h2>
 
     {% for axiom in system.formal_system.axioms %}
-        <strong class="pattern">{{ axiom.name }}</strong>
+        <p class="bold pattern">{{ axiom.name }}</p>
 
-        <p class="pattern">${{ axiom.pattern }}$</p>
+        {% include "website/pattern.html" with p=axiom %}
 
-        <p class="pattern">with
-        {% for subpattern, var_list in axiom.reverse_variables.items %}
-            ${{ var_list|join:"$, $" }}$ as <strong>{{ subpattern.name }}</strong>{% if not forloop.last %},{% else %}.{% endif %}
-        {% endfor %}
-        </p>
+    {% endfor %}
+
+
+    <h2>Inference Rules</h2>
+
+    {% for rule in system.formal_system.inference_rules %}
+        <h3>{{ rule.name }}</h3>
+
+        {% if rule.antecedents %}
+            <p class="bold pattern">Antecedents</p>
+            <ol start="0">
+            {% for ant in rule.antecedents %}
+                <li>{% include "website/pattern.html" with p=ant %}</li>
+            {% endfor %}
+            </ol>
+
+            <p class="bold pattern">Deduction</p>
+            <div style="padding-left: 2rem">
+                {% include "website/pattern.html" with p=rule.deduction %}
+            </div>
+        {% else %}
+            {% include "website/pattern.html" with p=rule.deduction %}
+        {% endif %}
+
+
+        {% if rule.condition %}
+            <p class="pattern">if {{ rule.condition.condition_match.string }}</p>
+        {% endif %}
 
     {% endfor %}
 
