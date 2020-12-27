@@ -1,0 +1,34 @@
+{% extends 'base.html' %}
+
+{% load static %}
+
+
+{% block content %}
+
+    <h1>Create a Formal System</h1>
+
+    <a href="{% url 'website:index' %}">Back</a><br/>
+    <a id="save">Save</a>
+
+    <input name="name" type="text" placeholder="System Name"/>
+
+    <input name="slug" type="text" placeholder="Slug"/>
+
+    <p>Lattice Code</p>
+    <div id="ace-container"></div><div id="output" class="mathjax_process"></div>
+
+
+
+{% endblock %}
+
+
+{% block js %}
+    <script src="{% static 'website/ace/editors.js' %}"></script>
+    <script src="{% static 'website/ace/src/ace.js' %}"></script>
+    <script src="{% static 'website/formal_system_create.js' %}"></script>
+
+{% endblock %}
+
+{% block css %}
+    <link rel="stylesheet" href="{% static '/website/formal_system_create.css' %}">
+{% endblock %}

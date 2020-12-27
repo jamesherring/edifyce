@@ -8,18 +8,13 @@
 
     {% for system in formal_systems %}
 
-        <a href="{% url 'website:formal_system' system.slug %}">{{ system.name }}</a>
-
-
+        <a href="{% url 'website:formal_system' system.slug %}">{{ system.name }}</a></br>
 
     {% endfor %}
 
-    <h1>String Patterns</h1>
+    <a href="{% url 'website:formal_system_create' %}">New System</a>
 
 
 {% endblock %}
 
 
-{% block notjs %}
-    <script src="{% static 'website/index.js' %}"></script>
-{% endblock %}

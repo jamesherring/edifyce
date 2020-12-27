@@ -2,7 +2,6 @@ from django.shortcuts import render
 from django.http import HttpResponse
 import json
 from .models import *
-from website.matching import LatticeCompiler
 
 
 def indexView(request):
@@ -25,6 +24,39 @@ def formalSystemView(request, system_slug):
     })
 
 
+def formalSystemCreateView(request):
+    # Form for creating a formal system
+    return render(request, "website/formal_system_create.html")
+
+
+def formalSystemCreateSubmitView(request):
+    # Ajax submission to create a formal system
+
+    try:
+        system = FormalSystemModel()
+
+        system.name = request.POST.get("name")
+        system.slug = request.POST.get("slug")
+
+        # Get the code
+        code = request.POST.get("code", False)
+
+        # Set the system code
+        system.set_code(code)
+
+        # Respond
+        return HttpResponse(json.dumps({
+            "success": True,
+            "url": system.get_absolute_url()
+        }))
+
+    except Exception as e:
+        return HttpResponse(json.dumps({
+            "success": False,
+            "errorMessage": str(e)
+        }))
+
+
 def formalSystemEditView(request, system_slug):
     # Edit view for a formal system
 
@@ -40,18 +72,14 @@ def formalSystemSaveView(request):
 
     try:
 
-        system_slug = request.POST.get("slug", False)
-        system = FormalSystemModel.objects.get(slug=system_slug)
+        system_id = request.POST.get("system_id", False)
+        system = FormalSystemModel.objects.get(id=system_id)
 
         # Get the new code
         new_code = request.POST.get("code", False)
 
-        # Save it to the system file
-        with open(system.path_to_file(), "w") as f:
-            f.write(new_code)
-
-        # Refresh the system instance
-        system.refresh_instance()
+        # Set the system code
+        system.set_code(new_code)
 
         return HttpResponse(json.dumps({"success": True}))
 
