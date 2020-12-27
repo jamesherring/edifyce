@@ -15,4 +15,8 @@
         </p>
     {% endif %}
 
+    {% if p.condition %}
+        <p class="pattern">if {{ p.condition.condition_match.string }}</p>
+    {% endif %}
+
 {% endblock %}

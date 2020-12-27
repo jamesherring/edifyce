@@ -1,0 +1,23 @@
+
+{% block pattern_structure %}
+
+    {% if p.pattern %}
+
+        {% include "website/pattern.html" %}
+
+    {% else %}
+
+        <p class="pattern">A <strong>{{ p.name }}</strong> is of the form</p>
+
+        <ul style="padding-left: 2rem">
+            {% for sub in p.patterns %}
+                <li>{% include "website/pattern_structure.html" with p=sub %}</li>
+            {% endfor %}
+        </ul>
+    {% endif %}
+
+    {% if p.condition %}
+        <p class="pattern">if {{ p.condition.condition_match.string }}</p>
+    {% endif %}
+
+{% endblock %}

@@ -7,13 +7,12 @@
 
     <h1>{{ system.name }}</h1>
 
+    <a href="{% url 'website:index' %}">Back</a><br/>
     <a href="{% url 'website:formal_system_edit' system.slug %}">Edit</a>
 
-    <h3>Test Formula</h3>
-    <input type="text" class="pattern test-formula" data-id="{{ system.id }}"/>
 
-    <p class="pattern test-formula-output" data-id="{{ system.id }}">...</p>
-
+    <h2>Formulae</h2>
+    {% include "website/pattern_structure.html" with p=system.formal_system.formula %}
 
     <h2>Axioms</h2>
 

@@ -50,13 +50,16 @@ class FormalSystemModel(models.Model):
     id = models.CharField(default=id_gen, max_length=64, primary_key=True, editable=False)
 
     name = models.CharField(max_length=64)
-    slug = models.CharField(max_length=64)
+    slug = models.CharField(max_length=64, unique=True)
 
     # Field pointing to an instance of a FormalSystem class
     formal_system = PickledObjectField(default=None, blank=True, null=True)
 
     created = models.DateTimeField(auto_now_add=True, blank=True, null=True)
     updated = models.DateTimeField(auto_now=True, blank=True, null=True)
+
+    def get_absolute_url(self):
+        return "/system/" + self.slug + "/"
 
     def path_to_file(self):
         # Get the path to the file defining this formal system
@@ -67,9 +70,17 @@ class FormalSystemModel(models.Model):
         with open(self.path_to_file()) as f:
             return f.read()
 
-    def refresh_instance(self):
-        # Refresh the formal system instance according to the file
+    def set_code(self, code):
+        # Set the system code
 
+        # Save it to the system file
+        with open(self.path_to_file(), "w") as f:
+            f.write(code)
+
+        # Refresh the formal system instance according to the file
         compiler = LatticeCompiler()
         self.formal_system = compiler.initiate_formal_system(path_to_file=self.path_to_file())
         self.save()
+
+    def __str__(self):
+        return self.name

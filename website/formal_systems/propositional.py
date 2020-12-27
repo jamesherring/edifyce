@@ -5,14 +5,15 @@ integer = StringPattern(name="integer", pattern="^(?:0|[1-9][0-9]*)$", is_regex=
 pv = StringPattern(name="variable", pattern="p_i")
 pv.i = integer
 
-ra = StringPattern(name="rightarrow", pattern="(left \\rightarrow east)", proper_initial_segment="never")
-neg = StringPattern(name="negation", pattern="\\neg f", proper_initial_segment="never")
+ra = StringPattern(name="rightarrow", pattern="(\\alpha \\rightarrow \\beta)", proper_initial_segment="never")
+neg = StringPattern(name="negation", pattern="\\neg \\alpha", proper_initial_segment="never")
 
 formula = UnionPattern(name="formula", patterns=[pv, ra, neg])
 
-ra.left = formula
-ra.east = formula
-neg.f = formula
+ra.add_variable("\\alpha", formula)
+ra.add_variable("\\beta", formula)
+
+neg.add_variable("\\alpha", formula)
 
 # Dollar formulas - for TeX parsing
 dollar_formula = StringPattern(name="dollar_formula", pattern="$f$", skip_node=True, proper_initial_segment="never")

@@ -17,6 +17,9 @@ class FormalSystem(object):
         # The name of the system
         self.name = name
 
+        # System formula pattern
+        self.formula = context_variables["formula"]
+
         # A list of patterns
         self.axioms = axioms
         if self.axioms is None:
@@ -43,14 +46,14 @@ class FormalSystem(object):
             self.inference_rule_dict[ir.label] = ir
 
         # Default context variables
-        self.context_variables = context_variables
+        self.context_variables = context_variables.copy()
         if self.context_variables is None:
             self.context_variables = dict()
 
         # Default system variables
         self.context_system = dict()
         if context is not None:
-            self.context_system = context.system
+            self.context_system = context.system.copy()
 
     def parse(self, text, proof=None, context=None, line_number_offset=0):
         # Parse the text into a proof

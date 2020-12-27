@@ -9,15 +9,15 @@ $(function() {
 
     $("#save").on("click", function() {
         AJAX(
-            "/ajax/save_system/",
+            "/ajax/create_system/",
             {
-                "system_id": system_id,
+                "name": $("input[name='name']").val(),
+                "slug": $("input[name='slug']").val(),
                 "code": editor.editor.getValue()
             },
             function(response) {
-
-                console.log(response);
-
+                // Success - redirect to view the page
+                window.location.href = response.url;
             }
         )
     })
