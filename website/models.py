@@ -1,14 +1,16 @@
 from django.db import models
 from django.contrib.auth.models import User
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 from picklefield.fields import PickledObjectField
 import string
 import random
+from slugify import slugify
 from website.matching import LatticeCompiler
+from website.formal_system import Proof
 
 
-def id_gen(length=12, chars=string.ascii_lowercase + string.ascii_uppercase + string.digits + "-_"):
+def id_gen(length=12, chars=string.digits):
     # An id generator to uniquely identify objects
     return "".join(random.SystemRandom().choice(chars) for _ in range(length))
 
@@ -49,8 +51,8 @@ class FormalSystemModel(models.Model):
 
     id = models.CharField(default=id_gen, max_length=64, primary_key=True, editable=False)
 
-    name = models.CharField(max_length=64)
-    slug = models.CharField(max_length=64, unique=True)
+    name = models.CharField(max_length=256)
+    slug = models.CharField(max_length=256)
 
     # Field pointing to an instance of a FormalSystem class
     formal_system = PickledObjectField(default=None, blank=True, null=True)
@@ -84,3 +86,57 @@ class FormalSystemModel(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class ProofModel(models.Model):
+    # Model for Proofs
+
+    id = models.CharField(default=id_gen, max_length=64, primary_key=True, editable=False)
+
+    name = models.CharField(max_length=256)
+    slug = models.CharField(max_length=256)
+
+    # The formal system to which this proof belongs
+    formal_system = models.ForeignKey(FormalSystemModel, on_delete=models.CASCADE)
+
+    # Field pointing to an instance of a Proof class
+    proof = PickledObjectField(default=None, blank=True, null=True)
+
+    created = models.DateTimeField(auto_now_add=True, blank=True, null=True)
+    updated = models.DateTimeField(auto_now=True, blank=True, null=True)
+
+    def get_absolute_url(self):
+        return "/proof/" + self.formal_system.slug + "/" + self.slug + "/"
+
+    def path_to_file(self):
+        # Get the path to the file defining this proof
+        return "website/proofs/" + self.id + ".txt"
+
+    def code(self):
+        # Get the code for this proof
+        with open(self.path_to_file()) as f:
+            return f.read()
+
+    def set_code(self, code):
+        # Set the proof code
+
+        # Save it to the proof file
+        with open(self.path_to_file(), "w") as f:
+            f.write(code)
+
+        # Refresh the proof instance according to the file
+        self.proof = self.formal_system.parse(code)
+        self.save()
+
+    def __str__(self):
+        return self.name
+
+
+# Update model slugs whenever it is saved
+@receiver(pre_save)
+def save_system(sender, instance, **kwargs):
+
+    if sender in (FormalSystemModel, ProofModel):
+        # It's a model that uses slugs
+        instance.slug = slugify(instance.name)
+        instance.save()

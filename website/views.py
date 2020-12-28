@@ -14,10 +14,10 @@ def indexView(request):
     })
 
 
-def formalSystemView(request, system_slug):
+def formalSystemView(request, system_id, system_slug):
     # View for a formal system
 
-    system = FormalSystemModel.objects.get(slug=system_slug)
+    system = FormalSystemModel.objects.get(id=system_id)
 
     return render(request, "website/formal_system.html", {
         "system": system
@@ -36,7 +36,6 @@ def formalSystemCreateSubmitView(request):
         system = FormalSystemModel()
 
         system.name = request.POST.get("name")
-        system.slug = request.POST.get("slug")
 
         # Get the code
         code = request.POST.get("code", False)
@@ -57,10 +56,10 @@ def formalSystemCreateSubmitView(request):
         }))
 
 
-def formalSystemEditView(request, system_slug):
+def formalSystemEditView(request, system_id, system_slug):
     # Edit view for a formal system
 
-    system = FormalSystemModel.objects.get(slug=system_slug)
+    system = FormalSystemModel.objects.get(id=system_id)
 
     return render(request, "website/formal_system_edit.html", {
         "system": system
@@ -80,6 +79,92 @@ def formalSystemSaveView(request):
 
         # Set the system code
         system.set_code(new_code)
+
+        return HttpResponse(json.dumps({"success": True}))
+
+    except Exception as e:
+        return HttpResponse(json.dumps({
+            "success": False,
+            "errorMessage": str(e)
+        }))
+
+
+def proofView(request, proof_id, proof_slug):
+    # View for a proof
+
+    proof = ProofModel.objects.get(id=proof_id)
+
+    return render(request, "website/proof.html", {
+        "proof": proof
+    })
+
+
+def proofCreateView(request, system_id, system_slug):
+    # Form for creating a proof
+
+    system = FormalSystemModel.objects.get(id=system_id)
+
+    return render(request, "website/proof_create.html", {
+        "system": system
+    })
+
+
+def proofCreateSubmitView(request):
+    # Ajax submission to create a proof
+
+    try:
+        proof = ProofModel()
+
+        proof.name = request.POST.get("name")
+
+        # Get the formal system
+        system_id = request.POST.get("system_id")
+        system = FormalSystemModel.objects.get(id=system_id)
+
+        proof.system = system
+
+        # Get the code
+        code = request.POST.get("code", False)
+
+        # Set the proof code
+        proof.set_code(code)
+
+        # Respond
+        return HttpResponse(json.dumps({
+            "success": True,
+            "url": proof.get_absolute_url()
+        }))
+
+    except Exception as e:
+        return HttpResponse(json.dumps({
+            "success": False,
+            "errorMessage": str(e)
+        }))
+
+
+def proofEditView(request, proof_id, proof_slug):
+    # Edit view for a proof
+
+    proof = ProofModel.objects.get(id=proof_id)
+
+    return render(request, "website/proof_edit.html", {
+        "proof": proof
+    })
+
+
+def proofSaveView(request):
+    # Ajax view to save a proof
+
+    try:
+
+        proof_id = request.POST.get("proof_id", False)
+        proof = FormalSystemModel.objects.get(id=proof_id)
+
+        # Get the new code
+        new_code = request.POST.get("code", False)
+
+        # Set the proof code
+        proof.set_code(new_code)
 
         return HttpResponse(json.dumps({"success": True}))
 

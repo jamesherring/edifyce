@@ -5,14 +5,13 @@
 
 {% block content %}
 
-    <h1>Create a Formal System</h1>
+    <h1>Create a Proof in {{ system.name }}</h1>
 
     <a href="{% url 'website:index' %}">Back</a><br/>
     <a id="save">Save</a>
 
-    <input name="name" type="text" placeholder="System Name"/>
+    <input name="name" type="text" placeholder="Name"/>
 
-    <p>Lattice Code</p>
     <div id="ace-container"></div>
 
 
@@ -23,10 +22,10 @@
 {% block js %}
     <script src="{% static 'website/ace/editors.js' %}"></script>
     <script src="{% static 'website/ace/src/ace.js' %}"></script>
-    <script src="{% static 'website/formal_system_create.js' %}"></script>
+    <script src="{% static 'website/proof_create.js' %}"></script>
 
 {% endblock %}
 
 {% block css %}
-    <link rel="stylesheet" href="{% static '/website/formal_system_create.css' %}">
+    <link rel="stylesheet" href="{% static '/website/proof_create.css' %}">
 {% endblock %}
