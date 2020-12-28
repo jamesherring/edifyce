@@ -9,10 +9,9 @@ $(function() {
 
     $("#save").on("click", function() {
         AJAX(
-            "/ajax/create_system/",
+            "system/ajax/create/",
             {
                 "name": $("input[name='name']").val(),
-                "slug": $("input[name='slug']").val(),
                 "code": editor.editor.getValue()
             },
             function(response) {

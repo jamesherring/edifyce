@@ -9,7 +9,7 @@ $(function() {
 
     $("#save").on("click", function() {
         AJAX(
-            "/ajax/save_system/",
+            "system/ajax/save/",
             {
                 "system_id": system_id,
                 "code": editor.editor.getValue()

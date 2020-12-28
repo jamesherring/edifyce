@@ -62,7 +62,7 @@ class FormalSystem(object):
 
         if proof is None:
             # Create a new proof instance
-            proof = Proof(name="test")
+            proof = Proof()
 
         if context is None:
             # Create a new context instance
@@ -250,13 +250,16 @@ class FormalSystem(object):
             i += 1
 
         if line_number_offset == 0:
+            # Check if the proof is valid
             valid_proof = True
             for line in proof.proof_lines:
-                if line.line_type.behaviour == "logical":
-                    print(line.text.lstrip(), line.valid)
-                    valid_proof = valid_proof and line.valid
+                if line.line_type.behaviour == "logical" and not line.valid:
+                    valid_proof = False
+                    break
 
-            print("\nValid proof: ", valid_proof)
+            proof.valid = valid_proof
+
+        return proof
 
     def __str__(self):
         return self.name
@@ -373,12 +376,13 @@ class InferenceRule(object):
 class Proof(object):
     # A proof in a formal system
 
-    def __init__(self, name, result=None):
-        # A name for this proof
-        self.name = name
+    def __init__(self, result=None):
 
         # The proof result
         self.result = result
+
+        # Whether the proof is valid
+        self.valid = None
 
         # The proof lines leading to the result
         self.proof_lines = []

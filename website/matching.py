@@ -3490,4 +3490,5 @@ if __name__ == "__main__":
     system = lc.initiate_formal_system(path_to_file="formal_systems/propositional.py")
 
     with open("proof.txt") as f:
-        system.parse(f.read())
+        result = system.parse(f.read())
+        print(result.valid)
