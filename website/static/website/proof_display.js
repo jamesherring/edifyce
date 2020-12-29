@@ -12,6 +12,10 @@ function proofDisplayClass(parent) {
         // First clear the table
         this.clear();
 
+        // Add a table element
+        this.table = $("<table></table>");
+        $(this.parent).append(this.table);
+
         // Sort the code into lines
         var lines = code.split("\n");
 
@@ -64,17 +68,29 @@ function proofDisplayClass(parent) {
         }
 
         // Add a row div
-        var row = $("<div class='row'></div>");
-        $(this.parent).append(row);
+        var row = $("<tr></tr>");
+        $(this.table).append(row);
 
         // Add the row number, line and reference as cells in the table
-        var number_cell = $("<div class='cell line-number'>" + String(line_number) + "</div>");
-        var line_cell = $("<div class='cell'>" + line + "</div>");
-        var ref_cell = $("<div class='cell'>" + ref + "</div>");
+        // var number_cell = $("<div class='cell line-number'>" + String(line_number) + "</div>");
+        // var line_cell = $("<div class='cell'>" + line + "</div>");
+        // var ref_cell = $("<div class='cell'>" + ref + "</div>");
 
+        var number_cell = $("<td class='line-number'>" + String(line_number) + "</td>");
         $(row).append(number_cell);
+
+        var line_cell = $("<td>" + line + "</td>");
+        if (!ref) {
+            // Allow the line to use space in the reference column
+            line_cell = $("<td colspan='2' class='allow-wrap'>" + line + "</td>");
+        }
         $(row).append(line_cell);
-        $(row).append(ref_cell);
+
+        if (ref) {
+            var ref_cell = $("<td>" + ref + "</td>");
+            $(row).append(ref_cell);
+        }
+
 
         if (!data) {
             return;
@@ -90,11 +106,11 @@ function proofDisplayClass(parent) {
             colour = "#0F0";
         }
 
-        var indicator_cell = $("<div class='cell indicator' style='background-color: " + colour + "'></div>");
+        var indicator_cell = $("<td class='indicator' style='background-color: " + colour + "'></td>");
         $(row).append(indicator_cell);
 
         if (data.invalid_message) {
-            var message_cell = $("<div class='cell'>" + data.invalid_message + "</div>");
+            var message_cell = $("<td>" + data.invalid_message + "</td>");
             $(row).append(message_cell);
         }
 

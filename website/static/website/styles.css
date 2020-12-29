@@ -22,23 +22,25 @@ body {
     font-weight: bold;
 }
 
+.allow-wrap {
+    white-space: normal;
+}
+
 /* Table classes */
-div.table {
-    display: table;
+table {
+    border-spacing: 0;
 }
-div.row {
-    display: table-row;
-}
-div.cell {
-    display: table-cell;
+td {
+    vertical-align: top;
     padding: 0 2rem 0 0.5rem;
     white-space: pre;
 }
-div.cell.indicator {
+
+td.indicator {
     padding: 0 0.2rem;
 }
 
-div.line-number {
+td.line-number {
     text-align: right;
     background-color: #CCC;
     padding: 0 0.5rem 0 1rem;

@@ -13,6 +13,10 @@ $(function() {
     var output_parent = $("#output");
     var output = new proofDisplayClass(output_parent);
 
+    // Get the validation data script
+    var validation = JSON.parse(document.getElementById("validation").innerHTML);
+    output.populate(editor.editor.getValue(), validation);
+
 
     function validate_proof() {
         // Validate the proof
@@ -25,16 +29,13 @@ $(function() {
             function(response) {
 
                 // Populate the output with the validation data
-                output.populate(editor.editor.getValue(), response);
+                output.populate(editor.editor.getValue(), response.validation);
 
                 // Parse mathjax
                 MathJax.typeset();
             }
         )
     }
-
-    // Do an initial validate proof
-    validate_proof();
 
     editor.editor.session.on("change", function() {
         // Validate the proof 500ms after any changes
