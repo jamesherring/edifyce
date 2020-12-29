@@ -15,7 +15,7 @@
 
     <div id="output" class="proof-display">{{ proof.code }}</div>
 
-
+    {{ proof.proof.validation_data|json_script:"validation" }}
 
 {% endblock %}
 

@@ -1,5 +1,5 @@
 
-# Given a formula and its negation, any formula follows
+# Given a formula and it's negation, deduce any formula. This could be a very very very long hypothetical line.
 
 with $\alpha$, $\beta$ as formula:
     

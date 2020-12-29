@@ -180,39 +180,30 @@ def proofSaveView(request):
 def proofValidateView(request):
     # Ajax view to validate a proof
 
-    # try:
+    try:
 
-    # Get the proof system
-    system_id = request.POST.get("system_id", False)
-    system_model = FormalSystemModel.objects.get(id=system_id)
-    system = system_model.formal_system
+        # Get the proof system
+        system_id = request.POST.get("system_id", False)
+        system_model = FormalSystemModel.objects.get(id=system_id)
+        system = system_model.formal_system
 
-    # Get the proof code
-    code = request.POST.get("code", False)
+        # Get the proof code
+        code = request.POST.get("code", False)
 
-    # Parse the code in the system to get a proof
-    proof = system.parse(code)
+        # Parse the code in the system to get a proof
+        proof = system.parse(code)
 
-    # Return the results
-    return HttpResponse(json.dumps({
-        "success": True,
-        "valid": proof.valid,
-        "parsed": proof.parsed,
-        "lines": [{
-            "valid": line.valid,
-            "parsed": line.line_type is not None,
-            "logical": (line.line_type is not None) and (line.line_type.behaviour == "logical"),
-            "invalid_message": line.invalid_message
-        } for line in proof.proof_lines]
-    }))
+        # Return the results
+        return HttpResponse(json.dumps({
+            "success": True,
+            "validation": proof.validation_data()
+        }))
 
-    # Try the
-
-    # except Exception as e:
-    #     return HttpResponse(json.dumps({
-    #         "success": False,
-    #         "errorMessage": str(e)
-    #     }))
+    except Exception as e:
+        return HttpResponse(json.dumps({
+            "success": False,
+            "errorMessage": str(e)
+        }))
 
 
 # def proofEditorView(request, system_slug):

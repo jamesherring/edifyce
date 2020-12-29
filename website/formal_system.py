@@ -416,6 +416,17 @@ class Proof(object):
         self.proof_lines.append(proof_line)
         return proof_line
 
+    def validation_data(self):
+        # Get validation data for this proof
+        return {
+            "valid": self.valid,
+            "lines": [{
+                "valid": line.valid,
+                "logical": (line.line_type is not None) and (line.line_type.behaviour == "logical"),
+                "invalid_message": line.invalid_message
+            } for line in self.proof_lines]
+        }
+
     def __str__(self):
         return self.name
 
