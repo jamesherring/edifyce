@@ -93,6 +93,7 @@ def proofView(request, proof_id, proof_slug):
     # View for a proof
 
     proof = ProofModel.objects.get(id=proof_id)
+    proof.refresh()
 
     return render(request, "website/proof.html", {
         "proof": proof,
@@ -147,6 +148,7 @@ def proofEditView(request, proof_id, proof_slug):
     # Edit view for a proof
 
     proof = ProofModel.objects.get(id=proof_id)
+    proof.refresh()
 
     return render(request, "website/proof_edit.html", {
         "proof": proof,

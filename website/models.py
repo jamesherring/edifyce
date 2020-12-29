@@ -128,6 +128,10 @@ class ProofModel(models.Model):
         self.proof = self.formal_system.formal_system.parse(code)
         self.save()
 
+    def refresh(self):
+        # Set a new instance of the proof
+        self.set_code(self.code())
+
     def __str__(self):
         return self.name
 
