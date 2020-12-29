@@ -101,6 +101,30 @@ class FormalSystem(object):
                 proof_line.line_type = line_type
                 proof_line.match = result
 
+                if not line_type.behaviour == "indent":
+                    # Check for data to add to context
+
+                    key_path = line_type.add_context_key_path
+                    value_path = line_type.add_context_value_path
+
+                    if key_path is not None:
+
+                        # Get the keys
+                        keys = result.get_by_path(key_path, context)
+
+                        if type(keys) is not list:
+                            # Make a singleton list
+                            keys = [keys]
+
+                        for key in keys:
+                            key_string = key.string
+
+                            # Get the value using the value path - relative to the key
+                            value = key.get_by_path(value_path, context).get_value(context)
+
+                            # Add to context
+                            context.string_variables[key_string] = value
+
                 if line_type.behaviour == "indent":
                     # Parse the block with a copied context
 

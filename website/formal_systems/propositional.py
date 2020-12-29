@@ -88,25 +88,25 @@ join.variable = dollar_variable
 csv = UnionPattern(name="comma_separated_variables", patterns=[join, dollar_variable], skip_node=True)
 join.j = csv
 
-with_part = StringPattern(name="with_part", pattern="csv as pattern", proper_initial_segment="never")
-with_part.csv = csv
-with_part.pattern = system["variable_name"]
+let_part = StringPattern(name="let_part", pattern="csv be pattern", proper_initial_segment="never")
+let_part.csv = csv
+let_part.pattern = system["variable_name"]
 
-join_wp = StringPattern(name="join_wp", pattern="j, with_part", skip_node=True)
-join_wp.with_part = with_part
+join_lp = StringPattern(name="join_lp", pattern="j, let_part", skip_node=True)
+join_lp.let_part = let_part
 
-cswp = UnionPattern(name="cswp", patterns=[join_wp, with_part], skip_node=True)
-join_wp.j = cswp
+cslp = UnionPattern(name="cslp", patterns=[join_lp, let_part], skip_node=True)
+join_lp.j = cslp
 
 # Build with line - for introducing variable patterns
-with_pattern = StringPattern(name="with", pattern="Swith cswp:", proper_initial_segment="never")
-with_pattern.S = empty_pattern
-with_pattern.cswp = cswp
-with_line = LineType(
-    name="with",
-    pattern=with_pattern,
-    behaviour="indent",
-    add_context_key_path="self.with_part.v",
+let_pattern = StringPattern(name="let", pattern="Slet cslp", proper_initial_segment="never")
+let_pattern.S = empty_pattern
+let_pattern.cslp = cslp
+let_line = LineType(
+    name="let",
+    pattern=let_pattern,
+    behaviour="none",
+    add_context_key_path="self.let_part.v",
     add_context_value_path="non_skip_parent().pattern"
 )
 
@@ -162,7 +162,7 @@ thinning = InferenceRule(name="Thinning", label="T", antecedents=[formula], dedu
 propositional = FormalSystem(
     name="Propositional Logic",
     axioms=[a1, a2, a3],
-    line_types=[import_line, empty_line, comment_line, reference_line, with_line, if_line],
+    line_types=[import_line, empty_line, comment_line, reference_line, let_line, if_line],
     inference_rules=[mp, if_rule, dt_1, dt_2, thinning],
     context_variables={"formula": formula}
 )

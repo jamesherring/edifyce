@@ -23,7 +23,7 @@ body {
 }
 
 .allow-wrap {
-    white-space: normal;
+    white-space: pre-wrap;
 }
 
 /* Table classes */
