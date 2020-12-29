@@ -1976,7 +1976,6 @@ class StringPattern(Pattern):
                     if next_offset < len(self.pattern) and next_offset not in self.variable_locations:
                         # Pattern still has a string left with nothing to match in s (and it's not a variable,
                         # which could match an empty string). No match.
-
                         if pattern_offset == 0 and j > 0 and self.proper_initial_segment == "never":
                             # The sub_match is a matching proper initial segment - contradicting this rule
                             context.add_to_history(s, self, pattern_match, None)
@@ -2004,12 +2003,6 @@ class StringPattern(Pattern):
 
                     if remainder_match is None:
                         # No match.
-
-                        if pattern_offset == 0 and j > 0 and self.proper_initial_segment == "never":
-                            # The sub_match is a matching proper initial segment - contradicting this rule
-                            context.add_to_history(s, self, pattern_match, None)
-                            return None
-
                         continue
 
                 # The remainder matches

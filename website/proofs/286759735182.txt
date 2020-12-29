@@ -1,9 +1,9 @@
 
-# New proof 2
+# Given a formula and its negation, any formula follows
 
 with $\alpha$, $\beta$ as formula:
     
-    $(\neg \alpha \rightarrow (\neg \beta \rightarrow \neg \alpha))$ ref{A1}
+    $(\neg \alpha \rightarrow (\neg \beta \rightarrow \neg \alpha))$ ref{A2}
     
     if $\neg \alpha$:
     

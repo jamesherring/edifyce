@@ -65,9 +65,9 @@ comment_line = LineType(name="comment", pattern=comment_pattern, behaviour="none
 # Create references
 reference = StringPattern(name="reference", pattern="^[a-zA-Z0-9 ,]+$", is_regex=True)
 
-reference_pattern = StringPattern(name="reference_pattern", pattern="S[ref] formula", proper_initial_segment="never")
+reference_pattern = StringPattern(name="reference_pattern", pattern="Sformula ref{refs}", proper_initial_segment="never")
 reference_pattern.S = empty_pattern
-reference_pattern.ref = reference
+reference_pattern.refs = reference
 reference_pattern.formula = any_formula
 reference_line = LineType(name="Reference", pattern=reference_pattern, behaviour="logical")
 

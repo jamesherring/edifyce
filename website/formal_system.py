@@ -154,10 +154,10 @@ class FormalSystem(object):
 
                     subs = result.get_sub_matches()
 
-                    if "ref" in subs:
+                    if "refs" in subs:
                         # Use the given reference and formula
 
-                        ref = subs["ref"].string
+                        ref = subs["refs"].string
                         formula = subs["f"]
 
                         proof_line.formula = formula
@@ -175,12 +175,11 @@ class FormalSystem(object):
                             if axiom.match(formula.string, context) is None:
                                 # Doesn't fit this axiom - step is invalid
 
-                                proof_line.invalid_message = "Line " + str(line_number) + ": " + formula.string + \
-                                                             " is not an instance of " + key + "."
+                                proof_line.valid = False
+                                proof_line.invalid_message = "Not an instance of " + key + "."
 
                             else:
                                 # Otherwise, axiom matches
-                                proof_line.valid = True
                                 proof_line.axiom = axiom
 
                         elif key in self.inference_rule_dict:
@@ -211,6 +210,7 @@ class FormalSystem(object):
 
                                     antecedent_lines = ant.text.lstrip()
 
+                                proof_line.valid = False
                                 proof_line.invalid_message = key + " does not apply with antecedents: " + \
                                                              ",".join(antecedent_lines)
 
@@ -249,10 +249,9 @@ class FormalSystem(object):
 
             if not found:
                 # The line doesn't match any of the line types. Invalid proof
-                print("Could not parse line " + str(line_number) + ": " + line)
+                proof_line.invalid_message = "Could not parse line."
+                proof_line.parsed = False
                 proof_line.valid = False
-
-                proof.parsed = False
 
             i += 1
 
@@ -260,9 +259,12 @@ class FormalSystem(object):
             # Check if the proof is valid
 
             proof.valid = True
+            proof.parsed = True
+
             for line in proof.proof_lines:
                 if line.line_type is None:
                     proof.parsed = False
+                    proof.valid = False
                     continue
 
                 if line.line_type.behaviour == "logical" and not line.valid:
@@ -451,7 +453,10 @@ class ProofLine(object):
         self.antecedents = None
 
         # Whether this step in the proof is valid
-        self.valid = False
+        self.valid = True
+
+        # Whether this step has been parsed
+        self.parsed = True
 
         # Later proof lines that depend (directly) on this one
         self.dependent_lines = []

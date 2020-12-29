@@ -149,31 +149,71 @@ def proofEditView(request, proof_id, proof_slug):
     proof = ProofModel.objects.get(id=proof_id)
 
     return render(request, "website/proof_edit.html", {
-        "proof": proof
+        "proof": proof,
+        "system": proof.formal_system
     })
 
 
 def proofSaveView(request):
     # Ajax view to save a proof
 
+    try:
+
+        proof_id = request.POST.get("proof_id", False)
+        proof = ProofModel.objects.get(id=proof_id)
+
+        # Get the new code
+        new_code = request.POST.get("code", False)
+
+        # Set the proof code
+        proof.set_code(new_code)
+
+        return HttpResponse(json.dumps({"success": True}))
+
+    except Exception as e:
+        return HttpResponse(json.dumps({
+            "success": False,
+            "errorMessage": str(e)
+        }))
+
+
+def proofValidateView(request):
+    # Ajax view to validate a proof
+
     # try:
 
-    proof_id = request.POST.get("proof_id", False)
-    proof = ProofModel.objects.get(id=proof_id)
+    # Get the proof system
+    system_id = request.POST.get("system_id", False)
+    system_model = FormalSystemModel.objects.get(id=system_id)
+    system = system_model.formal_system
 
-    # Get the new code
-    new_code = request.POST.get("code", False)
+    # Get the proof code
+    code = request.POST.get("code", False)
 
-    # Set the proof code
-    proof.set_code(new_code)
+    # Parse the code in the system to get a proof
+    proof = system.parse(code)
 
-    return HttpResponse(json.dumps({"success": True}))
+    # Return the results
+    return HttpResponse(json.dumps({
+        "success": True,
+        "valid": proof.valid,
+        "parsed": proof.parsed,
+        "lines": [{
+            "valid": line.valid,
+            "parsed": line.line_type is not None,
+            "logical": (line.line_type is not None) and (line.line_type.behaviour == "logical"),
+            "invalid_message": line.invalid_message
+        } for line in proof.proof_lines]
+    }))
+
+    # Try the
 
     # except Exception as e:
     #     return HttpResponse(json.dumps({
     #         "success": False,
     #         "errorMessage": str(e)
     #     }))
+
 
 # def proofEditorView(request, system_slug):
 #     # View for editing a proof
