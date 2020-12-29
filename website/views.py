@@ -95,7 +95,8 @@ def proofView(request, proof_id, proof_slug):
     proof = ProofModel.objects.get(id=proof_id)
 
     return render(request, "website/proof.html", {
-        "proof": proof
+        "proof": proof,
+        "system": proof.formal_system
     })
 
 
@@ -121,7 +122,7 @@ def proofCreateSubmitView(request):
         system_id = request.POST.get("system_id")
         system = FormalSystemModel.objects.get(id=system_id)
 
-        proof.system = system
+        proof.formal_system = system
 
         # Get the code
         code = request.POST.get("code", False)
@@ -155,24 +156,24 @@ def proofEditView(request, proof_id, proof_slug):
 def proofSaveView(request):
     # Ajax view to save a proof
 
-    try:
+    # try:
 
-        proof_id = request.POST.get("proof_id", False)
-        proof = FormalSystemModel.objects.get(id=proof_id)
+    proof_id = request.POST.get("proof_id", False)
+    proof = ProofModel.objects.get(id=proof_id)
 
-        # Get the new code
-        new_code = request.POST.get("code", False)
+    # Get the new code
+    new_code = request.POST.get("code", False)
 
-        # Set the proof code
-        proof.set_code(new_code)
+    # Set the proof code
+    proof.set_code(new_code)
 
-        return HttpResponse(json.dumps({"success": True}))
+    return HttpResponse(json.dumps({"success": True}))
 
-    except Exception as e:
-        return HttpResponse(json.dumps({
-            "success": False,
-            "errorMessage": str(e)
-        }))
+    # except Exception as e:
+    #     return HttpResponse(json.dumps({
+    #         "success": False,
+    #         "errorMessage": str(e)
+    #     }))
 
 # def proofEditorView(request, system_slug):
 #     # View for editing a proof

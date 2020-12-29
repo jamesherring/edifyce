@@ -1,0 +1,59 @@
+{% extends 'base.html' %}
+
+{% load static %}
+
+
+{% block content %}
+    <p id="proof_id" class="hidden">{{ proof.id }}</p>
+
+    <h1>{{ system.name }} Proof Editor</h1>
+
+    <h2>{{ proof.name }}</h2>
+
+    <a href="{% url 'website:proof' proof.id proof.slug %}">Back</a><br/>
+    <a id="save">Save</a><br/>
+
+    <div id="ace-container" class="mathjax_ignore">{{ proof.code }}</div><div id="output" class="pattern"></div>
+
+{% endblock %}
+
+
+{% block js %}
+    <script src="{% static 'website/ace/editors.js' %}"></script>
+    <script src="{% static 'website/ace/src/ace.js' %}"></script>
+
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+
+    <script>
+        MathJax = {
+            tex: {
+                inlineMath: [['$', '$'], ['\\(', '\\)']],
+            },
+            svg: {
+                fontCache: 'global'
+            },
+            chtml: {
+                displayAlign: "left",
+                mathmlSpacing: true,
+                displayIndent: "0"
+            },
+            "HTML-CSS": {
+                styles: {
+                    ".MathJax nobr": {
+                        padding: 0,
+                        margin: 0
+                    }
+                },
+            }
+        };
+    </script>
+
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+
+    <script src="{% static 'website/proof_edit.js' %}"></script>
+{% endblock %}
+
+{% block css %}
+    <link rel="stylesheet" href="{% static '/website/code_editor.css' %}">
+    <link rel="stylesheet" href="{% static '/website/proof_edit.css' %}">
+{% endblock %}

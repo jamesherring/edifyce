@@ -63,6 +63,8 @@ class FormalSystem(object):
         if proof is None:
             # Create a new proof instance
             proof = Proof()
+            proof.parsed = True
+            proof.valid = True
 
         if context is None:
             # Create a new context instance
@@ -213,7 +215,9 @@ class FormalSystem(object):
                                                              ",".join(antecedent_lines)
 
                         else:
-                            raise Exception("Did not recognise logical key '" + key + "' on line " + str(line_number))
+                            proof_line.invalid_message = "Did not recognise logical key '" + key + "' on line " + \
+                                                         str(line_number)
+                            proof_line.valid = False
 
                     else:
                         # Must have a formula
@@ -244,20 +248,25 @@ class FormalSystem(object):
                 break
 
             if not found:
-                # The line doesn't match any of the line types
-                raise Exception("Could not parse line " + str(line_number) + ": " + line)
+                # The line doesn't match any of the line types. Invalid proof
+                print("Could not parse line " + str(line_number) + ": " + line)
+                proof_line.valid = False
+
+                proof.parsed = False
 
             i += 1
 
         if line_number_offset == 0:
             # Check if the proof is valid
-            valid_proof = True
-            for line in proof.proof_lines:
-                if line.line_type.behaviour == "logical" and not line.valid:
-                    valid_proof = False
-                    break
 
-            proof.valid = valid_proof
+            proof.valid = True
+            for line in proof.proof_lines:
+                if line.line_type is None:
+                    proof.parsed = False
+                    continue
+
+                if line.line_type.behaviour == "logical" and not line.valid:
+                    proof.valid = False
 
         return proof
 
@@ -341,6 +350,9 @@ class InferenceRule(object):
         # Check if the antecedents match
         for pattern, ant in zip(self.antecedents, antecedents):
 
+            if ant.formula is None:
+                return False
+
             # Set the inference match - can be used in the Condition
             ant.inference_match = pattern.match(ant.formula.string, context)
 
@@ -380,6 +392,9 @@ class Proof(object):
 
         # The proof result
         self.result = result
+
+        # Whether all lines in the proof can be parsed
+        self.parsed = None
 
         # Whether the proof is valid
         self.valid = None

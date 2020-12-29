@@ -8,12 +8,18 @@
     <h1>{{ system.name }}</h1>
 
     <a href="{% url 'website:index' %}">Back</a><br/>
-    <a href="{% url 'website:formal_system_edit' system.slug %}">Edit</a>
+    <a href="{% url 'website:formal_system_edit' system.id system.slug %}">Edit</a>
 
 
     <h2>Proofs</h2>
 
-    <a href="{% url 'website:proof_create' %}">New Proof</a>
+    {% for proof in system.proofmodel_set.all %}
+        <a href="{% url 'website:proof' proof.id proof.slug %}">{{ proof.name }}</a><br/>
+    {% empty %}
+        <p>No proofs.</p>
+    {% endfor %}
+
+    <a href="{% url 'website:proof_create' system.id system.slug %}">New Proof</a>
 
 
     <h2>Formulae</h2>

@@ -61,7 +61,7 @@ class FormalSystemModel(models.Model):
     updated = models.DateTimeField(auto_now=True, blank=True, null=True)
 
     def get_absolute_url(self):
-        return "/system/" + self.slug + "/"
+        return "/system/" + self.id + "/" + self.slug + "/"
 
     def path_to_file(self):
         # Get the path to the file defining this formal system
@@ -106,7 +106,7 @@ class ProofModel(models.Model):
     updated = models.DateTimeField(auto_now=True, blank=True, null=True)
 
     def get_absolute_url(self):
-        return "/proof/" + self.formal_system.slug + "/" + self.slug + "/"
+        return "/proof/" + self.id + "/" + self.slug + "/"
 
     def path_to_file(self):
         # Get the path to the file defining this proof
@@ -125,7 +125,7 @@ class ProofModel(models.Model):
             f.write(code)
 
         # Refresh the proof instance according to the file
-        self.proof = self.formal_system.parse(code)
+        self.proof = self.formal_system.formal_system.parse(code)
         self.save()
 
     def __str__(self):
@@ -139,4 +139,3 @@ def save_system(sender, instance, **kwargs):
     if sender in (FormalSystemModel, ProofModel):
         # It's a model that uses slugs
         instance.slug = slugify(instance.name)
-        instance.save()
