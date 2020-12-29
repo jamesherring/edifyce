@@ -9,16 +9,16 @@ $(function() {
 
     $("#save").on("click", function() {
         AJAX(
-            "/system/ajax/save/",
+            "/proof/ajax/create/",
             {
-                "system_id": system_id,
-                "code": editor.editor.getValue()
+                "name": $("input[name='name']").val(),
+                "code": editor.editor.getValue(),
+                "system_id": system_id
             },
             function(response) {
-
-                console.log(response);
-
+                // Success - redirect to view the page
+                window.location.href = response.url;
             }
         )
-    });
+    })
 })

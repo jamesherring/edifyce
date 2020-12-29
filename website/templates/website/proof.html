@@ -1,0 +1,36 @@
+{% extends 'base.html' %}
+
+{% load static %}
+
+
+{% block content %}
+
+    <h1>{{ proof.name }}</h1>
+
+    <a href="{% url 'website:formal_system' system.id system.slug %}">Back</a><br/>
+    <a href="{% url 'website:proof_edit' proof.id proof.slug %}">Edit</a>
+
+
+    <h2>Proof Code</h2>
+
+    <p class="pattern">{{ proof.code }}</p>
+
+
+
+{% endblock %}
+
+{% block js %}
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script>
+        MathJax = {
+            tex: {
+                inlineMath: [['$', '$'], ['\\(', '\\)']]
+            },
+            svg: {
+                fontCache: 'global'
+            }
+        };
+    </script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+{% endblock %}
+

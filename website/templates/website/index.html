@@ -8,7 +8,7 @@
 
     {% for system in formal_systems %}
 
-        <a href="{% url 'website:formal_system' system.slug %}">{{ system.name }}</a></br>
+        <a href="{% url 'website:formal_system' system.id system.slug %}">{{ system.name }}</a></br>
 
     {% endfor %}
 

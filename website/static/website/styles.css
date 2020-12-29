@@ -21,3 +21,21 @@ body {
 .bold {
     font-weight: bold;
 }
+
+/* Table classes */
+div.table {
+    display: table;
+}
+div.row {
+    display: table-row;
+}
+div.cell {
+    display: table-cell;
+    padding: 0 2rem 0 0.5rem;
+}
+
+div.line-number {
+    text-align: right;
+    background-color: #CCC;
+    padding: 0 0.5rem 0 1rem;
+}

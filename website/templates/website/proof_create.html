@@ -5,6 +5,8 @@
 
 {% block content %}
 
+    <p id="system_id" class="hidden">{{ system.id }}</p>
+
     <h1>Create a Proof in {{ system.name }}</h1>
 
     <a href="{% url 'website:index' %}">Back</a><br/>
@@ -27,5 +29,5 @@
 {% endblock %}
 
 {% block css %}
-    <link rel="stylesheet" href="{% static '/website/proof_create.css' %}">
+    <link rel="stylesheet" href="{% static '/website/code_editor.css' %}">
 {% endblock %}

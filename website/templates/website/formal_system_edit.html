@@ -9,7 +9,7 @@
 
     <h1>{{ system.name }}</h1>
 
-    <a href="{% url 'website:formal_system' system.slug %}">Back</a><br/>
+    <a href="{% url 'website:formal_system' system.id system.slug %}">Back</a><br/>
     <a id="save">Save</a>
 
     <div id="ace-container">{{ system.code }}</div>
@@ -28,4 +28,5 @@
 
 {% block css %}
     <link rel="stylesheet" href="{% static '/website/formal_system_edit.css' %}">
+    <link rel="stylesheet" href="{% static '/website/code_editor.css' %}">
 {% endblock %}

@@ -1,0 +1,18 @@
+
+# New proof 2
+
+with $\alpha$, $\beta$ as formula:
+    
+    $(\neg \alpha \rightarrow (\neg \beta \rightarrow \neg \alpha))$ ref{A1}
+    
+    if $\neg \alpha$:
+    
+        $(\neg \beta \rightarrow \neg \alpha)$ ref{DT1, 6}
+
+        $((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ ref{A3}
+
+        $(\alpha \rightarrow \beta)$ ref{MP, 10, 12}
+        
+    $(\neg \alpha \rightarrow (\alpha \rightarrow \beta))$ ref{DT2, 14}
+    
+
