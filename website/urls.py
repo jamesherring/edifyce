@@ -23,6 +23,7 @@ urlpatterns = [
     path("proof/edit/<proof_id>/<proof_slug>/", proofEditView, name="proof_edit"),
 
     path("proof/ajax/create/", proofCreateSubmitView, name="proof_create_submit"),
-    path("proof/ajax/save/", proofSaveView, name="proof_save")
+    path("proof/ajax/save/", proofSaveView, name="proof_save"),
+    path("proof/ajax/validate/", proofValidateView, name="proof_validate")
 
 ]

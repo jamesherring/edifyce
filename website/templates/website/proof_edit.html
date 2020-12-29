@@ -5,6 +5,7 @@
 
 {% block content %}
     <p id="proof_id" class="hidden">{{ proof.id }}</p>
+    <p id="system_id" class="hidden">{{ system.id }}</p>
 
     <h1>{{ system.name }} Proof Editor</h1>
 
@@ -13,7 +14,7 @@
     <a href="{% url 'website:proof' proof.id proof.slug %}">Back</a><br/>
     <a id="save">Save</a><br/>
 
-    <div id="ace-container" class="mathjax_ignore">{{ proof.code }}</div><div id="output" class="pattern"></div>
+    <div id="ace-container" class="mathjax_ignore">{{ proof.code }}</div><div id="output" class="proof-display"></div>
 
 {% endblock %}
 
@@ -50,6 +51,7 @@
 
     <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
 
+    <script src="{% static 'website/proof_display.js' %}"></script>
     <script src="{% static 'website/proof_edit.js' %}"></script>
 {% endblock %}
 

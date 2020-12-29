@@ -1,12 +1,10 @@
 
-div#ace-container {
-    width: 50%;
-    display: inline-block;
-}
-
-div#output {
+div#ace-container, div#output {
     width: 50%;
     display: inline-block;
     vertical-align: top;
-    white-space: pre-wrap;
+}
+
+div#output {
+    overflow-x: scroll;
 }

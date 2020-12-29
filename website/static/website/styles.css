@@ -32,10 +32,20 @@ div.row {
 div.cell {
     display: table-cell;
     padding: 0 2rem 0 0.5rem;
+    white-space: pre;
+}
+div.cell.indicator {
+    padding: 0 0.2rem;
 }
 
 div.line-number {
     text-align: right;
     background-color: #CCC;
     padding: 0 0.5rem 0 1rem;
+}
+
+/* Proof display */
+div.proof-display {
+    white-space: pre-wrap;
+    font-family: monospace;
 }
