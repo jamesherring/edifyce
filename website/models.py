@@ -3,14 +3,13 @@ from django.contrib.auth.models import User
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 from picklefield.fields import PickledObjectField
-import string
 import random
 from slugify import slugify
 from website.matching import LatticeCompiler
 from website.formal_system import Proof
 
 
-def id_gen(length=12, chars=string.digits):
+def id_gen(length=8, chars="0123456789abcdef"):
     # An id generator to uniquely identify objects
     return "".join(random.SystemRandom().choice(chars) for _ in range(length))
 

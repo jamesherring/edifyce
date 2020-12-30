@@ -271,6 +271,10 @@ class FormalSystem(object):
                     for string_var, sub_pattern in context.string_variables.items():
                         defn.add_variable(string_var, sub_pattern)
 
+                elif line_type.behaviour == "import":
+                    # Import a file or result
+                    pass
+
                 elif line_type.behaviour == "none":
                     # Don't need to do anything :)
                     pass
