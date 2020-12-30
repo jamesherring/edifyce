@@ -51,3 +51,20 @@ div.proof-display {
     white-space: pre-wrap;
     font-family: monospace;
 }
+
+/* Proof valid indicator */
+span.indicator {
+    display: inline-block;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 1rem;
+    vertical-align: top;
+    margin-right: 1rem;
+}
+
+span.indicator[data-valid="True"] {
+    background-color: #0F0;
+}
+span.indicator[data-valid="False"] {
+    background-color: #F00;
+}

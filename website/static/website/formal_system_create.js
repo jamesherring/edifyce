@@ -6,7 +6,7 @@ $(function() {
 
     $("#save").on("click", function() {
         AJAX(
-            "system/ajax/create/",
+            "/system/ajax/create/",
             {
                 "name": $("input[name='name']").val(),
                 "code": editor.editor.getValue()

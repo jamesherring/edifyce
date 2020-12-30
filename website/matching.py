@@ -7,13 +7,16 @@ from website.context import Context
 class Match(object):
     # A match for a regex pattern
 
-    def __init__(self, pattern, string, definition_mapping=None, lower_match=None, parent_pattern_match=None):
+    def __init__(self, pattern, string, definition=None, definition_mapping=None, lower_match=None, parent_pattern_match=None):
 
         # The pattern or union instance
         self.pattern = pattern
 
         # The matching string (or possibly pattern)
         self.string = string
+
+        # The definition used (if any)
+        self.definition = definition
 
         # The definition mapping (if any)
         self.definition_mapping = definition_mapping
@@ -239,7 +242,12 @@ class Match(object):
             # Must be two args
             assert len(unlabelled_args) + len(labelled_args) == len(correct_args)
 
-            return Definition(*unlabelled_args, **labelled_args)
+            defn = Definition(*unlabelled_args, **labelled_args)
+
+            # Add the definition to context
+            context.definitions.append(defn)
+
+            return defn
 
         if path == "make_condition()":
             # Make a condition object with the value
@@ -654,14 +662,36 @@ class Match(object):
 
         return s
 
-    def equivalent(self, other, context):
+    def equivalent(self, other, context, allow_definitions=False):
         # Test whether two matches are equivalent. For variables - use context restrictions where possible.
 
         # A variable will typically return None when matched against a string or another variable - i.e. they could be
         # equal but it can't be guaranteed or ruled out.
 
-        # Belonging to the same pattern is a requirement
+        # Belonging to the same pattern is a requirement, unless there's a convenient definition
         if self.pattern is not other.pattern:
+
+            if not allow_definitions:
+                # Ignore possible definitions
+                return False
+
+            # See if there's a definition to help
+            if self.lower_match is not None:
+                # Try the lower match
+                if self.lower_match.equivalent(other, context, allow_definitions):
+                    return True
+
+                if other.lower_match is not None:
+                    # Combine both definitions
+                    if self.lower_match.equivalent(other.lower_match, context, allow_definitions):
+                        return True
+
+            if other.lower_match is not None:
+                # The the other definition
+                if self.equivalent(other.lower_match, context, allow_definitions):
+                    return True
+
+            # Otherwise, no luck
             return False
 
         # Test equality of sub_matches
@@ -679,7 +709,7 @@ class Match(object):
 
             for key in self_subs:
                 # Check the subs are equivalent
-                result = self_subs[key].equivalent(other_subs[key], context)
+                result = self_subs[key].equivalent(other_subs[key], context, allow_definitions)
 
                 if result is False:
                     # Weakest result is False - so we can return this immediately
@@ -888,12 +918,24 @@ class Match(object):
         return True
 
     def make_copy(self):
-        # Make a copy of self and the sub-match structure. Quicker than copy.deepcopy()
+
+        lower_copy = None
+        if self.lower_match is not None:
+            lower_copy = self.lower_match.make_copy()
+
+        # Copy the parent pattern match
+        parent_pattern_copy = None
+        if self.parent_pattern_match is not None:
+            parent_pattern_copy = self.parent_pattern_match.make_copy()
 
         # Create the initial match
         m = Match(
             pattern=self.pattern,
-            string=self.string
+            string=self.string,
+            definition=self.definition,
+            definition_mapping=self.definition_mapping,
+            lower_match=lower_copy,
+            parent_pattern_match=parent_pattern_copy
         )
 
         # Add the sub matches with recursive copying
@@ -947,6 +989,16 @@ class Condition(object):
             initial = self.get_item(initial, match, context, condition_context)
 
             return initial[index]
+
+        if ".definition_equivalent(" in s and s[-1] == ")":
+
+            index = s.index(".definition_equivalent(")
+            initial = self.get_item(s[:index], match, context, condition_context)
+
+            inner = s[index + len(".definition_equivalent("):-1]
+            inner_item = self.get_item(inner, match, context, condition_context)
+
+            return initial.equivalent(inner_item, context, allow_definitions=True)
 
         if "." in s:
 
@@ -1291,6 +1343,9 @@ class Definition(object):
         # Assign the lower match
         match.lower_match = pattern.match(lower_s, context)
 
+        # Record the definition used
+        match.definition = self
+
         return match
 
     def applies_to_pattern(self, pattern, context):
@@ -1336,6 +1391,14 @@ class Pattern(object):
 
         # Otherwise, error
         raise Exception(self.name + " does not have attribute: " + name)
+
+    @staticmethod
+    def add_definition(higher, lower, context):
+        # Add a definition for this pattern
+
+        defn = Definition(higher, lower)
+        context.definitions.append(defn)
+        return defn
 
     def meets_condition(self, match, pattern_match, context, update_history=True):
         # Check that a given match meets the condition for this Pattern
@@ -2163,8 +2226,8 @@ class StringPattern(Pattern):
         self.definition_context = context.get_copy()
 
         # Get from context definitions that apply to this pattern
-        vars = context.variables
-        defns = [vars[key] for key in vars if type(vars[key]) is Definition]
+        # vars = context.variables
+        # defns = [vars[key] for key in vars if type(vars[key]) is Definition]
 
         # Assume they are all invalid
         self.definitions = [
@@ -2173,7 +2236,7 @@ class StringPattern(Pattern):
                 "variables": defn.variables.copy(),
                 "valid": False,
                 "mapping": None
-            } for defn in defns
+            } for defn in context.definitions
         ]
 
         for dct in self.definitions:
@@ -2325,10 +2388,15 @@ class UnionPattern(Pattern):
                 # Match fails
                 continue
 
-            # Successful match - result is a union match
-            context.add_to_history(s, self, pattern_match, result)
+            # Successful match - but result is not a union match
+            m = Match(
+                pattern=self,
+                string=s
+            )
+            m.add_submatch(pattern.name, result)
+            context.add_to_history(s, self, pattern_match, m)
 
-            return result
+            return m
 
         # Sort the deeper patterns by decreasing certainty
         deeper_check_patterns.sort(key=lambda x: x.certainty, reverse=True)
@@ -2877,7 +2945,8 @@ class LatticeCompiler(object):
             "match",
             "inf_match",
             "set",
-            "variables"
+            "variables",
+            "definition_equivalent"
         )
 
         function = StringPattern(
@@ -3402,16 +3471,8 @@ class LatticeCompiler(object):
             # Check the inbuilt language options
             for key, option in self.line_options.items():
 
-                debug = None
-                if False and line == r'c = Condition(deduction.indent_line() == antecedents[0].indent_line().indent_line() and ' \
-                           r'set(deduction.inf_match().alpha) == antecedents[0].indent_line().match().shallow_instance' \
-                           r's(formula) and deduction.inf_match().beta == antecedents[0].formula())':
-                    debug = 1
-
-                    print("\n\n", key, option)
-
                 # Try to make the match
-                match = option.match(line, context, debug=debug)
+                match = option.match(line, context)
 
                 if match is None:
                     continue
@@ -3450,7 +3511,10 @@ class LatticeCompiler(object):
                     i = j - 1
                     break
 
-                self.parse_match(key, match, context)
+                try:
+                    self.parse_match(key, match, context)
+                except Exception as e:
+                    raise Exception("Could not parse line " + str(line_number) + ": " + str(e))
 
                 # Found a match
                 break

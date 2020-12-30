@@ -182,7 +182,7 @@ class FormalSystem(object):
                         # Use the given reference and formula
 
                         ref = subs["refs"].string
-                        formula = subs["f"]
+                        formula = subs["formula"]
 
                         proof_line.formula = formula
 
@@ -217,30 +217,27 @@ class FormalSystem(object):
                                 ant_line_no = int(ant_line_no)
                                 antecedents.append(proof.get_proof_line(ant_line_no))
 
+                            # Check the number of antecedents
+                            if not len(antecedents) == len(inference_rule.antecedents):
+                                # Wrong number of antecedents
+                                proof_line.valid = False
+                                proof_line.invalid_message = key + " requires " + str(len(inference_rule.antecedents)) + \
+                                    " antecedent(s)."
+                                continue
+
                             if inference_rule.check(antecedents=antecedents, deduction=proof_line, context=context):
                                 # It's a valid step
 
-                                proof_line.valid = True
                                 proof_line.antecedents = antecedents
                                 proof_line.inference_rule = inference_rule
 
                             else:
                                 # Not a valid line
-                                antecedent_lines = []
-                                for ant in antecedents:
-                                    if ant is None:
-                                        proof_line.invalid_message = "Invalid antecedents"
-                                        continue
-
-                                    antecedent_lines = ant.text.lstrip()
-
                                 proof_line.valid = False
-                                proof_line.invalid_message = key + " does not apply with antecedents: " + \
-                                                             ",".join(antecedent_lines)
+                                proof_line.invalid_message = key + " does not apply."
 
                         else:
-                            proof_line.invalid_message = "Did not recognise logical key '" + key + "' on line " + \
-                                                         str(line_number)
+                            proof_line.invalid_message = "Invalid reference '" + key + "'."
                             proof_line.valid = False
 
                     else:
@@ -263,6 +260,16 @@ class FormalSystem(object):
                             break
 
                         # No axioms work, need to try inference rules
+
+                elif line_type.behaviour == "definition":
+                    # Introduce a new definition to context
+
+                    subs = result.sub_matches
+                    defn = self.formula.add_definition(subs["higher"].string, subs["lower"].string, context)
+
+                    # Add variables to the definition
+                    for string_var, sub_pattern in context.string_variables.items():
+                        defn.add_variable(string_var, sub_pattern)
 
                 elif line_type.behaviour == "none":
                     # Don't need to do anything :)
@@ -313,7 +320,7 @@ class LineType(object):
 
         # The behaviour of these lines
         self.behaviour = behaviour
-        assert self.behaviour in ("none", "import", "logical", "indent")
+        assert self.behaviour in ("none", "import", "logical", "indent", "definition")
 
         # The data paths to add to context (if any)
         self.add_context_key_path = add_context_key_path
@@ -352,6 +359,10 @@ class InferenceRule(object):
 
     def check(self, antecedents, deduction, context):
         # Check to see if the proposed proof lines are valid under this inference rule
+
+        # Check the number of antecedents matches
+        if not len(antecedents) == len(self.antecedents):
+            return False
 
         if deduction is None:
             # Deduction doesn't point to a valid proof line
@@ -515,7 +526,7 @@ class ProofLine(object):
         index = self.index()
         line = self
 
-        while line.indent >= self.indent or line.line_type.behaviour == "none":
+        while line.indent >= self.indent or (line.line_type is not None and line.line_type.behaviour == "none"):
             index -= 1
             line = self.proof.proof_lines[index]
 

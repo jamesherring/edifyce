@@ -40,7 +40,7 @@ $(function() {
     editor.editor.session.on("change", function() {
         // Validate the proof 500ms after any changes
         window.clearTimeout(window.timeout);
-        window.timeout = setTimeout(validate_proof, 500);
+        window.timeout = setTimeout(validate_proof, 250);
     });
 
 

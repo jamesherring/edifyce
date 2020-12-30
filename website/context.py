@@ -1,7 +1,7 @@
 class Context(object):
     # A class for the context
 
-    def __init__(self, variables=None, string_variables=None, restrictions=None, system=None):
+    def __init__(self, variables=None, string_variables=None, restrictions=None, definitions=None, system=None):
 
         # Variables in the file
         self.variables = variables
@@ -17,6 +17,11 @@ class Context(object):
         self.restrictions = restrictions
         if restrictions is None:
             self.restrictions = list()
+
+        # Definitions
+        self.definitions = definitions
+        if definitions is None:
+            self.definitions = list()
 
         # System patterns
         self.system = system
@@ -74,7 +79,13 @@ class Context(object):
         })
 
     def get_copy(self):
-        return Context(self.variables.copy(), self.string_variables.copy(), self.restrictions.copy(), self.system.copy())
+        return Context(
+            variables=self.variables.copy(),
+            string_variables=self.string_variables.copy(),
+            restrictions=self.restrictions.copy(),
+            definitions=self.definitions.copy(),
+            system=self.system.copy()
+        )
 
     def add_to_history(self, key, pattern, pattern_match, match):
         # Add a match to a key, pattern, pattern_match tuple in history (match may be None)
@@ -83,3 +94,11 @@ class Context(object):
     def clear_history(self):
         # Clear context history
         self.history = dict()
+
+    def __eq__(self, other):
+        # Check if equal to another context
+        return self.variables == other.variables and \
+               self.string_variables == other.string_variables and \
+               self.restrictions == other.restrictions and \
+               self.definitions == other.definitions and \
+               self.system == other.system
