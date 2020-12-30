@@ -2,7 +2,7 @@
 
 integer = StringPattern(name="integer", pattern="^(?:0|[1-9][0-9]*)$", is_regex=True, proper_initial_segment="always")
 
-pv = StringPattern(name="variable", pattern="p_i")
+pv = StringPattern(name="variable", pattern="p_{i}", proper_initial_segment="never")
 pv.i = integer
 
 ra = StringPattern(name="rightarrow", pattern="(\\alpha \\rightarrow \\beta)", proper_initial_segment="never")
@@ -16,8 +16,8 @@ ra.add_variable("\\beta", formula)
 neg.add_variable("\\alpha", formula)
 
 # Dollar formulas - for TeX parsing
-dollar_formula = StringPattern(name="dollar_formula", pattern="$f$", skip_node=True, proper_initial_segment="never")
-dollar_formula.f = formula
+dollar_formula = StringPattern(name="dollar_formula", pattern="$formula$", skip_node=True, proper_initial_segment="never")
+dollar_formula.formula = formula
 
 # Dollar formula or a formula
 any_formula = UnionPattern(name="formula", patterns=[formula, dollar_formula], skip_node=True)
@@ -68,7 +68,7 @@ reference = StringPattern(name="reference", pattern="^[a-zA-Z0-9 ,]+$", is_regex
 reference_pattern = StringPattern(name="reference_pattern", pattern="Sformula ref{refs}", proper_initial_segment="never")
 reference_pattern.S = empty_pattern
 reference_pattern.refs = reference
-reference_pattern.formula = any_formula
+reference_pattern.formula = dollar_formula
 reference_line = LineType(name="Reference", pattern=reference_pattern, behaviour="logical")
 
 # Build comma separated formulae
@@ -115,6 +115,13 @@ if_pattern.S = empty_pattern
 if_pattern.csf = comma_separated_formula
 if_line = LineType(name="if line", pattern=if_pattern, behaviour="indent")
 
+# Definition line
+define_pattern = StringPattern(name="define", pattern="Sdefine $higher$ as $lower$")
+define_pattern.S = empty_pattern
+define_pattern.higher = StringPattern(name="anything", pattern="^.*$", is_regex=True)
+define_pattern.lower = formula
+define_line = LineType(name="define line", pattern=define_pattern, behaviour="definition")
+
 # Now make the inference rules
 
 # Make modus ponens
@@ -158,12 +165,18 @@ c = Condition(
 )
 thinning = InferenceRule(name="Thinning", label="T", antecedents=[formula], deduction=formula, condition=c)
 
+# Utilise a defintion
+c = Condition(
+    deduction.formula().definition_equivalent(antecedents[0].formula())
+)
+definition = InferenceRule(name="Definition", label="DEF", antecedents=[formula], deduction=formula, condition=c)
+
 # Create the formal system
 propositional = FormalSystem(
     name="Propositional Logic",
     axioms=[a1, a2, a3],
-    line_types=[import_line, empty_line, comment_line, reference_line, let_line, if_line],
-    inference_rules=[mp, if_rule, dt_1, dt_2, thinning],
+    line_types=[import_line, empty_line, comment_line, reference_line, let_line, if_line, define_line],
+    inference_rules=[mp, if_rule, dt_1, dt_2, thinning, definition],
     context_variables={"formula": formula}
 )
 system["formal_system"] = propositional

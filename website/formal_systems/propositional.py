@@ -167,7 +167,8 @@ thinning = InferenceRule(name="Thinning", label="T", antecedents=[formula], dedu
 
 # Utilise a defintion
 c = Condition(
-    deduction.formula().definition_equivalent(antecedents[0].formula())
+    deduction.formula().definition_equivalent(antecedents[0].formula()) and \
+    deduction.indent_line() == antecedents[0].indent_line()
 )
 definition = InferenceRule(name="Definition", label="DEF", antecedents=[formula], deduction=formula, condition=c)
 
