@@ -5,7 +5,9 @@
 
 {% block content %}
 
-    <h1>{{ proof.name }}</h1>
+    {{ proof.proof.validation_data|json_script:"validation" }}
+
+    <h1><span class="indicator" data-valid="{{ proof.proof.valid }}"></span>{{ proof.name }}</h1>
 
     <a href="{% url 'website:formal_system' system.id system.slug %}">Back</a><br/>
     <a href="{% url 'website:proof_edit' proof.id proof.slug %}">Edit</a>
@@ -14,8 +16,6 @@
     <h2>Proof</h2>
 
     <div id="output" class="proof-display">{{ proof.code }}</div>
-
-    {{ proof.proof.validation_data|json_script:"validation" }}
 
 {% endblock %}
 

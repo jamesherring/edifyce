@@ -1,0 +1,16 @@
+
+
+let $\alpha$, $\beta$ be formula
+
+define $(\alpha \land \beta)$ as $\neg (\alpha \rightarrow \neg \beta)$
+
+define $a_1(\alpha, \beta)$ as $(\alpha \rightarrow (\beta \rightarrow \alpha))$
+
+if $\alpha$, $\beta$:
+
+    $\neg (\alpha \rightarrow \neg \beta)$ ref{IF}
+
+    $(\alpha \land \beta)$ ref{DEF, 11}
+    
+    $\neg (\alpha \rightarrow \neg \beta)$ ref{DEF, 13}
+

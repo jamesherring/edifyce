@@ -61,7 +61,7 @@ class FormalSystemModel(models.Model):
     updated = models.DateTimeField(auto_now=True, blank=True, null=True)
 
     def get_absolute_url(self):
-        return "/system/" + self.id + "/" + self.slug + "/"
+        return "/system/view/" + self.id + "/" + self.slug + "/"
 
     def path_to_file(self):
         # Get the path to the file defining this formal system
@@ -106,7 +106,7 @@ class ProofModel(models.Model):
     updated = models.DateTimeField(auto_now=True, blank=True, null=True)
 
     def get_absolute_url(self):
-        return "/proof/" + self.id + "/" + self.slug + "/"
+        return "/proof/view/" + self.id + "/" + self.slug + "/"
 
     def path_to_file(self):
         # Get the path to the file defining this proof

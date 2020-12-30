@@ -182,30 +182,30 @@ def proofSaveView(request):
 def proofValidateView(request):
     # Ajax view to validate a proof
 
-    try:
+    # try:
 
-        # Get the proof system
-        system_id = request.POST.get("system_id", False)
-        system_model = FormalSystemModel.objects.get(id=system_id)
-        system = system_model.formal_system
+    # Get the proof system
+    system_id = request.POST.get("system_id", False)
+    system_model = FormalSystemModel.objects.get(id=system_id)
+    system = system_model.formal_system
 
-        # Get the proof code
-        code = request.POST.get("code", False)
+    # Get the proof code
+    code = request.POST.get("code", False)
 
-        # Parse the code in the system to get a proof
-        proof = system.parse(code)
+    # Parse the code in the system to get a proof
+    proof = system.parse(code)
 
-        # Return the results
-        return HttpResponse(json.dumps({
-            "success": True,
-            "validation": proof.validation_data()
-        }))
+    # Return the results
+    return HttpResponse(json.dumps({
+        "success": True,
+        "validation": proof.validation_data()
+    }))
 
-    except Exception as e:
-        return HttpResponse(json.dumps({
-            "success": False,
-            "errorMessage": str(e)
-        }))
+    # except Exception as e:
+    #     return HttpResponse(json.dumps({
+    #         "success": False,
+    #         "errorMessage": str(e)
+    #     }))
 
 
 # def proofEditorView(request, system_slug):
