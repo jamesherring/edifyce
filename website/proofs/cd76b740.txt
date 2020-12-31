@@ -1,3 +1,9 @@
 
-import deduce_anything_from_a_contradiction.result as res
+import deduce_anything_from_a_contradiction.X as res
+
+let $\alpha$, $\beta$ be formula
+
+$(\neg \alpha \rightarrow (\neg \beta \rightarrow \neg \alpha))$ ref{T, res}
+
+
 

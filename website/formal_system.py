@@ -1,12 +1,4 @@
 from website.context import Context
-from django.db import models
-import string
-import random
-
-
-def id_gen(length=12, chars=string.ascii_lowercase + string.ascii_uppercase + string.digits + "-_"):
-    # An id generator to uniquely identify objects
-    return "".join(random.SystemRandom().choice(chars) for _ in range(length))
 
 
 class FormalSystem(object):
@@ -55,7 +47,50 @@ class FormalSystem(object):
         if context is not None:
             self.context_system = context.system.copy()
 
-    def parse(self, text, proof=None, context=None, line_number_offset=0):
+    def get_references(self, text):
+        # Get references to external proofs from the given code
+
+        # Create a default context
+        context = Context()
+
+        # Provide the default variables and system variables
+        context.variables = self.context_variables
+        context.system = self.context_system
+
+        # Track the reference slugs
+        references = set()
+
+        # Get the import line types
+        import_line_types = [line_type for line_type in self.line_types if line_type.behaviour == "import"]
+
+        lines = text.split("\n")
+        for line in lines:
+
+            # Check the line is an import line type
+            for line_type in import_line_types:
+
+                result = line_type.parse_line(line, context)
+
+                if result is None:
+                    continue
+
+                subs = result.get_sub_matches()
+
+                # Get the path
+                path = subs["path"].string
+
+                # The proof reference is the first part
+                parts = path.split(".")
+
+                slug = parts[0].replace("_", "-")
+
+                references.add(slug)
+
+                break
+
+        return references
+
+    def parse(self, text, proof=None, reference_proofs=None, context=None, line_number_offset=0):
         # Parse the text into a proof
 
         lines = text.split("\n")
@@ -65,6 +100,8 @@ class FormalSystem(object):
             proof = Proof(formal_system=self)
             proof.parsed = True
             proof.valid = True
+
+            proof.reference_proofs = reference_proofs
 
         if context is None:
             # Create a new context instance
@@ -167,7 +204,7 @@ class FormalSystem(object):
                     # Compile the block
                     block = "\n".join(lines[i + 1:j])
 
-                    self.parse(block, proof, new_context, line_number_offset=i + 1)
+                    self.parse(text=block, proof=proof, context=new_context, line_number_offset=i + 1)
 
                     # Continue from after the block
                     i = j - 1
@@ -184,6 +221,9 @@ class FormalSystem(object):
                         if "label" in label_subs:
                             label = label_subs["label"].get_sub_matches()["ref"].string
                             proof_line.label = label
+
+                            # Add this line to proof context
+                            proof.context[label] = proof_line
 
                     if "refs" in subs:
                         # Use the given reference and formula
@@ -285,7 +325,42 @@ class FormalSystem(object):
 
                 elif line_type.behaviour == "import":
                     # Import a file or result
-                    pass
+
+                    subs = result.get_sub_matches()
+
+                    # Get the path and reference
+                    path = subs["path"].string
+                    reference = subs["reference"].string
+
+                    # Get the line from the import path
+                    parts = path.split(".")
+
+                    if len(parts) > 2:
+                        # Too many parts
+                        proof_line.valid = False
+                        proof_line.invalid_message = "Could not parse path"
+                        continue
+
+                    slug = parts[0].replace("_", "-")
+
+                    if slug not in proof.reference_proofs or proof.reference_proofs[slug] is None:
+                        # Don't recognise slug
+                        proof_line.valid = False
+                        proof_line.invalid_message = "Could not find file."
+                        continue
+
+                    # Otherwise, get the referenced proof
+                    ref_proof = reference_proofs[slug]
+
+                    if len(parts) == 1:
+                        # No other parts
+                        continue
+
+                    # Otherwise, two parts
+                    ref_line = ref_proof.get_reference(parts[1])
+
+                    # Add to proof context
+                    proof.context[reference] = ref_line
 
                 elif line_type.behaviour == "none":
                     # Don't need to do anything :)
@@ -319,8 +394,8 @@ class FormalSystem(object):
 
         return proof
 
-    def __str__(self):
-        return self.name
+    # def __str__(self):
+    #     return self.name
 
 
 class LineType(object):
@@ -441,7 +516,7 @@ class InferenceRule(object):
 class Proof(object):
     # A proof in a formal system
 
-    def __init__(self, formal_system, result=None):
+    def __init__(self, formal_system, reference_proofs=None, result=None):
 
         # The system in which this proof belongs
         self.formal_system = formal_system
@@ -457,6 +532,12 @@ class Proof(object):
 
         # The proof lines leading to the result
         self.proof_lines = []
+
+        # A dictionary of references to other proofs
+        self.reference_proofs = reference_proofs
+
+        # A context for references and imports
+        self.context = dict()
 
     def get_proof_line(self, line_number):
         # Get a proof line by line number
@@ -484,6 +565,10 @@ class Proof(object):
     def get_reference(self, ref):
         # Get the referenced line from a ref string
 
+        # Check if it's reference to another line
+        if ref in self.context:
+            return self.context[ref]
+
         # Split the ref into parts
         ref_parts = ref.split(", ")
         key = ref_parts[0]
@@ -507,12 +592,6 @@ class Proof(object):
                 "inference_rule": inference_rule,
                 "antecedents": antecedents
             }
-
-        # Check if it's reference to a label
-        for line in self.proof_lines:
-            if line.label == ref:
-                # Found it
-                return line
 
         # Check if it's a line number
         try:

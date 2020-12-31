@@ -669,7 +669,7 @@ class Match(object):
         # equal but it can't be guaranteed or ruled out.
 
         # Belonging to the same pattern is a requirement, unless there's a convenient definition
-        if self.pattern is not other.pattern:
+        if not self.pattern.equivalent(other.pattern):
 
             if not allow_definitions:
                 # Ignore possible definitions
@@ -1269,6 +1269,13 @@ class Condition(object):
 
         raise Exception("Could not recognise condition.")
 
+    def __eq__(self, other):
+        # Just require identical condition strings
+        return self.condition_match.string == other.condition_match.string
+
+    def __hash__(self):
+        return hash(self.condition_match.string)
+
 
 class Definition(object):
     # A definition object
@@ -1372,6 +1379,9 @@ class Pattern(object):
 
         # Note any bracket pairs that should be respected
         self.respect_brackets = respect_brackets
+
+        # Track equivalent patterns
+        self.equivalent_patterns = set()
 
     def add_attribute(self, name, value):
         # Add an attribute to this pattern
@@ -2264,6 +2274,85 @@ class StringPattern(Pattern):
 
         return reverse
 
+    def equivalent(self, other):
+        # Check equivalence of patterns
+
+        if other in self.equivalent_patterns:
+            return True
+
+        # Assume they are equivalent to begin with
+        self.equivalent_patterns.add(other)
+        other.equivalent_patterns.add(self)
+
+        def remove():
+            self.equivalent_patterns.discard(other)
+            other.equivalent_patterns.discard(self)
+
+        if not self.pattern == other.pattern:
+            remove()
+            return False
+
+        if not self.condition == other.condition:
+            remove()
+            return False
+
+        if not self.is_regex == other.is_regex:
+            remove()
+            return False
+
+        if not self.proper_initial_segment == other.proper_initial_segment:
+            remove()
+            return False
+
+        if not self.replacements == other.replacements:
+            remove()
+            return False
+
+        if not self.skip_node == other.skip_node:
+            remove()
+            return False
+
+        if not self.value_path == other.value_path:
+            remove()
+            return False
+
+        if not self.type == other.type:
+            remove()
+            return False
+
+        if not self.respect_brackets == other.respect_brackets:
+            remove()
+            return False
+
+        if self.parent is None:
+            if other.parent is not None:
+                remove()
+                return False
+
+        else:
+            if not self.parent.equivalent(other.parent):
+                remove()
+                return False
+
+        # Check the variables
+        if not len(self.variables) == len(other.variables):
+            remove()
+            return False
+
+        for key, sub_pattern in self.variables.items():
+            if key not in other.variables:
+                remove()
+                return False
+
+            if not sub_pattern.equivalent(other.variables[key]):
+                remove()
+                return False
+
+        self.equivalent_patterns.add(other)
+        other.equivalent_patterns.add(self)
+
+        return True
+
     def __str__(self):
         return self.name
 
@@ -2450,6 +2539,76 @@ class UnionPattern(Pattern):
                 found.add(p)
 
         return found
+
+    def equivalent(self, other):
+        # Check equivalent union patterns
+
+        if other in self.equivalent_patterns:
+            return True
+
+        # Assume they are equivalent to begin with
+        self.equivalent_patterns.add(other)
+        other.equivalent_patterns.add(self)
+
+        def remove():
+            self.equivalent_patterns.discard(other)
+            other.equivalent_patterns.discard(self)
+
+        if not self.condition == other.condition:
+            remove()
+            return False
+
+        if not self.skip_node == other.skip_node:
+            remove()
+            return False
+
+        if not self.value_path == other.value_path:
+            remove()
+            return False
+
+        if not self.type == other.type:
+            remove()
+            return False
+
+        if not self.respect_brackets == other.respect_brackets:
+            remove()
+            return False
+
+        if self.parent is None:
+            if other.parent is not None:
+                remove()
+                return False
+
+        else:
+            if not self.parent.equivalent(other.parent):
+                remove()
+                return False
+
+        # Check the patterns
+        if not len(self.patterns) == len(other.patterns):
+            remove()
+            return False
+
+        for pattern in self.patterns:
+            # Check equivalent
+            other_found = set()
+            remove()
+            found = False
+
+            for other_pattern in other.patterns:
+                if other_pattern not in other_found and pattern.equivalent(other_pattern):
+                    other_found.add(other_pattern)
+                    found = True
+
+            if not found:
+                # No equivalent pattern
+                remove()
+                return False
+
+        self.equivalent_patterns.add(other)
+        other.equivalent_patterns.add(self)
+
+        return True
 
     def __str__(self):
         return self.name
