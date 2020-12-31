@@ -1841,7 +1841,7 @@ class StringPattern(Pattern):
 
                 return m
 
-            if (len(pattern) == 0 and len(s) > 0) or (len(pattern) > 0 and len(s) == 0):
+            if len(pattern) == 0 and len(s) > 0:
                 # No match
                 if pattern_offset == 0:
                     context.add_to_history(s, self, pattern_match, None)
@@ -2013,7 +2013,8 @@ class StringPattern(Pattern):
                         sub_s,
                         context,
                         pattern_match=pattern_match,
-                        shallow=True,
+                        # shallow=True,
+                        shallow=None,
                         debug=next_debug
                     )
 

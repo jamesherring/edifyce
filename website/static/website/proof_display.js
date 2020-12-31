@@ -36,34 +36,32 @@ function proofDisplayClass(parent) {
         // First trim trailing whitespace
         line = line.replace(/\s+$/, "");
 
-        // Assume no reference by default
+        // Check if the line contains a reference of the form "ref{...}"
+        var index = line.indexOf("ref{");
+
+        // Get line variables
+        var result = this.get_line_variables(line);
+        var vars = result[0];
+        line = result[1];
+
         var ref = "";
+        if (vars.ref) {
+            // There is a reference
+            ref = "(" + vars.ref + ")";
+        }
 
-        // Check if the line ends with a reference of the form "ref{...}"
-        if (line.slice(-1) == "}") {
-            // Work backwards to find the corresponding open curly brace
+        var label = "";
+        if (vars.label) {
+            // There is a label
+            label = "(" + vars.label + ")";
+        }
 
-            var index = line.length - 2;
-            var depth = 1;
-            while (index >= 0) {
-                if (line[index] == "{") {
-                    depth -= 1;
-                    if (depth == 0) {
-                        // Found
-                        break;
-                    }
-                } else if (line[index] == "}") {
-                    depth += 1;
-                }
-                index -= 1;
-            }
-
-            if ((index - 3 >= 0) && (line.substr(index - 3, 3) == "ref")) {
-                // This is a reference
-                ref = "(" + line.slice(index + 1, -1) + ")";
-
-                // Remove the reference from the end of the line
-                line = line.substr(0, index - 3);
+        // Calculate the colspan.
+        var colspan = 1;
+        if (!ref) {
+            colspan++;
+            if (!label) {
+                colspan++;
             }
         }
 
@@ -71,18 +69,13 @@ function proofDisplayClass(parent) {
         var row = $("<tr></tr>");
         $(this.table).append(row);
 
-        // Add the row number, line and reference as cells in the table
-        // var number_cell = $("<div class='cell line-number'>" + String(line_number) + "</div>");
-        // var line_cell = $("<div class='cell'>" + line + "</div>");
-        // var ref_cell = $("<div class='cell'>" + ref + "</div>");
-
         var number_cell = $("<td class='line-number'>" + String(line_number) + "</td>");
         $(row).append(number_cell);
 
         var line_cell = $("<td>" + line + "</td>");
         if (!ref) {
             // Allow the line to use space in the reference column
-            line_cell = $("<td colspan='2' class='allow-wrap'>" + line + "</td>");
+            line_cell = $("<td colspan='" + String(colspan) + "' class='allow-wrap'>" + line + "</td>");
         }
         $(row).append(line_cell);
 
@@ -91,8 +84,13 @@ function proofDisplayClass(parent) {
             $(row).append(ref_cell);
         }
 
+        if (label || ref) {
+            var label_cell = $("<td>" + label + "</td>");
+            $(row).append(label_cell);
+        }
 
         if (!data) {
+            // No indicator data
             return;
         }
 
@@ -113,6 +111,61 @@ function proofDisplayClass(parent) {
             var message_cell = $("<td>" + data.invalid_message + "</td>");
             $(row).append(message_cell);
         }
+
+    }
+
+    this.get_line_variables = function(row, vars) {
+        // Get a variable dictionary from the row
+
+        // Create the dictionary
+        var vars = vars || {};
+
+        if (!(row.slice(-1) == "}")) {
+            return [vars, row];
+        }
+
+        // Work backwards to find the corresponding open curly brace
+
+        var index = row.length - 2;
+        var depth = 1;
+        while (index >= 0) {
+            if (row[index] == "{") {
+                depth -= 1;
+                if (depth == 0) {
+                    // Found
+                    break;
+                }
+            } else if (row[index] == "}") {
+                depth += 1;
+            }
+            index--;
+        }
+
+        var open_brace_index = index;
+
+        // Work backwards to find the next space
+        while (index >= 0) {
+            if (row[index] == " ") {
+                // Found the space
+                break;
+            }
+            index--;
+        }
+
+        // Found the varname
+        var varname = row.slice(index + 1, open_brace_index);
+        var value = row.slice(open_brace_index + 1, -1);
+
+        vars[varname] = value;
+
+        if (index == -1) {
+            return [vars, row];
+        }
+
+        // Otherwise trim the row and look for any more vars
+        row = row.slice(0, index);
+
+        return this.get_line_variables(row, vars);
 
     }
 

@@ -62,7 +62,7 @@ class FormalSystem(object):
 
         if proof is None:
             # Create a new proof instance
-            proof = Proof()
+            proof = Proof(formal_system=self)
             proof.parsed = True
             proof.valid = True
 
@@ -178,6 +178,13 @@ class FormalSystem(object):
 
                     subs = result.get_sub_matches()
 
+                    # Add a label if it exists
+                    if "label" in subs:
+                        label_subs = subs["label"].get_sub_matches()
+                        if "label" in label_subs:
+                            label = label_subs["label"].get_sub_matches()["ref"].string
+                            proof_line.label = label
+
                     if "refs" in subs:
                         # Use the given reference and formula
 
@@ -186,14 +193,22 @@ class FormalSystem(object):
 
                         proof_line.formula = formula
 
-                        # Split the ref into parts
-                        ref_parts = ref.split(", ")
-                        key = ref_parts[0]
+                        # Get the reference
+                        reference = proof.get_reference(ref)
 
-                        if key in self.axiom_dict:
+                        # Get the reference key
+                        key = ref.split(", ")[0]
+
+                        if type(reference) is not dict:
+                            # Reference must be a dictionary
+                            proof_line.valid = False
+                            proof_line.invalid_message = "Invalid reference '" + ref + "'."
+                            continue
+
+                        if "axiom" in reference:
 
                             # Get the axiom pattern
-                            axiom = self.axiom_dict[key]
+                            axiom = reference["axiom"]
 
                             # Check the formula is an instance of this axiom
                             if axiom.match(formula.string, context) is None:
@@ -206,16 +221,13 @@ class FormalSystem(object):
                                 # Otherwise, axiom matches
                                 proof_line.axiom = axiom
 
-                        elif key in self.inference_rule_dict:
+                        elif "inference_rule" in reference:
                             # It's an inference rule
 
-                            inference_rule = self.inference_rule_dict[key]
+                            inference_rule = reference["inference_rule"]
 
                             # Get the antecedent lines
-                            antecedents = []
-                            for ant_line_no in ref_parts[1:]:
-                                ant_line_no = int(ant_line_no)
-                                antecedents.append(proof.get_proof_line(ant_line_no))
+                            antecedents = reference["antecedents"]
 
                             # Check the number of antecedents
                             if not len(antecedents) == len(inference_rule.antecedents):
@@ -429,7 +441,10 @@ class InferenceRule(object):
 class Proof(object):
     # A proof in a formal system
 
-    def __init__(self, result=None):
+    def __init__(self, formal_system, result=None):
+
+        # The system in which this proof belongs
+        self.formal_system = formal_system
 
         # The proof result
         self.result = result
@@ -466,20 +481,62 @@ class Proof(object):
             } for line in self.proof_lines]
         }
 
-    def __str__(self):
-        return self.name
+    def get_reference(self, ref):
+        # Get the referenced line from a ref string
+
+        # Split the ref into parts
+        ref_parts = ref.split(", ")
+        key = ref_parts[0]
+
+        if key in self.formal_system.axiom_dict:
+
+            # It's an axiom
+            return {"axiom": self.formal_system.axiom_dict[key]}
+
+        if key in self.formal_system.inference_rule_dict:
+            # It's an inference rule
+
+            inference_rule = self.formal_system.inference_rule_dict[key]
+
+            # Get the antecedent lines
+            antecedents = []
+            for ant_ref in ref_parts[1:]:
+                antecedents.append(self.get_reference(ant_ref))
+
+            return {
+                "inference_rule": inference_rule,
+                "antecedents": antecedents
+            }
+
+        # Check if it's reference to a label
+        for line in self.proof_lines:
+            if line.label == ref:
+                # Found it
+                return line
+
+        # Check if it's a line number
+        try:
+            return self.get_proof_line(int(ref))
+        except ValueError:
+            pass
+
+        # Nothing works
+        return None
 
 
 class ProofLine(object):
     # A line in a proof
 
-    def __init__(self, proof, text):
+    def __init__(self, proof, text, label=None):
 
         # The proof this line belongs to
         self.proof = proof
 
         # The text string on this line
         self.text = text
+
+        # The label for this line (if any)
+        self.label = label
 
         # The formula match (if any) on this line
         self.formula = None

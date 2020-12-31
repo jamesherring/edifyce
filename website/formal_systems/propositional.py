@@ -51,7 +51,9 @@ a3.add_variable("\\alpha", formula)
 a3.add_variable("\\beta", formula)
 
 # Make the import line
-import_pattern = StringPattern(name="import", pattern="^import [a-zA-Z0-9\.]+$", is_regex=True)
+import_pattern = StringPattern(name="import", pattern="import path as reference")
+import_pattern.path = StringPattern(name="import_path", pattern="^[a-zA-Z0-9\._]+$", is_regex=True)
+import_pattern.reference = StringPattern(name="ref", pattern="^[a-zA-Z0-9_]+$", is_regex=True)
 import_line = LineType(name="import", pattern=import_pattern, behaviour="import")
 
 # Allow empty lines
@@ -62,13 +64,19 @@ empty_line = LineType(name="empty", pattern=empty_pattern, behaviour="none")
 comment_pattern = StringPattern(name="comment", pattern="^(?>    )*#.*$", is_regex=True)
 comment_line = LineType(name="comment", pattern=comment_pattern, behaviour="none")
 
-# Create references
-reference = StringPattern(name="reference", pattern="^[a-zA-Z0-9 ,]+$", is_regex=True)
+# Create references and exports
+reference = StringPattern(name="reference", pattern="^[a-zA-Z0-9_, ]+$", is_regex=True)
 
-reference_pattern = StringPattern(name="reference_pattern", pattern="Sformula ref{refs}", proper_initial_segment="never")
+empty = StringPattern(name="empty", pattern="")
+label = StringPattern(name="label", pattern=" label{ref}")
+label.ref = reference
+label_union = UnionPattern(name="label_union", patterns=[empty, label])
+
+reference_pattern = StringPattern(name="reference_pattern", pattern="Sformula ref{refs}label")
 reference_pattern.S = empty_pattern
 reference_pattern.refs = reference
 reference_pattern.formula = dollar_formula
+reference_pattern.label = label_union
 reference_line = LineType(name="Reference", pattern=reference_pattern, behaviour="logical")
 
 # Build comma separated formulae
