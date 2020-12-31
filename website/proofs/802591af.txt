@@ -14,6 +14,6 @@ if $\neg \alpha$:
 
     $(\alpha \rightarrow \beta)$ ref{MP, 10, 12}
     
-$(\neg \alpha \rightarrow (\alpha \rightarrow \beta))$ ref{DT2, 15}
+$(\neg \alpha \rightarrow (\alpha \rightarrow \beta))$ ref{DT2, 15} label{result}
     
 

@@ -1,0 +1,3 @@
+
+import deduce_anything_from_a_contradiction.result as res
+
