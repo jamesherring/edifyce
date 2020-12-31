@@ -15,3 +15,6 @@ if $\neg \alpha$:
     
 $(\neg \alpha \rightarrow (\alpha \rightarrow \beta))$ ref{DT2, XY} label{result}
 
+
+$(\alpha \rightarrow \beta)$ ref{A1} label{Z}
+

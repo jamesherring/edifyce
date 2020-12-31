@@ -917,6 +917,51 @@ class Match(object):
         # Otherwise ok
         return True
 
+    def leaves(self):
+        # Get the leaves of this match
+
+        subs = self.get_sub_matches()
+        if len(subs) == 0:
+            return [self]
+
+        leaves = list()
+
+        for key in subs:
+            sub = subs[key]
+            leaves.extend(sub.leaves())
+
+        return leaves
+
+    def maps_onto(self, other, context):
+        # Check if this pattern maps onto a given pattern
+
+        # To do this, we need to convert 'other' into a StringPattern
+        pattern = StringPattern(
+            name="mapping",
+            pattern=other.string,
+            parent=other.pattern
+        )
+
+        # Get the leaves in other - these will become variables
+        leaves = other.leaves()
+
+        # Convert the leaves into a dictionary
+        vars = dict()
+        for leaf in leaves:
+            if leaf.string in vars:
+                if not leaf.pattern.equivalent(vars[leaf.string]):
+                    # The patterns are not equivalent for the same variables. Can't be mapped onto
+                    return False
+
+                continue
+
+            # Otherwise, add to vars
+            vars[leaf.string] = leaf.pattern
+            pattern.add_variable(leaf.string, leaf.pattern)
+
+        # Use this to match against self.string in the current context
+        return pattern.match(self.string, context) is not None
+
     def make_copy(self):
 
         lower_copy = None
@@ -999,6 +1044,16 @@ class Condition(object):
             inner_item = self.get_item(inner, match, context, condition_context)
 
             return initial.equivalent(inner_item, context, allow_definitions=True)
+
+        if ".maps_onto(" in s and s[-1] == ")":
+
+            index = s.index(".maps_onto(")
+            initial = self.get_item(s[:index], match, context, condition_context)
+
+            inner = s[index + len(".maps_onto("):-1]
+            inner_item = self.get_item(inner, match, context, condition_context)
+
+            return initial.maps_onto(inner_item, context)
 
         if "." in s:
 
@@ -2023,8 +2078,7 @@ class StringPattern(Pattern):
                         sub_s,
                         context,
                         pattern_match=pattern_match,
-                        # shallow=True,
-                        shallow=None,
+                        shallow=True,
                         debug=next_debug
                     )
 
@@ -2402,7 +2456,7 @@ class UnionPattern(Pattern):
         if s in string_variables:
             pattern = string_variables[s]
 
-            if pattern is self:
+            if self.equivalent(pattern):
                 m = Match(
                     pattern=self,
                     string=s
@@ -3106,7 +3160,8 @@ class LatticeCompiler(object):
             "inf_match",
             "set",
             "variables",
-            "definition_equivalent"
+            "definition_equivalent",
+            "maps_onto"
         )
 
         function = StringPattern(
