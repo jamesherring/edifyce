@@ -6,7 +6,6 @@ from picklefield.fields import PickledObjectField
 import random
 from slugify import slugify
 from website.matching import LatticeCompiler
-from website.formal_system import Proof
 
 
 def id_gen(length=8, chars="0123456789abcdef"):
@@ -83,6 +82,27 @@ class FormalSystemModel(models.Model):
         self.formal_system = compiler.initiate_formal_system(path_to_file=self.path_to_file())
         self.save()
 
+    def parse(self, code):
+        # Parse proof code into a proof instance
+
+        # Find any references to other proofs
+        reference_slugs = self.formal_system.get_references(code)
+
+        # Build a dictionary of references to other proofs
+        reference_proofs = dict()
+        for slug in reference_slugs:
+            try:
+                reference_proofs[slug] = ProofModel.objects.get(slug=slug, formal_system=self).proof
+
+                # Update the formal system reference in the proof.
+                reference_proofs[slug].formal_system = self.formal_system
+
+            except ProofModel.DoesNotExist:
+                reference_proofs[slug] = None
+
+        # Create a proof instance
+        return self.formal_system.parse(code, reference_proofs=reference_proofs)
+
     def __str__(self):
         return self.name
 
@@ -124,7 +144,7 @@ class ProofModel(models.Model):
             f.write(code)
 
         # Refresh the proof instance according to the file
-        self.proof = self.formal_system.formal_system.parse(code)
+        self.proof = self.formal_system.parse(code)
         self.save()
 
     def refresh(self):

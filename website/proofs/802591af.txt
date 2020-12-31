@@ -3,7 +3,7 @@
 
 let $\alpha$, $\beta$ be formula
     
-$(\neg \alpha \rightarrow (\neg \beta \rightarrow \neg \alpha))$ ref{A1}
+$(\neg \alpha \rightarrow (\neg \beta \rightarrow \neg \alpha))$ ref{A1} label{X}
 
 if $\neg \alpha$:
 
@@ -11,9 +11,7 @@ if $\neg \alpha$:
 
     $((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ ref{A3}
 
-
-    $(\alpha \rightarrow \beta)$ ref{MP, 10, 12}
+    $(\alpha \rightarrow \beta)$ ref{MP, 10, 12} label{XY}
     
-$(\neg \alpha \rightarrow (\alpha \rightarrow \beta))$ ref{DT2, 15} label{result}
-    
+$(\neg \alpha \rightarrow (\alpha \rightarrow \beta))$ ref{DT2, XY} label{result}
 
