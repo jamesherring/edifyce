@@ -168,7 +168,7 @@ dt_2 = InferenceRule(name="Deduction Theorem 2", label="DT2", antecedents=[formu
 
 # Rewrite an earlier line in the proof
 c = Condition(
-    deduction.formula() == antecedents[0].formula() and \
+    deduction.formula().maps_onto(antecedents[0].formula()) and \
     (antecedents[0].is_root() or antecedents[0].indent_line() in deduction.indent_lines())
 )
 thinning = InferenceRule(name="Thinning", label="T", antecedents=[formula], deduction=formula, condition=c)

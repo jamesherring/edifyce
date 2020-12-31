@@ -394,8 +394,8 @@ class FormalSystem(object):
 
         return proof
 
-    # def __str__(self):
-    #     return self.name
+    def __str__(self):
+        return self.name
 
 
 class LineType(object):
@@ -465,7 +465,8 @@ class InferenceRule(object):
                 # antecedent isn't a proof line
                 return False
 
-            if deduction.index() < ant.index():
+            # Deduction in the same proof must come after the antecedents
+            if deduction.proof == ant.proof and deduction.index() < ant.index():
                 return False
 
         # First check if the deductions matches
