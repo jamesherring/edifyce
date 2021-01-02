@@ -80,8 +80,6 @@ def formalSystemSaveView(request):
         # Set the system code
         system.set_code(new_code)
 
-        print(system.formal_system)
-
         return HttpResponse(json.dumps({"success": True}))
 
     except Exception as e:

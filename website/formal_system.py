@@ -1,4 +1,5 @@
 from website.context import Context
+import website.matching as matching
 
 
 class FormalSystem(object):
@@ -353,7 +354,8 @@ class FormalSystem(object):
                     ref_proof = reference_proofs[slug]
 
                     if len(parts) == 1:
-                        # No other parts
+                        # No other parts - reference to the entire proof file
+                        proof.context[reference] = ref_proof
                         continue
 
                     # Otherwise, two parts
@@ -417,9 +419,30 @@ class LineType(object):
         self.add_context_key_path = add_context_key_path
         self.add_context_value_path = add_context_value_path
 
+        # Attributes
+        self.attributes = dict()
+
     def parse_line(self, line, context):
         # Check if the given line string is of this type
         return self.pattern.match(line, context)
+
+    def add_attribute(self, name, value):
+        # Add an attribute to this line type
+
+        if type(value) is list:
+            self.attributes[name] = value
+
+        else:
+            self.attributes[name] = str(value)
+
+    def get_attribute(self, name):
+        # Get the given attribute
+
+        if name in self.attributes:
+            return self.attributes[name]
+
+        # Otherwise, error
+        raise Exception(self.name + " does not have attribute: " + name)
 
     def __str__(self):
         return self.name
@@ -455,13 +478,13 @@ class InferenceRule(object):
         if not len(antecedents) == len(self.antecedents):
             return False
 
-        if deduction is None:
+        if type(deduction) is not ProofLine:
             # Deduction doesn't point to a valid proof line
             return False
 
         # Deduction must be after the antecedents
         for ant in antecedents:
-            if ant is None:
+            if type(ant) is not ProofLine:
                 # antecedent isn't a proof line
                 return False
 
@@ -569,6 +592,13 @@ class Proof(object):
         # Check if it's reference to another line
         if ref in self.context:
             return self.context[ref]
+
+        if "." in ref:
+            proof_ref, key = ref.split(".")
+            proof_ref = self.get_reference(proof_ref)
+
+            if type(proof_ref) is Proof:
+                return proof_ref.get_reference(key)
 
         # Split the ref into parts
         ref_parts = ref.split(", ")
@@ -693,6 +723,13 @@ class ProofLine(object):
     def get_by_path(self, s, context):
         # Get an attribute of the proofline given a path s
 
+        if type(s) is list:
+            # Get each component
+            return [self.get_by_path(item, context) for item in s]
+
+        if type(s) is not str:
+            s = str(s)
+
         if s[:13] == "indent_line()":
             # Get the indent line
 
@@ -706,33 +743,28 @@ class ProofLine(object):
         if s[:14] == "indent_lines()":
 
             if len(s) == 14:
-                return set(line.match for line in self.indent_lines()), set(), True
+                return set(line for line in self.indent_lines())
 
             assert s[14] == "."
             remainder = s[15:]
 
-            instances = set()
-            negatives = set()
-            complete = True
+            match_set = matching.MatchSet()
 
             for m in set(line.match for line in self.indent_lines()):
-                result = m.get_by_path(remainder, context)
-
-                if type(result) is tuple:
-                    # This is a tuple result with negatives and completeness
-
-                    sub_instances, sub_negatives, sub_complete = result
-
-                    instances = instances.union(sub_instances)
-                    negatives = negatives.union(sub_negatives)
-                    complete = complete and sub_complete
-
+                if m is None:
                     continue
 
-                # Otherwise, just an instances
-                instances.add(result)
+                result = m.get_by_path(remainder, context)
 
-            return instances, negatives, complete
+                if type(result) is matching.MatchSet:
+                    # This is a MatchSet
+                    match_set = match_set.union(result, context)
+                    continue
+
+                # Otherwise, just add an instance
+                match_set.add(result, context)
+
+            return match_set
 
         if s[:9] == "formula()":
             # Get the formula match
@@ -766,6 +798,11 @@ class ProofLine(object):
 
         if s == "is_root()":
             return self.is_root()
+
+        if s in self.line_type.attributes:
+            return self.get_by_path(self.line_type.get_attribute(s), context)
+
+        raise Exception("Could not find " + s + " in '" + self.text + "'.")
 
     def __str__(self):
         return self.text

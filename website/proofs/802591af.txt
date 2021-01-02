@@ -11,10 +11,11 @@ if $\neg \alpha$:
 
     $((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ ref{A3}
 
-    $(\alpha \rightarrow \beta)$ ref{MP, 10, 12} label{XY}
+    $(\alpha \rightarrow \beta)$ ref{MP, 10, 12} label{Y}
     
-$(\neg \alpha \rightarrow (\alpha \rightarrow \beta))$ ref{DT2, XY} label{result}
+$(\neg \alpha \rightarrow (\alpha \rightarrow \beta))$ ref{DT2, Y} label{result}
 
 
-$(\alpha \rightarrow \beta)$ ref{A1} label{Z}
+if $\alpha$:
+    $(\alpha \rightarrow \beta)$ ref{A1} label{Z}
 

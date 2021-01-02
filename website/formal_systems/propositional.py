@@ -65,19 +65,17 @@ comment_pattern = StringPattern(name="comment", pattern="^(?>    )*#.*$", is_reg
 comment_line = LineType(name="comment", pattern=comment_pattern, behaviour="none")
 
 # Create references and exports
-reference = StringPattern(name="reference", pattern="^[a-zA-Z0-9_, ]+$", is_regex=True)
-
 empty = StringPattern(name="empty", pattern="")
 label = StringPattern(name="label", pattern=" label{ref}")
-label.ref = reference
+label.ref = StringPattern(name="reference", pattern="^[a-zA-Z0-9_,\.]+$", is_regex=True)
 label_union = UnionPattern(name="label_union", patterns=[empty, label])
 
-reference_pattern = StringPattern(name="reference_pattern", pattern="Sformula ref{refs}label")
-reference_pattern.S = empty_pattern
-reference_pattern.refs = reference
-reference_pattern.formula = dollar_formula
-reference_pattern.label = label_union
-reference_line = LineType(name="Reference", pattern=reference_pattern, behaviour="logical")
+logical_pattern = StringPattern(name="logical_pattern", pattern="Sformula ref{refs}label")
+logical_pattern.S = empty_pattern
+logical_pattern.refs = StringPattern(name="reference", pattern="^[a-zA-Z0-9_,\. ]+$", is_regex=True)
+logical_pattern.formula = dollar_formula
+logical_pattern.label = label_union
+logical_line = LineType(name="Reference", pattern=logical_pattern, behaviour="logical")
 
 # Build comma separated formulae
 f_join = StringPattern(name="join_formula", pattern="j, formula", skip_node=True)
@@ -123,6 +121,15 @@ if_pattern.S = empty_pattern
 if_pattern.csf = comma_separated_formula
 if_line = LineType(name="if line", pattern=if_pattern, behaviour="indent")
 
+# Add an attribute to get assumptions
+if_pattern.add_attribute(name="assumptions", value=shallow_instances(formula))
+
+# Add an attribute to logical lines - to get all the assumptions
+logical_line.add_attribute(name="assumptions", value=indent_lines().assumptions)
+
+# Add an attribute - combining the formula and assumptions in a list.
+logical_line.add_attribute(name="formula_and_assumptions", value=[formula(), "assumptions"])
+
 # Definition line
 define_pattern = StringPattern(name="define", pattern="Sdefine $higher$ as $lower$")
 define_pattern.S = empty_pattern
@@ -142,20 +149,20 @@ mp_1.add_variable("\\beta", formula)
 c = Condition(
     deduction.formula() == antecedents[1].inf_match().variables("\\beta") and \
     antecedents[0].formula() == antecedents[1].inf_match().variables("\\alpha") and \
-    deduction.indent_line() == antecedents[0].indent_line() and \
-    deduction.indent_line() == antecedents[1].indent_line()
+    antecedents[0].assumptions.is_subset(deduction.assumptions) and \
+    antecedents[1].assumptions.is_subset(deduction.assumptions)
 )
 mp = InferenceRule(name="Modus Ponens", label="MP", antecedents=[mp_0, mp_1], deduction=formula, condition=c)
 
 # A formula in the given set can be deduced
-c = Condition(deduction.formula() in deduction.indent_lines().shallow_instances(formula))
+c = Condition(deduction.formula() in deduction.assumptions)
 if_rule = InferenceRule(name="Given", label="IF", antecedents=[], deduction=formula, condition=c)
 
 # Deduction theorem has two directions, requires two inference rules
 c = Condition(
     deduction.formula() == antecedents[0].inf_match().variables("\\beta") and \
-    deduction.indent_line().match().shallow_instances(formula) == set(antecedents[0].inf_match().variables("\\alpha")) and \
-    deduction.indent_line().indent_line() == antecedents[0].indent_line()
+    deduction.indent_line().match().assumptions == set(antecedents[0].inf_match().variables("\\alpha")) and \
+    (deduction.indent_line().indent_line() == None or (deduction.indent_line().indent_line().assumptions == antecedents[0].indent_line().assumptions))
 )
 dt_1 = InferenceRule(name="Deduction Theorem 1", label="DT1", antecedents=[mp_1], deduction=formula, condition=c)
 
@@ -166,12 +173,16 @@ c = Condition(
 )
 dt_2 = InferenceRule(name="Deduction Theorem 2", label="DT2", antecedents=[formula], deduction=mp_1, condition=c)
 
-# Rewrite an earlier line in the proof
+# Thinning rule
 c = Condition(
-    deduction.formula().maps_onto(antecedents[0].formula()) and \
-    (antecedents[0].is_root() or antecedents[0].indent_line() in deduction.indent_lines())
+    deduction.formula() == antecedents[0].formula() and \
+    antecedents[0].assumptions.is_subset(deduction.assumptions)
 )
-thinning = InferenceRule(name="Thinning", label="T", antecedents=[formula], deduction=formula, condition=c)
+thinning = InferenceRule(name="Thinning", label="R", antecedents=[formula], deduction=formula, condition=c)
+
+# Utilise a previous theorem
+c = Condition(antecedents[0].formula().maps_onto(deduction.formula(), consistent_with=[antecedents[0].assumptions, deduction.assumptions]))
+theorem = InferenceRule(name="theorem", label="T", antecedents=[formula], deduction=formula, condition=c)
 
 # Utilise a defintion
 c = Condition(
@@ -184,8 +195,8 @@ definition = InferenceRule(name="Definition", label="DEF", antecedents=[formula]
 propositional = FormalSystem(
     name="Propositional Logic",
     axioms=[a1, a2, a3],
-    line_types=[import_line, empty_line, comment_line, reference_line, let_line, if_line, define_line],
-    inference_rules=[mp, if_rule, dt_1, dt_2, thinning, definition],
+    line_types=[import_line, empty_line, comment_line, logical_line, let_line, if_line, define_line],
+    inference_rules=[mp, if_rule, dt_1, dt_2, thinning, theorem, definition],
     context_variables={"formula": formula}
 )
 system["formal_system"] = propositional

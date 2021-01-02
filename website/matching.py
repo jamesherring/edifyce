@@ -351,16 +351,17 @@ class Match(object):
 
             return self.get_by_path(value, context, data_type=data_type, attribute_name=attribute_name)
 
-        if self.definition_mapping is not None and path in self.definition_mapping:
+        if path in subs:
+            # Child match
+            return subs[path]
+
+        if self.definition_mapping is not None and path in self.definition_mapping and \
+                not self.definition_mapping[path] == path:
             return self.get_by_path(
                 path=self.definition_mapping[path],
                 context=context,
                 data_type=data_type
             )
-
-        if path in subs:
-            # Child match
-            return subs[path]
 
         if path in self.pattern.attributes:
             # Attribute
@@ -468,25 +469,6 @@ class Match(object):
         # Get instances of the pattern in nested sub matches, which meet the specified condition.
         # Optionally specify the attribute we are searching for
 
-        def add_to_set(instance, _set):
-            # Add the given instance to the set, if it's not equivalent to an existing member
-
-            for item in _set:
-                if instance.equivalent(item, context):
-                    return
-
-            _set.add(instance)
-
-        def set_union(a, b):
-            # Union two set a and b into a third set, union
-
-            union = a.copy()
-
-            for item in b:
-                add_to_set(item, union)
-
-            return union
-
         # If shallow - don't look for nested instances of pattern deeper than instances found
         if type(pattern) is str:
             # Need to get the correct pattern
@@ -498,15 +480,19 @@ class Match(object):
         # If incomplete, it's a variable pattern, that may contain an instance of the given pattern
         complete = not (self.string in context.string_variables and self.pattern.may_contain(pattern))
 
-        if not complete and pattern.match(self.string, context) is not None:
+        # Create a new MatchSet
+        match_set = MatchSet(instances, negatives, complete)
+
+        if not match_set.complete and pattern.match(self.string, context) is not None:
             # Don't consider this incomplete - as we have the whole variable instance
-            complete = True
+            match_set.complete = True
 
         if self.pattern is pattern:
             # Include self
 
             if condition is None or condition.check(self, context):
-                add_to_set(self, instances)
+                # add_to_set(self, instances)
+                match_set.add(self, context)
 
         if shallow and self.pattern is pattern:
             # Don't check sub matches
@@ -521,53 +507,9 @@ class Match(object):
                     sub_match_list = [sub_match_list]
 
                 for sub_match in sub_match_list:
-                    sub_instances, sub_negatives, sub_complete = sub_match.get_instances(pattern, context, condition, attribute_name, shallow)
-
-                    # instances = instances.union(sub_instances)
-                    # negatives = negatives.union(sub_negatives)
-                    instances = set_union(instances, sub_instances)
-                    negatives = set_union(negatives, sub_negatives)
-
-                    # The result is only complete if all sub matches return a complete set
-                    complete = complete and sub_complete
-
-            # Check the negatives
-            false_negatives = set()
-            for key, sub_match_list in self.get_sub_matches().items():
-
-                # Coerce the sub_matches into a list
-                if type(sub_match_list) is not list:
-                    sub_match_list = [sub_match_list]
-
-                for sub_match in sub_match_list:
-                    sub_instances, sub_negatives, sub_complete = sub_match.get_instances(pattern, context, condition, attribute_name, shallow)
-
-                    for neg in negatives:
-
-                        keep = False
-                        for item in sub_negatives:
-                            if item.equivalent(neg, context) is True:
-                                # Ok to keep
-                                keep = True
-                                break
-
-                        if keep:
-                            continue
-
-                        if not sub_complete:
-                            # Not a negative
-                            false_negatives.add(neg)
-                            continue
-
-                        # Check each item
-                        for item in sub_instances:
-                            if not (item.equivalent(neg, context) is False):
-                                # Not a negative
-                                false_negatives.add(neg)
-                                break
-
-            # Remove the false negatives
-            negatives = negatives - false_negatives
+                    # Union the match set into this one
+                    sub_match_set = sub_match.get_instances(pattern, context, condition, attribute_name, shallow)
+                    match_set = match_set.union(sub_match_set, context)
 
         # Check context for extra restrictions
         if attribute_name is not None:
@@ -577,15 +519,13 @@ class Match(object):
 
                     if not r["negated"]:
                         # Positive membership
-                        # instances.add(pattern.match(r["member"], context))
-                        add_to_set(pattern.match(r["member"], context), instances)
+                        match_set.add(pattern.match(r["member"], context), context)
 
                     else:
                         # Negative membership
-                        # negatives.add(pattern.match(r["member"], context))
-                        add_to_set(pattern.match(r["member"], context), negatives)
+                        match_set.remove(pattern.match(r["member"], context), context)
 
-        return instances, negatives, complete
+        return match_set
 
     def get_attribute(self, name, context):
         # Get the attribute value by name.
@@ -667,6 +607,9 @@ class Match(object):
 
         # A variable will typically return None when matched against a string or another variable - i.e. they could be
         # equal but it can't be guaranteed or ruled out.
+
+        if type(other) is not Match:
+            return False
 
         # Belonging to the same pattern is a requirement, unless there's a convenient definition
         if not self.pattern.equivalent(other.pattern):
@@ -932,18 +875,18 @@ class Match(object):
 
         return leaves
 
-    def maps_onto(self, other, context):
-        # Check if this pattern maps onto a given pattern
+    def maps_onto(self, other, context, mapping=None):
+        # Check if this pattern maps onto a given pattern. Optionally specify a mapping that has to be consistent.
 
-        # To do this, we need to convert 'other' into a StringPattern
+        # To do this, we need to convert 'self' into a StringPattern
         pattern = StringPattern(
             name="mapping",
-            pattern=other.string,
-            parent=other.pattern
+            pattern=self.string,
+            parent=self.pattern
         )
 
-        # Get the leaves in other - these will become variables
-        leaves = other.leaves()
+        # Get the leaves in self - these will become variables
+        leaves = self.leaves()
 
         # Convert the leaves into a dictionary
         vars = dict()
@@ -959,8 +902,31 @@ class Match(object):
             vars[leaf.string] = leaf.pattern
             pattern.add_variable(leaf.string, leaf.pattern)
 
-        # Use this to match against self.string in the current context
-        return pattern.match(self.string, context) is not None
+        # Use this to match against other.string in the current context
+        result = pattern.match(other.string, context)
+
+        if result is None:
+            # No match
+            return False
+
+        if mapping is None:
+            # No mapping to consider
+            return True
+
+        # Check the mapping is consistent
+        for var in vars:
+
+            mapped_var = result.get_by_path(var, context)
+
+            if var in mapping and not mapping[var].equivalent(mapped_var, context):
+                # Mapping not equivalent
+                return False
+
+            # Otherwise, add it to mapping
+            mapping[var] = mapped_var
+
+        # Success
+        return True
 
     def make_copy(self):
 
@@ -994,6 +960,162 @@ class Match(object):
         return str(self.string)
 
 
+class MatchSet(object):
+    # Class for a set of match instances
+
+    def __init__(self, instances=None, negatives=None, complete=True):
+
+        # A set of items in the matchset
+        self.instances = instances
+        if self.instances is None:
+            self.instances = set()
+
+        # A set of items known not to be in the matchset
+        self.negatives = negatives
+        if self.negatives is None:
+            self.negatives = set()
+
+        # Whether the match set is complete - i.e. does not contain variables
+        self.complete = complete
+
+    def contains(self, match, context):
+        # Check if the set contains the match. Return True if positive, False if negative, or None, if uncertain
+
+        assert type(match) is Match
+
+        # Check positives
+        for item in self.instances:
+            if match.equivalent(item, context):
+                return True
+
+        # Check negatives
+        for item in self.negatives:
+            if match.equivalent(item, context):
+                return False
+
+        # Not found in either set.
+        if self.complete:
+            # Not present in either set
+            return False
+
+        # Uncertain
+        return None
+
+    def is_subset(self, other, context):
+        # Check if this match set is a subset of the other
+
+        if not self.complete:
+            # There are other items we can't test
+            return False
+
+        for item in self.instances:
+            # Check membership of each item
+            if not other.contains(item, context):
+                # Not a subset
+                return False
+
+        # All members of self are members of other
+        return True
+
+    def add(self, match, context):
+        # Add a match to the set, if it's not equivalent to one of the members
+
+        if self.contains(match, context):
+            # We already contain it
+            return
+
+        # If there are any elements in self.negatives equivalent to this, remove them
+        self.negatives = {item for item in self.negatives if not item.equivalent(match, context)}
+
+        # Add to instances
+        self.instances.add(match)
+
+    def remove(self, match, context):
+        # Remove a match from the set
+
+        # If there are any elements in self.instances equivalent to this, remove them
+        self.instances = {item for item in self.instances if not item.equivalent(match, context)}
+
+        if self.complete:
+            # No need to worry about negatives.
+            return
+
+        for item in self.negatives:
+            if item.equivalent(match, context):
+                # Already present in negatives
+                return
+
+        # Add to negatives
+        self.negatives.add(match)
+
+    def union(self, other, context):
+        # Return the union of this match set with another, leaving both unchanged
+
+        new_match_set = MatchSet()
+
+        # Complete only if both sets are complete
+        new_match_set.complete = self.complete and other.complete
+
+        # Everything in instances will be in the new instances
+        new_match_set.instances = self.instances.copy()
+
+        for item in other.instances:
+            new_match_set.add(item, context)
+
+        if new_match_set.complete:
+            # No need to worry about negatives
+            return new_match_set
+
+        if (not self.complete) and (not other.complete):
+            # Both are incomplete. Take only those elements in both negative sets
+
+            for item in self.negatives:
+                if other.contains(item, context) is False:
+                    new_match_set.negatives.add(item)
+
+            return new_match_set
+
+        # One set is complete, and the other is not.
+        # Take the incomplete negatives which are not in the complete instances
+        if self.complete:
+            complete = self
+            incomplete = other
+        else:
+            complete = other
+            incomplete = self.negatives
+
+        for item in incomplete.negatives:
+            if complete.contains(item, context) is False:
+                new_match_set.negatives.add(item)
+
+        return new_match_set
+
+    def equivalent(self, other, context):
+        # Test equivalence of match sets
+
+        if not (self.complete and other.complete):
+            # Must be consistently complete
+            return False
+
+        if not (len(self.instances) == len(other.instances) and len(self.negatives) == len(other.negatives)):
+            # Size of the sets don't match
+            return False
+
+        # Check the match items in instances
+        for item in self.instances:
+            if not other.contains(item, context):
+                return False
+
+        # Every item in self.instances is in other.instances. Do the same with negatives
+        for item in self.negatives:
+            if other.contains(item, context) is not False:
+                # Other may contain the item
+                return False
+
+        # Every item in self.negatives is in other.negatives.
+        return True
+
+
 class Condition(object):
     # A condition match
 
@@ -1005,6 +1127,16 @@ class Condition(object):
     def get_item(self, s, match, context, condition_context):
         # Get an item s given a match, context and condition context
 
+        if type(s) is list:
+            # Get each item separately
+            return [self.get_item(i, match, context, condition_context) for i in s]
+
+        if s[0] == "[" and s[-1] == "]":
+            # Looks like we are building a list
+            system_list = context.system["list"]
+            list_items = system_list.match(s, context).get_sub_matches()["literal_list"].get_sub_matches()["obj"]
+            return [self.get_item(str(obj), match, context, condition_context) for obj in list_items]
+
         if s == "self":
             return condition_context["origin"]
 
@@ -1015,21 +1147,27 @@ class Condition(object):
             return context.variables[s]
 
         if s[:4] == "set(" and s[-1] == ")":
-            # Return a set with the given contents
+            # Return a match set with the given contents
             inner = s[4:-1]
             result = self.get_item(inner, match, context, condition_context)
 
-            if type(result) is tuple:
-                # Already a triple
+            if type(result) is MatchSet:
+                # Already a match set
                 return result
 
-            # Return a new triple
-            return {result}, set(), True
+            # Return a new match set
+            assert type(result) is Match
+
+            return MatchSet(instances={result})
 
         if s[-1] == "]" and "[" in s:
             # Looks like a list index
+
             initial = s[:s.index("[")]
-            index = int(s[s.index("[") + 1:-1])
+            remainder = s[s.index("["):]
+            end_index = len(initial) + remainder.index("]")
+
+            index = int(s[s.index("[") + 1:end_index])
 
             initial = self.get_item(initial, match, context, condition_context)
 
@@ -1051,9 +1189,30 @@ class Condition(object):
             initial = self.get_item(s[:index], match, context, condition_context)
 
             inner = s[index + len(".maps_onto("):-1]
-            inner_item = self.get_item(inner, match, context, condition_context)
 
-            return initial.maps_onto(inner_item, context)
+            # Check if there are other arguments
+            if ", consistent_with=" not in inner:
+                inner_item = self.get_item(inner, match, context, condition_context)
+                return self.maps_onto(initial, inner_item, context)
+
+            # Otherwise, get the parts
+            inner, consistent_with = inner.split(", consistent_with=")
+
+            inner_item = self.get_item(inner, match, context, condition_context)
+            consistent_with = self.get_item(consistent_with, match, context, condition_context)
+
+            return self.maps_onto(initial, inner_item, context, consistent_with=consistent_with)
+
+        if ".is_subset(" in s and s[-1] == ")":
+            # Test subset
+
+            index = s.index(".is_subset(")
+            initial_match_set = self.get_item(s[:index], match, context, condition_context)
+
+            inner = s[index + len(".is_subset("):-1]
+            inner_match_set = self.get_item(inner, match, context, condition_context)
+
+            return initial_match_set.is_subset(inner_match_set, context)
 
         if "." in s:
 
@@ -1064,6 +1223,9 @@ class Condition(object):
             initial = self.get_item(initial, match, context, condition_context)
 
             return initial.get_by_path(remainder, context)
+
+        if s == "None":
+            return None
 
         return match.get_by_path(s, context)
 
@@ -1091,48 +1253,9 @@ class Condition(object):
             left = self.get_item(equal_subs["left"].string, match, context, condition_context)
             right = self.get_item(equal_subs["right"].string, match, context, condition_context)
 
-            if type(left) is tuple and type(right) is tuple:
-                # Need to compare triples
-
-                left_instances, left_negatives, left_complete = left
-                right_instances, right_negatives, right_complete = right
-
-                if not (left_complete and right_complete):
-                    # Not identical
-                    return False
-
-                if not (len(left_instances) == len(right_instances) and len(left_negatives) == len(right_negatives)):
-                    # Size of the sets don't align
-                    return False
-
-                # Check the match items in instances
-                for left_item in left_instances:
-
-                    # Try to find this item in RHS
-                    found = False
-                    for right_item in right_instances:
-                        if left_item.equivalent(right_item, context):
-                            found = True
-                            break
-
-                    if not found:
-                        return False
-
-                # Every item in left_instances is in right_instances. Do the same with negatives
-                for left_item in left_negatives:
-
-                    # Try to find this item in RHS
-                    found = False
-                    for right_item in right_negatives:
-                        if left_item.equivalent(right_item, context):
-                            found = True
-                            break
-
-                    if not found:
-                        return False
-
-                # Every item in left_negatives is in right_negatives.
-                return True
+            if type(left) is MatchSet and type(right) is MatchSet:
+                # Compare match sets
+                return left.equivalent(right, context)
 
             if type(left) is not Match:
                 # Items are not match instances - just test direct equality
@@ -1152,34 +1275,18 @@ class Condition(object):
                 membership_subs = subs["negative_membership"].get_sub_matches()
 
             item = self.get_item(membership_subs["item"].string, match, context, condition_context)
-            triple = self.get_item(membership_subs["set"].string, match, context, condition_context)
+            match_set = self.get_item(membership_subs["set"].string, match, context, condition_context)
 
-            if triple is None:
+            if match_set is None:
                 # Set is empty
                 return negated
-
-            instances, negatives, complete = triple
 
             if type(item) is ProofLine:
                 # Get the line match
                 item = item.match
 
-            for inst in instances:
-                if item.equivalent(inst, context):
-                    # Equivalent
-                    return not negated
-
-            for inst in negatives:
-                if item.equivalent(inst, context):
-                    # Equivalent to a negative
-                    return negated
-
-            if complete:
-                # Complete and not present
-                return negated
-
-            # Otherwise, can't say - return None
-            return None
+            # Desired result is negated XOR is_member
+            return negated ^ match_set.contains(item, context)
 
         if "negation" in subs:
             # Negation
@@ -1262,19 +1369,17 @@ class Condition(object):
 
             elif func_name == "equal_any":
 
-                instances, negs, complete = self.get_item(args["item"].string, match, context, condition_context)
+                match_set = self.get_item(args["item"].string, match, context, condition_context)
 
-                if not complete:
+                if type(match_set) is not MatchSet:
+                    # Can't test
+                    return False
+
+                if not match_set.complete:
                     # Can't test against other matches
                     return False
 
-                for inst in instances:
-                    if item.equivalent(inst, context):
-                        # Equivalent to this instance
-                        return True
-
-                # Otherwise not equal to any
-                return False
+                return match_set.contains(item, context) is True
 
         if "replace_equivalent" in subs:
             # Equivalent up to some instances being replaced with another
@@ -1323,6 +1428,81 @@ class Condition(object):
             return True
 
         raise Exception("Could not recognise condition.")
+
+    def maps_onto(self, i, j, context, mapping=None, consistent_with=None):
+        # Check if item i maps onto item j. Optionally specify mapping dictionary that needs to be consistent.
+        # Optionally specify pair of items that have to be consistent under the mapping
+
+        if mapping is None:
+            mapping = dict()
+
+        if not type(i) is type(j):
+            return False
+
+        if type(i) is Match:
+            # Map matches
+            if not i.maps_onto(j, context, mapping):
+                return False
+
+        elif type(i) in (list, tuple):
+            # Need to map individual elements
+
+            for a, b in zip(i, j):
+                if not self.maps_onto(a, b, context, mapping, consistent_with=consistent_with):
+                    return False
+
+        else:
+            # Compare directly for other types
+            if not i == j:
+                return False
+
+        if consistent_with is None:
+            return True
+
+        if (not type(consistent_with) in (tuple, list)) or (not len(consistent_with) == 2):
+            # Invalid argument for consistent_with - assume False
+            return False
+
+        # Otherwise check mapping is consistent with consistent_with
+        a, b = consistent_with
+
+        # a needs to map consistently onto b
+        if not type(a) is type(b):
+            # Can't map differing types
+            return False
+
+        if type(a) is Match:
+            # Compare matches using the mapping
+
+            # By default, if there is no mapping, the mapped item is unchanged
+            mapped = a
+
+            if a.string in mapping:
+                # Use the mapped a
+                mapped = mapping[a.string]
+
+            if not mapped.equivalent(b, context):
+                # Mapping is not consistent
+                return False
+
+        if type(a) is MatchSet:
+            # Check every item in a is mapped to an item in b.
+
+            for item in a.instances:
+
+                # By default, if there is no mapping, the mapped item is unchanged
+                mapped = item
+
+                if item.string in mapping:
+                    # Use the mapped item
+                    mapped = mapping[item.string]
+
+                if not b.contains(mapped, context):
+                    # Mapping is not consistent
+                    return False
+
+        # All looks good
+        return True
 
     def __eq__(self, other):
         # Just require identical condition strings
@@ -2331,6 +2511,9 @@ class StringPattern(Pattern):
     def equivalent(self, other):
         # Check equivalence of patterns
 
+        if type(other) is UnionPattern:
+            return False
+
         if other in self.equivalent_patterns:
             return True
 
@@ -2596,6 +2779,9 @@ class UnionPattern(Pattern):
 
     def equivalent(self, other):
         # Check equivalent union patterns
+
+        if type(other) is StringPattern:
+            return False
 
         if other in self.equivalent_patterns:
             return True
@@ -3142,26 +3328,10 @@ class LatticeCompiler(object):
                 StringPattern(name="empty", pattern=""),
                 item,
                 item_and_condition,
-                string
+                string,
+                csa
             ],
             respect_brackets=respect_brackets
-        )
-
-        func_names = (
-            "has_parent",
-            "equal_any",
-            "instances",
-            "shallow_instances",
-            "indent_lines",
-            "indent_line",
-            "is_root",
-            "formula",
-            "match",
-            "inf_match",
-            "set",
-            "variables",
-            "definition_equivalent",
-            "maps_onto"
         )
 
         function = StringPattern(
@@ -3171,7 +3341,7 @@ class LatticeCompiler(object):
                 "args": condition_args,
                 "func": StringPattern(
                     name="function_name",
-                    pattern="^(" + "|".join(func_names) + ")$",
+                    pattern="^[[:alnum:]_]+$",
                     is_regex=True
                 )
             },
@@ -3257,7 +3427,7 @@ class LatticeCompiler(object):
         attribute = UnionPattern(
             name="attribute_union",
             patterns=[
-                # item,
+                item,
                 StringPattern(
                     name="instances",
                     pattern="instances(args)",
