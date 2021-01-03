@@ -86,14 +86,14 @@ class Match(object):
                 # Valid unlabelled argument
                 unlabelled_args.append(arg_value)
 
-            # Take out those arguments taken by the unlabelled args
-            correct_args = correct_args[len(unlabelled_args):]
+        # Take out those arguments taken by the unlabelled args
+        correct_args = correct_args[len(unlabelled_args):]
 
-            # Every labelled arg key should be in the remaining correct args
-            invalid_keys = [key for key in labelled_args if key not in correct_args]
+        # Every labelled arg key should be in the remaining correct args
+        invalid_keys = [key for key in labelled_args if key not in correct_args]
 
-            if len(invalid_keys) > 0:
-                raise Exception("Invalid argument(s): " + str(invalid_keys))
+        if len(invalid_keys) > 0:
+            raise Exception("Invalid argument(s): " + str(invalid_keys))
 
         return unlabelled_args, labelled_args
 
@@ -1830,20 +1830,6 @@ class StringPattern(Pattern):
             self.certainty = 10000
             self.get_non_variable_locations()
 
-        # Build a quick regex - can be quick to rule out non-matches
-        self.quick_regex = self.pattern
-
-        # Replace special chars
-        regex_special_chars = "\\^$.+*?()[]{}<>/"
-        for char in regex_special_chars:
-            self.quick_regex = self.quick_regex.replace(char, "\\" + char)
-
-        # Replace variables with anything
-        for var in self.variables:
-            self.quick_regex = self.quick_regex.replace(var, "(.*?)")
-
-        self.quick_regex = "^" + self.quick_regex + "$"
-
         # Whether proper initial segments match ("always", "never", or None - undetermined)
         self.proper_initial_segment = proper_initial_segment
 
@@ -2419,21 +2405,74 @@ class StringPattern(Pattern):
         context.add_to_history(s, self, None, None)
         return None
 
-    def add_variable(self, name, pattern):
+    def add_variable(self, name, pattern, use_location="all"):
         # Add a variable
+
         self.variables[name] = pattern
 
-        # Update the variable locations
-        for i in range(0, len(self.pattern)):
-            if self.pattern[i:i + len(name)] == name:
-                # Add the location
-                self.variable_locations[i] = {
-                    "label": name,
-                    "pattern": pattern
-                }
+        # Get the variable location dict
+        var_dict = {
+            "label": name,
+            "pattern": pattern
+        }
 
-        # Update quick regex
-        self.quick_regex = self.quick_regex.replace(name, "(.*)")
+        def find_nth(haystack, needle, n):
+            # Find the index of the nth occurrence of needle in haystack
+
+            start = haystack.find(needle)
+
+            while start >= 0 and n > 1:
+                start = haystack.find(needle, start + len(needle))
+                n -= 1
+
+            return start
+
+        def add_location(loc):
+            # Add location loc
+
+            if loc == "all":
+
+                # Update the variable locations
+                for i in range(0, len(self.pattern)):
+                    if self.pattern[i:i + len(name)] == name:
+                        # Add the location
+                        self.variable_locations[i] = var_dict
+
+            elif loc == "first":
+                # Use only the first location
+
+                index = self.pattern.find(name)
+
+                if index == -1:
+                    # No instances
+                    return
+
+                self.variable_locations[index] = var_dict
+
+            elif loc == "last":
+                # Use only the last location
+
+                index = self.pattern.rfind(name)
+
+                if index == -1:
+                    # No instances
+                    return
+
+                self.variable_locations[index] = var_dict
+
+            elif type(loc) is int:
+                # Take the nth location only
+
+                index = find_nth(self.pattern, name, loc)
+                self.variable_locations[index] = var_dict
+
+        # Encourage use_location to be a list
+        if type(use_location) is not list:
+            use_location = [use_location]
+
+        # Add each item in the list
+        for item in use_location:
+            add_location(item)
 
         self.get_non_variable_locations()
 
@@ -3351,15 +3390,6 @@ class LatticeCompiler(object):
         # Function can also be an item
         item.patterns.append(function)
 
-        each = StringPattern(
-            name="each",
-            pattern="each(items, condition)",
-            variables={
-                "items": item
-            },
-            proper_initial_segment="never"
-        )
-
         replace_equivalent = StringPattern(
             name="replace_equivalent",
             pattern="item.replace_equivalent(other, x, y)",
@@ -3389,16 +3419,16 @@ class LatticeCompiler(object):
                 membership,
                 negative_membership,
                 function,
-                each,
                 replace_equivalent,
                 item,
             ],
             respect_brackets=respect_brackets
         )
 
+        condition_args.patterns.append(condition)
+
         item_and_condition.add_variable("condition", condition)
         function.add_variable("condition", condition)
-        each.add_variable("condition", condition)
         negation.add_variable("condition", condition)
         logical_and.add_variable("left", condition)
         logical_and.add_variable("right", condition)
@@ -3519,6 +3549,12 @@ class LatticeCompiler(object):
                     pattern="inner,",
                     variables={"inner": inner_pattern, "append": ", "},
                     skip_node=True
+                ),
+                StringPattern(
+                    name="ending_open_curly_bracket",
+                    pattern="inner{",
+                    variables={"inner": inner_pattern, "append": "{"},
+                    skip_node=True
                 )
             ]
         )
@@ -3528,6 +3564,11 @@ class LatticeCompiler(object):
                 StringPattern(
                     name="close_bracket",
                     pattern="S)",
+                    variables={"S": spaces}
+                ),
+                StringPattern(
+                    name="close_curly_bracket",
+                    pattern="S}",
                     variables={"S": spaces}
                 )
             ]
@@ -3616,12 +3657,13 @@ class LatticeCompiler(object):
 
             "sub_pattern_dict_assignment": StringPattern(
                 name="sub_pattern_dict_assignment",
-                pattern="Spattern.add_variable(label, sub)",
+                pattern="Spattern.add_variable(csa)",
                 variables={
                     "S": spaces,
                     "pattern": self.system["pattern"],
-                    "label": self.system["string"],
-                    "sub": self.system["pattern"]
+                    # "label": self.system["string"],
+                    # "sub": self.system["pattern"]
+                    "csa": self.system["comma_separated_arguments"]
                 },
                 proper_initial_segment="never"
             ),
@@ -3701,7 +3743,7 @@ class LatticeCompiler(object):
 
             context.system[variable] = value
 
-        elif key in ("sub_pattern_assignment", "sub_pattern_dict_assignment"):
+        elif key == "sub_pattern_assignment":
             # Sub assignment
 
             # Get the pattern (or definition) instance
@@ -3720,6 +3762,18 @@ class LatticeCompiler(object):
 
             # Add the sub_match
             pattern_instance.add_variable(label, sub_pattern)
+
+        elif key == "sub_pattern_dict_assignment":
+            # Dictionary assignment
+
+            # Get the pattern (or definition) instance
+            pattern_instance = match.get_by_path("pattern.value()", context)
+
+            # Get the arguments
+            correct_args = ["name", "pattern", "use_location"]
+            args, kwargs = match.get_function_args(context, correct_args=correct_args)
+
+            pattern_instance.add_variable(*args, **kwargs)
 
         elif key == "add_pattern_attribute":
             # Add pattern attribute

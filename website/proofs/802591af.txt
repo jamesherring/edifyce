@@ -15,7 +15,3 @@ if $\neg \alpha$:
     
 $(\neg \alpha \rightarrow (\alpha \rightarrow \beta))$ ref{DT2, Y} label{result}
 
-
-if $\alpha$:
-    $(\alpha \rightarrow \beta)$ ref{A1} label{Z}
-
