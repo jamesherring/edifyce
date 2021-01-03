@@ -82,6 +82,10 @@ class FormalSystemModel(models.Model):
         self.formal_system = compiler.initiate_formal_system(path_to_file=self.path_to_file())
         self.save()
 
+    def refresh(self):
+        # Refresh the instance
+        self.set_code(self.code())
+
     def parse(self, code):
         # Parse proof code into a proof instance
 
@@ -149,6 +153,7 @@ class ProofModel(models.Model):
 
     def refresh(self):
         # Set a new instance of the proof
+        self.formal_system.refresh()
         self.set_code(self.code())
 
     def __str__(self):
