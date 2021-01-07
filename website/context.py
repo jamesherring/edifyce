@@ -78,6 +78,34 @@ class Context(object):
             "set": rhs
         })
 
+    def get_by_path(self, path):
+        # Get an instance from the given path, if it's pointing to the context scope
+
+        if path in self.variables:
+            return self.variables[path]
+
+        if path in self.string_variables:
+            return self.string_variables[path]
+
+        if path in self.definitions:
+            return self.definitions[path]
+
+        if path in self.system:
+            return self.system[path]
+
+        if "." in path:
+            index = path.index(".")
+            initial = path[:index]
+            remainder = path[index + 1:]
+
+            initial = self.get_by_path(initial)
+
+            if initial is not None:
+                return initial.get_by_path(remainder)
+
+        # Otherwise, can't find anything
+        return None
+
     def get_copy(self):
         return Context(
             variables=self.variables.copy(),
