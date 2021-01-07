@@ -127,9 +127,6 @@ if_pattern.add_attribute(name="assumptions", value=shallow_instances(formula))
 # Add an attribute to logical lines - to get all the assumptions
 logical_line.add_attribute(name="assumptions", value=indent_lines().assumptions)
 
-# Add an attribute - combining the formula and assumptions in a list.
-logical_line.add_attribute(name="formula_and_assumptions", value=[formula(), "assumptions"])
-
 # Definition line
 define_pattern = StringPattern(name="define", pattern="Sdefine $higher$ as $lower$")
 define_pattern.S = empty_pattern

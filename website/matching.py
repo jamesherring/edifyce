@@ -46,7 +46,7 @@ class Match(object):
 
         return self.get_by_path(self.pattern.value_path, context, data_type)
 
-    def get_function_args(self, context, correct_args):
+    def get_function_args(self, context, correct_args=None):
         # Return unlabelled and labelled arguments from a comma separated argument match
 
         args = self.get_sub_matches()["a"]
@@ -86,18 +86,19 @@ class Match(object):
                 # Valid unlabelled argument
                 unlabelled_args.append(arg_value)
 
-        # Take out those arguments taken by the unlabelled args
-        correct_args = correct_args[len(unlabelled_args):]
+        if correct_args is not None:
+            # Take out those arguments taken by the unlabelled args
+            correct_args = correct_args[len(unlabelled_args):]
 
-        # Every labelled arg key should be in the remaining correct args
-        invalid_keys = [key for key in labelled_args if key not in correct_args]
+            # Every labelled arg key should be in the remaining correct args
+            invalid_keys = [key for key in labelled_args if key not in correct_args]
 
-        if len(invalid_keys) > 0:
-            raise Exception("Invalid argument(s): " + str(invalid_keys))
+            if len(invalid_keys) > 0:
+                raise Exception("Invalid argument(s): " + str(invalid_keys))
 
         return unlabelled_args, labelled_args
 
-    def get_by_path(self, path, context, data_type=None, attribute_name=None):
+    def get_by_path(self, path, context, data_type=None, attribute_name=None, attribute_params=None):
         # Get the submatch in the given path.
 
         subs = self.get_sub_matches()
@@ -302,6 +303,11 @@ class Match(object):
             match = self.get_by_path("match.value()", context)
             attribute = self.get_by_path("attribute.string()", context)
 
+            if "a" in subs:
+                # Get arguments as well
+                args, kwargs = self.get_function_args(context)
+                return match.get_attribute(attribute, context, list(args))
+
             return match.get_attribute(attribute, context)
 
         # Instances path
@@ -311,10 +317,11 @@ class Match(object):
             inner = path[10:-1]
 
             if ", " in inner:
-                index = inner.index(",")
+                index = inner.index(", ")
                 pattern_name = inner[:index]
 
-                sub_condition = path_match.get_sub_matches()["a"][1].get_value(context)
+                system_condition = context.system["condition"]
+                sub_condition = system_condition.match(inner[index + 2:], context).get_value(context)
 
                 return self.get_instances(pattern_name, context, sub_condition, attribute_name)
 
@@ -527,11 +534,32 @@ class Match(object):
 
         return match_set
 
-    def get_attribute(self, name, context):
-        # Get the attribute value by name.
+    def get_attribute(self, name, context, params=None):
+        # Get the attribute value by name. Optionally specify a list of other matches as parameters
+
+        value, pattern_params_tuple = self.pattern.get_attribute(name)
+
+        if params is None:
+            params = []
+
+        # Build the parameters dct
+        if not len(pattern_params_tuple) == len(params):
+            raise Exception("Expected " + str(len(pattern_params_tuple)) + " parameters to get attribute " + name +
+                            " in " + self.pattern.name + ", but received " + str(len(params)))
+
+        attribute_params = {key: value for key, value in zip(pattern_params_tuple, params)}
+
+        if type(value) is Condition:
+            # Boolean attribute
+            return value.check(self, context, condition_context=attribute_params)
 
         # Use the pattern attribute path
-        return self.get_by_path(path=self.pattern.get_attribute(name), context=context, attribute_name=name)
+        return self.get_by_path(
+            path=value,
+            context=context,
+            attribute_name=name,
+            attribute_params=attribute_params
+        )
 
     def parent_matches(self):
         # Return a set of all the parent matches
@@ -1082,7 +1110,7 @@ class MatchSet(object):
             incomplete = other
         else:
             complete = other
-            incomplete = self.negatives
+            incomplete = self
 
         for item in incomplete.negatives:
             if complete.contains(item, context) is False:
@@ -1114,6 +1142,18 @@ class MatchSet(object):
 
         # Every item in self.negatives is in other.negatives.
         return True
+
+    def __str__(self):
+        str_instances = ", ".join({str(m) for m in self.instances})
+        str_negatives = ", ".join({str(m) for m in self.negatives})
+
+        if self.complete:
+            return "Complete instances: (" + str_instances + ")"
+
+        if len(self.negatives) == 0:
+            return "Incomplete instances: (" + str_instances + ")"
+
+        return "Incomplete instances: (" + str_instances + "), negatives: " + str_negatives
 
 
 class Condition(object):
@@ -1318,6 +1358,10 @@ class Condition(object):
             return self.check(match, context, condition_match=left, condition_context=condition_context) or \
                 self.check(match, context, condition_match=right, condition_context=condition_context)
 
+        if "function_union" in subs:
+            fn_union = subs["function_union"]
+            return self.check(match, context, condition_match=fn_union, condition_context=condition_context)
+
         if "function" in subs:
             # Function
 
@@ -1325,8 +1369,11 @@ class Condition(object):
 
             # Get the function name, item, and arguments
             func_name = func_subs["func"].string
-            item = self.get_item(func_subs["item"].string, match, context, condition_context)
             args = func_subs["args"].get_sub_matches()
+
+            item = condition_context["origin"]
+            if "item" in func_subs:
+                item = self.get_item(func_subs["item"].string, match, context, condition_context)
 
             if func_name == "has_parent":
                 # Check if item has a parent
@@ -1368,7 +1415,7 @@ class Condition(object):
                 return True
 
             elif func_name == "equal_any":
-
+                
                 match_set = self.get_item(args["item"].string, match, context, condition_context)
 
                 if type(match_set) is not MatchSet:
@@ -1380,6 +1427,34 @@ class Condition(object):
                     return False
 
                 return match_set.contains(item, context) is True
+
+            elif func_name == "each":
+                # Test a condition against each of the items
+
+                if type(item) is not MatchSet:
+                    # Not testing a matchset
+                    return False
+
+                match_set = item
+
+                if not match_set.complete:
+                    # No way to verify if the condition applies to other variable items
+                    return False
+
+                sub_condition = Condition(args["condition"])
+
+                for item in match_set.instances:
+
+                    # Create a new condition context
+                    new_condition_context = condition_context.copy()
+                    new_condition_context["instance"] = item
+
+                    if not sub_condition.check(item, context, condition_context=new_condition_context):
+                        # Doesn't pass the check
+                        return False
+
+                # Otherwise ok
+                return True
 
         if "replace_equivalent" in subs:
             # Equivalent up to some instances being replaced with another
@@ -1399,33 +1474,17 @@ class Condition(object):
             return self.check(match, context, condition_match=inner, condition_context=condition_context)
 
         if "item" in subs:
+
+            sub_subs = subs["item"].get_sub_matches()
+
+            if "function_union" in sub_subs:
+                fn_union = sub_subs["function_union"]
+                return self.check(match, context, condition_match=fn_union, condition_context=condition_context)
+
             return self.get_item(subs["item"].string, match, context, condition_context)
 
-        if "each" in subs:
-            # Test a condition against each of the items
-
-            each_subs = subs["each"].get_sub_matches()
-
-            items, neg_items, complete = self.get_item(each_subs["items"].string, match, context, condition_context)
-
-            if not complete:
-                # No way to verify if the condition applies to other variable items
-                return False
-
-            sub_condition = Condition(each_subs["condition"])
-
-            for item in items:
-
-                # Create a new condition context
-                new_condition_context = condition_context.copy()
-                new_condition_context["instance"] = item
-
-                if not sub_condition.check(item, context, condition_context=new_condition_context):
-                    # Doesn't pass the check
-                    return False
-
-            # Otherwise ok
-            return True
+        if "simple_item" in subs:
+            return self.get_item(subs["simple_item"].string, match, context, condition_context)
 
         raise Exception("Could not recognise condition.")
 
@@ -1505,6 +1564,11 @@ class Condition(object):
         return True
 
     def __eq__(self, other):
+
+        if type(other) is not Condition:
+            # Can't be equal
+            return False
+
         # Just require identical condition strings
         return self.condition_match.string == other.condition_match.string
 
@@ -1618,11 +1682,18 @@ class Pattern(object):
         # Track equivalent patterns
         self.equivalent_patterns = set()
 
-    def add_attribute(self, name, value):
-        # Add an attribute to this pattern
+    def add_attribute(self, name, value, params=None):
+        # Add an attribute to this pattern. Value may be a path or a condition
+
+        # Optionally specify list of strings as parameters
+        if params is None:
+            params = tuple()
+
+        if type(params) is list:
+            params = tuple(params)
 
         # Value can be a path picking on values from submatches
-        self.attributes[name] = value
+        self.attributes[name] = (value, params)
 
     def get_attribute(self, name):
         # Get the given attribute
@@ -2802,8 +2873,10 @@ class UnionPattern(Pattern):
 
                     # Append the sub paths to the dictionary, adding self
                     for pattern in sub_options:
-                        found[pattern] = sub_options[pattern]
-                        found[pattern].append(self)
+
+                        if pattern not in found or len(sub_options[pattern]) + 1 < len(found[pattern]):
+                            found[pattern] = sub_options[pattern]
+                            found[pattern].append(self)
 
                 else:
                     found = found.union(sub_options)
@@ -3272,14 +3345,29 @@ class LatticeCompiler(object):
         obj.patterns.append(match)
 
         # Pattern attributes
-        pattern_attribute = StringPattern(
-            name="pattern_attribute",
-            pattern="match.attribute",
-            variables={
-                "match": match,
-                "attribute": variable_name
-            },
-            value_path="get_attribute()"
+        pattern_attribute = UnionPattern(
+            name="pattern_attribute_union",
+            patterns=[
+                StringPattern(
+                    name="pattern_attribute",
+                    pattern="match.attribute",
+                    variables={
+                        "match": match,
+                        "attribute": variable_name
+                    },
+                    value_path="get_attribute()"
+                ),
+                StringPattern(
+                    name="pattern_attribute_fn",
+                    pattern="match.attribute(args)",
+                    variables={
+                        "match": match,
+                        "attribute": variable_name,
+                        "args": csa
+                    },
+                    value_path="get_attribute()"
+                )
+            ]
         )
         obj.patterns.append(pattern_attribute)
 
@@ -3295,25 +3383,23 @@ class LatticeCompiler(object):
             pattern="^[a-zA-Z_][[:alnum:]_\[\]]*$",
             is_regex=True
         )
-        pattern_or_item = UnionPattern(
-            name="pattern_or_item",
-            patterns=[pattern]
-        )
+
         instances = StringPattern(
             name="instances",
-            pattern="item.instances(pattern)",
+            pattern="instances(args)",
             variables={
-                "pattern": pattern_or_item
+                "args": csa
             },
             proper_initial_segment="never"
         )
 
+        obj.patterns.append(instances)
+
         item = UnionPattern(
             name="item",
-            patterns=[simple_item, instances],
+            patterns=[simple_item],
             respect_brackets=respect_brackets
         )
-        pattern_or_item.patterns.append(item)
 
         instances.add_variable("item", item)
 
@@ -3373,22 +3459,40 @@ class LatticeCompiler(object):
             respect_brackets=respect_brackets
         )
 
-        function = StringPattern(
-            name="function",
-            pattern="func(args)",
-            variables={
-                "args": condition_args,
-                "func": StringPattern(
-                    name="function_name",
-                    pattern="^[[:alnum:]_]+$",
-                    is_regex=True
-                )
-            },
-            proper_initial_segment="never"
+        func_name = StringPattern(
+            name="function_name",
+            pattern="^[[:alnum:]_]+$",
+            is_regex=True
         )
 
-        # Function can also be an item
-        item.patterns.append(function)
+        fn = UnionPattern(
+            name="function_union",
+            patterns=[
+                StringPattern(
+                    name="function",
+                    pattern="func(args)",
+                    variables={
+                        "args": condition_args,
+                        "func": func_name
+                    },
+                    proper_initial_segment="never"
+                ),
+                StringPattern(
+                    name="function",
+                    pattern="item.func(args)",
+                    variables={
+                        "item": item,
+                        "args": condition_args,
+                        "func": func_name
+                    },
+                    proper_initial_segment="never"
+                )
+            ]
+        )
+
+        # Function can also be an item and condition argument
+        item.patterns.append(fn)
+        condition_args.patterns.append(fn)
 
         replace_equivalent = StringPattern(
             name="replace_equivalent",
@@ -3418,7 +3522,7 @@ class LatticeCompiler(object):
                 equal,
                 membership,
                 negative_membership,
-                function,
+                fn,
                 replace_equivalent,
                 item,
             ],
@@ -3428,7 +3532,6 @@ class LatticeCompiler(object):
         condition_args.patterns.append(condition)
 
         item_and_condition.add_variable("condition", condition)
-        function.add_variable("condition", condition)
         negation.add_variable("condition", condition)
         logical_and.add_variable("left", condition)
         logical_and.add_variable("right", condition)
@@ -3458,15 +3561,16 @@ class LatticeCompiler(object):
             name="attribute_union",
             patterns=[
                 item,
-                StringPattern(
-                    name="instances",
-                    pattern="instances(args)",
-                    variables={
-                        "args": csa
-                    },
-                    proper_initial_segment="never"
-                ),
-                variable_name
+                # StringPattern(
+                #     name="instances",
+                #     pattern="match.instances(args)",
+                #     variables={
+                #         "match": match,
+                #         "args": csa
+                #     },
+                #     proper_initial_segment="never"
+                # ),
+                # variable_name
             ]
         )
         obj.patterns.append(attribute)
@@ -3589,7 +3693,6 @@ class LatticeCompiler(object):
             "comma_separated_with_parts": cswp,
             "spaces": spaces,
             "condition": condition_object,
-            "attribute": attribute,
             "formal_system_pattern": fs,
             "line_type": line_type,
             "inference_rule": inference_rule,
@@ -3781,26 +3884,11 @@ class LatticeCompiler(object):
             pattern = match.get_by_path("pattern.value()", context)
 
             # Get the arguments
-            args = match.get_by_path("csa.a", context)
-
-            # Handle cases regardless of labelling
-            arg_dict = {}
-            next_label = "name"
-            for arg in args:
-                a = arg.get_sub_matches()
-                if "labelled_argument" in a:
-                    la = a["labelled_argument"]
-                    subs = la.get_sub_matches()
-                    arg_dict[subs["label"].string] = subs["obj"].get_value(context)
-
-                elif "unlabelled_argument" in a:
-                    arg_dict[next_label] = a["unlabelled_argument"].get_value(context)
-
-                    if next_label == "name":
-                        next_label = "value"
+            correct_args = ["name", "value", "params"]
+            args, kwargs = match.get_function_args(context, correct_args=correct_args)
 
             # Add the attribute to the pattern
-            pattern.add_attribute(**arg_dict)
+            pattern.add_attribute(*args, **kwargs)
 
         elif key == "set_pattern_condition":
             # Set the condition

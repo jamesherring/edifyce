@@ -99,7 +99,6 @@ class FormalSystem(object):
         if proof is None:
             # Create a new proof instance
             proof = Proof(formal_system=self)
-            proof.parsed = True
             proof.valid = True
 
             proof.reference_proofs = reference_proofs
@@ -147,21 +146,27 @@ class FormalSystem(object):
 
                     if key_path is not None:
 
-                        # Get the keys
-                        keys = result.get_by_path(key_path, context)
+                        try:
+                            # Get the keys
+                            keys = result.get_by_path(key_path, context)
 
-                        if type(keys) is not list:
-                            # Make a singleton list
-                            keys = [keys]
+                            if type(keys) is not list:
+                                # Make a singleton list
+                                keys = [keys]
 
-                        for key in keys:
-                            key_string = key.string
+                            for key in keys:
+                                key_string = key.string
 
-                            # Get the value using the value path - relative to the key
-                            value = key.get_by_path(value_path, context).get_value(context)
+                                # Get the value using the value path - relative to the key
+                                value = key.get_by_path(value_path, context).get_value(context)
 
-                            # Add to context
-                            context.string_variables[key_string] = value
+                                # Add to context
+                                context.string_variables[key_string] = value
+
+                        except Exception as e:
+                            proof_line.valid = False
+                            proof_line.invalid_message = str(e)
+                            break
 
                 if line_type.behaviour == "indent":
                     # Parse the block with a copied context
@@ -374,7 +379,6 @@ class FormalSystem(object):
             if not found:
                 # The line doesn't match any of the line types. Invalid proof
                 proof_line.invalid_message = "Could not parse line."
-                proof_line.parsed = False
                 proof_line.valid = False
 
             i += 1
@@ -383,11 +387,9 @@ class FormalSystem(object):
             # Check if the proof is valid
 
             proof.valid = True
-            proof.parsed = True
 
             for line in proof.proof_lines:
                 if line.line_type is None:
-                    proof.parsed = False
                     proof.valid = False
                     continue
 
@@ -548,9 +550,6 @@ class Proof(object):
         # The proof result
         self.result = result
 
-        # Whether all lines in the proof can be parsed
-        self.parsed = None
-
         # Whether the proof is valid
         self.valid = None
 
@@ -671,9 +670,6 @@ class ProofLine(object):
 
         # Whether this step in the proof is valid
         self.valid = True
-
-        # Whether this step has been parsed
-        self.parsed = True
 
         # Later proof lines that depend (directly) on this one
         self.dependent_lines = []

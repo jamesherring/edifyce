@@ -69,24 +69,24 @@ def formalSystemEditView(request, system_id, system_slug):
 def formalSystemSaveView(request):
     # Ajax view to save a formal system code
 
-    try:
+    # try:
 
-        system_id = request.POST.get("system_id", False)
-        system = FormalSystemModel.objects.get(id=system_id)
+    system_id = request.POST.get("system_id", False)
+    system = FormalSystemModel.objects.get(id=system_id)
 
-        # Get the new code
-        new_code = request.POST.get("code", False)
+    # Get the new code
+    new_code = request.POST.get("code", False)
 
-        # Set the system code
-        system.set_code(new_code)
+    # Set the system code
+    system.set_code(new_code)
 
-        return HttpResponse(json.dumps({"success": True}))
+    return HttpResponse(json.dumps({"success": True}))
 
-    except Exception as e:
-        return HttpResponse(json.dumps({
-            "success": False,
-            "errorMessage": str(e)
-        }))
+    # except Exception as e:
+    #     return HttpResponse(json.dumps({
+    #         "success": False,
+    #         "errorMessage": str(e)
+    #     }))
 
 
 def proofView(request, proof_id, proof_slug):
