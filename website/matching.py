@@ -1285,6 +1285,9 @@ class Condition(object):
 
         subs = condition_match.get_sub_matches()
 
+        if "condition" in subs:
+            return self.check(match, context, condition_match=subs["condition"], condition_context=condition_context)
+
         if "equal" in subs:
             # Test equality
 
@@ -1415,8 +1418,8 @@ class Condition(object):
                 return True
 
             elif func_name == "equal_any":
-                
-                match_set = self.get_item(args["item"].string, match, context, condition_context)
+
+                match_set = self.get_item(func_subs["args"].string, match, context, condition_context)
 
                 if type(match_set) is not MatchSet:
                     # Can't test
@@ -1485,6 +1488,8 @@ class Condition(object):
 
         if "simple_item" in subs:
             return self.get_item(subs["simple_item"].string, match, context, condition_context)
+
+        print(condition_match.pretty_print())
 
         raise Exception("Could not recognise condition.")
 
@@ -2854,7 +2859,7 @@ class UnionPattern(Pattern):
 
     def nested_options(self, path_dict=False):
         # Get a set of all patterns in this union - and any sub-unions
-        # Optionally return as a dictionary including the path to each option
+        # Optionally return as a dictionary including the paths to each option
 
         # Start with an empty set
         found = set()
@@ -2874,9 +2879,10 @@ class UnionPattern(Pattern):
                     # Append the sub paths to the dictionary, adding self
                     for pattern in sub_options:
 
-                        if pattern not in found or len(sub_options[pattern]) + 1 < len(found[pattern]):
+                        if pattern not in found or len(sub_options[pattern]) < len(found[pattern]):
                             found[pattern] = sub_options[pattern]
-                            found[pattern].append(self)
+
+                        found[pattern].append(self)
 
                 else:
                     found = found.union(sub_options)

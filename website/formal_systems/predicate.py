@@ -216,7 +216,7 @@ define_line = LineType(name="define line", pattern=define_pattern, behaviour="de
 with "x", "y", "z" as variable, "t1" as term, "A" as formula:
     
     t = term.match("y")
-    var = variable.match("x")
+    var = variable.match("y")
     f = formula.match("(\\forall y \\; x = y \\rightarrow z = z)")
     print(f)
     
