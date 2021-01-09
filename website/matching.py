@@ -2,6 +2,7 @@ import regex as re
 import inspect
 from website.formal_system import FormalSystem, LineType, InferenceRule, ProofLine
 from website.context import Context
+from copy import deepcopy
 
 
 class Match(object):
@@ -2704,6 +2705,30 @@ class StringPattern(Pattern):
         other.equivalent_patterns.add(self)
 
         return True
+
+    def __deepcopy__(self, memodict=None):
+
+        if memodict is None:
+            memodict = dict()
+
+        result = StringPattern(
+            name=self.name,
+            pattern=self.pattern,
+            condition=deepcopy(self.condition, memodict),
+            is_regex=self.is_regex,
+            proper_initial_segment=self.proper_initial_segment,
+            variables=deepcopy(self.variables, memodict),
+            replacements=self.replacements,
+            skip_node=self.skip_node,
+            value_path=self.value_path,
+            data_type=self.type,
+            parent=deepcopy(self.parent, memodict),
+            respect_brackets=self.respect_brackets
+        )
+
+        memodict[id(self)] = result
+
+        return result
 
     def __str__(self):
         return self.name
