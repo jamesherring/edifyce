@@ -53,7 +53,7 @@ class FormalSystemModel(models.Model):
     slug = models.CharField(max_length=256)
 
     # Field pointing to an instance of a FormalSystem class
-    formal_system = PickledObjectField(default=None, blank=True, null=True)
+    formal_system = PickledObjectField(default=None, blank=True, null=True, editable=True)
 
     created = models.DateTimeField(auto_now_add=True, blank=True, null=True)
     updated = models.DateTimeField(auto_now=True, blank=True, null=True)
@@ -80,6 +80,7 @@ class FormalSystemModel(models.Model):
         # Refresh the formal system instance according to the file
         compiler = LatticeCompiler()
         self.formal_system = compiler.initiate_formal_system(path_to_file=self.path_to_file())
+
         self.save()
 
     def refresh(self):
@@ -123,7 +124,7 @@ class ProofModel(models.Model):
     formal_system = models.ForeignKey(FormalSystemModel, on_delete=models.CASCADE)
 
     # Field pointing to an instance of a Proof class
-    proof = PickledObjectField(default=None, blank=True, null=True)
+    proof = PickledObjectField(default=None, blank=True, null=True, editable=True)
 
     created = models.DateTimeField(auto_now_add=True, blank=True, null=True)
     updated = models.DateTimeField(auto_now=True, blank=True, null=True)
