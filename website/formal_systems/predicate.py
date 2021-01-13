@@ -34,15 +34,15 @@ atomic_formula = UnionPattern(name="atomic_formula", patterns=[predicate, equal]
 
 ra = StringPattern(name="rightarrow", pattern="(\\alpha \\rightarrow \\beta)")
 neg = StringPattern(name="negation", pattern="\\neg \\alpha")
-forall = StringPattern(name="forall", pattern="\\forall x \\; \\alpha")
+forall = StringPattern(name="forall", pattern="\\forall x \\alpha")
 replacement = StringPattern(name="replacement", pattern="\\alpha[t/x]")
 
 formula = UnionPattern(name="formula", patterns=[atomic_formula, ra, neg, forall, replacement])
-dollar_formula = StringPattern(name="dollar_formula", pattern="$formula$", skip_node=True, proper_initial_segment="never")
-dollar_formula.formula = formula
+# dollar_formula = StringPattern(name="dollar_formula", pattern="$formula$", skip_node=True, proper_initial_segment="never")
+# dollar_formula.formula = formula
 
 # Dollar formula or a formula
-any_formula = UnionPattern(name="formula", patterns=[formula, dollar_formula], skip_node=True)
+# any_formula = UnionPattern(name="formula", patterns=[formula, dollar_formula], skip_node=True)
 
 ra.add_variable("\\alpha", formula)
 ra.add_variable("\\beta", formula)
@@ -102,22 +102,23 @@ a3.add_variable("\\alpha", formula)
 a3.add_variable("\\beta", formula)
 
 c = Condition(
-    self.alpha.free_variables.each(
+    self.variables("\\alpha").free_variables.each(
         (not instance == self.x) or \
         (not instance.has_parent(forall, forall.x.equal_any(self.t.instances(variable)))))
 )
-a4 = StringPattern(name="A4", pattern="(\\forall x \\; \\alpha \\rightarrow \\alpha[t/x])", condition=c, parent=formula)
+a4 = StringPattern(name="A4", pattern="(\\forall x \\alpha \\rightarrow \\alpha[t/x])", condition=c, parent=formula)
 
 a4.add_variable("\\alpha", formula)
 a4.add_variable("t", term, use_location="last")
 a4.x = variable
 
 c = Condition(self.x not in self.variables("\\alpha").free_variables)
-a5 = StringPattern(name="A5", pattern="\\forall x \\; \\alpha", condition=c, parent=formula)
+a5 = StringPattern(name="A5", pattern="(\\forall x (\\alpha \\rightarrow \\beta) \\rightarrow (\\alpha \\rightarrow \\forall x \\beta))", condition=c, parent=formula)
 a5.add_variable("\\alpha", formula)
+a5.add_variable("\\beta", formula)
 a5.x = variable
 
-a6 = StringPattern(name="A6", pattern="\\forall x \\; x = x", parent=formula)
+a6 = StringPattern(name="A6", pattern="\\forall x x = x", parent=formula)
 a6.x = variable
 
 c = Condition(self.variables("\\alpha").replace_equivalent(self.variables("\\beta"), self.x, self.y))
@@ -127,6 +128,11 @@ a7.add_variable("\\beta", atomic_formula)
 a7.x = variable
 a7.y = variable
 
+pre_format = {
+    "(?P<char>[^\s])\s\s+": "\\g<char> ",
+    "\\$(?P<inner>.*?)\\$": "\\g<inner>",
+    "\\\\;": ""
+}
 
 # Make the import line
 import_pattern = StringPattern(name="import", pattern="import path as reference")
@@ -148,28 +154,28 @@ label = StringPattern(name="label", pattern=" label{ref}")
 label.ref = StringPattern(name="reference", pattern="^[a-zA-Z0-9_,\.]+$", is_regex=True)
 label_union = UnionPattern(name="label_union", patterns=[empty, label])
 
-logical_pattern = StringPattern(name="logical_pattern", pattern="Sformula ref{refs}label")
+logical_pattern = StringPattern(name="logical_pattern", pattern="Sformula ref{refs}label", pre_format=pre_format)
 logical_pattern.S = empty_pattern
 logical_pattern.refs = StringPattern(name="reference", pattern="^[a-zA-Z0-9_,\. ]+$", is_regex=True)
-logical_pattern.formula = dollar_formula
+logical_pattern.formula = formula
 logical_pattern.label = label_union
 logical_line = LineType(name="Reference", pattern=logical_pattern, behaviour="logical")
 
 # Build comma separated formulae
 f_join = StringPattern(name="join_formula", pattern="j, formula", skip_node=True)
-f_join.formula = any_formula
-comma_separated_formula = UnionPattern(name="csf", patterns=[any_formula, f_join], skip_node=True)
+f_join.formula = formula
+comma_separated_formula = UnionPattern(name="csf", patterns=[formula, f_join], skip_node=True)
 f_join.j = comma_separated_formula
 
 # Variables for with parts
-formula_variable = StringPattern(name="formula_variable_name", pattern="^[a-zA-Z0-9\\.\\\\]+$", is_regex=True)
-dollar_variable = StringPattern(name="dollar_variable", pattern="$v$", skip_node=True, proper_initial_segment="never")
-dollar_variable.v = formula_variable
+variable_name = StringPattern(name="variable_name", pattern="^[a-zA-Z0-9\\.\\\\]+$", is_regex=True)
+# dollar_variable = StringPattern(name="dollar_variable", pattern="$v$", skip_node=True, proper_initial_segment="never")
+# dollar_variable.v = formula_variable
 
 # Build comma separated variables
 join = StringPattern(name="join_variable", pattern="j, variable", skip_node=True)
-join.variable = dollar_variable
-csv = UnionPattern(name="comma_separated_variables", patterns=[join, dollar_variable], skip_node=True)
+join.variable = variable_name
+csv = UnionPattern(name="comma_separated_variables", patterns=[join, variable_name], skip_node=True)
 join.j = csv
 
 let_part = StringPattern(name="let_part", pattern="csv be pattern", proper_initial_segment="never")
@@ -183,18 +189,18 @@ cslp = UnionPattern(name="cslp", patterns=[join_lp, let_part], skip_node=True)
 join_lp.j = cslp
 
 # Build with line - for introducing variable patterns
-let_pattern = StringPattern(name="let", pattern="Slet cslp", proper_initial_segment="never")
+let_pattern = StringPattern(name="let", pattern="Slet cslp", proper_initial_segment="never", pre_format=pre_format)
 let_pattern.S = empty_pattern
 let_pattern.cslp = cslp
 let_line = LineType(
     name="let",
     pattern=let_pattern,
     behaviour="none",
-    add_context_key_path="self.let_part.v",
+    add_context_key_path="instances(variable_name)",
     add_context_value_path="non_skip_parent().pattern"
 )
 
-if_pattern = StringPattern(name="if", pattern="Sif csf:", proper_initial_segment="never")
+if_pattern = StringPattern(name="if", pattern="Sif csf:", proper_initial_segment="never", pre_format=pre_format)
 if_pattern.S = empty_pattern
 if_pattern.csf = comma_separated_formula
 if_line = LineType(name="if line", pattern=if_pattern, behaviour="indent")
@@ -205,11 +211,23 @@ if_pattern.add_attribute(name="assumptions", value=shallow_instances(formula))
 # Add an attribute to logical lines - to get all the assumptions
 logical_line.add_attribute(name="assumptions", value=indent_lines().assumptions)
 
+# Add an if pattern for suppositions - relating to attributes rather than assuming a formula
+if_attribute_pattern = StringPattern(name="if_attribute", pattern="Sif supp:", pre_format=pre_format)
+if_attribute_pattern.S = empty_pattern
+if_attribute_pattern.supp = system["condition_inner"]
+if_attribute_line = LineType(
+    name="if attribute line",
+    pattern=if_attribute_pattern,
+    behaviour="indent",
+    add_context_type="restrictions",
+    add_context_value_path="supp.string()"
+)
+
 # Definition line
-define_pattern = StringPattern(name="define", pattern="Sdefine $higher$ as $lower$")
+define_pattern = StringPattern(name="define", pattern="Sdefine higher as lower", pre_format=pre_format)
 define_pattern.S = empty_pattern
 define_pattern.higher = StringPattern(name="anything", pattern="^.*$", is_regex=True)
-define_pattern.lower = formula
+define_pattern.lower = StringPattern(name="anything", pattern="^.*$", is_regex=True)
 define_line = LineType(name="define line", pattern=define_pattern, behaviour="definition")
 
 
@@ -217,12 +235,12 @@ with "x", "y", "z" as variable, "t1" as term, "A" as formula:
     
     t = term.match("y")
     var = variable.match("y")
-    f = formula.match("(\\forall y \\; x = y \\rightarrow z = z)")
+    f = formula.match("(\\forall y x = y \\rightarrow z = z)")
     print(f)
     
     print(t.is_free_for(var, f))
     
-    
+
     
 # Make modus ponens
 mp_0 = formula
@@ -280,6 +298,7 @@ definition = InferenceRule(name="Definition", label="DEF", antecedents=[formula]
 
 # Store relevant context variables
 context_variables = {
+    "variable_name": variable_name,
     "variable": variable,
     "constant": constant,
     "function": function,
@@ -293,7 +312,7 @@ context_variables = {
 # Create the formal system
 propositional = FormalSystem(
     name="Predicate",
-    line_types=[import_line, empty_line, comment_line, logical_line, let_line, if_line, define_line],
+    line_types=[import_line, empty_line, comment_line, logical_line, let_line, if_line, if_attribute_line, define_line],
     axioms=[a1, a2, a3, a4, a5, a6, a7],
     inference_rules=[mp, if_rule, dt_1, dt_2, thinning, theorem, definition],
     context_variables=context_variables

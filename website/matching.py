@@ -2,7 +2,7 @@ import regex as re
 import inspect
 from website.formal_system import FormalSystem, LineType, InferenceRule, ProofLine
 from website.context import Context
-from copy import deepcopy
+from copy import copy, deepcopy
 
 
 class Match(object):
@@ -99,7 +99,7 @@ class Match(object):
 
         return unlabelled_args, labelled_args
 
-    def get_by_path(self, path, context, data_type=None, attribute_name=None, attribute_params=None):
+    def get_by_path(self, path, context, data_type=None, attribute_name=None):
         # Get the submatch in the given path.
 
         subs = self.get_sub_matches()
@@ -348,11 +348,27 @@ class Match(object):
         if path[:10] == "variables(" and path[-1] == ")":
             # Get the variable in the string
 
-            inner = path[10:-1]
-            system_string = context.system["string"]
-            var = system_string.match(inner, context)
+            def find_all(a_str, sub):
+                start = 0
+                while True:
+                    start = a_str.find(sub, start)
+                    if start == -1: return
+                    yield start
+                    start += len(sub)  # use start += 1 to find overlapping matches
 
-            assert var is not None
+            # Get all instances of closing brackets
+            closings = list(find_all(path[10:], ")"))
+
+            system_string = context.system["string"]
+            var = None
+            index = 0
+            while var is None and index < len(closings):
+                inner = path[10:10 + closings[index]]
+                var = system_string.match(inner, context)
+                index += 1
+
+            if var is None:
+                raise Exception("Could not parse path: " + path)
 
             # Get the value from the string
             value = var.get_value(context)
@@ -406,6 +422,7 @@ class Match(object):
 
             if type(sub_match) is list:
                 # Need to collect the result as a list
+
                 result = []
                 for m in sub_match:
                     sub_result = m.get_by_path(remainder, context, data_type)
@@ -477,6 +494,39 @@ class Match(object):
         # Get instances of the pattern in nested sub matches, which meet the specified condition.
         # Optionally specify the attribute we are searching for
 
+        if type(pattern) is str and "." in pattern:
+            # We need to get a path first
+            index = pattern.rfind(".")
+            initial = pattern[:index]
+            remainder = pattern[index + 1:]
+
+            item = self.get_by_path(initial, context)
+
+            if type(item) is Match:
+                return item.get_instances(remainder, context, condition, attribute_name, shallow)
+
+            if type(item) is list:
+                # Union each item in the list
+
+                union = MatchSet()
+                for i in item:
+                    sub_instances = i.get_instances(remainder, context, condition, attribute_name, shallow)
+                    union = union.union(sub_instances, context)
+
+                return union
+
+            if type(item) is MatchSet:
+
+                # Union each item in the matchset
+                union = MatchSet()
+                union.complete = item.complete
+
+                for match in item.instances:
+                    sub_instances = match.get_instances(remainder, context, condition, attribute_name, shallow)
+                    union = union.union(sub_instances, context)
+
+                return union
+
         # If shallow - don't look for nested instances of pattern deeper than instances found
         if type(pattern) is str:
             # Need to get the correct pattern
@@ -499,7 +549,6 @@ class Match(object):
             # Include self
 
             if condition is None or condition.check(self, context):
-                # add_to_set(self, instances)
                 match_set.add(self, context)
 
         if shallow and self.pattern is pattern:
@@ -522,16 +571,39 @@ class Match(object):
         # Check context for extra restrictions
         if attribute_name is not None:
             for r in context.restrictions:
-                if r["type"] == "membership" and r["set"] == self.string + "." + attribute_name:
+
+                subs = r.get_sub_matches()
+
+                negated = False
+                if "negation" in subs:
+                    negated = True
+                    subs = subs["negated"].get_sub_matches()["condition"].get_sub_matches()
+
+                if "membership" in subs:
+                    subs = subs["membership"].get_sub_matches()
+
+                if "negative_membership" in subs:
+                    subs = subs["negative_membership"].get_sub_matches()
+                    negated = not negated
+
+                else:
+                    continue
+
+                if subs["set"].string == self.string + "." + attribute_name:
                     # This membership restriction applies
 
-                    if not r["negated"]:
+                    item = pattern.match(subs["item"].string, context)
+                    if not negated:
                         # Positive membership
-                        match_set.add(pattern.match(r["member"], context), context)
+                        match_set.add(item, context)
 
                     else:
                         # Negative membership
-                        match_set.remove(pattern.match(r["member"], context), context)
+                        match_set.remove(item, context)
+
+            # Add the attribute path
+            match_set.attribute_match = self
+            match_set.attribute_name = attribute_name
 
         return match_set
 
@@ -555,12 +627,7 @@ class Match(object):
             return value.check(self, context, condition_context=attribute_params)
 
         # Use the pattern attribute path
-        return self.get_by_path(
-            path=value,
-            context=context,
-            attribute_name=name,
-            attribute_params=attribute_params
-        )
+        return self.get_by_path(path=value, context=context, attribute_name=name)
 
     def parent_matches(self):
         # Return a set of all the parent matches
@@ -696,90 +763,6 @@ class Match(object):
         self_var = self.string in context.string_variables
         other_var = other.string in context.string_variables
 
-        # Function to get variable restrictions
-        def get_variable_restrictions(var, mapping=None):
-            # Get all restrictions on var, including nested restrictions on equivalent variables
-
-            # Keep track of a set of results for all relevant variables
-            if mapping is None:
-                mapping = dict()
-
-            if var not in mapping:
-                mapping[var] = {
-                    "positive": {
-                        "variables": set()
-                    },
-                    "negative": {
-                        "variables": set(),
-                        "values": set()
-                    }
-                }
-
-            for r in context.restrictions:
-
-                if not r["type"] == "equivalence":
-                    # Not an equivalence restriction
-                    continue
-
-                if var in r["pair"]:
-                    # Restriction applies to var
-
-                    # Get the other item
-                    other = None
-                    for item in r["pair"]:
-                        if not item == var:
-                            other = item
-                            break
-
-                    # Check if other is a variable
-                    if other in context.string_variables:
-                        # Other is a variable
-
-                        if other in mapping:
-                            # Already mapped
-                            continue
-
-                        # Update the mapping with other
-                        mapping = get_variable_restrictions(other, mapping)
-
-                        if r["negated"]:
-                            # not var == other
-
-                            mapping[var]["negative"]["variables"].add(other)
-
-                            # Check if other has fixed value.
-                            if "value" in mapping[other]["positive"]:
-                                # This is useful - we know var cannot be equal to this
-                                mapping[var]["negative"]["values"].add(mapping[other]["positive"]["value"])
-
-                            # Any equivalent variables also apply to var
-                            mapping[var]["positive"]["variables"].update(mapping[other]["positive"]["variables"])
-
-                        else:
-                            # var == other
-                            mapping[var]["positive"]["variables"].add(other)
-
-                            # Check if other has fixed value
-                            if "value" in mapping[other]["positive"]:
-                                # This is useful - we know var must be equal to this
-                                mapping[var]["positive"]["value"] = mapping[other]["positive"]["value"]
-
-                            # Any negative restrictions on other also apply to var
-                            mapping[var]["negative"]["variables"].update(mapping[other]["negative"]["variables"])
-                            mapping[var]["negative"]["values"].update(mapping[other]["negative"]["values"])
-
-                    else:
-                        # Other is a fixed value
-                        if r["negated"]:
-                            # not var == item
-                            mapping[var]["negative"]["values"].add(other)
-
-                        else:
-                            # var == item
-                            mapping[var]["positive"]["value"] = other
-
-            return mapping
-
         if not self_var and not other_var:
             # Neither are variables
             return self.string == other.string
@@ -792,7 +775,7 @@ class Match(object):
         # Check the restrictions.
         mapping = None
         if self_var:
-            mapping = get_variable_restrictions(self.string, mapping)
+            mapping = context.get_variable_restrictions(self.string, mapping)
             self_map = mapping[self.string]
         else:
             self_map = {
@@ -800,7 +783,7 @@ class Match(object):
             }
 
         if other_var:
-            mapping = get_variable_restrictions(other.string, mapping)
+            mapping = context.get_variable_restrictions(other.string, mapping)
             other_map = mapping[other.string]
         else:
             other_map = {
@@ -889,18 +872,33 @@ class Match(object):
         # Otherwise ok
         return True
 
-    def leaves(self):
-        # Get the leaves of this match
+    def leaves(self, as_dict=False):
+        # Get the leaves of this match. Optionally return as a dictionary with keys corresponding to sub_matches keys
 
         subs = self.get_sub_matches()
         if len(subs) == 0:
+            if as_dict:
+                return dict()
+
             return [self]
 
         leaves = list()
+        if as_dict:
+            leaves = dict()
 
         for key in subs:
             sub = subs[key]
-            leaves.extend(sub.leaves())
+
+            if as_dict:
+                if len(sub.get_sub_matches()) == 0:
+                    leaves[key] = sub
+
+                else:
+                    # Append the leaves of the sub match
+                    leaves.update(sub.leaves(as_dict=True))
+
+            else:
+                leaves.extend(sub.leaves())
 
         return leaves
 
@@ -992,7 +990,8 @@ class Match(object):
 class MatchSet(object):
     # Class for a set of match instances
 
-    def __init__(self, instances=None, negatives=None, complete=True):
+    def __init__(self, instances=None, negatives=None, complete=True, allow_multiple=True, attribute_match=None,
+                 attribute_name=None):
 
         # A set of items in the matchset
         self.instances = instances
@@ -1006,6 +1005,13 @@ class MatchSet(object):
 
         # Whether the match set is complete - i.e. does not contain variables
         self.complete = complete
+
+        # Whether to allow multiple equivalent elements in the set
+        self.allow_multiple = allow_multiple
+
+        # If this is an attribute for a match - note the attribute match and name, to allow for easy comparison later
+        self.attribute_match = attribute_match
+        self.attribute_name = attribute_name
 
     def contains(self, match, context):
         # Check if the set contains the match. Return True if positive, False if negative, or None, if uncertain
@@ -1049,7 +1055,7 @@ class MatchSet(object):
     def add(self, match, context):
         # Add a match to the set, if it's not equivalent to one of the members
 
-        if self.contains(match, context):
+        if (not self.allow_multiple) and self.contains(match, context):
             # We already contain it
             return
 
@@ -1122,26 +1128,36 @@ class MatchSet(object):
     def equivalent(self, other, context):
         # Test equivalence of match sets
 
+        if self.attribute_match is not None and other.attribute_match is not None and \
+                self.attribute_name == other.attribute_name and \
+                self.attribute_match.equivalent(other.attribute_match, context):
+            # Attribute paths align
+            return True
+
         if not (self.complete and other.complete):
-            # Must be consistently complete
+            # Must both be complete to compare
             return False
 
-        if not (len(self.instances) == len(other.instances) and len(self.negatives) == len(other.negatives)):
-            # Size of the sets don't match
-            return False
-
-        # Check the match items in instances
-        for item in self.instances:
-            if not other.contains(item, context):
+        if (not self.allow_multiple) and (not other.allow_multiple):
+            # Neither set admits multiples
+            if not (len(self.instances) == len(other.instances) and len(self.negatives) == len(other.negatives)):
+                # Size of the sets don't match
                 return False
 
-        # Every item in self.instances is in other.instances. Do the same with negatives
-        for item in self.negatives:
-            if other.contains(item, context) is not False:
-                # Other may contain the item
-                return False
+        # Check instances and negatives have a bijection - maps in both directions
+        for first, second in ((self, other), (other, self)):
+            # Check the match items in instances
+            for item in first.instances:
+                if not second.contains(item, context):
+                    return False
+            # Every item in self.instances is in other.instances. Do the same with negatives
 
-        # Every item in self.negatives is in other.negatives.
+            for item in first.negatives:
+                if second.contains(item, context) is not False:
+                    # Other may contain the item
+                    return False
+            # Every item in self.negatives is in other.negatives.
+
         return True
 
     def __str__(self):
@@ -1284,6 +1300,11 @@ class Condition(object):
         if "origin" not in condition_context:
             condition_context["origin"] = match
 
+        # Try the context restrictions
+        if self.test_restrictions(match, context, condition_match, condition_context):
+            # Restrictions give this as True
+            return True
+
         subs = condition_match.get_sub_matches()
 
         if "condition" in subs:
@@ -1297,15 +1318,7 @@ class Condition(object):
             left = self.get_item(equal_subs["left"].string, match, context, condition_context)
             right = self.get_item(equal_subs["right"].string, match, context, condition_context)
 
-            if type(left) is MatchSet and type(right) is MatchSet:
-                # Compare match sets
-                return left.equivalent(right, context)
-
-            if type(left) is not Match:
-                # Items are not match instances - just test direct equality
-                return left == right
-
-            return left.equivalent(right, context)
+            return self.check_equal(left, right, context)
 
         if "membership" in subs or "negative_membership" in subs:
             # Test membership
@@ -1329,8 +1342,14 @@ class Condition(object):
                 # Get the line match
                 item = item.match
 
-            # Desired result is negated XOR is_member
-            return negated ^ match_set.contains(item, context)
+            contains = match_set.contains(item, context)
+
+            if contains is None:
+                # We can't ascertain positive or negative membership
+                return False
+
+            # Otherwise, desired result is negated XOR membership
+            return negated ^ contains
 
         if "negation" in subs:
             # Negation
@@ -1493,6 +1512,91 @@ class Condition(object):
         print(condition_match.pretty_print())
 
         raise Exception("Could not recognise condition.")
+
+    def test_restrictions(self, match, context, condition_match, condition_context):
+        # Test the restrictions in context to try and get a result
+
+        def map_nodes(restriction_node, condition_node):
+            # Map condition node onto restriction node, where items found should be equivalent.
+
+            if not restriction_node.pattern.equivalent(condition_node.pattern):
+                # Patterns don't match
+                return False
+
+            # Look for system condition items
+            if restriction_node.pattern.equivalent(context.system["condition_item"]):
+                # Equivalent to condition item. Get the items and compare
+
+                initial = restriction_node.string
+                remainder = ""
+
+                if "." in restriction_node.string:
+                    # Break the restriction string into parts, and map the initial one
+                    index = restriction_node.string.index(".")
+                    initial = restriction_node.string[:index]
+                    remainder = restriction_node.string[index:]
+
+                # Initial must map from the restriction to the condition variables
+                if initial not in mapping:
+                    return False
+
+                mapped_restriction = mapping[initial] + remainder
+
+                restriction_item = self.get_item(mapped_restriction, match, context, condition_context)
+                condition_item = self.get_item(condition_node.string, match, context, condition_context)
+
+                return self.check_equal(restriction_item, condition_item, context)
+
+            restriction_subs = restriction_node.get_sub_matches()
+            condition_subs = condition_node.get_sub_matches()
+
+            if not len(restriction_subs) == len(condition_subs):
+                # Leaves don't match
+                return False
+
+            for key in restriction_subs:
+                if key not in condition_subs:
+                    # Key in restriction but not in condition
+                    return False
+
+            for key in condition_subs:
+                if key not in restriction_subs:
+                    # Key in condition but not in restriction
+                    return False
+
+            # Keys match, result is True is all sub matches map
+            for key in restriction_subs:
+                if not map_nodes(restriction_subs[key], condition_subs[key]):
+                    return False
+
+            # Otherwise ok
+            return True
+
+        # Map leaves of match to their key (which can be found using get_item)
+        mapping = {m.string: key for key, m in match.leaves(as_dict=True).items()}
+
+        for r in context.restrictions:
+            # r is the restriction match. Try to map condition match onto it, where items are equivalent
+            if map_nodes(r, condition_match):
+                return True
+
+        # Otherwise, no result
+        return False
+
+    @staticmethod
+    def check_equal(left, right, context):
+        # Check if two items are equal
+
+        if type(left) is MatchSet and type(right) is MatchSet:
+            # Compare match sets
+            return left.equivalent(right, context)
+
+        if type(left) is not Match:
+            # Items are not match instances - just test direct equality
+            return left == right
+
+        return left.equivalent(right, context)
+
 
     def maps_onto(self, i, j, context, mapping=None, consistent_with=None):
         # Check if item i maps onto item j. Optionally specify mapping dictionary that needs to be consistent.
@@ -1668,7 +1772,7 @@ class Definition(object):
 class Pattern(object):
     # Parent class for StringPattern and UnionPattern
 
-    def __init__(self, name, parent=None, condition=None, respect_brackets=None):
+    def __init__(self, name, parent=None, condition=None, respect_brackets=None, pre_format=None):
 
         # The pattern name
         self.name = name
@@ -1685,8 +1789,41 @@ class Pattern(object):
         # Note any bracket pairs that should be respected
         self.respect_brackets = respect_brackets
 
+        # Any formatting to be removed from patterns
+        self.pre_format = pre_format
+
         # Track equivalent patterns
         self.equivalent_patterns = set()
+
+    def pre_format_apply(self, s):
+        # Remove formatting in the given string before matching
+
+        if type(s) is not str:
+            # Can't do much about non-strings
+            return s
+
+        if self.pre_format is None:
+            # No formatting
+            return s
+
+        count = 0
+        while True:
+            old_s = s
+
+            for pattern, replacement in self.pre_format.items():
+                s = re.sub(pattern, replacement, s)
+
+            # No changes
+            if s == old_s:
+                break
+
+            count += 1
+
+            if count > 100:
+                # Likely infinite replacing loop
+                raise Exception("Limit exceeded in RegEx replacements for " + s)
+
+        return s
 
     def add_attribute(self, name, value, params=None):
         # Add an attribute to this pattern. Value may be a path or a condition
@@ -1842,9 +1979,9 @@ class StringPattern(Pattern):
 
     def __init__(self, name, pattern, condition=None, is_regex=False, proper_initial_segment=None,
                  variables=None, replacements=None, skip_node=False, value_path="", data_type=None, parent=None,
-                 respect_brackets=None):
+                 respect_brackets=None, pre_format=None):
 
-        Pattern.__init__(self, name, parent, condition, respect_brackets)
+        Pattern.__init__(self, name, parent, condition, respect_brackets, pre_format)
 
         # The pattern string
         self.pattern = pattern
@@ -1982,11 +2119,23 @@ class StringPattern(Pattern):
                 print((debug + 1) * 4 * " ", "Found in history.")
             return self.context_history_match(s, pattern_match, context)
 
+        if pattern_offset == 0:
+
+            formatted = self.pre_format_apply(s)
+            if not s == formatted:
+                # s has been reformatted
+                m = self.match(formatted, context, pattern_offset, pattern_match, non_variable_mapping, shallow, debug)
+
+                if m is not None:
+                    m.string = s
+
+                return m
+
         parent_pattern_match = None
         if self.parent is not None:
 
             # Create a new context with variables in the string_variables
-            new_context = context.get_copy()
+            new_context = copy(context)
             new_context.string_variables.update(self.variables)
 
             parent_pattern_match = self.parent.match(s, new_context, pattern_match=pattern_match, debug=next_debug)
@@ -2155,7 +2304,7 @@ class StringPattern(Pattern):
                     context.add_to_history(s, self, pattern_match, None)
                 return None
 
-        # Here ends the shallow mapping
+        # Here ends the shallow check
         if shallow is True:
             return True
 
@@ -2584,7 +2733,7 @@ class StringPattern(Pattern):
         # Otherwise, we need to get the definitions
 
         # Update the definition context (using a copy)
-        self.definition_context = context.get_copy()
+        self.definition_context = copy(context)
 
         # Get from context definitions that apply to this pattern
         # vars = context.variables
@@ -2677,6 +2826,10 @@ class StringPattern(Pattern):
             remove()
             return False
 
+        if not self.pre_format == other.pre_format:
+            remove()
+            return False
+
         if self.parent is None:
             if other.parent is not None:
                 remove()
@@ -2723,7 +2876,8 @@ class StringPattern(Pattern):
             value_path=self.value_path,
             data_type=self.type,
             parent=deepcopy(self.parent, memodict),
-            respect_brackets=self.respect_brackets
+            respect_brackets=self.respect_brackets,
+            pre_format=self.pre_format
         )
 
         memodict[id(self)] = result
@@ -2738,9 +2892,9 @@ class UnionPattern(Pattern):
     # A union of patterns
 
     def __init__(self, name, patterns, condition=None, skip_node=False, value_path="union_value()", data_type=None,
-                 parent=None, respect_brackets=None):
+                 parent=None, respect_brackets=None, pre_format=None):
 
-        Pattern.__init__(self, name, parent, condition, respect_brackets)
+        Pattern.__init__(self, name, parent, condition, respect_brackets, pre_format)
 
         # The list of patterns
         self.patterns = patterns
@@ -2757,16 +2911,28 @@ class UnionPattern(Pattern):
     def match(self, s, context, pattern_match=None, shallow=None, debug=None):
         # Match s against one of the patterns. Optionally specify only speedy/non-speedy/all patterns.
 
-        # Check history
-        if (s, self, pattern_match) in context.history:
-            return self.context_history_match(s, pattern_match, context)
-
         next_debug = None
         if debug is not None:
             # Debugging
             spaces = debug * 4 * " "
             print(spaces, "Attempting to match", s, " in ", self.name, ", a UnionPattern.")
             next_debug = debug + 1
+
+        # Check history
+        if (s, self, pattern_match) in context.history:
+            if debug is not None:
+                print((debug + 1) * 4 * " ", "Found in history.")
+            return self.context_history_match(s, pattern_match, context)
+
+        formatted = self.pre_format_apply(s)
+        if not s == formatted:
+            # s has been reformatted
+            m = self.match(formatted, context, pattern_match, shallow, debug)
+
+            if m is not None:
+                m.string = s
+
+            return m
 
         string_variables = context.string_variables
         if pattern_match is not None:
@@ -2779,7 +2945,7 @@ class UnionPattern(Pattern):
         if s in string_variables:
             pattern = string_variables[s]
 
-            if self.equivalent(pattern):
+            if self.equivalent(pattern) or pattern in self.nested_options():
                 m = Match(
                     pattern=self,
                     string=s
@@ -2954,6 +3120,10 @@ class UnionPattern(Pattern):
             return False
 
         if not self.respect_brackets == other.respect_brackets:
+            remove()
+            return False
+
+        if not self.pre_format == other.pre_format:
             remove()
             return False
 
@@ -3411,7 +3581,7 @@ class LatticeCompiler(object):
 
         simple_item = StringPattern(
             name="simple_item",
-            pattern="^[a-zA-Z_][[:alnum:]_\[\]]*$",
+            pattern=r"^[a-zA-Z_\[\]\\][[:alnum:]_\[\]\\]*$",
             is_regex=True
         )
 
@@ -3431,6 +3601,7 @@ class LatticeCompiler(object):
             patterns=[simple_item],
             respect_brackets=respect_brackets
         )
+        obj.patterns.append(item)
 
         instances.add_variable("item", item)
 
@@ -3587,25 +3758,6 @@ class LatticeCompiler(object):
 
         obj.patterns.append(condition_object)
 
-        # Attributes
-        attribute = UnionPattern(
-            name="attribute_union",
-            patterns=[
-                item,
-                # StringPattern(
-                #     name="instances",
-                #     pattern="match.instances(args)",
-                #     variables={
-                #         "match": match,
-                #         "args": csa
-                #     },
-                #     proper_initial_segment="never"
-                # ),
-                # variable_name
-            ]
-        )
-        obj.patterns.append(attribute)
-
         # Formal systems
         fs = UnionPattern(
             name="formal_system_union",
@@ -3723,6 +3875,8 @@ class LatticeCompiler(object):
             "comma_separated_arguments": csa,
             "comma_separated_with_parts": cswp,
             "spaces": spaces,
+            "condition_item": item,
+            "condition_inner": condition,
             "condition": condition_object,
             "formal_system_pattern": fs,
             "line_type": line_type,
@@ -4056,7 +4210,7 @@ class LatticeCompiler(object):
                         j += 1
 
                     # Copy the context for a new scope
-                    new_context = context.get_copy()
+                    new_context = copy(context)
 
                     # Parse this line in the new scope
                     self.parse_match(key, match, new_context)

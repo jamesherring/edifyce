@@ -1,5 +1,6 @@
 from website.context import Context
 import website.matching as matching
+from copy import copy
 
 
 class FormalSystem(object):
@@ -23,7 +24,7 @@ class FormalSystem(object):
         for a in self.axioms:
             self.axiom_dict[a.name] = a
 
-        # A list of line types and their behaviour
+        # A list of line types
         self.line_types = line_types
         if self.line_types is None:
             self.line_types = []
@@ -150,18 +151,27 @@ class FormalSystem(object):
                             # Get the keys
                             keys = result.get_by_path(key_path, context)
 
-                            if type(keys) is not list:
-                                # Make a singleton list
-                                keys = [keys]
+                            if type(keys) is matching.Match:
+                                # Make a singleton matchset
 
-                            for key in keys:
-                                key_string = key.string
+                                key_string = keys.string
 
                                 # Get the value using the value path - relative to the key
-                                value = key.get_by_path(value_path, context).get_value(context)
+                                value = keys.get_by_path(value_path, context).get_value(context)
 
                                 # Add to context
-                                context.string_variables[key_string] = value
+                                context.add_by_key(line_type.add_context_type, key_string, value)
+
+                            if type(keys) is matching.MatchSet:
+
+                                for key in keys.instances:
+                                    key_string = key.string
+
+                                    # Get the value using the value path - relative to the key
+                                    value = key.get_by_path(value_path, context).get_value(context)
+
+                                    # Add to context
+                                    context.add_by_key(line_type.add_context_type, key_string, value)
 
                         except Exception as e:
                             proof_line.valid = False
@@ -171,29 +181,45 @@ class FormalSystem(object):
                 if line_type.behaviour == "indent":
                     # Parse the block with a copied context
 
-                    new_context = context.get_copy()
+                    new_context = copy(context)
 
                     # Check for data to add to context
                     key_path = line_type.add_context_key_path
                     value_path = line_type.add_context_value_path
 
-                    if key_path is not None:
+                    if key_path is None:
+
+                        if value_path is not None:
+                            # Add a value without a key - for context parts that are not dictionaries, e.g. restrictions
+                            value = result.get_by_path(value_path, new_context)
+                            new_context.add_by_key(line_type.add_context_type, value=value)
+
+                    else:
 
                         # Get the keys
-                        keys = result.get_by_path(key_path, context)
+                        keys = result.get_by_path(key_path, new_context)
 
-                        if type(keys) is not list:
-                            # Make a singleton list
-                            keys = [keys]
+                        if type(keys) is matching.Match:
+                            # Make a singleton matchset
 
-                        for key in keys:
-                            key_string = key.string
+                            key_string = keys.string
 
                             # Get the value using the value path - relative to the key
-                            value = key.get_by_path(value_path, context).get_value(context)
+                            value = keys.get_by_path(value_path, new_context).get_value(new_context)
 
                             # Add to context
-                            new_context.string_variables[key_string] = value
+                            new_context.add_by_key(line_type.add_context_type, key_string, value)
+
+                        if type(keys) is matching.MatchSet:
+
+                            for key in keys.instances:
+                                key_string = key.string
+
+                                # Get the value using the value path - relative to the key
+                                value = key.get_by_path(value_path, new_context).get_value(new_context)
+
+                                # Add to context
+                                new_context.add_by_key(line_type.add_context_type, key_string, value)
 
                     # Find the next line with this indent
                     j = line_number + 1
@@ -405,7 +431,8 @@ class FormalSystem(object):
 class LineType(object):
     # Class for types of lines in formal proofs
 
-    def __init__(self, name, pattern, behaviour, add_context_key_path=None, add_context_value_path=None):
+    def __init__(self, name, pattern, behaviour, add_context_type=None, add_context_key_path=None,
+                 add_context_value_path=None):
 
         # The name of this line type
         self.name = name
@@ -418,8 +445,14 @@ class LineType(object):
         assert self.behaviour in ("none", "import", "logical", "indent", "definition")
 
         # The data paths to add to context (if any)
+        self.add_context_type = add_context_type
         self.add_context_key_path = add_context_key_path
         self.add_context_value_path = add_context_value_path
+
+        if self.add_context_type is None:
+            self.add_context_type = "string_variables"
+
+        assert self.add_context_type in ("string_variables", "restrictions")
 
         # Attributes
         self.attributes = dict()
