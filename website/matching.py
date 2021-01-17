@@ -34,6 +34,10 @@ class Match(object):
         # The sub_matches
         self.sub_matches = dict()
 
+        # Callable match functions
+        self.fns = ("parent_matches", "has_parent", "find_parent", "get_non_skip_parent", "equivalent",
+                    "replace_equivalent", "leaves", "maps_onto")
+
     def add_submatch(self, name, sub):
         self.sub_matches[name] = sub
         sub.parent_match = self
@@ -101,6 +105,14 @@ class Match(object):
 
     def get_by_path(self, path, context, data_type=None, attribute_name=None):
         # Get the submatch in the given path.
+
+        def find_all(a_str, sub):
+            start = 0
+            while True:
+                start = a_str.find(sub, start)
+                if start == -1: return
+                yield start
+                start += len(sub)  # use start += 1 to find overlapping matches
 
         subs = self.get_sub_matches()
 
@@ -348,23 +360,20 @@ class Match(object):
         if path[:10] == "variables(" and path[-1] == ")":
             # Get the variable in the string
 
-            def find_all(a_str, sub):
-                start = 0
-                while True:
-                    start = a_str.find(sub, start)
-                    if start == -1: return
-                    yield start
-                    start += len(sub)  # use start += 1 to find overlapping matches
-
             # Get all instances of closing brackets
             closings = list(find_all(path[10:], ")"))
 
             system_string = context.system["string"]
             var = None
+            remainder = None
             index = 0
             while var is None and index < len(closings):
                 inner = path[10:10 + closings[index]]
                 var = system_string.match(inner, context)
+
+                # Get any remainder following the var
+                remainder = path[10 + closings[index] + 2:]
+
                 index += 1
 
             if var is None:
@@ -373,7 +382,13 @@ class Match(object):
             # Get the value from the string
             value = var.get_value(context)
 
-            return self.get_by_path(value, context, data_type=data_type, attribute_name=attribute_name)
+            initial = self.get_by_path(value, context, data_type=data_type, attribute_name=attribute_name)
+
+            if remainder:
+                return initial.get_by_path(remainder, context, data_type=data_type, attribute_name=attribute_name)
+
+            # Otherwise, return initial
+            return initial
 
         if path in subs:
             # Child match
@@ -390,6 +405,35 @@ class Match(object):
         if path in self.pattern.attributes:
             # Attribute
             return self.get_attribute(path, context)
+
+        # Attribute function
+        for attr in self.pattern.attributes:
+            index = len(attr)
+            if index < len(path) and path[:index] == attr and path[index] == "(" and path[-1] == ")":
+
+                # Get the argument
+                args = path[index + 1:-1].split(", ")
+                args = [self.get_by_path(arg, context) for arg in args]
+
+                return self.get_attribute(attr, context, params=args)
+
+        # Other functions
+        for fn in self.fns:
+            index = len(fn)
+            if index < len(path) and path[:index] == fn and path[index] == "(" and path[-1] == ")":
+
+                # Get the arguments
+                args = path[index + 1:-1]
+
+                if len(args) == 0:
+                    # No args
+                    return self.call_method(context, fn)
+
+                # Otherwise, split the args
+                args = args.split(", ")
+                args = [self.get_by_path(arg, context) for arg in args]
+
+                return self.call_method(context, fn, args)
 
         if "." in path:
             # Dotted path
@@ -434,6 +478,10 @@ class Match(object):
                         result.append(sub_result)
 
                 return result
+
+            if type(sub_match) is MatchSet:
+                # Need to collect the result as a matchset
+                return sub_match.get_by_path(remainder, context)
 
             return sub_match.get_by_path(remainder, context, data_type)
 
@@ -983,6 +1031,41 @@ class Match(object):
 
         return m
 
+    def call_method(self, context, method_name, args=None):
+        # Call a method with the given name
+
+        assert method_name in self.fns
+
+        # Get the method
+        method = getattr(self, method_name)
+
+        # Get the argument
+        if args is None:
+            # No args
+            args = list()
+
+        # Get the argument names
+        arg_names = list(inspect.signature(method).parameters)
+
+        if len(args) == len(arg_names):
+            # Looks good
+            return method(*args)
+
+        # May be some optional arguments
+        try:
+            return method(*args)
+
+        except Exception:
+            # Error
+            pass
+
+        if len(args) + 1 == len(arg_names) and "context" in arg_names:
+            # Context may be missing
+            index = arg_names.index("context")
+            args.insert(index, context)
+
+        return method(*args)
+
     def __str__(self):
         return str(self.string)
 
@@ -1160,6 +1243,44 @@ class MatchSet(object):
 
         return True
 
+    def get_by_path(self, path, context):
+        # Get some attribute of the matchset according to the given path
+
+        if path[:5] == "each(" and path[-1] == ")":
+            # Apply a condition to each element
+            inner = path[5:-1]
+            condition_match = context.system["condition"].match("Condition(" + inner + ")", context)
+            condition = Condition(condition_match=condition_match)
+
+            return self.each(condition, context)
+
+        result = MatchSet()
+        for m in self.instances:
+            sub_result = m.get_by_path(path, context)
+
+            if type(sub_result) is MatchSet:
+                # Extend the results
+                result = result.union(sub_result, context)
+
+            else:
+                result.add(sub_result, context)
+
+        return result
+
+    def each(self, condition, context):
+        # Check if every element meets a condition
+
+        if not self.complete:
+            # Can't check the missing elements
+            return False
+
+        for item in self.instances:
+            if not condition.check(item, context):
+                # This match fails
+                return False
+
+        return True
+
     def __str__(self):
         str_instances = ", ".join({str(m) for m in self.instances})
         str_negatives = ", ".join({str(m) for m in self.negatives})
@@ -1271,6 +1392,38 @@ class Condition(object):
 
             return initial_match_set.is_subset(inner_match_set, context)
 
+        # Attribute function
+        for attr in match.pattern.attributes:
+
+            if s == attr:
+                # Attribute
+                return match.get_attribute(attr, context)
+
+            index = len(attr)
+            if s[:index] == attr and index < len(s) and s[index] == "(" and s[-1] == ")":
+                # Get the arguments
+                args = s[index + 1:-1].split(", ")
+                args = [self.get_item(arg, match, context, condition_context) for arg in args]
+                return match.get_attribute(attr, context, params=args)
+
+        # Other match functions
+        for fn in match.fns:
+            index = len(fn)
+            if index < len(s) and s[:index] == fn and s[index] == "(" and s[-1] == ")":
+
+                # Get the argument
+                args = s[index + 1:-1]
+
+                if len(args) == 0:
+                    # No args
+                    return match.call_method(context, fn)
+
+                # Otherwise, split the args
+                args = args.split(", ")
+                args = [self.get_item(arg, match, context, condition_context) for arg in args]
+
+                return match.call_method(context, fn, args)
+
         if "." in s:
 
             index = s.index(".")
@@ -1278,8 +1431,7 @@ class Condition(object):
             remainder = s[index + 1:]
 
             initial = self.get_item(initial, match, context, condition_context)
-
-            return initial.get_by_path(remainder, context)
+            return self.get_item(remainder, initial, context, condition_context)
 
         if s == "None":
             return None
@@ -1479,6 +1631,16 @@ class Condition(object):
                 # Otherwise ok
                 return True
 
+            # Try attributes
+            if func_name in item.pattern.attributes:
+                # Looks like an attribute function
+
+                # Get the new arguments
+                arg_parts = func_subs["args"].string.split(", ")
+                args = [self.get_item(arg, match, context, condition_context) for arg in arg_parts]
+
+                return item.get_attribute(func_name, context, params=args)
+
         if "replace_equivalent" in subs:
             # Equivalent up to some instances being replaced with another
 
@@ -1509,8 +1671,6 @@ class Condition(object):
         if "simple_item" in subs:
             return self.get_item(subs["simple_item"].string, match, context, condition_context)
 
-        print(condition_match.pretty_print())
-
         raise Exception("Could not recognise condition.")
 
     def test_restrictions(self, match, context, condition_match, condition_context):
@@ -1519,36 +1679,52 @@ class Condition(object):
         def map_nodes(restriction_node, condition_node):
             # Map condition node onto restriction node, where items found should be equivalent.
 
-            if not restriction_node.pattern.equivalent(condition_node.pattern):
-                # Patterns don't match
-                return False
+            system_item = context.system["condition_item"]
+
+            restriction_is_item = system_item.match(restriction_node.string, context) is not None
+            condition_is_item = system_item.match(condition_node.string, context) is not None
+
+            restriction_subs = restriction_node.get_sub_matches()
+            condition_subs = condition_node.get_sub_matches()
+
+            # If either node has a single sub-match that has the same string - take the sub-match
+            if len(restriction_subs) == 1:
+                sub = list(restriction_subs.values())[0]
+                if sub.string == restriction_node.string:
+                    return map_nodes(sub, condition_node)
+
+            if len(condition_subs) == 1:
+                sub = list(condition_subs.values())[0]
+                if sub.string == condition_node.string:
+                    return map_nodes(restriction_node, sub)
 
             # Look for system condition items
-            if restriction_node.pattern.equivalent(context.system["condition_item"]):
+            if restriction_is_item or condition_is_item:
                 # Equivalent to condition item. Get the items and compare
 
                 initial = restriction_node.string
-                remainder = ""
-
                 if "." in restriction_node.string:
                     # Break the restriction string into parts, and map the initial one
                     index = restriction_node.string.index(".")
                     initial = restriction_node.string[:index]
-                    remainder = restriction_node.string[index:]
 
                 # Initial must map from the restriction to the condition variables
                 if initial not in mapping:
                     return False
 
-                mapped_restriction = mapping[initial] + remainder
+                try:
+                    restriction_item = self.get_item(restriction_node.string, match, context, condition_context_copy)
+                    condition_item = self.get_item(condition_node.string, match, context, condition_context_copy)
 
-                restriction_item = self.get_item(mapped_restriction, match, context, condition_context)
-                condition_item = self.get_item(condition_node.string, match, context, condition_context)
+                    return self.check_equal(restriction_item, condition_item, context)
 
-                return self.check_equal(restriction_item, condition_item, context)
+                except Exception as e:
+                    return False
 
-            restriction_subs = restriction_node.get_sub_matches()
-            condition_subs = condition_node.get_sub_matches()
+            # Otherwise, require matching patterns
+            if not restriction_node.pattern.equivalent(condition_node.pattern):
+                # Patterns don't match
+                return False
 
             if not len(restriction_subs) == len(condition_subs):
                 # Leaves don't match
@@ -1573,7 +1749,9 @@ class Condition(object):
             return True
 
         # Map leaves of match to their key (which can be found using get_item)
-        mapping = {m.string: key for key, m in match.leaves(as_dict=True).items()}
+        mapping = {m.string: m for key, m in match.leaves(as_dict=True).items()}
+        condition_context_copy = copy(condition_context)
+        condition_context_copy.update(mapping)
 
         for r in context.restrictions:
             # r is the restriction match. Try to map condition match onto it, where items are equivalent
@@ -1596,7 +1774,6 @@ class Condition(object):
             return left == right
 
         return left.equivalent(right, context)
-
 
     def maps_onto(self, i, j, context, mapping=None, consistent_with=None):
         # Check if item i maps onto item j. Optionally specify mapping dictionary that needs to be consistent.
@@ -2012,9 +2189,6 @@ class StringPattern(Pattern):
         # Record the last definition this pattern has seen
         self.definition_context = None
 
-        # Is this a fast or a slow match? Updated in self.get_non_variable_locations()
-        self.speedy = self.is_regex
-
         # Record the variable locations for speed
         self.variable_locations = dict()
 
@@ -2074,9 +2248,6 @@ class StringPattern(Pattern):
                 self.non_variable_locations[i] = self.pattern[i:end]
                 i = end
 
-        # Update the speed
-        self.speedy = 0 in self.non_variable_locations
-
         # Update the certainty - the number of non-variable characters
         self.certainty = sum(len(self.non_variable_locations[i]) for i in self.non_variable_locations)
 
@@ -2115,9 +2286,10 @@ class StringPattern(Pattern):
             next_debug = debug + 1
 
         if pattern_offset == 0 and (s, self, pattern_match) in context.history:
+            result = self.context_history_match(s, pattern_match, context)
             if debug is not None:
-                print((debug + 1) * 4 * " ", "Found in history.")
-            return self.context_history_match(s, pattern_match, context)
+                print((debug + 1) * 4 * " ", "Found in history:", result)
+            return result
 
         if pattern_offset == 0:
 
@@ -2132,13 +2304,18 @@ class StringPattern(Pattern):
                 return m
 
         parent_pattern_match = None
-        if self.parent is not None:
+        if pattern_offset == 0 and self.parent is not None:
 
             # Create a new context with variables in the string_variables
             new_context = copy(context)
             new_context.string_variables.update(self.variables)
 
             parent_pattern_match = self.parent.match(s, new_context, pattern_match=pattern_match, debug=next_debug)
+
+            if parent_pattern_match is None:
+                # No match
+                context.add_to_history(s, self, pattern_match, None)
+                return None
 
         if type(s) is UnionPattern:
             # We'd need every pattern in the union to match self. Would be unusual as unions don't normally intersect
@@ -2579,6 +2756,13 @@ class StringPattern(Pattern):
         if part == s[:len(part)]:
             # Skip past the part in s and in the pattern
 
+            if len(s[len(part):]) == 0 and pattern_offset + len(part) == len(self.pattern):
+                # Reached the end of the pattern and string
+                if pattern_offset == 0:
+                    return self.meets_condition(m, pattern_match, context)
+
+                return m
+
             new_non_variable_mapping = {
                 key: [entry - len(part) for entry in non_variable_mapping[key]]
                 for key in non_variable_mapping
@@ -2880,6 +3064,9 @@ class StringPattern(Pattern):
             pre_format=self.pre_format
         )
 
+        result.variable_locations = deepcopy(self.variable_locations, memodict)
+        result.non_variable_locations = self.non_variable_locations
+
         memodict[id(self)] = result
 
         return result
@@ -2909,7 +3096,7 @@ class UnionPattern(Pattern):
         self.skip_node = skip_node
 
     def match(self, s, context, pattern_match=None, shallow=None, debug=None):
-        # Match s against one of the patterns. Optionally specify only speedy/non-speedy/all patterns.
+        # Match s against one of the patterns.
 
         next_debug = None
         if debug is not None:
@@ -2920,9 +3107,10 @@ class UnionPattern(Pattern):
 
         # Check history
         if (s, self, pattern_match) in context.history:
+            result = self.context_history_match(s, pattern_match, context)
             if debug is not None:
-                print((debug + 1) * 4 * " ", "Found in history.")
-            return self.context_history_match(s, pattern_match, context)
+                print((debug + 1) * 4 * " ", "Found in history:", result)
+            return result
 
         formatted = self.pre_format_apply(s)
         if not s == formatted:

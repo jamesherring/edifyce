@@ -1,5 +1,5 @@
 
-let $\alpha$, $\beta$, $\gamma$, $\delta$ be formula
+let $\alpha$, $\beta$, $\gamma$ be formula
 
 # First three axioms the same as in propositional logic
 
@@ -12,8 +12,9 @@ $((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ 
 
 let $x$, $y$ be variable, $t$ be term
 
-# if $t$.is_free_for($x$, $\alpha$):
-    
+
+if $t$.is_free_for($x$, $\alpha$):
+
     $(\forall x \; \alpha \rightarrow \alpha[t/x])$ ref{A4}
 
 
@@ -21,7 +22,7 @@ if $x$ not in $\alpha$.free_variables:
 
     $(\forall x \; (\alpha \rightarrow \beta) \rightarrow (\alpha \rightarrow \forall x \; \beta))$ ref{A5}
 
-    
+
 $\forall x \; x = x$ ref{A6}
 
 
@@ -30,22 +31,6 @@ let $\alpha$, $\beta$ be atomic_formula
 if $\alpha$.replace_equivalent($\beta$, $x$, $y$):
 
     $(x = y \rightarrow (\alpha \rightarrow \beta))$ ref{A7}
-
-define $\beta$ is $\alpha$ with some instances of $x$ replaced with $y$ as $\gamma$
-
-if $\beta$ is $\alpha$ with some instances of $x$ replaced with $y$:
-
-    $(x = y \rightarrow (\alpha \rightarrow \beta))$ ref{A7}
-
-
-
-
-
-
-
-
-
-
 
 
 

@@ -37,12 +37,11 @@ neg = StringPattern(name="negation", pattern="\\neg \\alpha")
 forall = StringPattern(name="forall", pattern="\\forall x \\alpha")
 replacement = StringPattern(name="replacement", pattern="\\alpha[t/x]")
 
-formula = UnionPattern(name="formula", patterns=[atomic_formula, ra, neg, forall, replacement])
-# dollar_formula = StringPattern(name="dollar_formula", pattern="$formula$", skip_node=True, proper_initial_segment="never")
-# dollar_formula.formula = formula
+respect_brackets = {
+    "(": ")"
+}
 
-# Dollar formula or a formula
-# any_formula = UnionPattern(name="formula", patterns=[formula, dollar_formula], skip_node=True)
+formula = UnionPattern(name="formula", patterns=[atomic_formula, ra, neg, forall, replacement], respect_brackets=respect_brackets)
 
 ra.add_variable("\\alpha", formula)
 ra.add_variable("\\beta", formula)
@@ -101,11 +100,12 @@ a3 = StringPattern(
 a3.add_variable("\\alpha", formula)
 a3.add_variable("\\beta", formula)
 
-c = Condition(
-    self.variables("\\alpha").free_variables.each(
-        (not instance == self.x) or \
-        (not instance.has_parent(forall, forall.x.equal_any(self.t.instances(variable)))))
-)
+# c = Condition(
+#     self.variables("\\alpha").free_variables.each(
+#         (not instance == self.x) or \
+#         (not instance.has_parent(forall, forall.x.equal_any(self.t.instances(variable)))))
+# )
+c = Condition(t.is_free_for(self.x, self.variables("\\alpha")))
 a4 = StringPattern(name="A4", pattern="(\\forall x \\alpha \\rightarrow \\alpha[t/x])", condition=c, parent=formula)
 
 a4.add_variable("\\alpha", formula)
@@ -169,8 +169,6 @@ f_join.j = comma_separated_formula
 
 # Variables for with parts
 variable_name = StringPattern(name="variable_name", pattern="^[a-zA-Z0-9\\.\\\\]+$", is_regex=True)
-# dollar_variable = StringPattern(name="dollar_variable", pattern="$v$", skip_node=True, proper_initial_segment="never")
-# dollar_variable.v = formula_variable
 
 # Build comma separated variables
 join = StringPattern(name="join_variable", pattern="j, variable", skip_node=True)

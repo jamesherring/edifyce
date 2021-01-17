@@ -285,7 +285,6 @@ class FormalSystem(object):
                             # Check the formula is an instance of this axiom
                             if axiom.match(formula.string, context) is None:
                                 # Doesn't fit this axiom - step is invalid
-
                                 proof_line.valid = False
                                 proof_line.invalid_message = "Not an instance of " + key + "."
 
