@@ -34,7 +34,7 @@
 
     {% endfor %}
 
-
+    {% comment %}
     <h2>Inference Rules</h2>
 
     {% for rule in system.formal_system.inference_rules %}
@@ -62,6 +62,8 @@
         {% endif %}
 
     {% endfor %}
+
+    {% endcomment %}
 
 {% endblock %}
 

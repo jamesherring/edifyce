@@ -2,8 +2,14 @@
 
 $(function() {
 
-    var editor = new codeEditorClass($("div#ace-container"));
+    var container = $("div#ace-container");
+    var editor = new codeEditorClass(container);
     editor.editor.session.setMode("ace/mode/latex");
+
+    // Set the editor height
+    var y = $(container).offset().top;
+    var height = $(window).height() - y;
+    $(container).css("height", String(height) + "px");
 
     // Get the proof and system ids
     var proof_id = $("#proof_id").text();
@@ -12,6 +18,8 @@ $(function() {
     // Get the output div and build a table class in it
     var output_parent = $("#output");
     var output = new proofDisplayClass(output_parent);
+
+    $(output_parent).css("height", String(height) + "px");
 
     // Get the validation data script
     var validation = JSON.parse(document.getElementById("validation").innerHTML);
@@ -142,7 +150,11 @@ $(function() {
             },
             function(response) {
 
-                console.log(response);
+                // Populate the output with the validation data
+                output.populate(editor.editor.getValue(), response.validation);
+
+                // Parse mathjax
+                MathJax.typeset();
 
             }
         )

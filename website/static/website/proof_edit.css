@@ -6,5 +6,5 @@ div#ace-container, div#output {
 }
 
 div#output {
-    overflow-x: scroll;
+    overflow: scroll;
 }

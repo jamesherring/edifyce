@@ -11,6 +11,10 @@ body {
     padding: 1rem;
 }
 
+div.full-width {
+    margin: 0 -1rem;
+}
+
 .hidden {
     display: none;
 }
@@ -67,4 +71,24 @@ span.indicator[data-valid="True"] {
 }
 span.indicator[data-valid="False"] {
     background-color: #F00;
+}
+
+
+/* Button */
+div.button {
+    display: inline-block;
+    padding: 0.8rem 1.5rem;
+    margin: 0 0.5rem 0 0;
+    background-color: #402080;
+    color: #FFF;
+    border-radius: 0.5rem;
+    cursor: pointer;
+}
+
+/* top right float */
+div.top-right {
+    position: absolute;
+    top: 0;
+    right: 0;
+    padding: 1rem;
 }

@@ -7,14 +7,19 @@
     <p id="proof_id" class="hidden">{{ proof.id }}</p>
     <p id="system_id" class="hidden">{{ system.id }}</p>
 
-    <h1>{{ system.name }} Proof Editor</h1>
+    <h3>
+        <a href="{% url 'website:formal_system' system.id system.slug %}">{{ system.name }}</a> / <a href="{% url 'website:proof' proof.id proof.slug %}">{{ proof.name }}</a>
+    </h3>
 
-    <h2>{{ proof.name }}</h2>
+    <div class="top-right">
+        <a id="save">
+            <div class="button">Save</div>
+        </a>
+    </div>
 
-    <a href="{% url 'website:proof' proof.id proof.slug %}">Back</a><br/>
-    <a id="save">Save</a><br/>
-
-    <div id="ace-container" class="mathjax_ignore">{{ proof.code }}</div><div id="output" class="proof-display"></div>
+    <div class="full-width">
+        <div id="ace-container" class="mathjax_ignore">{{ proof.code }}</div><div id="output" class="proof-display"></div>
+    </div>
 
     {{ proof.proof.validation_data|json_script:"validation" }}
 

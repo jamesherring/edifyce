@@ -170,7 +170,10 @@ def proofSaveView(request):
     # Set the proof code
     proof.set_code(new_code)
 
-    return HttpResponse(json.dumps({"success": True}))
+    return HttpResponse(json.dumps({
+        "success": True,
+        "validation": proof.proof.validation_data()
+    }))
 
     # except Exception as e:
     #     return HttpResponse(json.dumps({
