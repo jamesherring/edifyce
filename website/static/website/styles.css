@@ -11,10 +11,6 @@ body {
     padding: 1rem;
 }
 
-div.full-width {
-    margin: 0 -1rem;
-}
-
 .hidden {
     display: none;
 }
@@ -33,22 +29,31 @@ div.full-width {
 /* Table classes */
 table {
     border-spacing: 0;
+
+    /* Make the indicator column flush with screen right */
+    width: 100%;
 }
 td {
     vertical-align: top;
-    padding: 0 2rem 0 0.5rem;
+    padding: 0 2em 0 0.5em;
     white-space: pre;
 }
 
 td.indicator {
-    padding: 0 0.2rem;
+    padding: 0 0.1em;
+}
+
+td.comment {
+    font-style: italic;
 }
 
 td.line-number {
     text-align: right;
     background-color: #CCC;
-    padding: 0 0.5rem 0 1rem;
+    padding: 0 0.5em 0 0;
+    max-width: 3em;
 }
+
 
 /* Proof display */
 div.proof-display {
@@ -77,8 +82,8 @@ span.indicator[data-valid="False"] {
 /* Button */
 div.button {
     display: inline-block;
-    padding: 0.8rem 1.5rem;
-    margin: 0 0.5rem 0 0;
+    padding: 0.6rem 1.5rem;
+    margin: 0 0.3rem 0 0;
     background-color: #402080;
     color: #FFF;
     border-radius: 0.5rem;
@@ -88,7 +93,6 @@ div.button {
 /* top right float */
 div.top-right {
     position: absolute;
-    top: 0;
-    right: 0;
-    padding: 1rem;
+    top: 0.5rem;
+    right: 0.5rem;
 }

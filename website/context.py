@@ -1,3 +1,5 @@
+from copy import copy
+
 
 class Context(object):
     # A class for the context
@@ -178,6 +180,11 @@ class Context(object):
     def add_to_history(self, key, pattern, pattern_match, match):
         # Add a match to a key, pattern, pattern_match tuple in history (match may be None)
         self.history[(key, pattern, pattern_match)] = match
+
+    def get_from_history(self, key, pattern, pattern_match):
+        # Return a copy of the match found
+        entry = self.history[(key, pattern, pattern_match)]
+        return entry if entry is None else entry.make_copy()
 
     def clear_history(self):
         # Clear context history

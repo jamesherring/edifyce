@@ -8,3 +8,7 @@ div#ace-container, div#output {
 div#output {
     overflow: scroll;
 }
+
+h3 {
+    padding-left: 2rem;
+}

@@ -7,10 +7,13 @@
 
     <p id="system_id" class="hidden">{{ system.id }}</p>
 
-    <h1>{{ system.name }}</h1>
+    <h3><a href="{% url 'website:formal_system' system.id system.slug %}">{{ system.name }}</a></h3>
 
-    <a href="{% url 'website:formal_system' system.id system.slug %}">Back</a><br/>
-    <a id="save">Save</a>
+    <div class="top-right">
+        <a id="save">
+            <div class="button">Save</div>
+        </a>
+    </div>
 
     <div id="ace-container">{{ system.code }}</div>
 
