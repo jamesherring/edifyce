@@ -57,6 +57,7 @@ class Match(object):
         args = self.get_sub_matches()["a"]
 
         if type(args) is not list:
+            print(args)
             # Only one argument - not enough, we need at least a name and a pattern
             raise Exception("At least 2 arguments are required to make a pattern.")
 
@@ -130,6 +131,10 @@ class Match(object):
         if type(path) is Match:
             path_match = path
             path = path.string
+
+        if path == "pattern()":
+            # Get the pattern
+            return self.pattern
 
         if path == "string()":
             # Get the string
@@ -580,14 +585,11 @@ class Match(object):
             # Need to get the correct pattern
             pattern = context.variables[pattern]
 
-        instances = set()
-        negatives = set()
-
         # If incomplete, it's a variable pattern, that may contain an instance of the given pattern
         complete = not (self.string in context.string_variables and self.pattern.may_contain(pattern))
 
         # Create a new MatchSet
-        match_set = MatchSet(instances, negatives, complete)
+        match_set = MatchSet(complete=complete)
 
         if not match_set.complete and pattern.match(self.string, context) is not None:
             # Don't consider this incomplete - as we have the whole variable instance
@@ -596,7 +598,9 @@ class Match(object):
         if self.pattern is pattern:
             # Include self
 
-            if condition is None or condition.check(self, context):
+            condition_context = {"instance": self}
+
+            if condition is None or condition.check(self, context, condition_context=condition_context):
                 match_set.add(self, context)
 
         if shallow and self.pattern is pattern:
@@ -604,6 +608,7 @@ class Match(object):
             pass
 
         else:
+
             # Union with any sub matches
             for key, sub_match_list in self.get_sub_matches().items():
 
@@ -1004,6 +1009,7 @@ class Match(object):
         return True
 
     def make_copy(self):
+        # Copy this node, without the parent match
 
         lower_copy = None
         if self.lower_match is not None:
@@ -1282,8 +1288,8 @@ class MatchSet(object):
         return True
 
     def __str__(self):
-        str_instances = ", ".join({str(m) for m in self.instances})
-        str_negatives = ", ".join({str(m) for m in self.negatives})
+        str_instances = ", ".join(sorted([str(m) for m in self.instances]))
+        str_negatives = ", ".join(sorted([str(m) for m in self.negatives]))
 
         if self.complete:
             return "Complete instances: (" + str_instances + ")"
@@ -1308,6 +1314,10 @@ class Condition(object):
         if type(s) is list:
             # Get each item separately
             return [self.get_item(i, match, context, condition_context) for i in s]
+
+        subs = match.get_sub_matches()
+        if s in subs:
+            return subs[s]
 
         if s[0] == "[" and s[-1] == "]":
             # Looks like we are building a list
@@ -1571,23 +1581,22 @@ class Condition(object):
 
                 parent_match = item.find_parent(parent_pattern)
 
-                if parent_match is None:
-                    # item doesn't have this parent
-                    return False
+                while True:
 
-                if sub_condition is not None:
-                    # Check the sub_condition
+                    if parent_match is None:
+                        # item doesn't have this parent
+                        return False
 
-                    # Add the parent to the context
+                    # Add the parent to a context copy
                     new_condition_context = condition_context.copy()
                     new_condition_context[parent_pattern.name] = parent_match
 
-                    if not sub_condition.check(match, context, condition_context=new_condition_context):
-                        # Sub condition fails
-                        return False
+                    if sub_condition is None or sub_condition.check(match, context, condition_context=new_condition_context):
+                        # Passes any condition
+                        return True
 
-                # Must be ok
-                return True
+                    # Find the next parent match
+                    parent_match = parent_match.find_parent(parent_pattern)
 
             elif func_name == "equal_any":
 
@@ -2273,9 +2282,10 @@ class StringPattern(Pattern):
         # Optionally specify non variable mapping.
 
         # Use shallow=True to not perform nested pattern matching. Quicker to rule out false positives.
-        # Use shallow=False to not perform shallow checks (if already done).
+        # Use shallow=False to not perform shallow checks (assume already done).
 
         next_debug = None
+        spaces = ""
         if debug is not None:
             # Debugging
             spaces = debug * 4 * " "
@@ -2286,9 +2296,9 @@ class StringPattern(Pattern):
             next_debug = debug + 1
 
         if pattern_offset == 0 and (s, self, pattern_match) in context.history:
-            result = self.context_history_match(s, pattern_match, context)
+            result = context.get_from_history(s, self, pattern_match)
             if debug is not None:
-                print((debug + 1) * 4 * " ", "Found in history:", result)
+                print(spaces, 4 * " ", "Found in history:", result)
             return result
 
         if pattern_offset == 0:
@@ -2310,7 +2320,13 @@ class StringPattern(Pattern):
             new_context = copy(context)
             new_context.string_variables.update(self.variables)
 
+            if debug is not None:
+                print(spaces, "Checking parent pattern.")
+
             parent_pattern_match = self.parent.match(s, new_context, pattern_match=pattern_match, debug=next_debug)
+
+            if debug is not None:
+                print(spaces, "Parent pattern match:", parent_pattern_match)
 
             if parent_pattern_match is None:
                 # No match
@@ -2389,7 +2405,8 @@ class StringPattern(Pattern):
 
                 # Check if the whole string is a variable
                 for svar, sub_pattern in string_variables.items():
-                    if s == svar and self.match(sub_pattern, context, debug=next_debug):
+                    # if s == svar and self.match(sub_pattern, context, debug=next_debug):
+                    if s == svar and self.equivalent(sub_pattern):
                         # Match!
                         return self.meets_condition(m, pattern_match, context)
 
@@ -3066,6 +3083,7 @@ class StringPattern(Pattern):
 
         result.variable_locations = deepcopy(self.variable_locations, memodict)
         result.non_variable_locations = self.non_variable_locations
+        result.attributes = deepcopy(self.attributes)
 
         memodict[id(self)] = result
 
@@ -3107,7 +3125,7 @@ class UnionPattern(Pattern):
 
         # Check history
         if (s, self, pattern_match) in context.history:
-            result = self.context_history_match(s, pattern_match, context)
+            result = context.get_from_history(s, self, pattern_match)
             if debug is not None:
                 print((debug + 1) * 4 * " ", "Found in history:", result)
             return result
@@ -3122,6 +3140,10 @@ class UnionPattern(Pattern):
 
             return m
 
+        # Get the nested options
+        nested_options = self.nested_options(path_dict=True)
+        pattern_options = {p: nested_options[p] for p in nested_options if type(p) is StringPattern}
+
         string_variables = context.string_variables
         if pattern_match is not None:
             # This is also a pattern match
@@ -3133,13 +3155,36 @@ class UnionPattern(Pattern):
         if s in string_variables:
             pattern = string_variables[s]
 
-            if self.equivalent(pattern) or pattern in self.nested_options():
+            if self.equivalent(pattern):
                 m = Match(
                     pattern=self,
                     string=s
                 )
                 context.add_to_history(s, self, pattern_match, m)
                 return m
+
+            elif pattern in nested_options:
+                m = Match(
+                    pattern=pattern,
+                    string=s
+                )
+
+                for p in nested_options[pattern]:
+                    next_match = Match(
+                        pattern=p,
+                        string=s
+                    )
+                    next_match.add_submatch(m.pattern.name, m)
+
+                    m = next_match
+
+                context.add_to_history(s, self, pattern_match, m)
+                return m
+
+        if not self.check_brackets(s):
+            # Brackets don't match
+            context.add_to_history(s, self, pattern_match, None)
+            return None
 
         def attempt_match(pattern):
 
@@ -3152,7 +3197,7 @@ class UnionPattern(Pattern):
                 return True
 
             # Otherwise looks like a successful match. Check the chain of union patterns it has to match
-            for p in options[m.pattern]:
+            for p in nested_options[m.pattern]:
                 # Check this union condition
 
                 if not p.meets_condition(m, pattern_match, context, update_history=False):
@@ -3173,22 +3218,9 @@ class UnionPattern(Pattern):
             context.add_to_history(s, self, pattern_match, m)
             return m
 
-        if shallow is not False:
-            # shallow is None or True, need to perform shallow check
-            pass
-        
-        if not self.check_brackets(s):
-            # Brackets don't match
-            context.add_to_history(s, self, pattern_match, None)
-            return None
-
-        # Get the nested options which are string patterns directly
-        nested_options = self.nested_options(path_dict=True)
-        options = {p: nested_options[p] for p in nested_options if type(p) is StringPattern}
-
         deeper_check_patterns = []
 
-        for pattern in options:
+        for pattern in pattern_options:
 
             # Try the pattern with shallow match first
             result = pattern.match(s, context, pattern_match=pattern_match, debug=next_debug, shallow=True)

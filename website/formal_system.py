@@ -612,7 +612,8 @@ class Proof(object):
             "valid": self.valid,
             "lines": [{
                 "valid": line.valid,
-                "logical": (line.line_type is not None) and (line.line_type.behaviour == "logical"),
+                "line_behaviour": line.line_type.behaviour if line.line_type is not None else None,
+                "line_name": line.line_type.name if line.line_type is not None else None,
                 "invalid_message": line.invalid_message
             } for line in self.proof_lines]
         }

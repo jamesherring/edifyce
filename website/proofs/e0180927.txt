@@ -10,17 +10,17 @@ $((\alpha \rightarrow (\beta \rightarrow \gamma)) \rightarrow ((\alpha \rightarr
 $((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ ref{A3}
 
 
-let $x$, $y$ be variable, $t$ be term
+let $x$, $y$, $z$ be variable, $t$ be term
 
 
-if $t$.is_free_for($x$, $\alpha$):
+# if $t$.is_free_for($x$, $\alpha$) and $\beta$ == $\alpha$.replace($x$, $t$, $x$.free):
 
-    $(\forall x \; \alpha \rightarrow \alpha[t/x])$ ref{A4}
+    # $(\forall x \; \alpha \rightarrow \beta)$ ref{A4}
 
 
-if $x$ not in $\alpha$.free_variables:
+# if $x$ not in $\alpha$.free_variables:
 
-    $(\forall x \; (\alpha \rightarrow \beta) \rightarrow (\alpha \rightarrow \forall x \; \beta))$ ref{A5}
+    # $(\forall x \; (\alpha \rightarrow \beta) \rightarrow (\alpha \rightarrow \forall x \; \beta))$ ref{A5}
 
 
 $\forall x \; x = x$ ref{A6}
@@ -30,7 +30,7 @@ let $\alpha$, $\beta$ be atomic_formula
 
 if $\alpha$.replace_equivalent($\beta$, $x$, $y$):
 
-    $(x = y \rightarrow (\alpha \rightarrow \beta))$ ref{A7}
+    # $(x = y \rightarrow (\alpha \rightarrow \beta))$ ref{A7}
 
 
-
+$(\forall x \; \forall y \; x = y \rightarrow \forall y \; x = y[y/y])$ ref{A4}

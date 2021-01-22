@@ -57,20 +57,32 @@ replacement.x = variable
 
 # Define free variables
 variable.add_attribute(name="free", value=Condition(not has_parent(forall, forall.x == self)))
-formula.add_attribute(name="free_variables", value=instances(variable, Condition(free)))
-formula.add_attribute(name="bound_variables", value=instances(variable, Condition(not free)))
+formula.add_attribute(name="variables", value=instances(variable))
+formula.add_attribute(name="free_variables", value=instances(variable, Condition((not instance.parent().pattern() == forall) and free)))
+formula.add_attribute(name="bound_variables", value=instances(variable, Condition((not instance.parent().pattern() == forall) and not free)))
 
 c = Condition(
-    formula.free_variables.each(
-        (not instance == variable) or \
+    alpha.free_variables.each(
+        (not instance == x) or \
         (not instance.has_parent(forall, forall.x.equal_any(self.instances(variable)))))
 )
 
 term.add_attribute(
     name="is_free_for",
-    params=["variable", "formula"],
+    params=["x", "alpha"],
     value=c
 )
+
+
+with "x", "y", "z" as variable, "t1" as term, "A" as formula:
+    
+    t = term.match("x")
+    var = variable.match("y")
+    f = formula.match("(\\forall x \\forall y x = y \\rightarrow \\forall y x = y)")
+    
+    # print(f.free_variables)
+    print(t.is_free_for(var, f))
+    
 
 a1 = StringPattern(
     name="A1",
@@ -100,11 +112,6 @@ a3 = StringPattern(
 a3.add_variable("\\alpha", formula)
 a3.add_variable("\\beta", formula)
 
-# c = Condition(
-#     self.variables("\\alpha").free_variables.each(
-#         (not instance == self.x) or \
-#         (not instance.has_parent(forall, forall.x.equal_any(self.t.instances(variable)))))
-# )
 c = Condition(t.is_free_for(self.x, self.variables("\\alpha")))
 a4 = StringPattern(name="A4", pattern="(\\forall x \\alpha \\rightarrow \\alpha[t/x])", condition=c, parent=formula)
 
@@ -228,17 +235,6 @@ define_pattern.higher = StringPattern(name="anything", pattern="^.*$", is_regex=
 define_pattern.lower = StringPattern(name="anything", pattern="^.*$", is_regex=True)
 define_line = LineType(name="define line", pattern=define_pattern, behaviour="definition")
 
-
-with "x", "y", "z" as variable, "t1" as term, "A" as formula:
-    
-    t = term.match("y")
-    var = variable.match("y")
-    f = formula.match("(\\forall y x = y \\rightarrow z = z)")
-    print(f)
-    
-    print(t.is_free_for(var, f))
-    
-
     
 # Make modus ponens
 mp_0 = formula
@@ -304,6 +300,7 @@ context_variables = {
     "predicate": predicate,
     "equal": equal,
     "atomic_formula": atomic_formula,
+    "forall": forall,
     "formula": formula
 }
 

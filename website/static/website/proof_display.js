@@ -79,6 +79,10 @@ function proofDisplayClass(parent) {
         }
         $(row).append(line_cell);
 
+        if (data && data.line_name == "comment") {
+            $(line_cell).addClass("comment");
+        }
+
         if (ref) {
             var ref_cell = $("<td>" + ref + "</td>");
             $(row).append(ref_cell);
@@ -97,7 +101,7 @@ function proofDisplayClass(parent) {
         // Get validation columns
         var colour = "#F00";
         if (data.valid) {
-            if (!data.logical) {
+            if (!(data.line_behaviour == "logical")) {
                 // Line is valid, but not logical, so no need for any feedback
                 return;
             }
@@ -107,10 +111,11 @@ function proofDisplayClass(parent) {
         var indicator_cell = $("<td class='indicator' style='background-color: " + colour + "'></td>");
         $(row).append(indicator_cell);
 
+        /*
         if (data.invalid_message) {
             var message_cell = $("<td>" + data.invalid_message + "</td>");
             $(row).append(message_cell);
-        }
+        }*/
 
     }
 

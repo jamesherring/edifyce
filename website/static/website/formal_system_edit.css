@@ -1,0 +1,10 @@
+
+div#ace-container {
+    width: 100%;
+    display: inline-block;
+    vertical-align: top;
+}
+
+h3 {
+    padding-left: 2rem;
+}
