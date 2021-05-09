@@ -96,3 +96,36 @@ div.top-right {
     top: 0.5rem;
     right: 0.5rem;
 }
+
+
+/* Tooltips */
+.tooltip {
+  position: relative;
+}
+
+.tooltip .tooltiptext {
+    visibility: hidden;
+    background-color: black;
+    color: #fff;
+    text-align: center;
+    border-radius: 6px;
+    padding: 0.2rem 0.5rem;
+    position: absolute;
+    z-index: 1;
+    top: -0.1rem;
+    right: 0.8rem;
+}
+
+.tooltip .tooltiptext::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 100%;
+    margin-top: -5px;
+    border-width: 5px;
+    border-style: solid;
+    border-color: transparent transparent transparent black;
+}
+.tooltip:hover .tooltiptext {
+    visibility: visible;
+}

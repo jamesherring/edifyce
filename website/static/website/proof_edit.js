@@ -22,12 +22,13 @@ $(function() {
     $(output_parent).css("height", String(height) + "px");
 
     // Get the validation data script
-    var validation = JSON.parse(document.getElementById("validation").innerHTML);
-    output.populate(editor.editor.getValue(), validation);
+    var proof_data = JSON.parse(document.getElementById("proof_data").innerHTML);
+    output.populate(proof_data);
 
 
     function validate_proof() {
         // Validate the proof
+
         AJAX(
             "/proof/ajax/validate/",
             {
@@ -37,7 +38,7 @@ $(function() {
             function(response) {
 
                 // Populate the output with the validation data
-                output.populate(editor.editor.getValue(), response.validation);
+                output.populate(response.data);
 
                 // Parse mathjax
                 MathJax.typeset();
@@ -151,7 +152,7 @@ $(function() {
             function(response) {
 
                 // Populate the output with the validation data
-                output.populate(editor.editor.getValue(), response.validation);
+                output.populate(response.data);
 
                 // Parse mathjax
                 MathJax.typeset();

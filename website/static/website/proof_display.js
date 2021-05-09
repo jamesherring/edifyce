@@ -6,8 +6,8 @@ function proofDisplayClass(parent) {
         $(this.parent).empty();
     }
 
-    this.populate = function(code, data) {
-        // Populate the table with the given code. Provide optional validation data
+    this.populate = function(data) {
+        // Populate the table with the given data.
 
         // First clear the table
         this.clear();
@@ -16,44 +16,33 @@ function proofDisplayClass(parent) {
         this.table = $("<table></table>");
         $(this.parent).append(this.table);
 
-        // Sort the code into lines
-        var lines = code.split("\n");
-
         // Add a row for each line
-        for (var i = 0; i < lines.length; i++) {
-            if (data) {
-                this.add_row(i + 1, lines[i], data.lines[i]);
-            } else {
-                this.add_row(i + 1, lines[i]);
-            }
+        for (var i = 0; i < data.lines.length; i++) {
+            this.add_row(i + 1, data.lines[i]);
         }
 
     }
 
-    this.add_row = function(line_number, line, data) {
+    this.add_row = function(line_number, data) {
         // Add a row to the table with the given line. Provide optional validation data
 
-        // First trim trailing whitespace
-        line = line.replace(/\s+$/, "");
+        // Get the display value and trim trailing whitespace
+        var line = " ".repeat(data.indent) + data.display.replace(/\s+$/, "");
 
         // Check if the line contains a reference of the form "ref{...}"
         var index = line.indexOf("ref{");
 
-        // Get line variables
-        var result = this.get_line_variables(line);
-        var vars = result[0];
-        line = result[1];
-
+        // Get label and reference if they exist
         var ref = "";
-        if (vars.ref) {
+        if (data.reference) {
             // There is a reference
-            ref = "(" + vars.ref + ")";
+            ref = "(" + data.reference + ")";
         }
 
         var label = "";
-        if (vars.label) {
+        if (data.label) {
             // There is a label
-            label = "(" + vars.label + ")";
+            label = "(" + data.label + ")";
         }
 
         // Calculate the colspan.
@@ -93,15 +82,10 @@ function proofDisplayClass(parent) {
             $(row).append(label_cell);
         }
 
-        if (!data) {
-            // No indicator data
-            return;
-        }
-
         // Get validation columns
         var colour = "#F00";
         if (data.valid) {
-            if (!(data.line_behaviour == "logical")) {
+            if (!(data.behaviour == "logical")) {
                 // Line is valid, but not logical, so no need for any feedback
                 return;
             }
@@ -111,71 +95,70 @@ function proofDisplayClass(parent) {
         var indicator_cell = $("<td class='indicator' style='background-color: " + colour + "'></td>");
         $(row).append(indicator_cell);
 
-        /*
+
         if (data.invalid_message) {
-            var message_cell = $("<td>" + data.invalid_message + "</td>");
-            $(row).append(message_cell);
-        }*/
+            var message_cell = $("<span class='tooltiptext'>" + data.invalid_message + "</span>");
+            $(indicator_cell).append(message_cell);
+            $(indicator_cell).addClass("tooltip");
+        }
 
     }
 
-    this.get_line_variables = function(row, vars) {
-        // Get a variable dictionary from the row
+//    this.get_line_variables = function(row, vars) {
+//        // Get a variable dictionary from the row
+//
+//        // Create the dictionary
+//        var vars = vars || {};
+//
+//        if (!(row.slice(-1) == "}")) {
+//            return [vars, row];
+//        }
+//
+//        // Work backwards to find the corresponding open curly brace
+//
+//        var index = row.length - 2;
+//        var depth = 1;
+//        while (index >= 0) {
+//            if (row[index] == "{") {
+//                depth -= 1;
+//                if (depth == 0) {
+//                    // Found
+//                    break;
+//                }
+//            } else if (row[index] == "}") {
+//                depth += 1;
+//            }
+//            index--;
+//        }
+//
+//        var open_brace_index = index;
+//
+//        // Work backwards to find the next space
+//        while (index >= 0) {
+//            if (row[index] == " ") {
+//                // Found the space
+//                break;
+//            }
+//            index--;
+//        }
+//
+//        // Found the varname
+//        var varname = row.slice(index + 1, open_brace_index);
+//        var value = row.slice(open_brace_index + 1, -1);
+//
+//        vars[varname] = value;
+//
+//        if (index == -1) {
+//            return [vars, row];
+//        }
+//
+//        // Otherwise trim the row and look for any more vars
+//        row = row.slice(0, index);
+//
+//        return this.get_line_variables(row, vars);
+//
+//    }
 
-        // Create the dictionary
-        var vars = vars || {};
-
-        if (!(row.slice(-1) == "}")) {
-            return [vars, row];
-        }
-
-        // Work backwards to find the corresponding open curly brace
-
-        var index = row.length - 2;
-        var depth = 1;
-        while (index >= 0) {
-            if (row[index] == "{") {
-                depth -= 1;
-                if (depth == 0) {
-                    // Found
-                    break;
-                }
-            } else if (row[index] == "}") {
-                depth += 1;
-            }
-            index--;
-        }
-
-        var open_brace_index = index;
-
-        // Work backwards to find the next space
-        while (index >= 0) {
-            if (row[index] == " ") {
-                // Found the space
-                break;
-            }
-            index--;
-        }
-
-        // Found the varname
-        var varname = row.slice(index + 1, open_brace_index);
-        var value = row.slice(open_brace_index + 1, -1);
-
-        vars[varname] = value;
-
-        if (index == -1) {
-            return [vars, row];
-        }
-
-        // Otherwise trim the row and look for any more vars
-        row = row.slice(0, index);
-
-        return this.get_line_variables(row, vars);
-
-    }
-
-    // Add the parameters and do an initial populate based on the contents of the parent
     this.parent = parent;
-    this.populate($(parent).html());
 
 }

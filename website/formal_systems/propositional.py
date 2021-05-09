@@ -16,11 +16,11 @@ ra.add_variable("\\beta", formula)
 neg.add_variable("\\alpha", formula)
 
 # Dollar formulas - for TeX parsing
-dollar_formula = StringPattern(name="dollar_formula", pattern="$formula$", skip_node=True, proper_initial_segment="never")
-dollar_formula.formula = formula
+# dollar_formula = StringPattern(name="dollar_formula", pattern="$formula$", skip_node=True, proper_initial_segment="never")
+# dollar_formula.formula = formula
 
 # Dollar formula or a formula
-any_formula = UnionPattern(name="formula", patterns=[formula, dollar_formula], skip_node=True)
+# any_formula = UnionPattern(name="formula", patterns=[formula, dollar_formula], skip_node=True)
 
 a1 = StringPattern(
     name="A1",
@@ -50,6 +50,11 @@ a3 = StringPattern(
 a3.add_variable("\\alpha", formula)
 a3.add_variable("\\beta", formula)
 
+pre_format = {
+    "(?P<char>[^\s])\s\s+": "\\g<char> ",
+    "\\$(?P<inner>.*?)\\$": "\\g<inner>"
+}
+
 # Make the import line
 import_pattern = StringPattern(name="import", pattern="import path as reference")
 import_pattern.path = StringPattern(name="import_path", pattern="^[a-zA-Z0-9\._]+$", is_regex=True)
@@ -70,28 +75,26 @@ label = StringPattern(name="label", pattern=" label{ref}")
 label.ref = StringPattern(name="reference", pattern="^[a-zA-Z0-9_,\.]+$", is_regex=True)
 label_union = UnionPattern(name="label_union", patterns=[empty, label])
 
-logical_pattern = StringPattern(name="logical_pattern", pattern="Sformula ref{refs}label")
+logical_pattern = StringPattern(name="logical_pattern", pattern="Sformula ref{refs}label", pre_format=pre_format)
 logical_pattern.S = empty_pattern
 logical_pattern.refs = StringPattern(name="reference", pattern="^[a-zA-Z0-9_,\. ]+$", is_regex=True)
-logical_pattern.formula = dollar_formula
+logical_pattern.formula = formula
 logical_pattern.label = label_union
 logical_line = LineType(name="Reference", pattern=logical_pattern, behaviour="logical")
 
 # Build comma separated formulae
 f_join = StringPattern(name="join_formula", pattern="j, formula", skip_node=True)
-f_join.formula = any_formula
-comma_separated_formula = UnionPattern(name="csf", patterns=[any_formula, f_join], skip_node=True)
+f_join.formula = formula
+comma_separated_formula = UnionPattern(name="csf", patterns=[formula, f_join], skip_node=True)
 f_join.j = comma_separated_formula
 
 # Variables for with parts
-variable = StringPattern(name="formula_variable_name", pattern="^[a-zA-Z0-9\\.\\\\]+$", is_regex=True)
-dollar_variable = StringPattern(name="dollar_variable", pattern="$v$", skip_node=True, proper_initial_segment="never")
-dollar_variable.v = variable
+variable_name = StringPattern(name="variable_name", pattern="^[a-zA-Z0-9\\.\\\\]+$", is_regex=True)
 
 # Build comma separated variables
-join = StringPattern(name="join_variable", pattern="j, variable", skip_node=True)
-join.variable = dollar_variable
-csv = UnionPattern(name="comma_separated_variables", patterns=[join, dollar_variable], skip_node=True)
+join = StringPattern(name="join_variable", pattern="j, v", skip_node=True)
+join.v = variable_name
+csv = UnionPattern(name="comma_separated_variables", patterns=[join, variable_name], skip_node=True)
 join.j = csv
 
 let_part = StringPattern(name="let_part", pattern="csv be pattern", proper_initial_segment="never")
@@ -105,18 +108,18 @@ cslp = UnionPattern(name="cslp", patterns=[join_lp, let_part], skip_node=True)
 join_lp.j = cslp
 
 # Build with line - for introducing variable patterns
-let_pattern = StringPattern(name="let", pattern="Slet cslp", proper_initial_segment="never")
+let_pattern = StringPattern(name="let", pattern="Slet cslp", proper_initial_segment="never", pre_format=pre_format)
 let_pattern.S = empty_pattern
 let_pattern.cslp = cslp
 let_line = LineType(
     name="let",
     pattern=let_pattern,
     behaviour="none",
-    add_context_key_path="self.let_part.v",
+    add_context_key_path="self.let_part.instances(variable_name)",
     add_context_value_path="non_skip_parent().pattern"
 )
 
-if_pattern = StringPattern(name="if", pattern="Sif csf:", proper_initial_segment="never")
+if_pattern = StringPattern(name="if", pattern="Sif csf:", proper_initial_segment="never", pre_format=pre_format)
 if_pattern.S = empty_pattern
 if_pattern.csf = comma_separated_formula
 if_line = LineType(name="if line", pattern=if_pattern, behaviour="indent")
@@ -188,12 +191,18 @@ c = Condition(
 )
 definition = InferenceRule(name="Definition", label="DEF", antecedents=[formula], deduction=formula, condition=c)
 
+# Context variables
+context_variables = {
+    "formula": formula,
+    "variable_name": variable_name
+}
+
 # Create the formal system
 propositional = FormalSystem(
     name="Propositional Logic",
     axioms=[a1, a2, a3],
     line_types=[import_line, empty_line, comment_line, logical_line, let_line, if_line, define_line],
     inference_rules=[mp, if_rule, dt_1, dt_2, thinning, theorem, definition],
-    context_variables={"formula": formula}
+    context_variables=context_variables
 )
 system["formal_system"] = propositional

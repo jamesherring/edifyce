@@ -1,13 +1,12 @@
 from django.shortcuts import render
 from django.http import HttpResponse
+from django.views.decorators.csrf import requires_csrf_token
 import json
 from .models import *
 
 
 def indexView(request):
     # Index view
-
-    # formal_systems = FormalSystemModel.objects.all()
 
     return render(request, "website/index.html", {
         "formal_systems": FormalSystemModel.objects.all()
@@ -66,6 +65,7 @@ def formalSystemEditView(request, system_id, system_slug):
     })
 
 
+@requires_csrf_token
 def formalSystemSaveView(request):
     # Ajax view to save a formal system code
 
@@ -101,6 +101,7 @@ def proofView(request, proof_id, proof_slug):
     })
 
 
+@requires_csrf_token
 def proofCreateView(request, system_id, system_slug):
     # Form for creating a proof
 
@@ -111,6 +112,7 @@ def proofCreateView(request, system_id, system_slug):
     })
 
 
+@requires_csrf_token
 def proofCreateSubmitView(request):
     # Ajax submission to create a proof
 
@@ -144,6 +146,7 @@ def proofCreateSubmitView(request):
         }))
 
 
+@requires_csrf_token
 def proofEditView(request, proof_id, proof_slug):
     # Edit view for a proof
 
@@ -156,6 +159,7 @@ def proofEditView(request, proof_id, proof_slug):
     })
 
 
+@requires_csrf_token
 def proofSaveView(request):
     # Ajax view to save a proof
 
@@ -172,7 +176,7 @@ def proofSaveView(request):
 
     return HttpResponse(json.dumps({
         "success": True,
-        "validation": proof.proof.validation_data()
+        "data": proof.proof.data()
     }))
 
     # except Exception as e:
@@ -182,6 +186,7 @@ def proofSaveView(request):
     #     }))
 
 
+@requires_csrf_token
 def proofValidateView(request):
     # Ajax view to validate a proof
 
@@ -200,7 +205,7 @@ def proofValidateView(request):
     # Return the results
     return HttpResponse(json.dumps({
         "success": True,
-        "validation": proof.validation_data()
+        "data": proof.data()
     }))
 
     # except Exception as e:

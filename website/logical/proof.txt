@@ -1,0 +1,13 @@
+let A, B be formula
+
+(neg A rightarrow (neg B rightarrow neg A)) ref{A1}
+
+if neg A:
+
+    (neg B rightarrow neg A) ref{DT1, 3}
+
+    ((neg B rightarrow neg A) rightarrow (A rightarrow B)) ref{A3}
+
+    (A rightarrow B) ref{MP, 7, 9}
+
+(neg A rightarrow (A rightarrow B)) ref{DT2, 11}

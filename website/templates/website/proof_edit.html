@@ -19,7 +19,7 @@
 
     <div id="ace-container" class="mathjax_ignore">{{ proof.code }}</div><div id="output" class="proof-display"></div>
 
-    {{ proof.proof.validation_data|json_script:"validation" }}
+    {{ proof.proof.data|json_script:"proof_data" }}
 
 {% endblock %}
 
