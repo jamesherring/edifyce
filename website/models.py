@@ -5,7 +5,7 @@ from django.dispatch import receiver
 from picklefield.fields import PickledObjectField
 import random
 from slugify import slugify
-from website.matching import LatticeCompiler
+from website.logical.compiler import compile
 
 
 def id_gen(length=8, chars="0123456789abcdef"):
@@ -63,7 +63,7 @@ class FormalSystemModel(models.Model):
 
     def path_to_file(self):
         # Get the path to the file defining this formal system
-        return "website/formal_systems/" + self.slug + ".py"
+        return "website/formal_systems/" + self.id + "/" + self.slug + ".txt"
 
     def code(self):
         # Get the code for this formal system
@@ -78,8 +78,7 @@ class FormalSystemModel(models.Model):
             f.write(code)
 
         # Refresh the formal system instance according to the file
-        compiler = LatticeCompiler()
-        self.formal_system = compiler.initiate_formal_system(path_to_file=self.path_to_file())
+        self.formal_system = compile(code)
 
         self.save()
 

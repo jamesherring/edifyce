@@ -13,9 +13,10 @@ $((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ 
 let $x$, $y$, $z$ be variable, $t$ be term
 
 
-# if $t$.is_free_for($x$, $\alpha$) and $\beta$ == $\alpha$.replace($x$, $t$, $x$.free):
+if $t$.is_free_for($x$, $\alpha$) and $\beta$ == $\alpha$.replace($x$, $t$, $x$.free):
 
-    # $(\forall x \; \alpha \rightarrow \beta)$ ref{A4}
+    $(\forall x \; \alpha \rightarrow \beta)$ ref{A4} label{B4}
+
 
 
 # if $x$ not in $\alpha$.free_variables:
@@ -34,3 +35,8 @@ if $\alpha$.replace_equivalent($\beta$, $x$, $y$):
 
 
 $(\forall x \; \forall y \; x = y \rightarrow \forall y \; x = y[y/y])$ ref{A4}
+
+
+# Inference Rules
+
+from $\Gamma \vdash \alpha$ and $\Gamma \vdash (\alpha \rightarrow \beta)$ deduce $\Gamma \vdash\beta$

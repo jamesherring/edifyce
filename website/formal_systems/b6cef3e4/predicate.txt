@@ -1,0 +1,258 @@
+
+FormalSystem Predicate:
+
+    # Variables and constants are abstract patterns
+    Abstract variable, constant
+    
+    # Create a format dictionary for tex
+    Format tex:
+        # Treat multiple spaces as a single space
+        (?P<char>[^\s])\s\s+: \g<char>\s
+        
+        # Ignore $...$ surrounding formulae
+        \$(?P<inner>.*?)\$: \g<inner>
+        
+        # Ignore \ characters
+        (?P<char>[^\\])\\: \g<char>
+
+    Regex integer:
+        ^(?:0|[1-9][0-9]*)$
+
+    Regex variable_name:
+        ^[a-zA-Z][a-zA-Z0-9]*$
+
+    UnionPattern comma_separated_variable_names:
+        with var as variable_name, csv as comma_separated_variable_names:
+            var
+            csv, var
+
+    UnionPattern term:
+        variable
+        constant
+
+    UnionPattern comma_separated_terms:
+        with t as term, cst as comma_separated_terms:
+            t
+            cst, t
+
+    comma_separated_terms.terms():
+        instances(term)
+
+    term:
+        Pattern function:
+            with i as integer, T as comma_separated_terms:
+                f_i(T)
+
+    Pattern equal:
+        with t_1, t_2 as term:
+            t_1 = t_2
+
+    UnionPattern atomic_formula:
+        equal
+        with i as integer, T as comma_separated_terms:
+            P_i(T)
+
+    Pattern rightarrow:
+        (alpha rightarrow beta)
+
+    Pattern not:
+        neg alpha
+
+    Pattern forall:
+        with x as variable:
+            forall x alpha
+
+    UnionPattern formula:
+        atomic_formula
+        rightarrow
+        not
+        forall
+        
+    # Apply tex formatting to formula
+    formula.format:
+        tex
+
+    # Add formula as variable in recursive patterns
+    rightarrow.add_variables:
+        alpha: formula
+        beta: formula
+
+    not.add_variables:
+        alpha: formula
+
+    forall.add_variables:
+        alpha: formula
+
+    UnionPattern comma_separated_formulae:
+        with f as formula, csf as comma_separated_formulae:
+            f
+            csf, f
+
+    variable.free():
+        not has_parent(f as forall; f.x == self)
+
+    formula.free_variables():
+        instances(v as variable; v.free)
+
+    formula.bound_variables():
+        instances(v as variable; (not v.free) and (not v.parent().pattern() == forall))
+
+    term.is_free_for(x as variable, alpha as formula):
+        alpha.free_variables.each(instance):
+            (not instance == x) or (not instance.has_parent(f as forall; f.x.equal_any(self.instances(variable))))
+
+    # Create a default proof context
+    ProofContext:
+        given: set()
+        string_variables: dict()
+        
+    Regex reference:
+        ^[a-zA-Z0-9_,\. ]+$
+
+    UnionPattern logical_pattern:
+        with fo as formula, refs as reference, label_ref as reference:
+            fo ref{refs}
+            fo ref{refs} label{label_ref}
+            
+    logical_pattern.formula():
+        # Get the formula regardless of the option
+        union_submatch().fo
+        
+    logical_pattern.reference():
+        # Get any reference
+        union_submatch().refs.string()
+        
+    logical_pattern.label():
+        # Get any label
+        union_submatch().label_ref.string()
+        
+    logical_pattern.display():
+        # The display value - ignore references and labels
+        union_submatch().fo.string()
+
+    # Proof lines
+    LineType logical:
+        pattern: logical_pattern
+        behaviour: logical
+
+    Pattern let_pattern:
+        with csv as comma_separated_variable_names, p as variable_name:
+            let csv be p
+            
+    let_pattern.format:
+        tex
+
+    let_pattern.keys():
+        csv.instances(variable_name)
+
+    LineType let:
+        pattern: let_pattern
+        behaviour: none
+        context.string_variables:
+            # Extend with all the keys
+            match.keys: match.p.lookup()
+
+    Regex comment_pattern:
+        ^#.*$
+
+    LineType comment:
+        pattern: comment_pattern
+        behaviour: none
+
+    Pattern if_pattern:
+        with csf as comma_separated_formulae:
+            if csf:
+                
+    if_pattern.format:
+        tex
+
+    if_pattern.parts():
+        csf.shallow_instances(formula)
+
+    LineType if:
+        pattern: if_pattern
+        behaviour: indent
+        context.given:
+            # Add pattern parts to given set
+            union: match.parts
+
+    with alpha, beta as formula:
+        InferenceRule modus_ponens:
+            label:
+                MP
+
+            antecedents:
+                alpha
+                (alpha rightarrow beta)
+            deduction:
+                beta
+
+            condition:
+                # Conditional on the deduction given set containing the antecedent given sets
+                antecedents[0].given.union(antecedents[1].given).issubset(deduction.given)
+                
+            format:
+                tex
+
+        InferenceRule deduction_theorem_1:
+            label:
+                DT1
+
+            antecedents:
+                (alpha rightarrow beta)
+            deduction:
+                beta
+
+            condition:
+                antecedents[0].given.issubset(deduction.given) and alpha in deduction.given
+                
+            format:
+                tex
+
+        InferenceRule deduction_theorem_2:
+            label:
+                DT2
+
+            antecedents:
+                beta
+
+            deduction:
+                (alpha rightarrow beta)
+
+            condition:
+                deduction.given.union(set(alpha)) == antecedents[0].given
+                
+            format:
+                tex
+
+        InferenceRule thinning:
+            label:
+                T
+
+            antecedents:
+                alpha
+
+            deduction:
+                alpha
+
+            condition:
+                antecedents[0].given.issubset(deduction.given)
+                
+            format:
+                tex
+
+        InferenceRule theorem:
+            label:
+                Th
+
+            antecedents:
+                alpha
+
+            deduction:
+                beta
+
+            condition:
+                antecedents[0].maps_onto(deduction)
+                
+            format:
+                tex
