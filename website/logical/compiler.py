@@ -693,8 +693,11 @@ class AbstractSyntaxTree(object):
                     return
 
                 elif stripped == "condition:":
-                    # Don't worry about conditions for now
-                    return
+                    # Create a condition for the rule
+
+                    # Start with an empty condition
+                    new_object = Condition(string="")
+                    current_object.condition = new_object
 
                 elif stripped == "format:":
                     # Create a format dictionary
@@ -724,6 +727,12 @@ class AbstractSyntaxTree(object):
                 value_string = stripped[index + 2:]
 
                 current_object[key] = value_string
+
+            elif type(current_object) is Condition:
+                # Apply condition text
+
+                current_object.string = stripped
+                current_object.parse()
 
             else:
 
