@@ -92,7 +92,7 @@ class FormalSystem(object):
             line_number = line_number_offset + i + 1
 
             # Create a proof line for this line
-            proof_line = proof.add_proof_line(line)
+            proof_line = proof.add_proof_line(line, proof_context)
 
             if proof_line.empty:
                 # Ignore blank lines
@@ -426,6 +426,45 @@ class InferenceRule(object):
         # Deduction indentation relative to antecedents
         self.indent = indent
 
+    def get_by_path(self, path, proof_context):
+        # Get information from the given path
+
+        initial, remainder = parse_path(path)
+
+        if remainder:
+            # Chain the parts
+            return self.get_by_path(initial, proof_context).get_by_path(remainder, proof_context)
+
+        # Otherwise, only one part
+
+        if path[:12] == "antecedents[" and path[-1] == "]":
+            # Only if this is the whole path
+
+            try:
+                index = int(path[12:-1])
+
+                if "antecedents" in proof_context:
+                    return proof_context["antecedents"][index]
+
+                else:
+                    return self.antecedents[index]
+
+            except Exception as e:
+                raise Exception("Could not parse path: '" + path + "'.")
+
+        if path == "deduction":
+            # Get the deduction
+            if "deduction" in proof_context:
+                return proof_context["deduction"]
+
+            else:
+                return self.deduction
+
+        if path in proof_context["variables"]:
+            return proof_context["variables"][path]
+
+        raise Exception("Could not parse path: '" + path + "'.")
+
     def check(self, antecedents, deduction, proof_context):
         # Check to see if the proposed proof lines are valid under this inference rule
 
@@ -466,16 +505,30 @@ class InferenceRule(object):
                 # No match
                 return False
 
+        # Check variables are consistent
+        variables = copy(deduction.inference_match.sub_matches)
+        for ant in antecedents:
+            for name, sub_match in ant.inference_match.sub_matches.items():
+                if name in variables:
+                    if not sub_match.equivalent(variables[name], proof_context):
+                        # Same variable with different value
+                        return None
+
+                else:
+                    # Add to variables
+                    variables[name] = sub_match
+
         # Check the rule condition
         if self.condition is not None:
-
             # Make a condition context with antecedents and deduction
-            condition_context = {
+            condition_context = copy(proof_context)
+            condition_context.update({
                 "antecedents": antecedents,
                 "deduction": deduction
-            }
+            })
+            condition_context["variables"].update(variables)
 
-            if not self.condition.check(match=None, context=proof_context, condition_context=condition_context):
+            if not self.check_condition(self.condition, condition_context):
                 # Doesn't meet the condition
                 return False
 
@@ -489,6 +542,39 @@ class InferenceRule(object):
             ant.dependent_lines.append(deduction)
 
         return True
+
+    def check_condition(self, c, context):
+        # Check a condition c - returns true or false
+
+        # Add the top-most match to context in a copy
+        if "self" not in context["variables"]:
+            context = copy(context)
+            context["variables"]["self"] = self
+
+        # Check the possible condition types
+        if not c.type == "atomic":
+            # Composite case
+            return c.check_composite(self, context)
+
+        # Otherwise, atomic condition
+
+        if " == " in c.string:
+            # Equals
+            left, right = [self.get_by_path(arg, context) for arg in c.string.split(" == ")]
+
+            if not type(left) == type(right):
+                # Mismatched types
+                return False
+
+            if type(left) in (Match, MatchSet):
+                return left.equivalent(right, context)
+
+            else:
+                return left == right
+
+        else:
+            # Get by path
+            return self.get_by_path(c.string, context)
 
 
 class Proof(object):
@@ -521,8 +607,8 @@ class Proof(object):
 
         return self.proof_lines[line_number - 1]
 
-    def add_proof_line(self, text):
-        proof_line = ProofLine(self, text)
+    def add_proof_line(self, text, proof_context):
+        proof_line = ProofLine(self, text, context=copy(proof_context))
         self.proof_lines.append(proof_line)
         return proof_line
 
@@ -588,7 +674,7 @@ class Proof(object):
 class ProofLine(object):
     # A line in a proof
 
-    def __init__(self, proof, text, reference_string=None, label=None):
+    def __init__(self, proof, text, context, reference_string=None, label=None):
 
         # The proof this line belongs to
         self.proof = proof
@@ -598,6 +684,9 @@ class ProofLine(object):
 
         # The text to display on this line. By default equal to the actual text.
         self.display = text
+
+        # A frozen context - useful to later refer to from inference rules
+        self.context = context
 
         # The reference string for this line (if any)
         self.reference_string = reference_string
@@ -677,47 +766,45 @@ class ProofLine(object):
         # Whether the line has no indent line
         return self.indent_line() is None
 
-    def get_by_path(self, s, context):
+    def get_by_path(self, path, proof_context):
         # Get an attribute of the proof line given a path s
 
-        if type(s) is list:
+        initial, remainder = parse_path(path)
+
+        if remainder:
+            # Chain the parts
+            return self.get_by_path(initial, proof_context).get_by_path(remainder, proof_context)
+
+        # Otherwise, only one part
+
+        if type(path) is list:
             # Get each component
-            return [self.get_by_path(item, context) for item in s]
+            return [self.get_by_path(item, proof_context) for item in path]
 
-        if type(s) is not str:
-            s = str(s)
+        if type(path) is not str:
+            path = str(path)
 
-        if s == "match":
+        if path == "match":
             # Get the match
             return self.match
 
-        # if s[:11] == "inf_match()":
-        #     # Get the inference match
-        #
-        #     if len(s) == 11:
-        #         return self.inference_match
-        #
-        #     assert s[11] == "."
-        #
-        #     return self.inference_match.get_by_path(s[12:], context)
-
-        if s == "is_root()":
+        if path == "is_root()":
             return self.is_root()
 
-        if s == "pattern":
+        if path == "pattern":
             return self.line_type.pattern
 
-        if s in self.line_type.attributes:
-            return self.get_by_path(self.line_type.get_attribute(s), context)
+        if path in self.line_type.attributes:
+            return self.get_by_path(self.line_type.get_attribute(path), proof_context)
 
-        if "." in s:
-            # Dotted path
-            index = s.find(".")
-            initial = s[:index]
-            remainder = s[index + 1:]
-            return self.get_by_path(initial, context).get_by_path(remainder, context)
+        if path in self.context:
+            # Check self context first
+            return self.context[path]
 
-        raise Exception("Could not find " + s + " in '" + self.text + "'.")
+        if path in proof_context:
+            return proof_context[path]
+
+        raise Exception("Could not find " + path + " in '" + self.text + "'.")
 
     def edit_context(self, proof_context):
         # Edit the proof context according to the rule on this line type
@@ -770,10 +857,10 @@ class ProofLine(object):
                         # Union the set with the value
 
                         if type(sub_value) is Match:
-                            current_value = current_value.add(sub_value, proof_context)
+                            proof_context[key] = current_value.add(sub_value, proof_context)
 
                         elif type(sub_value) is MatchSet:
-                            current_value = current_value.union(sub_value, proof_context)
+                            proof_context[key] = current_value.union(sub_value, proof_context)
 
                         else:
                             # Has to be a match or a match set

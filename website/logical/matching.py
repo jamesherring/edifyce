@@ -2,6 +2,28 @@ import regex as re
 from copy import copy
 
 
+def parse_path(path):
+    # Parse a path string to get the initial (and remainder if applicable)
+
+    if "." not in path:
+        # No dots
+        return path, None
+
+    # Otherwise, dots in path. Get the first part with consistent brackets
+    depth = 0
+    for i in range(0, len(path)):
+        if path[i] == "(":
+            depth += 1
+        elif path[i] == ")":
+            depth -= 1
+
+        if depth == 0 and path[i] == ".":
+            return path[:i], path[i + 1:]
+
+    # There are dots - but inside brackets
+    return path, None
+
+
 class Condition(object):
     # A condition tree object
 
@@ -10,7 +32,7 @@ class Condition(object):
         # The condition string
         self.string = string
 
-        # The condition type - "and", "or", "not", "brackets", or "atomic"
+        # The condition type - "and", "or", "not", "in", "not in", "brackets", or "atomic"
         self.type = None
 
         # Optionally specify list of string parts
@@ -23,6 +45,11 @@ class Condition(object):
 
     def parse(self):
         # Parse the string into sub conditions
+
+        if self.string == "":
+            # No string given
+            self.parts = None
+            return
 
         if self.parts is not None:
             parts = self.parts
@@ -89,7 +116,7 @@ class Condition(object):
 
             self.parts = parts
 
-        # Each part is either bracketed, a keyword (and, or, not), or atomic
+        # Each part is either bracketed, a keyword (and, or, not, in), or atomic
 
         # Check for brackets
         if len(parts) == 1 and parts[0][0] == "(" and parts[0][-1] == ")":
@@ -121,6 +148,35 @@ class Condition(object):
                 # Done
                 return
 
+        # Check for in, not in
+        for i in range(0, len(parts)):
+            part = parts[i]
+
+            if part == "in":
+                if i == 0 or i == len(parts) - 1:
+                    raise Exception("Could not parse condition '" + self.string + "'.")
+
+                self.type = "in"
+
+                left = parts[:i]
+                right = parts[i + 1:]
+
+                if part[i - 1] == "not":
+                    # Not in
+                    self.type = "not in"
+                    if i - 1 == 0:
+                        raise Exception("Could not parse condition '" + self.string + "'.")
+
+                    left = parts[:i - 1]
+
+                self.sub_conditions = [
+                    Condition(string="".join(left), parts=left),
+                    Condition(string="".join(right), parts=right)
+                ]
+
+                # Done
+                return
+
         # Check for not
         if parts[0] == "not":
 
@@ -133,7 +189,41 @@ class Condition(object):
 
         # Otherwise atomic - can be parsed by the match
         self.type = "atomic"
-        return
+
+    def check_composite(self, obj, context):
+        # Check a composite type condition for the given object
+
+        # Check the possible condition types
+        if self.type == "brackets":
+            # Easy case
+            return obj.check_condition(self.sub_conditions[0], context)
+
+        elif self.type == "and":
+            return obj.check_condition(self.sub_conditions[0], context) and \
+                   obj.check_condition(self.sub_conditions[1], context)
+
+        elif self.type == "or":
+            return obj.check_condition(self.sub_conditions[0], context) or \
+                   obj.check_condition(self.sub_conditions[1], context)
+
+        elif self.type == "not":
+            return not obj.check_condition(self.sub_conditions[0], context)
+
+        elif self.type in ("in", "not in"):
+            # Must be for a match set
+
+            item = obj.get_by_path(self.sub_conditions[0].string, context)
+            match_set = obj.get_by_path(self.sub_conditions[1].string, context)
+
+            result = match_set.contains(item, context)
+
+            if self.type == "in":
+                return result
+
+            # Negated
+            return not result
+
+        raise Exception("Condition is not composite.")
 
 
 class Match(object):
@@ -156,43 +246,42 @@ class Match(object):
 
     def get_by_path(self, path, context):
         # Get the value by a path
-        
-        initial = path
-        remainder = None
 
-        if "." in path:
-            index = path.find(".")
-            initial = path[:index]
-            remainder = path[index + 1:]
+        initial, remainder = parse_path(path)
 
-        # Get the initial value
-        if initial == "parent()":
-            value = self.parent_match
+        if remainder:
+            # Chain the parts
+            return self.get_by_path(initial, context).get_by_path(remainder, context)
 
-        elif initial == "pattern()":
-            value = self.pattern
+        # Otherwise, only one part
 
-        elif initial in self.sub_matches:
-            value = self.sub_matches[initial]
+        if path == "parent()":
+            return self.parent_match
 
-        elif initial in self.pattern.attributes:
-            value = self.run_function(initial, context)
+        elif path == "pattern()":
+            return self.pattern
 
-        elif initial == "lookup()":
+        elif path in self.sub_matches:
+            return self.sub_matches[path]
+
+        elif path in self.pattern.attributes:
+            return self.run_function(path, context)
+
+        elif path == "lookup()":
             # Look up the value in context
             if self.string in context["variables"]:
                 return context["variables"][self.string]
 
             raise Exception("Could not find '" + self.string + "' in context.")
 
-        elif initial == "union_submatch()":
+        elif path == "union_submatch()":
             # Get the only submatch
             assert type(self.pattern) is UnionPattern
 
-            value = list(self.sub_matches.values())[0]
+            return list(self.sub_matches.values())[0]
 
-        elif initial in context["variables"]:
-            value = context["variables"][initial]
+        elif path in context["variables"]:
+            return context["variables"][path]
 
         elif path[:10] == "instances(" and path[-1] == ")":
             # Call for instances
@@ -263,6 +352,17 @@ class Match(object):
         elif path == "string()":
             return self.string
 
+        elif path in context:
+            return context[path]
+
+        if "antecedents" in context and path[:12] == "antecedents[" and path[-1] == "]":
+            try:
+                index = int(path[12:-1])
+                return context["antecedents"][index]
+
+            except Exception as e:
+                raise Exception("Could not parse path: '" + path + "'.")
+
         else:
             condition_fns = ["has_parent", "equal_any"]
 
@@ -272,13 +372,7 @@ class Match(object):
                     condition = Condition(path)
                     return self.check_condition(condition, context)
 
-            raise Exception("Could not find '" + path + "' in " + self.string)
-
-        if remainder is None:
-            return value
-
-        # Use the remaining path
-        return value.get_by_path(remainder, context)
+        raise Exception("Could not parse path: '" + path + "'.")
 
     def check_condition(self, c, context):
         # Check a condition c - returns true or false
@@ -289,80 +383,66 @@ class Match(object):
             context["variables"]["self"] = self
 
         # Check the possible condition types
-        if c.type == "brackets":
-            # Easy case
-            return self.check_condition(c.sub_conditions[0], context)
+        if not c.type == "atomic":
+            # Composite case
+            return c.check_composite(self, context)
 
-        elif c.type == "and":
-            return self.check_condition(c.sub_conditions[0], context) and \
-                   self.check_condition(c.sub_conditions[1], context)
+        # Otherwise, atomic condition
 
-        elif c.type == "or":
-            return self.check_condition(c.sub_conditions[0], context) or \
-                   self.check_condition(c.sub_conditions[1], context)
+        if c.string[:11] == "has_parent(":
+            # Has parent of the given pattern
 
-        elif c.type == "not":
-            return not self.check_condition(c.sub_conditions[0], context)
+            inner = c.string[11:-1]
+            index = inner.find(";")
 
-        elif c.type == "atomic":
-            # Atomic condition
-
-            if c.string[:11] == "has_parent(":
-                # Has parent of the given pattern
-
-                inner = c.string[11:-1]
-                index = inner.find(";")
-
-                sub_condition_string = None
-                if index == -1:
-                    # No sub condition
-                    pattern_string = inner
-
-                else:
-                    # There is a sub condition
-                    pattern_string = inner[:index]
-                    sub_condition_string = inner[index + 2:]
-
-                condition = None if sub_condition_string is None else Condition(sub_condition_string)
-
-                # Get the pattern label and name
-                pattern_label, pattern_name = pattern_string.split(" as ")
-
-                if pattern_name not in context["variables"]:
-                    raise Exception("Could not find pattern '" + pattern_string + "'.")
-
-                # Get the pattern
-                pattern = context["variables"][pattern_name]
-
-                return self.has_parent(pattern, condition, copy(context), label=pattern_label)
-
-            elif c.string[:10] == "equal_any(":
-                # Check if a value is equal to any of a matchset
-
-                inner = c.string[10:-1]
-                match_set = self.get_by_path(inner, context)
-
-                return self.equal_any(match_set, context)
-
-            elif " == " in c.string:
-                # Equals
-                left, right = [self.get_by_path(arg, context) for arg in c.string.split(" == ")]
-
-                if not type(left) == type(right):
-                    # Mismatched types
-                    return False
-
-                if type(left) in (Match, MatchSet):
-                    return left.equivalent(right, context)
-
-                else:
-                    return left == right
+            sub_condition_string = None
+            if index == -1:
+                # No sub condition
+                pattern_string = inner
 
             else:
-                # Get by path
-                return self.get_by_path(c.string, context)
+                # There is a sub condition
+                pattern_string = inner[:index]
+                sub_condition_string = inner[index + 2:]
 
-        raise Exception("Could not parse condition: " + c.string)
+            condition = None if sub_condition_string is None else Condition(sub_condition_string)
+
+            # Get the pattern label and name
+            pattern_label, pattern_name = pattern_string.split(" as ")
+
+            if pattern_name not in context["variables"]:
+                raise Exception("Could not find pattern '" + pattern_string + "'.")
+
+            # Get the pattern
+            pattern = context["variables"][pattern_name]
+
+            return self.has_parent(pattern, condition, copy(context), label=pattern_label)
+
+        elif c.string[:10] == "equal_any(":
+            # Check if a value is equal to any of a matchset
+
+            inner = c.string[10:-1]
+            match_set = self.get_by_path(inner, context)
+
+            return self.equal_any(match_set, context)
+
+        elif " == " in c.string:
+            # Equals
+            left, right = [self.get_by_path(arg, context) for arg in c.string.split(" == ")]
+
+            if not type(left) == type(right):
+                # Mismatched types
+                return False
+
+            if type(left) in (Match, MatchSet):
+                return left.equivalent(right, context)
+
+            else:
+                return left == right
+
+        else:
+            # Get by path
+            return self.get_by_path(c.string, context)
 
     def run_function(self, name, context, params=None):
         # Run a custom function with the given name.
@@ -859,6 +939,38 @@ class MatchSet(object):
     def get_by_path(self, path, context):
         # Get some attribute of the matchset according to the given path
 
+        initial, remainder = parse_path(path)
+
+        if remainder:
+            # Chain the parts
+            return self.get_by_path(initial, context).get_by_path(remainder, context)
+
+        # Otherwise, only one part
+
+        if path[:9] == "issubset(" and path[-1] == ")":
+
+            inner = path[9:-1]
+            other = self.get_by_path(inner, context)
+            return self.is_subset(other, context)
+
+        elif path[:6] == "union(" and path[-1] == ")":
+            inner = path[6:-1]
+            other = self.get_by_path(inner, context)
+            return self.union(other, context)
+
+        elif path[:4] == "set(" and path[-1] == ")":
+            # Make a new set
+            inner = path[4:-1]
+            return MatchSet(instances={self.get_by_path(inner, context)})
+
+        elif path in context["variables"]:
+            return context["variables"][path]
+
+        if not self.complete:
+            # Can't apply to incomplete set
+            raise Exception("Can't get path '" + path + "' from incomplete set.")
+
+        # Otherwise, apply the path to each element in the set
         result = MatchSet()
         for m in self.instances:
             sub_result = m.get_by_path(path, context)
