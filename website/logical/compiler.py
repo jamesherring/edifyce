@@ -107,6 +107,9 @@ class Context(object):
         # Proof context
         self.proof_context = dict()
 
+        # Formatting context
+        self.pre_format = dict()
+
     def current_object(self):
         if len(self.current_object_stack) == 0:
             return None
@@ -290,6 +293,22 @@ class AbstractSyntaxTree(object):
 
                 context.variables[name] = new_object
 
+            elif stripped[:7] == "Format ":
+                # Apply a format dictionary
+
+                name = stripped[7:]
+
+                if name not in context.variables:
+                    raise Exception("Could not find format dictionary '" + name + "'.")
+
+                pre_format = context.variables[name]
+
+                if type(current_object) is FormalSystem:
+                    current_object.pre_format = pre_format
+
+                # Update context formatting, which is used for patterns, string variables, etc.
+                context.pre_format.update(pre_format)
+
             elif stripped[:9] == "Abstract ":
                 # Create an abstract pattern variable
 
@@ -334,7 +353,7 @@ class AbstractSyntaxTree(object):
                     return
 
                 # Create the pattern
-                pattern = StringPattern(name=name, pattern="")
+                pattern = StringPattern(name=name, pattern="", pre_format=context.pre_format)
                 context.variables[name] = pattern
 
                 new_object = pattern
@@ -351,7 +370,7 @@ class AbstractSyntaxTree(object):
                     return
 
                 # Create the union with no patterns to begin with
-                union = UnionPattern(name=name, patterns=[])
+                union = UnionPattern(name=name, patterns=[], pre_format=context.pre_format)
                 context.variables[name] = union
 
                 new_object = union
@@ -507,11 +526,18 @@ class AbstractSyntaxTree(object):
                 # Pattern is a StringPattern or UnionPattern instance
                 pattern = context.variables[name]
 
-                # Get the dictionary of variables to add
-                format_dict = dict()
+                # Get the dictionary of variables to add - starting with pre_format context
+                format_dict = copy(context.pre_format)
                 for sub_tree in self.sub_trees:
+
                     s = sub_tree.line.strip()
+
                     if len(s) == 0 or s[0] == "#":
+                        continue
+
+                    if s == "clear":
+                        # Clear the format so far
+                        format_dict = dict()
                         continue
 
                     if s in context.variables and type(context.variables[s]) is dict:
@@ -529,7 +555,7 @@ class AbstractSyntaxTree(object):
 
                     format_dict[key] = value
 
-                pattern.pre_format = format_dict
+                pattern.set_pre_format(format_dict)
                 return
 
             elif self.parent.type == "ProofContext":
@@ -554,13 +580,10 @@ class AbstractSyntaxTree(object):
 
             elif type(current_object) is StringPattern:
                 # Define the pattern
-                current_object.pattern = stripped
+                current_object.set_pattern(stripped)
 
-                # Set the variables
-                current_object.reset_variables({
-                    key: context.string_variables[key] for key in context.string_variables
-                    if key in stripped
-                })
+                # Apply string variables
+                current_object.add_variables(context.string_variables)
 
             elif type(current_object) is UnionPattern:
                 # Add a pattern to the union

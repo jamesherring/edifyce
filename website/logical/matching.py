@@ -759,6 +759,10 @@ class Match(object):
         # No apparent relation between self and other
         return None
 
+    def formatted_string(self):
+        # Apply pattern formatting to the match string
+        return self.pattern.pre_format_apply(self.string)
+
     def __str__(self):
         return self.string
 
@@ -1174,12 +1178,16 @@ class StringPattern(Pattern):
         Pattern.__init__(self, name, parent, respect_brackets, pre_format)
 
         # The pattern string
-        self.pattern = pattern
+        self.pattern = self.pre_format_apply(pattern)
 
-        # Variables for subpatterns - a dictionary mapping to other StringPatterns or UnionPattern objects
-        self.variables = variables
-        if self.variables is None:
-            self.variables = dict()
+        # The display pattern. May be different to pattern depending on format
+        self.display_pattern = pattern
+
+        # Variables for sub patterns - a dictionary mapping to other StringPatterns or UnionPattern objects
+        self.variables = dict()
+
+        # Display variables
+        self.display_variables = dict()
 
         # The definitions that apply - only to a certain context
         self.definitions = None
@@ -1189,6 +1197,9 @@ class StringPattern(Pattern):
 
         # Record the variable locations for speed
         self.variable_locations = dict()
+
+        if variables is not None:
+            self.add_variables(variables)
 
         # Get the variable locations
         for i in range(0, len(self.pattern)):
@@ -1621,6 +1632,10 @@ class StringPattern(Pattern):
     def add_variable(self, name, pattern, use_location="all"):
         # Add a variable
 
+        self.display_variables[name] = pattern
+
+        # Format the variable name
+        name = self.pre_format_apply(name)
         self.variables[name] = pattern
 
         # Get the variable location dict
@@ -1693,17 +1708,39 @@ class StringPattern(Pattern):
         # Add variables using a dictionary
 
         for name, var in variable_dict.items():
-            if name in self.pattern:
+            if self.pre_format_apply(name) in self.pattern:
                 self.add_variable(name, var)
 
-    def reset_variables(self, variable_dict):
+    def reset_variables(self):
         # Reset the variables on this pattern
 
+        variables = self.variables
+
         # Clear the variable locations. Non variable locations taken care of automatically
+        self.variables = dict()
         self.variable_locations = dict()
 
+        self.display_variables = dict()
+
         # Add the variables
-        self.add_variables(variable_dict)
+        self.add_variables(variables)
+
+    def set_pattern(self, pattern):
+        # Reset the pattern string
+
+        self.display_pattern = pattern
+        self.pattern = self.pre_format_apply(pattern)
+
+        # Reset variables
+        self.reset_variables()
+
+    def set_pre_format(self, pre_format):
+        # Set the pre-format dictionary.
+
+        self.pre_format = pre_format
+
+        # Reset the pattern and variables
+        self.set_pattern(self.display_pattern)
 
     def reverse_variables(self):
         # Get the reverse dictionary for variables
@@ -1862,6 +1899,10 @@ class UnionPattern(Pattern):
                 found.add(p)
 
         return found
+
+    def set_pre_format(self, pre_format):
+        # Set the pre-format dictionary.
+        self.pre_format = pre_format
 
     def __str__(self):
         return "UnionPattern: " + self.name

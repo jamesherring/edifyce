@@ -22,8 +22,9 @@
     <a href="{% url 'website:proof_create' system.id system.slug %}">New Proof</a>
 
 
-    <h2>Formulae</h2>
-    {% include "website/pattern_structure.html" with p=system.formal_system.formula %}
+    <h2>Patterns</h2>
+
+    {% include "website/pattern_structure.html" with p=system.formal_system.proof_context.variables.formula %}
 
     <h2>Axioms</h2>
 

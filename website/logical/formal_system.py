@@ -5,7 +5,7 @@ from copy import copy
 class FormalSystem(object):
     # A formal system
 
-    def __init__(self, name, axioms=None, line_types=None, inference_rules=None, proof_context=None):
+    def __init__(self, name, axioms=None, line_types=None, inference_rules=None, proof_context=None, pre_format=None):
 
         # The name of the system
         self.name = name
@@ -14,22 +14,19 @@ class FormalSystem(object):
         self.formula = None
 
         # A list of patterns
-        self.axioms = axioms
-        if self.axioms is None:
-            self.axioms = []
+        self.axioms = axioms if axioms is not None else []
 
         # A list of line types
-        self.line_types = line_types
-        if self.line_types is None:
-            self.line_types = []
+        self.line_types = line_types if line_types is not None else []
 
         # A list of valid inference rules for the system
-        self.inference_rules = inference_rules
-        if self.inference_rules is None:
-            self.inference_rules = []
+        self.inference_rules = inference_rules if inference_rules is not None else []
 
         # Default proof context
         self.proof_context = proof_context if proof_context is not None else dict()
+
+        # Default formatting for all strings in the system.
+        self.formatting = pre_format if pre_format is not None else dict()
 
     def get_references(self, text):
         # Get references to external proofs from the given code
@@ -178,6 +175,7 @@ class FormalSystem(object):
 
                     try:
                         reference_string = result.get_by_path("reference", proof_context)
+
                     except Exception as e:
                         pass
 
@@ -213,7 +211,7 @@ class FormalSystem(object):
                             key = reference["key"]
 
                             # Check the formula is an instance of this axiom
-                            if axiom.match(formula.string, proof_context) is None:
+                            if axiom.match(formula.formatted_string, proof_context) is None:
                                 # Doesn't fit this axiom - step is invalid
                                 proof_line.valid = False
                                 proof_line.invalid_message = "Not an instance of " + key + "."
@@ -260,7 +258,7 @@ class FormalSystem(object):
 
                         # Try to work out the deduction. First try the axioms
                         for axiom in self.axioms:
-                            if axiom.match(formula.string, proof_context) is not None:
+                            if axiom.match(formula.formatted_string(), proof_context) is not None:
                                 # It's a match
                                 proof_line.valid = True
                                 proof_line.axiom = axiom
@@ -487,7 +485,7 @@ class InferenceRule(object):
                 return False
 
         # First check if the deduction matches
-        deduction.inference_match = self.deduction.match(deduction.formula.string, proof_context)
+        deduction.inference_match = self.deduction.match(deduction.formula.formatted_string(), proof_context)
 
         if deduction.inference_match is None:
             # No match
@@ -499,7 +497,7 @@ class InferenceRule(object):
                 return False
 
             # Set the inference match - can be used in the Condition
-            ant.inference_match = pattern.match(ant.formula.string, proof_context)
+            ant.inference_match = pattern.match(ant.formula.formatted_string(), proof_context)
 
             if ant.inference_match is None:
                 # No match
