@@ -1,8 +1,8 @@
 
 {% block pattern %}
 
-    {% if p.pattern %}
-        <p class="pattern">${{ p.pattern }}$</p>
+    {% if p.display_pattern %}
+        <p class="pattern">{{ p.display_pattern }}</p>
     {% else %}
         <p class="bold pattern">{{ p.name }}</p>
     {% endif %}
@@ -10,7 +10,7 @@
     {% if p.variables %}
         <p class="pattern">with
             {% for subpattern, var_list in p.reverse_variables.items %}
-                ${{ var_list|join:"$, $" }}$ as <strong>{{ subpattern.name }}</strong>{% if not forloop.last %},{% else %}.{% endif %}
+                {{ var_list|join:", " }} as <strong>{{ subpattern.name }}</strong>{% if not forloop.last %},{% else %}.{% endif %}
             {% endfor %}
         </p>
     {% endif %}

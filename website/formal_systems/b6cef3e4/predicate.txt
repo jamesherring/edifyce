@@ -1,19 +1,22 @@
 
+# Create a format dictionary for tex
+Format tex:
+    # Treat multiple spaces as a single space
+    (?P<char>[^\s])\s\s+: \g<char>\s
+    
+    # Ignore $...$ surrounding formulae
+    \$(?P<inner>.*?)\$: \g<inner>
+    
+    # Ignore \ characters
+    (?P<char>[^\\]*)\\: \g<char>
+    
 FormalSystem Predicate:
 
+    # Use tex formatting throughout
+    Format tex
+    
     # Variables and constants are abstract patterns
     Abstract variable, constant
-    
-    # Create a format dictionary for tex
-    Format tex:
-        # Treat multiple spaces as a single space
-        (?P<char>[^\s])\s\s+: \g<char>\s
-        
-        # Ignore $...$ surrounding formulae
-        \$(?P<inner>.*?)\$: \g<inner>
-        
-        # Ignore \ characters
-        (?P<char>[^\\])\\: \g<char>
 
     Regex integer:
         ^(?:0|[1-9][0-9]*)$
@@ -39,49 +42,42 @@ FormalSystem Predicate:
         instances(term)
 
     term:
-        Pattern function:
-            with i as integer, T as comma_separated_terms:
-                f_i(T)
-
-    Pattern equal:
-        with t_1, t_2 as term:
-            t_1 = t_2
+        with $i$ as integer, $T$ as comma_separated_terms:
+            $f_i(T)$
 
     UnionPattern atomic_formula:
-        equal
-        with i as integer, T as comma_separated_terms:
-            P_i(T)
+        with $t_1$, $t_2$ as term:
+            $t_1 = t_2$
+            
+        with $i$ as integer, $T$ as comma_separated_terms:
+            $P_i(T)$
 
     Pattern rightarrow:
-        (alpha rightarrow beta)
+        $(\alpha \rightarrow \beta)$
 
     Pattern not:
-        neg alpha
+        $\neg \alpha$
 
     Pattern forall:
-        with x as variable:
-            forall x alpha
+        with $x$ as variable:
+            $\forall x \alpha$
 
     UnionPattern formula:
         atomic_formula
         rightarrow
         not
         forall
-        
-    # Apply tex formatting to formula
-    formula.format:
-        tex
 
     # Add formula as variable in recursive patterns
     rightarrow.add_variables:
-        alpha: formula
-        beta: formula
+        $\alpha$: formula
+        $\beta$: formula
 
     not.add_variables:
-        alpha: formula
+        $\alpha$: formula
 
     forall.add_variables:
-        alpha: formula
+        $\alpha$: formula
 
     UnionPattern comma_separated_formulae:
         with f as formula, csf as comma_separated_formulae:
@@ -114,6 +110,9 @@ FormalSystem Predicate:
             fo ref{refs}
             fo ref{refs} label{label_ref}
             
+    logical_pattern.format:
+        clear
+        
     logical_pattern.formula():
         # Get the formula regardless of the option
         union_submatch().fo
@@ -138,10 +137,7 @@ FormalSystem Predicate:
     Pattern let_pattern:
         with csv as comma_separated_variable_names, p as variable_name:
             let csv be p
-            
-    let_pattern.format:
-        tex
-
+           
     let_pattern.keys():
         csv.instances(variable_name)
 
@@ -162,10 +158,7 @@ FormalSystem Predicate:
     Pattern if_pattern:
         with csf as comma_separated_formulae:
             if csf:
-                
-    if_pattern.format:
-        tex
-
+           
     if_pattern.parts():
         csf.shallow_instances(formula)
 
@@ -190,9 +183,6 @@ FormalSystem Predicate:
             condition:
                 # Conditional on the deduction given set containing the antecedent given sets
                 antecedents[0].given.union(antecedents[1].given).issubset(deduction.given)
-                
-            format:
-                tex
 
         InferenceRule deduction_theorem_1:
             label:
@@ -205,9 +195,6 @@ FormalSystem Predicate:
 
             condition:
                 antecedents[0].given.issubset(deduction.given) and alpha in deduction.given
-                
-            format:
-                tex
 
         InferenceRule deduction_theorem_2:
             label:
@@ -221,9 +208,6 @@ FormalSystem Predicate:
 
             condition:
                 deduction.given.union(set(alpha)) == antecedents[0].given
-                
-            format:
-                tex
 
         InferenceRule thinning:
             label:
@@ -237,9 +221,6 @@ FormalSystem Predicate:
 
             condition:
                 antecedents[0].given.issubset(deduction.given)
-                
-            format:
-                tex
 
         InferenceRule theorem:
             label:
@@ -253,6 +234,3 @@ FormalSystem Predicate:
 
             condition:
                 antecedents[0].maps_onto(deduction)
-                
-            format:
-                tex
