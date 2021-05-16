@@ -122,6 +122,8 @@ class Context(object):
         new_context.variables = copy(self.variables)
         new_context.string_variables = copy(self.string_variables)
         new_context.current_object_stack = copy(self.current_object_stack)
+        new_context.proof_context = copy(self.proof_context)
+        new_context.pre_format = copy(self.pre_format)
 
         return new_context
 
@@ -230,6 +232,8 @@ class AbstractSyntaxTree(object):
         if context is None:
             # Create a context
             context = Context()
+
+        # print(len(context.pre_format), self.line)
 
         if self.is_root():
             # Just run the sub trees
@@ -587,12 +591,11 @@ class AbstractSyntaxTree(object):
 
             elif type(current_object) is UnionPattern:
                 # Add a pattern to the union
-                pattern = StringPattern(name=current_object.name, pattern=stripped)
+
+                pattern = StringPattern(name=current_object.name, pattern=stripped, pre_format=context.pre_format)
 
                 # Add any relevant string variables
-                for var, sub_pattern in context.string_variables.items():
-                    if var in stripped:
-                        pattern.add_variable(var, sub_pattern)
+                pattern.add_variables(context.string_variables)
 
                 current_object.patterns.append(pattern)
 

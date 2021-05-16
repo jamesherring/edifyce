@@ -1755,6 +1755,19 @@ class StringPattern(Pattern):
 
         return reverse
 
+    def reverse_display_variables(self):
+        # Get the reverse dictionary for display variables
+
+        reverse = dict()
+        for var, subpattern in self.display_variables.items():
+            if subpattern not in reverse:
+                reverse[subpattern] = [var]
+
+            else:
+                reverse[subpattern].append(var)
+
+        return reverse
+
     def __str__(self):
         return "StringPattern: " + self.name
 
