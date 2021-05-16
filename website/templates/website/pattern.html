@@ -7,9 +7,9 @@
         <p class="bold pattern">{{ p.name }}</p>
     {% endif %}
 
-    {% if p.variables %}
+    {% if p.display_variables %}
         <p class="pattern">with
-            {% for subpattern, var_list in p.reverse_variables.items %}
+            {% for subpattern, var_list in p.reverse_display_variables.items %}
                 {{ var_list|join:", " }} as <strong>{{ subpattern.name }}</strong>{% if not forloop.last %},{% else %}.{% endif %}
             {% endfor %}
         </p>
