@@ -105,12 +105,25 @@ FormalSystem Predicate:
     Regex reference:
         ^[a-zA-Z0-9_,\. ]+$
 
-    UnionPattern logical_pattern:
-        with fo as formula, refs as reference, label_ref as reference:
+    Pattern without_label:
+        with fo as formula, refs as reference:
             fo ref{refs}
+            
+    Pattern with_label:
+        with fo as formula, refs as reference, label_ref as reference:
             fo ref{refs} label{label_ref}
             
+    UnionPattern logical_pattern:
+        without_label
+        with_label
+            
     logical_pattern.format:
+        clear
+        
+    without_label.format:
+        clear
+        
+    with_label.format:
         clear
         
     logical_pattern.formula():
@@ -129,10 +142,29 @@ FormalSystem Predicate:
         # The display value - ignore references and labels
         union_submatch().fo.string()
 
-    # Proof lines
     LineType logical:
         pattern: logical_pattern
         behaviour: logical
+        
+    Pattern axiom_pattern:
+        with fo as formula, ref as reference:
+            fo label{Ax: ref}
+            
+    axiom_pattern.format:
+        clear
+        
+    axiom_pattern.formula():
+        fo
+        
+    axiom_pattern.display():
+        fo.string()
+        
+    axiom_pattern.label():
+        ref.string()
+        
+    LineType axiom:
+        pattern: axiom_pattern
+        behaviour: axiom
 
     Pattern let_pattern:
         with csv as comma_separated_variable_names, p as variable_name:

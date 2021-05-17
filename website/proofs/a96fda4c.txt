@@ -1,16 +1,24 @@
 
-let $\alpha$, $\beta$ be formula
+let $\alpha$, $\beta$, $\gamma$ be formula
+
+$(\alpha \rightarrow (\beta \rightarrow \alpha))$ label{Ax: A1}
+
+$((\alpha \rightarrow (\beta \rightarrow \gamma)) \rightarrow ((\alpha \rightarrow \beta) \rightarrow (\alpha \rightarrow \gamma)))$ label{Ax: A2}
+
+$((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ label{Ax: A3}
+
+
 
 $(\neg \alpha \rightarrow (\neg \beta \rightarrow \neg \alpha))$ ref{A1} label{A}
 
 if $\neg \alpha$:
 
-    $(\neg \beta \rightarrow \neg \alpha)$ ref{DT1, A} label{Y}
+    $(\neg \beta \rightarrow \neg \alpha)$ ref{DT1, A} label{B}
 
-    $((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ ref{A3}
+    $((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ ref{A3} label{C}
 
-    $(\alpha \rightarrow \beta)$ ref{MP, 8, 10}
+    $(\alpha \rightarrow \beta)$ ref{MP, B, C} label{D}
 
-$(\neg \alpha \rightarrow (\alpha \rightarrow \beta))$ ref{DT2, 12}
+$(\neg \alpha \rightarrow (\alpha \rightarrow \beta))$ ref{DT2, D}
 
 

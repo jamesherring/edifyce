@@ -65,7 +65,6 @@ def formalSystemEditView(request, system_id, system_slug):
     })
 
 
-@requires_csrf_token
 def formalSystemSaveView(request):
     # Ajax view to save a formal system code
 
@@ -101,7 +100,6 @@ def proofView(request, proof_id, proof_slug):
     })
 
 
-@requires_csrf_token
 def proofCreateView(request, system_id, system_slug):
     # Form for creating a proof
 
@@ -112,7 +110,6 @@ def proofCreateView(request, system_id, system_slug):
     })
 
 
-@requires_csrf_token
 def proofCreateSubmitView(request):
     # Ajax submission to create a proof
 
@@ -146,7 +143,6 @@ def proofCreateSubmitView(request):
         }))
 
 
-@requires_csrf_token
 def proofEditView(request, proof_id, proof_slug):
     # Edit view for a proof
 
@@ -159,7 +155,6 @@ def proofEditView(request, proof_id, proof_slug):
     })
 
 
-@requires_csrf_token
 def proofSaveView(request):
     # Ajax view to save a proof
 
@@ -186,7 +181,6 @@ def proofSaveView(request):
     #     }))
 
 
-@requires_csrf_token
 def proofValidateView(request):
     # Ajax view to validate a proof
 
@@ -215,61 +209,11 @@ def proofValidateView(request):
     #     }))
 
 
-# def proofEditorView(request, system_slug):
-#     # View for editing a proof
+# def axiomsEditView(request, system_id, system_slug):
+#     # Edit the axioms of the given system
 #
-#     system = FormalSystem.objects.get(slug=system_slug)
+#     system = FormalSystemModel.objects.get(id=system_id)
 #
-#     return render(request, "website/proof_editor.html", {
+#     return render(request, "website/axioms_edit.html", {
 #         "system": system
 #     })
-#
-#
-# def updateFormulaDefinition(request):
-#     # Ajax view to update a formula definition
-#
-#     try:
-#         fd_id = request.POST.get("formula_definition_id", False)
-#         fd = FormulaDefinition.objects.get(id=fd_id)
-#
-#         pattern = request.POST.get("pattern", False)
-#         if pattern:
-#             fd.pattern = pattern
-#             fd.save()
-#
-#         return HttpResponse(json.dumps({
-#             "success": True,
-#             "system_id": fd.system.id,
-#             "system_regex": fd.system.formula_regex()
-#         }))
-#
-#     except Exception as e:
-#         return HttpResponse(json.dumps({
-#             "success": False,
-#             "errorMessage": str(e)
-#         }))
-#
-#
-# def testFormulaView(request):
-#     # Ajax view to test a system formula
-#
-#     try:
-#
-#         system_id = request.POST.get("system_id")
-#         test_string = request.POST.get("test_string")
-#
-#         system = FormalSystem.objects.get(id=system_id)
-#
-#         return HttpResponse(json.dumps({
-#             "success": True,
-#             "result": system.test_formula(test_string)
-#         }))
-#
-#     except Exception as e:
-#         return HttpResponse(json.dumps({
-#             "success": False,
-#             "errorMessage": str(e)
-#         }))
-#
-#
-#

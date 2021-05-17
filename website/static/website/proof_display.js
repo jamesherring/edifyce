@@ -104,61 +104,6 @@ function proofDisplayClass(parent) {
 
     }
 
-//    this.get_line_variables = function(row, vars) {
-//        // Get a variable dictionary from the row
-//
-//        // Create the dictionary
-//        var vars = vars || {};
-//
-//        if (!(row.slice(-1) == "}")) {
-//            return [vars, row];
-//        }
-//
-//        // Work backwards to find the corresponding open curly brace
-//
-//        var index = row.length - 2;
-//        var depth = 1;
-//        while (index >= 0) {
-//            if (row[index] == "{") {
-//                depth -= 1;
-//                if (depth == 0) {
-//                    // Found
-//                    break;
-//                }
-//            } else if (row[index] == "}") {
-//                depth += 1;
-//            }
-//            index--;
-//        }
-//
-//        var open_brace_index = index;
-//
-//        // Work backwards to find the next space
-//        while (index >= 0) {
-//            if (row[index] == " ") {
-//                // Found the space
-//                break;
-//            }
-//            index--;
-//        }
-//
-//        // Found the varname
-//        var varname = row.slice(index + 1, open_brace_index);
-//        var value = row.slice(open_brace_index + 1, -1);
-//
-//        vars[varname] = value;
-//
-//        if (index == -1) {
-//            return [vars, row];
-//        }
-//
-//        // Otherwise trim the row and look for any more vars
-//        row = row.slice(0, index);
-//
-//        return this.get_line_variables(row, vars);
-//
-//    }
-
     this.parent = parent;
 
 }
