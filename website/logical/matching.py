@@ -763,6 +763,14 @@ class Match(object):
         # Apply pattern formatting to the match string
         return self.pattern.pre_format_apply(self.string)
 
+    def create_pattern(self, string_variables):
+        # Turn this match into a pattern with the submatches as variables
+
+        pattern = StringPattern(name="", pattern=self.string, pre_format=self.pattern.pre_format)
+        pattern.add_variables(string_variables)
+
+        return pattern
+
     def __str__(self):
         return self.string
 
@@ -1308,7 +1316,7 @@ class StringPattern(Pattern):
 
             # Check if the whole string is a variable
             for svar, sub_pattern in string_variables.items():
-                if s == svar and self.equivalent(sub_pattern):
+                if s == svar and self == sub_pattern:
                     # Match!
                     return m
 

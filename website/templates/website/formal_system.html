@@ -33,9 +33,10 @@
 
         {% include "website/pattern.html" with p=axiom %}
 
+    {% empty %}
+        <p>No axioms to show.</p>
     {% endfor %}
 
-    {% comment %}
     <h2>Inference Rules</h2>
 
     {% for rule in system.formal_system.inference_rules %}
@@ -59,12 +60,12 @@
 
 
         {% if rule.condition %}
-            <p class="pattern">if {{ rule.condition.condition_match.string }}</p>
+            <p class="pattern">if {{ rule.condition.string }}</p>
         {% endif %}
 
+    {% empty %}
+        <p>No inference rules to show.</p>
     {% endfor %}
-
-    {% endcomment %}
 
 {% endblock %}
 

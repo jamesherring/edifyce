@@ -24,6 +24,9 @@ urlpatterns = [
 
     path("proof/ajax/create/", proofCreateSubmitView, name="proof_create_submit"),
     path("proof/ajax/save/", proofSaveView, name="proof_save"),
-    path("proof/ajax/validate/", proofValidateView, name="proof_validate")
+    path("proof/ajax/validate/", proofValidateView, name="proof_validate"),
+
+    # Axioms
+    # path("axioms/edit/<system_id>/<system_slug>/", axiomsEditView, name="axioms_edit")
 
 ]

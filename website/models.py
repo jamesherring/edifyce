@@ -111,6 +111,23 @@ class FormalSystemModel(models.Model):
         return self.name
 
 
+# # Create an empty axioms file for each System
+# @receiver(post_save, sender=FormalSystemModel)
+# def create_empty_axioms(sender, instance, created, **kwargs):
+#     if created:
+#         # Create an empty axioms proof
+#
+#         axioms = ProofModel()
+#         axioms.name = "Axioms"
+#         axioms.formal_system = instance
+#         axioms.set_code("")
+#
+#         axioms.save()
+#
+#         instance.axioms = axioms
+#         instance.save()
+
+
 class ProofModel(models.Model):
     # Model for Proofs
 

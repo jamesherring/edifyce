@@ -3,12 +3,13 @@ let $\alpha$, $\beta$, $\gamma$ be formula
 
 # First three axioms the same as in propositional logic
 
-$(\alpha \rightarrow (\beta \rightarrow \alpha))$ ref{A1}
+$(\alpha \rightarrow (\beta \rightarrow \alpha))$ label{Ax: A1}
 
-$((\alpha \rightarrow (\beta \rightarrow \gamma)) \rightarrow ((\alpha \rightarrow \beta) \rightarrow (\alpha \rightarrow \gamma)))$ ref{A2}
+$((\alpha \rightarrow (\beta \rightarrow \gamma)) \rightarrow ((\alpha \rightarrow \beta) \rightarrow (\alpha \rightarrow \gamma)))$ label{Ax: A2}
 
-$((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ ref{A3}
+$((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ label{Ax: A3}
 
+$((\alpha \rightarrow \beta) \rightarrow (\gamma \rightarrow (\alpha \rightarrow \beta)))$ ref{A1}
 
 let $x$, $y$, $z$ be variable, $t$ be term
 
