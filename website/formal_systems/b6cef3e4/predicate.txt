@@ -7,8 +7,12 @@ Format tex:
     # Ignore $...$ surrounding formulae
     \$(?P<inner>.*?)\$: \g<inner>
     
+    # Ignore \; spacing
+    (?P<char>[^;]*);: \g<char>
+    
     # Ignore \ characters
     (?P<char>[^\\]*)\\: \g<char>
+    
     
 FormalSystem Predicate:
 
@@ -60,7 +64,7 @@ FormalSystem Predicate:
 
     Pattern forall:
         with $x$ as variable:
-            $\forall x \alpha$
+            $\forall x \; \alpha$
 
     UnionPattern formula:
         atomic_formula
@@ -117,6 +121,8 @@ FormalSystem Predicate:
         without_label
         with_label
             
+    # Clear tex format from logical_pattern and it's options - to keep tex 
+    # formatting which is used for displaying the formula
     logical_pattern.format:
         clear
         
@@ -201,68 +207,68 @@ FormalSystem Predicate:
             # Add pattern parts to given set
             union: match.parts
 
-    with alpha, beta as formula:
-        InferenceRule modus_ponens:
+    with $\alpha$, $\beta$ as formula:
+        InferenceRule Modus_Ponens:
             label:
                 MP
 
             antecedents:
-                alpha
-                (alpha rightarrow beta)
+                $\alpha$
+                $(\alpha \rightarrow \beta)$
             deduction:
-                beta
+                $\beta$
 
             condition:
                 # Conditional on the deduction given set containing the antecedent given sets
                 antecedents[0].given.union(antecedents[1].given).issubset(deduction.given)
 
-        InferenceRule deduction_theorem_1:
+        InferenceRule Deduction_Theorem_1:
             label:
                 DT1
 
             antecedents:
-                (alpha rightarrow beta)
+                $(\alpha \rightarrow \beta)$
             deduction:
-                beta
+                $\beta$
 
             condition:
                 antecedents[0].given.issubset(deduction.given) and alpha in deduction.given
 
-        InferenceRule deduction_theorem_2:
+        InferenceRule Deduction_Theorem_2:
             label:
                 DT2
 
             antecedents:
-                beta
+                $\beta$
 
             deduction:
-                (alpha rightarrow beta)
+                $(\alpha \rightarrow \beta)$
 
             condition:
                 deduction.given.union(set(alpha)) == antecedents[0].given
 
-        InferenceRule thinning:
+        InferenceRule Thinning:
             label:
                 T
 
             antecedents:
-                alpha
+                $\alpha$
 
             deduction:
-                alpha
+                $\alpha$
 
             condition:
                 antecedents[0].given.issubset(deduction.given)
 
-        InferenceRule theorem:
+        InferenceRule Theorem:
             label:
                 Th
 
             antecedents:
-                alpha
+                $\alpha$
 
             deduction:
-                beta
+                $\beta$
 
             condition:
                 antecedents[0].maps_onto(deduction)
