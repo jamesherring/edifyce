@@ -40,7 +40,7 @@
     <h2>Inference Rules</h2>
 
     {% for rule in system.formal_system.inference_rules %}
-        <h3>{{ rule.name }}</h3>
+        <h3>{{ rule.name }} <span style="font-weight: normal;">({{ rule.label }})</span></h3>
 
         {% if rule.antecedents %}
             <p class="bold pattern">Antecedents</p>

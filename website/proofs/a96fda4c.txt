@@ -9,16 +9,15 @@ $((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ 
 
 
 
-$(\neg \alpha \rightarrow (\neg \beta \rightarrow \neg \alpha))$ ref{A1} label{A}
+$(\neg \alpha \rightarrow (\neg \beta \rightarrow \neg \alpha))$ ref{A1}
 
 if $\neg \alpha$:
 
-    $(\neg \beta \rightarrow \neg \alpha)$ ref{DT1, A} label{B}
+    $(\neg \beta \rightarrow \neg \alpha)$ ref{DT1}
 
-    $((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ ref{A3} label{C}
+    $((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ ref{A3}
 
-    $(\alpha \rightarrow \beta)$ ref{MP, B, C} label{D}
+    $(\alpha \rightarrow \beta)$ ref{MP}
 
-$(\neg \alpha \rightarrow (\alpha \rightarrow \beta))$ ref{DT2, D}
-
+$(\neg \alpha \rightarrow (\alpha \rightarrow \beta))$ ref{DT2}
 

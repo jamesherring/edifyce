@@ -680,12 +680,10 @@ class AbstractSyntaxTree(object):
 
                             else:
                                 # New pattern
-                                new_pattern = StringPattern(name="antecedent", pattern=stripped_line)
+                                new_pattern = StringPattern(name="antecedent", pattern=stripped_line, pre_format=context.pre_format)
 
                                 # Add variables
-                                for key, value in context.string_variables.items():
-                                    if key in stripped_line:
-                                        new_pattern.add_variable(key, value)
+                                new_pattern.add_variables(context.string_variables)
 
                                 current_object.antecedents.append(new_pattern)
 
@@ -708,13 +706,12 @@ class AbstractSyntaxTree(object):
                                 # New pattern
                                 current_object.deduction = StringPattern(
                                     name="deduction",
-                                    pattern=stripped_line
+                                    pattern=stripped_line,
+                                    pre_format=context.pre_format
                                 )
 
                                 # Add variables
-                                for key, value in context.string_variables.items():
-                                    if key in stripped_line:
-                                        current_object.deduction.add_variable(key, value)
+                                current_object.deduction.add_variables(context.string_variables)
 
                     return
 
