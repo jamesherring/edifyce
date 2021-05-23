@@ -34,7 +34,7 @@ class FormalSystem(object):
         self.formatting = pre_format if pre_format is not None else dict()
 
     def get_references(self, text):
-        # Get references to external proofs from the given code
+        # Get references to external proofs from the given code.
 
         # Create a default context
         context = copy(self.proof_context)
@@ -83,8 +83,6 @@ class FormalSystem(object):
         if proof is None:
             # Create a new proof instance
             proof = Proof(formal_system=self)
-            proof.valid = True
-
             proof.reference_proofs = reference_proofs
 
         if proof_context is None:
@@ -102,6 +100,9 @@ class FormalSystem(object):
 
             # Create a proof line for this line
             proof_line = proof.add_proof_line(line, proof_context)
+
+            # Assume valid unless we find an issue
+            proof_line.valid = True
 
             if proof_line.empty:
                 # Ignore blank lines
@@ -351,6 +352,10 @@ class FormalSystem(object):
                         # Otherwise, get the referenced proof
                         ref_proof = reference_proofs[slug]
 
+                        if ref_proof.has_warnings or not ref_proof.valid:
+                            # Referenced proof has errors
+                            proof_line.warning_message = slug + " has unresolved errors."
+
                         if len(parts) == 1:
                             # No other parts - reference to the entire proof file
                             proof.reference_context[label] = ref_proof
@@ -380,18 +385,20 @@ class FormalSystem(object):
                 proof_line.valid = False
 
         if line_number_offset == 0:
-            # Check if the proof is valid
+            # Check if the proof is valid or has warnings
 
             proof.valid = True
+            proof.has_warnings = False
 
             for line in proof.proof_lines:
-                if line.line_type is None and not line.empty:
+                if not line.valid:
                     proof.valid = False
-                    continue
+                    break
 
-                if line.line_type is not None and line.line_type.behaviour == "logical" and not line.valid:
-                    proof.valid = False
-                    continue
+            for line in proof.proof_lines:
+                if line.warning_message is not None:
+                    proof.has_warnings = True
+                    break
 
         return proof
 
@@ -669,6 +676,9 @@ class Proof(object):
         # Whether the proof is valid
         self.valid = None
 
+        # Any warnings for the proof
+        self.has_warnings = False
+
         # The proof lines leading to the result
         self.proof_lines = []
 
@@ -690,10 +700,20 @@ class Proof(object):
         self.proof_lines.append(proof_line)
         return proof_line
 
+    def indicator(self):
+        # Get the indicator level
+        if not self.valid:
+            return "error"
+
+        if self.has_warnings:
+            return "warning"
+
+        return "ok"
+
     def data(self):
         # Get data for this proof
         return {
-            "valid": self.valid,
+            "indicator": self.indicator(),
             "lines": [line.data() for line in self.proof_lines]
         }
 
@@ -714,15 +734,6 @@ class Proof(object):
         # Split the ref into parts
         ref_parts = ref.split(", ")
         key = ref_parts[0]
-
-        # Check the axioms
-        # for ax in self.formal_system.axioms:
-        #     if key == ax.label:
-        #         # It's an axiom
-        #         return {
-        #             "axiom": self.formal_system.axiom_dict[key],
-        #             "key": key
-        #         }
 
         for ir in self.formal_system.inference_rules:
             if key == ir.label:
@@ -846,6 +857,9 @@ class ProofLine(object):
         # Invalid message
         self.invalid_message = None
 
+        # Warning message
+        self.warning_message = None
+
         # Line may be empty
         self.empty = len(self.text) == 0
 
@@ -962,6 +976,7 @@ class ProofLine(object):
             "behaviour": self.line_type.behaviour if self.line_type is not None else None,
             "name": self.line_type.name if self.line_type is not None else None,
             "invalid_message": self.invalid_message,
+            "warning_message": self.warning_message,
             "reference": self.reference_string,
             "label": self.label,
             "display": self.display,

@@ -8,7 +8,8 @@
     <p id="system_id" class="hidden">{{ system.id }}</p>
 
     <h3>
-        <a href="{% url 'website:formal_system' system.id system.slug %}">{{ system.name }}</a> / <a href="{% url 'website:proof' proof.id proof.slug %}">{{ proof.name }}</a>
+        <a href="{% url 'website:formal_system' system.id system.slug %}">{{ system.name }}</a> /
+        <a href="{% url 'website:proof' proof.id proof.slug %}">{{ proof.name }}</a>
     </h3>
 
     <div class="top-right">

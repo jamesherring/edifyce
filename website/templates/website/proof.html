@@ -7,7 +7,7 @@
 
     {{ proof.proof.data|json_script:"proof_data" }}
 
-    <h1><span class="indicator" data-valid="{{ proof.proof.valid }}"></span>{{ proof.name }}</h1>
+    <h1><span class="indicator" data-indicator="{{ proof.proof.indicator }}"></span>{{ proof.name }}</h1>
 
     <a href="{% url 'website:formal_system' system.id system.slug %}">Back</a><br/>
     <a href="{% url 'website:proof_edit' proof.id proof.slug %}">Edit</a>

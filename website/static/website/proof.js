@@ -9,6 +9,4 @@ $(function() {
      var data = JSON.parse(document.getElementById("proof_data").innerHTML);
      output.populate(data);
 
-    console.log(data.valid);
-
 })

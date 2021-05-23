@@ -105,27 +105,12 @@ class FormalSystemModel(models.Model):
                 reference_proofs[slug] = None
 
         # Create a proof instance
-        return self.formal_system.parse(code, reference_proofs=reference_proofs)
+        proof = self.formal_system.parse(code, reference_proofs=reference_proofs)
+
+        return proof
 
     def __str__(self):
         return self.name
-
-
-# # Create an empty axioms file for each System
-# @receiver(post_save, sender=FormalSystemModel)
-# def create_empty_axioms(sender, instance, created, **kwargs):
-#     if created:
-#         # Create an empty axioms proof
-#
-#         axioms = ProofModel()
-#         axioms.name = "Axioms"
-#         axioms.formal_system = instance
-#         axioms.set_code("")
-#
-#         axioms.save()
-#
-#         instance.axioms = axioms
-#         instance.save()
 
 
 class ProofModel(models.Model):
