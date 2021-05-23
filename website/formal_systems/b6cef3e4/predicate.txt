@@ -92,13 +92,13 @@ FormalSystem Predicate:
         not has_parent(f as forall; f.x == self)
 
     formula.free_variables():
-        instances(v as variable; v.free)
+        instances(v as variable; v.free())
 
     formula.bound_variables():
-        instances(v as variable; (not v.free) and (not v.parent().pattern() == forall))
+        instances(v as variable; (not v.free()) and (not v.parent().pattern() == forall))
 
     term.is_free_for(x as variable, alpha as formula):
-        alpha.free_variables.each(instance):
+        alpha.free_variables().each(instance):
             (not instance == x) or (not instance.has_parent(f as forall; f.x.equal_any(self.instances(variable))))
 
     # Create a default proof context
@@ -184,7 +184,7 @@ FormalSystem Predicate:
         behaviour: none
         context.string_variables:
             # Extend with all the keys
-            match.keys: match.p.lookup()
+            match.keys(): match.p.lookup()
 
     Regex comment_pattern:
         ^#.*$
@@ -205,8 +205,25 @@ FormalSystem Predicate:
         behaviour: indent
         context.given:
             # Add pattern parts to given set
-            union: match.parts
-
+            union: match.parts()
+            
+    Regex import_path:
+        ^[a-zA-Z0-9_\.]+$
+        
+    Pattern import_pattern:
+        with path as import_path, label as variable_name:
+            import path as label
+            
+    import_pattern.path():
+        path.string()
+        
+    import_pattern.label():
+        label.string()
+            
+    LineType import:
+        pattern: import_pattern
+        behaviour: import
+        
     with $\alpha$, $\beta$ as formula:
         InferenceRule Modus_Ponens:
             label:

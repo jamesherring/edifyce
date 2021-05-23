@@ -254,18 +254,17 @@ class Match(object):
             return self.get_by_path(initial, context).get_by_path(remainder, context)
 
         # Otherwise, only one part
-
         if path == "parent()":
             return self.parent_match
 
         elif path == "pattern()":
             return self.pattern
 
+        elif len(path) > 2 and path[-2:] == "()" and path[:-2] in self.pattern.attributes:
+            return self.run_function(path[:-2], context)
+
         elif path in self.sub_matches:
             return self.sub_matches[path]
-
-        elif path in self.pattern.attributes:
-            return self.run_function(path, context)
 
         elif path == "lookup()":
             # Look up the value in context

@@ -1,23 +1,18 @@
 
-let $\alpha$, $\beta$, $\gamma$ be formula
+let $\alpha$, $\beta$ be formula
 
-$(\alpha \rightarrow (\beta \rightarrow \alpha))$ label{Ax: A1}
+import axioms as ax
 
-$((\alpha \rightarrow (\beta \rightarrow \gamma)) \rightarrow ((\alpha \rightarrow \beta) \rightarrow (\alpha \rightarrow \gamma)))$ label{Ax: A2}
-
-$((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ label{Ax: A3}
-
-
-
-$(\neg \alpha \rightarrow (\neg \beta \rightarrow \neg \alpha))$ ref{A1}
+$(\neg \alpha \rightarrow (\neg \beta \rightarrow \neg \alpha))$ ref{ax.A1}
 
 if $\neg \alpha$:
 
     $(\neg \beta \rightarrow \neg \alpha)$ ref{DT1}
 
-    $((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ ref{A3}
+    $((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ ref{ax.A3}
 
     $(\alpha \rightarrow \beta)$ ref{MP}
 
 $(\neg \alpha \rightarrow (\alpha \rightarrow \beta))$ ref{DT2}
+
 
