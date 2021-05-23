@@ -1,7 +1,7 @@
+import axioms as ax
+
 
 let $\alpha$, $\beta$ be formula
-
-import axioms as ax
 
 $(\neg \alpha \rightarrow (\neg \beta \rightarrow \neg \alpha))$ ref{ax.A1}
 
@@ -14,5 +14,3 @@ if $\neg \alpha$:
     $(\alpha \rightarrow \beta)$ ref{MP}
 
 $(\neg \alpha \rightarrow (\alpha \rightarrow \beta))$ ref{DT2}
-
-

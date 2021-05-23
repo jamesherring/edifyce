@@ -84,20 +84,27 @@ function proofDisplayClass(parent) {
 
         // Get validation columns
         var colour = "#F00";
+        var message = data.invalid_message;
         if (data.valid) {
-            if (!(data.behaviour == "logical")) {
-                // Line is valid, but not logical, so no need for any feedback
+            if (!(["logical", "import"].includes(data.behaviour))) {
+                // Line is valid, but not logical or import, so no need for any feedback
                 return;
             }
             colour = "#0F0";
+        }
+
+        if ((data.valid) && (data.warning_message)) {
+            // There is a warning message
+            colour = "#FFA500";
+            message = data.warning_message;
         }
 
         var indicator_cell = $("<td class='indicator' style='background-color: " + colour + "'></td>");
         $(row).append(indicator_cell);
 
 
-        if (data.invalid_message) {
-            var message_cell = $("<span class='tooltiptext'>" + data.invalid_message + "</span>");
+        if (message) {
+            var message_cell = $("<span class='tooltiptext'>" + message + "</span>");
             $(indicator_cell).append(message_cell);
             $(indicator_cell).addClass("tooltip");
         }
