@@ -56,10 +56,13 @@ class FormalSystem(object):
                 if result is None:
                     continue
 
-                subs = result.get_sub_matches()
-
                 # Get the path
-                path = subs["path"].string
+                try:
+                    path = result.get_by_path("path()", context)
+
+                except Exception as e:
+                    # No valid path here
+                    continue
 
                 # The proof reference is the first part
                 parts = path.split(".")
@@ -88,8 +91,12 @@ class FormalSystem(object):
             # Create a new proof context instance
             proof_context = copy(self.proof_context)
 
-        i = 0
-        while i < len(lines):
+        i = -1
+        while i + 1 < len(lines):
+
+            # Increment at the start so we can use 'continue' without concern
+            i += 1
+
             line = lines[i].rstrip()
             line_number = line_number_offset + i + 1
 
@@ -98,7 +105,6 @@ class FormalSystem(object):
 
             if proof_line.empty:
                 # Ignore blank lines
-                i += 1
                 continue
 
             # Check the line is of a given line type
@@ -122,7 +128,7 @@ class FormalSystem(object):
                 # Try to get the formula, reference, label, display
                 try:
                     # Add formula to the proof line
-                    proof_line.formula = result.get_by_path("formula", proof_context)
+                    proof_line.formula = result.get_by_path("formula()", proof_context)
 
                     # It has to be a match
                     if type(proof_line.formula) is not Match:
@@ -132,7 +138,7 @@ class FormalSystem(object):
                     pass
 
                 try:
-                    reference_string = result.get_by_path("reference", proof_context)
+                    reference_string = result.get_by_path("reference()", proof_context)
 
                     if type(reference_string) is str:
                         proof_line.reference_string = reference_string
@@ -141,7 +147,7 @@ class FormalSystem(object):
                     pass
 
                 try:
-                    label = result.get_by_path("label", proof_context)
+                    label = result.get_by_path("label()", proof_context)
                     proof_line.label = label
 
                 except Exception as e:
@@ -149,7 +155,7 @@ class FormalSystem(object):
 
                 # Check if the line type has a 'display' value
                 try:
-                    proof_line.display = result.get_by_path("display", proof_context)
+                    proof_line.display = result.get_by_path("display()", proof_context)
                 except Exception as e:
                     # No valid display path
                     pass
@@ -223,7 +229,6 @@ class FormalSystem(object):
                             break
 
                         # No axioms work, need to try inference rules
-                        i += 1
                         continue
 
                     # Use the given reference and formula
@@ -321,42 +326,46 @@ class FormalSystem(object):
                 elif line_type.behaviour == "import":
                     # Import a file or result
 
-                    subs = result.get_sub_matches()
-
                     # Get the path and reference
-                    path = subs["path"].string
-                    reference = subs["reference"].string
+                    try:
+                        path = result.get_by_path("path()", proof_context)
+                        label = result.get_by_path("label()", proof_context)
 
-                    # Get the line from the import path
-                    parts = path.split(".")
+                        # Get the line from the import path
+                        parts = path.split(".")
 
-                    if len(parts) > 2:
-                        # Too many parts
+                        if len(parts) > 2:
+                            # Too many parts
+                            proof_line.valid = False
+                            proof_line.invalid_message = "Could not parse path"
+                            continue
+
+                        slug = parts[0].replace("_", "-")
+
+                        if slug not in proof.reference_proofs or proof.reference_proofs[slug] is None:
+                            # Don't recognise slug
+                            proof_line.valid = False
+                            proof_line.invalid_message = "Could not find file."
+                            continue
+
+                        # Otherwise, get the referenced proof
+                        ref_proof = reference_proofs[slug]
+
+                        if len(parts) == 1:
+                            # No other parts - reference to the entire proof file
+                            proof.reference_context[label] = ref_proof
+                            continue
+
+                        # Otherwise, two parts
+                        ref_line = ref_proof.get_reference(parts[1])
+
+                        # Add to proof context
+                        proof.reference_context[label] = ref_line
+
+                    except Exception as e:
+                        # No valid path or label
                         proof_line.valid = False
-                        proof_line.invalid_message = "Could not parse path"
-                        continue
-
-                    slug = parts[0].replace("_", "-")
-
-                    if slug not in proof.reference_proofs or proof.reference_proofs[slug] is None:
-                        # Don't recognise slug
-                        proof_line.valid = False
-                        proof_line.invalid_message = "Could not find file."
-                        continue
-
-                    # Otherwise, get the referenced proof
-                    ref_proof = reference_proofs[slug]
-
-                    if len(parts) == 1:
-                        # No other parts - reference to the entire proof file
-                        proof.context[reference] = ref_proof
-                        continue
-
-                    # Otherwise, two parts
-                    ref_line = ref_proof.get_reference(parts[1])
-
-                    # Add to proof context
-                    proof.context[reference] = ref_line
+                        proof_line.invalid_message = "Could not get path or label from import line: " + str(e)
 
                 elif line_type.behaviour == "none":
                     # Don't need to do anything :)
@@ -369,8 +378,6 @@ class FormalSystem(object):
                 # The line doesn't match any of the line types. Invalid proof
                 proof_line.invalid_message = "Could not parse line."
                 proof_line.valid = False
-
-            i += 1
 
         if line_number_offset == 0:
             # Check if the proof is valid
@@ -868,14 +875,11 @@ class ProofLine(object):
             # Get the match
             return self.match
 
-        if path == "is_root()":
-            return self.is_root()
-
         if path == "pattern":
             return self.line_type.pattern
 
-        if path in self.line_type.attributes:
-            return self.get_by_path(self.line_type.get_attribute(path), proof_context)
+        if len(path) > 2 and path[-2:] == "()" and path[:-2] in self.line_type.attributes:
+            return self.get_by_path(self.line_type.get_attribute(path[:-2]), proof_context)
 
         if path in self.context:
             # Check self context first
