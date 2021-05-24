@@ -23,7 +23,7 @@ $(function() {
 
     // Get the validation data script
     var proof_data = JSON.parse(document.getElementById("proof_data").innerHTML);
-    output.populate(proof_data);
+    output.populate(proof_data, false);
 
 
     function validate_proof() {
@@ -36,12 +36,8 @@ $(function() {
                 "code": editor.editor.getValue()
             },
             function(response) {
-
                 // Populate the output with the validation data
-                output.populate(response.data);
-
-                // Parse mathjax
-                MathJax.typeset();
+                output.populate(response.data, true);
             }
         )
     }
@@ -49,7 +45,6 @@ $(function() {
     var previous_code = editor.editor.getValue();
 
     editor.editor.session.on("change", function(e) {
-
         // Validate the proof 500ms after any changes
         window.clearTimeout(window.timeout);
         window.timeout = setTimeout(validate_proof, 250);
@@ -66,13 +61,8 @@ $(function() {
                 "code": editor.editor.getValue()
             },
             function(response) {
-
                 // Populate the output with the validation data
-                output.populate(response.data);
-
-                // Parse mathjax
-                MathJax.typeset();
-
+                output.populate(response.data, true);
             }
         )
     });

@@ -701,6 +701,9 @@ class Match(object):
             # We can take this as equal
             return True
 
+        # No apparent relation between self and other
+        return None
+
         # Check the restrictions.
         mapping = None
         if self_var:

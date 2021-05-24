@@ -202,110 +202,7 @@ class FormalSystem(object):
 
                 elif line_type.behaviour == "logical":
                     # Logical lines for parsing
-
-                    if proof_line.formula is None:
-                        # No formula
-                        proof_line.valid = False
-                        proof_line.invalid_message = "No formula defined for logical line."
-                        continue
-
-                    if proof_line.label is not None:
-                        # Add label to reference context
-                        proof.reference_context[proof_line.label] = proof_line
-
-                    if proof_line.reference_string is None:
-                        valid = False
-
-                        # Try to work out the deduction. First try the axioms
-                        for axiom in self.axioms:
-                            if axiom.match(proof_line.formula.formatted_string(), proof_context) is not None:
-                                # It's a match
-                                proof_line.valid = True
-                                proof_line.axiom = axiom
-                                valid = True
-                                break
-
-                        if valid:
-                            # No need to carry on
-                            break
-
-                        # No axioms work, need to try inference rules
-                        continue
-
-                    # Use the given reference and formula
-
-                    # Get the reference
-                    reference = proof.get_reference(proof_line.reference_string)
-
-                    if type(reference) is ProofLine and reference.is_axiom:
-                        # This is an axiom
-
-                        # Get the axiom pattern
-                        axiom = reference.formula.create_pattern(string_variables=proof_context["string_variables"])
-                        key = reference.label
-
-                        # Update the StringPattern name
-                        axiom.name = key
-
-                        # Check the formula is an instance of this axiom
-                        if axiom.match(proof_line.formula.formatted_string(), proof_context) is None:
-                            # Doesn't fit this axiom - step is invalid
-                            proof_line.valid = False
-                            proof_line.invalid_message = "Not an instance of " + key + "."
-
-                        else:
-                            # Otherwise, axiom matches
-                            proof_line.axiom = axiom
-
-                    elif type(reference) is dict and "inference_rule" in reference:
-                        # It's an inference rule
-
-                        inference_rule = reference["inference_rule"]
-                        key = reference["key"]
-
-                        # Get the antecedent lines
-                        antecedents = reference["antecedents"]
-
-                        if len(antecedents) == 0 and len(inference_rule.antecedents) < 5:
-                            # Antecedents not provided. Try to justify:
-                            proof.justify(
-                                deduction=proof_line,
-                                proof_context=proof_context,
-                                inference_rule=inference_rule
-                            )
-
-                        else:
-                            # Check the number of antecedents given
-                            if not len(antecedents) == len(inference_rule.antecedents):
-                                # Wrong number of antecedents
-                                proof_line.valid = False
-                                proof_line.invalid_message = key + " requires " + \
-                                    str(len(inference_rule.antecedents)) + " antecedent(s)."
-                                continue
-
-                            # Try any permutation of the given antecedents
-                            permutation_found = False
-                            for permutation in list(itertools.permutations(antecedents)):
-                                if inference_rule.check(
-                                        antecedents=permutation,
-                                        deduction=proof_line,
-                                        proof_context=proof_context
-                                ):
-                                    # It's a valid permutation
-                                    proof_line.antecedents = permutation
-                                    proof_line.inference_rule = inference_rule
-
-                                    permutation_found = True
-                                    break
-
-                            if not permutation_found:
-                                # Not a valid line
-                                proof_line.valid = False
-                                proof_line.invalid_message = key + " does not apply."
-
-                    else:
-                        proof_line.invalid_message = "Invalid reference '" + reference_string + "'."
-                        proof_line.valid = False
+                    proof.check_logical_line(proof_line, proof_context)
 
                 elif line_type.behaviour == "axiom":
                     # Introduce an axiom to the system
@@ -759,6 +656,113 @@ class Proof(object):
         # Nothing works
         return None
 
+    def check_logical_line(self, proof_line, proof_context):
+        # Check if the given proof line is valid.
+
+        if proof_line.formula is None:
+            # No formula
+            proof_line.valid = False
+            proof_line.invalid_message = "No formula defined for logical line."
+            return False
+
+        if proof_line.label is not None:
+            # Add label to reference context
+            self.reference_context[proof_line.label] = proof_line
+
+        if proof_line.reference_string is None:
+
+            # Try to work out the deduction. Try the axioms
+            for axiom in self.formal_system.axioms:
+                if axiom.match(proof_line.formula.formatted_string(), proof_context) is not None:
+                    # It's a match
+                    proof_line.axiom = axiom
+                    return True
+
+        # Use the given reference and formula
+
+        # Get the reference
+        reference = self.get_reference(proof_line.reference_string)
+
+        if type(reference) is ProofLine and reference.is_axiom:
+            # This is an axiom
+
+            # Get the axiom pattern
+            axiom = reference.formula.create_pattern(string_variables=proof_context["string_variables"])
+            key = reference.label
+
+            # Update the StringPattern name
+            axiom.name = key
+
+            # Check the formula is an instance of this axiom
+            if axiom.match(proof_line.formula.formatted_string(), proof_context) is None:
+                # Doesn't fit this axiom - step is invalid
+                proof_line.valid = False
+                proof_line.invalid_message = "Not an instance of " + key + "."
+                return False
+
+            else:
+                # Otherwise, axiom matches
+                proof_line.axiom = axiom
+                return True
+
+        if not (type(reference) is dict and "inference_rule" in reference):
+            proof_line.invalid_message = "Invalid reference '" + proof_line.reference_string + "'."
+            proof_line.valid = False
+            return False
+
+        # Otherwise, it's an inference rule
+
+        inference_rule = reference["inference_rule"]
+        key = reference["key"]
+
+        # Get the antecedent lines
+        antecedents = reference["antecedents"]
+
+        if len(antecedents) == 0 and len(inference_rule.antecedents) == 0:
+            # No antecedents for this inference rule
+            if inference_rule.check(
+                    antecedents=[],
+                    deduction=proof_line,
+                    proof_context=proof_context
+            ):
+                # It's a valid line
+                proof_line.antecedents = []
+                proof_line.inference_rule = inference_rule
+                return True
+
+        if len(antecedents) == 0 and len(inference_rule.antecedents) < 5:
+            # Antecedents not provided. Try to justify:
+            return self.justify(
+                deduction=proof_line,
+                proof_context=proof_context,
+                inference_rule=inference_rule
+            )
+
+        # Otherwise, check the number of antecedents given
+        if not len(antecedents) == len(inference_rule.antecedents):
+            # Wrong number of antecedents
+            proof_line.valid = False
+            proof_line.invalid_message = key + " requires " + str(len(inference_rule.antecedents)) + " antecedent(s)."
+            return False
+
+        # Try any permutation of the given antecedents
+        for permutation in list(itertools.permutations(antecedents)):
+            if inference_rule.check(
+                    antecedents=permutation,
+                    deduction=proof_line,
+                    proof_context=proof_context
+            ):
+                # It's a valid permutation
+                proof_line.antecedents = permutation
+                proof_line.inference_rule = inference_rule
+
+                return True
+
+        # No valid permutation found, not a valid line
+        proof_line.valid = False
+        proof_line.invalid_message = key + " does not apply."
+        return False
+
     def justify(self, deduction, proof_context, inference_rule=None):
         # Artificially try to find a justification for the given reference. Optionally specify a inference rule.
 
@@ -809,8 +813,8 @@ class ProofLine(object):
         # The text string on this line
         self.text = text
 
-        # The text to display on this line. By default equal to the actual text.
-        self.display = text
+        # The text to display on this line. By default equal to the actual text, stripped.
+        self.display = text.strip()
 
         # A frozen context - useful to later refer to from inference rules
         self.context = context
