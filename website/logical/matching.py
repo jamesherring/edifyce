@@ -1526,10 +1526,12 @@ class StringPattern(Pattern):
                     for name, sub in remainder_match.sub_matches.items():
                         m.add_submatch(name, sub)
 
+                    sub_pattern_match = sub_pattern.match(string_var, context, debug=next_debug)
+
                     # Add the string variable
                     m.add_submatch(
                         var=var,
-                        m=sub_pattern.match(string_var, context, debug=next_debug)
+                        m=sub_pattern_match
                     )
 
                     return m
@@ -1984,8 +1986,8 @@ class AbstractPattern(Pattern):
     def match(self, s, context, debug=None):
         # Try to match s in the given context
 
-        # s only matches if there is a variable of this pattern
-        if s in context["variables"] and context["variables"][s] is self:
+        # s only matches if there is a string variable of this pattern
+        if s in context["string_variables"] and context["string_variables"][s] is self:
             return Match(
                 pattern=self,
                 string=s
