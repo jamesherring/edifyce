@@ -3,7 +3,7 @@ $(function() {
 
     var container = $("div#ace-container");
     var editor = new codeEditorClass(container);
-    editor.editor.session.setMode("ace/mode/python");
+    editor.editor.session.setMode("ace/mode/yaml");
 
     // Set the editor height
     var y = $(container).offset().top;

@@ -1,8 +1,8 @@
 
 # Create a format dictionary for tex
 Format tex:
-    # Treat multiple spaces as a single space
-    (?P<char>[^\s])\s\s+: \g<char>\s
+    # Treat multiple spaces between characters as a single space
+    (?P<char1>[^\s])\s\s+(?P<char2>[^\s]): \g<char1> \g<char2>
     
     # Ignore $...$ surrounding formulae
     \$(?P<inner>.*?)\$: \g<inner>
@@ -269,6 +269,7 @@ FormalSystem Predicate:
                 As
                 
             antecedents:
+                # No antecedents!
                 
             deduction:
                 $\alpha$
