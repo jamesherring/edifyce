@@ -1,13 +1,19 @@
 function proofDisplayClass(parent) {
     // A class structure for proof displays
 
+    this.parent = parent;
+
     this.clear = function() {
         // Clear the table
         $(this.parent).empty();
     }
 
-    this.populate = function(data) {
+    this.populate = function(data, mathjax) {
         // Populate the table with the given data.
+
+        // Persist the parent scrollTop value
+        var scrollTop = this.parent.scrollTop();
+
 
         // First clear the table
         this.clear();
@@ -21,13 +27,21 @@ function proofDisplayClass(parent) {
             this.add_row(i + 1, data.lines[i]);
         }
 
+        if (mathjax) {
+            // Parse mathjax
+            MathJax.typeset();
+        }
+
+        // Set the scrollTop value
+        this.parent.scrollTop(scrollTop);
+
     }
 
     this.add_row = function(line_number, data) {
         // Add a row to the table with the given line. Provide optional validation data
 
-        // Get the display value and trim trailing whitespace
-        var line = " ".repeat(data.indent) + data.display.replace(/\s+$/, "");
+        // Get the display value
+        var line = " ".repeat(data.indent) + data.display;
 
         // Check if the line contains a reference of the form "ref{...}"
         var index = line.indexOf("ref{");
@@ -68,7 +82,7 @@ function proofDisplayClass(parent) {
         }
         $(row).append(line_cell);
 
-        if (data && data.line_name == "comment") {
+        if (data.behaviour == "comment") {
             $(line_cell).addClass("comment");
         }
 
@@ -110,7 +124,5 @@ function proofDisplayClass(parent) {
         }
 
     }
-
-    this.parent = parent;
 
 }

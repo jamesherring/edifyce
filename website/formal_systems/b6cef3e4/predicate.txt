@@ -264,6 +264,18 @@ FormalSystem Predicate:
             condition:
                 deduction.given.union(set(alpha)) == antecedents[0].given
 
+        InferenceRule Assumed:
+            label:
+                As
+                
+            antecedents:
+                
+            deduction:
+                $\alpha$
+                
+            condition:
+                alpha in deduction.given
+                
         InferenceRule Thinning:
             label:
                 T

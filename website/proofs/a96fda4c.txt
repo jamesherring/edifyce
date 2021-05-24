@@ -14,3 +14,28 @@ if $\neg \alpha$:
     $(\alpha \rightarrow \beta)$ ref{MP}
 
 $(\neg \alpha \rightarrow (\alpha \rightarrow \beta))$ ref{DT2}
+
+
+
+let $\gamma$, $\delta$ be formula
+
+$(\neg \gamma \rightarrow (\gamma \rightarrow (\delta \rightarrow \delta)))$ ref{Th}
+
+
+if $\gamma$, $\delta$:
+    if $\neg \gamma$:
+        $(\neg \gamma \rightarrow (\gamma \rightarrow (\delta \rightarrow \delta)))$ ref{T}
+        
+        $\neg \gamma$ ref{As}
+        
+        $(\gamma \rightarrow (\delta \rightarrow \delta))$ ref{MP}
+        
+        $\gamma$ ref{As}
+        
+        $(\delta \rightarrow \delta)$ ref{MP}
+        
+        $\delta$ ref{As}
+        
+        $\delta$ ref{MP}
+        
+    
