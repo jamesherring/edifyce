@@ -288,4 +288,4 @@ FormalSystem Predicate:
                 $\beta$
 
             condition:
-                antecedents[0].maps_onto(deduction)
+                beta.maps_onto(alpha)
