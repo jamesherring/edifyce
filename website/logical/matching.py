@@ -351,6 +351,11 @@ class Match(object):
         elif path == "string()":
             return self.string
 
+        elif path[:10] == "maps_onto(" and path[-1] == ")":
+            inner = path[10:-1]
+            other = self.get_by_path(inner, context)
+            return self.maps_onto(other, context)
+
         elif path in context:
             return context[path]
 
@@ -769,6 +774,14 @@ class Match(object):
         pattern.add_variables(string_variables)
 
         return pattern
+
+    def maps_onto(self, other, context):
+        # Check if this match maps onto the other.
+
+        # Get the pattern
+        other_pattern = other.create_pattern(context["string_variables"])
+
+        return other_pattern.match(self.string, context) is not None
 
     def __str__(self):
         return self.string
