@@ -49,7 +49,10 @@ td.comment {
 
 td.line-number {
     text-align: right;
-    background-color: #CCC;
+    background-color: #f0f0f0;
+    color: #333;
+    cursor: default;
+    font: 12px/normal 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace;
     padding: 0 0.5em 0 0;
     max-width: 3em;
 }

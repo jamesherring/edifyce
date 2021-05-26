@@ -96,7 +96,10 @@ class Context(object):
     def __init__(self):
 
         # Variables in the code
-        self.variables = dict()
+        self.variables = {
+            # Include system condition by default
+            "_system_condition_": SystemConditionPattern(name="System Condition")
+        }
 
         # String variables for inside patterns
         self.string_variables = dict()
@@ -442,7 +445,7 @@ class AbstractSyntaxTree(object):
 
                         pattern = context.variables[reference]
 
-                        if type(pattern) not in (StringPattern, UnionPattern, RegexPattern, AbstractPattern):
+                        if not isinstance(pattern, Pattern):
                             self.error = "'" + reference + "' is not a pattern."
                             return
 
@@ -574,6 +577,9 @@ class AbstractSyntaxTree(object):
                 value_string = stripped[index + 2:]
 
                 if value_string == "set()":
+                    current_object[key] = set()
+
+                elif value_string == "MatchSet()":
                     current_object[key] = MatchSet()
 
                 elif value_string == "dict()":
