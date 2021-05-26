@@ -17,9 +17,15 @@ let $x$, $y$, $z$ be variable
 let $t$ be term
 
 
-# if $t$.is_free_for($x$, $\alpha$) and $\beta$ == $\alpha$.replace($x$, $t$, $x$.free):
+# if $t$.is_free_for($x$, $\alpha$) and $\beta$ == $\alpha$.replace($x$, $t$, $x$.free()):
 
-    # $(\forall x \; \alpha \rightarrow \beta)$ ref{A4} label{B4}
+if $\beta$ == $\alpha$.replace($x$, $t$):
+
+    $(\forall x \; \alpha \rightarrow \beta)$ label{Ax: A4}
+
+
+
+
 
 
 

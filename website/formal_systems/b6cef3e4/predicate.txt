@@ -103,7 +103,8 @@ FormalSystem Predicate:
 
     # Create a default proof context
     ProofContext:
-        given: set()
+        given: MatchSet()
+        conditions: set()
         string_variables: dict()
         
     Regex reference:
@@ -184,7 +185,7 @@ FormalSystem Predicate:
         behaviour: none
         context.string_variables:
             # Extend with all the keys
-            match.keys(): match.p.lookup()
+            match().keys(): match().p.lookup()
 
     Regex comment_pattern:
         ^#.*$
@@ -205,7 +206,20 @@ FormalSystem Predicate:
         behaviour: indent
         context.given:
             # Add pattern parts to given set
-            union: match.parts()
+            union: match().parts()
+            
+    Pattern if_condition_pattern:
+        # _system_condition_ is not a pattern but matches only if the given
+        # string parses successfully as a Condition.
+        with sc as _system_condition_:
+            if sc:
+            
+    LineType if_condition:
+        pattern: if_condition_pattern
+        behaviour: indent
+        context.conditions:
+            # Add condition to context
+            add: match().sc.string()
             
     Regex import_path:
         ^[a-zA-Z0-9_\.]+$
@@ -237,7 +251,7 @@ FormalSystem Predicate:
 
             condition:
                 # Conditional on the deduction given set containing the antecedent given sets
-                antecedents[0].given.union(antecedents[1].given).issubset(deduction.given)
+                (antecedents[0].given.union(antecedents[1].given).issubset(deduction.given)) and (antecedents[0].conditions.union(antecedents[1].conditions).issubset(deduction.conditions))
 
         InferenceRule Deduction_Theorem_1:
             label:
@@ -249,7 +263,7 @@ FormalSystem Predicate:
                 $\beta$
 
             condition:
-                antecedents[0].given.issubset(deduction.given) and alpha in deduction.given
+                (antecedents[0].given.issubset(deduction.given)) and (alpha in deduction.given) and (antecedents[0].conditions.issubset(deduction.conditions))
 
         InferenceRule Deduction_Theorem_2:
             label:
@@ -262,7 +276,7 @@ FormalSystem Predicate:
                 $(\alpha \rightarrow \beta)$
 
             condition:
-                deduction.given.union(set(alpha)) == antecedents[0].given
+                (deduction.given.union(set(alpha)) == antecedents[0].given) and (antecedents[0].conditions == deduction.conditions)
 
         InferenceRule Assumed:
             label:
@@ -288,7 +302,7 @@ FormalSystem Predicate:
                 $\alpha$
 
             condition:
-                antecedents[0].given.issubset(deduction.given)
+                (antecedents[0].given.issubset(deduction.given)) and (antecedents[0].conditions.issubset(deduction.conditions))
 
         InferenceRule Theorem:
             label:
@@ -301,4 +315,4 @@ FormalSystem Predicate:
                 $\beta$
 
             condition:
-                beta.maps_onto(alpha)
+                (beta.maps_onto(alpha)) and (antecedents[0].given == deduction.given) and (antecedents[0].conditions == deduction.conditions)

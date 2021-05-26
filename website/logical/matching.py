@@ -24,6 +24,66 @@ def parse_path(path):
     return path, None
 
 
+def get_by_path(obj, path, context, recurse=True):
+    # General function to get an object by a path.
+
+    initial, remainder = parse_path(path)
+
+    if remainder:
+        # Chain the parts
+        initial = get_by_path(obj, initial, context)
+
+        if hasattr(initial, "get_by_path"):
+            # Use the native get_by_path first
+            return initial.get_by_path(remainder, context)
+
+        return get_by_path(initial, remainder, context)
+
+    # Otherwise, only one part
+    if path in context["variables"]:
+        return context["variables"][path]
+
+    if path in context["string_variables"]:
+        # Create a match
+        return context["string_variables"][path].match(path, context)
+
+    if path in context:
+        return context[path]
+
+    if "[" in path and path[-1] == "]":
+        # Looks like list lookup
+        index = path.index("[")
+        initial = path[:index]
+        i = int(path[index + 1:-1])
+        return get_by_path(obj, initial, context)[i]
+
+    if type(obj) is set:
+        # obj is a set - need to perform a set operation
+
+        args = None
+        name = initial
+
+        if "(" in initial and initial[-1] == ")":
+            index = initial.index("(")
+            name = initial[:index]
+            arg_names = initial[index + 1:-1].split(", ")
+
+            args = [get_by_path(obj, arg, context) for arg in arg_names]
+
+        fn = getattr(obj, name)
+
+        if args:
+            return fn(*args)
+
+        return fn()
+
+    if obj is not None and recurse:
+        # Try the obj get_by_path without coming back to this fn
+        return obj.get_by_path(path, context, recurse=False)
+
+    raise Exception("Could not find value from path '" + path + "'.")
+
+
 class Condition(object):
     # A condition tree object
 
@@ -190,8 +250,8 @@ class Condition(object):
         # Otherwise atomic - can be parsed by the match
         self.type = "atomic"
 
-    def check_composite(self, obj, context):
-        # Check a composite type condition for the given object
+    def check_condition(self, obj, context):
+        # Check a typically composite type condition for the given object
 
         # Check the possible condition types
         if self.type == "brackets":
@@ -212,8 +272,8 @@ class Condition(object):
         elif self.type in ("in", "not in"):
             # Must be for a match set
 
-            item = obj.get_by_path(self.sub_conditions[0].string, context)
-            match_set = obj.get_by_path(self.sub_conditions[1].string, context)
+            item = get_by_path(obj, self.sub_conditions[0].string, context)
+            match_set = get_by_path(obj, self.sub_conditions[1].string, context)
 
             result = match_set.contains(item, context)
 
@@ -223,7 +283,12 @@ class Condition(object):
             # Negated
             return not result
 
-        raise Exception("Condition is not composite.")
+        # This is an atomic condition
+        if obj is None:
+            # No context object given. Try to get an object from the first condition part
+            return get_by_path(None, self.string, context)
+
+        raise Exception("Couldn't evaluate condition '" + self.string + "'.")
 
 
 class Match(object):
@@ -244,14 +309,14 @@ class Match(object):
         self.sub_matches[var] = m
         m.parent_match = self
 
-    def get_by_path(self, path, context):
+    def get_by_path(self, path, context, recurse=True):
         # Get the value by a path
 
         initial, remainder = parse_path(path)
 
         if remainder:
-            # Chain the parts
-            return self.get_by_path(initial, context).get_by_path(remainder, context)
+            # Use generic get by path
+            return get_by_path(self, path, context)
 
         # Otherwise, only one part
         if path == "parent()":
@@ -262,6 +327,17 @@ class Match(object):
 
         elif len(path) > 2 and path[-2:] == "()" and path[:-2] in self.pattern.attributes:
             return self.run_function(path[:-2], context)
+
+        elif "(" in path and path[:path.index("(")] in self.pattern.attributes:
+            # An attribute function with parameters
+
+            index = path.index("(")
+            name = path[:index]
+
+            arg_strings = path[index + 1:-1].split(", ")
+            args = [self.get_by_path(arg, context) for arg in arg_strings]
+
+            return self.run_function(name, context, params=args)
 
         elif path in self.sub_matches:
             return self.sub_matches[path]
@@ -278,9 +354,6 @@ class Match(object):
             assert type(self.pattern) is UnionPattern
 
             return list(self.sub_matches.values())[0]
-
-        elif path in context["variables"]:
-            return context["variables"][path]
 
         elif path[:10] == "instances(" and path[-1] == ")":
             # Call for instances
@@ -348,6 +421,30 @@ class Match(object):
 
             return self.instances(pattern, context, condition, label=pattern_label, shallow=True)
 
+        elif path[:8] == "replace(" and path[-1] == ")":
+            # Replace
+            inner = path[8:-1]
+            parts = inner.split(", ")
+
+            if len(parts) == 2:
+                needle_string, value_string = parts
+                condition_string = None
+
+            elif len(parts) == 3:
+                needle_string, value_string, condition_string = parts
+
+            else:
+                raise Exception("Match.replace requires 2 or 3 arguments, not " + str(len(parts)) + ".")
+
+            needle = self.get_by_path(needle_string, context)
+            value = self.get_by_path(value_string, context)
+
+            condition = None
+            if condition_string:
+                condition = Condition(condition_string)
+
+            return self.replace(needle, value, context, condition)
+
         elif path == "string()":
             return self.string
 
@@ -355,17 +452,6 @@ class Match(object):
             inner = path[10:-1]
             other = self.get_by_path(inner, context)
             return self.maps_onto(other, context)
-
-        elif path in context:
-            return context[path]
-
-        if "antecedents" in context and path[:12] == "antecedents[" and path[-1] == "]":
-            try:
-                index = int(path[12:-1])
-                return context["antecedents"][index]
-
-            except Exception as e:
-                raise Exception("Could not parse path: '" + path + "'.")
 
         else:
             condition_fns = ["has_parent", "equal_any"]
@@ -376,7 +462,11 @@ class Match(object):
                     condition = Condition(path)
                     return self.check_condition(condition, context)
 
-        raise Exception("Could not parse path: '" + path + "'.")
+        if recurse:
+            # Try generic get_by_path
+            return get_by_path(self, path, context, recurse=False)
+
+        raise Exception("Could not find value from path '" + path + "'.")
 
     def check_condition(self, c, context):
         # Check a condition c - returns true or false
@@ -389,7 +479,7 @@ class Match(object):
         # Check the possible condition types
         if not c.type == "atomic":
             # Composite case
-            return c.check_composite(self, context)
+            return c.check_condition(self, context)
 
         # Otherwise, atomic condition
 
@@ -596,6 +686,24 @@ class Match(object):
                 return True
 
         return False
+
+    def replace(self, needle, value, context, condition=None):
+        # Return a new match replacing sub matches equivalent to needle with value. Optionally specify condition for
+        # needles
+
+        # Start with a copy of the same match
+        m = copy(self)
+
+        if m.equivalent(needle, context):
+            # Easy case
+            if condition is None or self.check_condition(condition, context):
+                return copy(value)
+
+        # Go through the submatches
+        for key, sub_match in m.sub_matches.items():
+            m.sub_matches[key] = sub_match.replace(needle, value, context, condition)
+
+        return m
 
     def pretty_print(self, depth=0):
         # Print the match tree
@@ -963,14 +1071,14 @@ class MatchSet(object):
 
         return True
 
-    def get_by_path(self, path, context):
+    def get_by_path(self, path, context, recurse=True):
         # Get some attribute of the matchset according to the given path
 
         initial, remainder = parse_path(path)
 
         if remainder:
-            # Chain the parts
-            return self.get_by_path(initial, context).get_by_path(remainder, context)
+            # Use generic get by path
+            return get_by_path(self, path, context)
 
         # Otherwise, only one part
 
@@ -980,36 +1088,39 @@ class MatchSet(object):
             other = self.get_by_path(inner, context)
             return self.is_subset(other, context)
 
-        elif path[:6] == "union(" and path[-1] == ")":
+        if path[:6] == "union(" and path[-1] == ")":
             inner = path[6:-1]
             other = self.get_by_path(inner, context)
             return self.union(other, context)
 
-        elif path[:4] == "set(" and path[-1] == ")":
+        if path[:4] == "set(" and path[-1] == ")":
             # Make a new set
             inner = path[4:-1]
             return MatchSet(instances={self.get_by_path(inner, context)})
 
-        elif path in context["variables"]:
-            return context["variables"][path]
+        if recurse:
+            # Try generic get_by_path
+            return get_by_path(self, path, context, recurse=False)
 
-        if not self.complete:
-            # Can't apply to incomplete set
-            raise Exception("Can't get path '" + path + "' from incomplete set.")
+        raise Exception("Could not find value from path '" + path + "'.")
 
-        # Otherwise, apply the path to each element in the set
-        result = MatchSet()
-        for m in self.instances:
-            sub_result = m.get_by_path(path, context)
-
-            if type(sub_result) is MatchSet:
-                # Extend the results
-                result = result.union(sub_result, context)
-
-            else:
-                result.add(sub_result, context)
-
-        return result
+        # if not self.complete:
+        #     # Can't apply to incomplete set
+        #     raise Exception("Can't get path '" + path + "' from incomplete set.")
+        #
+        # # Otherwise, apply the path to each element in the set
+        # result = MatchSet()
+        # for m in self.instances:
+        #     sub_result = m.get_by_path(path, context)
+        #
+        #     if type(sub_result) is MatchSet:
+        #         # Extend the results
+        #         result = result.union(sub_result, context)
+        #
+        #     else:
+        #         result.add(sub_result, context)
+        #
+        # return result
 
     def each(self, condition, context):
         # Check if every element meets a condition
@@ -1179,10 +1290,13 @@ class Pattern(object):
             sub_patterns = tuple(self.variables.values())
 
         else:
-            # AbstractPattern or RegexPattern
+            # AbstractPattern, RegexPattern, or SystemConditionPattern
             return False
 
         for sub_pattern in sub_patterns:
+            if sub_pattern is other:
+                return True
+
             if sub_pattern.may_contain(other, found):
                 return True
 
@@ -1998,3 +2112,40 @@ class AbstractPattern(Pattern):
     def __str__(self):
         return "AbstractPattern: " + self.name
 
+
+class SystemConditionPattern(Pattern):
+    # Special pattern used to check if strings can be parsed as a Condition
+
+    def __init__(self, name):
+        Pattern.__init__(self, name)
+
+        # Arbitrary infinite certainty
+        self.certainty = 1000000
+
+    def match(self, s, context, debug=None):
+        # Try to match a string s.
+
+        # Try to check the condition
+        valid = True
+        try:
+            # We only care if s could be a Condition
+            condition = Condition(string=s)
+            result = condition.check_condition(obj=condition, context=context)
+
+            if result not in (True, False, None):
+                # result needs to be boolean or None (uncertain)
+                valid = False
+
+        except Exception as e:
+            # Not a valid condition
+            valid = False
+
+        if valid:
+            # Return a match
+            return Match(
+                pattern=self,
+                string=s
+            )
+
+        # Otherwise, no match
+        return None

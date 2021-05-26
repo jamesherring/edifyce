@@ -373,33 +373,17 @@ class InferenceRule(object):
         # Deduction indentation relative to antecedents
         self.indent = indent
 
-    def get_by_path(self, path, proof_context):
+    def get_by_path(self, path, proof_context, recurse=True):
         # Get information from the given path
 
         initial, remainder = parse_path(path)
 
         if remainder:
-            # Chain the parts
-            return self.get_by_path(initial, proof_context).get_by_path(remainder, proof_context)
+            # Use generic get by path
+            return get_by_path(self, path, proof_context)
 
         # Otherwise, only one part
-
-        if path[:12] == "antecedents[" and path[-1] == "]":
-            # Only if this is the whole path
-
-            try:
-                index = int(path[12:-1])
-
-                if "antecedents" in proof_context:
-                    return proof_context["antecedents"][index]
-
-                else:
-                    return self.antecedents[index]
-
-            except Exception as e:
-                raise Exception("Could not parse path: '" + path + "'.")
-
-        if path == "deduction":
+        if path == "deduction()":
             # Get the deduction
             if "deduction" in proof_context:
                 return proof_context["deduction"]
@@ -407,10 +391,11 @@ class InferenceRule(object):
             else:
                 return self.deduction
 
-        if path in proof_context["variables"]:
-            return proof_context["variables"][path]
+        if recurse:
+            # Try generic get_by_path
+            return get_by_path(self, path, proof_context, recurse=False)
 
-        raise Exception("Could not parse path: '" + path + "'.")
+        raise Exception("Could not find value from path '" + path + "'.")
 
     def check(self, antecedents, deduction, proof_context):
         # Check to see if the proposed proof lines are valid under this inference rule
@@ -500,13 +485,15 @@ class InferenceRule(object):
         # Check the possible condition types
         if not c.type == "atomic":
             # Composite case
-            return c.check_composite(self, context)
+            return c.check_condition(self, context)
 
         # Otherwise, atomic condition
 
         if " == " in c.string:
             # Equals
-            left, right = [self.get_by_path(arg, context) for arg in c.string.split(" == ")]
+            left_string, right_string = c.string.split(" == ")
+            left = self.get_by_path(left_string, context)
+            right = self.get_by_path(right_string, context)
 
             if not type(left) == type(right):
                 # Mismatched types
@@ -871,42 +858,39 @@ class ProofLine(object):
         # Get the index of this line in the proof
         return self.proof.proof_lines.index(self)
 
-    def get_by_path(self, path, proof_context):
+    def get_by_path(self, path, proof_context, recurse=True):
         # Get an attribute of the proof line given a path s
 
         initial, remainder = parse_path(path)
 
         if remainder:
-            # Chain the parts
-            return self.get_by_path(initial, proof_context).get_by_path(remainder, proof_context)
+            # Use generic get by path
+            return get_by_path(self, path, proof_context)
 
         # Otherwise, only one part
 
-        if type(path) is list:
-            # Get each component
-            return [self.get_by_path(item, proof_context) for item in path]
-
-        if type(path) is not str:
-            path = str(path)
-
-        if path == "match":
+        if path == "match()":
             # Get the match
             return self.match
 
-        if path == "pattern":
+        if path == "pattern()":
             return self.line_type.pattern
 
         if len(path) > 2 and path[-2:] == "()" and path[:-2] in self.line_type.attributes:
             return self.get_by_path(self.line_type.get_attribute(path[:-2]), proof_context)
 
-        if path in self.context:
-            # Check self context first
-            return self.context[path]
+        # Try to get path using the frozen context
+        try:
+            return get_by_path(self, path, self.context, recurse=False)
+        except Exception as e:
+            # No luck
+            pass
 
-        if path in proof_context:
-            return proof_context[path]
+        if recurse:
+            # Try generic get_by_path
+            return get_by_path(self, path, proof_context, recurse=False)
 
-        raise Exception("Could not find " + path + " in '" + self.text + "'.")
+        raise Exception("Could not find value from path '" + path + "'.")
 
     def edit_context(self, proof_context):
         # Edit the proof context according to the rule on this line type
@@ -947,8 +931,22 @@ class ProofLine(object):
                         # Add directly
                         proof_context[key][sub_key] = sub_value
 
-            elif type(current_value) is MatchSet:
+            elif type(current_value) is set():
                 # Set type context entry
+
+                for edit_type, sub_value_string in value.items():
+
+                    # Get the value
+                    sub_value = self.get_by_path(sub_value_string, proof_context)
+
+                    # Get the attribute function of the set
+                    attr = getattr(current_value, edit_type)
+
+                    # Run this with the given value
+                    attr(sub_value)
+
+            elif type(current_value) is MatchSet:
+                # MatchSet type context entry
 
                 for edit_type, sub_value_string in value.items():
 
@@ -967,6 +965,14 @@ class ProofLine(object):
                         else:
                             # Has to be a match or a match set
                             raise Exception("Cannot union a set with object of type '" + str(type(sub_value)) + "'.")
+
+                    elif edit_type == "add":
+                        # Add the value to the set
+                        if type(sub_value) is not Match:
+                            # Has to be a match
+                            raise Exception("Cannot add a non-match to a match set")
+
+                        current_value.add(sub_value, proof_context)
 
                     else:
                         raise Exception("Cannot edit a set with operator '" + edit_type + "'.")
