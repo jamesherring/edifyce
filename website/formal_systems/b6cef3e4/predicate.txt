@@ -105,7 +105,6 @@ FormalSystem Predicate:
     ProofContext:
         given: MatchSet()
         conditions: set()
-        string_variables: dict()
         
     Regex reference:
         ^[a-zA-Z0-9_,\. ]+$
@@ -118,9 +117,14 @@ FormalSystem Predicate:
         with fo as formula, refs as reference, label_ref as reference:
             fo ref{refs} label{label_ref}
             
+    Pattern axiom_pattern:
+        with fo as formula, label_ref as reference:
+            fo label{Ax: label_ref}
+            
     UnionPattern logical_pattern:
         without_label
         with_label
+        axiom_pattern
             
     # Clear tex format from logical_pattern and it's options - to keep tex 
     # formatting which is used for displaying the formula
@@ -131,6 +135,9 @@ FormalSystem Predicate:
         clear
         
     with_label.format:
+        clear
+        
+    axiom_pattern.format:
         clear
         
     logical_pattern.formula():
@@ -148,37 +155,61 @@ FormalSystem Predicate:
     logical_pattern.display():
         # The display value - ignore references and labels
         union_submatch().fo.string()
+        
+    logical_pattern.axiom():
+        # The axiom formula - if it exists
+        axiom_pattern.fo.string()
 
     LineType logical:
         pattern: logical_pattern
         behaviour: logical
         
-    Pattern axiom_pattern:
-        with fo as formula, ref as reference:
-            fo label{Ax: ref}
+    # Function to get formula map
+    logical.formula_mapping(other as logical):
+        # Returns None if no mapping
+        formula().maps_to(other.formula())
+        
+    # Function to get map for given set as well as formula
+    logical.given_mapping(other as logical):
+        # Returns None if no mapping
+        given.maps_to(other.given, depends_on=self.formula_mapping(other))
+        
+    # Check conditions from another line are consistent with this one
+    logical.check_consistent_conditions(other as logical, mapping as dict):
+        # Requires mapping to work.
+        self.conditions.each(c):
+            c.maps_into_set(other.conditions, mapping) or other.check_condition(c, mapping)
+    
+    # Function to check the proof line follows from other.        
+    logical.maps_to(other as logical):
+        self.check_consistent_conditions(other, self.given_mapping(other))
+        
+    # Pattern axiom_pattern:
+    #     with fo as formula, ref as reference:
+    #         fo label{Ax: ref}
             
-    axiom_pattern.format:
-        clear
+    # axiom_pattern.format:
+    #     clear
         
-    axiom_pattern.formula():
-        fo
+    # axiom_pattern.formula():
+    #     fo
         
-    axiom_pattern.display():
-        fo.string()
+    # axiom_pattern.display():
+    #     fo.string()
         
-    axiom_pattern.label():
-        ref.string()
+    # axiom_pattern.label():
+    #     ref.string()
         
-    LineType axiom:
-        pattern: axiom_pattern
-        behaviour: axiom
+    # LineType axiom:
+    #     pattern: axiom_pattern
+    #     behaviour: axiom
 
     Pattern let_pattern:
         with csv as comma_separated_variable_names, p as variable_name:
             let csv be p
            
     let_pattern.keys():
-        csv.instances(variable_name)
+        csv.instances(variable_name).strings()
 
     LineType let:
         pattern: let_pattern
@@ -259,11 +290,12 @@ FormalSystem Predicate:
 
             antecedents:
                 $(\alpha \rightarrow \beta)$
+                
             deduction:
                 $\beta$
 
             condition:
-                (antecedents[0].given.issubset(deduction.given)) and (alpha in deduction.given) and (antecedents[0].conditions.issubset(deduction.conditions))
+                (antecedent.given.issubset(deduction.given)) and (alpha in deduction.given) and (antecedent.conditions.issubset(deduction.conditions))
 
         InferenceRule Deduction_Theorem_2:
             label:
@@ -276,7 +308,7 @@ FormalSystem Predicate:
                 $(\alpha \rightarrow \beta)$
 
             condition:
-                (deduction.given.union(set(alpha)) == antecedents[0].given) and (antecedents[0].conditions == deduction.conditions)
+                (deduction.given.union(set(alpha)) == antecedent.given) and (antecedent.conditions == deduction.conditions)
 
         InferenceRule Assumed:
             label:
@@ -302,7 +334,7 @@ FormalSystem Predicate:
                 $\alpha$
 
             condition:
-                (antecedents[0].given.issubset(deduction.given)) and (antecedents[0].conditions.issubset(deduction.conditions))
+                (antecedent.given.issubset(deduction.given)) and (antecedent.conditions.issubset(deduction.conditions))
 
         InferenceRule Theorem:
             label:
@@ -315,4 +347,4 @@ FormalSystem Predicate:
                 $\beta$
 
             condition:
-                (beta.maps_onto(alpha)) and (antecedents[0].given == deduction.given) and (antecedents[0].conditions == deduction.conditions)
+                antecedent.maps_to(deduction)

@@ -24,31 +24,126 @@ def parse_path(path):
     return path, None
 
 
+def parse_arguments(args_string, obj, context, arg_names=None):
+    # Parse arguments from a string and get them by path.
+
+    # Optionally specify a list arg_names to force the arguments into just kwargs
+
+    # Target args and kwargs
+    args = []
+    kwargs = {}
+
+    depth = 0
+    start_index = 0
+    keyword = None
+    for i in range(0, len(args_string)):
+        char = args_string[i]
+
+        if char == "(":
+            depth += 1
+            continue
+
+        if char == ")":
+            depth -= 1
+
+        if char == "=" and depth == 0:
+            # keyword argument
+            keyword = args_string[start_index:i].strip()
+            start_index = i + 1
+            continue
+
+        if char == "," and depth == 0:
+            # Top-level comma of an argument
+
+            value = get_by_path(obj, args_string[start_index:i].strip(), context)
+
+            if keyword is None:
+                args.append(value)
+            else:
+                kwargs[keyword] = value
+                keyword = None
+
+            start_index = i + 1
+
+    # Append the final argument
+    value = get_by_path(obj, args_string[start_index:].strip(), context)
+
+    if keyword is None:
+        args.append(value)
+    else:
+        kwargs[keyword] = value
+
+    if arg_names is None:
+        # Simple case
+        return args, kwargs
+
+    # Otherwise, we have specified arg names
+
+    arg_count = len(args) + len(kwargs)
+
+    if arg_count > len(arg_names):
+        raise Exception("Mismatched number of arguments given.")
+
+    for key in kwargs.keys():
+        if key not in arg_names[len(args):]:
+            raise Exception("Unexpected argument: '" + key + "'.")
+
+    # Otherwise, kwargs match.
+
+    # Add the args to kwargs
+    for arg, arg_name in zip(args, arg_names[:len(args)]):
+        kwargs[arg_name] = arg
+
+    # Add any missing arguments as None
+    for arg in arg_names:
+        if arg not in kwargs:
+            kwargs[args] = None
+
+    # Return no args, all kwargs
+    return [], kwargs
+
+
 def get_by_path(obj, path, context, recurse=True):
     # General function to get an object by a path.
+
+    if context.reference_object is None and obj is not None:
+        context = copy(context)
+        context.reference_object = obj
 
     initial, remainder = parse_path(path)
 
     if remainder:
         # Chain the parts
         initial = get_by_path(obj, initial, context)
-
-        if hasattr(initial, "get_by_path"):
-            # Use the native get_by_path first
-            return initial.get_by_path(remainder, context)
-
         return get_by_path(initial, remainder, context)
 
     # Otherwise, only one part
-    if path in context["variables"]:
-        return context["variables"][path]
+    if hasattr(obj, "get_by_path") and recurse:
+        # Try the obj get_by_path first
+        try:
+            return obj.get_by_path(path, context)
+        except Exception as e:
+            pass
 
-    if path in context["string_variables"]:
-        # Create a match
-        return context["string_variables"][path].match(path, context)
+    if path in context.variables:
+        return context.variables[path]
 
-    if path in context:
-        return context[path]
+    if context.mapping is None:
+        # Can try string variables
+
+        if path in context.string_variables:
+            return context.string_variables[path]
+
+    else:
+        # Context mapping exists
+        if path in context.mapping:
+            # Get the mapped path
+            context_copy = copy(context)
+            context_copy.mapping = None
+            return get_by_path(obj, context.mapping[path], context_copy)
+
+    if path in context.logical:
+        return context.logical[path]
 
     if "[" in path and path[-1] == "]":
         # Looks like list lookup
@@ -57,31 +152,179 @@ def get_by_path(obj, path, context, recurse=True):
         i = int(path[index + 1:-1])
         return get_by_path(obj, initial, context)[i]
 
+    if path[:4] == "set(" and path[-1] == ")":
+        # Make a new set
+        inner = path[4:-1]
+        return MatchSet(instances={get_by_path(obj, inner, context)})
+
     if type(obj) is set:
         # obj is a set - need to perform a set operation
 
-        args = None
         name = initial
+        args = []
+        kwargs = {}
 
         if "(" in initial and initial[-1] == ")":
             index = initial.index("(")
             name = initial[:index]
-            arg_names = initial[index + 1:-1].split(", ")
+            args_string = initial[index + 1:-1]
 
-            args = [get_by_path(obj, arg, context) for arg in arg_names]
+            args, kwargs = parse_arguments(args_string, obj, context)
 
-        fn = getattr(obj, name)
+        if hasattr(obj, name):
+            fn = getattr(obj, name)
+            return fn(*args, **kwargs)
 
-        if args:
-            return fn(*args)
+    if path == "self" and context.reference_object is not None:
+        return context.reference_object
 
-        return fn()
-
-    if obj is not None and recurse:
-        # Try the obj get_by_path without coming back to this fn
-        return obj.get_by_path(path, context, recurse=False)
+    if recurse and context.reference_object is not None and hasattr(context.reference_object, "get_by_path"):
+        # Try the reference object
+        return context.reference_object.get_by_path(path, context)
 
     raise Exception("Could not find value from path '" + path + "'.")
+
+
+def path_maps_to(path, other_path, mapping):
+    # Check if this path is maps to the other path under the given mapping
+
+    initial, remainder = parse_path(path)
+    other_initial, other_remainder = parse_path(other_path)
+
+    # Remainders have to both be None or both not None
+    if (remainder is None and other_remainder is not None) or (remainder is not None and other_remainder is None):
+        return False
+
+    # Revalue initial if it's in the mapping
+    if initial in mapping:
+        initial = mapping[initial]
+
+    # Check function arguments
+    if "(" in initial and initial[-1] == ")":
+        index = initial.index("(")
+        inner = initial[index:-1]
+        args = inner.split(", ")
+
+        if "(" in other_initial and other_initial[-1] == ")":
+            other_index = other_initial.index("(")
+            other_inner = other_initial[other_index:-1]
+            other_args = other_inner.split(", ")
+
+            if not len(args) == len(other_args):
+                return False
+
+            for a, b in zip(args, other_args):
+                if a in mapping:
+                    a = mapping[a]
+
+                if not a == b:
+                    return False
+
+    # Initials have to match
+    if not initial == other_initial:
+        return False
+
+    # Remainders have to match
+    if remainder is None:
+        # Both remainders are None
+        return True
+
+    # Both remainders are not None
+    return path_maps_to(remainder, other_remainder, mapping)
+
+
+class Context(object):
+
+    def __init__(self, variables=None, string_variables=None, logical=None, reference_object=None, mapping=None):
+
+        self.variables = variables if variables is not None else dict()
+        self.string_variables = string_variables if string_variables is not None else dict()
+
+        # Logical context for inside proofs
+        self.logical = logical if logical is not None else dict()
+
+        # Reference object
+        self.reference_object = reference_object
+
+        # Mapping on string variables - string: string dictionary
+        self.mapping = mapping
+        
+    def equivalent(self, other, context, memo=None):
+        # Check equivalence
+    
+        if memo is None:
+            memo = dict()
+            
+        if (self, other) in memo:
+            return memo[(self, other)]
+        
+        # Assume False
+        memo[(self, other)] = False
+
+        if type(other) is not Context:
+            return False
+        
+        if not len(self.variables) == len(other.variables):
+            return False
+        
+        if not len(self.string_variables) == len(other.string_variables):
+            return False
+            
+        if not len(self.logical) == len(other.logical):
+            return False
+        
+        if not self.mapping == other.mapping:
+            return False
+        
+        # Assume True for recursive checks
+        memo[(self, other)] = True
+        
+        if not self.reference_object.equivalent(other.reference_object, context, memo):
+            memo[(self, other)] = False
+            return False
+        
+        for key in self.variables:
+            if key not in other.variables:
+                memo[(self, other)] = False
+                return False
+            
+            if not self.variables[key].equivalent(other.variables[key], context, memo):
+                memo[(self, other)] = False
+                return False
+
+        for key in self.string_variables:
+            if key not in other.string_variables:
+                memo[(self, other)] = False
+                return False
+
+            if not self.string_variables[key].equivalent(other.string_variables[key], context, memo):
+                memo[(self, other)] = False
+                return False
+
+        for key in self.logical:
+            if key not in other.logical:
+                memo[(self, other)] = False
+                return False
+
+            if not self.logical[key].equivalent(other.logical[key], context, memo):
+                memo[(self, other)] = False
+                return False
+
+        # Otherwise ok
+        return True
+            
+    def __copy__(self):
+        # Return a copy of the context
+        return Context(
+            variables=copy(self.variables),
+            string_variables=copy(self.string_variables),
+
+            # Logical is a dict of dicts
+            logical={key: copy(self.logical[key]) for key in self.logical},
+
+            reference_object=self.reference_object,
+            mapping=copy(self.mapping)
+        )
 
 
 class Condition(object):
@@ -92,7 +335,7 @@ class Condition(object):
         # The condition string
         self.string = string
 
-        # The condition type - "and", "or", "not", "in", "not in", "brackets", or "atomic"
+        # The condition type - "brackets", "and", "or", "not", "in", "not in", "equals", or "atomic"
         self.type = None
 
         # Optionally specify list of string parts
@@ -100,6 +343,9 @@ class Condition(object):
 
         # Any sub conditions
         self.sub_conditions = []
+
+        # Any sub-items (for "in", "not in", or "equals" type)
+        self.sub_items = []
 
         self.parse()
 
@@ -229,7 +475,7 @@ class Condition(object):
 
                     left = parts[:i - 1]
 
-                self.sub_conditions = [
+                self.sub_items = [
                     Condition(string="".join(left), parts=left),
                     Condition(string="".join(right), parts=right)
                 ]
@@ -247,33 +493,70 @@ class Condition(object):
 
             return
 
+        if " == " in self.string:
+            # Equals
+
+            # Check the == doesn't occur inside brackets
+            depth = 0
+            left = None
+            right = None
+            for i in range(0, len(self.string)):
+                char = self.string[i]
+
+                if char == "(":
+                    depth += 1
+                    continue
+
+                if char == ")":
+                    depth -= 1
+                    continue
+
+                if depth == 0 and i + 4 < len(self.string) and self.string[i:i + 4] == " == ":
+                    left = self.string[:i].strip()
+                    right = self.string[i + 4:].strip()
+                    break
+
+            if left is not None and right is not None:
+                self.type = "equals"
+                self.sub_items = (left, right)
+                return
+
         # Otherwise atomic - can be parsed by the match
         self.type = "atomic"
 
+    def is_atomic(self):
+        return self.type in {"in", "not in", "equals", "atomic"}
+
     def check_condition(self, obj, context):
-        # Check a typically composite type condition for the given object
+        # Check a condition for the given object (if it exists)
+
+        if context.reference_object is None:
+            context = copy(context)
+            context.reference_object = obj
 
         # Check the possible condition types
         if self.type == "brackets":
             # Easy case
-            return obj.check_condition(self.sub_conditions[0], context)
+            return self.sub_conditions[0].check_condition(obj, context)
 
-        elif self.type == "and":
-            return obj.check_condition(self.sub_conditions[0], context) and \
-                   obj.check_condition(self.sub_conditions[1], context)
+        if self.type == "and":
+            return self.sub_conditions[0].check_condition(obj, context) and \
+                   self.sub_conditions[1].check_condition(obj, context)
 
-        elif self.type == "or":
-            return obj.check_condition(self.sub_conditions[0], context) or \
-                   obj.check_condition(self.sub_conditions[1], context)
+        if self.type == "or":
+            return self.sub_conditions[0].check_condition(obj, context) or \
+                   self.sub_conditions[1].check_condition(obj, context)
 
-        elif self.type == "not":
-            return not obj.check_condition(self.sub_conditions[0], context)
+        if self.type == "not":
+            return not self.sub_conditions[0].check_condition(obj, context)
 
-        elif self.type in ("in", "not in"):
+        # Otherwise, an atomic condition
+
+        if self.type in ("in", "not in"):
             # Must be for a match set
 
-            item = get_by_path(obj, self.sub_conditions[0].string, context)
-            match_set = get_by_path(obj, self.sub_conditions[1].string, context)
+            item = get_by_path(obj, self.sub_items[0].string, context)
+            match_set = get_by_path(obj, self.sub_items[1].string, context)
 
             result = match_set.contains(item, context)
 
@@ -283,12 +566,124 @@ class Condition(object):
             # Negated
             return not result
 
-        # This is an atomic condition
+        if self.type == "equals":
+            # Equals
+            left_string, right_string = self.sub_items
+            left = get_by_path(obj, left_string, context)
+            right = get_by_path(obj, right_string, context)
+
+            if not type(left) == type(right):
+                # Mismatched types
+                return False
+
+            if type(left) in (Match, MatchSet):
+                return left.equivalent(right, context)
+
+            else:
+                return left == right
+
         if obj is None:
             # No context object given. Try to get an object from the first condition part
             return get_by_path(None, self.string, context)
 
+        if hasattr(obj, "get_by_path"):
+            return obj.get_by_path(self.string, context)
+
         raise Exception("Couldn't evaluate condition '" + self.string + "'.")
+
+    def validate(self, context):
+        # See if this is a valid condition with the given context
+
+        # Work with a copy of context
+        context_copy = copy(context)
+
+        # Replace the string variables with matches
+        for var, pattern in context.string_variables.items():
+            context_copy.string_variables[var] = Match(pattern=pattern, string=var)
+
+        try:
+            result = self.check_condition(None, context_copy)
+
+        except Exception as e:
+            # Not valid condition
+            return False
+
+        if result not in (True, False, None):
+            # result needs to be boolean or None (uncertain)
+            return False
+
+        # Otherwise ok
+        return True
+
+    def maps_to(self, other, mapping, context):
+        # Check if this condition maps to the other one under the string variable mapping
+
+        # Must be of the same types
+        if not self.type == other.type:
+            return False
+
+        if not self.is_atomic():
+            # Not atomic - so just need to check sub-conditions
+            for sub, other_sub in zip(self.sub_conditions, other.sub_conditions):
+                if not sub.maps_to(other_sub, mapping, context):
+                    return False
+
+            return True
+
+        # Otherwise atomic - just need to check the path
+        return path_maps_to(self.string, other.string, mapping)
+
+    def maps_into_set(self, target_condition_set, mapping, context):
+        # Check if this condition maps into the target set using the given mapping
+
+        for target_condition in target_condition_set:
+            if self.maps_to(target_condition, mapping, context):
+                # Maps successfully
+                return True
+
+        # No luck
+        return False
+
+    def get_by_path(self, path, context, recurse=True):
+        # Get the value by a path
+
+        if context.reference_object is None:
+            context = copy(context)
+            context.reference_object = self
+
+        initial, remainder = parse_path(path)
+
+        if remainder:
+            # Use generic get by path
+            return get_by_path(self, path, context)
+
+        # Otherwise, only one part
+        if path[:14] == "maps_into_set(" and path[-1] == ")":
+            inner = path[14:-1]
+            kwargs = parse_arguments(inner, self, context, arg_names=("target_condition_set", "mapping"))[1]
+
+            return self.maps_into_set(kwargs["target_set"], kwargs["mapping"], context)
+
+        if recurse:
+            # Try generic get_by_path
+            return get_by_path(self, path, context, recurse=False)
+
+        raise Exception("Could not find value from path '" + path + "'.")
+
+    def equivalent(self, other, context, memo=None):
+        # Check equivalence
+
+        if memo is None:
+            memo = dict()
+
+        if (self, other) in memo:
+            return memo[(self, other)]
+
+        memo[(self, other)] = self.string == other.string
+        return self.string == other.string
+
+    def __str__(self):
+        return "Condition: " + self.string
 
 
 class Match(object):
@@ -312,6 +707,10 @@ class Match(object):
     def get_by_path(self, path, context, recurse=True):
         # Get the value by a path
 
+        if context.reference_object is None:
+            context = copy(context)
+            context.reference_object = self
+
         initial, remainder = parse_path(path)
 
         if remainder:
@@ -325,27 +724,27 @@ class Match(object):
         elif path == "pattern()":
             return self.pattern
 
-        elif len(path) > 2 and path[-2:] == "()" and path[:-2] in self.pattern.attributes:
+        elif len(path) > 2 and path[-2:] == "()" and path[:-2] in self.pattern.functions:
             return self.run_function(path[:-2], context)
 
-        elif "(" in path and path[:path.index("(")] in self.pattern.attributes:
+        elif "(" in path and path[:path.index("(")] in self.pattern.functions:
             # An attribute function with parameters
 
             index = path.index("(")
             name = path[:index]
 
-            arg_strings = path[index + 1:-1].split(", ")
-            args = [self.get_by_path(arg, context) for arg in arg_strings]
+            args_string = path[index + 1:-1]
+            args, kwargs = parse_arguments(args_string, self, context)
 
-            return self.run_function(name, context, params=args)
+            return self.run_function(name, context, args=args, kwargs=kwargs)
 
         elif path in self.sub_matches:
             return self.sub_matches[path]
 
         elif path == "lookup()":
             # Look up the value in context
-            if self.string in context["variables"]:
-                return context["variables"][self.string]
+            if self.string in context.variables:
+                return context.variables[self.string]
 
             raise Exception("Could not find '" + self.string + "' in context.")
 
@@ -376,10 +775,10 @@ class Match(object):
             if " as " in pattern_name:
                 pattern_label, pattern_name = pattern_name.split(" as ")
 
-            if pattern_name not in context["variables"]:
+            if pattern_name not in context.variables:
                 raise Exception("Unrecognised pattern '" + pattern_name + "'.")
 
-            pattern = context["variables"][pattern_name]
+            pattern = context.variables[pattern_name]
 
             # Build the condition
             condition = None
@@ -409,10 +808,10 @@ class Match(object):
             if " as " in pattern_name:
                 pattern_label, pattern_name = pattern_name.split(" as ")
 
-            if pattern_name not in context["variables"]:
+            if pattern_name not in context.variables:
                 raise Exception("Unrecognised pattern '" + pattern_name + "'.")
 
-            pattern = context["variables"][pattern_name]
+            pattern = context.variables[pattern_name]
 
             # Build the condition
             condition = None
@@ -424,34 +823,19 @@ class Match(object):
         elif path[:8] == "replace(" and path[-1] == ")":
             # Replace
             inner = path[8:-1]
-            parts = inner.split(", ")
 
-            if len(parts) == 2:
-                needle_string, value_string = parts
-                condition_string = None
+            # Specify arg_names to get all in kwargs
+            kwargs = parse_arguments(inner, self, context, arg_names=("needle", "value", "condition"))[1]
 
-            elif len(parts) == 3:
-                needle_string, value_string, condition_string = parts
-
-            else:
-                raise Exception("Match.replace requires 2 or 3 arguments, not " + str(len(parts)) + ".")
-
-            needle = self.get_by_path(needle_string, context)
-            value = self.get_by_path(value_string, context)
-
-            condition = None
-            if condition_string:
-                condition = Condition(condition_string)
-
-            return self.replace(needle, value, context, condition)
+            return self.replace(kwargs["needle"], kwargs["value"], context, kwargs["condition"])
 
         elif path == "string()":
             return self.string
 
-        elif path[:10] == "maps_onto(" and path[-1] == ")":
-            inner = path[10:-1]
+        elif path[:8] == "maps_to(" and path[-1] == ")":
+            inner = path[8:-1]
             other = self.get_by_path(inner, context)
-            return self.maps_onto(other, context)
+            return self.maps_to(other, context)
 
         else:
             condition_fns = ["has_parent", "equal_any"]
@@ -472,9 +856,9 @@ class Match(object):
         # Check a condition c - returns true or false
 
         # Add the top-most match to context in a copy
-        if "self" not in context["variables"]:
+        if context.reference_object is None:
             context = copy(context)
-            context["variables"]["self"] = self
+            context.reference_object = self
 
         # Check the possible condition types
         if not c.type == "atomic":
@@ -482,7 +866,6 @@ class Match(object):
             return c.check_condition(self, context)
 
         # Otherwise, atomic condition
-
         if c.string[:11] == "has_parent(":
             # Has parent of the given pattern
 
@@ -504,11 +887,11 @@ class Match(object):
             # Get the pattern label and name
             pattern_label, pattern_name = pattern_string.split(" as ")
 
-            if pattern_name not in context["variables"]:
+            if pattern_name not in context.variables:
                 raise Exception("Could not find pattern '" + pattern_string + "'.")
 
             # Get the pattern
-            pattern = context["variables"][pattern_name]
+            pattern = context.variables[pattern_name]
 
             return self.has_parent(pattern, condition, copy(context), label=pattern_label)
 
@@ -520,26 +903,12 @@ class Match(object):
 
             return self.equal_any(match_set, context)
 
-        elif " == " in c.string:
-            # Equals
-            left, right = [self.get_by_path(arg, context) for arg in c.string.split(" == ")]
-
-            if not type(left) == type(right):
-                # Mismatched types
-                return False
-
-            if type(left) in (Match, MatchSet):
-                return left.equivalent(right, context)
-
-            else:
-                return left == right
-
         else:
             # Get by path
             return self.get_by_path(c.string, context)
 
-    def run_function(self, name, context, params=None):
-        # Run a custom function with the given name.
+    def run_function(self, name, context, args=None, kwargs=None):
+        # Run a custom function with the given name, args and kwargs
 
         fn = self.pattern.get_function(name)
 
@@ -547,31 +916,42 @@ class Match(object):
             raise Exception("'" + self.pattern.name + "' does not have function '" + name + "'.")
 
         # Check the params matches have the correct pattern
-        if params is None:
-            params = []
+        if args is None:
+            args = []
 
-        if not len(params) == len(fn["params"]):
+        if kwargs is None:
+            kwargs = {}
+
+        arg_count = len(args) + len(kwargs)
+        if not arg_count == len(fn["params"]):
             # Wrong number of parameters provided
-            raise Exception("'" + name + "' expected " + str(len(fn["params"])) + " argument(s), " + str(len(params)) +
+            raise Exception("'" + name + "' expected " + str(len(fn["params"])) + " argument(s), " + str(arg_count) +
                             " provided.")
 
         # Build a parameter mapping
         param_mapping = dict()
-        for given, fn_param in zip(params, fn["params"]):
-            fn_param_label, fn_param_pattern = fn_param
 
-            if not given.pattern == fn_param_pattern:
-                # Patterns don't match
-                raise Exception("'" + name + "' expected argument of pattern '" + fn_param_pattern.name + "'.")
+        # Check args
+        for given, fn_param in zip(args, fn["params"][:len(args)]):
+            param_mapping[fn_param[0]] = given
 
-            param_mapping[fn_param_label] = given
+        # kwargs don't have to be in order
+        remaining_fn_params = fn["params"][len(args):]
+        remaining_fn_param_dict = {param[0]: param[1] for param in remaining_fn_params}
+
+        # Check kwargs
+        for given_name, given in kwargs.items():
+            if given_name not in remaining_fn_param_dict:
+                raise Exception("'" + name + "' does not accept parameter '" + given_name + ".")
+
+            param_mapping[given_name] = given
 
         # Create a copy of context
         context_copy = copy(context)
 
         # Run the tree as a function
         tree = fn["tree"]
-        return tree.run_function(match=self, context=context_copy, params=param_mapping)
+        return tree.run_function(item=self, context=context_copy, params=param_mapping, param_types=fn["params"])
 
     def instances(self, pattern, context, condition=None, attribute_name=None, shallow=False, label=None):
         # Get instances of the pattern in nested sub matches, which meet the specified condition.
@@ -582,10 +962,10 @@ class Match(object):
         # If shallow - don't look for nested instances of pattern deeper than instances found
         if type(pattern) is str:
             # Need to get the correct pattern
-            pattern = context["variables"][pattern]
+            pattern = context.variables[pattern]
 
         # If incomplete, it's a variable pattern, that may contain an instance of the needle pattern
-        complete = not (self.string in context["string_variables"] and self.pattern.may_contain(pattern))
+        complete = not (self.string in context.string_variables and self.pattern.may_contain(pattern))
 
         # Create a new MatchSet
         match_set = MatchSet(complete=complete)
@@ -598,7 +978,7 @@ class Match(object):
             # Include self
 
             if label is not None:
-                context["variables"][label] = self
+                context.variables[label] = self
 
             if condition is None or self.check_condition(condition, context):
                 match_set.add(self, context)
@@ -670,7 +1050,7 @@ class Match(object):
         if self.parent_match.pattern is pattern:
 
             if label is not None:
-                context["variables"][label] = self.parent_match
+                context.variables[label] = self.parent_match
 
             # Check the condition (if any)
             if condition is None or self.parent_match.check_condition(condition, context):
@@ -735,39 +1115,51 @@ class Match(object):
 
         return s
 
-    def equivalent(self, other, context, allow_definitions=False):
+    def equivalent(self, other, context, memo=None, allow_definitions=False):
         # Test whether two matches are equivalent. For variables - use context restrictions where possible.
 
         # A variable will typically return None when matched against a string or another variable - i.e. they could be
         # equal but it can't be guaranteed or ruled out.
 
+        if memo is None:
+            memo = dict()
+
+        if (self, other) in memo:
+            return memo[(self, other)]
+
         if type(other) is not Match:
+            memo[(self, other)] = False
             return False
 
         # Belonging to the same pattern is a requirement, unless there's a convenient definition
-        if not self.pattern is other.pattern:
+        if not self.pattern.equivalent(other.pattern, context, memo):
 
             if not allow_definitions:
                 # Ignore possible definitions
+                memo[(self, other)] = False
                 return False
 
             # See if there's a definition to help
             if self.lower_match is not None:
                 # Try the lower match
-                if self.lower_match.equivalent(other, context, allow_definitions):
+                if self.lower_match.equivalent(other, context, memo, allow_definitions):
+                    memo[(self, other)] = True
                     return True
 
                 if other.lower_match is not None:
                     # Combine both definitions
-                    if self.lower_match.equivalent(other.lower_match, context, allow_definitions):
+                    if self.lower_match.equivalent(other.lower_match, context, memo, allow_definitions):
+                        memo[(self, other)] = True
                         return True
 
             if other.lower_match is not None:
                 # The the other definition
-                if self.equivalent(other.lower_match, context, allow_definitions):
+                if self.equivalent(other.lower_match, context, memo, allow_definitions):
+                    memo[(self, other)] = True
                     return True
 
             # Otherwise, no luck
+            memo[(self, other)] = False
             return False
 
         # Test equality of sub_matches
@@ -776,6 +1168,7 @@ class Match(object):
 
         if not set(self_subs.keys()) == set(other_subs.keys()):
             # Sub matches don't correspond
+            memo[(self, other)] = False
             return False
 
         if len(self_subs) > 0:
@@ -785,10 +1178,11 @@ class Match(object):
 
             for key in self_subs:
                 # Check the subs are equivalent
-                result = self_subs[key].equivalent(other_subs[key], context, allow_definitions)
+                result = self_subs[key].equivalent(other_subs[key], context, memo, allow_definitions)
 
                 if result is False:
                     # Weakest result is False - so we can return this immediately
+                    memo[(self, other)] = False
                     return False
 
                 if result is None:
@@ -797,20 +1191,23 @@ class Match(object):
             return weakest
 
         # Otherwise, no sub_matches. Are we dealing with variables?
-        self_var = self.string in context["string_variables"]
-        other_var = other.string in context["string_variables"]
+        self_var = self.string in context.string_variables
+        other_var = other.string in context.string_variables
 
         if not self_var and not other_var:
             # Neither are variables
+            memo[(self, other)] = self.string == other.string
             return self.string == other.string
 
         # Otherwise, at least one variable.
         if self.string == other.string:
             # We can take this as equal
+            memo[(self, other)] = True
             return True
 
         # No apparent relation between self and other
-        return None
+        memo[(self, other)] = False
+        return False
 
         # Check the restrictions.
         mapping = None
@@ -881,18 +1278,40 @@ class Match(object):
     def create_pattern(self, string_variables):
         # Turn this match into a pattern with the submatches as variables
 
-        pattern = StringPattern(name="", pattern=self.string, pre_format=self.pattern.pre_format)
+        pattern = StringPattern(name=self.string, pattern=self.string, pre_format=self.pattern.pre_format)
         pattern.add_variables(string_variables)
 
         return pattern
 
-    def maps_onto(self, other, context):
-        # Check if this match maps onto the other.
+    def maps_to(self, other, context, depends_on=None):
+        # Check if this match maps to the other. Return a dictionary mapping or False
+        # Optionally specify depends_on dictionary that must be consistent
+
+        if depends_on is False:
+            return None
 
         # Get the pattern
-        other_pattern = other.create_pattern(context["string_variables"])
+        pattern = self.create_pattern(context.string_variables)
 
-        return other_pattern.match(self.string, context) is not None
+        # Get the match
+        match = pattern.match(other.formatted_string(), context)
+
+        if match is None:
+            return None
+
+        if depends_on is not None:
+            # Check consistency
+            for key, sub_match in match.sub_matches.items():
+                if key in depends_on and not depends_on[key].equivalent(sub_match, context):
+                    return None
+
+        # Return the mapping
+        mapping = depends_on.copy() if depends_on is not None else dict()
+        mapping.update(match.sub_matches)
+
+        mapping[self.string] = other
+
+        return mapping
 
     def __str__(self):
         return self.string
@@ -1036,23 +1455,36 @@ class MatchSet(object):
 
         return new_match_set
 
-    def equivalent(self, other, context):
+    def equivalent(self, other, context, memo=None):
         # Test equivalence of match sets
+
+        if memo is None:
+            memo = dict()
+
+        if (self, other) in memo:
+            return memo[(self, other)]
+
+        if type(other) is not MatchSet:
+            memo[(self, other)] = False
+            return False
 
         if self.attribute_match is not None and other.attribute_match is not None and \
                 self.attribute_name == other.attribute_name and \
-                self.attribute_match.equivalent(other.attribute_match, context):
+                self.attribute_match.equivalent(other.attribute_match, context, memo):
             # Attribute paths align
+            memo[(self, other)] = True
             return True
 
         if not (self.complete and other.complete):
             # Must both be complete to compare
+            memo[(self, other)] = False
             return False
 
         if (not self.allow_multiple) and (not other.allow_multiple):
             # Neither set admits multiples
             if not (len(self.instances) == len(other.instances) and len(self.negatives) == len(other.negatives)):
                 # Size of the sets don't match
+                memo[(self, other)] = False
                 return False
 
         # Check instances and negatives have a bijection - maps in both directions
@@ -1060,19 +1492,26 @@ class MatchSet(object):
             # Check the match items in instances
             for item in first.instances:
                 if not second.contains(item, context):
+                    memo[(self, other)] = False
                     return False
             # Every item in self.instances is in other.instances. Do the same with negatives
 
             for item in first.negatives:
                 if second.contains(item, context) is not False:
                     # Other may contain the item
+                    memo[(self, other)] = False
                     return False
             # Every item in self.negatives is in other.negatives.
 
+        memo[(self, other)] = True
         return True
 
     def get_by_path(self, path, context, recurse=True):
         # Get some attribute of the matchset according to the given path
+
+        if context.reference_object is None:
+            context = copy(context)
+            context.reference_object = self
 
         initial, remainder = parse_path(path)
 
@@ -1083,44 +1522,40 @@ class MatchSet(object):
         # Otherwise, only one part
 
         if path[:9] == "issubset(" and path[-1] == ")":
-
             inner = path[9:-1]
-            other = self.get_by_path(inner, context)
+
+            other = get_by_path(context.reference_object, inner, context)
             return self.is_subset(other, context)
 
         if path[:6] == "union(" and path[-1] == ")":
             inner = path[6:-1]
-            other = self.get_by_path(inner, context)
+            other = get_by_path(context.reference_object, inner, context)
             return self.union(other, context)
 
-        if path[:4] == "set(" and path[-1] == ")":
-            # Make a new set
-            inner = path[4:-1]
-            return MatchSet(instances={self.get_by_path(inner, context)})
+        if path == "strings()":
+            # Return the matches as a set of strings
+            if not self.complete:
+                raise Exception("Can't get strings of an incomplete set.")
+
+            return {match.string for match in self.instances}
+
+        if path[:8] == "maps_to(" and path[-1] == ")":
+            # Check if this matchset maps to the other one. Return the mapping if it exists.
+            # Optionally specify a mapping dictionary that must be consistent.
+
+            inner = path[8:-1]
+            kwargs = parse_arguments(inner, self, context, arg_names=("other", "depends_on"))[1]
+
+            other = kwargs["other"]
+            depends_on = kwargs["depends_on"]
+
+            return self.maps_to(other, context, depends_on)
 
         if recurse:
             # Try generic get_by_path
             return get_by_path(self, path, context, recurse=False)
 
         raise Exception("Could not find value from path '" + path + "'.")
-
-        # if not self.complete:
-        #     # Can't apply to incomplete set
-        #     raise Exception("Can't get path '" + path + "' from incomplete set.")
-        #
-        # # Otherwise, apply the path to each element in the set
-        # result = MatchSet()
-        # for m in self.instances:
-        #     sub_result = m.get_by_path(path, context)
-        #
-        #     if type(sub_result) is MatchSet:
-        #         # Extend the results
-        #         result = result.union(sub_result, context)
-        #
-        #     else:
-        #         result.add(sub_result, context)
-        #
-        # return result
 
     def each(self, condition, context):
         # Check if every element meets a condition
@@ -1135,6 +1570,62 @@ class MatchSet(object):
                 return False
 
         return True
+
+    def maps_to(self, other, context, depends_on=None):
+        # Check if this matchset maps to the other one. Return the mapping if it exists.
+        # Optionally specify a mapping dictionary that must be consistent.
+
+        if type(other) is not MatchSet:
+            # Other must also be a match set
+            return False
+
+        if depends_on is False:
+            return False
+
+        if not self.complete:
+            # Can't map an incomplete set
+            return False
+
+        # Every item in instances must have a corresponding item in other instances
+        if len(self.instances) > 0 and len(other.instances) == 0:
+            # Nothing to map to
+            return False
+
+        def sub_maps_to(source, target, map):
+            # Recursive function to try mappings
+
+            for s in source.instances:
+                if s.string in map:
+                    t = map[s.string]
+
+                    if not other.contains(t, context):
+                        # Target is not here
+                        return False
+
+                    continue
+
+                for t in target.instances:
+                    new_map = s.maps_to(t, context, depends_on=map)
+                    if new_map is not None:
+                        # Try with this new mapping
+
+                        # Recurse
+                        result = sub_maps_to(source, target, new_map)
+
+                        if result is False:
+                            # This one is not consistent
+                            continue
+
+                        # The result works
+                        return new_map
+
+                # No consistent mapping
+                return False
+
+            # All source instances are mapped
+            return map
+
+        return sub_maps_to(self, other, depends_on.copy())
 
     def __str__(self):
         str_instances = ", ".join(sorted([str(m) for m in self.instances]))
@@ -1157,19 +1648,16 @@ class Pattern(object):
         self.name = name
 
         # The parent pattern (if applicable)
-        self.parent = parent
+        # self.parent = parent
 
-        # Keep a dictionary of attributes on the pattern
-        self.attributes = dict()
+        # Keep a dictionary of functions on the pattern
+        self.functions = dict()
 
         # Note any bracket pairs that should be respected
         self.respect_brackets = respect_brackets
 
         # Any formatting to be removed from patterns
         self.pre_format = pre_format
-
-        # Track equivalent patterns
-        self.equivalent_patterns = set()
 
         # Default certainty of 0
         self.certainty = 0
@@ -1211,7 +1699,7 @@ class Pattern(object):
         if params is None:
             params = tuple()
 
-        self.attributes[name] = {
+        self.functions[name] = {
             "tree": tree,
             "params": params
         }
@@ -1219,12 +1707,8 @@ class Pattern(object):
     def get_function(self, name):
         # Get the given attribute function
 
-        if name in self.attributes:
-            return self.attributes[name]
-
-        # Check the parent pattern attributes
-        if self.parent is not None:
-            return self.parent.get_attribute(name)
+        if name in self.functions:
+            return self.functions[name]
 
         return None
 
@@ -1329,6 +1813,30 @@ class RegexPattern(Pattern):
 
         # No matches
         return None
+
+    def equivalent(self, other, context, memo=None):
+        # Check equivalence
+
+        if memo is None:
+            memo = dict()
+
+        if (self, other) in memo:
+            return memo[(self, other)]
+
+        memo[(self, other)] = False
+
+        if not isinstance(other, RegexPattern):
+            return False
+
+        if not self.name == other.name:
+            return False
+
+        if not self.pattern == other.pattern:
+            return False
+
+        # Otherwise ok
+        memo[(self, other)] = True
+        return True
 
     def __str__(self):
         return "RegexPattern: " + self.name
@@ -1444,16 +1952,7 @@ class StringPattern(Pattern):
 
                 return m
 
-        if pattern_offset == 0 and self.parent is not None:
-
-            # Create a new context with variables in the string_variables
-            new_context = copy(context)
-            new_context["string_variables"].update(self.variables)
-
-            if debug is not None:
-                print(spaces, "Checking parent pattern.")
-
-        string_variables = context["string_variables"]
+        string_variables = context.string_variables
 
         if pattern_offset == 0 and not self.check_brackets(s):
             # Brackets don't match
@@ -1605,7 +2104,7 @@ class StringPattern(Pattern):
                     continue
 
                 # This looks like a string variable. Check the variable type is the same or part of a union
-                if str_pattern is sub_pattern or \
+                if str_pattern.equivalent(sub_pattern, context) or \
                         (type(sub_pattern) is UnionPattern and str_pattern in sub_pattern.nested_options()):
                     # These refer to the same pattern
 
@@ -1934,6 +2433,55 @@ class StringPattern(Pattern):
 
         return reverse
 
+    def equivalent(self, other, context, memo=None):
+        # Check if two patterns are the same
+
+        if memo is None:
+            memo = dict()
+
+        if (self, other) in memo:
+            return memo[(self, other)]
+
+        # Assume False to save lines
+        memo[(self, other)] = False
+
+        if not isinstance(other, StringPattern):
+            return False
+
+        if not self.name == other.name:
+            return False
+
+        if not self.pre_format == other.pre_format:
+            return False
+
+        if not self.respect_brackets == other.respect_brackets:
+            return False
+
+        if not self.pattern == other.pattern:
+            return False
+
+        if not self.display_pattern == other.display_pattern:
+            return False
+
+        if not len(self.variables) == len(other.variables):
+            return False
+
+        # Assume True when checking nested patterns - so recursive patterns can compare equal
+        memo[(self, other)] = True
+
+        for key, sub_pattern in self.variables.items():
+            if key not in other.variables:
+                memo[(self, other)] = False
+                return False
+
+            if not self.variables[key].equivalent(other.variables[key], context, memo):
+                memo[(self, other)] = False
+                return False
+
+        # Otherwise ok
+        memo[(self, other)] = True
+        return True
+
     def __str__(self):
         return "StringPattern: " + self.name
 
@@ -1976,12 +2524,12 @@ class UnionPattern(Pattern):
         # Sort the patterns by decreasing certainty
         pattern_options.sort(key=lambda x: x.certainty, reverse=True)
 
-        string_variables = context["string_variables"]
+        string_variables = context.string_variables
 
         if s in string_variables:
             pattern = string_variables[s]
 
-            if self is pattern:
+            if self.equivalent(pattern, context):
                 return Match(
                     pattern=self,
                     string=s
@@ -2083,6 +2631,45 @@ class UnionPattern(Pattern):
         # Set the pre-format dictionary.
         self.pre_format = pre_format
 
+    def equivalent(self, other, context, memo=None):
+        # Check if two patterns are the same
+
+        if memo is None:
+            memo = dict()
+
+        if (self, other) in memo:
+            return memo[(self, other)]
+
+        # Assume False to save lines
+        memo[(self, other)] = False
+
+        if not isinstance(other, UnionPattern):
+            return False
+
+        if not self.name == other.name:
+            return False
+
+        if not self.pre_format == other.pre_format:
+            return False
+
+        if not self.respect_brackets == other.respect_brackets:
+            return False
+
+        if not len(self.patterns) == len(other.patterns):
+            return False
+
+        # Assume True for nested checks
+        memo[(self, other)] = True
+
+        # Patterns must be in the same order
+        for pattern, other_pattern in zip(self.patterns, other.patterns):
+            if not pattern.equivalent(other_pattern, context, memo):
+                memo[(self, other)] = False
+                return False
+
+        # Looks ok
+        return True
+
     def __str__(self):
         return "UnionPattern: " + self.name
 
@@ -2101,13 +2688,33 @@ class AbstractPattern(Pattern):
         # Try to match s in the given context
 
         # s only matches if there is a string variable of this pattern
-        if s in context["string_variables"] and context["string_variables"][s] is self:
+        if s in context.string_variables and self.equivalent(context.string_variables[s], context):
             return Match(
                 pattern=self,
                 string=s
             )
 
         return None
+
+    def equivalent(self, other, context, memo=None):
+        # Check equivalence - depends only on name
+
+        if memo is None:
+            memo = dict()
+
+        if (self, other) in memo:
+            return memo[(self, other)]
+
+        memo[(self, other)] = False
+
+        if not isinstance(other, AbstractPattern):
+            return False
+
+        if not self.name == other.name:
+            return False
+
+        memo[(self, other)] = True
+        return True
 
     def __str__(self):
         return "AbstractPattern: " + self.name
@@ -2125,27 +2732,40 @@ class SystemConditionPattern(Pattern):
     def match(self, s, context, debug=None):
         # Try to match a string s.
 
-        # Try to check the condition
-        valid = True
+        # We only care if s could be a Condition
         try:
-            # We only care if s could be a Condition
             condition = Condition(string=s)
-            result = condition.check_condition(obj=condition, context=context)
+            result = condition.validate(context)
 
-            if result not in (True, False, None):
-                # result needs to be boolean or None (uncertain)
-                valid = False
+            if result:
+                # Return a match
+                return Match(
+                    pattern=self,
+                    string=s
+                )
 
         except Exception as e:
-            # Not a valid condition
-            valid = False
-
-        if valid:
-            # Return a match
-            return Match(
-                pattern=self,
-                string=s
-            )
+            pass
 
         # Otherwise, no match
         return None
+
+    def equivalent(self, other, context, memo=None):
+        # Check equivalence
+
+        if memo is None:
+            memo = dict()
+
+        if (self, other) in memo:
+            return memo[(self, other)]
+
+        memo[(self, other)] = False
+
+        if not isinstance(other, SystemConditionPattern):
+            return False
+
+        if not self.name == other.name:
+            return False
+
+        memo[(self, other)] = True
+        return True

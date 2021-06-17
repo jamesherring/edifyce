@@ -6,16 +6,13 @@ import itertools
 class FormalSystem(object):
     # A formal system
 
-    def __init__(self, name, axioms=None, line_types=None, inference_rules=None, proof_context=None, pre_format=None):
+    def __init__(self, name, line_types=None, inference_rules=None, context=None, pre_format=None):
 
         # The name of the system
         self.name = name
 
         # System formula pattern
-        self.formula = None
-
-        # A list of patterns
-        self.axioms = axioms if axioms is not None else []
+        # self.formula = None
 
         # A list of line types
         self.line_types = line_types if line_types is not None else []
@@ -24,11 +21,9 @@ class FormalSystem(object):
         self.inference_rules = inference_rules if inference_rules is not None else []
 
         # Default proof context
-        self.proof_context = proof_context if proof_context is not None else dict()
-
-        if "axioms" not in self.proof_context:
-            # Keep axioms in context also
-            self.proof_context["axioms"] = dict()
+        self.context = Context(
+            logical=context if context is not None else dict()
+        )
 
         # Default formatting for all strings in the system.
         self.formatting = pre_format if pre_format is not None else dict()
@@ -37,7 +32,7 @@ class FormalSystem(object):
         # Get references to external proofs from the given code.
 
         # Create a default context
-        context = copy(self.proof_context)
+        context = copy(self.context)
 
         # Track the reference slugs
         references = set()
@@ -75,7 +70,7 @@ class FormalSystem(object):
 
         return references
 
-    def parse(self, text, proof=None, reference_proofs=None, proof_context=None, line_number_offset=0):
+    def parse(self, text, proof=None, reference_proofs=None, context=None, line_number_offset=0):
         # Parse the text into a proof
 
         lines = text.split("\n")
@@ -85,9 +80,9 @@ class FormalSystem(object):
             proof = Proof(formal_system=self)
             proof.reference_proofs = reference_proofs
 
-        if proof_context is None:
+        if context is None:
             # Create a new proof context instance
-            proof_context = copy(self.proof_context)
+            context = copy(self.context)
 
         i = -1
         while i + 1 < len(lines):
@@ -99,7 +94,7 @@ class FormalSystem(object):
             line_number = line_number_offset + i + 1
 
             # Create a proof line for this line
-            proof_line = proof.add_proof_line(line, proof_context)
+            proof_line = proof.add_proof_line(line, context)
 
             # Assume valid unless we find an issue
             proof_line.valid = True
@@ -113,7 +108,7 @@ class FormalSystem(object):
             for line_type in self.line_types:
 
                 line = line.lstrip()
-                result = line_type.parse_line(line, proof_context)
+                result = line_type.parse_line(line, context)
 
                 if result is None:
                     continue
@@ -126,10 +121,10 @@ class FormalSystem(object):
                 proof_line.match = result
 
                 # Check for main line type attributes
-                # Try to get the formula, reference, label, display
+                # Try to get the formula, reference, label, display, is_axiom
                 try:
                     # Add formula to the proof line
-                    proof_line.formula = result.get_by_path("formula()", proof_context)
+                    proof_line.formula = result.get_by_path("formula()", context)
 
                     # It has to be a match
                     if type(proof_line.formula) is not Match:
@@ -139,7 +134,7 @@ class FormalSystem(object):
                     pass
 
                 try:
-                    reference_string = result.get_by_path("reference()", proof_context)
+                    reference_string = result.get_by_path("reference()", context)
 
                     if type(reference_string) is str:
                         proof_line.reference_string = reference_string
@@ -148,7 +143,7 @@ class FormalSystem(object):
                     pass
 
                 try:
-                    label = result.get_by_path("label()", proof_context)
+                    label = result.get_by_path("label()", context)
                     proof_line.label = label
 
                 except Exception as e:
@@ -156,15 +151,23 @@ class FormalSystem(object):
 
                 # Check if the line type has a 'display' value
                 try:
-                    proof_line.display = result.get_by_path("display()", proof_context)
+                    proof_line.display = result.get_by_path("display()", context)
                 except Exception as e:
                     # No valid display path
+                    pass
+
+                try:
+                    # Check if there is a valid axiom
+                    result.get_by_path("axiom()", context)
+                    proof_line.is_axiom = True
+                except Exception as e:
+                    # Not an axiom
                     pass
 
                 if not line_type.behaviour == "indent":
                     # Check for data to add to context
                     try:
-                        proof_line.edit_context(proof_context)
+                        proof_line.edit_context(context)
 
                     except Exception as e:
                         # Error in editing context
@@ -174,7 +177,7 @@ class FormalSystem(object):
                 if line_type.behaviour == "indent":
                     # Parse the block with a copied context
 
-                    new_context = copy(proof_context)
+                    new_context = copy(context)
 
                     # Edit context
                     proof_line.edit_context(new_context)
@@ -194,7 +197,7 @@ class FormalSystem(object):
                     # Compile the block
                     block = "\n".join(lines[i + 1:j])
 
-                    self.parse(text=block, proof=proof, proof_context=new_context, line_number_offset=i + 1)
+                    self.parse(text=block, proof=proof, context=new_context, line_number_offset=i + 1)
 
                     # Continue from after the block
                     i = j - 1
@@ -202,7 +205,7 @@ class FormalSystem(object):
 
                 elif line_type.behaviour == "logical":
                     # Logical lines for parsing
-                    proof.check_logical_line(proof_line, proof_context)
+                    proof.check_logical_line(proof_line, context)
 
                 elif line_type.behaviour == "axiom":
                     # Introduce an axiom to the system
@@ -211,14 +214,17 @@ class FormalSystem(object):
                     proof.reference_context[proof_line.label] = proof_line
                     proof_line.is_axiom = True
 
+                    proof_line.axiom_pattern = proof_line.formula.create_pattern(context.string_variables)
+                    proof_line.axiom_pattern.name = proof_line.label
+
                 elif line_type.behaviour == "definition":
                     # Introduce a new definition to context
 
                     subs = result.sub_matches
-                    defn = self.formula.add_definition(subs["higher"].string, subs["lower"].string, proof_context)
+                    defn = self.formula.add_definition(subs["higher"].string, subs["lower"].string, context)
 
                     # Add variables to the definition
-                    for string_var, sub_pattern in proof_context["string_variables"].items():
+                    for string_var, sub_pattern in context.string_variables.items():
                         defn.add_variable(string_var, sub_pattern)
 
                 elif line_type.behaviour == "import":
@@ -226,8 +232,8 @@ class FormalSystem(object):
 
                     # Get the path and reference
                     try:
-                        path = result.get_by_path("path()", proof_context)
-                        label = result.get_by_path("label()", proof_context)
+                        path = result.get_by_path("path()", context)
+                        label = result.get_by_path("label()", context)
 
                         # Get the line from the import path
                         parts = path.split(".")
@@ -299,6 +305,52 @@ class FormalSystem(object):
 
         return proof
 
+    def equivalent(self, other, context, memo=None):
+        # Check if two formal systems are equivalent
+
+        if memo is None:
+            memo = dict()
+
+        if (self, other) in memo:
+            return memo[(self, other)]
+
+        memo[(self, other)] = False
+
+        if not type(other) is FormalSystem:
+            return False
+
+        if not self.name == other.name:
+            return False
+
+        if not self.formatting == other.formatting:
+            return False
+
+        if not len(self.line_types) == other.line_types:
+            return False
+
+        if not len(self.inference_rules) == len(other.inference_rules):
+            return False
+
+        # Assume equivalent while checking recursively
+        memo[(self, other)] = True
+
+        for self_line, other_line in zip(self.line_types, other.line_types):
+            if not self_line.equivalent(other_line, context, memo):
+                memo[(self, other)] = False
+                return False
+
+        for self_rule, other_rule in zip(self.inference_rules, other.inference_rules):
+            if not self_rule.equivalent(other_rule, context, memo):
+                memo[(self, other)] = False
+                return False
+
+        if not self.context.equivalent(other.context, context, memo):
+            memo[(self, other)] = False
+            return False
+
+        # Otherwise ok
+        return True
+
     def __str__(self):
         return self.name
 
@@ -321,30 +373,78 @@ class LineType(object):
         # The data paths (and their values) to add to context, if any
         self.add_context = add_context if add_context is not None else dict()
 
-        # Attributes
-        self.attributes = dict()
+        # Custom functions
+        self.functions = dict()
 
-    def parse_line(self, line, proof_context):
+    def parse_line(self, line, context):
         # Check if the given line string is of this type
-        return self.pattern.match(line, proof_context)
+        return self.pattern.match(line, context)
 
-    def add_attribute(self, name, value):
-        # Add an attribute to this line type
+    def add_function(self, name, tree, params=None):
+        # Add an function to this pattern. tree is an AbstractSyntaxTree instance
 
-        if type(value) is list:
-            self.attributes[name] = value
+        # Optionally specify a list of (variable, pattern) tuples of parameters
+        if params is None:
+            params = tuple()
 
-        else:
-            self.attributes[name] = str(value)
+        self.functions[name] = {
+            "tree": tree,
+            "params": params
+        }
 
-    def get_attribute(self, name):
-        # Get the given attribute
+    def get_function(self, name):
+        # Get the given attribute function
 
-        if name in self.attributes:
-            return self.attributes[name]
+        if name in self.functions:
+            return self.functions[name]
 
-        # Otherwise, error
-        raise Exception(self.name + " does not have attribute: " + name)
+        return None
+
+    def equivalent(self, other, context, memo=None):
+        # Check equivalence
+
+        if memo is None:
+            memo = dict()
+
+        if (self, other) in memo:
+            return memo[(self, other)]
+
+        memo[(self, other)] = False
+
+        if type(other) is not LineType:
+            return False
+
+        if not self.name == other.name:
+            return False
+
+        if not self.behaviour == other.behaviour:
+            return False
+
+        if not self.add_context == other.add_context:
+            return False
+
+        # Assume true for recursive checks
+        memo[(self, other)] = True
+
+        if not self.pattern.equivalent(other.pattern, context, memo):
+            memo[(self, other)] = False
+            return False
+
+        if not len(self.functions) == len(other.functions):
+            memo[(self, other)] = False
+            return False
+
+        for key in self.functions:
+            if key not in other.functions:
+                memo[(self, other)] = False
+                return False
+
+            # print("TODO check functions are equivalent")
+            # TODO check functions are equivalent
+
+        # Otherwise ok
+        memo[(self, other)] = True
+        return True
 
     def __str__(self):
         return self.name
@@ -353,7 +453,7 @@ class LineType(object):
 class InferenceRule(object):
     # Inference rules for deduction
 
-    def __init__(self, name, label=None, antecedents=None, deduction=None, condition=None, indent=0):
+    def __init__(self, name, label=None, antecedents=None, deduction=None, condition=None):
 
         # The inference rule name
         self.name = name.replace("_", " ")
@@ -370,34 +470,7 @@ class InferenceRule(object):
         # Condition for the rule to apply
         self.condition = condition
 
-        # Deduction indentation relative to antecedents
-        self.indent = indent
-
-    def get_by_path(self, path, proof_context, recurse=True):
-        # Get information from the given path
-
-        initial, remainder = parse_path(path)
-
-        if remainder:
-            # Use generic get by path
-            return get_by_path(self, path, proof_context)
-
-        # Otherwise, only one part
-        if path == "deduction()":
-            # Get the deduction
-            if "deduction" in proof_context:
-                return proof_context["deduction"]
-
-            else:
-                return self.deduction
-
-        if recurse:
-            # Try generic get_by_path
-            return get_by_path(self, path, proof_context, recurse=False)
-
-        raise Exception("Could not find value from path '" + path + "'.")
-
-    def check(self, antecedents, deduction, proof_context):
+    def check(self, antecedents, deduction, context):
         # Check to see if the proposed proof lines are valid under this inference rule
 
         # Check the number of antecedents matches
@@ -422,7 +495,7 @@ class InferenceRule(object):
         inference = Inference(self, antecedents, deduction)
 
         # First check if the deduction matches
-        inference.deduction_inference_match = self.deduction.match(deduction.formula.formatted_string(), proof_context)
+        inference.deduction_inference_match = self.deduction.match(deduction.formula.formatted_string(), context)
 
         if inference.deduction_inference_match is None:
             # No match
@@ -434,7 +507,7 @@ class InferenceRule(object):
                 return False
 
             # Set the inference match - can be used in the Condition
-            match = pattern.match(ant.formula.formatted_string(), proof_context)
+            match = pattern.match(ant.formula.formatted_string(), context)
 
             if match is None:
                 # No match
@@ -443,28 +516,24 @@ class InferenceRule(object):
             inference.antecedent_inference_matches.append(match)
 
         # Check variables are consistent
-        if not inference.check_variables(proof_context):
+        if not inference.check_variables(context):
             # Variables not consistent
             return False
 
         # Check the rule condition
         if self.condition is not None:
             # Make a condition context with antecedents and deduction
-            condition_context = copy(proof_context)
-            condition_context.update({
-                "antecedents": antecedents,
-                "deduction": deduction,
-                "inference": inference
-            })
-            condition_context["variables"].update(inference.variables)
 
-            if not self.check_condition(self.condition, condition_context):
-                # Doesn't meet the condition
+            try:
+                if not self.condition.check_condition(inference, context):
+                    # Doesn't meet the condition
+                    return False
+
+            except Exception as e:
+                # Error trying to apply the condition
                 return False
 
         # Otherwise ok
-        deduction.antecedents = antecedents
-        deduction.inference_rule = self
         deduction.inference = inference
         deduction.valid = True
 
@@ -474,40 +543,48 @@ class InferenceRule(object):
 
         return True
 
-    def check_condition(self, c, context):
-        # Check a condition c - returns true or false
+    def equivalent(self, other, context, memo=None):
+        # Check equivalent
 
-        # Add the top-most match to context in a copy
-        if "self" not in context["variables"]:
-            context = copy(context)
-            context["variables"]["self"] = self
+        if memo is None:
+            memo = dict()
 
-        # Check the possible condition types
-        if not c.type == "atomic":
-            # Composite case
-            return c.check_condition(self, context)
+        if (self, other) in memo:
+            return memo[(self, other)]
 
-        # Otherwise, atomic condition
+        # Assume false
+        memo[(self, other)] = False
 
-        if " == " in c.string:
-            # Equals
-            left_string, right_string = c.string.split(" == ")
-            left = self.get_by_path(left_string, context)
-            right = self.get_by_path(right_string, context)
+        if type(other) is not InferenceRule:
+            return False
 
-            if not type(left) == type(right):
-                # Mismatched types
+        if not self.name == other.name:
+            return False
+
+        if not self.label == other.label:
+            return False
+
+        if not len(self.antecedents) == len(other.antecedents):
+            return False
+
+        # Assume true
+        memo[(self, other)] = True
+
+        for ant, other_ant in zip(self.antecedents, other.antecedents):
+            if not ant.equivalent(other_ant, context, memo):
+                memo[(self, other)] = False
                 return False
 
-            if type(left) in (Match, MatchSet):
-                return left.equivalent(right, context)
+        if not self.deduction.equivalent(other.deduction, context, memo):
+            memo[(self, other)] = False
+            return False
 
-            else:
-                return left == right
+        if not self.condition.equivalent(other.condition, context, memo):
+            memo[(self, other)] = False
+            return False
 
-        else:
-            # Get by path
-            return self.get_by_path(c.string, context)
+        # Otherwise ok
+        return True
 
 
 class Inference(object):
@@ -527,14 +604,47 @@ class Inference(object):
 
         self.variables = None
 
-    def check_variables(self, proof_context):
+    def get_by_path(self, path, context, recurse=True):
+        # Get information from the given path
+
+        if context.reference_object is None:
+            context = copy(context)
+            context.reference_object = self
+
+        initial, remainder = parse_path(path)
+
+        if remainder:
+            # Use generic get by path
+            return get_by_path(self, path, context)
+
+        # Otherwise, only one part
+        if path == "deduction":
+            # Get the deduction
+            return self.deduction
+
+        if path == "antecedents":
+            return self.antecedents
+
+        if path == "antecedent":
+            return self.antecedents[0]
+
+        if path in self.variables:
+            return self.variables[path]
+
+        if recurse:
+            # Try generic get_by_path
+            return get_by_path(self, path, context, recurse=False)
+
+        raise Exception("Could not find value from path '" + path + "'.")
+
+    def check_variables(self, context):
         # Check the variables for antecedent and deduction matches are consistent
 
         self.variables = copy(self.deduction_inference_match.sub_matches)
         for ant_match in self.antecedent_inference_matches:
             for name, sub_match in ant_match.sub_matches.items():
                 if name in self.variables:
-                    if not sub_match.equivalent(self.variables[name], proof_context):
+                    if not sub_match.equivalent(self.variables[name], context):
                         # Same variable with different value
                         return False
 
@@ -579,8 +689,8 @@ class Proof(object):
 
         return self.proof_lines[line_number - 1]
 
-    def add_proof_line(self, text, proof_context):
-        proof_line = ProofLine(self, text, context=copy(proof_context))
+    def add_proof_line(self, text, context):
+        proof_line = ProofLine(self, text, context=copy(context))
         self.proof_lines.append(proof_line)
         return proof_line
 
@@ -608,31 +718,36 @@ class Proof(object):
         if ref in self.reference_context:
             return self.reference_context[ref]
 
+        if ", " in ref:
+            # Split the ref into parts
+            ref_parts = ref.split(", ")
+            key = ref_parts[0]
+
+            for ir in self.formal_system.inference_rules:
+                if key == ir.label:
+                    # It's an inference rule
+
+                    # Get the antecedent lines
+                    antecedents = []
+                    for ant_ref in ref_parts[1:]:
+                        antecedents.append(self.get_reference(ant_ref))
+
+                    return {
+                        "inference_rule": ir,
+                        "antecedents": antecedents,
+                        "key": key
+                    }
+
+            raise Exception("'" + key + "' is not a valid inference rule key.")
+
         if "." in ref:
-            proof_ref, key = ref.split(".")
+            index = ref.index(".")
+            proof_ref = ref[:index]
+            key = ref[index + 1:]
             proof_ref = self.get_reference(proof_ref)
 
             if type(proof_ref) is Proof:
                 return proof_ref.get_reference(key)
-
-        # Split the ref into parts
-        ref_parts = ref.split(", ")
-        key = ref_parts[0]
-
-        for ir in self.formal_system.inference_rules:
-            if key == ir.label:
-                # It's an inference rule
-
-                # Get the antecedent lines
-                antecedents = []
-                for ant_ref in ref_parts[1:]:
-                    antecedents.append(self.get_reference(ant_ref))
-
-                return {
-                    "inference_rule": ir,
-                    "antecedents": antecedents,
-                    "key": key
-                }
 
         # Check if it's a line number
         try:
@@ -643,8 +758,20 @@ class Proof(object):
         # Nothing works
         return None
 
-    def check_logical_line(self, proof_line, proof_context):
+    def check_logical_line(self, proof_line, context):
         # Check if the given proof line is valid.
+
+        if proof_line.proof is not self:
+            # Can't check a line outside the proof
+            return False
+
+        if proof_line.label is not None:
+            # Add label to reference context
+            self.reference_context[proof_line.label] = proof_line
+
+        if proof_line.is_axiom:
+            # Easy case
+            return True
 
         if proof_line.formula is None:
             # No formula
@@ -652,15 +779,11 @@ class Proof(object):
             proof_line.invalid_message = "No formula defined for logical line."
             return False
 
-        if proof_line.label is not None:
-            # Add label to reference context
-            self.reference_context[proof_line.label] = proof_line
-
         if proof_line.reference_string is None:
 
             # Try to work out the deduction. Try the axioms
             for axiom in self.formal_system.axioms:
-                if axiom.match(proof_line.formula.formatted_string(), proof_context) is not None:
+                if axiom.match(proof_line.formula.formatted_string(), context) is not None:
                     # It's a match
                     proof_line.axiom = axiom
                     return True
@@ -669,28 +792,6 @@ class Proof(object):
 
         # Get the reference
         reference = self.get_reference(proof_line.reference_string)
-
-        if type(reference) is ProofLine and reference.is_axiom:
-            # This is an axiom
-
-            # Get the axiom pattern
-            axiom = reference.formula.create_pattern(string_variables=proof_context["string_variables"])
-            key = reference.label
-
-            # Update the StringPattern name
-            axiom.name = key
-
-            # Check the formula is an instance of this axiom
-            if axiom.match(proof_line.formula.formatted_string(), proof_context) is None:
-                # Doesn't fit this axiom - step is invalid
-                proof_line.valid = False
-                proof_line.invalid_message = "Not an instance of " + key + "."
-                return False
-
-            else:
-                # Otherwise, axiom matches
-                proof_line.axiom = axiom
-                return True
 
         if not (type(reference) is dict and "inference_rule" in reference):
             proof_line.invalid_message = "Invalid reference '" + proof_line.reference_string + "'."
@@ -710,7 +811,7 @@ class Proof(object):
             if inference_rule.check(
                     antecedents=[],
                     deduction=proof_line,
-                    proof_context=proof_context
+                    context=context
             ):
                 # It's a valid line
                 proof_line.antecedents = []
@@ -721,7 +822,7 @@ class Proof(object):
             # Antecedents not provided. Try to justify:
             return self.justify(
                 deduction=proof_line,
-                proof_context=proof_context,
+                context=context,
                 inference_rule=inference_rule
             )
 
@@ -737,7 +838,7 @@ class Proof(object):
             if inference_rule.check(
                     antecedents=permutation,
                     deduction=proof_line,
-                    proof_context=proof_context
+                    context=context
             ):
                 # It's a valid permutation
                 proof_line.antecedents = permutation
@@ -750,7 +851,7 @@ class Proof(object):
         proof_line.invalid_message = key + " does not apply."
         return False
 
-    def justify(self, deduction, proof_context, inference_rule=None):
+    def justify(self, deduction, context, inference_rule=None):
         # Artificially try to find a justification for the given reference. Optionally specify a inference rule.
 
         if inference_rule is not None:
@@ -771,7 +872,7 @@ class Proof(object):
                 if inference_rule.check(
                         antecedents=permutation,
                         deduction=deduction,
-                        proof_context=proof_context
+                        context=context
                 ):
                     # Found the valid permutation
                     deduction.antecedents = permutation
@@ -826,18 +927,13 @@ class ProofLine(object):
 
         # This line may be an axiom
         self.is_axiom = False
+        self.axiom_pattern = None
 
         # The axiom this line uses (if any)
         self.axiom = None
 
-        # The rule that this line uses
-        self.inference_rule = None
-
         # The inference instance with this line as the deduction
         self.inference = None
-
-        # The antecedents used in the deduction
-        self.antecedents = None
 
         # Whether this step in the proof is valid
         self.valid = True
@@ -858,14 +954,18 @@ class ProofLine(object):
         # Get the index of this line in the proof
         return self.proof.proof_lines.index(self)
 
-    def get_by_path(self, path, proof_context, recurse=True):
+    def get_by_path(self, path, context, recurse=True):
         # Get an attribute of the proof line given a path s
+
+        if context.reference_object is None:
+            context = copy(context)
+            context.reference_object = self
 
         initial, remainder = parse_path(path)
 
         if remainder:
             # Use generic get by path
-            return get_by_path(self, path, proof_context)
+            return get_by_path(self, path, context)
 
         # Otherwise, only one part
 
@@ -876,8 +976,26 @@ class ProofLine(object):
         if path == "pattern()":
             return self.line_type.pattern
 
-        if len(path) > 2 and path[-2:] == "()" and path[:-2] in self.line_type.attributes:
-            return self.get_by_path(self.line_type.get_attribute(path[:-2]), proof_context)
+        if path == "formula()":
+            return self.formula
+
+        if "(" in path and path[:path.index("(")] in self.line_type.functions:
+            # An attribute function with parameters
+
+            index = path.index("(")
+            name = path[:index]
+
+            args_strings = path[index + 1:-1]
+            args, kwargs = parse_arguments(args_strings, self, context)
+
+            return self.run_function(name, context, args=args, kwargs=kwargs)
+
+        if path[:16] == "check_condition(" and path[-1] == ")":
+            inner = path[16:-1]
+
+            kwargs = parse_arguments(inner, self, context, arg_names=("condition", "mapping"))[1]
+
+            return self.check_condition(kwargs["condition"], context, kwargs["mapping"])
 
         # Try to get path using the frozen context
         try:
@@ -888,24 +1006,39 @@ class ProofLine(object):
 
         if recurse:
             # Try generic get_by_path
-            return get_by_path(self, path, proof_context, recurse=False)
+            return get_by_path(self, path, context, recurse=False)
 
         raise Exception("Could not find value from path '" + path + "'.")
 
-    def edit_context(self, proof_context):
+    def check_condition(self, condition, context, mapping=None):
+        # Check a condition using the given context. Optionally specify a string variable mapping
+
+        if mapping is not None:
+            context = copy(context)
+            context.mapping = mapping
+
+        return condition.check_condition(self, context)
+
+    def edit_context(self, context):
         # Edit the proof context according to the rule on this line type
 
         if self.line_type.add_context is None:
             # Nothing to change
-            return proof_context
+            return context
 
         # Otherwise, changes to make
         for key, value in self.line_type.add_context.items():
 
-            if key not in proof_context:
+            if key not in context.__dict__ and key not in context.logical:
                 raise Exception("Can't find '" + key + "' in proof context.")
 
-            current_value = proof_context[key]
+            # Get the current value and target dictionary
+            if key in context.logical:
+                current_value = context.logical[key]
+                target = context.logical
+            else:
+                current_value = getattr(context, key)
+                target = context.__dict__
 
             if type(current_value) is dict:
                 # Dictionary type context entry
@@ -913,31 +1046,31 @@ class ProofLine(object):
                 for sub_key_string, sub_value_string in value.items():
 
                     # Try get by path
-                    sub_key = self.get_by_path(sub_key_string, proof_context)
+                    sub_key = self.get_by_path(sub_key_string, context)
 
                     # Get the value
-                    sub_value = self.get_by_path(sub_value_string, proof_context)
+                    sub_value = self.get_by_path(sub_value_string, context)
 
-                    if type(sub_key) is MatchSet:
-                        # Need to add each match
-                        for m in sub_key.instances:
-                            proof_context[key][m.string] = sub_value
+                    if isinstance(sub_key, (list, tuple, set)):
+                        # Need to add each item
+                        for item in sub_key:
+                            target[key][item] = sub_value
 
                     elif type(sub_key) is Match:
                         # Just one match
-                        proof_context[key][sub_key.string] = sub_value
+                        target[key][sub_key.string] = sub_value
 
                     else:
                         # Add directly
-                        proof_context[key][sub_key] = sub_value
+                        target[key][sub_key] = sub_value
 
-            elif type(current_value) is set():
+            elif type(current_value) is set:
                 # Set type context entry
 
                 for edit_type, sub_value_string in value.items():
 
                     # Get the value
-                    sub_value = self.get_by_path(sub_value_string, proof_context)
+                    sub_value = self.get_by_path(sub_value_string, context)
 
                     # Get the attribute function of the set
                     attr = getattr(current_value, edit_type)
@@ -951,16 +1084,16 @@ class ProofLine(object):
                 for edit_type, sub_value_string in value.items():
 
                     # Get the value
-                    sub_value = self.get_by_path(sub_value_string, proof_context)
+                    sub_value = self.get_by_path(sub_value_string, context)
 
                     if edit_type == "union":
                         # Union the set with the value
 
                         if type(sub_value) is Match:
-                            proof_context[key] = current_value.add(sub_value, proof_context)
+                            target[key] = current_value.add(sub_value, context)
 
                         elif type(sub_value) is MatchSet:
-                            proof_context[key] = current_value.union(sub_value, proof_context)
+                            target[key] = current_value.union(sub_value, context)
 
                         else:
                             # Has to be a match or a match set
@@ -972,12 +1105,12 @@ class ProofLine(object):
                             # Has to be a match
                             raise Exception("Cannot add a non-match to a match set")
 
-                        current_value.add(sub_value, proof_context)
+                        current_value.add(sub_value, context)
 
                     else:
                         raise Exception("Cannot edit a set with operator '" + edit_type + "'.")
 
-        return proof_context
+        return context
 
     def data(self):
         # Get data for this proof line
@@ -993,5 +1126,78 @@ class ProofLine(object):
             "indent": self.indent
         }
 
+    def run_function(self, name, context, args=None, kwargs=None):
+        # Run a custom function with the given name, args and kwargs
+
+        fn = self.line_type.get_function(name)
+
+        if fn is None:
+            raise Exception("'" + self.line_type.name + "' does not have function '" + name + "'.")
+
+        # Check the params matches have the correct pattern
+        if args is None:
+            args = []
+
+        if kwargs is None:
+            kwargs = {}
+
+        arg_count = len(args) + len(kwargs)
+        if not arg_count == len(fn["params"]):
+            # Wrong number of parameters provided
+            raise Exception("'" + name + "' expected " + str(len(fn["params"])) + " argument(s), " + str(arg_count) +
+                            " provided.")
+
+        # Build a parameter mapping
+        param_mapping = dict()
+
+        # Check args
+        for given, fn_param in zip(args, fn["params"][:len(args)]):
+            param_mapping[fn_param[0]] = given
+
+        # kwargs don't have to be in order
+        remaining_fn_params = fn["params"][len(args):]
+        remaining_fn_param_dict = {param[0]: param[1] for param in remaining_fn_params}
+
+        # Check kwargs
+        for given_name, given in kwargs.items():
+            if given_name not in remaining_fn_param_dict:
+                raise Exception("'" + name + "' does not accept parameter '" + given_name + ".")
+
+            param_mapping[given_name] = given
+
+        # Create a copy of context
+        context_copy = copy(context)
+
+        # Run the tree as a function
+        tree = fn["tree"]
+
+        return tree.run_function(item=self, context=context_copy, params=param_mapping, param_types=fn["params"])
+    
+    def maps_onto(self, other, context):
+        # Check if this proof line maps onto another proof line. Includes patterns but also any logical context
+
+        # First check the patterns
+        if self.formula is None:
+            # No formula to check
+            return False
+
+        # Try to get a mapping
+        mapping = self.formula.maps_onto(other.formula, context)
+
+        if mapping is None:
+            return False
+
+        for key, match in mapping.items():
+            print(key, match.string)
+
+        # Check logical proof context items
+        for key in context.logical:
+            print("")
+            print(key)
+            print("self", context.logical[key])
+            print("other", other.context.logical[key])
+
+        return True
+
     def __str__(self):
-        return self.text
+        return "ProofLine: " + self.text

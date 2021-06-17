@@ -1,5 +1,6 @@
-from website.logical.matching import *
-from website.logical.formal_system import FormalSystem, LineType, InferenceRule
+from website.logical.matching import Condition, Match, MatchSet, Pattern, StringPattern, UnionPattern, RegexPattern, \
+    AbstractPattern, SystemConditionPattern
+from website.logical.formal_system import FormalSystem, LineType, InferenceRule, ProofLine
 from copy import copy
 
 
@@ -236,8 +237,6 @@ class AbstractSyntaxTree(object):
             # Create a context
             context = Context()
 
-        # print(len(context.pre_format), self.line)
-
         if self.is_root():
             # Just run the sub trees
 
@@ -281,9 +280,9 @@ class AbstractSyntaxTree(object):
                 new_object = fs
 
             elif stripped == "ProofContext:":
-                # Proof context definition
+                # Logical proof context definition
                 self.type = "ProofContext"
-                new_object = current_object.proof_context
+                new_object = current_object.context.logical
 
             elif stripped[:7] == "Format " and stripped[-1] == ":":
                 # Create a format dictionary
@@ -400,6 +399,7 @@ class AbstractSyntaxTree(object):
                 if type(current_object) is not FormalSystem:
                     raise Exception("Cannot add LineType to object of type " + str(type(current_object)) + ".")
 
+                context.variables[name] = new_object
                 current_object.line_types.append(new_object)
 
             elif stripped[:14] == "InferenceRule " and stripped[-1] == ":":
@@ -773,13 +773,13 @@ class AbstractSyntaxTree(object):
                     remainder = stripped[index + 1:-1]
 
                     if name not in context.variables:
-                        self.error = "Unrecognised pattern '" + name + "'."
+                        self.error = "Unrecognised variable '" + name + "'."
                         return
 
-                    pattern = context.variables[name]
+                    obj = context.variables[name]
 
-                    if type(pattern) not in (UnionPattern, StringPattern, RegexPattern, AbstractPattern):
-                        self.error = "'" + name + "' is not a pattern."
+                    if not isinstance(obj, (Pattern, LineType)):
+                        self.error = "'" + name + "' is not a pattern or LineType."
                         return
 
                     index = remainder.find("(")
@@ -801,18 +801,21 @@ class AbstractSyntaxTree(object):
                             self.error = "Invalid variable name: '" + key + "'."
                             return
 
-                        if value not in context.variables:
+                        if value not in context.variables and value not in ("dict", "list", "set"):
                             self.error = "'" + value + "' is not defined."
                             return
 
                     # Change dictionary values from strings to the corresponding patterns
-                    args = tuple((arg[0], context.variables[arg[1]]) for arg in args)
+                    args = tuple(
+                        (arg[0], context.variables[arg[1]]) if arg[1] in context.variables else (arg[0], arg[1])
+                        for arg in args
+                    )
 
                     if len(args) == 0:
                         args = None
 
                     # Add the function to the pattern
-                    pattern.add_function(name=fn_name, tree=self, params=args)
+                    obj.add_function(name=fn_name, tree=self, params=args)
 
                     self.type = "function"
 
@@ -846,32 +849,65 @@ class AbstractSyntaxTree(object):
 
         # Add context to formal systems
         if self.type == "FormalSystem":
-            proof_context = new_object.proof_context
-
-            if "string_variables" not in proof_context:
-                proof_context["string_variables"] = dict()
-
-            if "variables" not in proof_context:
-                proof_context["variables"] = dict()
-
-            proof_context["variables"].update(sub_context.variables)
+            context = new_object.context
+            context.variables.update(sub_context.variables)
 
         return context
 
-    def run_function(self, match, context, params=None):
-        # Run a function for a given match. For 'function' type trees
+    def run_function(self, item, context, params=None, param_types=None):
+        # Run a function for a given match or proof line. For 'function' type trees
 
         if not self.type == "function":
             raise Exception("Cannot run function on non-function trees.")
 
-        # Update context variables with any parameters
-        if params is not None:
-            context["variables"].update(params)
+        if params is None:
+            params = {}
+
+        if param_types is None:
+            param_types = tuple()
+
+        # Update the context reference object
+        context = copy(context)
+        context.reference_object = item
+
+        # Check the number of parameters is correct
+        if not len(params) == len(param_types):
+            raise Exception("Expected " + str(len(param_types)) + " arguments, but " + str(len(params)) +
+                            " were given.")
+
+        # Check the parameters are of the right type
+        param_type_dict = {param[0]: param[1] for param in param_types}
+
+        for key, value in params.items():
+            if key not in param_type_dict:
+                raise Exception("Unexpected argument '" + key + "'.")
+
+            param_type = param_type_dict[key]
+
+            if isinstance(value, Match):
+                if not value.pattern.equivalent(param_type, context):
+                    raise Exception("Incorrect argument type.")
+
+            elif isinstance(value, ProofLine):
+                if not value.line_type.equivalent(param_type, context):
+                    raise Exception("Incorrect argument type.")
+
+            elif isinstance(value, dict) and param_type == "dict":
+                # Ok
+                pass
+
+            else:
+                raise Exception("Invalid parameter.")
+
+        # Otherwise ok
+
+        # Update string variables with any parameters (e.g. 'alpha' as formula)
+        context.string_variables.update(params)
 
         result = None
 
         for tree in self.sub_trees:
-            next_result = tree.run_function_line(match, context)
+            next_result = tree.run_function_line(item, context)
 
             if next_result is not None:
                 # Update the result
@@ -879,8 +915,8 @@ class AbstractSyntaxTree(object):
 
         return result
 
-    def run_function_line(self, match, context):
-        # Run a line in a function for a given match
+    def run_function_line(self, item, context):
+        # Run a line in a function for a given match or proof line
 
         stripped = self.line.strip()
 
@@ -888,22 +924,28 @@ class AbstractSyntaxTree(object):
             # Nothing to do
             return None
 
-        if stripped[:10] == "instances(" and stripped[-1] == ")":
-            # Instances
-            return match.get_by_path(stripped, context)
-
         elif ".each(" in stripped and stripped[-1] == ":":
             # Looks like an each function
 
-            # First need a match set
+            # First need an iterable
             index = stripped.index(".each(")
             path = stripped[:index]
 
-            match_set = match.get_by_path(path, context)
+            obj = item.get_by_path(path, context)
 
-            if not match_set.complete:
-                # Can't iterate over incomplete match set
-                return False
+            if type(obj) is MatchSet:
+                items = obj.instances
+
+                if not obj.complete:
+                    # Can't iterate over incomplete match set
+                    return False
+
+            elif isinstance(obj, (list, tuple, set)):
+                # Normal iterable object
+                items = obj
+
+            else:
+                raise Exception("Cannot iterate over '" + str(type(obj)) + ".")
 
             # Get the parameter named for the loop
             name = stripped[index + 6:-2]
@@ -912,16 +954,16 @@ class AbstractSyntaxTree(object):
             context_copy = copy(context)
 
             # Loop through the match set
-            for m in match_set.instances:
+            for i in items:
 
                 # Add this match to context
-                context_copy.variables[name] = m
+                context_copy.variables[name] = i
 
                 result = None
 
                 # Run sub-trees
                 for sub_tree in self.sub_trees:
-                    result = sub_tree.run_function_line(match, context_copy)
+                    result = sub_tree.run_function_line(item, context_copy)
 
                 if not result:
                     # This instance fails
@@ -930,60 +972,38 @@ class AbstractSyntaxTree(object):
             # All instances pass the condition
             return True
 
-        else:
-            # Assume it's a condition
-            c = Condition(string=stripped)
-            return match.check_condition(c, context)
+        elif stripped[:6] == "print(" and stripped[-1] == ")":
+            inner = stripped[6:-1]
+            print(inner)
+            return None
+
+        # Try to get by path
+        try:
+            return item.get_by_path(stripped, context)
+        except Exception as e:
+            pass
+
+        # Try making a condition
+        # try:
+        #     c = Condition(string=stripped)
+        #     return item.check_condition(c, context)
+        #
+        # except Exception as e:
+        #     pass
+
+        raise Exception("Could not parse function line '" + stripped + "'.")
 
     @staticmethod
     def valid_variable_name(var):
         # Check if var is a valid variable name
-
-        blacklist = [
+        return var.isidentifier() and var not in {
             "FormalSystem",
             "Abstract",
             "Pattern"
-        ]
-
-        return var.isidentifier() and var not in blacklist
+        }
 
     def __str__(self):
         if self.is_root():
             return "Tree root"
 
         return str(self.line_number) + ": " + self.line
-
-
-if __name__ == "__main__":
-
-    # Parse the system
-    with open("formal_systems/b6cef3e4/predicate.txt") as f:
-        predicate = compile(f.read())
-
-    vars = predicate.proof_context["variables"]
-
-    formula = vars["formula"]
-    atomic = vars["atomic_formula"]
-    equal = vars["equal"]
-    variable = vars["variable"]
-    term = vars["term"]
-
-    c = {
-        "string_variables": {},
-        "variables": {},
-        "restrictions": {}
-    }
-
-    logical = vars["logical_pattern"]
-
-    print(logical)
-
-    c["string_variables"].update({
-        "A": formula,
-        "B": formula
-    })
-
-    print(logical.match("((neg B rightarrow neg A) rightarrow (A rightarrow B)) ref{A3} label{X}", c))
-
-
-
