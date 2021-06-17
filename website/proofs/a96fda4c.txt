@@ -1,41 +1,32 @@
 import axioms as ax
 
 
-let $\alpha$, $\beta$ be formula
+let $A$, $B$, $\alpha$, $\beta$, $\gamma$, $\delta$ be formula
 
-$(\neg \alpha \rightarrow (\neg \beta \rightarrow \neg \alpha))$ ref{ax.A1}
+
+if $\alpha$:
+    $(\alpha \rightarrow (\beta \rightarrow \alpha))$ label{Ax: A1}
+
+
+if $\gamma$:
+    $(\gamma \rightarrow (\delta \rightarrow \gamma))$ ref{Th, A1}
+
+
 
 if $\neg \alpha$:
 
-    $(\neg \beta \rightarrow \neg \alpha)$ ref{DT1}
+    # $(\neg \beta \rightarrow \neg \alpha)$ ref{DT1}
 
-    $((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ ref{ax.A3}
+    # $((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ ref{ax.A3}
 
-    $(\alpha \rightarrow \beta)$ ref{MP}
+    # $(\alpha \rightarrow \beta)$ ref{MP}
 
-$(\neg \alpha \rightarrow (\alpha \rightarrow \beta))$ ref{DT2}
+# $(\neg \alpha \rightarrow (\alpha \rightarrow \beta))$ ref{DT2}
 
 
 
 let $\gamma$, $\delta$ be formula
+let $x$, $y$ be variable
 
-$(\neg \gamma \rightarrow (\gamma \rightarrow (\delta \rightarrow \delta)))$ ref{Th}
+# $(\forall x \; \gamma \rightarrow \delta)$ ref{Th, ax.A4.0}
 
-
-if $\gamma$, $\delta$:
-    if $\neg \gamma$:
-        $(\neg \gamma \rightarrow (\gamma \rightarrow (\delta \rightarrow \delta)))$ ref{T}
-        
-        $\neg \gamma$ ref{As}
-        
-        $(\gamma \rightarrow (\delta \rightarrow \delta))$ ref{MP}
-        
-        $\gamma$ ref{As}
-        
-        $(\delta \rightarrow \delta)$ ref{MP}
-        
-        $\delta$ ref{As}
-        
-        $\delta$ ref{MP}
-        
-    
