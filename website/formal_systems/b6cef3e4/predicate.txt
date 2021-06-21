@@ -183,26 +183,6 @@ FormalSystem Predicate:
     # Function to check the proof line follows from other.        
     logical.maps_to(other as logical):
         self.check_consistent_conditions(other, self.given_mapping(other))
-        
-    # Pattern axiom_pattern:
-    #     with fo as formula, ref as reference:
-    #         fo label{Ax: ref}
-            
-    # axiom_pattern.format:
-    #     clear
-        
-    # axiom_pattern.formula():
-    #     fo
-        
-    # axiom_pattern.display():
-    #     fo.string()
-        
-    # axiom_pattern.label():
-    #     ref.string()
-        
-    # LineType axiom:
-    #     pattern: axiom_pattern
-    #     behaviour: axiom
 
     Pattern let_pattern:
         with csv as comma_separated_variable_names, p as variable_name:
@@ -268,6 +248,42 @@ FormalSystem Predicate:
     LineType import:
         pattern: import_pattern
         behaviour: import
+        
+    Regex any:
+        ^.+$
+        
+    Pattern definition_pattern:
+        with lower as any, higher as any, pattern as variable_name:
+            define higher as lower for pattern
+            
+    definition_pattern.format:
+        clear
+            
+    Pattern labelled_definition_pattern:
+        with def as definition_pattern, label_ref as reference:
+            def label{label_ref}
+            
+    labelled_definition_pattern.format:
+        clear
+            
+    labelled_definition_pattern.display():
+        def.string()
+        
+    labelled_definition_pattern.label():
+        label_ref.string()
+        
+    labelled_definition_pattern.higher():
+        def.higher
+        
+    labelled_definition_pattern.lower():
+        def.lower
+        
+    labelled_definition_pattern.for():
+        def.pattern.lookup()
+            
+    LineType definition:
+        pattern: labelled_definition_pattern
+        behaviour: definition
         
     with $\alpha$, $\beta$ as formula:
         InferenceRule Modus_Ponens:
@@ -348,3 +364,17 @@ FormalSystem Predicate:
 
             condition:
                 antecedent.maps_to(deduction)
+                
+        InferenceRule Definition:
+            label:
+                Def
+                
+            antecedents:
+                labelled_definition_pattern
+                $\alpha$
+                
+            deduction:
+                $\beta$
+                
+            condition:
+                (deduction.follows_from_definition(antecedents[1], antecedents[0].definition())) and (antecedents[1].given.issubset(deduction.given)) and (antecedents[1].conditions.issubset(deduction.conditions))
