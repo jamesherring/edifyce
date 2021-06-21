@@ -235,10 +235,14 @@ def path_maps_to(path, other_path, mapping):
 
 class Context(object):
 
-    def __init__(self, variables=None, string_variables=None, logical=None, reference_object=None, mapping=None):
+    def __init__(self, variables=None, string_variables=None, definitions=None, logical=None, reference_object=None,
+                 mapping=None):
 
         self.variables = variables if variables is not None else dict()
         self.string_variables = string_variables if string_variables is not None else dict()
+
+        # Definitions
+        self.definitions = definitions if definitions is not None else []
 
         # Logical context for inside proofs
         self.logical = logical if logical is not None else dict()
@@ -268,6 +272,9 @@ class Context(object):
             return False
         
         if not len(self.string_variables) == len(other.string_variables):
+            return False
+
+        if not len(self.definitions) == len(other.definitions):
             return False
             
         if not len(self.logical) == len(other.logical):
@@ -301,6 +308,11 @@ class Context(object):
                 memo[(self, other)] = False
                 return False
 
+        for self_def, other_def in zip(self.definitions, other.definitions):
+            if not self_def.equivalent(other_def, context, memo):
+                memo[(self, other)] = False
+                return False
+
         for key in self.logical:
             if key not in other.logical:
                 memo[(self, other)] = False
@@ -318,6 +330,8 @@ class Context(object):
         return Context(
             variables=copy(self.variables),
             string_variables=copy(self.string_variables),
+
+            definitions=[copy(defn) for defn in self.definitions],
 
             # Logical is a dict of dicts
             logical={key: copy(self.logical[key]) for key in self.logical},
@@ -686,10 +700,158 @@ class Condition(object):
         return "Condition: " + self.string
 
 
+class Definition(object):
+    # A definition class - linking higher level string patterns with lower level ones
+
+    def __init__(self, lower, higher, pattern, context):
+
+        # The pattern this definition applies to
+        self.pattern = pattern
+
+        # Get the match for variables
+        match = self.pattern.match(lower, context)
+        assert match is not None
+
+        # Create a lower pattern
+        self.lower = match.create_pattern(context.string_variables)
+
+        # Create a higher pattern
+        self.higher = StringPattern(
+            name="Definition (higher)",
+            pattern=higher,
+            variables=self.lower.variables,
+            pre_format=self.pattern.pre_format
+        )
+
+        # Store the variables
+        self.variables = self.lower.variables
+
+    def match(self, s, context):
+        # Check if the definition applies to a string s, of the higher level match
+
+        higher_match = self.higher.match(s, context)
+
+        if higher_match is None:
+            return None
+
+        # Success - create a match
+        m = Match(
+            string=s,
+            pattern=self.pattern,
+            definition=self
+        )
+
+        # Add submatches according to the variables in the higher match
+        for key, sub_match in higher_match.sub_matches.items():
+            m.add_submatch(key, copy(sub_match))
+
+        return m
+
+    def check_application(self, lower, higher, context, mapping=None):
+        # Check if this definition defines higher match from lower match. Recursive algorithm.
+        # Optionally specify mapping that must be consistent
+
+        if mapping is None:
+            mapping = dict()
+
+        if lower.string in mapping and not mapping[lower.string] == higher.string:
+            # Inconsistent mapping
+            return False
+
+        # if lower.equivalent(higher, context):
+            # Vacuously True
+            # mapping[lower.string] = higher.string
+            # return True
+
+        if (lower.definition is None and higher.definition is None) or \
+                (lower.definition is not None and lower.definition.equivalent(higher.definition, context)):
+            # Both definitions are the same or both None. No need to unpack, just need to check sub_matches
+
+            if not len(lower.sub_matches) == len(higher.sub_matches):
+                return False
+
+            for key, lower_sub in lower.sub_matches.items():
+                if key not in higher.sub_matches:
+                    return False
+
+                higher_sub = higher.sub_matches[key]
+
+                if not self.check_application(lower_sub, higher_sub, context, mapping):
+                    return False
+
+            # Otherwise ok
+
+            if len(lower.sub_matches) == 0:
+                mapping[lower.string] = higher.string
+
+            return True
+
+        # Otherwise, lower and higher definitions are different. Need higher to define to lower to be valid
+        if higher.definition is None or not higher.definition.equivalent(self, context):
+            return False
+
+        # Higher uses this definition.
+
+        # Check if lower matches
+        defn_lower_match = self.lower.match(lower.string, context)
+
+        if defn_lower_match is None:
+            # Lower doesn't match
+            return False
+
+        # Compare the variables
+        for key, lower_var in defn_lower_match.sub_matches.items():
+            if key not in higher.sub_matches:
+                return False
+
+            higher_var = higher.sub_matches[key]
+
+            if not self.check_application(lower=lower_var, higher=higher_var, context=context, mapping=mapping):
+                # Variables don't match
+                return False
+
+        # Otherwise ok
+        return True
+
+    def equivalent(self, other, context, memo=None):
+        # Check if two definitions are the same
+
+        if memo is None:
+            memo = dict()
+
+        if (self, other) in memo:
+            return memo[(self, other)]
+
+        # Assume False to save lines
+        memo[(self, other)] = False
+
+        if not isinstance(other, Definition):
+            return False
+
+        # Assume True when checking nested patterns - so recursive patterns can compare equal
+        memo[(self, other)] = True
+
+        if not self.lower.equivalent(other.lower, context, memo):
+            memo[(self, other)] = False
+            return False
+
+        if not self.higher.equivalent(other.higher, context, memo):
+            memo[(self, other)] = False
+            return False
+
+        if not self.pattern.equivalent(other.pattern, context, memo):
+            memo[(self, other)] = False
+            return False
+
+        # Otherwise ok
+        memo[(self, other)] = True
+        return True
+
+
 class Match(object):
     # Match object
 
-    def __init__(self, pattern, string):
+    def __init__(self, pattern, string, definition=None):
 
         self.pattern = pattern
         self.string = string
@@ -699,6 +861,9 @@ class Match(object):
 
         # The parent match
         self.parent_match = None
+
+        # The definition used
+        self.definition = definition
 
     def add_submatch(self, var, m):
         self.sub_matches[var] = m
@@ -1115,7 +1280,7 @@ class Match(object):
 
         return s
 
-    def equivalent(self, other, context, memo=None, allow_definitions=False):
+    def equivalent(self, other, context, memo=None):
         # Test whether two matches are equivalent. For variables - use context restrictions where possible.
 
         # A variable will typically return None when matched against a string or another variable - i.e. they could be
@@ -1131,34 +1296,12 @@ class Match(object):
             memo[(self, other)] = False
             return False
 
-        # Belonging to the same pattern is a requirement, unless there's a convenient definition
+        # Belonging to the same pattern is a requirement
         if not self.pattern.equivalent(other.pattern, context, memo):
+            memo[(self, other)] = False
+            return False
 
-            if not allow_definitions:
-                # Ignore possible definitions
-                memo[(self, other)] = False
-                return False
-
-            # See if there's a definition to help
-            if self.lower_match is not None:
-                # Try the lower match
-                if self.lower_match.equivalent(other, context, memo, allow_definitions):
-                    memo[(self, other)] = True
-                    return True
-
-                if other.lower_match is not None:
-                    # Combine both definitions
-                    if self.lower_match.equivalent(other.lower_match, context, memo, allow_definitions):
-                        memo[(self, other)] = True
-                        return True
-
-            if other.lower_match is not None:
-                # The the other definition
-                if self.equivalent(other.lower_match, context, memo, allow_definitions):
-                    memo[(self, other)] = True
-                    return True
-
-            # Otherwise, no luck
+        if self.definition is not None and not self.definition.equivalent(other.definition, context, memo):
             memo[(self, other)] = False
             return False
 
@@ -1178,7 +1321,7 @@ class Match(object):
 
             for key in self_subs:
                 # Check the subs are equivalent
-                result = self_subs[key].equivalent(other_subs[key], context, memo, allow_definitions)
+                result = self_subs[key].equivalent(other_subs[key], context, memo)
 
                 if result is False:
                     # Weakest result is False - so we can return this immediately
@@ -1643,12 +1786,9 @@ class MatchSet(object):
 class Pattern(object):
     # Parent class for Pattern objects StringPattern and UnionPattern
 
-    def __init__(self, name, parent=None, respect_brackets=None, pre_format=None):
+    def __init__(self, name, respect_brackets=None, pre_format=None):
 
         self.name = name
-
-        # The parent pattern (if applicable)
-        # self.parent = parent
 
         # Keep a dictionary of functions on the pattern
         self.functions = dict()
@@ -1786,20 +1926,49 @@ class Pattern(object):
 
         return False
 
+    def add_definition(self, lower, higher, context):
+        # Add a definition to this pattern
+
+        if self.match(lower, context) is None:
+            # No match with lower
+            return None
+
+        defn = Definition(lower, higher, self, context)
+        context.definitions.append(defn)
+
+        return defn
+
+    def try_definitions(self, s, context):
+        # Try definitions to see if they can give a match for s
+
+        for definition in context.definitions:
+            if not definition.pattern.equivalent(self, context):
+                continue
+
+            result = definition.match(s, context)
+
+            if result is not None:
+                return result
+
+        # No definitions work
+        return None
+
 
 class RegexPattern(Pattern):
     # RegEx pattern matching
 
-    def __init__(self, name, pattern):
+    def __init__(self, name, pattern, pre_format=None):
 
-        Pattern.__init__(self, name)
+        Pattern.__init__(self, name, pre_format=pre_format)
 
         self.pattern = pattern
 
     def match(self, s, context, debug=None):
         # Try to match a string s with the pattern
 
-        for re_match in re.finditer(self.pattern, s, overlapped=True):
+        formatted = self.pre_format_apply(s)
+
+        for re_match in re.finditer(self.pattern, formatted, overlapped=True):
 
             if re_match is None:
                 # No match
@@ -1845,9 +2014,9 @@ class RegexPattern(Pattern):
 class StringPattern(Pattern):
     """A string pattern created in compiling lattice"""
 
-    def __init__(self, name, pattern, variables=None, parent=None, respect_brackets=None, pre_format=None):
+    def __init__(self, name, pattern, variables=None, respect_brackets=None, pre_format=None):
 
-        Pattern.__init__(self, name, parent, respect_brackets, pre_format)
+        Pattern.__init__(self, name, respect_brackets, pre_format)
 
         # The pattern string
         self.pattern = self.pre_format_apply(pattern)
@@ -1860,12 +2029,6 @@ class StringPattern(Pattern):
 
         # Display variables
         self.display_variables = dict()
-
-        # The definitions that apply - only to a certain context
-        self.definitions = None
-
-        # Record the last definition this pattern has seen
-        self.definition_context = None
 
         # Record the variable locations for speed
         self.variable_locations = dict()
@@ -1929,7 +2092,6 @@ class StringPattern(Pattern):
         # Optionally specify non variable mapping.
 
         next_debug = None
-        spaces = ""
         if debug is not None:
             # Debugging
             spaces = debug * 4 * " "
@@ -1977,15 +2139,12 @@ class StringPattern(Pattern):
 
         if pattern_offset == 0:
 
-            # # Get the definitions for this pattern
-            # self.get_definitions(context)
-            #
-            # # Check if there is an applicable definition
-            # for defn in self.definitions:
-            #     # Try the definition
-            #
-            #     if defn["valid"]:
-            #         return defn["definition"].apply(s, self, context)
+            # Try definitions
+            result = self.try_definitions(s, context)
+
+            if result is not None:
+                # Definition applies
+                return result
 
             # Check the non-variable parts all appear in order
             indices = sorted(index for index in self.non_variable_locations)
@@ -2433,6 +2592,22 @@ class StringPattern(Pattern):
 
         return reverse
 
+    def create_match_with_variable_map(self, variable_map):
+        # Create a match using this pattern with the given variable map ({String: String})
+
+        s = self.pattern
+
+        # Go through variable locations in reverse order
+        indices = sorted([i for i in self.variable_locations], reverse=True)
+
+        for i in indices:
+            var_label = self.variable_locations[i]["label"]
+
+            if var_label in variable_map:
+                s = s[:i] + variable_map[var_label] + s[i + len(var_label):]
+
+        return Match(string=s, pattern=self)
+
     def equivalent(self, other, context, memo=None):
         # Check if two patterns are the same
 
@@ -2489,9 +2664,9 @@ class StringPattern(Pattern):
 class UnionPattern(Pattern):
     # A union of patterns
 
-    def __init__(self, name, patterns, parent=None, respect_brackets=None, pre_format=None):
+    def __init__(self, name, patterns, respect_brackets=None, pre_format=None):
 
-        Pattern.__init__(self, name, parent, respect_brackets, pre_format)
+        Pattern.__init__(self, name, respect_brackets, pre_format)
 
         # The list of patterns
         self.patterns = patterns
@@ -2576,6 +2751,13 @@ class UnionPattern(Pattern):
             m.add_submatch(pattern.name, result)
 
             return m
+
+        # Try definitions
+        result = self.try_definitions(s, context)
+
+        if result is not None:
+            # Definition applies
+            return result
 
         return None
 

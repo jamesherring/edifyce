@@ -11,9 +11,6 @@ class FormalSystem(object):
         # The name of the system
         self.name = name
 
-        # System formula pattern
-        # self.formula = None
-
         # A list of line types
         self.line_types = line_types if line_types is not None else []
 
@@ -145,6 +142,7 @@ class FormalSystem(object):
                 try:
                     label = result.get_by_path("label()", context)
                     proof_line.label = label
+                    proof.reference_context[label] = proof_line
 
                 except Exception as e:
                     pass
@@ -220,12 +218,24 @@ class FormalSystem(object):
                 elif line_type.behaviour == "definition":
                     # Introduce a new definition to context
 
-                    subs = result.sub_matches
-                    defn = self.formula.add_definition(subs["higher"].string, subs["lower"].string, context)
+                    try:
+                        # Get the higher and lower strings, and the pattern it should apply to
+                        lower = result.get_by_path("lower()", context)
+                        higher = result.get_by_path("higher()", context)
+                        pattern = result.get_by_path("for()", context)
+                    except Exception as e:
+                        # Not a valid definition
+                        proof_line.valid = False
+                        proof_line.invalid_message = "Missing higher or lower for definition."
+                        continue
 
-                    # Add variables to the definition
-                    for string_var, sub_pattern in context.string_variables.items():
-                        defn.add_variable(string_var, sub_pattern)
+                    if pattern.match(lower.string, context) is None:
+                        proof_line.valid = False
+                        proof_line.invalid_message = lower.string + " is not an instance of " + pattern.name + "."
+                        continue
+
+                    # Add the definition
+                    proof_line.definition = pattern.add_definition(lower.formatted_string(), higher.formatted_string(), context)
 
                 elif line_type.behaviour == "import":
                     # Import a file or result
@@ -503,6 +513,11 @@ class InferenceRule(object):
 
         # Check if the antecedents match
         for pattern, ant in zip(self.antecedents, antecedents):
+
+            if (not ant.line_type.behaviour == "logical") and pattern.equivalent(ant.line_type.pattern, context):
+                # This is an instance of a non-logical line
+                continue
+
             if ant.formula is None:
                 return False
 
@@ -718,6 +733,14 @@ class Proof(object):
         if ref in self.reference_context:
             return self.reference_context[ref]
 
+        for ir in self.formal_system.inference_rules:
+            if ref == ir.label:
+                return {
+                    "inference_rule": ir,
+                    "antecedents": [],
+                    "key": ref
+                }
+
         if ", " in ref:
             # Split the ref into parts
             ref_parts = ref.split(", ")
@@ -764,10 +787,6 @@ class Proof(object):
         if proof_line.proof is not self:
             # Can't check a line outside the proof
             return False
-
-        if proof_line.label is not None:
-            # Add label to reference context
-            self.reference_context[proof_line.label] = proof_line
 
         if proof_line.is_axiom:
             # Easy case
@@ -858,7 +877,7 @@ class Proof(object):
 
             logical_lines = [
                 line for line in self.proof_lines[:deduction.index()]
-                if line.line_type is not None and line.line_type.behaviour == "logical"
+                if line.line_type is not None and line.line_type.behaviour in ("logical", "definition")
             ][-len(inference_rule.antecedents):]
 
             if not len(logical_lines) == len(inference_rule.antecedents):
@@ -915,6 +934,9 @@ class ProofLine(object):
 
         # The formula match (if any) on this line
         self.formula = None
+
+        # The definition created (if any) on this line
+        self.definition = None
 
         # The LineType used for this line
         self.line_type = None
@@ -979,6 +1001,9 @@ class ProofLine(object):
         if path == "formula()":
             return self.formula
 
+        if path == "definition()":
+            return self.definition
+
         if "(" in path and path[:path.index("(")] in self.line_type.functions:
             # An attribute function with parameters
 
@@ -996,6 +1021,13 @@ class ProofLine(object):
             kwargs = parse_arguments(inner, self, context, arg_names=("condition", "mapping"))[1]
 
             return self.check_condition(kwargs["condition"], context, kwargs["mapping"])
+
+        if path[:24] == "follows_from_definition(" and path[-1] == ")":
+            # Follows from definition
+            inner = path[24:-1]
+            kwargs = parse_arguments(inner, self, context, arg_names=("other", "definition"))[1]
+
+            return self.follows_from_definition(kwargs["other"], kwargs["definition"], context)
 
         # Try to get path using the frozen context
         try:
@@ -1018,6 +1050,16 @@ class ProofLine(object):
             context.mapping = mapping
 
         return condition.check_condition(self, context)
+
+    def follows_from_definition(self, other, definition, context):
+        # Check if this proof line follows from the other by means of a definition
+
+        if (not self.line_type.behaviour == "logical") or (not other.line_type.behaviour == "logical"):
+            # Must be logical lines
+            return False
+
+        # Check if the definition applies
+        return definition.check_application(lower=other.formula, higher=self.formula, context=context)
 
     def edit_context(self, context):
         # Edit the proof context according to the rule on this line type
@@ -1173,31 +1215,5 @@ class ProofLine(object):
 
         return tree.run_function(item=self, context=context_copy, params=param_mapping, param_types=fn["params"])
     
-    def maps_onto(self, other, context):
-        # Check if this proof line maps onto another proof line. Includes patterns but also any logical context
-
-        # First check the patterns
-        if self.formula is None:
-            # No formula to check
-            return False
-
-        # Try to get a mapping
-        mapping = self.formula.maps_onto(other.formula, context)
-
-        if mapping is None:
-            return False
-
-        for key, match in mapping.items():
-            print(key, match.string)
-
-        # Check logical proof context items
-        for key in context.logical:
-            print("")
-            print(key)
-            print("self", context.logical[key])
-            print("other", other.context.logical[key])
-
-        return True
-
     def __str__(self):
         return "ProofLine: " + self.text

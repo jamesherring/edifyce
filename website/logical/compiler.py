@@ -342,7 +342,7 @@ class AbstractSyntaxTree(object):
                     return
 
                 # Add to context with placeholder pattern
-                pattern = RegexPattern(name=name, pattern="")
+                pattern = RegexPattern(name=name, pattern="", pre_format=context.pre_format)
                 context.variables[name] = pattern
 
                 new_object = pattern
