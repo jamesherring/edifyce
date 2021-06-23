@@ -13,18 +13,21 @@ $(\neg \alpha \rightarrow (\beta \lor \neg \alpha))$ ref{Def, X, or}
 
 if $\neg \alpha$:
 
-    # $(\neg \beta \rightarrow \neg \alpha)$ ref{DT1}
+    $(\neg \beta \rightarrow \neg \alpha)$ ref{DT1, X}
 
-    # $((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ ref{ax.A3}
+    $((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ ref{Th, ax.A3}
 
-    # $(\alpha \rightarrow \beta)$ ref{MP}
+    $(\alpha \rightarrow \beta)$ ref{MP}
 
-# $(\neg \alpha \rightarrow (\alpha \rightarrow \beta))$ ref{DT2}
+$(\neg \alpha \rightarrow (\alpha \rightarrow \beta))$ ref{DT2}
 
 
 
 let $\gamma$, $\delta$ be formula
 let $x$, $y$ be variable
+let $t_2$ be term
 
-# $(\forall x \; \gamma \rightarrow \delta)$ ref{Th, ax.A4.0}
+if $t_2$.is_free_for($y$, $\gamma$):
+    
+    $(\forall y \; \gamma \rightarrow \delta)$ ref{Th, ax.A4.1}
 

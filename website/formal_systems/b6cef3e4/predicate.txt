@@ -26,7 +26,7 @@ FormalSystem Predicate:
         ^(?:0|[1-9][0-9]*)$
 
     Regex variable_name:
-        ^[a-zA-Z][a-zA-Z0-9]*$
+        ^[a-zA-Z][a-zA-Z0-9_]*$
 
     UnionPattern comma_separated_variable_names:
         with var as variable_name, csv as comma_separated_variable_names:
@@ -89,16 +89,16 @@ FormalSystem Predicate:
             csf, f
 
     variable.free():
-        not has_parent(f as forall; f.x == self)
+        return not has_parent(f as forall; f.x == self)
 
     formula.free_variables():
-        instances(v as variable; v.free())
+        return instances(v as variable; v.free())
 
     formula.bound_variables():
-        instances(v as variable; (not v.free()) and (not v.parent().pattern() == forall))
+        return instances(v as variable; (not v.free()) and (not v.parent().pattern() == forall))
 
     term.is_free_for(x as variable, alpha as formula):
-        alpha.free_variables().each(instance):
+        return alpha.free_variables().each(instance):
             (not instance == x) or (not instance.has_parent(f as forall; f.x.equal_any(self.instances(variable))))
 
     # Create a default proof context
@@ -142,23 +142,23 @@ FormalSystem Predicate:
         
     logical_pattern.formula():
         # Get the formula regardless of the option
-        union_submatch().fo
+        return union_submatch().fo
         
     logical_pattern.reference():
         # Get any reference
-        union_submatch().refs.string()
+        return union_submatch().refs.string()
         
     logical_pattern.label():
         # Get any label
-        union_submatch().label_ref.string()
+        return union_submatch().label_ref.string()
         
     logical_pattern.display():
         # The display value - ignore references and labels
-        union_submatch().fo.string()
+        return union_submatch().fo.string()
         
     logical_pattern.axiom():
         # The axiom formula - if it exists
-        axiom_pattern.fo.string()
+        return axiom_pattern.fo.string()
 
     LineType logical:
         pattern: logical_pattern
@@ -166,30 +166,60 @@ FormalSystem Predicate:
         
     # Function to get formula map
     logical.formula_mapping(other as logical):
-        # Returns None if no mapping
-        formula().maps_to(other.formula())
+        # Returns a mapping or False
+        
+        mapping = dict()
+        result = formula().maps_to(other.formula(), mapping)
+        
+        if mapping is False:
+            return False
+        
+        return mapping
         
     # Function to get map for given set as well as formula
     logical.given_mapping(other as logical):
-        # Returns None if no mapping
-        given.maps_to(other.given, depends_on=self.formula_mapping(other))
+        # Returns a mapping or False
+        
+        # Get the formula mapping
+        mapping = self.formula_mapping(other)
+        
+        if mapping is False:
+            return False
+            
+        if given.maps_to(other.given, mapping):
+            return mapping
+        
+        return False
         
     # Check conditions from another line are consistent with this one
     logical.check_consistent_conditions(other as logical, mapping as dict):
-        # Requires mapping to work.
-        self.conditions.each(c):
-            c.maps_into_set(other.conditions, mapping) or other.check_condition(c, mapping)
+        # Returns a boolean. Mapping is updated within maps_into_set as needed.
+        for c in self.conditions:
+            if other.check_condition(c, mapping) or c.maps_into_set(other.conditions, mapping):
+                continue
+            
+            # Condition fails
+            return False
+            
+        return True
     
-    # Function to check the proof line follows from other.        
+    # Function to check the proof line follows from other.
     logical.maps_to(other as logical):
-        self.check_consistent_conditions(other, self.given_mapping(other))
+    
+        # Get the given mapping
+        mapping = self.given_mapping(other)
+        
+        if mapping is False:
+            return False
+    
+        return self.check_consistent_conditions(other, mapping)
 
     Pattern let_pattern:
         with csv as comma_separated_variable_names, p as variable_name:
             let csv be p
            
     let_pattern.keys():
-        csv.instances(variable_name).strings()
+        return csv.instances(variable_name).strings()
 
     LineType let:
         pattern: let_pattern
@@ -210,7 +240,7 @@ FormalSystem Predicate:
             if csf:
            
     if_pattern.parts():
-        csf.shallow_instances(formula)
+        return csf.shallow_instances(formula)
 
     LineType if:
         pattern: if_pattern
@@ -230,7 +260,7 @@ FormalSystem Predicate:
         behaviour: indent
         context.conditions:
             # Add condition to context
-            add: match().sc.string()
+            add: match().sc.condition()
             
     Regex import_path:
         ^[a-zA-Z0-9_\.]+$
@@ -240,10 +270,10 @@ FormalSystem Predicate:
             import path as label
             
     import_pattern.path():
-        path.string()
+        return path.string()
         
     import_pattern.label():
-        label.string()
+        return label.string()
             
     LineType import:
         pattern: import_pattern
@@ -267,19 +297,19 @@ FormalSystem Predicate:
         clear
             
     labelled_definition_pattern.display():
-        def.string()
+        return def.string()
         
     labelled_definition_pattern.label():
-        label_ref.string()
+        return label_ref.string()
         
     labelled_definition_pattern.higher():
-        def.higher
+        return def.higher
         
     labelled_definition_pattern.lower():
-        def.lower
+        return def.lower
         
     labelled_definition_pattern.for():
-        def.pattern.lookup()
+        return def.pattern.lookup()
             
     LineType definition:
         pattern: labelled_definition_pattern
