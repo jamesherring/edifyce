@@ -17,6 +17,7 @@ let $x$, $y$, $z$ be variable
 let $t$ be term
 
 if $\alpha$ == $\beta$:
+
     $(\forall x \; \alpha \rightarrow \beta)$ label{Ax: A4.0}
 
 if $t$.is_free_for($x$, $\alpha$):

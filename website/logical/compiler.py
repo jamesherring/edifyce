@@ -21,6 +21,42 @@ def compile(code):
     raise Exception("No formal system defined.")
 
 
+def constant(s):
+    # Parse a string s to a constant
+
+    if s == "True":
+        return True
+
+    if s == "False":
+        return False
+
+    if s == "set()":
+        return set()
+
+    if s == "tuple()":
+        return tuple()
+
+    if s == "list()" or s == "[]":
+        return list()
+
+    if s == "dict()" or s == "{}":
+        return dict()
+
+    try:
+        if "." not in s:
+            return int(s)
+        return float(s)
+    except ValueError as e:
+        pass
+
+    if len(s) > 1 and s[0] in ("'", '"') and s[0] == s[-1]:
+        # Looks like a string
+        inner = s[1:-1]
+        return inner
+
+    return None
+
+
 def parse_arguments(s):
     # Parse comma separated arguments from a string s
 
@@ -901,19 +937,14 @@ class AbstractSyntaxTree(object):
 
         # Otherwise ok
 
-        # Update string variables with any parameters (e.g. 'alpha' as formula)
-        context.string_variables.update(params)
-
-        result = None
+        # Update variables with any parameters (e.g. 'alpha' as formula)
+        context.variables.update(params)
 
         for tree in self.sub_trees:
-            next_result = tree.run_function_line(item, context)
+            result = tree.run_function_line(item, context)
 
-            if next_result is not None:
-                # Update the result
-                result = next_result
-
-        return result
+            if result is not None:
+                return result["return"]
 
     def run_function_line(self, item, context):
         # Run a line in a function for a given match or proof line
@@ -924,7 +955,120 @@ class AbstractSyntaxTree(object):
             # Nothing to do
             return None
 
-        elif ".each(" in stripped and stripped[-1] == ":":
+        if stripped.startswith("return "):
+            remainder = stripped[7:]
+            return {"return": self.evaluate_line_part(item, remainder, context)}
+
+        if stripped.startswith("if ") and stripped[-1] == ":":
+            # If
+            condition_string = stripped[3:-1]
+
+            if self.evaluate_line_part(item, condition_string, context):
+                # Positive branch
+
+                for tree in self.sub_trees:
+                    result = tree.run_function_line(item, context)
+
+                    if result is not None:
+                        return result
+
+            else:
+                # Negative branch
+                pass
+
+            return None
+
+        if stripped.startswith("for ") and stripped[-1] == ":":
+            # Looks like a loop
+            index = stripped.find(" in ")
+            if index == -1:
+                raise Exception("Could not parse function line '" + stripped + ".")
+
+            var_name = stripped[4:index]
+            set_string = stripped[index + 4:-1]
+
+            try:
+                set_value = item.get_by_path(set_string, context)
+
+                assert isinstance(set_value, (list, tuple, set, MatchSet))
+
+                if isinstance(set_value, MatchSet):
+                    if not set_value.complete:
+                        # Can't iterate over an incomplete set
+                        raise Exception("Could not parse function line '" + stripped + "'." + \
+                                        " Can't iterate over an incomplete set")
+
+                    iterable = set_value.instances
+
+                else:
+                    iterable = set_value
+
+                break_flag = False
+
+                for obj in iterable:
+                    context_copy = copy(context)
+
+                    # Add the object to context
+                    context_copy.variables[var_name] = obj
+
+                    for sub_tree in self.sub_trees:
+
+                        result = sub_tree.run_function_line(item, context_copy)
+
+                        if result is not None:
+                            if "loop" in result:
+                                command = result["loop"]
+
+                                if command == "break":
+                                    break_flag = True
+
+                                elif command == "continue":
+                                    # Go to the next object
+                                    break
+
+                            else:
+                                # Otherwise, return value
+                                return result
+
+                    if break_flag:
+                        break
+
+                # No return value
+                return None
+
+            except Exception as e:
+                raise Exception("Could not parse function line '" + stripped + "'.")
+
+        if stripped.startswith("print(") and stripped[-1] == ")":
+            # Print a value
+            inner = stripped[6:-1]
+            print(self.evaluate_line_part(item, inner, context))
+            return None
+
+        if " = " in stripped:
+            # Assignment to a variable in context
+            index = stripped.index(" = ")
+            var_name = stripped[:index]
+            value_string = stripped[index + 3:]
+
+            value = self.evaluate_line_part(item, value_string, context)
+            context.variables[var_name] = value
+
+            return None
+
+        if stripped in ("continue", "break"):
+            # Loop keywords
+            return {"loop": stripped}
+
+        # Otherwise stuck
+        raise Exception("Could not parse '" + stripped + "'.")
+
+    def evaluate_line_part(self, item, line, context):
+        # Evaluate part of this line, which may utilise subtrees. Gets a value.
+
+        stripped = line.strip()
+
+        if ".each(" in stripped and stripped.endswith("):"):
             # Looks like an each function
 
             # First need an iterable
@@ -937,7 +1081,7 @@ class AbstractSyntaxTree(object):
                 items = obj.instances
 
                 if not obj.complete:
-                    # Can't iterate over incomplete match set
+                    # Can't iterate over incomplete match set - assume False
                     return False
 
             elif isinstance(obj, (list, tuple, set)):
@@ -972,10 +1116,12 @@ class AbstractSyntaxTree(object):
             # All instances pass the condition
             return True
 
-        elif stripped[:6] == "print(" and stripped[-1] == ")":
-            inner = stripped[6:-1]
-            print(inner)
+        if stripped == "None":
             return None
+
+        c = constant(stripped)
+        if c is not None:
+            return c
 
         # Try to get by path
         try:
@@ -984,14 +1130,14 @@ class AbstractSyntaxTree(object):
             pass
 
         # Try making a condition
-        # try:
-        #     c = Condition(string=stripped)
-        #     return item.check_condition(c, context)
-        #
-        # except Exception as e:
-        #     pass
+        try:
+            c = Condition(string=stripped)
+            return item.check_condition(c, context)
 
-        raise Exception("Could not parse function line '" + stripped + "'.")
+        except Exception as e:
+            pass
+
+        raise Exception("Could not parse '" + stripped + "'.")
 
     @staticmethod
     def valid_variable_name(var):

@@ -1015,14 +1015,13 @@ class ProofLine(object):
 
             return self.run_function(name, context, args=args, kwargs=kwargs)
 
-        if path[:16] == "check_condition(" and path[-1] == ")":
+        if path.startswith("check_condition(") and path[-1] == ")":
             inner = path[16:-1]
-
             kwargs = parse_arguments(inner, self, context, arg_names=("condition", "mapping"))[1]
 
             return self.check_condition(kwargs["condition"], context, kwargs["mapping"])
 
-        if path[:24] == "follows_from_definition(" and path[-1] == ")":
+        if path.startswith("follows_from_definition(") and path[-1] == ")":
             # Follows from definition
             inner = path[24:-1]
             kwargs = parse_arguments(inner, self, context, arg_names=("other", "definition"))[1]
@@ -1030,11 +1029,12 @@ class ProofLine(object):
             return self.follows_from_definition(kwargs["other"], kwargs["definition"], context)
 
         # Try to get path using the frozen context
-        try:
-            return get_by_path(self, path, self.context, recurse=False)
-        except Exception as e:
-            # No luck
-            pass
+        if context.mapping is None:
+            try:
+                return get_by_path(self, path, self.context, recurse=False)
+            except Exception as e:
+                # No luck
+                pass
 
         if recurse:
             # Try generic get_by_path
@@ -1045,11 +1045,20 @@ class ProofLine(object):
     def check_condition(self, condition, context, mapping=None):
         # Check a condition using the given context. Optionally specify a string variable mapping
 
+        # Work with a copy of context
+        context = copy(context)
+
         if mapping is not None:
-            context = copy(context)
+            assert isinstance(mapping, dict)
             context.mapping = mapping
 
-        return condition.check_condition(self, context)
+        # Set string variable matches
+        context.set_string_variable_matches()
+
+        try:
+            return condition.check_condition(self, context)
+        except Exception as e:
+            return False
 
     def follows_from_definition(self, other, definition, context):
         # Check if this proof line follows from the other by means of a definition
@@ -1213,7 +1222,8 @@ class ProofLine(object):
         # Run the tree as a function
         tree = fn["tree"]
 
-        return tree.run_function(item=self, context=context_copy, params=param_mapping, param_types=fn["params"])
+        result = tree.run_function(item=self, context=context_copy, params=param_mapping, param_types=fn["params"])
+        return result
     
     def __str__(self):
         return "ProofLine: " + self.text
