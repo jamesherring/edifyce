@@ -164,36 +164,23 @@ FormalSystem Predicate:
         pattern: logical_pattern
         behaviour: logical
         
-    # Function to get formula map
-    logical.formula_mapping(other as logical):
-        # Returns a mapping or False
-        
+    # Function to check the proof line follows from other.
+    logical.maps_to(other as logical):
+    
+        # Start with empty mapping
         mapping = dict()
-        result = formula().maps_to(other.formula(), mapping)
-        
-        if mapping is False:
-            return False
-        
-        return mapping
-        
-    # Function to get map for given set as well as formula
-    logical.given_mapping(other as logical):
-        # Returns a mapping or False
         
         # Get the formula mapping
-        mapping = self.formula_mapping(other)
-        
-        if mapping is False:
+        result = formula().maps_to(other.formula(), mapping)
+        if result is False:
             return False
             
-        if given.maps_to(other.given, mapping):
-            return mapping
-        
-        return False
-        
-    # Check conditions from another line are consistent with this one
-    logical.check_consistent_conditions(other as logical, mapping as dict):
-        # Returns a boolean. Mapping is updated within maps_into_set as needed.
+        # Get the given mapping
+        result = given.maps_to(other.given, mapping)
+        if result is False:
+            return False
+            
+        # Check all conditions are met or mapped
         for c in self.conditions:
             if other.check_condition(c, mapping) or c.maps_into_set(other.conditions, mapping):
                 continue
@@ -201,18 +188,8 @@ FormalSystem Predicate:
             # Condition fails
             return False
             
+        # Otherwise ok
         return True
-    
-    # Function to check the proof line follows from other.
-    logical.maps_to(other as logical):
-    
-        # Get the given mapping
-        mapping = self.given_mapping(other)
-        
-        if mapping is False:
-            return False
-    
-        return self.check_consistent_conditions(other, mapping)
 
     Pattern let_pattern:
         with csv as comma_separated_variable_names, p as variable_name:
