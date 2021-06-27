@@ -522,7 +522,7 @@ class InferenceRule(object):
                 return False
 
             # Set the inference match - can be used in the Condition
-            match = pattern.match(ant.formula.formatted_string(), context)
+            match = pattern.match(ant.formula.formatted_string(), ant.context)
 
             if match is None:
                 # No match
@@ -1049,6 +1049,7 @@ class ProofLine(object):
         context = copy(context)
 
         if mapping is not None:
+            # Set context mapping
             assert isinstance(mapping, dict)
             context.mapping = mapping
 
@@ -1216,7 +1217,7 @@ class ProofLine(object):
 
             param_mapping[given_name] = given
 
-        # Create a copy of context
+        # Create a copy of proof line context
         context_copy = copy(context)
 
         # Run the tree as a function

@@ -1,33 +1,35 @@
 import axioms as ax
 
 
-let $A$, $B$, $\alpha$, $\beta$, $\gamma$, $\delta$ be formula
-
-
-define $(A \lor B)$ as $(\neg A \rightarrow B)$ for formula label{or}
-
-
-$(\neg \alpha \rightarrow (\neg \beta \rightarrow \neg \alpha))$ ref{Th, ax.A1} label{X}
-
-$(\neg \alpha \rightarrow (\beta \lor \neg \alpha))$ ref{Def, X, or}
-
-if $\neg \alpha$:
-
-    $(\neg \beta \rightarrow \neg \alpha)$ ref{DT1, X}
-
-    $((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ ref{Th, ax.A3}
-
-    $(\alpha \rightarrow \beta)$ ref{MP}
-
-$(\neg \alpha \rightarrow (\alpha \rightarrow \beta))$ ref{DT2}
-
-
 
 let $\gamma$, $\delta$ be formula
-let $x$, $y$ be variable
+let $x$, $y$, $a$, $b$ be variable
 let $t_2$ be term
 
-if $t_2$.is_free_for($y$, $\gamma$):
+# if $\delta$ == $\gamma$.replace($y$, $t_2$, $y$.free()):
+
+if $t_2$.is_free_for($y$, $\gamma$) and $\delta$ == $\gamma$.replace($y$, $t_2$, $y$.free()):
     
-    $(\forall y \; \gamma \rightarrow \delta)$ ref{Th, ax.A4.1}
+    $(\forall y \; \gamma \rightarrow \delta)$ ref{Th, ax.A4}
+
+
+
+# let $A$, $B$, $\alpha$, $\beta$, $\gamma$, $\delta$ be formula
+
+#define $(A \lor B)$ as $(\neg A \rightarrow B)$ for formula label{or}
+
+
+#$(\neg \alpha \rightarrow (\neg \beta \rightarrow \neg \alpha))$ ref{Th, ax.A1} label{X}
+
+#$(\neg \alpha \rightarrow (\beta \lor \neg \alpha))$ ref{Def, X, or}
+
+#if $\neg \alpha$:
+
+    #$(\neg \beta \rightarrow \neg \alpha)$ ref{DT1, X}
+
+    #$((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ ref{Th, ax.A3}
+
+    #$(\alpha \rightarrow \beta)$ ref{MP}
+
+#$(\neg \alpha \rightarrow (\alpha \rightarrow \beta))$ ref{DT2}
 

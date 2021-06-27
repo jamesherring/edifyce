@@ -256,7 +256,7 @@ def path_maps_to(path, other_path, context, other_context, mapping):
             return False
 
         # Success
-        mapping[initial] = Match(string=other_initial, pattern=other_initial_pattern)
+        mapping[initial] = Match(string=other_initial, pattern=other_initial_pattern, is_variable=True)
 
     # Remainders have to match
     if remainder is None:
@@ -293,26 +293,26 @@ class Context(object):
     def set_string_variable_matches(self):
         # Set string variable matches
         for var, pattern in self.string_variables.items():
-            self.string_variable_matches[var] = Match(pattern=pattern, string=var)
+            self.string_variable_matches[var] = Match(pattern=pattern, string=var, is_variable=True)
 
     def equivalent(self, other, context, memo=None):
         # Check equivalence
-    
+
         if memo is None:
             memo = dict()
-            
+
         if (self, other) in memo:
             return memo[(self, other)]
-        
+
         # Assume False
         memo[(self, other)] = False
 
         if type(other) is not Context:
             return False
-        
+
         if not len(self.variables) == len(other.variables):
             return False
-        
+
         if not len(self.string_variables) == len(other.string_variables):
             return False
 
@@ -321,25 +321,25 @@ class Context(object):
 
         if not len(self.definitions) == len(other.definitions):
             return False
-            
+
         if not len(self.logical) == len(other.logical):
             return False
-        
+
         if not self.mapping == other.mapping:
             return False
-        
+
         # Assume True for recursive checks
         memo[(self, other)] = True
-        
+
         if not self.reference_object.equivalent(other.reference_object, context, memo):
             memo[(self, other)] = False
             return False
-        
+
         for key in self.variables:
             if key not in other.variables:
                 memo[(self, other)] = False
                 return False
-            
+
             if not self.variables[key].equivalent(other.variables[key], context, memo):
                 memo[(self, other)] = False
                 return False
@@ -378,7 +378,7 @@ class Context(object):
 
         # Otherwise ok
         return True
-            
+
     def __copy__(self):
         # Return a copy of the context
         return Context(
@@ -580,7 +580,6 @@ class Condition(object):
 
         # Check for not
         if parts[0] == "not":
-
             self.type = "not"
 
             remainder = parts[1:]
@@ -711,7 +710,6 @@ class Condition(object):
 
         try:
             result = self.check_condition(None, context_copy)
-
         except Exception as e:
             # Not valid condition
             return False
@@ -725,6 +723,13 @@ class Condition(object):
 
     def maps_to(self, other, mapping):
         # Check if this condition maps to the other one under the string variable mapping
+
+        # Work with copies of self context and other context with string_variable_matches
+        self_context = copy(self.context)
+        other_context = copy(other.context)
+
+        self_context.set_string_variable_matches()
+        other_context.set_string_variable_matches()
 
         # Must be of the same types
         if not self.type == other.type:
@@ -741,31 +746,31 @@ class Condition(object):
         if self.type in ("in", "not in"):
             # Need to check the items and set can be mapped
 
-            item, match_set = [get_by_path(self, i, self.context) for i in self.sub_items]
-            other_item, other_match_set = [get_by_path(other, i, other.context) for i in other.sub_items]
+            item, match_set = [get_by_path(self, i, self_context) for i in self.sub_items]
+            other_item, other_match_set = [get_by_path(other, i, other_context) for i in other.sub_items]
 
-            result = match_set.maps_to(other_match_set, self.context, mapping)
+            result = match_set.maps_to(other_match_set, self_context, mapping)
 
             if not result:
                 return False
 
-            return item.maps_to(other_item, self.context, mapping)
+            return item.maps_to(other_item, self_context, mapping)
 
         if self.type in ("equals", "is", "is not"):
             # need to check the two parts
 
-            left, right = [get_by_path(self, i, self.context) for i in self.sub_items]
-            other_left, other_right = [get_by_path(other, i, other.context) for i in other.sub_items]
+            left, right = [get_by_path(self, i, self_context) for i in self.sub_items]
+            other_left, other_right = [get_by_path(other, i, other_context) for i in other.sub_items]
 
-            result = left.maps_to(other_left, self.context, mapping)
+            result = left.maps_to(other_left, self_context, mapping)
 
             if not result:
                 return False
 
-            return right.maps_to(other_right, self.context, mapping)
+            return right.maps_to(other_right, self_context, mapping)
 
         # Otherwise atomic - just need to check the path
-        return path_maps_to(self.string, other.string, self.context, other.context, mapping)
+        return path_maps_to(self.string, other.string, self_context, other_context, mapping)
 
     def maps_into_set(self, target_condition_set, mapping):
         # Check if this condition maps into the target set using the given mapping
@@ -863,7 +868,7 @@ class Definition(object):
 
         # Add submatches according to the variables in the higher match
         for key, sub_match in higher_match.sub_matches.items():
-            m.add_submatch(key, copy(sub_match))
+            m.add_submatch(key, sub_match.duplicate())
 
         return m
 
@@ -879,9 +884,9 @@ class Definition(object):
             return False
 
         # if lower.equivalent(higher, context):
-            # Vacuously True
-            # mapping[lower.string] = higher.string
-            # return True
+        # Vacuously True
+        # mapping[lower.string] = higher.string
+        # return True
 
         if (lower.definition is None and higher.definition is None) or \
                 (lower.definition is not None and lower.definition.equivalent(higher.definition, context)):
@@ -971,10 +976,13 @@ class Definition(object):
 class Match(object):
     # Match object
 
-    def __init__(self, pattern, string, definition=None):
+    def __init__(self, pattern, string, is_variable=False, definition=None):
 
         self.pattern = pattern
         self.string = string
+
+        # Is this a variable match?
+        self.is_variable = is_variable
 
         # List of sub matches
         self.sub_matches = dict()
@@ -1111,7 +1119,6 @@ class Match(object):
 
             # Specify arg_names to get all in kwargs
             kwargs = parse_arguments(inner, self, context, arg_names=("needle", "value", "condition"))[1]
-
             return self.replace(kwargs["needle"], kwargs["value"], context, kwargs["condition"])
 
         elif path == "string()":
@@ -1360,16 +1367,58 @@ class Match(object):
         # needles
 
         # Start with a copy of the same match
-        m = copy(self)
+        m = self.duplicate()
 
         if m.equivalent(needle, context):
             # Easy case
-            if condition is None or self.check_condition(condition, context):
-                return copy(value)
+
+            if condition is None or needle.check_condition(condition, context):
+                return value.duplicate()
 
         # Go through the submatches
+        new_sub_matches = dict()
         for key, sub_match in m.sub_matches.items():
             m.sub_matches[key] = sub_match.replace(needle, value, context, condition)
+
+            if not m.sub_matches[key].string == sub_match.string and sub_match.is_variable and \
+                    sub_match.string == needle.string:
+                # This sub match been changed - update the key
+                new_sub_matches[value.string] = m.sub_matches[key]
+
+            else:
+                new_sub_matches[key] = m.sub_matches[key]
+
+        if isinstance(m.pattern, StringPattern):
+
+            # Reset the match string
+            m.string = ""
+            i = 0
+            while i < len(self.pattern.pattern):
+                if i in self.pattern.non_variable_locations:
+                    part = self.pattern.non_variable_locations[i]
+                    match_part = part
+
+                else:
+                    part = self.pattern.variable_locations[i]["label"]
+                    match_part = m.sub_matches[part].string
+
+                    # Check if this value has changed
+                    original = self.sub_matches[part]
+                    new = m.sub_matches[part]
+
+                    if (not new.string == original.string) and original.is_variable and original.string == needle.string:
+                        # This sub match been changed
+                        match_part = new.string
+
+                m.string += match_part
+                i += len(part)
+
+        elif isinstance(m.pattern, UnionPattern):
+            if not m.is_variable:
+                m.string = list(m.sub_matches.values())[0].string
+
+        # Replace sub_matches with the dictionary with updated keys
+        m.sub_matches = new_sub_matches
 
         return m
 
@@ -1383,31 +1432,17 @@ class Match(object):
         s = spaces + "> " + str(self) + ": " + str(self.pattern.name) + "\n"
 
         for key, item in self.sub_matches.items():
-            if type(item) is list:
-                # This is a list entry
-                s += spaces + "    [\n"
-
-                for sub in item:
-                    s += sub.pretty_print(depth + 2)
-
-                s += spaces + "    ]\n"
-
-            elif type(item) is Match:
-                s += item.pretty_print(depth + 1)
-
-            else:
-                # Simple entry
-                print(self.pattern, type(self.pattern))
-                print(self.sub_matches)
-                s += str(item)
+            s += item.pretty_print(depth + 1)
 
         return s
 
     def equivalent(self, other, context, memo=None):
-        # Test whether two matches are equivalent. For variables - use context restrictions where possible.
+        # Test whether two matches are equivalent.
 
         # A variable will typically return None when matched against a string or another variable - i.e. they could be
         # equal but it can't be guaranteed or ruled out.
+
+        # Does not require equivalence of parent_match
 
         if memo is None:
             memo = dict()
@@ -1416,6 +1451,10 @@ class Match(object):
             return memo[(self, other)]
 
         if type(other) is not Match:
+            memo[(self, other)] = False
+            return False
+
+        if not self.is_variable == other.is_variable:
             memo[(self, other)] = False
             return False
 
@@ -1475,111 +1514,121 @@ class Match(object):
         memo[(self, other)] = False
         return False
 
-        # Check the restrictions.
-        mapping = None
-        if self_var:
-            mapping = context.get_variable_restrictions(self.string, mapping)
-            self_map = mapping[self.string]
-        else:
-            self_map = {
-                "positive": {"value": self.string}
-            }
-
-        if other_var:
-            mapping = context.get_variable_restrictions(other.string, mapping)
-            other_map = mapping[other.string]
-        else:
-            other_map = {
-                "positive": {"value": other.string}
-            }
-
-        if "value" in self_map["positive"]:
-            # We have a fixed value for self
-            self_value = self_map["positive"]["value"]
-
-            if "value" in other_map["positive"]:
-                # We have a fixed value for other
-                other_value = other_map["positive"]["value"]
-
-                return self_value == other_value
-
-            # No fixed value for other
-            if self_value in other_map["negative"]["values"]:
-                # Can't be equal
-                return False
-
-            # Otherwise, they could be equal, and they could be not equal
-            return None
-
-        # No fixed value for self
-        if "value" in other_map["positive"]:
-            # We have a fixed value for other
-            other_value = other_map["positive"]["value"]
-
-            if other_value in self_map["negative"]["values"]:
-                # Can't be equal
-                return False
-
-            # Otherwise, they could be equal, and they could be not equal
-            return None
-
-        # No fixed value for other
-
-        # Both self and other don't have fixed values
-        if other.string in self_map["positive"]["variables"]:
-            # They are nonetheless the same
-            return True
-
-        if other.string in self_map["negative"]["variables"]:
-            # They must be different
-            return False
-
-        # No apparent relation between self and other
-        return None
-
     def formatted_string(self):
         # Apply pattern formatting to the match string
         return self.pattern.pre_format_apply(self.string)
 
-    def create_pattern(self, string_variables):
+    def variables(self, context, variables=None):
+        # Get the variable leaves in this match structure
+
+        if variables is None:
+            variables = MatchSet()
+
+        if len(self.sub_matches) == 0 and self.is_variable:
+            variables.add(self, context)
+
+        for m in self.sub_matches.values():
+            variables = variables.union(m.variables(context, variables), context)
+
+        return variables
+
+    def create_pattern(self, context):
         # Turn this match into a pattern with the submatches as variables
 
         pattern = StringPattern(name=self.string, pattern=self.string, pre_format=self.pattern.pre_format)
-        pattern.add_variables(string_variables)
 
+        # Need to be careful as variables may collide with parts of non-variable strings - which leads to unexpected
+        # behaviour.
+
+        # Get a match set of variables
+        variables = self.variables(context)
+
+        # Get unique variable names
+        var_names = {v.string: v.pattern for v in variables.instances}
+
+        for variable, variable_pattern in var_names.items():
+            # Check occurrences of variable in string and in the tree. If string occurrences exceed tree occurrences,
+            # there is a collision.
+
+            string_occurrences = pattern.pattern.count(variable)
+            tree_occurrences = len({v for v in variables.instances if v.string == variable})
+
+            if string_occurrences == tree_occurrences:
+                # All ok
+                pattern.add_variable(variable, variable_pattern)
+                continue
+
+            # Collision. Try renaming the variable by appending increasing integers until it works
+            i = 0
+            while True:
+                # Create the new variable
+                new_var = variable + "_" + str(i)
+
+                # New variable needs to not exist in var_names and not appear in pattern
+                if new_var in variable or new_var in pattern.pattern:
+                    continue
+
+                # new_var works - use it to replace variable
+                old_variable_match = Match(string=variable, pattern=variable_pattern, is_variable=True)
+                new_variable_match = Match(string=new_var, pattern=variable_pattern, is_variable=True)
+
+                new_match = self.replace(needle=old_variable_match, value=new_variable_match, context=context)
+
+                # Use new_match to create a pattern
+                return new_match.create_pattern(context)
+
+        # In this case all existing variables are ok
         return pattern
 
     def maps_to(self, other, context, mapping=None):
-        # Check if this match maps to the other. Return a dictionary mapping or False
-        # Optionally specify mapping dictionary that must be consistent
-
-        if mapping is False:
-            return False
+        # Check if this match maps to the other. Changes mapping and returns a boolean
 
         if mapping is None:
             mapping = dict()
 
-        # Get the pattern
-        pattern = self.create_pattern(context.string_variables)
+        if self.is_variable and self.string in mapping:
+            return other.equivalent(mapping[self.string], context)
 
-        # Get the match
-        match = pattern.match(other.formatted_string(), context)
-
-        if match is None:
+        # Must have consistent patterns
+        if not self.pattern.equivalent(other.pattern, context):
             return False
 
-        if mapping is not None:
-            # Check consistency
-            for key, sub_match in match.sub_matches.items():
-                if key in mapping and not mapping[key].equivalent(sub_match, context):
-                    return False
+        if self.is_variable and len(self.sub_matches) == 0:
+            # Add variable to mapping
+            mapping[self.string] = other
+            return True
 
-        # Return the mapping
-        mapping.update(match.sub_matches)
+        # Otherwise depends on sub matches
+        if not len(self.sub_matches) == len(other.sub_matches):
+            return False
 
-        mapping[self.string] = other
+        for key, sub in self.sub_matches.items():
+            if key not in other.sub_matches:
+                return False
 
+            other_sub = other.sub_matches[key]
+
+            # Recursive call will update mapping if successful
+            if not sub.maps_to(other_sub, context, mapping):
+                return False
+
+        # All ok
         return True
+
+    def duplicate(self, parent_match=None):
+        # Create a copy of this match.
+        m = Match(
+            pattern=copy(self.pattern),
+            string=self.string,
+            is_variable=self.is_variable
+        )
+
+        m.parent_match = parent_match
+        m.sub_matches = {key: self.sub_matches[key].duplicate(parent_match=m) for key in self.sub_matches}
+
+        m.definition = self.definition
+
+        return m
 
     def __str__(self):
         return self.string
@@ -1878,12 +1927,14 @@ class MatchSet(object):
                         # Try with this new mapping
 
                         # Recurse
-                        if not sub_maps_to(source, target, new_map):
+                        result_map = sub_maps_to(source, target, new_map)
+
+                        if result_map is False:
                             # This one is not consistent
                             continue
 
                         # The result works
-                        return new_map
+                        return result_map
 
                 # No consistent mapping
                 return False
@@ -2000,7 +2051,6 @@ class Pattern(object):
                 closing = self.respect_brackets[opening]
 
                 if s[i:i + len(opening)] == opening:
-
                     i += len(opening)
                     stack.append(opening)
                     found = True
@@ -2266,6 +2316,7 @@ class StringPattern(Pattern):
             for svar, sub_pattern in string_variables.items():
                 if s == svar and self == sub_pattern:
                     # Match!
+                    m.is_variable = True
                     return m
 
         if pattern_offset == 0:
@@ -2838,13 +2889,15 @@ class UnionPattern(Pattern):
             if self.equivalent(pattern, context):
                 return Match(
                     pattern=self,
-                    string=s
+                    string=s,
+                    is_variable=True
                 )
 
             elif pattern in nested_options:
                 m = Match(
                     pattern=pattern,
-                    string=s
+                    string=s,
+                    is_variable=True
                 )
 
                 for p in nested_options[pattern]:
@@ -3004,7 +3057,8 @@ class AbstractPattern(Pattern):
         if s in context.string_variables and self.equivalent(context.string_variables[s], context):
             return Match(
                 pattern=self,
-                string=s
+                string=s,
+                is_variable=True
             )
 
         return None

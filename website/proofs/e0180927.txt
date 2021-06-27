@@ -1,5 +1,5 @@
 
-let $\alpha$, $\beta$, $\gamma$ be formula
+let $\alpha$, $\beta$, $\gamma$, $a$, $b$ be formula
 
 # First three axioms the same as in propositional logic
 
@@ -16,6 +16,9 @@ $((\neg \beta \rightarrow \neg \alpha) \rightarrow (\alpha \rightarrow \beta))$ 
 let $x$, $y$, $z$ be variable
 let $t$ be term
 
+$(\forall x \; a \rightarrow b)$ label{Ax: A4.a}
+
+
 if $\alpha$ == $\beta$:
 
     $(\forall x \; \alpha \rightarrow \beta)$ label{Ax: A4.0}
@@ -25,9 +28,9 @@ if $t$.is_free_for($x$, $\alpha$):
     $(\forall x \; \alpha \rightarrow \beta)$ label{Ax: A4.1}
 
  
-if $\beta$ == $\alpha$.replace($x$, $t$, $x$.free()):
+if $b$ == $a$.replace($x$, $t$, $x$.free()):
 
-    $(\forall x \; \alpha \rightarrow \beta)$ label{Ax: A4.2}
+    $(\forall x \; a \rightarrow b)$ label{Ax: A4.2}
 
 
 if $t$.is_free_for($x$, $\alpha$) and $\beta$ == $\alpha$.replace($x$, $t$, $x$.free()):
