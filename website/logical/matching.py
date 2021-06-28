@@ -1121,6 +1121,18 @@ class Match(object):
             kwargs = parse_arguments(inner, self, context, arg_names=("needle", "value", "condition"))[1]
             return self.replace(kwargs["needle"], kwargs["value"], context, kwargs["condition"])
 
+        elif path.startswith("equivalent_with_some_replacements(") and path[-1] == ")":
+            inner = path[34:-1]
+
+            # Specify arg_names to get all in kwargs
+            kwargs = parse_arguments(inner, self, context, arg_names=("other", "needle", "value"))[1]
+            return self.equivalent_with_some_replacements(
+                kwargs["other"],
+                kwargs["needle"],
+                kwargs["value"],
+                context
+            )
+
         elif path == "string()":
             return self.string
 
@@ -1513,6 +1525,55 @@ class Match(object):
         # No apparent relation between self and other
         memo[(self, other)] = False
         return False
+
+    def equivalent_with_some_replacements(self, other, needle, value, context):
+        # Check if this match is equivalent to other, with some instances (on self) of needle replaced with value.
+
+        if self.equivalent(other, context):
+            # Equivalent without need to consider needle/value
+            return True
+
+        if self.equivalent(needle, context) and other.equivalent(value, context):
+            # Needle and value
+            return True
+
+        # Otherwise need to be equivalent with sub matches equivalent under replacements
+
+        if not self.pattern.equivalent(other.pattern, context):
+            # Inconsistent patterns
+            return False
+
+        if self.is_variable is not other.is_variable:
+            # One is a variable and the other is not
+            return False
+
+        # Check match definitions are equivalent
+        if self.definition is not None:
+            if other.definition is None:
+                return False
+
+            if not self.definition.equivalent(other.definition, context):
+                return False
+
+        else:
+            if other.definition is not None:
+                return False
+
+        for key, sub in self.sub_matches.items():
+            if key not in other.sub_matches:
+                return False
+
+            other_sub = other.sub_matches[key]
+
+            if not sub.equivalent_with_some_replacements(other_sub, needle, value, context):
+                return False
+
+        # All sub-matches match
+        if self.is_variable:
+            # Can't check sub-matches of a variable
+            return False
+
+        return True
 
     def formatted_string(self):
         # Apply pattern formatting to the match string

@@ -16,7 +16,7 @@ if $t_2$.is_free_for($y$, $\gamma$) and $\delta$ == $\gamma$.replace($y$, $t_2$,
 
 # let $A$, $B$, $\alpha$, $\beta$, $\gamma$, $\delta$ be formula
 
-#define $(A \lor B)$ as $(\neg A \rightarrow B)$ for formula label{or}
+# define $(A \lor B)$ as $(\neg A \rightarrow B)$ for formula label{or}
 
 
 #$(\neg \alpha \rightarrow (\neg \beta \rightarrow \neg \alpha))$ ref{Th, ax.A1} label{X}

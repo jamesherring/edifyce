@@ -9,7 +9,8 @@ def indexView(request):
     # Index view
 
     return render(request, "website/index.html", {
-        "formal_systems": FormalSystemModel.objects.all()
+        "formal_systems": FormalSystemModel.objects.all(),
+        "title": "Edifyce"
     })
 
 
@@ -19,13 +20,16 @@ def formalSystemView(request, system_id, system_slug):
     system = FormalSystemModel.objects.get(id=system_id)
 
     return render(request, "website/formal_system.html", {
-        "system": system
+        "system": system,
+        "title": system.name
     })
 
 
 def formalSystemCreateView(request):
     # Form for creating a formal system
-    return render(request, "website/formal_system_create.html")
+    return render(request, "website/formal_system_create.html", {
+        "title": "Create Formal System"
+    })
 
 
 def formalSystemCreateSubmitView(request):
@@ -61,7 +65,8 @@ def formalSystemEditView(request, system_id, system_slug):
     system = FormalSystemModel.objects.get(id=system_id)
 
     return render(request, "website/formal_system_edit.html", {
-        "system": system
+        "system": system,
+        "title": system.name
     })
 
 
@@ -96,7 +101,8 @@ def proofView(request, proof_id, proof_slug):
 
     return render(request, "website/proof.html", {
         "proof": proof,
-        "system": proof.formal_system
+        "system": proof.formal_system,
+        "title": proof.formal_system.name + " / " + proof.name
     })
 
 
@@ -106,7 +112,8 @@ def proofCreateView(request, system_id, system_slug):
     system = FormalSystemModel.objects.get(id=system_id)
 
     return render(request, "website/proof_create.html", {
-        "system": system
+        "system": system,
+        "title": system.name + " / " + "Create Proof"
     })
 
 
@@ -151,7 +158,8 @@ def proofEditView(request, proof_id, proof_slug):
 
     return render(request, "website/proof_edit.html", {
         "proof": proof,
-        "system": proof.formal_system
+        "system": proof.formal_system,
+        "title": proof.formal_system.name + " / " + proof.name
     })
 
 
