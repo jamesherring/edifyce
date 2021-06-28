@@ -128,7 +128,7 @@ def get_by_path(obj, path, context, recurse=True):
         return set()
 
     # Otherwise, only one part
-    if hasattr(obj, "get_by_path") and recurse and context.mapping is None:
+    if hasattr(obj, "get_by_path") and recurse:
         # Try the obj get_by_path first
         try:
             return obj.get_by_path(path, context)
@@ -148,13 +148,14 @@ def get_by_path(obj, path, context, recurse=True):
             return context.string_variables[path]
 
     else:
+
         # Context mapping exists
         if path in context.mapping:
             # Get the mapped path
 
             mapped_path = context.mapping[path]
             if type(mapped_path) is Match:
-                mapped_path = mapped_path.string
+                return mapped_path
 
             if mapped_path in context.string_variable_matches:
                 return context.string_variable_matches[mapped_path]
