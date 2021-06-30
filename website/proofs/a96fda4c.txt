@@ -4,16 +4,18 @@ import axioms as ax
 
 let $\gamma$, $\delta$ be formula
 let $x$, $y$, $a$, $b$ be variable
-let $t_2$ be term
+let $t_2$, $t_3$ be term
 
 
-
-if $t_2$.is_free_for($y$, $\gamma$) and $\delta$ == $\gamma$.replace($y$, $t_2$, $y$.free()):
+# if $t_2$.is_free_for($y$, $\gamma$) and $\delta$ == $\gamma$.replace($y$, $t_2$, Condition($y$.free())):
     
     # $(\forall y \; \gamma \rightarrow \delta)$ ref{Th, ax.A4}
     
+
+# Needs debugging
+$(\forall x \; x = y \rightarrow y = y)$ ref{Th, ax.A4, $t \mapsto y$}
     
-$(\forall x \; (a = b \rightarrow a = x) \rightarrow (a = b \rightarrow \forall x \; a = x))$ ref{Th, ax.A5}
+# $(\forall y \; (a = b \rightarrow a = x) \rightarrow (a = b \rightarrow \forall y \; a = x))$ ref{Th, ax.A5}
 
 
 
