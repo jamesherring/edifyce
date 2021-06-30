@@ -89,13 +89,18 @@ FormalSystem Predicate:
             csf, f
 
     variable.free():
+        # Check if the variable is free in the whole tree
         return not has_parent(f as forall; f.x == self)
+        
+    variable.free_in(alpha as formula):
+        # Check if the variable is free in the given formula.
+        return not has_parent(f as forall; f.x == self and f.is_descendant_of(alpha))
 
     formula.free_variables():
-        return instances(v as variable; v.free())
+        return instances(v as variable; v.free_in(self))
 
     formula.bound_variables():
-        return instances(v as variable; (not v.free()) and (not v.parent().pattern() == forall))
+        return instances(v as variable; (not v.free_in(self)) and (not v.parent().pattern() == forall))
 
     term.is_free_for(x as variable, alpha as formula):
         return alpha.free_variables().each(instance):
@@ -145,8 +150,8 @@ FormalSystem Predicate:
         return union_submatch().fo
         
     logical_pattern.reference():
-        # Get any reference
-        return union_submatch().refs.string()
+        # Get the reference string
+        return union_submatch().refs
         
     logical_pattern.label():
         # Get any label
@@ -167,8 +172,8 @@ FormalSystem Predicate:
     # Function to check the proof line follows from other.
     logical.maps_to(other as logical):
     
-        # Start with empty mapping
-        mapping = dict()
+        # Start with mapping given in the reference
+        mapping = other.reference_mapping()
         
         # Get the formula mapping
         result = formula().maps_to(other.formula(), mapping)
@@ -187,7 +192,7 @@ FormalSystem Predicate:
             
             # Condition fails
             return False
-            
+        
         # Otherwise ok
         return True
 

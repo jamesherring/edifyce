@@ -19,7 +19,7 @@ let $t$ be term
 
 # May consider separating the conditions so that one can map and the other evaluate to True
 
-if $t$.is_free_for($x$, $\alpha$) and $\beta$ == $\alpha$.replace($x$, $t$, $x$.free()):
+if $\beta$ == $\alpha$.replace($x$, $t$, Condition($x$.free_in($\alpha$))) and $t$.is_free_for($x$, $\alpha$):
 
     $(\forall x \; \alpha \rightarrow \beta)$ label{Ax: A4}
 

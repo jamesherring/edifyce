@@ -6,7 +6,7 @@ import itertools
 class FormalSystem(object):
     # A formal system
 
-    def __init__(self, name, line_types=None, inference_rules=None, context=None, pre_format=None):
+    def __init__(self, name, line_types=None, inference_rules=None, context=None):
 
         # The name of the system
         self.name = name
@@ -21,9 +21,6 @@ class FormalSystem(object):
         self.context = Context(
             logical=context if context is not None else dict()
         )
-
-        # Default formatting for all strings in the system.
-        self.formatting = pre_format if pre_format is not None else dict()
 
     def get_references(self, text):
         # Get references to external proofs from the given code.
@@ -131,10 +128,10 @@ class FormalSystem(object):
                     pass
 
                 try:
-                    reference_string = result.get_by_path("reference()", context)
+                    reference_match = result.get_by_path("reference()", context)
 
-                    if type(reference_string) is str:
-                        proof_line.reference_string = reference_string
+                    proof_line.reference_string = reference_match.formatted_string()
+                    proof_line.reference_string_display = reference_match.string
 
                 except Exception as e:
                     pass
@@ -726,7 +723,7 @@ class Proof(object):
             "lines": [line.data() for line in self.proof_lines]
         }
 
-    def get_reference(self, ref):
+    def get_reference(self, ref, context):
         # Get the referenced line from a ref string
 
         # Check if it's reference to another line
@@ -738,7 +735,8 @@ class Proof(object):
                 return {
                     "inference_rule": ir,
                     "antecedents": [],
-                    "key": ref
+                    "key": ref,
+                    "mapping": {}
                 }
 
         if ", " in ref:
@@ -752,13 +750,25 @@ class Proof(object):
 
                     # Get the antecedent lines
                     antecedents = []
-                    for ant_ref in ref_parts[1:]:
-                        antecedents.append(self.get_reference(ant_ref))
+                    mapping = {}
+                    last_proof_line = None
+                    for r in ref_parts[1:]:
+                        item = self.get_reference(r, context)
+
+                        if isinstance(item, ProofLine):
+                            antecedents.append(item)
+                            last_proof_line = item
+                            continue
+
+                        if item is None and last_proof_line is not None:
+                            # Probably a mapping
+                            mapping.update(self.get_reference_mapping(r, last_proof_line, context))
 
                     return {
                         "inference_rule": ir,
                         "antecedents": antecedents,
-                        "key": key
+                        "key": key,
+                        "mapping": mapping
                     }
 
             raise Exception("'" + key + "' is not a valid inference rule key.")
@@ -767,10 +777,10 @@ class Proof(object):
             index = ref.index(".")
             proof_ref = ref[:index]
             key = ref[index + 1:]
-            proof_ref = self.get_reference(proof_ref)
+            proof_ref = self.get_reference(proof_ref, context)
 
             if type(proof_ref) is Proof:
-                return proof_ref.get_reference(key)
+                return proof_ref.get_reference(key, context)
 
         # Check if it's a line number
         try:
@@ -780,6 +790,26 @@ class Proof(object):
 
         # Nothing works
         return None
+
+    @staticmethod
+    def get_reference_mapping(ref, source_proof_line, context):
+        # Get the mapping on a proof line with reference to the source proof line.
+
+        if " mapsto " not in ref:
+            return {}
+
+        source, target = ref.split(" mapsto ")
+
+        # Get the source pattern using the source line context
+        pattern = get_by_path(None, source, source_proof_line.context)
+
+        # Use the same pattern with the current context to get a target match
+        target_match = pattern.match(target, context)
+
+        if target_match is None:
+            raise Exception("Cannot map " + source + " to " + target + ".")
+
+        return {source: target_match}
 
     def check_logical_line(self, proof_line, context):
         # Check if the given proof line is valid.
@@ -798,19 +828,13 @@ class Proof(object):
             proof_line.invalid_message = "No formula defined for logical line."
             return False
 
-        if proof_line.reference_string is None:
-
-            # Try to work out the deduction. Try the axioms
-            for axiom in self.formal_system.axioms:
-                if axiom.match(proof_line.formula.formatted_string(), context) is not None:
-                    # It's a match
-                    proof_line.axiom = axiom
-                    return True
-
-        # Use the given reference and formula
-
         # Get the reference
-        reference = self.get_reference(proof_line.reference_string)
+        try:
+            reference = self.get_reference(proof_line.reference_string, context)
+        except Exception as e:
+            proof_line.invalid_message = "Could not parse reference: " + str(e)
+            proof_line.valid = False
+            return False
 
         if not (type(reference) is dict and "inference_rule" in reference):
             proof_line.invalid_message = "Invalid reference '" + proof_line.reference_string + "'."
@@ -821,6 +845,7 @@ class Proof(object):
 
         inference_rule = reference["inference_rule"]
         key = reference["key"]
+        proof_line.reference_mapping = reference["mapping"]
 
         # Get the antecedent lines
         antecedents = reference["antecedents"]
@@ -928,6 +953,10 @@ class ProofLine(object):
 
         # The reference string for this line (if any)
         self.reference_string = reference_string
+        self.reference_string_display = reference_string
+
+        # A reference mapping given on the line
+        self.reference_mapping = dict()
 
         # The label for this line (if any)
         self.label = label
@@ -1003,6 +1032,9 @@ class ProofLine(object):
 
         if path == "definition()":
             return self.definition
+
+        if path == "reference_mapping()":
+            return copy(self.reference_mapping)
 
         if "(" in path and path[:path.index("(")] in self.line_type.functions:
             # An attribute function with parameters
@@ -1172,7 +1204,7 @@ class ProofLine(object):
             "name": self.line_type.name if self.line_type is not None else None,
             "invalid_message": self.invalid_message,
             "warning_message": self.warning_message,
-            "reference": self.reference_string,
+            "reference": self.reference_string_display,
             "label": self.label,
             "display": self.display,
             "indent": self.indent

@@ -1107,7 +1107,7 @@ class AbstractSyntaxTree(object):
 
                 # Run sub-trees
                 for sub_tree in self.sub_trees:
-                    result = sub_tree.run_function_line(item, context_copy)
+                    result = sub_tree.evaluate_line_part(item, sub_tree.line.strip(), context_copy)
 
                 if not result:
                     # This instance fails
