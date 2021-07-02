@@ -814,6 +814,16 @@ class Condition(object):
         # No luck
         return False
 
+    def conjunctive_parts(self):
+        # Get the conjunctive parts of this condition.
+
+        if not self.type == "and":
+            # Only one part - the whole condition
+            return {self}
+
+        # Otherwise get parts recursively
+        return self.sub_conditions[0].conjunctive_parts().union(self.sub_conditions[1].conjunctive_parts())
+
     def get_by_path(self, path, context, recurse=True):
         # Get the value by a path
 
@@ -828,11 +838,14 @@ class Condition(object):
             return get_by_path(self, path, context)
 
         # Otherwise, only one part
-        if path[:14] == "maps_into_set(" and path[-1] == ")":
+        if path.startswith("maps_into_set(") and path[-1] == ")":
             inner = path[14:-1]
             kwargs = parse_arguments(inner, self, context, arg_names=("target_condition_set", "mapping"))[1]
 
             return self.maps_into_set(kwargs["target_condition_set"], kwargs["mapping"])
+
+        if path == "conjunctive_parts()":
+            return self.conjunctive_parts()
 
         if recurse:
             # Try generic get_by_path

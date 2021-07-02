@@ -1160,7 +1160,14 @@ class ProofLine(object):
                     attr = getattr(current_value, edit_type)
 
                     # Run this with the given value
-                    attr(sub_value)
+                    result = attr(sub_value)
+
+                    if result is not None:
+                        # Update the target value
+                        target[key] = result
+
+                    # Otherwise ok - could be just a function that changes the existing value but doesn't return
+                    # anything, e.g. set.add()
 
             elif type(current_value) is MatchSet:
                 # MatchSet type context entry

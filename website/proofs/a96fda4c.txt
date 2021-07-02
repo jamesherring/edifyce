@@ -7,9 +7,10 @@ let $x$, $y$, $a$, $b$ be variable
 let $t_2$, $t_3$ be term
 
 
-#if $\delta$ == $\gamma$.replace($y$, $t_2$, Condition($y$.free_in($\gamma$))) and $t_2$.is_free_for($y$, $\gamma$):
+if $\delta$ == $\gamma$.replace($y$, $t_2$, Condition($y$.free_in($\gamma$))):
+    if $t_2$.is_free_for($y$, $\gamma$):
     
-    #$(\forall y \; \gamma \rightarrow \delta)$ ref{Th, ax.A4}
+        $(\forall y \; \gamma \rightarrow \delta)$ ref{Th, ax.A4}
     
 
 #$(\forall x \; x = a \rightarrow y = a)$ ref{Th, ax.A4, $t \mapsto y$}
