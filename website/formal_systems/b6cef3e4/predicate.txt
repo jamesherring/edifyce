@@ -242,7 +242,7 @@ FormalSystem Predicate:
         behaviour: indent
         context.conditions:
             # Add condition to context
-            add: match().sc.condition()
+            union: match().sc.condition().conjunctive_parts()
             
     Regex import_path:
         ^[a-zA-Z0-9_\.]+$
