@@ -1598,7 +1598,8 @@ class Match(object):
         return False
 
     def equivalent_with_some_replacements(self, other, needle, value, context):
-        # Check if this match is equivalent to other, with some instances (on self) of needle replaced with value.
+        # Check if this match is equivalent to other, with some instances (on self) of needle replaced with value on
+        # other
 
         if self.equivalent(other, context):
             # Equivalent without need to consider needle/value
@@ -3013,7 +3014,7 @@ class UnionPattern(Pattern):
         # Get the nested options
         nested_options = self.nested_options(path_dict=True)
 
-        pattern_options = [p for p in nested_options if type(p) in (StringPattern, AbstractPattern)]
+        pattern_options = [p for p in nested_options if not isinstance(p, UnionPattern)]
 
         # Sort the patterns by decreasing certainty
         pattern_options.sort(key=lambda x: x.certainty, reverse=True)
@@ -3030,23 +3031,24 @@ class UnionPattern(Pattern):
                     is_variable=True
                 )
 
-            elif pattern in nested_options:
-                m = Match(
-                    pattern=pattern,
-                    string=s,
-                    is_variable=True
-                )
-
-                for p in nested_options[pattern]:
-                    next_match = Match(
-                        pattern=p,
-                        string=s
+            for p in nested_options:
+                if p.equivalent(pattern, context):
+                    m = Match(
+                        pattern=pattern,
+                        string=s,
+                        is_variable=True
                     )
-                    next_match.add_submatch(m.pattern.name, m)
 
-                    m = next_match
+                    for q in nested_options[p]:
+                        next_match = Match(
+                            pattern=q,
+                            string=s
+                        )
+                        next_match.add_submatch(m.pattern.name, m)
 
-                return m
+                        m = next_match
+
+                    return m
 
         if not self.check_brackets(s):
             # Brackets don't match
@@ -3062,16 +3064,18 @@ class UnionPattern(Pattern):
                 continue
 
             # Successful match - but result is not a union match
-            m = Match(
-                pattern=self,
-                string=s
-            )
 
-            # TODO: Is this correct? May need to add a chain of matches if pattern is nested?
+            # Add a chain of matches if pattern is nested
+            for q in nested_options[pattern]:
+                next_match = Match(
+                    pattern=q,
+                    string=s
+                )
+                next_match.add_submatch(result.pattern.name, result)
 
-            m.add_submatch(pattern.name, result)
+                result = next_match
 
-            return m
+            return result
 
         # Try definitions
         result = self.try_definitions(s, context)
