@@ -1,8 +1,8 @@
 from django.shortcuts import render
 from django.http import HttpResponse
-from django.views.decorators.csrf import requires_csrf_token
 import json
 from .models import *
+import os
 
 
 def indexView(request):
@@ -39,6 +39,14 @@ def formalSystemCreateSubmitView(request):
         system = FormalSystemModel()
 
         system.name = request.POST.get("name")
+
+        # Save the system with the name to set slug
+        system.save()
+
+        # Create the folder
+        folder_path = system.path_to_file()
+        folder_path = folder_path[:folder_path.rfind("/")]
+        os.mkdir(folder_path)
 
         # Get the code
         code = request.POST.get("code", False)

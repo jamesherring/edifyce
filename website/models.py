@@ -5,7 +5,7 @@ from django.dispatch import receiver
 from picklefield.fields import PickledObjectField
 import random
 from slugify import slugify
-from website.logical.compiler import compile
+from website.logical.compiler import get_referenced_systems, compile
 
 
 def id_gen(length=8, chars="0123456789abcdef"):
@@ -77,8 +77,17 @@ class FormalSystemModel(models.Model):
         with open(self.path_to_file(), "w") as f:
             f.write(code)
 
+        # Get referenced systems from the code
+        system_dict = dict()
+        for slug in get_referenced_systems(code):
+            # Try to get the referenced system
+            try:
+                system_dict[slug] = FormalSystemModel.objects.get(slug=slug).formal_system
+            except Exception as e:
+                pass
+
         # Refresh the formal system instance according to the file
-        self.formal_system = compile(code)
+        self.formal_system = compile(code, system_dict=system_dict)
 
         self.save()
 
@@ -131,7 +140,7 @@ class ProofModel(models.Model):
     updated = models.DateTimeField(auto_now=True, blank=True, null=True)
 
     def get_absolute_url(self):
-        return "/proof/view/" + self.id + "/" + self.slug + "/"
+        return "/proof/view/" + self.id + "/" + slug + "/"
 
     def path_to_file(self):
         # Get the path to the file defining this proof
