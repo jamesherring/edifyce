@@ -6,7 +6,7 @@ import itertools
 class FormalSystem(object):
     # A formal system
 
-    def __init__(self, name, line_types=None, inference_rules=None, context=None):
+    def __init__(self, name, line_types=None, inference_rules=None, build_context=None, context=None):
 
         # The name of the system
         self.name = name
@@ -16,6 +16,9 @@ class FormalSystem(object):
 
         # A list of valid inference rules for the system
         self.inference_rules = inference_rules if inference_rules is not None else []
+
+        # The build context from compiler
+        self.build_context = build_context
 
         # Default proof context
         self.context = Context(
@@ -311,6 +314,24 @@ class FormalSystem(object):
                     break
 
         return proof
+
+    def add_inference_rule(self, rule):
+        # Add an inference rule
+
+        # Remove existing inference rules with the same label
+        self.inference_rules = [ir for ir in self.inference_rules if not ir.label == rule.label]
+
+        # Add the new rule
+        self.inference_rules.append(rule)
+
+    def add_line_type(self, line_type):
+        # Add a line type
+
+        # Remove existing line types with the same name
+        self.line_types = [lt for lt in self.line_types if not lt.name == line_type.name]
+
+        # Add the new line type
+        self.line_types.append(line_type)
 
     def equivalent(self, other, context, memo=None):
         # Check if two formal systems are equivalent

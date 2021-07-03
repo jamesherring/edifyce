@@ -4,21 +4,42 @@ from website.logical.formal_system import FormalSystem, LineType, InferenceRule,
 from copy import copy
 
 
-def compile(code):
-    # Compile the given code string into a tree. Return the formal system
+def get_referenced_systems(code):
+    # Get referenced systems from the given code
+
+    system_slugs = set()
+
+    lines = code.split("\n")
+    for line in lines:
+        line = line.strip()
+        if line.startswith("inherit "):
+            system_slugs.add(line[8:])
+
+    return system_slugs
+
+
+def compile(code, system_dict=None):
+    # Compile the given code string into a tree. Return the formal system.
+
+    # Optionally specify a system_dict of reference systems
+
+    # Create an initial context
+    context = Context()
+    context.system_dict = system_dict if system_dict is not None else dict()
 
     # Create a root node
     root = AbstractSyntaxTree()
     root.add_lines(code.split("\n"))
 
-    context = root.run()
+    context = root.run(context)
 
     # Return the formal system
     for item in context.variables.values():
         if type(item) is FormalSystem:
             return item
 
-    raise Exception("No formal system defined.")
+    # Return an empty formal system
+    return FormalSystem(name="")
 
 
 def constant(s):
@@ -141,8 +162,8 @@ class Context(object):
         # String variables for inside patterns
         self.string_variables = dict()
 
-        # Stack of objects at a point in the code
-        self.current_object_stack = []
+        # Current object at a point in the code
+        self.current_object = None
 
         # Proof context
         self.proof_context = dict()
@@ -150,20 +171,28 @@ class Context(object):
         # Formatting context
         self.pre_format = dict()
 
-    def current_object(self):
-        if len(self.current_object_stack) == 0:
-            return None
+        # External systems for reference
+        self.system_dict = dict()
 
-        return self.current_object_stack[-1]
+    def inherit(self, parent):
+        # Inherit from parent context
+
+        self.variables.update(parent.variables)
+        self.proof_context.update(parent.proof_context)
+        self.pre_format.update(parent.pre_format)
+        self.system_dict.update(parent.system_dict)
+
+        # Don't inherit string_variables or current_object
 
     def __copy__(self):
         new_context = Context()
 
         new_context.variables = copy(self.variables)
         new_context.string_variables = copy(self.string_variables)
-        new_context.current_object_stack = copy(self.current_object_stack)
+        new_context.current_object = self.current_object
         new_context.proof_context = copy(self.proof_context)
         new_context.pre_format = copy(self.pre_format)
+        new_context.system_dict = copy(self.system_dict)
 
         return new_context
 
@@ -286,7 +315,7 @@ class AbstractSyntaxTree(object):
         # Remove spaces
         stripped = self.line.strip()
 
-        current_object = context.current_object()
+        current_object = context.current_object
 
         # New data to add to inner context
         new_object = None
@@ -298,7 +327,28 @@ class AbstractSyntaxTree(object):
                 # This is a comment - no need to do anything
                 return
 
-            if stripped[:13] == "FormalSystem " and stripped[-1] == ":":
+            if stripped.startswith("inherit "):
+                # Inherit from an existing formal system
+
+                name = stripped[8:]
+                if name not in context.system_dict:
+                    self.error = "Could not find formal system with slug: " + name + "."
+                    return
+
+                system = context.system_dict[name]
+
+                # Inherit the system context
+                context.inherit(system.build_context)
+
+                # Add inference rules and line types
+                if isinstance(current_object, FormalSystem):
+                    for ir in system.inference_rules:
+                        current_object.add_inference_rule(ir)
+
+                    for lt in system.line_types:
+                        current_object.add_line_type(lt)
+
+            elif stripped.startswith("FormalSystem ") and stripped[-1] == ":":
                 # Looks like a formal system declaration
 
                 self.type = "FormalSystem"
@@ -320,7 +370,7 @@ class AbstractSyntaxTree(object):
                 self.type = "ProofContext"
                 new_object = current_object.context.logical
 
-            elif stripped[:7] == "Format " and stripped[-1] == ":":
+            elif stripped.startswith("Format ") and stripped[-1] == ":":
                 # Create a format dictionary
                 self.type = "Format"
 
@@ -335,7 +385,7 @@ class AbstractSyntaxTree(object):
 
                 context.variables[name] = new_object
 
-            elif stripped[:7] == "Format ":
+            elif stripped.startswith("Format "):
                 # Apply a format dictionary
 
                 name = stripped[7:]
@@ -351,7 +401,7 @@ class AbstractSyntaxTree(object):
                 # Update context formatting, which is used for patterns, string variables, etc.
                 context.pre_format.update(pre_format)
 
-            elif stripped[:9] == "Abstract ":
+            elif stripped.startswith("Abstract "):
                 # Create an abstract pattern variable
 
                 self.type = "Abstract"
@@ -366,7 +416,7 @@ class AbstractSyntaxTree(object):
                     # Add to context
                     context.variables[name] = AbstractPattern(name=name)
 
-            elif stripped[:6] == "Regex " and stripped[-1] == ":":
+            elif stripped.startswith("Regex ") and stripped[-1] == ":":
                 # Create a regex pattern variable
 
                 self.type = "Regex"
@@ -383,7 +433,7 @@ class AbstractSyntaxTree(object):
 
                 new_object = pattern
 
-            elif stripped[:8] == "Pattern " and stripped[-1] == ":":
+            elif stripped.startswith("Pattern ") and stripped[-1] == ":":
                 # String pattern
 
                 self.type = "Pattern"
@@ -400,7 +450,7 @@ class AbstractSyntaxTree(object):
 
                 new_object = pattern
 
-            elif stripped[:13] == "UnionPattern " and stripped[-1] == ":":
+            elif stripped.startswith("UnionPattern ") and stripped[-1] == ":":
                 # Union pattern
 
                 self.type = "UnionPattern"
@@ -417,7 +467,7 @@ class AbstractSyntaxTree(object):
 
                 new_object = union
 
-            elif stripped[:9] == "LineType " and stripped[-1] == ":":
+            elif stripped.startswith("LineType ") and stripped[-1] == ":":
                 # New linetype
 
                 self.type = "LineType"
@@ -436,9 +486,8 @@ class AbstractSyntaxTree(object):
                     raise Exception("Cannot add LineType to object of type " + str(type(current_object)) + ".")
 
                 context.variables[name] = new_object
-                current_object.line_types.append(new_object)
 
-            elif stripped[:14] == "InferenceRule " and stripped[-1] == ":":
+            elif stripped.startswith("InferenceRule ") and stripped[-1] == ":":
                 # New InferenceRule
 
                 self.type = "InferenceRule"
@@ -452,13 +501,7 @@ class AbstractSyntaxTree(object):
                 # Create the rule
                 new_object = InferenceRule(name=name)
 
-                # Add to the formal system
-                if type(current_object) is not FormalSystem:
-                    raise Exception("Cannot add inference rule to object of type '" + str(type(current_object)) + "'.")
-
-                current_object.inference_rules.append(new_object)
-
-            elif stripped[:5] == "with " and stripped[-1] == ":":
+            elif stripped.startswith("with ") and stripped[-1] == ":":
                 # Define string variables
 
                 self.type = "with"
@@ -872,7 +915,7 @@ class AbstractSyntaxTree(object):
 
         # Add the new object if it exists
         if new_object is not None:
-            sub_context.current_object_stack.append(new_object)
+            sub_context.current_object = new_object
 
         # Add new string variables
         sub_context.string_variables.update(new_string_variables)
@@ -883,10 +926,21 @@ class AbstractSyntaxTree(object):
             if tree.error is not None:
                 print(str(tree.line_number) + ": " + tree.error)
 
+        # Add inference rules to formal systems
+        if isinstance(new_object, InferenceRule) and isinstance(current_object, FormalSystem):
+            current_object.add_inference_rule(new_object)
+
+        # Add line types to formal systems
+        if isinstance(new_object, LineType) and isinstance(current_object, FormalSystem):
+            current_object.add_line_type(new_object)
+
         # Add context to formal systems
         if self.type == "FormalSystem":
             context = new_object.context
             context.variables.update(sub_context.variables)
+
+            # Set the formal system build context
+            new_object.build_context = sub_context
 
         return context
 
