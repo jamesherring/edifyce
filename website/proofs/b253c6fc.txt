@@ -46,14 +46,3 @@ if $\varphi$.equivalent_with_some_replacements($\psi$, $x$, $y$):
 
 
 
-
-
-
-
-
-
-
-
-
-
-

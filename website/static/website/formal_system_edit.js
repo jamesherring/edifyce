@@ -5,6 +5,11 @@ $(function() {
     var editor = new codeEditorClass(container);
     editor.editor.session.setMode("ace/mode/yaml");
 
+    if ($(container).hasClass("uneditable")) {
+        // Set the editor to be read-only
+        editor.editor.setReadOnly(true);
+    }
+
     // Set the editor height
     var y = $(container).offset().top;
     var height = $(window).height() - y;

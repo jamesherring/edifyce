@@ -1,0 +1,110 @@
+/* Table classes */
+table {
+    border-spacing: 0;
+
+    /* Make the indicator column flush with screen right */
+    width: 100%;
+}
+td {
+    vertical-align: top;
+    padding: 0 2em 0 0.5em;
+    white-space: pre;
+}
+
+td.indicator {
+    padding: 0 0.1em;
+}
+
+td.comment {
+    font-style: italic;
+}
+
+td.line-number {
+    text-align: right;
+    background-color: #f0f0f0;
+    color: #333;
+    cursor: default;
+    font: 12px/normal 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace;
+    padding: 0 0.5em 0 0;
+    max-width: 3em;
+}
+
+
+/* Proof display */
+div.proof-display {
+    white-space: pre-wrap;
+    font-family: monospace;
+}
+
+/* Proof valid indicator */
+span.indicator {
+    display: inline-block;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 1rem;
+    vertical-align: top;
+    margin-right: 0.5rem;
+}
+
+span.indicator[data-indicator="error"] {
+    background-color: #F00;
+}
+span.indicator[data-indicator="warning"] {
+    background-color: #FFA500;
+}
+span.indicator[data-indicator="ok"] {
+    background-color: #0F0;
+}
+
+span.indicator[data-size="medium"] {
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 0.75rem;
+    margin-right: 0.1rem;
+}
+
+
+/* top right float */
+div.top-right {
+    position: absolute;
+    top: 0.7rem;
+    right: 0.7rem;
+}
+div.top-right div.button {
+    margin: 0;
+}
+
+
+/* Tooltips */
+.tooltip {
+  position: relative;
+}
+
+.tooltip .tooltiptext {
+    visibility: hidden;
+    background-color: black;
+    color: #fff;
+    text-align: center;
+    border-radius: 6px;
+    padding: 0.2rem 0.5rem;
+    position: absolute;
+    z-index: 1;
+    top: -0.1rem;
+    right: 0.8rem;
+}
+
+.tooltip .tooltiptext::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 100%;
+    margin-top: -5px;
+    border-width: 5px;
+    border-style: solid;
+    border-color: transparent transparent transparent black;
+}
+.tooltip:hover .tooltiptext {
+    visibility: visible;
+}
+
+

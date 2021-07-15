@@ -57,13 +57,17 @@ function AJAX(url, data, response) {
                 if (response_data.success) {
                     // Call the user functions
                     response(response_data);
-    
+
                 } else {
-                    // Alert the error
-                    alert(response_data.errorMessage);
+                    // Add a message with the error
+                    add_message(response_data.errorMessage);
                 }
             } else {
                 response(response_data);
+            }
+
+            if ("message" in response_data) {
+                add_message(response_data.message);
             }
         }
     });
