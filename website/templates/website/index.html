@@ -3,8 +3,8 @@
 {% load static %}
 
 
-{% block content %}
-    <h1>Systems</h1>
+{% block main_content %}
+    <h1>Formal Systems</h1>
 
     {% for system in formal_systems %}
 
@@ -12,7 +12,11 @@
 
     {% endfor %}
 
-    <a href="{% url 'website:formal_system_create' %}">New System</a>
+    <div class="centered">
+        <a href="{% url 'website:formal_system_create' %}">
+            <div class="button">New System</div>
+        </a>
+    </div>
 
 
 {% endblock %}

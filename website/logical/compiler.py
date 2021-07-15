@@ -4,18 +4,18 @@ from website.logical.formal_system import FormalSystem, LineType, InferenceRule,
 from copy import copy
 
 
-def get_referenced_systems(code):
+def get_inherited_system(code):
     # Get referenced systems from the given code
 
-    system_slugs = set()
+    slug = None
 
     lines = code.split("\n")
     for line in lines:
         line = line.strip()
         if line.startswith("inherit "):
-            system_slugs.add(line[8:])
+            slug = line[8:]
 
-    return system_slugs
+    return slug
 
 
 def compile(code, system_dict=None):

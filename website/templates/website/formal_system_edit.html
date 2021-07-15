@@ -3,19 +3,21 @@
 {% load static %}
 
 
-{% block content %}
+{% block main_content %}
 
     <p id="system_id" class="hidden">{{ system.id }}</p>
 
-    <h3><a href="{% url 'website:formal_system' system.id system.slug %}">{{ system.name }}</a></h3>
+    <h3 style="margin: 1rem 0;">
+        <a href="{% url 'website:formal_system' system.id system.slug %}">{{ system.name }}</a>
+    </h3>
 
-    <div class="top-right">
-        <a id="save">
-            <div class="button">Save</div>
-        </a>
-    </div>
+    {% if editable %}
+        <div class="top-right">
+            <a id="save"><div class="button">Save</div></a>
+        </div>
+    {% endif %}
 
-    <div id="ace-container">{{ system.code }}</div>
+    <div id="ace-container"{% if not editable %} class="uneditable"{% endif %}>{{ system.code }}</div>
 
 
 

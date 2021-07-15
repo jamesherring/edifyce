@@ -1,0 +1,39 @@
+
+div.google-signin-container {
+    display: inline-block;
+    margin: 1rem;
+}
+
+div.google-signin-container img {
+    height: 3rem;
+}
+
+div.google-signin-container img.focus {
+    display: none;
+}
+
+div.google-signin-container img.pressed {
+    display: none;
+}
+
+/* Hover */
+div.google-signin-container:hover img.main {
+    display: none;
+}
+
+div.google-signin-container:hover img.focus {
+    display: inline;
+}
+
+/* Click */
+div.google-signin-container:active img.main {
+    display: none;
+}
+
+div.google-signin-container:active img.focus {
+    display: none;
+}
+
+div.google-signin-container:active img.pressed {
+    display: inline;
+}

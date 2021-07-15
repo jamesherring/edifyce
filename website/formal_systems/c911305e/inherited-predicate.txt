@@ -196,3 +196,4 @@ FormalSystem Predicate:
                 
             condition:
                 (deduction.follows_from_definition(antecedents[1], antecedents[0].definition())) and (antecedents[1].given.issubset(deduction.given)) and (antecedents[1].conditions.issubset(deduction.conditions))
+

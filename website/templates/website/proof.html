@@ -3,36 +3,27 @@
 {% load static %}
 
 
-{% block content %}
+{% block main_content %}
 
     {{ proof.proof.data|json_script:"proof_data" }}
 
-    <h1><span class="indicator" data-indicator="{{ proof.proof.indicator }}"></span>{{ proof.name }}</h1>
+    <h3 style="margin-top: 0;">
+        <a href="{% url 'website:formal_system' system.id system.slug %}">{{ system.name }}</a> /
+        <span class="indicator" data-indicator="{{ proof.proof.indicator }}"></span>{{ proof.name }}
+    </h3>
 
-    <a href="{% url 'website:formal_system' system.id system.slug %}">Back</a><br/>
-    <a href="{% url 'website:proof_edit' proof.id proof.slug %}">Edit</a>
+    <div id="output" class="proof-display" style="margin: 0 -2rem;"></div>
 
-
-    <h2>Proof</h2>
-
-    <div id="output" class="proof-display"></div>
-
+    <div class="centered">
+        {% if request.user.is_authenticated and request.user.profile == proof.owner %}
+            <a href="{% url 'website:proof_edit' proof.id proof.slug %}">
+                <div class="button">Edit</div>
+            </a>
+        {% endif %}
+    </div>
 {% endblock %}
 
 {% block js %}
-    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
-    <script>
-        MathJax = {
-            tex: {
-                inlineMath: [['$', '$'], ['\\(', '\\)']]
-            },
-            svg: {
-                fontCache: 'global'
-            }
-        };
-    </script>
-    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-
     <script src="{% static 'website/proof_display.js' %}"></script>
     <script src="{% static 'website/proof.js' %}"></script>
 

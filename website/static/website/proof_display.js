@@ -27,9 +27,11 @@ function proofDisplayClass(parent) {
             this.add_row(i + 1, data.lines[i]);
         }
 
-        if (mathjax) {
+        try {
             // Parse mathjax
-            MathJax.typeset();
+            MathJax.typeset(this.table);
+        } catch(error) {
+            console.log(error);
         }
 
         // Set the scrollTop value

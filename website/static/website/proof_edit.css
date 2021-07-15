@@ -12,3 +12,9 @@ div#output {
 h3 {
     padding-left: 2rem;
 }
+
+/* Update the page-content size */
+div#page-content {
+    width: 100%;
+    padding: 0;
+}

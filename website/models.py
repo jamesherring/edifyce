@@ -5,7 +5,7 @@ from django.dispatch import receiver
 from picklefield.fields import PickledObjectField
 import random
 from slugify import slugify
-from website.logical.compiler import get_referenced_systems, compile
+from website.logical.compiler import get_inherited_system, compile
 
 
 def id_gen(length=8, chars="0123456789abcdef"):
@@ -19,12 +19,24 @@ class Profile(models.Model):
     id = models.CharField(default=id_gen, max_length=64, primary_key=True, editable=False)
     user = models.OneToOneField(User, on_delete=models.CASCADE)
 
+    # Unique slug
+    slug = models.CharField(max_length=64, blank=True, null=True)
+
+    first_name = models.CharField(max_length=64, blank=True, null=True)
+    last_name = models.CharField(max_length=64, blank=True, null=True)
+
+    email = models.EmailField(blank=True, null=True)
+
     created = models.DateTimeField(auto_now_add=True, blank=True, null=True)
     updated = models.DateTimeField(auto_now=True, blank=True, null=True)
 
     def get_absolute_url(self):
         # Return the absolute url for the profile
-        return "/profile/" + self.user.username + "/"
+        return "/profile/" + self.slug + "/"
+
+    def name(self):
+        # Get the full name
+        return self.first_name + " " + self.last_name
 
     def __str__(self):
         return str(self.user)
@@ -34,13 +46,29 @@ class Profile(models.Model):
 @receiver(post_save, sender=User)
 def create_user_profile(sender, instance, created, **kwargs):
     if created:
-        Profile.objects.create(user=instance)
+
+        # Create the profile
+        Profile.objects.create(
+            user=instance,
+            first_name=instance.first_name,
+            last_name=instance.last_name,
+            email=instance.email
+        )
+
+        # Set the User username to the email
+        instance.username = instance.email
+        instance.save()
 
 
 # Update the profile model whenever a user is updated
 @receiver(post_save, sender=User)
 def save_user_profile(sender, instance, **kwargs):
     profile, created = Profile.objects.get_or_create(user=instance)
+
+    profile.first_name = instance.first_name
+    profile.last_name = instance.last_name
+    profile.email = instance.email
+
     profile.save()
 
 
@@ -54,6 +82,13 @@ class FormalSystemModel(models.Model):
 
     # Field pointing to an instance of a FormalSystem class
     formal_system = PickledObjectField(default=None, blank=True, null=True, editable=True)
+
+    # Formal system this inherits from
+    inherits_from = models.ForeignKey("self", on_delete=models.SET_NULL, default=None, blank=True, null=True,
+                                      related_name="inherited_by")
+
+    # Owner of this formal system
+    owner = models.ForeignKey(Profile, on_delete=models.SET_NULL, blank=True, null=True)
 
     created = models.DateTimeField(auto_now_add=True, blank=True, null=True)
     updated = models.DateTimeField(auto_now=True, blank=True, null=True)
@@ -77,13 +112,15 @@ class FormalSystemModel(models.Model):
         with open(self.path_to_file(), "w") as f:
             f.write(code)
 
-        # Get referenced systems from the code
+        # Get the inherited system slug
+        slug = get_inherited_system(code)
         system_dict = dict()
-        for slug in get_referenced_systems(code):
-            # Try to get the referenced system
+
+        if slug is not None:
             try:
-                system_dict[slug] = FormalSystemModel.objects.get(slug=slug).formal_system
-            except Exception as e:
+                self.inherits_from = FormalSystemModel.objects.get(slug=slug)
+                system_dict[slug] = self.inherits_from.formal_system
+            except:
                 pass
 
         # Refresh the formal system instance according to the file
@@ -136,11 +173,14 @@ class ProofModel(models.Model):
     # Field pointing to an instance of a Proof class
     proof = PickledObjectField(default=None, blank=True, null=True, editable=True)
 
+    # Owner of this proof
+    owner = models.ForeignKey(Profile, on_delete=models.SET_NULL, blank=True, null=True)
+
     created = models.DateTimeField(auto_now_add=True, blank=True, null=True)
     updated = models.DateTimeField(auto_now=True, blank=True, null=True)
 
     def get_absolute_url(self):
-        return "/proof/view/" + self.id + "/" + slug + "/"
+        return "/proof/view/" + self.id + "/" + self.slug + "/"
 
     def path_to_file(self):
         # Get the path to the file defining this proof
