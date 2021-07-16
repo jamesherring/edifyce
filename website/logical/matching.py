@@ -2295,6 +2295,8 @@ class RegexPattern(Pattern):
 
         self.pattern = pattern
 
+        self.pattern_type = "RegexPattern"
+
     def match(self, s, context, debug=None):
         # Try to match a string s with the pattern
 
@@ -2388,6 +2390,8 @@ class StringPattern(Pattern):
         # Artificially infinite certainty
         self.certainty = 10000
         self.get_non_variable_locations()
+
+        self.pattern_type = "StringPattern"
 
     def get_non_variable_locations(self):
 
@@ -3004,6 +3008,8 @@ class UnionPattern(Pattern):
         # The list of patterns
         self.patterns = patterns
 
+        self.pattern_type = "UnionPattern"
+
     def match(self, s, context, debug=None):
         # Match s against one of the patterns.
 
@@ -3204,6 +3210,8 @@ class AbstractPattern(Pattern):
         # Arbitrary infinite certainty
         self.certainty = 1000000
 
+        self.pattern_type = "AbstractPattern"
+
     def match(self, s, context, debug=None):
         # Try to match s in the given context
 
@@ -3249,6 +3257,8 @@ class SystemConditionPattern(Pattern):
 
         # Arbitrary infinite certainty
         self.certainty = 1000000
+
+        self.pattern_type = "SystemConditionPattern"
 
     def match(self, s, context, debug=None):
         # Try to match a string s.

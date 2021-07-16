@@ -21,13 +21,10 @@
             {% endfor %}
         </ul>
     {% endif %}
-    <h2>Proofs</h2>
 
-    {% for proof in system.proofmodel_set.all %}
-        <a href="{% url 'website:proof' proof.id proof.slug %}">{{ proof.name }}</a><br/>
-    {% empty %}
-        <p>No proofs.</p>
-    {% endfor %}
+    <h2>Recent Proofs</h2>
+
+    {% include 'website/proof_list.html' with system=False %}
 
     <div class="centered">
         <a href="{% url 'website:proof_create' system.id system.slug %}">
@@ -53,7 +50,7 @@
     <h2>Inference Rules</h2>
 
     {% for rule in system.formal_system.inference_rules %}
-        <h3>{{ rule.name }} <span style="font-weight: normal;">({{ rule.label }})</span></h3>
+        <h3>{{ rule.name }} (<span class="pattern">{{ rule.label }}</span>)</h3>
 
         {% if rule.antecedents %}
             <p class="bold pattern">Antecedents</p>

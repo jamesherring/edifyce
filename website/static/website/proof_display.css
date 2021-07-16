@@ -36,32 +36,6 @@ div.proof-display {
     font-family: monospace;
 }
 
-/* Proof valid indicator */
-span.indicator {
-    display: inline-block;
-    width: 1.5rem;
-    height: 1.5rem;
-    border-radius: 1rem;
-    vertical-align: top;
-    margin-right: 0.5rem;
-}
-
-span.indicator[data-indicator="error"] {
-    background-color: #F00;
-}
-span.indicator[data-indicator="warning"] {
-    background-color: #FFA500;
-}
-span.indicator[data-indicator="ok"] {
-    background-color: #0F0;
-}
-
-span.indicator[data-size="medium"] {
-    width: 1.5rem;
-    height: 1.5rem;
-    border-radius: 0.75rem;
-    margin-right: 0.1rem;
-}
 
 
 /* top right float */

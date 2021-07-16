@@ -17,8 +17,9 @@
         </div>
     {% endif %}
 
-    <div id="ace-container"{% if not editable %} class="uneditable"{% endif %}>{{ system.code }}</div>
-
+    <div class="mathjax_ignore">
+        <div id="ace-container"{% if not editable %} class="uneditable"{% endif %}>{{ system.code }}</div>
+    </div>
 
 
 {% endblock %}

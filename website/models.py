@@ -1,3 +1,5 @@
+import datetime
+
 from django.db import models
 from django.contrib.auth.models import User
 from django.db.models.signals import post_save, pre_save
@@ -90,6 +92,12 @@ class FormalSystemModel(models.Model):
     # Owner of this formal system
     owner = models.ForeignKey(Profile, on_delete=models.SET_NULL, blank=True, null=True)
 
+    # Date the system is published
+    published = models.DateTimeField(blank=True, null=True)
+
+    # Optional description of the formal system
+    description = models.TextField(blank=True, null=True)
+
     created = models.DateTimeField(auto_now_add=True, blank=True, null=True)
     updated = models.DateTimeField(auto_now=True, blank=True, null=True)
 
@@ -176,6 +184,12 @@ class ProofModel(models.Model):
     # Owner of this proof
     owner = models.ForeignKey(Profile, on_delete=models.SET_NULL, blank=True, null=True)
 
+    # Date the proof is published
+    published = models.DateTimeField(blank=True, null=True)
+
+    # Optional description of the proof
+    description = models.TextField(blank=True, null=True)
+
     created = models.DateTimeField(auto_now_add=True, blank=True, null=True)
     updated = models.DateTimeField(auto_now=True, blank=True, null=True)
 
@@ -202,9 +216,10 @@ class ProofModel(models.Model):
         self.proof = self.formal_system.parse(code)
         self.save()
 
-    def refresh(self):
+    def refresh(self, refresh_system=True):
         # Set a new instance of the proof
-        self.formal_system.refresh()
+        if refresh_system:
+            self.formal_system.refresh()
         self.set_code(self.code())
 
     def __str__(self):

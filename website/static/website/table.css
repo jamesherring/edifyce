@@ -1,0 +1,23 @@
+
+div.table {
+    display: table;
+    font-size: 0.8rem;
+    width: 100%;
+}
+
+div.table-row {
+    display: table-row;
+}
+
+div.table-row.header-row {
+    background-color: #DDD;
+}
+
+div.table-row:not(.header-row):hover {
+    background-color: #EEE;
+}
+
+div.table-cell {
+    display: table-cell;
+    padding: 0.5rem 0.8rem;
+}

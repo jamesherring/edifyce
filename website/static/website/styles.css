@@ -1,6 +1,7 @@
 @import "proof_display.css";
 @import "signin.css";
 @import "form.css";
+@import "table.css";
 
 html, body, div {
     margin: 0;
@@ -53,10 +54,6 @@ h3 {
     font-size: 1.1rem;
     font-weight: normal;
     margin-top: 2rem;
-}
-
-p {
-
 }
 
 
@@ -174,8 +171,7 @@ div#page-content {
     display: inline-block;
     background-color: #FFF;
     text-align: left;
-    padding: 2rem;
-    margin-top: 3rem;
+    padding: 5rem 2rem 2rem 2rem;
     position: relative;
 }
 
@@ -190,4 +186,41 @@ div#page-content {
     display: inline-block;
     width: 30rem;
     text-align: left;
+}
+
+
+/* Proof valid indicator */
+span.indicator {
+    display: inline-block;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 0.75rem;
+    vertical-align: top;
+    margin-right: 0.5rem;
+}
+
+span.indicator[data-indicator="error"] {
+    background-color: #F00;
+}
+span.indicator[data-indicator="warning"] {
+    background-color: #FFA500;
+}
+span.indicator[data-indicator="ok"] {
+    background-color: #0F0;
+}
+
+span.indicator[data-size="small"] {
+    width: 1rem;
+    height: 1rem;
+    border-radius: 0.5rem;
+    margin-right: 0.1rem;
+}
+
+
+/* Notes */
+div.note {
+    margin: 1rem 0;
+    padding: 1rem;
+    background-color: #F5F5DC;
+    border-radius: 0.5rem;
 }
