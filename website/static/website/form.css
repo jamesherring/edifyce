@@ -19,12 +19,16 @@ button, input[type="submit"], div.button {
     background-color: #402080;
     color: #FFF;
     padding: 0.5rem 2rem;
-    margin: 1rem 0;
+    margin: 1rem 0.3rem;
     border-radius: 0.25rem;
     border-style: none;
     font-family: inherit;
     font-size: 1rem;
     cursor: pointer;
+}
+
+.delete-button {
+    background-color: #F33 !important;
 }
 
 input[type="text"], input[type="email"], input[type="password"], textarea {
@@ -38,7 +42,7 @@ input[type="text"], input[type="email"], input[type="password"], textarea {
     outline: none;
     border: none;
     border-bottom: 2px solid #FFF;
-    display: block;
+    display: inline-block;
 }
 
 input[type="text"]:focus, input[type="email"]:focus, input[type="password"]:focus, textarea:focus {

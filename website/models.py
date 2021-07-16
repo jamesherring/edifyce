@@ -85,6 +85,9 @@ class FormalSystemModel(models.Model):
     # Field pointing to an instance of a FormalSystem class
     formal_system = PickledObjectField(default=None, blank=True, null=True, editable=True)
 
+    # The system source text
+    formal_system_text =  models.TextField(default="")
+
     # Formal system this inherits from
     inherits_from = models.ForeignKey("self", on_delete=models.SET_NULL, default=None, blank=True, null=True,
                                       related_name="inherited_by")
@@ -110,15 +113,11 @@ class FormalSystemModel(models.Model):
 
     def code(self):
         # Get the code for this formal system
-        with open(self.path_to_file()) as f:
-            return f.read()
+        return self.formal_system_text
 
     def set_code(self, code):
         # Set the system code
-
-        # Save it to the system file
-        with open(self.path_to_file(), "w") as f:
-            f.write(code)
+        self.formal_system_text = code
 
         # Get the inherited system slug
         slug = get_inherited_system(code)
@@ -181,6 +180,9 @@ class ProofModel(models.Model):
     # Field pointing to an instance of a Proof class
     proof = PickledObjectField(default=None, blank=True, null=True, editable=True)
 
+    # Proof text
+    proof_text = models.TextField(default="")
+
     # Owner of this proof
     owner = models.ForeignKey(Profile, on_delete=models.SET_NULL, blank=True, null=True)
 
@@ -196,21 +198,24 @@ class ProofModel(models.Model):
     def get_absolute_url(self):
         return "/proof/view/" + self.id + "/" + self.slug + "/"
 
+    def get_absolute_edit_url(self):
+        return "/proof/edit/" + self.id + "/" + self.slug + "/"
+
     def path_to_file(self):
         # Get the path to the file defining this proof
         return "website/proofs/" + self.id + ".txt"
 
     def code(self):
         # Get the code for this proof
-        with open(self.path_to_file()) as f:
-            return f.read()
+        # with open(self.path_to_file()) as f:
+        #     return f.read()
+        return self.proof_text
 
     def set_code(self, code):
         # Set the proof code
 
         # Save it to the proof file
-        with open(self.path_to_file(), "w") as f:
-            f.write(code)
+        self.proof_text = code
 
         # Refresh the proof instance according to the file
         self.proof = self.formal_system.parse(code)

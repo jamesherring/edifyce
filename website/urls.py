@@ -10,10 +10,10 @@ urlpatterns = [
     path("", indexView, name="index"),
 
     # Profile
-    path("profile/<profile_id>/", viewProfileView, name="profile_view"),
+    path("profile/<profile_slug>/", viewProfileView, name="profile_view"),
 
     # Admin views
-    path("admin/", adminView, name="admin"),
+    path("superadmin/", adminView, name="admin"),
     path("ajax/admin/refresh-proofs/", refreshProofsView, name="refresh_proofs"),
 
     # Formal systems
@@ -27,8 +27,10 @@ urlpatterns = [
 
     # Proofs
     path("proof/view/<proof_id>/<proof_slug>/", proofView, name="proof"),
-    path("proof/create/<system_id>/<system_slug>", proofCreateView, name="proof_create"),
+    path("proof/create/<system_id>/<system_slug>/", proofCreateView, name="proof_create"),
     path("proof/edit/<proof_id>/<proof_slug>/", proofEditView, name="proof_edit"),
+    path("proof/delete/<proof_id>/<proof_slug>/", proofDeleteView, name="proof_delete"),
+    path("proof/delete_submit/<proof_id>/<proof_slug>/", proofDeleteSubmitView, name="proof_delete_submit"),
 
     path("proof/ajax/create/", proofCreateSubmitView, name="proof_create_submit"),
     path("proof/ajax/save/", proofSaveView, name="proof_save"),

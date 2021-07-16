@@ -17,6 +17,7 @@ td.indicator {
 
 td.comment {
     font-style: italic;
+    color: #666;
 }
 
 td.line-number {

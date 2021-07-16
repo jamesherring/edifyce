@@ -1,8 +1,7 @@
-import datetime
-
 from django.shortcuts import render
 from django.http import HttpResponse
 from django.contrib.auth.decorators import login_required
+from django.contrib import messages
 from django.shortcuts import redirect
 import json
 from .models import *
@@ -18,10 +17,10 @@ def indexView(request):
     })
 
 
-def viewProfileView(request, profile_id):
+def viewProfileView(request, profile_slug):
     # View of a users profile
 
-    profile = Profile.objects.get(id=profile_id)
+    profile = Profile.objects.get(slug=profile_slug)
 
     return render(request, "website/profile.html", {
         "title": profile.name(),
@@ -230,6 +229,7 @@ def proofCreateSubmitView(request):
         proof = ProofModel()
 
         proof.name = request.POST.get("name")
+        proof.description = request.POST.get("description")
         proof.owner = request.user.profile
 
         # Get the formal system
@@ -238,16 +238,13 @@ def proofCreateSubmitView(request):
 
         proof.formal_system = system
 
-        # Get the code
-        code = request.POST.get("code", False)
-
-        # Set the proof code
-        proof.set_code(code)
+        # Set code to empty - includes save
+        proof.set_code("")
 
         # Respond
         return HttpResponse(json.dumps({
             "success": True,
-            "url": proof.get_absolute_url()
+            "url": proof.get_absolute_edit_url()
         }))
 
     except Exception as e:
@@ -374,6 +371,40 @@ def proofPublishView(request):
             "success": False,
             "errorMessage": str(e)
         }))
+
+
+@login_required
+def proofDeleteView(request, proof_id, proof_slug):
+    # View to submit deletion a proof
+
+    proof = ProofModel.objects.get(id=proof_id)
+
+    if not request.user.profile == proof.owner:
+        # User is not the owner of the proof
+        return redirect(proof.get_absolute_url())
+
+    return render(request, "website/proof_delete.html", {
+        "proof": proof
+    })
+
+
+@login_required
+def proofDeleteSubmitView(request, proof_id, proof_slug):
+    # View to submit deletion a proof
+
+    proof = ProofModel.objects.get(id=proof_id)
+
+    if not request.user.profile == proof.owner:
+        # User is not the owner of the proof
+        return redirect(proof.get_absolute_url())
+
+    proof.delete()
+
+    messages.add_message(request, messages.INFO, "Proof deleted.")
+
+    return redirect(request.user.profile)
+
+
 
 
 @login_required
