@@ -285,7 +285,7 @@ class FormalSystem(object):
                         proof_line.valid = False
                         proof_line.invalid_message = "Could not get path or label from import line: " + str(e)
 
-                elif line_type.behaviour == "none":
+                elif line_type.behaviour in ("none", "comment"):
                     # Don't need to do anything :)
                     pass
 
@@ -396,7 +396,7 @@ class LineType(object):
 
         # The behaviour of these lines
         self.behaviour = behaviour
-        assert self.behaviour in ("none", "import", "logical", "axiom", "indent", "definition")
+        assert self.behaviour in ("none", "import", "logical", "axiom", "indent", "definition", "comment")
 
         # The data paths (and their values) to add to context, if any
         self.add_context = add_context if add_context is not None else dict()

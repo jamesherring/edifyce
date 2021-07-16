@@ -1,9 +1,6 @@
 
 $(function() {
 
-    var editor = new codeEditorClass($("div#ace-container"));
-    editor.editor.session.setMode("ace/mode/python");
-
     // Get the formal system id
     var system_id = $("#system_id").text();
 
@@ -12,7 +9,7 @@ $(function() {
             "/proof/ajax/create/",
             {
                 "name": $("input[name='name']").val(),
-                "code": editor.editor.getValue(),
+                "description": $("textarea").val(),
                 "system_id": system_id
             },
             function(response) {

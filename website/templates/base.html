@@ -65,7 +65,7 @@
                         <span>{{ request.user.profile.name }} &#9662;</span>
                     </div><br/>
                     <div id="user-menu" class="hidden">
-                        <a href="{% url 'website:profile_view' request.user.profile.id %}">Profile</a>
+                        <a href="{% url 'website:profile_view' request.user.profile.slug %}">Profile</a>
                         <a>Settings</a>
 
                         {% if request.user.is_superuser %}

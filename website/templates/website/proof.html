@@ -23,7 +23,7 @@
         </p>
     {% endif %}
 
-    <div id="output" class="proof-display" style="margin: 0 -2rem;"></div>
+    <div id="output" class="proof-display" style="margin: 2rem -2rem;"></div>
 
     {% if proof.published %}
         <p>Published on {{ proof.published|date:"jS F Y" }}.</p>
@@ -34,7 +34,8 @@
     <div class="centered">
         {% if request.user.is_authenticated and request.user.profile == proof.owner %}
             <a href="{% url 'website:proof_edit' proof.id proof.slug %}"><div class="button">Edit</div></a>
-            <div class="button">Publish</div>
+            <div class="button publish-button">Publish</div>
+            <a href="{% url 'website:proof_delete' proof.id proof.slug %}"><div class="button delete-button">Delete</div></a>
         {% endif %}
     </div>
 {% endblock %}

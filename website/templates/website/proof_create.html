@@ -3,18 +3,23 @@
 {% load static %}
 
 
-{% block content %}
+{% block main_content %}
 
     <p id="system_id" class="hidden">{{ system.id }}</p>
 
-    <h1>Create a Proof in {{ system.name }}</h1>
+    <h2 style="margin-top: 0"><a href="{% url 'website:formal_system' system.id system.slug %}">{{ system.name }}</a> / Create Proof</h2>
 
-    <a href="{% url 'website:index' %}">Back</a><br/>
-    <a id="save">Save</a>
+    <div class="centered">
+        <input name="name" type="text" placeholder="Proof name"/>
 
-    <input name="name" type="text" placeholder="Name"/>
+        <textarea placeholder="Description" rows="5"></textarea>
 
-    <div id="ace-container"></div>
+        <br/>
+        <a id="save">
+            <div class="button">Save</div>
+        </a>
+    </div>
+
 
 
 
@@ -22,12 +27,10 @@
 
 
 {% block js %}
-    <script src="{% static 'website/ace/editors.js' %}"></script>
-    <script src="{% static 'website/ace/src/ace.js' %}"></script>
     <script src="{% static 'website/proof_create.js' %}"></script>
 
 {% endblock %}
 
 {% block css %}
-    <link rel="stylesheet" href="{% static '/website/code_editor.css' %}">
+    <link rel="stylesheet" href="{% static '/website/proof_create.css' %}">
 {% endblock %}
