@@ -1,24 +1,21 @@
 {% extends 'base.html' %}
 
 {% load static %}
-{% load account %}
+{% load humanize %}
 
-
-{% block js %}
-{% endblock %}
-
-{% block css %}
-{% endblock %}
 
 
 {% block main_content %}
 
     <h1>{{ profile.name }}</h1>
 
+    <h2>Proofs</h2>
+
+    {% include 'website/proof_list.html' with author=False %}
 
 
-
-
+    <p>Joined on {{ profile.created|date:"jS F Y" }}.</p>
+    <p>Last login {{ profile.user.last_login|naturaltime }}.</p>
 
 {% endblock %}
 

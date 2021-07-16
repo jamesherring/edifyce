@@ -7,7 +7,7 @@
     <p id="proof_id" class="hidden">{{ proof.id }}</p>
     <p id="system_id" class="hidden">{{ system.id }}</p>
 
-    <h3>
+    <h3 style="margin: 1rem 0;">
         <a href="{% url 'website:formal_system' system.id system.slug %}">{{ system.name }}</a> /
         <a href="{% url 'website:proof' proof.id proof.slug %}">{{ proof.name }}</a>
     </h3>
@@ -18,8 +18,9 @@
         </a>
     </div>
 
-    <div id="ace-container" class="mathjax_ignore">{{ proof.code }}</div><div id="output" class="proof-display"></div>
-
+    <div class="mathjax_ignore">
+        <div id="ace-container">{{ proof.code }}</div><div id="output" class="proof-display"></div>
+    </div>
     {{ proof.proof.data|json_script:"proof_data" }}
 
 {% endblock %}

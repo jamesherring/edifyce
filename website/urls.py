@@ -12,6 +12,10 @@ urlpatterns = [
     # Profile
     path("profile/<profile_id>/", viewProfileView, name="profile_view"),
 
+    # Admin views
+    path("admin/", adminView, name="admin"),
+    path("ajax/admin/refresh-proofs/", refreshProofsView, name="refresh_proofs"),
+
     # Formal systems
     path("system/view/<system_id>/<system_slug>/", formalSystemView, name="formal_system"),
     path("system/create/", formalSystemCreateView, name="formal_system_create"),
@@ -29,6 +33,10 @@ urlpatterns = [
     path("proof/ajax/create/", proofCreateSubmitView, name="proof_create_submit"),
     path("proof/ajax/save/", proofSaveView, name="proof_save"),
     path("proof/ajax/validate/", proofValidateView, name="proof_validate"),
+    path("proof/ajax/publish/", proofPublishView, name="proof_publish"),
+
+    # Update text
+    path("ajax/update-text/<table>/<field>/", updateTextView, name="update_text")
 
     # Axioms
     # path("axioms/edit/<system_id>/<system_slug>/", axiomsEditView, name="axioms_edit")

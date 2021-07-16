@@ -1,3 +1,5 @@
+import datetime
+
 from django.shortcuts import render
 from django.http import HttpResponse
 from django.contrib.auth.decorators import login_required
@@ -23,8 +25,50 @@ def viewProfileView(request, profile_id):
 
     return render(request, "website/profile.html", {
         "title": profile.name(),
-        "profile": profile
+        "profile": profile,
+        "proofs": ProofModel.objects.filter(owner=profile)[:20]
     })
+
+
+@login_required
+def adminView(request):
+    # Admin view with powerful buttons
+
+    if not request.user.is_superuser:
+        # User not an admin
+        return redirect("website:index")
+
+    return render(request, "website/admin.html", {
+        "title": "Admin"
+    })
+
+
+@login_required
+def refreshProofsView(request):
+    # Admin refresh all proofs
+
+    try:
+        if not request.user.is_superuser:
+            return HttpResponse(json.dumps({
+                "success": False,
+                "errorMessage": "Authentication error."
+            }))
+
+        proofs = ProofModel.objects.all()
+
+        for proof in proofs:
+            proof.refresh(refresh_system=False)
+
+        return HttpResponse(json.dumps({
+            "success": True,
+            "message": str(len(proofs)) + " proofs refreshed."
+        }))
+
+    except Exception as e:
+        return HttpResponse(json.dumps({
+            "success": False,
+            "errorMessage": str(e)
+        }))
 
 
 def formalSystemView(request, system_id, system_slug):
@@ -34,7 +78,8 @@ def formalSystemView(request, system_id, system_slug):
 
     return render(request, "website/formal_system.html", {
         "system": system,
-        "title": system.name
+        "title": system.name,
+        "proofs": system.proofmodel_set.filter(published__isnull=False)
     })
 
 
@@ -147,16 +192,22 @@ def formalSystemSaveView(request):
 
 
 def proofView(request, proof_id, proof_slug):
-    # View for a proof
+    # View for a proof.
 
     proof = ProofModel.objects.get(id=proof_id)
-    proof.refresh()
 
-    return render(request, "website/proof.html", {
-        "proof": proof,
-        "system": proof.formal_system,
-        "title": proof.formal_system.name + " / " + proof.name
-    })
+    # Proof must be published or belong to the user
+    if proof.published is not None or (request.user.is_authenticated and request.user.profile == proof.owner):
+        return render(request, "website/proof.html", {
+            "proof": proof,
+            "system": proof.formal_system,
+            "title": proof.formal_system.name + " / " + proof.name,
+            "editable": proof.published is None and request.user.is_authenticated and
+                        request.user.profile == proof.owner
+        })
+
+    # Nor authenticated
+    return redirect("website:index")
 
 
 @login_required
@@ -288,3 +339,70 @@ def proofValidateView(request):
             "errorMessage": str(e)
         }))
 
+
+@login_required
+def proofPublishView(request):
+    # Ajax view to publish a proof
+
+    try:
+
+        proof_id = request.POST.get("proof_id", False)
+        proof = ProofModel.objects.get(id=proof_id)
+
+        if not request.user.profile == proof.owner:
+            # User is not the owner of the proof
+            return HttpResponse(json.dumps({
+                "success": False,
+                "errorMessage": "Authentication error."
+            }))
+
+        if not proof.proof.valid:
+            return HttpResponse(json.dumps({
+                "success": False,
+                "errorMessage": "Cannot publish an invalid proof."
+            }))
+
+        proof.published = datetime.datetime.now()
+
+        return HttpResponse(json.dumps({
+            "success": True,
+            "message": "Proof published!"
+        }))
+
+    except Exception as e:
+        return HttpResponse(json.dumps({
+            "success": False,
+            "errorMessage": str(e)
+        }))
+
+
+@login_required
+def updateTextView(request, table, field):
+    # Ajax view to update a text field
+
+    try:
+        assert table in ("proof",)
+
+        target_id = request.POST.get("target_id")
+        value = request.POST.get("value")
+
+        profile = request.user.profile
+
+        if table == "proof":
+            # Update the proof
+            proof = ProofModel.objects.get(id=target_id)
+
+            assert field in ("description",)
+
+            # Set the value
+            setattr(proof, field, value)
+
+            proof.save()
+
+        return HttpResponse(json.dumps({"success": True}))
+
+    except Exception as e:
+        return HttpResponse(json.dumps({
+            "success": False,
+            "errorMessage": str(e)
+        }))

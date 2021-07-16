@@ -1,6 +1,7 @@
 {% extends 'base.html' %}
 
 {% load static %}
+{% load humanize %}
 
 
 {% block main_content %}
@@ -12,13 +13,28 @@
         <span class="indicator" data-indicator="{{ proof.proof.indicator }}"></span>{{ proof.name }}
     </h3>
 
+    {% if not proof.published %}
+        <div class="note">This proof is not published and is only visible to you.</div>
+    {% endif %}
+
+    {% if proof.description or editable %}
+        <p>
+            {% include "website/editable_text.html" with value=proof.description table="proof" target=proof field="description" placeholder="Description" inputtype="textarea"%}
+        </p>
+    {% endif %}
+
     <div id="output" class="proof-display" style="margin: 0 -2rem;"></div>
+
+    {% if proof.published %}
+        <p>Published on {{ proof.published|date:"jS F Y" }}.</p>
+    {% else %}
+        <p>Last saved {{ proof.updated|naturaltime }}.</p>
+    {% endif %}
 
     <div class="centered">
         {% if request.user.is_authenticated and request.user.profile == proof.owner %}
-            <a href="{% url 'website:proof_edit' proof.id proof.slug %}">
-                <div class="button">Edit</div>
-            </a>
+            <a href="{% url 'website:proof_edit' proof.id proof.slug %}"><div class="button">Edit</div></a>
+            <div class="button">Publish</div>
         {% endif %}
     </div>
 {% endblock %}

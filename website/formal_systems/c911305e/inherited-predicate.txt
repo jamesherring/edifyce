@@ -1,4 +1,3 @@
-
 FormalSystem Predicate:
 
     # Inherit from the Propositional logic system

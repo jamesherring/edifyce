@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     "sslserver",
     "ordered_model",
+    "django.contrib.humanize",
     "website",
 
     # Allauth required apps
@@ -76,7 +77,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
-    'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'django.middleware.clickjacking.XFrameOptionsMiddleware'
 ]
 
 ROOT_URLCONF = 'edifyce.urls'
@@ -115,8 +116,6 @@ ACCOUNT_AUTHENTICATION_METHOD = 'email'
 
 # Default to homepage after login
 LOGIN_REDIRECT_URL = "/"
-
-
 
 WSGI_APPLICATION = 'edifyce.wsgi.application'
 
