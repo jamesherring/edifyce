@@ -25,7 +25,8 @@ def viewProfileView(request, profile_slug):
     return render(request, "website/profile.html", {
         "title": profile.name(),
         "profile": profile,
-        "proofs": ProofModel.objects.filter(owner=profile)[:20]
+        "proofs": ProofModel.objects.filter(folder_entry__owner=profile)[:20],
+        "entries": FolderEntry.objects.filter(parent_folder__isnull=True, owner=profile)
     })
 
 
@@ -75,10 +76,15 @@ def formalSystemView(request, system_id, system_slug):
 
     system = FormalSystemModel.objects.get(id=system_id)
 
+    user_proofs = None
+    if request.user.is_authenticated:
+        user_proofs = ProofModel.objects.filter(folder_entry__owner=request.user.profile, folder_entry__formal_system=system)
+
     return render(request, "website/formal_system.html", {
         "system": system,
         "title": system.name,
-        "proofs": system.proofmodel_set.filter(published__isnull=False)
+        "proofs": ProofModel.objects.filter(folder_entry__formal_system=system, published__isnull=False),
+        "user_proofs": user_proofs
     })
 
 
@@ -98,21 +104,14 @@ def formalSystemCreateSubmitView(request):
         system = FormalSystemModel()
 
         system.name = request.POST.get("name")
+        system.description = request.POST.get("description")
         system.owner = request.user.profile
 
         # Save the system with the name to set slug
         system.save()
 
-        # Create the folder
-        folder_path = system.path_to_file()
-        folder_path = folder_path[:folder_path.rfind("/")]
-        os.mkdir(folder_path)
-
-        # Get the code
-        code = request.POST.get("code", False)
-
         # Set the system code
-        system.set_code(code)
+        system.set_code("")
 
         # Respond
         return HttpResponse(json.dumps({
@@ -190,19 +189,73 @@ def formalSystemSaveView(request):
         }))
 
 
+def folderView(request, folder_id, folder_slug):
+    # View for a folder
+
+    folder = ProofFolder.objects.get(id=folder_id)
+
+    # TODO: Folder must be published or belong to the user
+    return render(request, "website/folder.html", {
+        "folder": folder,
+        "system": folder.formal_system(),
+        "title": folder.name,
+        "editable": request.user.is_authenticated and folder.owner() == request.user.profile
+    })
+
+
+@login_required
+def folderCreateView(request):
+    # Ajax view to create a folder
+
+    try:
+        folder = ProofFolder()
+        entry = FolderEntry()
+
+        print(1)
+        folder.name = request.POST.get("name")
+        folder.folder_entry = entry
+
+        entry.owner = request.user.profile
+
+        print(2)
+        # Parent folder (if any)
+        parent_id = request.POST.get("parent_id", None)
+
+        if parent_id is not None:
+            entry.parent_folder = ProofFolder.objects.get(id=parent_id)
+
+        # System
+        system_id = request.POST.get("system_id")
+        entry.formal_system = FormalSystemModel.objects.get(id=system_id)
+
+        entry.save()
+        folder.save()
+
+        return HttpResponse(json.dumps({
+            "success": True,
+            "folder_url": folder.get_absolute_url()
+        }))
+
+    except Exception as e:
+        return HttpResponse(json.dumps({
+            "success": False,
+            "errorMessage": str(e)
+        }))
+
+
 def proofView(request, proof_id, proof_slug):
     # View for a proof.
 
     proof = ProofModel.objects.get(id=proof_id)
 
     # Proof must be published or belong to the user
-    if proof.published is not None or (request.user.is_authenticated and request.user.profile == proof.owner):
+    if proof.published is not None or (request.user.is_authenticated and request.user.profile == proof.owner()):
         return render(request, "website/proof.html", {
             "proof": proof,
-            "system": proof.formal_system,
-            "title": proof.formal_system.name + " / " + proof.name,
+            "system": proof.formal_system(),
+            "title": proof.formal_system().name + " / " + proof.name,
             "editable": proof.published is None and request.user.is_authenticated and
-                        request.user.profile == proof.owner
+                        request.user.profile == proof.owner()
         })
 
     # Nor authenticated
@@ -210,13 +263,15 @@ def proofView(request, proof_id, proof_slug):
 
 
 @login_required
-def proofCreateView(request, system_id, system_slug):
+def proofCreateView(request, system_id, system_slug, folder_id=None):
     # Form for creating a proof
 
     system = FormalSystemModel.objects.get(id=system_id)
+    folder = ProofFolder.objects.get(id=folder_id) if folder_id is not None else None
 
     return render(request, "website/proof_create.html", {
         "system": system,
+        "folder": folder,
         "title": system.name + " / " + "Create Proof"
     })
 
@@ -227,16 +282,24 @@ def proofCreateSubmitView(request):
 
     try:
         proof = ProofModel()
+        entry = FolderEntry()
 
         proof.name = request.POST.get("name")
         proof.description = request.POST.get("description")
-        proof.owner = request.user.profile
+        proof.folder_entry = entry
+
+        entry.owner = request.user.profile
 
         # Get the formal system
         system_id = request.POST.get("system_id")
-        system = FormalSystemModel.objects.get(id=system_id)
+        entry.formal_system = FormalSystemModel.objects.get(id=system_id)
 
-        proof.formal_system = system
+        # Get the folder (if any)
+        folder_id = request.POST.get("folder_id", None)
+        if folder_id:
+            entry.parent_folder = ProofFolder.objects.get(id=folder_id)
+
+        entry.save()
 
         # Set code to empty - includes save
         proof.set_code("")
@@ -260,7 +323,7 @@ def proofEditView(request, proof_id, proof_slug):
 
     proof = ProofModel.objects.get(id=proof_id)
 
-    if not request.user.profile == proof.owner:
+    if not request.user.profile == proof.owner():
         # Redirect
         return redirect(proof.get_absolute_url())
 
@@ -268,8 +331,8 @@ def proofEditView(request, proof_id, proof_slug):
 
     return render(request, "website/proof_edit.html", {
         "proof": proof,
-        "system": proof.formal_system,
-        "title": proof.formal_system.name + " / " + proof.name
+        "system": proof.formal_system(),
+        "title": proof.formal_system().name + " / " + proof.name
     })
 
 
@@ -282,7 +345,7 @@ def proofSaveView(request):
         proof_id = request.POST.get("proof_id", False)
         proof = ProofModel.objects.get(id=proof_id)
 
-        if not request.user.profile == proof.owner:
+        if not request.user.profile == proof.owner():
             # User is not the owner of the proof
             return HttpResponse(json.dumps({
                 "success": False,
@@ -314,15 +377,16 @@ def proofValidateView(request):
 
     try:
 
-        # Get the proof system
-        system_id = request.POST.get("system_id", False)
-        system = FormalSystemModel.objects.get(id=system_id)
+        # Get the proof
+        proof_id = request.POST.get("proof_id", False)
+        proof = ProofModel.objects.get(id=proof_id)
+        system = proof.formal_system()
 
         # Get the proof code
         code = request.POST.get("code", False)
 
-        # Parse the code in the system to get a proof
-        proof = system.parse(code)
+        # Parse the code in the system
+        proof = system.parse(proof, code)
 
         # Return the results
         return HttpResponse(json.dumps({
@@ -346,7 +410,7 @@ def proofPublishView(request):
         proof_id = request.POST.get("proof_id", False)
         proof = ProofModel.objects.get(id=proof_id)
 
-        if not request.user.profile == proof.owner:
+        if not request.user.profile == proof.owner():
             # User is not the owner of the proof
             return HttpResponse(json.dumps({
                 "success": False,
@@ -379,7 +443,7 @@ def proofDeleteView(request, proof_id, proof_slug):
 
     proof = ProofModel.objects.get(id=proof_id)
 
-    if not request.user.profile == proof.owner:
+    if not request.user.profile == proof.owner():
         # User is not the owner of the proof
         return redirect(proof.get_absolute_url())
 
@@ -394,7 +458,7 @@ def proofDeleteSubmitView(request, proof_id, proof_slug):
 
     proof = ProofModel.objects.get(id=proof_id)
 
-    if not request.user.profile == proof.owner:
+    if not request.user.profile == proof.owner():
         # User is not the owner of the proof
         return redirect(proof.get_absolute_url())
 
@@ -423,7 +487,7 @@ def updateTextView(request, table, field):
             # Update the proof
             proof = ProofModel.objects.get(id=target_id)
 
-            assert field in ("description",)
+            assert field in ("name", "description")
 
             # Set the value
             setattr(proof, field, value)

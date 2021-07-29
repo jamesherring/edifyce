@@ -11,9 +11,11 @@
 
     <h2>Proofs</h2>
 
-    {% include 'website/proof_list.html' with author=False %}
+
+    {% include 'website/folder_list.html' with author=False %}
 
 
+    <br/>
     <p>Joined on {{ profile.created|date:"jS F Y" }}.</p>
     <p>Last login {{ profile.user.last_login|naturaltime }}.</p>
 

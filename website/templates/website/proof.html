@@ -10,7 +10,13 @@
 
     <h3 style="margin-top: 0;">
         <a href="{% url 'website:formal_system' system.id system.slug %}">{{ system.name }}</a> /
-        <span class="indicator" data-indicator="{{ proof.proof.indicator }}"></span>{{ proof.name }}
+        {% if proof.parent_folder %}
+            {% include "website/folder_path.html" with include_link=True folder=proof.parent_folder %} /
+        {% endif %}
+        <span class="indicator" data-indicator="{{ proof.proof.indicator }}"></span>
+        <span id="proof-title">
+            {% include "website/editable_text.html" with value=proof.name table="proof" target=proof field="name" placeholder="Proof Name"%}
+        </span>
     </h3>
 
     {% if not proof.published %}
@@ -43,6 +49,9 @@
 {% block js %}
     <script src="{% static 'website/proof_display.js' %}"></script>
     <script src="{% static 'website/proof.js' %}"></script>
+{% endblock %}
 
+{% block css %}
+    <link rel="stylesheet" href="{% static '/website/proof.css' %}">
 {% endblock %}
 

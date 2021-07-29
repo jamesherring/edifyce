@@ -5,6 +5,8 @@
 
 {% block main_content %}
 
+    <p id="system_id" class="hidden">{{ system.id }}</p>
+
     <h1>{{ system.name }}</h1>
 
     {% if system.inherits_from %}
@@ -23,14 +25,19 @@
     {% endif %}
 
     <h2>Recent Proofs</h2>
-
     {% include 'website/proof_list.html' with system=False %}
 
-    <div class="centered">
-        <a href="{% url 'website:proof_create' system.id system.slug %}">
-            <div class="button">New Proof</div>
-        </a>
-    </div>
+
+    {% if request.user.is_authenticated %}
+        <h2>Your Proofs</h2>
+
+        {% include 'website/proof_list.html' with system=False author=False proofs=user_proofs %}
+
+        <div class="centered">
+            <a href="{% url 'website:proof_create' system.id system.slug %}"><div class="button">New Proof</div></a>
+            <div id="create-folder" class="button">New Folder</div>
+        </div>
+    {% endif %}
 
     <h2>Patterns</h2>
 
@@ -88,6 +95,16 @@
         {% endif %}
     </div>
 
+
 {% endblock %}
 
+
+{% block js %}
+    <script src="{% static 'website/folder.js' %}"></script>
+{% endblock %}
+
+
+{% block modal %}
+    {% include "website/create_folder_modal.html" %}
+{% endblock %}
 

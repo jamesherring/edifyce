@@ -1,15 +1,12 @@
 
 $(function() {
 
-    var editor = new codeEditorClass($("div#ace-container"));
-    editor.editor.session.setMode("ace/mode/python");
-
     $("#save").on("click", function() {
         AJAX(
             "/system/ajax/create/",
             {
                 "name": $("input[name='name']").val(),
-                "code": editor.editor.getValue()
+                "description": $("textarea").val()
             },
             function(response) {
                 // Success - redirect to view the page
