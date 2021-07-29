@@ -80,18 +80,21 @@
         </div>
 
 
-    </body>
-
-    <div class="messages-container">
-        {% for message in messages %}
-            <div class="message-container">
-                <div class="message">
-                    <span>{{ message }}</span>
-                    <span class="close-cross">&#x2715;</span>
+        <div class="messages-container">
+            {% for message in messages %}
+                <div class="message-container">
+                    <div class="message">
+                        <span>{{ message }}</span>
+                        <span class="close-cross">&#x2715;</span>
+                    </div>
                 </div>
-            </div>
-        {% endfor %}
-    </div>
+            {% endfor %}
+        </div>
+
+        {% block modal %}
+        {% endblock %}
+
+    </body>
 
 
 </html>

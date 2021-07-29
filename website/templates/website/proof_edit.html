@@ -9,6 +9,9 @@
 
     <h3 style="margin: 1rem 0;">
         <a href="{% url 'website:formal_system' system.id system.slug %}">{{ system.name }}</a> /
+        {% if proof.parent_folder %}
+            {% include "website/folder_path.html" with include_link=True folder=proof.parent_folder %} /
+        {% endif %}
         <a href="{% url 'website:proof' proof.id proof.slug %}">{{ proof.name }}</a>
     </h3>
 

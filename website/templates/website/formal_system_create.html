@@ -3,17 +3,20 @@
 {% load static %}
 
 
-{% block content %}
+{% block main_content %}
 
-    <h1>Create a Formal System</h1>
+    <h2 style="margin-top: 0">Create a Formal System</h2>
 
-    <a href="{% url 'website:index' %}">Back</a><br/>
-    <a id="save">Save</a>
+    <div class="centered">
+        <input name="name" type="text" placeholder="System Name"/>
 
-    <input name="name" type="text" placeholder="System Name"/>
+        <textarea placeholder="Description" rows="5"></textarea>
 
-    <p>Lattice Code</p>
-    <div id="ace-container"></div>
+        <br/>
+        <a id="save">
+            <div class="button">Save</div>
+        </a>
+    </div>
 
 
 
@@ -21,13 +24,13 @@
 
 
 {% block js %}
-    <script src="{% static 'website/ace/editors.js' %}"></script>
-    <script src="{% static 'website/ace/src/ace.js' %}"></script>
+    <!--<script src="{% static 'website/ace/editors.js' %}"></script>
+    <script src="{% static 'website/ace/src/ace.js' %}"></script>-->
     <script src="{% static 'website/formal_system_create.js' %}"></script>
 
 {% endblock %}
 
 {% block css %}
     <link rel="stylesheet" href="{% static '/website/formal_system_create.css' %}">
-    <link rel="stylesheet" href="{% static '/website/code_editor.css' %}">
+    <!--<link rel="stylesheet" href="{% static '/website/code_editor.css' %}">-->
 {% endblock %}

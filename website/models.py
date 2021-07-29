@@ -1,6 +1,5 @@
-import datetime
-
 from django.db import models
+from ordered_model.models import OrderedModel
 from django.contrib.auth.models import User
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
@@ -111,6 +110,13 @@ class FormalSystemModel(models.Model):
         # Get the path to the file defining this formal system
         return "website/formal_systems/" + self.id + "/" + self.slug + ".txt"
 
+    def inherited_system_slugs(self):
+        # Return a set of slugs of the chain of systems
+        if self.inherits_from is None:
+            return set()
+
+        return {self.inherits_from}.union(self.inherits_from.inherited_system_slugs)
+
     def code(self):
         # Get the code for this formal system
         return self.formal_system_text
@@ -139,28 +145,68 @@ class FormalSystemModel(models.Model):
         # Refresh the instance
         self.set_code(self.code())
 
-    def parse(self, code):
+    def parse(self, proof_model, code):
         # Parse proof code into a proof instance
 
         # Find any references to other proofs
-        reference_slugs = self.formal_system.get_references(code)
+        reference_paths = self.formal_system.get_references(code)
 
         # Build a dictionary of references to other proofs
-        reference_proofs = dict()
-        for slug in reference_slugs:
-            try:
-                reference_proofs[slug] = ProofModel.objects.get(slug=slug, formal_system=self).proof
-
-                # Update the formal system reference in the proof.
-                reference_proofs[slug].formal_system = self.formal_system
-
-            except ProofModel.DoesNotExist:
-                reference_proofs[slug] = None
+        reference_dict = dict()
+        for path in reference_paths:
+            proof_model.parse_import(path, reference_dict)
 
         # Create a proof instance
-        proof = self.formal_system.parse(code, reference_proofs=reference_proofs)
+        proof = self.formal_system.parse(code, reference_proofs=reference_dict)
 
         return proof
+
+    def __str__(self):
+        return self.name
+
+
+class FolderEntry(OrderedModel):
+    # A folder entry (either a proof or a folder)
+
+    id = models.CharField(default=id_gen, max_length=64, primary_key=True, editable=False)
+
+    parent_folder = models.ForeignKey("ProofFolder", on_delete=models.CASCADE, blank=True, null=True, related_name="entries")
+
+    # Owner of this item
+    owner = models.ForeignKey(Profile, on_delete=models.SET_NULL, blank=True, null=True)
+
+    # The formal system this entry belongs to
+    formal_system = models.ForeignKey(FormalSystemModel, on_delete=models.CASCADE)
+
+    # Order with respect to parent folder - and owner and system in case of root level items
+    order_with_respect_to = ('parent_folder', 'owner', 'formal_system')
+
+
+class ProofFolder(models.Model):
+    # A model for folders containing folders and proofs
+
+    id = models.CharField(default=id_gen, max_length=64, primary_key=True, editable=False)
+
+    # The folder entry
+    folder_entry = models.OneToOneField(FolderEntry, on_delete=models.CASCADE)
+
+    name = models.CharField(max_length=256)
+    slug = models.CharField(max_length=256)
+
+    created = models.DateTimeField(auto_now_add=True, blank=True, null=True)
+    updated = models.DateTimeField(auto_now=True, blank=True, null=True)
+
+    def get_absolute_url(self):
+        return "/folder/view/" + self.id + "/" + self.slug + "/"
+
+    def parent_folder(self):
+        return self.folder_entry.parent_folder
+
+    def formal_system(self):
+        return self.folder_entry.formal_system
+
+    def owner(self):
+        return self.folder_entry.owner
 
     def __str__(self):
         return self.name
@@ -171,11 +217,14 @@ class ProofModel(models.Model):
 
     id = models.CharField(default=id_gen, max_length=64, primary_key=True, editable=False)
 
+    # The folder entry
+    folder_entry = models.OneToOneField(FolderEntry, on_delete=models.CASCADE)
+
     name = models.CharField(max_length=256)
     slug = models.CharField(max_length=256)
 
-    # The formal system to which this proof belongs
-    formal_system = models.ForeignKey(FormalSystemModel, on_delete=models.CASCADE)
+    # Optional description of the proof
+    description = models.TextField(blank=True, null=True)
 
     # Field pointing to an instance of a Proof class
     proof = PickledObjectField(default=None, blank=True, null=True, editable=True)
@@ -183,14 +232,8 @@ class ProofModel(models.Model):
     # Proof text
     proof_text = models.TextField(default="")
 
-    # Owner of this proof
-    owner = models.ForeignKey(Profile, on_delete=models.SET_NULL, blank=True, null=True)
-
     # Date the proof is published
     published = models.DateTimeField(blank=True, null=True)
-
-    # Optional description of the proof
-    description = models.TextField(blank=True, null=True)
 
     created = models.DateTimeField(auto_now_add=True, blank=True, null=True)
     updated = models.DateTimeField(auto_now=True, blank=True, null=True)
@@ -207,25 +250,120 @@ class ProofModel(models.Model):
 
     def code(self):
         # Get the code for this proof
-        # with open(self.path_to_file()) as f:
-        #     return f.read()
         return self.proof_text
 
     def set_code(self, code):
         # Set the proof code
 
-        # Save it to the proof file
         self.proof_text = code
 
         # Refresh the proof instance according to the file
-        self.proof = self.formal_system.parse(code)
+        self.proof = self.formal_system().parse(self, code)
         self.save()
+
+    def parse_import(self, path, reference_dict=None, parent=None, parent_path=None):
+        # Parse an import path on this proof and store it in the reference dictionary.
+        # Optionally specify the parent object (formal system or proof folder)
+        # Return the target proof (ignore line labels)
+
+        system = self.formal_system()
+
+        if reference_dict is None:
+            reference_dict = dict()
+
+        if "." in path:
+            # Path has multiple parts
+            index = path.find(".")
+            initial = path[:index]
+            remainder = path[index + 1:]
+
+        else:
+            initial = path
+            remainder = None
+
+        # Get the path up to this part and no further
+        total_path = initial if parent is None else parent_path + "." + initial
+
+        # Find the initial part
+        if parent is None:
+            # Try system
+            system = FormalSystemModel.objects.filter(slug=initial, published__isnull=False).first()
+
+            if system is None:
+                # Try an unpublished system belonging to this user
+                system = FormalSystemModel.objects.filter(slug=initial, folder_entry__owner=self.owner()).first()
+
+            if system is not None and system.slug in system.inherited_system_slugs():
+                # Found it
+                reference_dict[total_path] = system
+
+                # Parse the remainder
+                self.parse_import(remainder, reference_dict, parent=system, parent_path=initial)
+
+                return
+
+            # Try folder
+            # --------------------------------------------------------------------
+
+            # Try proofs
+            proof = ProofModel.objects.filter(slug=initial, folder_entry__formal_system=system, published__isnull=False).first()
+
+            if proof is None:
+                # Try an unpublished proof belonging to this user
+                proof = ProofModel.objects.filter(slug=initial, folder_entry__formal_system=system, folder_entry__owner=self.owner()).first()
+
+            if proof is not None:
+                # Found it
+                reference_dict[total_path] = proof.proof
+                return
+
+            else:
+                # Couldn't find it
+                reference_dict[total_path] = None
+                return
+
+        # Parent exists
+        if isinstance(parent, FormalSystemModel):
+            # Parent is a formal system
+
+            # Try folder
+            # --------------------------------------------------------------------
+
+            # Try to get the proof directly
+            proof = ProofModel.objects.filter(slug=initial, folder_entry__formal_system=parent, published__isnull=False).first()
+
+            if proof is None:
+                # Try an unpublished proof belonging to this user
+                proof = ProofModel.objects.filter(slug=initial, folder_entry__formal_system=parent, folder_entry__owner=self.owner()).first()
+
+            if proof is not None:
+                # Found it
+                reference_dict[total_path] = proof.proof
+                return
+
+            else:
+                # Couldn't find it
+                reference_dict[total_path] = None
+                return
+
+        # Folders
+
+        reference_dict[total_path] = None
 
     def refresh(self, refresh_system=True):
         # Set a new instance of the proof
         if refresh_system:
-            self.formal_system.refresh()
+            self.formal_system().refresh()
         self.set_code(self.code())
+
+    def parent_folder(self):
+        return self.folder_entry.parent_folder
+
+    def formal_system(self):
+        return self.folder_entry.formal_system
+
+    def owner(self):
+        return self.folder_entry.owner
 
     def __str__(self):
         return self.name
@@ -235,6 +373,6 @@ class ProofModel(models.Model):
 @receiver(pre_save)
 def save_system(sender, instance, **kwargs):
 
-    if sender in (FormalSystemModel, ProofModel):
+    if sender in (FormalSystemModel, ProofFolder, ProofModel):
         # It's a model that uses slugs
         instance.slug = slugify(instance.name)

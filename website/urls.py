@@ -25,8 +25,13 @@ urlpatterns = [
     path("system/ajax/create/", formalSystemCreateSubmitView, name="formal_system_create_submit"),
     path("system/ajax/save/", formalSystemSaveView, name="formal_system_save"),
 
+    # Folders
+    path("folder/view/<folder_id>/<folder_slug>/", folderView, name="folder"),
+    path("folder/ajax/create/", folderCreateView, name="folder_create"),
+
     # Proofs
     path("proof/view/<proof_id>/<proof_slug>/", proofView, name="proof"),
+    path("proof/create/<system_id>/<system_slug>/<folder_id>/", proofCreateView, name="proof_create_in_folder"),
     path("proof/create/<system_id>/<system_slug>/", proofCreateView, name="proof_create"),
     path("proof/edit/<proof_id>/<proof_slug>/", proofEditView, name="proof_edit"),
     path("proof/delete/<proof_id>/<proof_slug>/", proofDeleteView, name="proof_delete"),

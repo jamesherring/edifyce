@@ -1,0 +1,10 @@
+
+{% if folder.parent_folder %}
+    {% include "website/folder_path.html" with folder=folder.parent_folder include_link=True %} /
+{% endif %}
+
+{% if include_link %}
+    <a href="{% url 'website:folder' folder.id folder.slug %}">{{ folder.name }}</a>
+{% else %}
+    {{ folder.name }}
+{% endif %}

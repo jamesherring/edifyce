@@ -56,13 +56,7 @@ class FormalSystem(object):
                     # No valid path here
                     continue
 
-                # The proof reference is the first part
-                parts = path.split(".")
-
-                slug = parts[0].replace("_", "-")
-
-                references.add(slug)
-
+                references.add(path)
                 break
 
         return references
@@ -275,7 +269,7 @@ class FormalSystem(object):
                             continue
 
                         # Otherwise, two parts
-                        ref_line = ref_proof.get_reference(parts[1])
+                        ref_line = ref_proof.get_reference(parts[1], context)
 
                         # Add to proof context
                         proof.reference_context[label] = ref_line
@@ -531,6 +525,8 @@ class InferenceRule(object):
 
         # Check if the antecedents match
         for pattern, ant in zip(self.antecedents, antecedents):
+            if ant.line_type is None:
+                return False
 
             if (not ant.line_type.behaviour == "logical") and pattern.equivalent(ant.line_type.pattern, context):
                 # This is an instance of a non-logical line
@@ -564,6 +560,7 @@ class InferenceRule(object):
 
             except Exception as e:
                 # Error trying to apply the condition
+                print(e)
                 return False
 
         # Otherwise ok
@@ -1119,14 +1116,15 @@ class ProofLine(object):
             return False
 
     def follows_from_definition(self, other, definition, context):
-        # Check if this proof line follows from the other by means of a definition
+        # Check if this proof line follows from the other by means of a definition.
 
         if (not self.line_type.behaviour == "logical") or (not other.line_type.behaviour == "logical"):
             # Must be logical lines
             return False
 
-        # Check if the definition applies
-        return definition.check_application(lower=other.formula, higher=self.formula, context=context)
+        # Check if the definition applies - in either direction
+        return definition.check_application(lower=other.formula, higher=self.formula, context=context) or \
+            definition.check_application(lower=self.formula, higher=other.formula, context=context)
 
     def edit_context(self, context):
         # Edit the proof context according to the rule on this line type

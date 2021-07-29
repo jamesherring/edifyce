@@ -32,7 +32,7 @@ $(function() {
         AJAX(
             "/proof/ajax/validate/",
             {
-                "system_id": system_id,
+                "proof_id": proof_id,
                 "code": editor.editor.getValue()
             },
             function(response) {

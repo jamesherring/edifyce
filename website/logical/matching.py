@@ -2562,7 +2562,7 @@ class StringPattern(Pattern):
                 index = index + next_index + 1
 
             # Add any other legal non variable mappings
-            for i in range(0, len(non_variable_mapping)):
+            for i in range(len(non_variable_mapping) - 1, -1, -1):
                 part_index, lst = non_variable_mapping[i]
                 start_index = lst[0]
                 pattern_part = self.non_variable_locations[part_index]
@@ -2570,7 +2570,7 @@ class StringPattern(Pattern):
                 max_index = len(s)
                 if i < len(non_variable_mapping) - 1:
                     # There is a next item
-                    max_index = non_variable_mapping[i + 1][1][0]
+                    max_index = non_variable_mapping[i + 1][1][-1]
 
                 # Search for further instances of pattern_part in s, and add the index of these to lst
                 next_index = start_index + 1
@@ -2678,7 +2678,11 @@ class StringPattern(Pattern):
             keys = tuple(key for key in self.non_variable_locations if key - pattern_offset >= 0)
 
             if len(keys) > 0:
+
+                # Min key is the position of the next non-variable part in the pattern
                 min_key = min(keys)
+
+                # max_j
                 max_j = max(non_variable_mapping[min_key])
 
             possible_js = [j for j in possible_js if 0 <= j <= max_j]
