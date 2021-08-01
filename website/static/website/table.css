@@ -26,3 +26,11 @@ div.table-cell img.folder {
     height: 1rem;
     vertical-align: top;
 }
+
+div.table-cell span.move-arrow {
+    cursor: pointer;
+}
+
+div.table-cell span.hide {
+    visibility: hidden;
+}
