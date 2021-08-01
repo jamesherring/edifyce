@@ -42,6 +42,9 @@ urlpatterns = [
     path("proof/ajax/validate/", proofValidateView, name="proof_validate"),
     path("proof/ajax/publish/", proofPublishView, name="proof_publish"),
 
+    # Folder entries
+    path("folderentry/ajax/move/", folderEntryMoveView, name="folderentry_move"),
+
     # Update text
     path("ajax/update-text/<table>/<field>/", updateTextView, name="update_text")
 

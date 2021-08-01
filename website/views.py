@@ -22,11 +22,24 @@ def viewProfileView(request, profile_slug):
 
     profile = Profile.objects.get(slug=profile_slug)
 
+    # Get the top level entries for this profile
+    entries = FolderEntry.objects.filter(parent_folder__isnull=True, owner=profile)
+
+    # Get the formal systems used
+    systems = FormalSystemModel.objects.filter(entries__in=entries).distinct()
+
+    # Sort the entries by systems
+    system_list = [
+        {
+            "system": system,
+            "entries": entries.filter(formal_system=system)
+        } for system in systems
+    ]
+
     return render(request, "website/profile.html", {
         "title": profile.name(),
         "profile": profile,
-        "proofs": ProofModel.objects.filter(folder_entry__owner=profile)[:20],
-        "entries": FolderEntry.objects.filter(parent_folder__isnull=True, owner=profile)
+        "system_list": system_list
     })
 
 
@@ -211,13 +224,11 @@ def folderCreateView(request):
         folder = ProofFolder()
         entry = FolderEntry()
 
-        print(1)
         folder.name = request.POST.get("name")
         folder.folder_entry = entry
 
         entry.owner = request.user.profile
 
-        print(2)
         # Parent folder (if any)
         parent_id = request.POST.get("parent_id", None)
 
@@ -469,6 +480,40 @@ def proofDeleteSubmitView(request, proof_id, proof_slug):
     return redirect(request.user.profile)
 
 
+@login_required
+def folderEntryMoveView(request):
+    # Ajax request to move a folder entry
+
+    try:
+        entry_id = request.POST.get("entry_id")
+        direction = request.POST.get("direction")
+
+        assert direction in ("up", "down")
+
+        entry = FolderEntry.objects.get(id=entry_id)
+
+        # Check the entry belongs to the owner
+        if not entry.owner == request.user.profile:
+            return HttpResponse(json.dumps({
+                "success": False,
+                "errorMessage": "Authentication error."
+            }))
+
+        # Make the move
+        if direction == "up":
+            entry.up()
+        else:
+            entry.down()
+
+        return HttpResponse(json.dumps({
+            "success": True
+        }))
+
+    except Exception as e:
+        return HttpResponse(json.dumps({
+            "success": False,
+            "errorMessage": str(e)
+        }))
 
 
 @login_required

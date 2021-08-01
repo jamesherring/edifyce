@@ -7,9 +7,10 @@
     <div class="table">
 
         <div class="table-row header-row">
-            <div class="table-cell">Order</div>
 
-            <div class="table-cell">System</div>
+            {% if system %}
+                <div class="table-cell">System</div>
+            {% endif %}
 
             <div class="table-cell">Name</div>
 
@@ -19,19 +20,23 @@
 
             <div class="table-cell">Logical Lines</div>
 
+            {% if editable %}
+                <div class="table-cell">Move</div>
+            {% endif %}
+
         </div>
 
         {% for entry in entries %}
-            <div class="table-row">
-
-                <div class="table-cell">{{ entry.order }}</div>
+            <div class="table-row" data-id="{{ entry.id }}">
 
                 {% if entry.proofmodel %}
                     {% with proof=entry.proofmodel %}
 
-                        <div class="table-cell">
-                            <a href="{% url 'website:formal_system' proof.formal_system.id proof.formal_system.slug %}">{{ proof.formal_system.name }}</a>
-                        </div>
+                        {% if system %}
+                            <div class="table-cell">
+                                <a href="{% url 'website:formal_system' proof.formal_system.id proof.formal_system.slug %}">{{ proof.formal_system.name }}</a>
+                            </div>
+                        {% endif %}
 
                         <div class="table-cell">
                             <span class="indicator" data-indicator="{{ proof.proof.indicator }}" data-size="small"></span>
@@ -46,14 +51,21 @@
 
                         <div class="table-cell">{{ proof.proof.logical_lines }}</div>
 
+                        <div class="table-cell">
+                            <span class="move-arrow move-up{% if forloop.first %} hide{% endif %}">&#9650;</span>
+                            <span class="move-arrow move-down{% if forloop.last %} hide{% endif %}">&#9660;</span>
+                        </div>
+
                     {% endwith %}
 
                 {% else %}
                     {% with folder=entry.prooffolder %}
 
-                        <div class="table-cell">
-                            <a href="{% url 'website:formal_system' folder.formal_system.id folder.formal_system.slug %}">{{ folder.formal_system.name }}</a>
-                        </div>
+                        {% if system %}
+                            <div class="table-cell">
+                                <a href="{% url 'website:formal_system' folder.formal_system.id folder.formal_system.slug %}">{{ folder.formal_system.name }}</a>
+                            </div>
+                        {% endif %}
 
                         <div class="table-cell">
                             <img class="folder" src="{% static 'website/images/folder.png' %}"/>
@@ -67,6 +79,11 @@
                         {% endif %}
 
                         <div class="table-cell"></div>
+
+                        <div class="table-cell">
+                            <span class="move-arrow move-up{% if forloop.first %} hide{% endif %}">&#9650;</span>
+                            <span class="move-arrow move-down{% if forloop.last %} hide{% endif %}">&#9660;</span>
+                        </div>
 
                     {% endwith %}
                 {% endif %}

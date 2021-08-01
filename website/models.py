@@ -176,7 +176,7 @@ class FolderEntry(OrderedModel):
     owner = models.ForeignKey(Profile, on_delete=models.SET_NULL, blank=True, null=True)
 
     # The formal system this entry belongs to
-    formal_system = models.ForeignKey(FormalSystemModel, on_delete=models.CASCADE)
+    formal_system = models.ForeignKey(FormalSystemModel, on_delete=models.CASCADE, related_name="entries")
 
     # Order with respect to parent folder - and owner and system in case of root level items
     order_with_respect_to = ('parent_folder', 'owner', 'formal_system')
