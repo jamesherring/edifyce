@@ -123,6 +123,10 @@ span.editable-value {
     white-space: pre-wrap;
     width: 100%;
 }
+.small-editable span.editable-container {
+    /* limit the width of smaller editable containers */
+    width: 20rem;
+}
 
 input.editable-text, textarea.editable-text {
     font-size: inherit;
