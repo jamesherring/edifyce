@@ -559,7 +559,7 @@ def updateTextView(request, table, field):
     # Ajax view to update a text field
 
     try:
-        assert table in ("proof",)
+        assert table in ("proof", "folder")
 
         target_id = request.POST.get("target_id")
         value = request.POST.get("value")
@@ -572,10 +572,35 @@ def updateTextView(request, table, field):
 
             assert field in ("name", "description")
 
+            # Check the proof belongs to the user
+            if not proof.owner() == profile:
+                return HttpResponse(json.dumps({
+                    "success": False,
+                    "errorMessage": "Authentication error."
+                }))
+
             # Set the value
             setattr(proof, field, value)
 
             proof.save()
+
+        elif table == "folder":
+            # Update the proof folder
+
+            folder = ProofFolder.objects.get(id=target_id)
+
+            assert field in ("name",)
+
+            # Check the folder belongs to the user
+            if not folder.owner() == profile:
+                return HttpResponse(json.dumps({
+                    "success": False,
+                    "errorMessage": "Authentication error."
+                }))
+
+            setattr(folder, field, value)
+
+            folder.save()
 
         return HttpResponse(json.dumps({"success": True}))
 

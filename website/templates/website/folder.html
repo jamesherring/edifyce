@@ -8,7 +8,10 @@
     <p id="system_id" class="hidden">{{ system.id }}</p>
     <p id="folder_id" class="hidden">{{ folder.id }}</p>
 
-    <h2 style="margin-top: 0"><a href="{% url 'website:formal_system' system.id system.slug %}">{{ system.name }}</a> / {% include "website/folder_path.html" %}</h2>
+    <h2 style="margin-top: 0">
+        <a href="{% url 'website:formal_system' system.id system.slug %}">{{ system.name }}</a> /
+        {% include "website/folder_path.html" with edit_last=editable %}
+    </h2>
 
     <p>Owner: <a href="{% url 'website:profile_view' folder.owner.slug %}">{{ folder.owner.name }}</a></p>
     <br/>

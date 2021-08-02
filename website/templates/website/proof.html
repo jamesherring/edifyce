@@ -14,7 +14,7 @@
             {% include "website/folder_path.html" with include_link=True folder=proof.parent_folder %} /
         {% endif %}
         <span class="indicator" data-indicator="{{ proof.proof.indicator }}"></span>
-        <span id="proof-title">
+        <span id="proof-title" class="small-editable">
             {% include "website/editable_text.html" with value=proof.name table="proof" target=proof field="name" placeholder="Proof Name"%}
         </span>
     </h3>
@@ -51,7 +51,4 @@
     <script src="{% static 'website/proof.js' %}"></script>
 {% endblock %}
 
-{% block css %}
-    <link rel="stylesheet" href="{% static '/website/proof.css' %}">
-{% endblock %}
 
