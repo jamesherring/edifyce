@@ -13,6 +13,8 @@ td {
 
 td.indicator {
     padding: 0 0.1em;
+    width: 0.4rem;
+    max-width: 0.4rem;
 }
 
 td.comment {
@@ -26,8 +28,9 @@ td.line-number {
     color: #333;
     cursor: default;
     font: 12px/normal 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace;
-    padding: 0 0.5em 0 0;
-    max-width: 3em;
+    padding: 0 0.5rem 0 0;
+    max-width: 3rem;
+    width: 3rem;
 }
 
 
