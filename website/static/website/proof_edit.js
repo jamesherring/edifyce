@@ -4,7 +4,41 @@ $(function() {
 
     var container = $("div#ace-container");
     var editor = new codeEditorClass(container);
-    editor.editor.session.setMode("ace/mode/latex");
+
+    var root_autocomplete = JSON.parse(document.getElementById("root_autocomplete").innerHTML);
+
+    // Add custom completion rules
+    var staticWordCompleter = {
+        getCompletions: function(editor, session, pos, prefix, callback) {
+
+            // Get the current line
+            var line = session.getLine(pos["row"]);
+
+            // Trim anything after the cursor
+            trimmed = line.substr(0, pos["column"]);
+
+            // Find the final space (if any) and trim anything before it
+            trimmed = trimmed.split(" ").pop();
+
+            if (trimmed == "prop.") {
+                wordList = ["axioms", "proof1"];
+
+                callback(null, wordList.map(function(word) {
+                    return {
+                        caption: word,
+                        value: word,
+                        meta: "static"
+                    };
+                }));
+            } else {
+                callback(null, root_autocomplete);
+            }
+
+        }
+    }
+
+    editor.editor.completers = [staticWordCompleter];
+
 
     // Set the editor height
     var y = $(container).offset().top;

@@ -207,13 +207,16 @@ def folderView(request, folder_id, folder_slug):
 
     folder = ProofFolder.objects.get(id=folder_id)
 
-    # TODO: Folder must be published or belong to the user
-    return render(request, "website/folder.html", {
-        "folder": folder,
-        "system": folder.formal_system(),
-        "title": folder.name,
-        "editable": request.user.is_authenticated and folder.owner() == request.user.profile
-    })
+    if folder.published is not None or (request.user.is_authenticated and request.user.profile == folder.owner()):
+        return render(request, "website/folder.html", {
+            "folder": folder,
+            "system": folder.formal_system(),
+            "title": folder.name,
+            "editable": request.user.is_authenticated and folder.owner() == request.user.profile
+        })
+
+    # Not authenticated
+    return redirect("website:index")
 
 
 @login_required
@@ -254,6 +257,39 @@ def folderCreateView(request):
         }))
 
 
+@login_required
+def folderDeleteView(request, folder_id, folder_slug):
+    # View to submit deletion a proof
+
+    folder = ProofFolder.objects.get(id=folder_id)
+
+    if not request.user.profile == folder.owner():
+        # User is not the owner of the proof
+        return redirect(folder.get_absolute_url())
+
+    return render(request, "website/folder_delete.html", {
+        "folder": folder
+    })
+
+
+@login_required
+def folderDeleteSubmitView(request, folder_id, folder_slug):
+    # View to submit deletion a proof
+
+    folder = ProofFolder.objects.get(id=folder_id)
+
+    if not request.user.profile == folder.owner():
+        # User is not the owner of the proof
+        return redirect(folder.get_absolute_url())
+
+    # Delete the folder entry, which cascades to delete the folder.
+    folder.folder_entry.delete()
+
+    messages.add_message(request, messages.INFO, "Folder deleted.")
+
+    return redirect(request.user.profile)
+
+
 def proofView(request, proof_id, proof_slug):
     # View for a proof.
 
@@ -269,7 +305,7 @@ def proofView(request, proof_id, proof_slug):
                         request.user.profile == proof.owner()
         })
 
-    # Nor authenticated
+    # Not authenticated
     return redirect("website:index")
 
 
@@ -342,6 +378,7 @@ def proofEditView(request, proof_id, proof_slug):
 
     return render(request, "website/proof_edit.html", {
         "proof": proof,
+        "root_autocomplete": proof.autocomplete_suggestions(),
         "system": proof.formal_system(),
         "title": proof.formal_system().name + " / " + proof.name
     })
@@ -473,7 +510,8 @@ def proofDeleteSubmitView(request, proof_id, proof_slug):
         # User is not the owner of the proof
         return redirect(proof.get_absolute_url())
 
-    proof.delete()
+    # Delete the folder entry, which cascades to delete the proof
+    proof.folder_entry.delete()
 
     messages.add_message(request, messages.INFO, "Proof deleted.")
 

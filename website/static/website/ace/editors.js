@@ -120,8 +120,18 @@ var codeEditorClass = function(container) {
         }
     })
 
+
+    // Enable autocompletion
+    ace.require("ace/ext/language_tools");
+
     this.editor = ace.edit($(this.container).attr("id"));
-    // this.editor.setTheme("ace/theme/monokai");
+    this.editor.session.setMode("ace/mode/latex");
+
+    this.editor.setOptions({
+        enableBasicAutocompletion: true,
+        enableSnippets: true,
+        enableLiveAutocompletion: true
+    });
 
     $(window).on("resize", function() {
         // Resize the editor with the window
@@ -129,7 +139,7 @@ var codeEditorClass = function(container) {
     });
 
     // Check for changes and save when the user stops typing
-    this.editor.session.on("change", function() {
+    this.editor.session.on("change", function(obj) {
         // Clear any previous timeout
         window.clearTimeout(editorClass.saveTimeout);
 
@@ -140,16 +150,14 @@ var codeEditorClass = function(container) {
             $(editorClass.expand_div).css("background-color", "#FFAA33");
         }
 
-        // Set a new timeout
-        // editorClass.saveTimeout = window.setTimeout(function() {
-            // editorClass.save_file();
-        // }, 2000);
-    })
+        // Trigger autocomplete on typing "."
+        if ((obj.action == "insert") && (obj.lines.length == 1) && (obj.lines[0] == ".")) {
+            // Set a timeout to allow for ace to finish processing the change
+            setTimeout(function() {
+                editorClass.editor.commands.byName.startAutocomplete.exec(editorClass.editor);
+            }, 50);
+        }
 
-    // Save on editor blur
-    // this.editor.on("blur", function() {
-       //  editorClass.save_file();
-
-    // })
+    });
 
 }

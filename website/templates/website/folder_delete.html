@@ -1,0 +1,23 @@
+{% extends 'base.html' %}
+
+{% load static %}
+
+
+{% block main_content %}
+    <p id="folder_id" class="hidden">{{ folder.id }}</p>
+
+    <h2 style="margin: 1rem 0;">Delete {{ folder.name }}</h2>
+
+    <p>Are you sure you want to permanently delete this folder?</p>
+    <p>This will also delete {{ folder.nested_sub_folders.count }} nested sub folder(s) and {{ folder.nested_proofs.count }} nested proof(s).</p>
+    <br/>
+
+    <div class="centered">
+        <a href="{% url 'website:folder' folder.id folder.slug %}"><div class="button">Back</div></a>
+        <a href="{% url 'website:folder_delete_submit' folder.id folder.slug %}"><div class="button delete-button">Delete</div></a>
+    </div>
+
+{% endblock %}
+
+
+

@@ -743,7 +743,10 @@ class Proof(object):
 
     def logical_lines(self):
         # Count the logical lines in the proof
-        return len([line for line in self.proof_lines if (not line.empty) and line.line_type.behaviour == "logical"])
+        return len([
+            line for line in self.proof_lines
+            if (not line.empty) and (line.line_type is not None) and line.line_type.behaviour == "logical"
+        ])
 
     def get_reference(self, ref, context):
         # Get the referenced line from a ref string

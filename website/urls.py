@@ -28,6 +28,8 @@ urlpatterns = [
     # Folders
     path("folder/view/<folder_id>/<folder_slug>/", folderView, name="folder"),
     path("folder/ajax/create/", folderCreateView, name="folder_create"),
+    path("folder/delete/<folder_id>/<folder_slug>/", folderDeleteView, name="folder_delete"),
+    path("folder/delete_submit/<folder_id>/<folder_slug>/", folderDeleteSubmitView, name="folder_delete_submit"),
 
     # Proofs
     path("proof/view/<proof_id>/<proof_slug>/", proofView, name="proof"),
