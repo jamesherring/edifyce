@@ -14,6 +14,11 @@ def id_gen(length=8, chars="0123456789abcdef"):
     return "".join(random.SystemRandom().choice(chars) for _ in range(length))
 
 
+def import_slug(s):
+    # Return the import slug for a string s
+    return slugify(s).replace("-", "_")
+
+
 class Profile(models.Model):
 
     # One-to-one relationship to the user model
@@ -110,12 +115,12 @@ class FormalSystemModel(models.Model):
         # Get the path to the file defining this formal system
         return "website/formal_systems/" + self.id + "/" + self.slug + ".txt"
 
-    def inherited_system_slugs(self):
+    def inherited_systems(self):
         # Return a set of slugs of the chain of systems
         if self.inherits_from is None:
             return set()
 
-        return {self.inherits_from}.union(self.inherits_from.inherited_system_slugs)
+        return {self.inherits_from}.union(self.inherits_from.inherited_systems)
 
     def code(self):
         # Get the code for this formal system
@@ -181,9 +186,35 @@ class FolderEntry(OrderedModel):
     # Order with respect to parent folder - and owner and system in case of root level items
     order_with_respect_to = ('parent_folder', 'owner', 'formal_system')
 
+    def item(self):
+        # Return the sub-item (proof folder or proof model) this entry corresponds to
+
+        proofs = ProofModel.objects.filter(folder_entry=self)
+        if len(proofs) > 0:
+            return proofs[0]
+
+        folders = ProofFolder.objects.filter(folder_entry=self)
+        if len(folders) > 0:
+            return folders[0]
+
+        raise Exception("Couldn't find a proof or folder corresponding to the folder entry.")
+
+    def autocomplete_option(self):
+        # Return a dictionary option for autocomplete for this entry
+
+        item = self.item()
+        slug = import_slug(item.slug)
+        return {
+            "value": slug,
+            "caption": slug,
+            "meta": "Folder" if isinstance(item, ProofFolder) else "Proof"
+        }
+
 
 class ProofFolder(models.Model):
     # A model for folders containing folders and proofs
+
+    model_name = "ProofFolder"
 
     id = models.CharField(default=id_gen, max_length=64, primary_key=True, editable=False)
 
@@ -192,6 +223,9 @@ class ProofFolder(models.Model):
 
     name = models.CharField(max_length=256)
     slug = models.CharField(max_length=256)
+
+    # Date the folder is published
+    published = models.DateTimeField(blank=True, null=True)
 
     created = models.DateTimeField(auto_now_add=True, blank=True, null=True)
     updated = models.DateTimeField(auto_now=True, blank=True, null=True)
@@ -208,12 +242,44 @@ class ProofFolder(models.Model):
     def owner(self):
         return self.folder_entry.owner
 
+    def sub_folders(self):
+        # Get sub folders in this folder
+        return ProofFolder.objects.filter(folder_entry__parent_folder=self)
+
+    def nested_sub_folders(self):
+        # Get all nested folders in layers
+
+        folders = self.sub_folders()
+        last_layer = folders
+
+        while len(last_layer) > 0:
+            # Get the next layer of folders
+            new_folders = ProofFolder.objects.filter(folder_entry__parent_folder__in=last_layer)
+
+            # Add to the queryset
+            folders = folders | new_folders
+
+            # Go to the next layer
+            last_layer = new_folders
+
+        return folders
+
+    def proofs(self):
+        # Get proofs belonging directly to this folder
+        return ProofModel.objects.filter(folder_entry__parent_folder=self)
+
+    def nested_proofs(self):
+        # Get proofs belonging to this folder including those nested in sub-folders
+        return self.proofs() | ProofModel.objects.filter(folder_entry__parent_folder__in=self.nested_sub_folders())
+
     def __str__(self):
         return self.name
 
 
 class ProofModel(models.Model):
     # Model for Proofs
+
+    model_name = "ProofModel"
 
     id = models.CharField(default=id_gen, max_length=64, primary_key=True, editable=False)
 
@@ -266,7 +332,7 @@ class ProofModel(models.Model):
         # Optionally specify the parent object (formal system or proof folder)
         # Return the target proof (ignore line labels)
 
-        system = self.formal_system()
+        self_system = self.formal_system()
 
         if reference_dict is None:
             reference_dict = dict()
@@ -293,7 +359,7 @@ class ProofModel(models.Model):
                 # Try an unpublished system belonging to this user
                 system = FormalSystemModel.objects.filter(slug=initial, folder_entry__owner=self.owner()).first()
 
-            if system is not None and system.slug in system.inherited_system_slugs():
+            if system is not None and system in self_system.inherited_system_slugs():
                 # Found it
                 reference_dict[total_path] = system
 
@@ -350,6 +416,33 @@ class ProofModel(models.Model):
 
         reference_dict[total_path] = None
 
+    def autocomplete_suggestions(self, path=None):
+        # Get autocomplete suggestions on the given path (optional).
+
+        options = []
+
+        if path is None:
+            # Return the top level reference options - previous entries in the same folder and formal systems
+
+            # Get the parent folder if it exists
+            parent_folder = self.parent_folder()
+
+            if parent_folder is not None:
+
+                # Add to the options
+                options.append(parent_folder.folder_entry.autocomplete_option())
+
+                previous_entries = parent_folder.entries.filter(order__lt=self.folder_entry.order)
+
+                options.extend(entry.autocomplete_option() for entry in previous_entries)
+
+                # Include any higher-level folders
+                while parent_folder.parent_folder() is not None:
+                    parent_folder = parent_folder.parent_folder()
+                    options.append(parent_folder.folder_entry.autocomplete_option())
+
+        return options
+
     def refresh(self, refresh_system=True):
         # Set a new instance of the proof
         if refresh_system:
@@ -371,8 +464,8 @@ class ProofModel(models.Model):
 
 # Update model slugs whenever it is saved
 @receiver(pre_save)
-def save_system(sender, instance, **kwargs):
+def save_slug(sender, instance, **kwargs):
 
     if sender in (FormalSystemModel, ProofFolder, ProofModel):
         # It's a model that uses slugs
-        instance.slug = slugify(instance.name)
+        instance.slug = import_slug(instance.name)

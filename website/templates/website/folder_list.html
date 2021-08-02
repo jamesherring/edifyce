@@ -29,8 +29,8 @@
         {% for entry in entries %}
             <div class="table-row" data-id="{{ entry.id }}">
 
-                {% if entry.proofmodel %}
-                    {% with proof=entry.proofmodel %}
+                {% if entry.item.model_name == "ProofModel" %}
+                    {% with proof=entry.item %}
 
                         {% if system %}
                             <div class="table-cell">
@@ -59,7 +59,7 @@
                     {% endwith %}
 
                 {% else %}
-                    {% with folder=entry.prooffolder %}
+                    {% with folder=entry.item %}
 
                         {% if system %}
                             <div class="table-cell">
