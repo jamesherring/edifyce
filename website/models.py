@@ -135,11 +135,20 @@ class FormalSystemModel(models.Model):
         system_dict = dict()
 
         if slug is not None:
+            inherits_from = None
             try:
-                self.inherits_from = FormalSystemModel.objects.get(slug=slug)
-                system_dict[slug] = self.inherits_from.formal_system
+                inherits_from = FormalSystemModel.objects.get(slug=slug)
+
             except:
                 pass
+
+            if inherits_from is not None:
+                if self in inherits_from.inherited_systems():
+                    # Circular reference
+                    raise Exception("Circular reference in formal system inheritence.")
+
+                self.inherits_from = inherits_from
+                system_dict[slug] = self.inherits_from.formal_system
 
         # Refresh the formal system instance according to the file
         self.formal_system = compile(code, system_dict=system_dict)
@@ -160,6 +169,21 @@ class FormalSystemModel(models.Model):
         reference_dict = dict()
         for path in reference_paths:
             proof_model.parse_import(path, reference_dict)
+
+        # Check the imports are valid
+        proof_folder_entry = proof_model.folder_entry
+        for key, target in reference_dict.items():
+
+            if target is None:
+                reference_dict[key] = "Cannot find reference."
+
+            elif proof_folder_entry.comes_before(target.folder_entry):
+                # We are referencing a proof that doesn't come first.
+                reference_dict[key] = "Cannot reference a later proof."
+
+            if isinstance(target, ProofModel):
+                # Use the pickled proof object rather than the django class.
+                reference_dict[key] = target.proof
 
         # Create a proof instance
         proof = self.formal_system.parse(code, reference_proofs=reference_dict)
@@ -202,9 +226,9 @@ class FolderEntry(OrderedModel):
     def parent_folders(self):
         # Get the set of parent folders
         if self.parent_folder is None:
-            return set()
+            return []
 
-        return {self.parent_folder}.union(self.parent_folder.folder_entry.parent_folders())
+        return self.parent_folder.folder_entry.parent_folders() + [self.parent_folder]
 
     def autocomplete_option(self):
         # Return a dictionary option for autocomplete for this entry
@@ -216,6 +240,67 @@ class FolderEntry(OrderedModel):
             "caption": slug,
             "meta": "Folder" if isinstance(item, ProofFolder) else "Proof"
         }
+
+    def comes_before(self, other):
+        # Check if this folder entry comes before the other one (for avoiding circular references).
+
+        if not self.formal_system == other.formal_system:
+            # Formal systems not the same. This one should be in the other's inherited systems.
+            return self.formal_system in other.formal_system.inherited_systems()
+
+        # Otherwise formal systems are the same.
+
+        self_item = self.item()
+        other_item = other.item()
+
+        self_published = self_item.published
+        other_published = other_item.published
+
+        if self_published is not None and other_published is not None:
+            # Both are published, just need to verify is self was published first
+            return self_published < other_published
+
+        if self_published is not None and other_published is None:
+            # self is published, and other is not yet published - so must be ok
+            return True
+
+        if self_published is None and other_published is not None:
+            # self is not published but other is - so can't come afterwards
+            return False
+
+        # Both are not published. They need to have the same author.
+        if not self.owner == other.owner:
+            return False
+
+        # Check if the parent_folder is the same
+        if self.parent_folder == other.parent_folder:
+            # Just need to compare order.
+            return self.order < other.order
+
+        # Find the common ancestor and compare order
+        self_ancestors = self.parent_folders()
+        other_ancestors = other.parent_folders()
+
+        if self_item in other_ancestors:
+            # self is a folder in the ancestor list of other. We say this comes before other, so ok.
+            return True
+
+        if other_item in self_ancestors:
+            # other is a folder in the ancestor list of self. So other comes first.
+            return False
+
+        # Otherwise these are on branches that separate somewhere.
+        i = 0
+        max_depth = max(len(self_ancestors), len(other_ancestors))
+        while i < max_depth:
+            self_parent = self_ancestors[i]
+            other_parent = other_ancestors[i]
+
+            if self_parent == other_parent:
+                continue
+
+            # Otherwise, we found a difference
+            return self_parent.order < other_parent.order
 
 
 class ProofFolder(models.Model):
@@ -433,7 +518,7 @@ class ProofModel(models.Model):
 
             if proof is not None:
                 # Found it
-                reference_dict[total_path] = proof.proof
+                reference_dict[total_path] = proof
                 return
 
             else:
@@ -472,7 +557,7 @@ class ProofModel(models.Model):
 
             if proof is not None:
                 # Found it
-                reference_dict[total_path] = proof.proof
+                reference_dict[total_path] = proof
                 return
 
         # Folders
@@ -508,7 +593,7 @@ class ProofModel(models.Model):
 
             if proof is not None:
                 # Found it
-                reference_dict[total_path] = proof.proof
+                reference_dict[total_path] = proof
                 return
 
             else:

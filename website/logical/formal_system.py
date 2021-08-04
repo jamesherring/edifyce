@@ -780,7 +780,11 @@ class Proof(object):
             remainder = ref[index + 1:]
             item = self.get_reference(proof_ref, context)
 
-            if type(item) is Proof:
+            if isinstance(item, str):
+                # This is an error string
+                raise Exception(item)
+
+            if isinstance(item, Proof):
                 return item.get_reference(remainder, context)
 
             elif hasattr(item, "get_reference"):
@@ -914,6 +918,14 @@ class Proof(object):
             if initial in self.reference_proofs:
                 # Found it
                 ref_proof = self.reference_proofs[initial]
+
+                if isinstance(ref_proof, str):
+                    # This is an error string
+                    return {
+                        "success": False,
+                        "errorMessage": ref_proof
+                    }
+
                 ref_item = ref_proof.get_reference(parts[-1], context)
 
                 if ref_item is None:
