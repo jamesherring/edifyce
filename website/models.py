@@ -7,6 +7,7 @@ from picklefield.fields import PickledObjectField
 import random
 from slugify import slugify
 from website.logical.compiler import get_inherited_system, compile
+from website.logical.matching import Pattern
 
 
 def id_gen(length=8, chars="0123456789abcdef"):
@@ -243,6 +244,10 @@ class FolderEntry(OrderedModel):
 
     def comes_before(self, other):
         # Check if this folder entry comes before the other one (for avoiding circular references).
+
+        if self == other:
+            # It doesn't come before itself
+            return False
 
         if not self.formal_system == other.formal_system:
             # Formal systems not the same. This one should be in the other's inherited systems.
@@ -627,6 +632,16 @@ class ProofModel(models.Model):
                 while parent_folder.parent_folder() is not None:
                     parent_folder = parent_folder.parent_folder()
                     options.append(parent_folder.folder_entry.autocomplete_option())
+
+        # Add system context patterns
+        patterns = self.formal_system().formal_system.context.variables
+        for key, value in patterns.items():
+            if isinstance(value, Pattern):
+                options.append({
+                    "value": key,
+                    "caption": key,
+                    "meta": value.pattern_type
+                })
 
         return options
 
