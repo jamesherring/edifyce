@@ -164,7 +164,7 @@ class FormalSystemModel(models.Model):
         # Create a proof instance
         proof = self.formal_system.parse(code, reference_proofs=reference_dict)
 
-        return proof
+        return proof, reference_dict
 
     def __str__(self):
         return self.name
@@ -198,6 +198,13 @@ class FolderEntry(OrderedModel):
             return folders[0]
 
         raise Exception("Couldn't find a proof or folder corresponding to the folder entry.")
+
+    def parent_folders(self):
+        # Get the set of parent folders
+        if self.parent_folder is None:
+            return set()
+
+        return {self.parent_folder}.union(self.parent_folder.folder_entry.parent_folders())
 
     def autocomplete_option(self):
         # Return a dictionary option for autocomplete for this entry
@@ -272,6 +279,36 @@ class ProofFolder(models.Model):
         # Get proofs belonging to this folder including those nested in sub-folders
         return self.proofs() | ProofModel.objects.filter(folder_entry__parent_folder__in=self.nested_sub_folders())
 
+    def get_reference(self, ref, context):
+        # Get a reference
+
+        initial = ref
+        remainder = None
+
+        if "." in ref:
+            index = ref.find(".")
+            initial = ref[:index]
+            remainder = ref[index + 1:]
+
+        # Try folder
+        folder = self.sub_folders().filter(slug=initial).first()
+        if folder is not None:
+            if remainder is None:
+                return folder
+
+            return folder.get_reference(remainder, context)
+
+        # Try proof
+        proof = self.proofs().filter(slug=initial).first()
+        if proof is not None:
+            if remainder is None:
+                return proof
+
+            return proof.proof.get_reference(remainder, context)
+
+        # No luck
+        return None
+
     def __str__(self):
         return self.name
 
@@ -297,6 +334,9 @@ class ProofModel(models.Model):
 
     # Proof text
     proof_text = models.TextField(default="")
+
+    # References to other proofs
+    references = models.ManyToManyField("self", symmetrical=False)
 
     # Date the proof is published
     published = models.DateTimeField(blank=True, null=True)
@@ -324,7 +364,8 @@ class ProofModel(models.Model):
         self.proof_text = code
 
         # Refresh the proof instance according to the file
-        self.proof = self.formal_system().parse(self, code)
+        self.proof, references = self.formal_system().parse(self, code)
+
         self.save()
 
     def parse_import(self, path, reference_dict=None, parent=None, parent_path=None):
@@ -332,7 +373,11 @@ class ProofModel(models.Model):
         # Optionally specify the parent object (formal system or proof folder)
         # Return the target proof (ignore line labels)
 
+        if path is None:
+            return
+
         self_system = self.formal_system()
+        owner = self.owner()
 
         if reference_dict is None:
             reference_dict = dict()
@@ -357,9 +402,9 @@ class ProofModel(models.Model):
 
             if system is None:
                 # Try an unpublished system belonging to this user
-                system = FormalSystemModel.objects.filter(slug=initial, folder_entry__owner=self.owner()).first()
+                system = FormalSystemModel.objects.filter(slug=initial, owner=owner).first()
 
-            if system is not None and system in self_system.inherited_system_slugs():
+            if system is not None and (system == self_system or system in self_system.inherited_systems()):
                 # Found it
                 reference_dict[total_path] = system
 
@@ -369,14 +414,22 @@ class ProofModel(models.Model):
                 return
 
             # Try folder
-            # --------------------------------------------------------------------
+            for folder in self.folder_entry.parent_folders():
+                if folder.slug == initial:
+                    # Found it
+                    reference_dict[total_path] = folder
+
+                    # Parse the remainder
+                    self.parse_import(remainder, reference_dict, parent=folder, parent_path=initial)
+
+                    return
 
             # Try proofs
             proof = ProofModel.objects.filter(slug=initial, folder_entry__formal_system=system, published__isnull=False).first()
 
             if proof is None:
                 # Try an unpublished proof belonging to this user
-                proof = ProofModel.objects.filter(slug=initial, folder_entry__formal_system=system, folder_entry__owner=self.owner()).first()
+                proof = ProofModel.objects.filter(slug=initial, folder_entry__formal_system=system, folder_entry__owner=owner).first()
 
             if proof is not None:
                 # Found it
@@ -393,14 +446,65 @@ class ProofModel(models.Model):
             # Parent is a formal system
 
             # Try folder
-            # --------------------------------------------------------------------
+            folder = ProofFolder.objects.filter(slug=initial, folder_entry__formal_system=parent,
+                                                folder_entry__parent_folder=None, published__isnull=False).first()
+
+            if folder is None:
+                # Try an unpublished folder belonging to this user
+                folder = ProofFolder.objects.filter(slug=initial, folder_entry__formal_system=parent,
+                                                    folder_entry__parent_folder=None, folder_entry__owner=owner).first()
+
+            if folder is not None:
+                # Found it
+                reference_dict[total_path] = folder
+
+                # Parse the remainder
+                self.parse_import(remainder, reference_dict, parent=folder, parent_path=initial)
+
+                return
 
             # Try to get the proof directly
             proof = ProofModel.objects.filter(slug=initial, folder_entry__formal_system=parent, published__isnull=False).first()
 
             if proof is None:
                 # Try an unpublished proof belonging to this user
-                proof = ProofModel.objects.filter(slug=initial, folder_entry__formal_system=parent, folder_entry__owner=self.owner()).first()
+                proof = ProofModel.objects.filter(slug=initial, folder_entry__formal_system=parent, folder_entry__owner=owner).first()
+
+            if proof is not None:
+                # Found it
+                reference_dict[total_path] = proof.proof
+                return
+
+        # Folders
+        if isinstance(parent, ProofFolder):
+            # Parent is a folder
+
+            # Try folder
+            folder = ProofFolder.objects.filter(slug=initial, folder_entry__parent_folder=parent,
+                                                published__isnull=False).first()
+
+            if folder is None:
+                # Try an unpublished folder belonging to this user
+                folder = ProofFolder.objects.filter(slug=initial, folder_entry__parent_folder=parent,
+                                                    folder_entry__owner=owner).first()
+
+            if folder is not None:
+                # Found it
+                reference_dict[total_path] = folder
+
+                # Parse the remainder
+                self.parse_import(remainder, reference_dict, parent=folder, parent_path=initial)
+
+                return
+
+            # Try to get the proof directly
+            proof = ProofModel.objects.filter(slug=initial, folder_entry__parent_folder=parent,
+                                              published__isnull=False).first()
+
+            if proof is None:
+                # Try an unpublished proof belonging to this user
+                proof = ProofModel.objects.filter(slug=initial, folder_entry__parent_folder=parent,
+                                                  folder_entry__owner=owner).first()
 
             if proof is not None:
                 # Found it
@@ -411,8 +515,6 @@ class ProofModel(models.Model):
                 # Couldn't find it
                 reference_dict[total_path] = None
                 return
-
-        # Folders
 
         reference_dict[total_path] = None
 

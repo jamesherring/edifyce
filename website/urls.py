@@ -50,7 +50,5 @@ urlpatterns = [
     # Update text
     path("ajax/update-text/<table>/<field>/", updateTextView, name="update_text")
 
-    # Axioms
-    # path("axioms/edit/<system_id>/<system_slug>/", axiomsEditView, name="axioms_edit")
 
 ]
