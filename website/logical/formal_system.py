@@ -234,45 +234,21 @@ class FormalSystem(object):
                 elif line_type.behaviour == "import":
                     # Import a file or result
 
-                    # Get the path and reference
                     try:
+
+                        if proof_line.label is None:
+                            proof_line.valid = False
+                            proof_line.invalid_message = "Line has missing label."
+                            continue
+
                         path = result.get_by_path("path()", context)
-                        label = result.get_by_path("label()", context)
 
-                        # Get the line from the import path
-                        parts = path.split(".")
+                        result = proof.import_path(path, proof_line.label, context)
 
-                        if len(parts) > 2:
-                            # Too many parts
+                        if not result["success"]:
+                            # Error
                             proof_line.valid = False
-                            proof_line.invalid_message = "Could not parse path"
-                            continue
-
-                        slug = parts[0].replace("_", "-")
-
-                        if slug not in proof.reference_proofs or proof.reference_proofs[slug] is None:
-                            # Don't recognise slug
-                            proof_line.valid = False
-                            proof_line.invalid_message = "Could not find file."
-                            continue
-
-                        # Otherwise, get the referenced proof
-                        ref_proof = reference_proofs[slug]
-
-                        if ref_proof.has_warnings or not ref_proof.valid:
-                            # Referenced proof has errors
-                            proof_line.warning_message = slug + " has unresolved errors."
-
-                        if len(parts) == 1:
-                            # No other parts - reference to the entire proof file
-                            proof.reference_context[label] = ref_proof
-                            continue
-
-                        # Otherwise, two parts
-                        ref_line = ref_proof.get_reference(parts[1], context)
-
-                        # Add to proof context
-                        proof.reference_context[label] = ref_line
+                            proof_line.invalid_message = result["errorMessage"]
 
                     except Exception as e:
                         # No valid path or label
@@ -801,11 +777,15 @@ class Proof(object):
         if "." in ref:
             index = ref.index(".")
             proof_ref = ref[:index]
-            key = ref[index + 1:]
-            proof_ref = self.get_reference(proof_ref, context)
+            remainder = ref[index + 1:]
+            item = self.get_reference(proof_ref, context)
 
-            if type(proof_ref) is Proof:
-                return proof_ref.get_reference(key, context)
+            if type(item) is Proof:
+                return item.get_reference(remainder, context)
+
+            elif hasattr(item, "get_reference"):
+                # Item has a get reference method (probably a folder!)
+                return item.get_reference(remainder, context)
 
         # Check if it's a line number
         try:
@@ -919,6 +899,48 @@ class Proof(object):
         proof_line.valid = False
         proof_line.invalid_message = key + " does not apply."
         return False
+
+    def import_path(self, path, label, context):
+        # Import a result using the given path
+
+        if path in self.reference_proofs:
+            # Found it
+            ref_item = self.reference_proofs[path]
+
+        else:
+            parts = path.split(".")
+            initial = ".".join(parts[:-1])
+
+            if initial in self.reference_proofs:
+                # Found it
+                ref_proof = self.reference_proofs[initial]
+                ref_item = ref_proof.get_reference(parts[-1], context)
+
+                if ref_item is None:
+                    # No such label in the ref proof
+                    return {
+                        "success": False,
+                        "errorMessage": initial + " does not have a line with label " + parts[-1] + "."
+                    }
+
+                if ref_proof.has_warnings or not ref_proof.valid:
+                    # Referenced proof has errors
+                    return {
+                        "success": False,
+                        "errorMessage": path + " has unresolved errors."
+                    }
+
+            else:
+                # Don't recognise the path
+                return {
+                    "success": False,
+                    "errorMessage": "Could not find '" + path + "'."
+                }
+
+        # Add the reference
+        self.reference_context[label] = ref_item
+
+        return {"success": True}
 
     def justify(self, deduction, context, inference_rule=None):
         # Artificially try to find a justification for the given reference. Optionally specify a inference rule.

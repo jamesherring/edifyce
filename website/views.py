@@ -434,7 +434,7 @@ def proofValidateView(request):
         code = request.POST.get("code", False)
 
         # Parse the code in the system
-        proof = system.parse(proof, code)
+        proof = system.parse(proof, code)[0]
 
         # Return the results
         return HttpResponse(json.dumps({
