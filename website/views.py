@@ -450,6 +450,32 @@ def proofValidateView(request):
 
 
 @login_required
+def proofAutocompleteView(request):
+    # Ajax view to get autocomplete suggestions on a given path
+
+    try:
+
+        # Get the proof
+        proof_id = request.POST.get("proof_id", False)
+        proof = ProofModel.objects.get(id=proof_id)
+
+        # Get the autocomplete path
+        path = request.POST.get("path", False)
+
+        # Return the results
+        return HttpResponse(json.dumps({
+            "success": True,
+            "suggestions": proof.autocomplete_suggestions(path=path)
+        }))
+
+    except Exception as e:
+        return HttpResponse(json.dumps({
+            "success": False,
+            "errorMessage": str(e)
+        }))
+
+
+@login_required
 def proofPublishView(request):
     # Ajax view to publish a proof
 

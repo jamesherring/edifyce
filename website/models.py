@@ -461,12 +461,12 @@ class ProofModel(models.Model):
     def parse_import(self, path, reference_dict=None, parent=None, parent_path=None):
         # Parse an import path on this proof and store it in the reference dictionary.
         # Optionally specify the parent object (formal system or proof folder)
-        # Return the target proof (ignore line labels)
 
         if path is None:
             return
 
         self_system = self.formal_system()
+        self_parent_folder = self.parent_folder()
         owner = self.owner()
 
         if reference_dict is None:
@@ -499,7 +499,7 @@ class ProofModel(models.Model):
                 reference_dict[total_path] = system
 
                 # Parse the remainder
-                self.parse_import(remainder, reference_dict, parent=system, parent_path=initial)
+                self.parse_import(remainder, reference_dict, parent=system, parent_path=total_path)
 
                 return
 
@@ -510,16 +510,25 @@ class ProofModel(models.Model):
                     reference_dict[total_path] = folder
 
                     # Parse the remainder
-                    self.parse_import(remainder, reference_dict, parent=folder, parent_path=initial)
+                    self.parse_import(remainder, reference_dict, parent=folder, parent_path=total_path)
 
                     return
 
             # Try proofs
-            proof = ProofModel.objects.filter(slug=initial, folder_entry__formal_system=system, published__isnull=False).first()
+
+            # Try an earlier proof in the same folder
+            proof = ProofModel.objects.filter(slug=initial, folder_entry__parent_folder=self_parent_folder,
+                                              folder_entry__order__lt=self.folder_entry.order).first()
 
             if proof is None:
-                # Try an unpublished proof belonging to this user
-                proof = ProofModel.objects.filter(slug=initial, folder_entry__formal_system=system, folder_entry__owner=owner).first()
+                # Try a published root-level proof
+                proof = ProofModel.objects.filter(slug=initial, folder_entry__formal_system=self_system,
+                                                  folder_entry__parent_folder=None, published__isnull=False).first()
+
+            if proof is None:
+                # Try an unpublished root-level proof belonging to this user
+                proof = ProofModel.objects.filter(slug=initial, folder_entry__formal_system=self_system,
+                                                  folder_entry__parent_folder=None, folder_entry__owner=owner).first()
 
             if proof is not None:
                 # Found it
@@ -549,7 +558,7 @@ class ProofModel(models.Model):
                 reference_dict[total_path] = folder
 
                 # Parse the remainder
-                self.parse_import(remainder, reference_dict, parent=folder, parent_path=initial)
+                self.parse_import(remainder, reference_dict, parent=folder, parent_path=total_path)
 
                 return
 
@@ -583,7 +592,7 @@ class ProofModel(models.Model):
                 reference_dict[total_path] = folder
 
                 # Parse the remainder
-                self.parse_import(remainder, reference_dict, parent=folder, parent_path=initial)
+                self.parse_import(remainder, reference_dict, parent=folder, parent_path=total_path)
 
                 return
 
@@ -632,6 +641,50 @@ class ProofModel(models.Model):
                 while parent_folder.parent_folder() is not None:
                     parent_folder = parent_folder.parent_folder()
                     options.append(parent_folder.folder_entry.autocomplete_option())
+
+        else:
+            # Use the given path to return results in the given file or folder
+
+            # Try to parse the import
+            reference_dict = {}
+            self.parse_import(path, reference_dict)
+
+            if path in reference_dict:
+                target = reference_dict[path]
+                if isinstance(target, ProofFolder):
+                    # We have a folder.
+
+                    # Find the appropriate order in the folder (so we don't offer later proofs as reference)
+                    if self.parent_folder() == target:
+                        # Simple case
+                        entries = target.entries.filter(order__lt=self.folder_entry.order)
+
+                    else:
+
+                        # Otherwise, target is a higher level folder
+                        parent_folders = self.folder_entry.parent_folders()
+
+                        if target not in parent_folders:
+                            # Include the entire list
+                            entries = target.entries.all()
+
+                        else:
+                            key_entry = parent_folders[parent_folders.index(target) + 1].folder_entry
+                            entries = target.entries.filter(order__lte=key_entry.order)
+
+                    return [entry.autocomplete_option() for entry in entries]
+
+                elif isinstance(target, ProofModel):
+                    # We have a proof.
+
+                    # Get the labelled items in the proof
+                    labelled_items = target.proof.reference_context
+
+                    return [{
+                        "value": key,
+                        "caption": key,
+                        "meta": "ProofLine"
+                    } for key in labelled_items.keys()]
 
         # Add system context patterns
         patterns = self.formal_system().formal_system.context.variables

@@ -685,7 +685,7 @@ class Proof(object):
         # A dictionary of references to other proofs
         self.reference_proofs = reference_proofs
 
-        # A context for references and imports
+        # A reference for labelled lines
         self.reference_context = dict()
 
     def get_proof_line(self, line_number):

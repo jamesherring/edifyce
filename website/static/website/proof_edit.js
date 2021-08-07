@@ -7,6 +7,8 @@ $(function() {
 
     var root_autocomplete = JSON.parse(document.getElementById("root_autocomplete").innerHTML);
 
+    var autocomplete_paths = {};
+
     // Add custom completion rules
     var staticWordCompleter = {
         getCompletions: function(editor, session, pos, prefix, callback) {
@@ -20,16 +22,26 @@ $(function() {
             // Find the final space (if any) and trim anything before it
             trimmed = trimmed.split(" ").pop();
 
-            if (trimmed == "prop.") {
-                wordList = ["axioms", "proof1"];
+            if ((trimmed.length > 0) && (trimmed.slice(-1) == ".")) {
+                var path = trimmed.slice(0, -1);
 
-                callback(null, wordList.map(function(word) {
-                    return {
-                        caption: word,
-                        value: word,
-                        meta: "static"
-                    };
-                }));
+                if (path in autocomplete_paths) {
+                    // We already did an ajax call for this path
+                    callback(null, autocomplete_paths[path]);
+                    return;
+                }
+
+                AJAX(
+                    "/proof/ajax/autocomplete/",
+                    {
+                        "proof_id": proof_id,
+                        "path": path
+                    },
+                    function(response) {
+                        autocomplete_paths[path] = response.suggestions;
+                        callback(null, response.suggestions);
+                    }
+                )
             } else {
                 callback(null, root_autocomplete);
             }
