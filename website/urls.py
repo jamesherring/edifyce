@@ -42,6 +42,7 @@ urlpatterns = [
     path("proof/ajax/create/", proofCreateSubmitView, name="proof_create_submit"),
     path("proof/ajax/save/", proofSaveView, name="proof_save"),
     path("proof/ajax/validate/", proofValidateView, name="proof_validate"),
+    path("proof/ajax/autocomplete/", proofAutocompleteView, name="proof_autocomplete"),
     path("proof/ajax/publish/", proofPublishView, name="proof_publish"),
 
     # Folder entries
