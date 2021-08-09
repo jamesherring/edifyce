@@ -9,19 +9,19 @@
         <div class="table-row header-row">
 
             {% if system %}
-                <div class="table-cell">System</div>
+                <div class="table-cell" data-name="system">System</div>
             {% endif %}
 
-            <div class="table-cell">Name</div>
+            <div class="table-cell" data-name="name">Name</div>
 
             {% if not author == False %}
-                <div class="table-cell">Author</div>
+                <div class="table-cell" data-name="author">Author</div>
             {% endif %}
 
-            <div class="table-cell">Logical Lines</div>
+            <div class="table-cell" data-name="logical-lines">Logical Lines</div>
 
             {% if editable %}
-                <div class="table-cell">Move</div>
+                <div class="table-cell" data-name="order">Order</div>
             {% endif %}
 
         </div>
@@ -33,25 +33,25 @@
                     {% with proof=entry.item %}
 
                         {% if system %}
-                            <div class="table-cell">
+                            <div class="table-cell" data-name="system">
                                 <a href="{% url 'website:formal_system' proof.formal_system.id proof.formal_system.slug %}">{{ proof.formal_system.name }}</a>
                             </div>
                         {% endif %}
 
-                        <div class="table-cell">
+                        <div class="table-cell" data-name="name">
                             <span class="indicator" data-indicator="{{ proof.proof.indicator }}" data-size="small"></span>
                             <a href="{% url 'website:proof' proof.id proof.slug %}">{{ proof.name }}</a>
                         </div>
 
                         {% if not author == False %}
-                            <div class="table-cell">
+                            <div class="table-cell" data-name="author">
                                 <a href="{% url 'website:profile_view' proof.owner.id %}">{{ proof.owner.name }}</a>
                             </div>
                         {% endif %}
 
-                        <div class="table-cell">{{ proof.proof.logical_lines }}</div>
+                        <div class="table-cell" data-name="logical-lines">{{ proof.proof.logical_lines }}</div>
 
-                        <div class="table-cell">
+                        <div class="table-cell" data-name="order">
                             <span class="move-arrow move-up{% if forloop.first %} hide{% endif %}">&#9650;</span>
                             <span class="move-arrow move-down{% if forloop.last %} hide{% endif %}">&#9660;</span>
                         </div>
@@ -70,6 +70,9 @@
                         <div class="table-cell">
                             <img class="folder" src="{% static 'website/images/folder.png' %}"/>
                             <a href="{% url 'website:folder' folder.id folder.slug %}">{{ folder.name }}</a>
+                            {% if folder.entries.count > 0 %}
+                                <span class="expand-folder">&#9662;</span>
+                            {% endif %}
                         </div>
 
                         {% if not author == False %}

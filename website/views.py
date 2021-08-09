@@ -5,7 +5,7 @@ from django.contrib import messages
 from django.shortcuts import redirect
 import json
 from .models import *
-import os
+from django.template.loader import render_to_string
 
 
 def indexView(request):
@@ -217,6 +217,36 @@ def folderView(request, folder_id, folder_slug):
 
     # Not authenticated
     return redirect("website:index")
+
+
+def folderExpandView(request):
+    # Ajax view to expand a folder - returns html table rows
+
+    try:
+        entry_id = request.POST.get("entry_id")
+
+        entry = FolderEntry.objects.get(id=entry_id)
+        folder = entry.prooffolder
+
+        # Check the entry belongs to the owner or is published
+        if (not entry.owner == request.user.profile) and folder.published is None:
+            return HttpResponse(json.dumps({
+                "success": False,
+                "errorMessage": "Authentication error."
+            }))
+
+        return HttpResponse(json.dumps({
+            "success": True,
+            "html": render_to_string("website/folder_list.html", {
+                "entries": folder.entries.all()
+            })
+        }))
+
+    except Exception as e:
+        return HttpResponse(json.dumps({
+            "success": False,
+            "errorMessage": str(e)
+        }))
 
 
 @login_required
