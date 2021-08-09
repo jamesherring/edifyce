@@ -34,3 +34,15 @@ div.table-cell span.move-arrow {
 div.table-cell span.hide {
     visibility: hidden;
 }
+
+div.table-cell span.expand-folder {
+    margin-left: 0.2rem;
+    padding: 0 0.1rem;
+    cursor: pointer;
+}
+
+div.table-row-group {
+    display: table-row-group;
+}
+
+div.table-row-group
