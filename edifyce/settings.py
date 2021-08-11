@@ -171,3 +171,7 @@ STATIC_URL = '/static/'
 
 
 EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+
+# Default primary key
+DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
+

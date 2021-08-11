@@ -27,7 +27,7 @@
         </div>
 
         {% for entry in entries %}
-            <div class="table-row" data-id="{{ entry.id }}">
+            <div class="table-row" data-id="{{ entry.id }}" data-depth="0">
 
                 {% if entry.item.model_name == "ProofModel" %}
                     {% with proof=entry.item %}
@@ -62,12 +62,12 @@
                     {% with folder=entry.item %}
 
                         {% if system %}
-                            <div class="table-cell">
+                            <div class="table-cell" data-name="system">
                                 <a href="{% url 'website:formal_system' folder.formal_system.id folder.formal_system.slug %}">{{ folder.formal_system.name }}</a>
                             </div>
                         {% endif %}
 
-                        <div class="table-cell">
+                        <div class="table-cell" data-name="name">
                             <img class="folder" src="{% static 'website/images/folder.png' %}"/>
                             <a href="{% url 'website:folder' folder.id folder.slug %}">{{ folder.name }}</a>
                             {% if folder.entries.count > 0 %}
@@ -76,14 +76,14 @@
                         </div>
 
                         {% if not author == False %}
-                            <div class="table-cell">
+                            <div class="table-cell" data-name="author">
                                 <a href="{% url 'website:profile_view' folder.owner.id %}">{{ folder.owner.name }}</a>
                             </div>
                         {% endif %}
 
-                        <div class="table-cell"></div>
+                        <div class="table-cell" data-name="logical-lines"></div>
 
-                        <div class="table-cell">
+                        <div class="table-cell" data-name="order">
                             <span class="move-arrow move-up{% if forloop.first %} hide{% endif %}">&#9650;</span>
                             <span class="move-arrow move-down{% if forloop.last %} hide{% endif %}">&#9660;</span>
                         </div>
