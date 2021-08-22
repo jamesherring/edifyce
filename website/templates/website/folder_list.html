@@ -3,8 +3,7 @@
 {% if entries.count == 0 %}
     <p>No entries.</p>
 {% else %}
-
-    <div class="table">
+    <div class="table folder-list-table" data-editable="{{ editable|lower }}">
 
         <div class="table-row header-row">
 
@@ -19,18 +18,15 @@
             {% endif %}
 
             <div class="table-cell" data-name="logical-lines">Logical Lines</div>
-
-            {% if editable %}
-                <div class="table-cell" data-name="order">Order</div>
-            {% endif %}
+            <div class="table-cell" data-name="order">Order</div>
 
         </div>
 
         {% for entry in entries %}
-            <div class="table-row" data-id="{{ entry.id }}" data-depth="0">
+            {% if entry.item.model_name == "ProofModel" %}
+                {% with proof=entry.item %}
 
-                {% if entry.item.model_name == "ProofModel" %}
-                    {% with proof=entry.item %}
+                    <div class="table-row" data-id="{{ entry.id }}" data-type="proof" data-depth="0">
 
                         {% if system %}
                             <div class="table-cell" data-name="system">
@@ -51,15 +47,15 @@
 
                         <div class="table-cell" data-name="logical-lines">{{ proof.proof.logical_lines }}</div>
 
-                        <div class="table-cell" data-name="order">
-                            <span class="move-arrow move-up{% if forloop.first %} hide{% endif %}">&#9650;</span>
-                            <span class="move-arrow move-down{% if forloop.last %} hide{% endif %}">&#9660;</span>
-                        </div>
+                        <div class="table-cell" data-name="order">{{ entry.order }}</div>
+                    </div>
 
-                    {% endwith %}
+                {% endwith %}
 
-                {% else %}
-                    {% with folder=entry.item %}
+            {% else %}
+                {% with folder=entry.item %}
+
+                    <div class="table-row" data-id="{{ entry.id }}" data-type="folder" data-depth="0">
 
                         {% if system %}
                             <div class="table-cell" data-name="system">
@@ -70,9 +66,7 @@
                         <div class="table-cell" data-name="name">
                             <img class="folder" src="{% static 'website/images/folder.png' %}"/>
                             <a href="{% url 'website:folder' folder.id folder.slug %}">{{ folder.name }}</a>
-                            {% if folder.entries.count > 0 %}
-                                <span class="expand-folder">&#9662;</span>
-                            {% endif %}
+                            <span class="expand-folder{% if folder.entries.count == 0 %} hidden{% endif %}">&#9662;</span>
                         </div>
 
                         {% if not author == False %}
@@ -83,14 +77,12 @@
 
                         <div class="table-cell" data-name="logical-lines"></div>
 
-                        <div class="table-cell" data-name="order">
-                            <span class="move-arrow move-up{% if forloop.first %} hide{% endif %}">&#9650;</span>
-                            <span class="move-arrow move-down{% if forloop.last %} hide{% endif %}">&#9660;</span>
-                        </div>
+                        <div class="table-cell" data-name="order">{{ entry.order }}</div>
 
-                    {% endwith %}
-                {% endif %}
-            </div>
+                    </div>
+                {% endwith %}
+            {% endif %}
+
         {% endfor %}
     </div>
 

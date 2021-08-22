@@ -579,12 +579,20 @@ def folderEntryMoveView(request):
     # Ajax request to move a folder entry
 
     try:
+        # The id of the entry to move
         entry_id = request.POST.get("entry_id")
-        direction = request.POST.get("direction")
-
-        assert direction in ("up", "down")
-
         entry = FolderEntry.objects.get(id=entry_id)
+
+        # The id of the parent entry
+        target_parent_id = request.POST.get("target_parent_id")
+        if target_parent_id == "root":
+            # Move to the root position (no parent)
+            target_parent = None
+        else:
+            target_parent = FolderEntry.objects.get(id=target_parent_id).item()
+
+        # The index (position) to move to.
+        index = int(request.POST.get("index"))
 
         # Check the entry belongs to the owner
         if not entry.owner == request.user.profile:
@@ -593,11 +601,21 @@ def folderEntryMoveView(request):
                 "errorMessage": "Authentication error."
             }))
 
-        # Make the move
-        if direction == "up":
-            entry.up()
-        else:
-            entry.down()
+        if not entry.parent_folder == target_parent:
+            # Put the entry at the end of its group
+            entry.bottom()
+
+            # Get the max order of the new group
+            max_order = FolderEntry.objects.filter(parent_folder=target_parent).get_max_order()
+
+            # Update the parent
+            entry.parent_folder = target_parent
+
+            # Put at the end of the new group by default
+            entry.order = max_order + 1
+
+        # Set the new index
+        entry.to(index)
 
         return HttpResponse(json.dumps({
             "success": True
