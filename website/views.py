@@ -592,7 +592,7 @@ def folderEntryMoveView(request):
             target_parent = FolderEntry.objects.get(id=target_parent_id).item()
 
         # The index (position) to move to.
-        index = int(request.POST.get("index"))
+        index = request.POST.get("index")
 
         # Check the entry belongs to the owner
         if not entry.owner == request.user.profile:
@@ -606,16 +606,23 @@ def folderEntryMoveView(request):
             entry.bottom()
 
             # Get the max order of the new group
-            max_order = FolderEntry.objects.filter(parent_folder=target_parent).get_max_order()
+            max_order = FolderEntry.objects.filter(parent_folder=target_parent, formal_system=entry.formal_system, owner=entry.owner).get_max_order()
 
             # Update the parent
             entry.parent_folder = target_parent
 
             # Put at the end of the new group by default
-            entry.order = max_order + 1
+            entry.order = max_order + 1 if max_order is not None else 0
 
-        # Set the new index
-        entry.to(index)
+            entry.save()
+
+        if index == "last":
+            # Move to the bottom
+            entry.bottom()
+
+        else:
+            # Set the new index
+            entry.to(int(index))
 
         return HttpResponse(json.dumps({
             "success": True
