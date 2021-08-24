@@ -72,18 +72,6 @@ $(function() {
             // Update the depth
             row.set_depth(0);
 
-            AJAX(
-                "/folderentry/ajax/move/",
-                {
-                    "entry_id": row.entry_id,
-                    "target_parent_id": "root",
-                    "index": index
-                },
-                function(response) {
-                    console.log(response);
-                }
-            );
-
         }
 
         if (this.editable) {
@@ -117,7 +105,7 @@ $(function() {
 
                 }
 
-                if ((dragging.intermediate_thresholds_above) && (!(dom_swap))) {
+                if ((dragging.intermediate_thresholds_above) && (delta < 0) && (!(dom_swap))) {
                     // Check for intermediate places to swap above - changes depth but no dom swap
 
                     var target_row = null;
@@ -153,6 +141,7 @@ $(function() {
                     if (dragging.row_below.type == "proof") {
                         // Simple swap
                         dragging.target.insert_after(dragging.row_below);
+                        swapHeight = -dragging.row_below.height();
 
                     } else {
                         // Folder is below
@@ -162,6 +151,10 @@ $(function() {
                         } else {
                             // Folder is closed - need to include it at the bottom
                             dragging.row_below.add_row_at_index(dragging.target, "last");
+
+                            if (dragging.row_below.status == "default") {
+                                // The row is currently unopened
+                            }
                         }
                     }
 
@@ -214,18 +207,64 @@ $(function() {
             });
 
             $(document).on("mouseup", function(e) {
-                if (!(self.dragging.status == "dragging")) {
+                var dragging = self.dragging;
+
+                if (!(dragging.status == "dragging")) {
                     // Not dragging anything
                     return;
                 }
 
                 // Drop
-                self.dragging.status = "none";
+                dragging.status = "none";
 
                 // Remove the relative position
-                $(self.dragging.rows).css("position", "static");
-                $(self.dragging.rows).css("top", "");
-                $(self.dragging.rows).css("background-color", "");
+                $(dragging.rows).css("position", "static");
+                $(dragging.rows).css("top", "");
+                $(dragging.rows).css("background-color", "");
+
+                var target = dragging.target;
+
+                if ((target.parent_row == dragging.start_parent_row) && (target.index() == dragging.start_index)) {
+                    // No change
+                    return;
+                }
+
+                // Push the update to the backend
+                var parent_id = "root";
+                if (target.parent_row) {
+                    parent_id = target.parent_row.entry_id;
+                }
+
+                var index = target.index();
+                if ((target.parent_row) && (target.parent_row.status == "default")) {
+                    // Add target at the end
+                    index = "last";
+                }
+
+                AJAX(
+                    "/folderentry/ajax/move/",
+                    {
+                        "entry_id": target.entry_id,
+                        "target_parent_id": parent_id,
+                        "index": index
+                    },
+                    function(response) {
+                    }
+                );
+
+                // Check if we dropped it into a collapsed folder
+                if ((target.parent_row) && (!target.parent_row.is_empty)) {
+                    if (target.parent_row.status == "default") {
+                        // Remove the row entirely - we haven't fetched the other child rows
+                        target.remove_from_parent();
+                        $(dragging.rows).remove();
+                    } else if (target.parent_row.status == "collapsed") {
+                        // Just hide the row
+                        target.collapse();
+                        target.hide();
+                    }
+                }
+
             });
         }
 
@@ -257,6 +296,7 @@ $(function() {
         this.row = row_element;
 
         this.entry_id = $(row_element).data("id");
+        this.is_empty = $(row_element).data("empty");
 
         // What type of entry this is ("proof", "folder")
         this.type = $(row_element).data("type");
@@ -286,12 +326,7 @@ $(function() {
 
         this.update_expand_button = function() {
             // Update the expand button based on the number of child rows
-            if (this.status == "default") {
-                // Don't update
-                return;
-            }
-
-            if (this.rows.length == 0) {
+            if (this.is_empty) {
                 $(this.row).find("span.expand-folder").addClass("hidden");
             } else {
                 $(this.row).find("span.expand-folder").removeClass("hidden");
@@ -310,7 +345,11 @@ $(function() {
             }
 
             // Check if the parent folder now has no child rows
-            if (this.parent_row) {
+            if ((this.parent_row) && (this.parent_row.status !== "default")) {
+                if (parent_rows.length == 0) {
+                    this.parent_row.is_empty = true;
+                    this.parent_row.status = "collapsed";
+                }
                 this.parent_row.update_expand_button();
             }
 
@@ -326,7 +365,7 @@ $(function() {
         }
 
         this.previous_sibling = function() {
-            // Get the previous sibling row if it exists
+            // Get the previous visible sibling row if it exists
 
             var index = this.index();
             if (index == 0) {
@@ -345,7 +384,8 @@ $(function() {
         this.row_boundaries_above = function() {
             // Return a list of rows with group boundaries immediately above this row
 
-            if (this.index() == 0) {
+            if ((this.index() == 0) || ((this.parent_row) && (this.parent_row.status !== "expanded"))) {
+                // The first child, or the child of a parent row which is not expanded.
                 // Just use the parent row
                 if (this.parent_row) {
                     return [this.parent_row];
@@ -440,7 +480,7 @@ $(function() {
         }
 
         this.add_row_at_index = function(row, index) {
-            // Add the given row at the given index. Also send an ajax query to update the backend.
+            // Add the given row at the given index.
 
             // First remove row from the parent rows
             row.remove_from_parent();
@@ -465,19 +505,15 @@ $(function() {
             // Update the depth
             row.set_depth(this.depth + 1);
 
+            if ((this.is_empty) && (this.rows.length == 1)) {
+                // We just added a row into an empty folder
+                this.is_empty = false;
+                this.status = "expanded";
+            }
+
+            // Update the expand button
             this.update_expand_button();
 
-            AJAX(
-                "/folderentry/ajax/move/",
-                {
-                    "entry_id": row.entry_id,
-                    "target_parent_id": this.entry_id,
-                    "index": index
-                },
-                function(response) {
-                    console.log(response);
-                }
-            );
         }
 
         this.set_depth = function(depth) {
@@ -490,7 +526,7 @@ $(function() {
             if (depth == 0) {
                 $(name_cell).css("padding-left", "");
             } else {
-                $(name_cell).css("padding-left", String((depth * 1) + 0.8) + "rem");
+                $(name_cell).css("padding-left", String((depth * 1.5) + 0.8) + "rem");
             }
 
             // Update depth of child rows
@@ -515,7 +551,7 @@ $(function() {
             }
         }
 
-        this.collapse = function () {
+        this.collapse = function() {
             // Collapse and hide the child rows
             for (var i = 0; i < this.rows.length; i++) {
                 var row = this.rows[i];
@@ -744,7 +780,7 @@ $(function() {
             // Update the dragging max delta if need be to allow intermediate moves at the bottom of the table
             dragging.maxDelta = Math.max(dragging.maxDelta, max);
 
-            // Also store the original parent and index of the row
+            // Also store the original parent and index of the row - these change whenever a swap happens
             dragging.original_parent_row = this.parent_row;
             dragging.original_index = this.index();
 
@@ -755,22 +791,28 @@ $(function() {
             self.toggle_folder();
         });
 
-        $(row_element).on("mousedown", function(e) {
-            // Mousedown - start dragging
-            var dragging = self.table.dragging;
+        if (this.table.editable) {
+            $(row_element).on("mousedown", function(e) {
+                // Mousedown - start dragging
+                var dragging = self.table.dragging;
 
-            dragging.status = "dragging";
+                dragging.status = "dragging";
 
-            // Calculate boundaries
-            self.calculate_dragging_parameters(e);
+                // Record the original position of the row - doesn't change until mouseup
+                dragging.start_parent_row = self.parent_row;
+                dragging.start_index = self.index();
 
-            // Relatively position the rows so we can move them
-            $(dragging.rows).css("position", "relative");
-            $(dragging.rows).css("background-color", "#EEE");
+                // Calculate boundaries
+                self.calculate_dragging_parameters(e);
 
-            // Prevent text selection etc
-            e.preventDefault();
-        });
+                // Relatively position the rows so we can move them
+                $(dragging.rows).css("position", "relative");
+                $(dragging.rows).css("background-color", "#EEE");
+
+                // Prevent text selection etc
+                e.preventDefault();
+            });
+        }
 
     }
 

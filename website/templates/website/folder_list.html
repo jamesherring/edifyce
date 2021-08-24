@@ -18,7 +18,6 @@
             {% endif %}
 
             <div class="table-cell" data-name="logical-lines">Logical Lines</div>
-            <div class="table-cell" data-name="order">Order</div>
 
         </div>
 
@@ -47,7 +46,6 @@
 
                         <div class="table-cell" data-name="logical-lines">{{ proof.proof.logical_lines }}</div>
 
-                        <div class="table-cell" data-name="order">{{ entry.order }}</div>
                     </div>
 
                 {% endwith %}
@@ -55,7 +53,7 @@
             {% else %}
                 {% with folder=entry.item %}
 
-                    <div class="table-row" data-id="{{ entry.id }}" data-type="folder" data-depth="0">
+                    <div class="table-row" data-id="{{ entry.id }}" data-type="folder" data-depth="0" data-empty="{% if folder.entries.count == 0 %}true{% else %}false{% endif %}">
 
                         {% if system %}
                             <div class="table-cell" data-name="system">
@@ -76,9 +74,6 @@
                         {% endif %}
 
                         <div class="table-cell" data-name="logical-lines"></div>
-
-                        <div class="table-cell" data-name="order">{{ entry.order }}</div>
-
                     </div>
                 {% endwith %}
             {% endif %}
