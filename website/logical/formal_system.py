@@ -688,6 +688,9 @@ class Proof(object):
         # A reference for labelled lines
         self.reference_context = dict()
 
+        # The proof model id
+        self.model_id = None
+
     def get_proof_line(self, line_number):
         # Get a proof line by line number
         if not 0 <= line_number < len(self.proof_lines):
@@ -709,6 +712,32 @@ class Proof(object):
             return "warning"
 
         return "ok"
+
+    def get_references_used(self):
+        # Get references to other proofs actually used in this proof
+
+        proofs = set()
+
+        # Go through the valid logical lines and check the references
+        for line in self.proof_lines:
+            if line.empty or (line.line_type is None) or (not line.line_type.behaviour == "logical"):
+                continue
+
+            if not line.valid:
+                continue
+
+            if line.inference is None:
+                continue
+
+            # Get the antecedents
+            antecedents = line.inference.antecedents
+
+            for antecedent in antecedents:
+                if not antecedent.proof == self:
+                    # The antecedent belongs to another proof
+                    proofs.add(antecedent.proof)
+
+        return proofs
 
     def data(self):
         # Get data for this proof
