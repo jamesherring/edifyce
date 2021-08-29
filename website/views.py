@@ -68,7 +68,6 @@ def refreshProofsView(request):
             }))
 
         proofs = ProofModel.objects.all()
-
         for proof in proofs:
             proof.refresh(refresh_system=False)
 
@@ -464,7 +463,7 @@ def proofValidateView(request):
         code = request.POST.get("code", False)
 
         # Parse the code in the system
-        proof = system.parse(proof, code)[0]
+        proof = system.parse(proof, code)
 
         # Return the results
         return HttpResponse(json.dumps({
@@ -506,42 +505,6 @@ def proofAutocompleteView(request):
 
 
 @login_required
-def proofPublishView(request):
-    # Ajax view to publish a proof
-
-    try:
-
-        proof_id = request.POST.get("proof_id", False)
-        proof = ProofModel.objects.get(id=proof_id)
-
-        if not request.user.profile == proof.owner():
-            # User is not the owner of the proof
-            return HttpResponse(json.dumps({
-                "success": False,
-                "errorMessage": "Authentication error."
-            }))
-
-        if not proof.proof.valid:
-            return HttpResponse(json.dumps({
-                "success": False,
-                "errorMessage": "Cannot publish an invalid proof."
-            }))
-
-        proof.published = datetime.datetime.now()
-
-        return HttpResponse(json.dumps({
-            "success": True,
-            "message": "Proof published!"
-        }))
-
-    except Exception as e:
-        return HttpResponse(json.dumps({
-            "success": False,
-            "errorMessage": str(e)
-        }))
-
-
-@login_required
 def proofDeleteView(request, proof_id, proof_slug):
     # View to submit deletion a proof
 
@@ -572,6 +535,43 @@ def proofDeleteSubmitView(request, proof_id, proof_slug):
     messages.add_message(request, messages.INFO, "Proof deleted.")
 
     return redirect(request.user.profile)
+
+
+
+@login_required
+def publishView(request):
+    # Ajax view to publish a folder
+
+    try:
+
+        folder_id = request.POST.get("folder_id", False)
+        folder = ProofFolder.objects.get(id=folder_id)
+
+        if not request.user.profile == folder.owner():
+            # User is not the owner of the folder
+            return HttpResponse(json.dumps({
+                "success": False,
+                "errorMessage": "Authentication error."
+            }))
+
+        if not proof.proof.valid:
+            return HttpResponse(json.dumps({
+                "success": False,
+                "errorMessage": "Cannot publish an invalid proof."
+            }))
+
+        proof.published = datetime.datetime.now()
+
+        return HttpResponse(json.dumps({
+            "success": True,
+            "message": "Proof published!"
+        }))
+
+    except Exception as e:
+        return HttpResponse(json.dumps({
+            "success": False,
+            "errorMessage": str(e)
+        }))
 
 
 @login_required

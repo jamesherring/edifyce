@@ -178,6 +178,11 @@ class FormalSystemModel(models.Model):
             if target is None:
                 reference_dict[key] = "Cannot find reference."
 
+            elif isinstance(target, FormalSystemModel):
+                # Target is a formal system
+                if target not in self.inherited_systems():
+                    reference_dict[key] = "Cannot reference from a formal system not inherited by " + self.name + "."
+
             elif proof_folder_entry.comes_before(target.folder_entry):
                 # We are referencing a proof that doesn't come first.
                 reference_dict[key] = "Cannot reference a later proof."
@@ -189,7 +194,10 @@ class FormalSystemModel(models.Model):
         # Create a proof instance
         proof = self.formal_system.parse(code, reference_proofs=reference_dict)
 
-        return proof, reference_dict
+        # Assign the references to external proofs
+        references_used = proof.get_references_used()
+
+        return proof
 
     def __str__(self):
         return self.name
@@ -242,6 +250,25 @@ class FolderEntry(OrderedModel):
             "meta": "Folder" if isinstance(item, ProofFolder) else "Proof"
         }
 
+    def published(self):
+        # Return the datetime published or None if it is not published
+        if self.parent_folder:
+            return self.parent_folder.folder_entry.published()
+
+        # Otherwise no parent folder
+        item = self.item()
+        if item.model_name == "ProofFolder":
+            # item is a root folder
+
+            try:
+                return item.publishedfolder.published
+            except Exception as e:
+                # Related object does not exist
+                return None
+
+        # Not a folder
+        return None
+
     def comes_before(self, other):
         # Check if this folder entry comes before the other one (for avoiding circular references).
 
@@ -258,8 +285,8 @@ class FolderEntry(OrderedModel):
         self_item = self.item()
         other_item = other.item()
 
-        self_published = self_item.published
-        other_published = other_item.published
+        self_published = self.published()
+        other_published = other.published()
 
         if self_published is not None and other_published is not None:
             # Both are published, just need to verify is self was published first
@@ -307,6 +334,44 @@ class FolderEntry(OrderedModel):
             # Otherwise, we found a difference
             return self_parent.order < other_parent.order
 
+    def validate(self):
+        # Check this entry (and any sub-entries) are valid proofs
+
+        item = self.item()
+
+        if item.model_name == "ProofModel":
+            # Refresh the proof
+            item.refresh(refresh_system=False)
+            return item.proof.valid
+
+        # Otherwise it's a folder
+
+        # Get the sub-entries in order
+        sub_entries = FolderEntry.objects.filter(parent_folder=item).order_by("order")
+        result = True
+        for entry in sub_entries:
+            result = result and entry.validate()
+
+        return result
+
+
+class PublishedFolder(models.Model):
+    # A published proof folder
+
+    id = models.CharField(default=id_gen, max_length=64, primary_key=True, editable=False)
+
+    # The author
+    owner = models.ForeignKey(Profile, on_delete=models.SET_NULL, blank=True, null=True)
+
+    # The formal system this folder belongs to
+    formal_system = models.ForeignKey(FormalSystemModel, on_delete=models.CASCADE, related_name="published_folders")
+
+    # The date published
+    published = models.DateTimeField(auto_now_add=True, blank=True, null=True)
+
+    # The corresponding root folder
+    root_folder = models.OneToOneField("ProofFolder", on_delete=models.CASCADE)
+
 
 class ProofFolder(models.Model):
     # A model for folders containing folders and proofs
@@ -321,8 +386,8 @@ class ProofFolder(models.Model):
     name = models.CharField(max_length=256)
     slug = models.CharField(max_length=256)
 
-    # Date the folder is published
-    published = models.DateTimeField(blank=True, null=True)
+    # The published folder (if any)
+    published = models.ForeignKey(PublishedFolder, on_delete=models.SET_NULL, blank=True, null=True)
 
     created = models.DateTimeField(auto_now_add=True, blank=True, null=True)
     updated = models.DateTimeField(auto_now=True, blank=True, null=True)
@@ -338,6 +403,9 @@ class ProofFolder(models.Model):
 
     def owner(self):
         return self.folder_entry.owner
+
+    def is_root(self):
+        return self.parent_folder() is None
 
     def sub_folders(self):
         # Get sub folders in this folder
@@ -426,10 +494,10 @@ class ProofModel(models.Model):
     proof_text = models.TextField(default="")
 
     # References to other proofs
-    references = models.ManyToManyField("self", symmetrical=False)
+    references = models.ManyToManyField("self", symmetrical=False, related_name="dependants")
 
-    # Date the proof is published
-    published = models.DateTimeField(blank=True, null=True)
+    # The published folder (if any)
+    published = models.ForeignKey(PublishedFolder, on_delete=models.SET_NULL, blank=True, null=True)
 
     created = models.DateTimeField(auto_now_add=True, blank=True, null=True)
     updated = models.DateTimeField(auto_now=True, blank=True, null=True)
@@ -454,9 +522,26 @@ class ProofModel(models.Model):
         self.proof_text = code
 
         # Refresh the proof instance according to the file
-        self.proof, references = self.formal_system().parse(self, code)
+        self.proof = self.formal_system().parse(self, code)
+        self.proof.model_id = self.id
+
+        # Get the references used
+        references = self.proof.get_references_used()
+
+        # Reverse these to get the model instances
+        id_list = [p.model_id for p in references]
+        models = ProofModel.objects.filter(id__in=id_list)
+
+        # Clear the many-to-many relationship and add the referenced models
+        self.references.clear()
+        self.references.add(*models)
 
         self.save()
+
+        # Refresh the dependant proofs
+        for d in self.dependants.all():
+            print(d)
+            d.refresh(refresh_system=False)
 
     def parse_import(self, path, reference_dict=None, parent=None, parent_path=None):
         # Parse an import path on this proof and store it in the reference dictionary.

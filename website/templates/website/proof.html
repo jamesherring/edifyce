@@ -44,6 +44,22 @@
             <a href="{% url 'website:proof_delete' proof.id proof.slug %}"><div class="button delete-button">Delete</div></a>
         {% endif %}
     </div>
+
+    <h3>Referenced proofs</h3>
+    {% for p in proof.references.all %}
+        <a href="{% url 'website:proof' p.id p.slug %}">{{ p.name }}</a>
+    {% empty %}
+        <p>None</p>
+    {% endfor %}
+
+    <h3>Dependent proofs</h3>
+    {% for p in proof.dependants.all %}
+        <a href="{% url 'website:proof' p.id p.slug %}">{{ p.name }}</a>
+    {% empty %}
+        <p>None</p>
+    {% endfor %}
+
+
 {% endblock %}
 
 {% block js %}

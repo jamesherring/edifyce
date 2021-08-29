@@ -32,6 +32,7 @@ urlpatterns = [
     path("folder/delete_submit/<folder_id>/<folder_slug>/", folderDeleteSubmitView, name="folder_delete_submit"),
 
     path("folder/ajax/expand/", folderExpandView, name="folder_expand"),
+    path("folder/ajax/publish/", publishView, name="publish"),
 
     # Proofs
     path("proof/view/<proof_id>/<proof_slug>/", proofView, name="proof"),
@@ -45,7 +46,6 @@ urlpatterns = [
     path("proof/ajax/save/", proofSaveView, name="proof_save"),
     path("proof/ajax/validate/", proofValidateView, name="proof_validate"),
     path("proof/ajax/autocomplete/", proofAutocompleteView, name="proof_autocomplete"),
-    path("proof/ajax/publish/", proofPublishView, name="proof_publish"),
 
     # Folder entries
     path("folderentry/ajax/move/", folderEntryMoveView, name="folderentry_move"),
