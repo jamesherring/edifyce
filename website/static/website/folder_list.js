@@ -74,6 +74,22 @@ $(function() {
 
         }
 
+        this.update_validity = function(validity_data) {
+            // Update the validity of some proofs in the table according to the given data
+
+            for (var i = 0; i < validity_data.length; i++) {
+                var proof = validity_data[i];
+                var entry_id = proof.entry_id;
+                var indicator = proof.indicator;
+
+                // Get the row and indicator element
+                var row = $(this.table_element).find("[data-id='" + entry_id + "']");
+                var indicator_element = $(row).find("span.indicator");
+
+                $(indicator_element).attr("data-indicator", indicator);
+            }
+        }
+
         if (this.editable) {
             $(document).on("mousemove", function(e) {
 
@@ -230,7 +246,7 @@ $(function() {
                 }
 
                 // Push the update to the backend
-                var parent_id = "root";
+                var parent_id = $("#entry_id").html() || "root";
                 if (target.parent_row) {
                     parent_id = target.parent_row.entry_id;
                 }
@@ -249,6 +265,8 @@ $(function() {
                         "index": index
                     },
                     function(response) {
+                        // The move may have changed the validity of some proofs
+                        self.update_validity(response.validity_data);
                     }
                 );
 

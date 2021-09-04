@@ -601,6 +601,14 @@ def folderEntryMoveView(request):
                 "errorMessage": "Authentication error."
             }))
 
+        # Check the direction of travel so we know which entries to refresh
+        if target_parent is None:
+
+            # Get the root parent folder for entry
+            entry_parent = entry
+            while entry_parent.parent_folder is not None:
+                entry_parent = entry_parent.parent_folder.folder_entry
+
         if not entry.parent_folder == target_parent:
             # Put the entry at the end of its group
             entry.bottom()
@@ -624,8 +632,42 @@ def folderEntryMoveView(request):
             # Set the new index
             entry.to(int(index))
 
+        # Keep a set of proofs whose validity has changed as a result of the move
+        validity_changed = set()
+
+        # Refresh the dependant proofs
+        item = entry.item()
+        if item.model_name == "ProofModel":
+            # This is one proof being moved
+            for p in item.dependants.all():
+                p.refresh(refresh_system=False, validity_changed=validity_changed)
+
+            item.refresh(refresh_system=False, validity_changed=validity_changed)
+
+        else:
+            # It's a folder. Get a queryset of all proofs and dependants
+            proofs = item.nested_proofs()
+
+            dependants = ProofModel.objects.none()
+            for p in proofs:
+                dependants = dependants | p.dependants.all()
+
+            # Add the proofs
+            proofs_and_dependants = (proofs | dependants).distinct()
+
+            for p in proofs_and_dependants:
+                p.refresh(refresh_system=False, validity_changed=validity_changed)
+
+        # Return a list of the corresponding entry ids for those proofs whose validity has changed - and their new
+        # indicator
+        validity_data = [{
+            "entry_id": p.folder_entry.id,
+            "indicator": p.proof.indicator()
+        } for p in validity_changed]
+
         return HttpResponse(json.dumps({
-            "success": True
+            "success": True,
+            "validity_data": validity_data
         }))
 
     except Exception as e:

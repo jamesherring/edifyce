@@ -175,27 +175,32 @@ class FormalSystemModel(models.Model):
         proof_folder_entry = proof_model.folder_entry
         for key, target in reference_dict.items():
 
-            if target is None:
-                reference_dict[key] = "Cannot find reference."
+            reference_dict[key] = {
+                "target": target
+            }
 
-            elif isinstance(target, FormalSystemModel):
+            if target is None:
+                reference_dict[key]["errorMessage"] = "Cannot find reference."
+                continue
+
+            if isinstance(target, FormalSystemModel):
                 # Target is a formal system
                 if target not in self.inherited_systems():
-                    reference_dict[key] = "Cannot reference from a formal system not inherited by " + self.name + "."
+                    reference_dict[key]["errorMessage"] = "Cannot reference from a formal system not inherited by " + self.name + "."
 
-            elif proof_folder_entry.comes_before(target.folder_entry):
+                continue
+
+            if proof_folder_entry.comes_before(target.folder_entry):
                 # We are referencing a proof that doesn't come first.
-                reference_dict[key] = "Cannot reference a later proof."
+                reference_dict[key]["errorMessage"] = "Cannot reference a later proof."
+                continue
 
             if isinstance(target, ProofModel):
                 # Use the pickled proof object rather than the django class.
-                reference_dict[key] = target.proof
+                reference_dict[key]["target"] = target.proof
 
         # Create a proof instance
         proof = self.formal_system.parse(code, reference_proofs=reference_dict)
-
-        # Assign the references to external proofs
-        references_used = proof.get_references_used()
 
         return proof
 
@@ -353,6 +358,10 @@ class FolderEntry(OrderedModel):
             result = result and entry.validate()
 
         return result
+
+    def __str__(self):
+        item = self.item()
+        return item.model_name + ":" + str(item)
 
 
 class PublishedFolder(models.Model):
@@ -516,8 +525,10 @@ class ProofModel(models.Model):
         # Get the code for this proof
         return self.proof_text
 
-    def set_code(self, code):
-        # Set the proof code
+    def set_code(self, code, validity_changed=None):
+        # Set the proof code. Optionally keep a set of proofs whose validity changes.
+
+        validity = self.proof.valid
 
         self.proof_text = code
 
@@ -525,8 +536,8 @@ class ProofModel(models.Model):
         self.proof = self.formal_system().parse(self, code)
         self.proof.model_id = self.id
 
-        # Get the references used
-        references = self.proof.get_references_used()
+        # Get the proofs used
+        references = self.proof.proofs_used
 
         # Reverse these to get the model instances
         id_list = [p.model_id for p in references]
@@ -538,10 +549,13 @@ class ProofModel(models.Model):
 
         self.save()
 
-        # Refresh the dependant proofs
-        for d in self.dependants.all():
-            print(d)
-            d.refresh(refresh_system=False)
+        if not self.proof.valid == validity:
+            if validity_changed is not None:
+                validity_changed.add(self)
+
+            # Validity has changed - refresh the dependant proofs
+            for p in self.dependants.all():
+                p.refresh(refresh_system=False, validity_changed=validity_changed)
 
     def parse_import(self, path, reference_dict=None, parent=None, parent_path=None):
         # Parse an import path on this proof and store it in the reference dictionary.
@@ -783,11 +797,11 @@ class ProofModel(models.Model):
 
         return options
 
-    def refresh(self, refresh_system=True):
-        # Set a new instance of the proof
+    def refresh(self, refresh_system=True, validity_changed=None):
+        # Set a new instance of the proof. Optionally keep a set of proofs whose validity changes.
         if refresh_system:
             self.formal_system().refresh()
-        self.set_code(self.code())
+        self.set_code(self.code(), validity_changed)
 
     def parent_folder(self):
         return self.folder_entry.parent_folder
