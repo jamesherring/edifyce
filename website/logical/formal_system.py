@@ -242,7 +242,6 @@ class FormalSystem(object):
                             continue
 
                         path = result.get_by_path("path()", context)
-
                         result = proof.import_path(path, proof_line.label, context)
 
                         if not result["success"]:
@@ -682,11 +681,14 @@ class Proof(object):
         # The proof lines leading to the result
         self.proof_lines = []
 
-        # A dictionary of references to other proofs
+        # A dictionary of references to other proofs - given on proof creation
         self.reference_proofs = reference_proofs
 
         # A reference for labelled lines
         self.reference_context = dict()
+
+        # Keep a set of proof models referenced from this one (no folders)
+        self.proofs_used = set()
 
         # The proof model id
         self.model_id = None
@@ -712,32 +714,6 @@ class Proof(object):
             return "warning"
 
         return "ok"
-
-    def get_references_used(self):
-        # Get references to other proofs actually used in this proof
-
-        proofs = set()
-
-        # Go through the valid logical lines and check the references
-        for line in self.proof_lines:
-            if line.empty or (line.line_type is None) or (not line.line_type.behaviour == "logical"):
-                continue
-
-            if not line.valid:
-                continue
-
-            if line.inference is None:
-                continue
-
-            # Get the antecedents
-            antecedents = line.inference.antecedents
-
-            for antecedent in antecedents:
-                if not antecedent.proof == self:
-                    # The antecedent belongs to another proof
-                    proofs.add(antecedent.proof)
-
-        return proofs
 
     def data(self):
         # Get data for this proof
@@ -936,9 +912,32 @@ class Proof(object):
     def import_path(self, path, label, context):
         # Import a result using the given path
 
+        def add_reference(obj):
+            # Add a reference to the given object - if it can be associated with a proof
+            if isinstance(obj, Proof):
+                self.proofs_used.add(obj)
+
+            elif isinstance(obj, ProofLine):
+                self.proofs_used.add(obj.proof)
+
+            elif hasattr(obj, "proof"):
+                self.proofs_used.add(obj.proof)
+
+            if self in self.proofs_used:
+                self.proofs_used.remove(self)
+
         if path in self.reference_proofs:
             # Found it
-            ref_item = self.reference_proofs[path]
+            item = self.reference_proofs[path]
+            if "errorMessage" in item:
+                add_reference(item["target"])
+                return {
+                    "success": False,
+                    "errorMessage": item["errorMessage"],
+                    "target": item["target"]
+                }
+
+            ref_item = item["target"]
 
         else:
             parts = path.split(".")
@@ -946,29 +945,36 @@ class Proof(object):
 
             if initial in self.reference_proofs:
                 # Found it
-                ref_proof = self.reference_proofs[initial]
+                ref_dict = self.reference_proofs[initial]
 
-                if isinstance(ref_proof, str):
+                if "errorMessage" in ref_dict:
                     # This is an error string
+                    add_reference(ref_dict["target"])
                     return {
                         "success": False,
-                        "errorMessage": ref_proof
+                        "errorMessage": ref_dict["errorMessage"],
+                        "target": ref_dict["target"]
                     }
 
+                ref_proof = ref_dict["target"]
                 ref_item = ref_proof.get_reference(parts[-1], context)
 
                 if ref_item is None:
                     # No such label in the ref proof
+                    add_reference(ref_proof)
                     return {
                         "success": False,
-                        "errorMessage": initial + " does not have a line with label " + parts[-1] + "."
+                        "errorMessage": initial + " does not have a line with label " + parts[-1] + ".",
+                        "target": ref_proof
                     }
 
                 if ref_proof.has_warnings or not ref_proof.valid:
                     # Referenced proof has errors
+                    add_reference(ref_proof)
                     return {
                         "success": False,
-                        "errorMessage": path + " has unresolved errors."
+                        "errorMessage": path + " has unresolved errors.",
+                        "target": ref_proof
                     }
 
             else:
@@ -981,7 +987,11 @@ class Proof(object):
         # Add the reference
         self.reference_context[label] = ref_item
 
-        return {"success": True}
+        add_reference(ref_item)
+        return {
+            "success": True,
+            "target": ref_item
+        }
 
     def justify(self, deduction, context, inference_rule=None):
         # Artificially try to find a justification for the given reference. Optionally specify a inference rule.
