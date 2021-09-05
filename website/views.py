@@ -17,7 +17,7 @@ def indexView(request):
     })
 
 
-def viewProfileView(request, profile_slug):
+def profileView(request, profile_slug):
     # View of a users profile
 
     profile = Profile.objects.get(slug=profile_slug)
@@ -32,7 +32,7 @@ def viewProfileView(request, profile_slug):
     system_list = [
         {
             "system": system,
-            "entries": entries.filter(formal_system=system)
+            "entries": entries.filter(formal_system=system).order_by("order")
         } for system in systems
     ]
 
@@ -90,7 +90,7 @@ def formalSystemView(request, system_id, system_slug):
 
     user_proofs = None
     if request.user.is_authenticated:
-        user_proofs = ProofModel.objects.filter(folder_entry__owner=request.user.profile, folder_entry__formal_system=system)
+        user_proofs = FolderEntry.objects.filter(parent_folder__isnull=True, owner=request.user.profile, formal_system=system)
 
     return render(request, "website/formal_system.html", {
         "system": system,

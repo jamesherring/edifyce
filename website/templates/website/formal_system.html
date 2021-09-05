@@ -24,14 +24,14 @@
         </ul>
     {% endif %}
 
-    <h2>Recent Proofs</h2>
+    <h2>Recently Published</h2>
     {% include 'website/proof_list.html' with system=False %}
 
 
     {% if request.user.is_authenticated %}
         <h2>Your Proofs</h2>
 
-        {% include 'website/proof_list.html' with system=False author=False proofs=user_proofs %}
+        {% include 'website/folder_list.html' with author=False editable=True system=False entries=user_proofs %}
 
         <div class="centered">
             <a href="{% url 'website:proof_create' system.id system.slug %}"><div class="button">New Proof</div></a>
@@ -101,6 +101,7 @@
 
 {% block js %}
     <script src="{% static 'website/folder.js' %}"></script>
+    <script src="{% static 'website/folder_list.js' %}"></script>
 {% endblock %}
 
 
