@@ -32,7 +32,6 @@ urlpatterns = [
     path("folder/delete_submit/<folder_id>/<folder_slug>/", folderDeleteSubmitView, name="folder_delete_submit"),
 
     path("folder/ajax/expand/", folderExpandView, name="folder_expand"),
-    path("folder/ajax/publish/", publishView, name="publish"),
 
     # Proofs
     path("proof/view/<proof_id>/<proof_slug>/", proofView, name="proof"),
@@ -49,6 +48,7 @@ urlpatterns = [
 
     # Folder entries
     path("folderentry/ajax/move/", folderEntryMoveView, name="folderentry_move"),
+    path("folderentry/ajax/publish/", publishView, name="publish"),
 
     # Update text
     path("ajax/update-text/<table>/<field>/", updateTextView, name="update_text")

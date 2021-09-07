@@ -221,6 +221,9 @@ class FolderEntry(OrderedModel):
     # The formal system this entry belongs to
     formal_system = models.ForeignKey(FormalSystemModel, on_delete=models.CASCADE, related_name="entries")
 
+    # The published entry (if this item is published)
+    published = models.ForeignKey("PublishedEntry", on_delete=models.SET_NULL, blank=True, null=True)
+
     # Order with respect to parent folder - and owner and system in case of root level items
     order_with_respect_to = ('parent_folder', 'owner', 'formal_system')
 
@@ -255,24 +258,8 @@ class FolderEntry(OrderedModel):
             "meta": "Folder" if isinstance(item, ProofFolder) else "Proof"
         }
 
-    def published(self):
-        # Return the datetime published or None if it is not published
-        if self.parent_folder:
-            return self.parent_folder.folder_entry.published()
-
-        # Otherwise no parent folder
-        item = self.item()
-        if item.model_name == "ProofFolder":
-            # item is a root folder
-
-            try:
-                return item.publishedfolder.published
-            except Exception as e:
-                # Related object does not exist
-                return None
-
-        # Not a folder
-        return None
+    def datetime_published(self):
+        return None if self.published is None else self.published.published
 
     def comes_before(self, other):
         # Check if this folder entry comes before the other one (for avoiding circular references).
@@ -290,8 +277,8 @@ class FolderEntry(OrderedModel):
         self_item = self.item()
         other_item = other.item()
 
-        self_published = self.published()
-        other_published = other.published()
+        self_published = self.datetime_published()
+        other_published = other.datetime_published()
 
         if self_published is not None and other_published is not None:
             # Both are published, just need to verify is self was published first
@@ -359,27 +346,41 @@ class FolderEntry(OrderedModel):
 
         return result
 
+    def nested_sub_entries(self):
+        # Get all sub entries nested in this one (if a folder)
+        item = self.item()
+        qs = FolderEntry.objects.none()
+
+        if item.model_name == "ProofModel":
+            return qs
+
+        # Item is a folder
+        nested_sub_folders = item.nested_sub_folders()
+        nested_proofs = item.nested_proofs()
+
+        qs = FolderEntry.objects.filter()
+
     def __str__(self):
         item = self.item()
         return item.model_name + ":" + str(item)
 
 
-class PublishedFolder(models.Model):
-    # A published proof folder
+class PublishedEntry(models.Model):
+    # A published entry
 
     id = models.CharField(default=id_gen, max_length=64, primary_key=True, editable=False)
-
-    # The author
-    owner = models.ForeignKey(Profile, on_delete=models.SET_NULL, blank=True, null=True)
-
-    # The formal system this folder belongs to
-    formal_system = models.ForeignKey(FormalSystemModel, on_delete=models.CASCADE, related_name="published_folders")
 
     # The date published
     published = models.DateTimeField(auto_now_add=True, blank=True, null=True)
 
-    # The corresponding root folder
-    root_folder = models.OneToOneField("ProofFolder", on_delete=models.CASCADE)
+    # The corresponding root entry
+    folder_entry = models.OneToOneField(FolderEntry, on_delete=models.CASCADE)
+
+    def formal_system(self):
+        return self.folder_entry.formal_system
+
+    def owner(self):
+        return self.folder_entry.owner
 
 
 class ProofFolder(models.Model):
@@ -395,9 +396,6 @@ class ProofFolder(models.Model):
     name = models.CharField(max_length=256)
     slug = models.CharField(max_length=256)
 
-    # The published folder (if any)
-    published = models.ForeignKey(PublishedFolder, on_delete=models.SET_NULL, blank=True, null=True)
-
     created = models.DateTimeField(auto_now_add=True, blank=True, null=True)
     updated = models.DateTimeField(auto_now=True, blank=True, null=True)
 
@@ -412,6 +410,9 @@ class ProofFolder(models.Model):
 
     def owner(self):
         return self.folder_entry.owner
+
+    def datetime_published(self):
+        return self.folder_entry.datetime_published()
 
     def is_root(self):
         return self.parent_folder() is None
@@ -445,6 +446,42 @@ class ProofFolder(models.Model):
     def nested_proofs(self):
         # Get proofs belonging to this folder including those nested in sub-folders
         return self.proofs() | ProofModel.objects.filter(folder_entry__parent_folder__in=self.nested_sub_folders())
+
+    def publishable(self):
+        # Check if the folder is publishable
+
+        # The folder has to not already be published
+        if self.folder_entry.published is not None:
+            return False
+
+        # It has to be root level
+        if not self.is_root():
+            return False
+
+        # All the proofs inside have to be valid
+        nested_proofs = self.nested_proofs()
+        for proof in nested_proofs:
+            if not proof.proof.valid:
+                return False
+
+        # All the references outside of the folder must be published
+        references = ProofModel.objects.none()
+        for proof in nested_proofs:
+            references = references | proof.references.all()
+
+        references = references.distinct()
+
+        for proof in references:
+            if (not self.contains(proof.folder_entry)) and (proof.published is None):
+                # External reference is not published
+                return False
+
+        # Otherwise ok
+        return True
+
+    def contains(self, entry):
+        # Check if the folder contains this folder entry
+        return self in entry.parent_folders()
 
     def get_reference(self, ref, context):
         # Get a reference
@@ -504,9 +541,6 @@ class ProofModel(models.Model):
 
     # References to other proofs
     references = models.ManyToManyField("self", symmetrical=False, related_name="dependants")
-
-    # The published folder (if any)
-    published = models.ForeignKey(PublishedFolder, on_delete=models.SET_NULL, blank=True, null=True)
 
     created = models.DateTimeField(auto_now_add=True, blank=True, null=True)
     updated = models.DateTimeField(auto_now=True, blank=True, null=True)
@@ -622,7 +656,7 @@ class ProofModel(models.Model):
             if proof is None:
                 # Try a published root-level proof
                 proof = ProofModel.objects.filter(slug=initial, folder_entry__formal_system=self_system,
-                                                  folder_entry__parent_folder=None, published__isnull=False).first()
+                                                  folder_entry__parent_folder=None, folder_entry__published__isnull=False).first()
 
             if proof is None:
                 # Try an unpublished root-level proof belonging to this user
@@ -645,7 +679,7 @@ class ProofModel(models.Model):
 
             # Try folder
             folder = ProofFolder.objects.filter(slug=initial, folder_entry__formal_system=parent,
-                                                folder_entry__parent_folder=None, published__isnull=False).first()
+                                                folder_entry__parent_folder=None, folder_entry__published__isnull=False).first()
 
             if folder is None:
                 # Try an unpublished folder belonging to this user
@@ -662,7 +696,8 @@ class ProofModel(models.Model):
                 return
 
             # Try to get the proof directly
-            proof = ProofModel.objects.filter(slug=initial, folder_entry__formal_system=parent, published__isnull=False).first()
+            proof = ProofModel.objects.filter(slug=initial, folder_entry__formal_system=parent,
+                                              folder_entry__published__isnull=False).first()
 
             if proof is None:
                 # Try an unpublished proof belonging to this user
@@ -679,7 +714,7 @@ class ProofModel(models.Model):
 
             # Try folder
             folder = ProofFolder.objects.filter(slug=initial, folder_entry__parent_folder=parent,
-                                                published__isnull=False).first()
+                                                folder_entry__published__isnull=False).first()
 
             if folder is None:
                 # Try an unpublished folder belonging to this user
@@ -697,7 +732,7 @@ class ProofModel(models.Model):
 
             # Try to get the proof directly
             proof = ProofModel.objects.filter(slug=initial, folder_entry__parent_folder=parent,
-                                              published__isnull=False).first()
+                                              folder_entry__published__isnull=False).first()
 
             if proof is None:
                 # Try an unpublished proof belonging to this user
@@ -811,6 +846,32 @@ class ProofModel(models.Model):
 
     def owner(self):
         return self.folder_entry.owner
+
+    def datetime_published(self):
+        return self.folder_entry.datetime_published()
+
+    def publishable(self):
+        # Is this proof publishable?
+
+        # First, the proof has to be not published already
+        if self.folder_entry.published is not None:
+            return False
+
+        # It has to be root level
+        if self.folder_entry.parent_folder is not None:
+            return False
+
+        # It has to be valid
+        if not self.proof.valid:
+            return False
+
+        # Referenced proofs have to be published
+        for proof in self.references.all():
+            if proof.datetime_published() is None:
+                return False
+
+        # Otherwise it's publishable
+        return True
 
     def __str__(self):
         return self.name
