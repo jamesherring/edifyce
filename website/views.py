@@ -12,15 +12,15 @@ def indexView(request):
     # Index view
 
     return render(request, "website/index.html", {
-        "formal_systems": FormalSystemModel.objects.all(),
+        "systems": FormalSystemModel.objects.all(),
         "title": "Edifyce"
     })
 
 
-def profileView(request, profile_slug):
+def profileView(request, profile_id, profile_slug):
     # View of a users profile
 
-    profile = Profile.objects.get(slug=profile_slug)
+    profile = Profile.objects.get(id=profile_id)
 
     # Get the top level entries for this profile
     entries = FolderEntry.objects.filter(parent_folder__isnull=True, owner=profile)
@@ -29,12 +29,22 @@ def profileView(request, profile_slug):
     systems = FormalSystemModel.objects.filter(entries__in=entries).distinct()
 
     # Sort the entries by systems
-    system_list = [
-        {
-            "system": system,
-            "entries": entries.filter(formal_system=system).order_by("order")
-        } for system in systems
-    ]
+    if request.user.is_authenticated and request.user.profile == profile:
+        # The user is viewing their own profile - include unpublished proofs
+        system_list = [
+            {
+                "system": system,
+                "entries": entries.filter(formal_system=system).order_by("order")
+            } for system in systems
+        ]
+
+    else:
+        system_list = [
+            {
+                "system": system,
+                "entries": entries.filter(formal_system=system, published__isnull=False).order_by("order")
+            } for system in systems
+        ]
 
     return render(request, "website/profile.html", {
         "title": profile.name(),
@@ -88,15 +98,22 @@ def formalSystemView(request, system_id, system_slug):
 
     system = FormalSystemModel.objects.get(id=system_id)
 
-    user_proofs = None
+    entries = FolderEntry.objects.filter(parent_folder__isnull=True, formal_system=system, published__isnull=False).order_by("-published__published")
+
+    user_proofs_published = None
+    user_proofs_not_published = None
     if request.user.is_authenticated:
         user_proofs = FolderEntry.objects.filter(parent_folder__isnull=True, owner=request.user.profile, formal_system=system)
+
+        user_proofs_published = user_proofs.filter(published__isnull=False)
+        user_proofs_not_published = user_proofs.filter(published__isnull=True)
 
     return render(request, "website/formal_system.html", {
         "system": system,
         "title": system.name,
-        "proofs": ProofModel.objects.filter(folder_entry__formal_system=system, folder_entry__published__isnull=False),
-        "user_proofs": user_proofs
+        "entries": entries,
+        "user_proofs_published": user_proofs_published,
+        "user_proofs_not_published": user_proofs_not_published
     })
 
 
@@ -288,8 +305,6 @@ def folderCreateView(request):
 
 @login_required
 def folderDeleteView(request, folder_id, folder_slug):
-    # View to submit deletion a proof
-
     folder = ProofFolder.objects.get(id=folder_id)
 
     if not request.user.profile == folder.owner():
@@ -303,7 +318,7 @@ def folderDeleteView(request, folder_id, folder_slug):
 
 @login_required
 def folderDeleteSubmitView(request, folder_id, folder_slug):
-    # View to submit deletion a proof
+    # View to submit deletion of a folder
 
     folder = ProofFolder.objects.get(id=folder_id)
 

@@ -13,9 +13,10 @@
 
     {% for system_entry in system_list %}
         {% with system=system_entry.system entries=system_entry.entries %}
-            <a href="{% url 'website:formal_system' system.id system.slug %}"><h3>{{ system.name }}</h3></a>
-            {% include 'website/folder_list.html' with author=False editable=True system=False %}
-
+            {% if entries.count > 0 %}
+                <a href="{% url 'website:formal_system' system.id system.slug %}"><h3>{{ system.name }}</h3></a>
+                {% include 'website/folder_list.html' with author=False editable=True system=False %}
+            {% endif %}
         {% endwith %}
     {% endfor %}
 

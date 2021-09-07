@@ -1,7 +1,8 @@
 {% load static %}
+{% load humanize %}
 
 {% if entries.count == 0 %}
-    <p>No entries.</p>
+    <p>None.</p>
 {% else %}
     <div class="table folder-list-table" data-editable="{{ editable|lower }}">
 
@@ -42,7 +43,7 @@
 
                         {% if not author == False %}
                             <div class="table-cell" data-name="author">
-                                <a href="{% url 'website:profile_view' proof.owner.id %}">{{ proof.owner.name }}</a>
+                                <a href="{% url 'website:profile_view' proof.owner.id proof.owner.slug %}">{{ proof.owner.name }}</a>
                             </div>
                         {% endif %}
 
@@ -50,7 +51,7 @@
 
                         <div class="table-cell" data-name="published">
                             {% if entry.published %}
-                                <img class="tick" src="{% static 'website/images/tick.png' %}"/>
+                                {{ entry.published.published|naturaltime }}
                             {% endif %}
                         </div>
 
@@ -77,7 +78,7 @@
 
                         {% if not author == False %}
                             <div class="table-cell" data-name="author">
-                                <a href="{% url 'website:profile_view' folder.owner.id %}">{{ folder.owner.name }}</a>
+                                <a href="{% url 'website:profile_view' folder.owner.id folder.owner.slug %}">{{ folder.owner.name }}</a>
                             </div>
                         {% endif %}
 
@@ -85,7 +86,7 @@
 
                         <div class="table-cell" data-name="published">
                             {% if entry.published %}
-                                <img class="tick" src="{% static 'website/images/tick.png' %}"/>
+                                {{ entry.published.published|naturaltime }}
                             {% endif %}
                         </div>
 

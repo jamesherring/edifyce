@@ -204,6 +204,9 @@ class FormalSystemModel(models.Model):
 
         return proof
 
+    def proof_count(self):
+        return ProofModel.objects.filter(folder_entry__formal_system=self).count()
+    
     def __str__(self):
         return self.name
 
@@ -345,20 +348,6 @@ class FolderEntry(OrderedModel):
             result = result and entry.validate()
 
         return result
-
-    def nested_sub_entries(self):
-        # Get all sub entries nested in this one (if a folder)
-        item = self.item()
-        qs = FolderEntry.objects.none()
-
-        if item.model_name == "ProofModel":
-            return qs
-
-        # Item is a folder
-        nested_sub_folders = item.nested_sub_folders()
-        nested_proofs = item.nested_proofs()
-
-        qs = FolderEntry.objects.filter()
 
     def __str__(self):
         item = self.item()
