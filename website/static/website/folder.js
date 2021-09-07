@@ -2,6 +2,7 @@
 $(function() {
 
     var system_id = $("#system_id").text();
+    var entry_id = $("#entry_id").text();
 
     var parent_id = null;
     var e = $("#folder_id");
@@ -9,8 +10,10 @@ $(function() {
         parent_id = e.text();
     }
 
+    var create_folder_modal = $("#create-folder-modal");
+
     // Modal click
-    $("div.modal-outer").on("click", function(e) {
+    $(create_folder_modal).on("click", function(e) {
         if (e.target == this) {
             // Hide the modal
             $(this).toggleClass("hidden");
@@ -19,8 +22,7 @@ $(function() {
 
     // Show the modal
     $("#create-folder").on("click", function() {
-        var modal = $("div.modal-outer");
-        $(modal).toggleClass("hidden");
+        $(create_folder_modal).toggleClass("hidden");
     });
 
     $("#create-folder-button").on("click", function() {
@@ -48,5 +50,42 @@ $(function() {
             }
         )
     });
+
+
+    // Publish buttons
+     var confirm_publish_modal = $("#confirm-publish-modal");
+
+     $(".publish-button").on("click", function() {
+         // Show the modal
+         $(confirm_publish_modal).removeClass("hidden");
+     });
+
+     $(confirm_publish_modal).on("click", function(e) {
+         if ($(e.target).hasClass("modal-outer")) {
+             // Click outside of the modal
+             $(confirm_publish_modal).addClass("hidden");
+         }
+     });
+
+     $(confirm_publish_modal).on("click", ".grey-button", function() {
+         // Hide the modal
+         $(confirm_publish_modal).addClass("hidden");
+     });
+
+     $(confirm_publish_modal).on("click", ".confirm-publish-button", function() {
+        // confirm publish
+        AJAX(
+            "/folderentry/ajax/publish/",
+            {
+                "entry_id": entry_id
+            },
+            function(response) {
+                console.log(response);
+
+                // Refresh the page
+
+            }
+        );
+     });
 
 });

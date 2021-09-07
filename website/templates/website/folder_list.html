@@ -19,6 +19,8 @@
 
             <div class="table-cell" data-name="logical-lines">Logical Lines</div>
 
+            <div class="table-cell" data-name="published">Published</div>
+
         </div>
 
         {% for entry in entries %}
@@ -45,6 +47,12 @@
                         {% endif %}
 
                         <div class="table-cell" data-name="logical-lines">{{ proof.proof.logical_lines }}</div>
+
+                        <div class="table-cell" data-name="published">
+                            {% if entry.published %}
+                                <img class="tick" src="{% static 'website/images/tick.png' %}"/>
+                            {% endif %}
+                        </div>
 
                     </div>
 
@@ -74,6 +82,13 @@
                         {% endif %}
 
                         <div class="table-cell" data-name="logical-lines"></div>
+
+                        <div class="table-cell" data-name="published">
+                            {% if entry.published %}
+                                <img class="tick" src="{% static 'website/images/tick.png' %}"/>
+                            {% endif %}
+                        </div>
+
                     </div>
                 {% endwith %}
             {% endif %}

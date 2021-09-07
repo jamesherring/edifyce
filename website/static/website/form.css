@@ -27,6 +27,15 @@ button, input[type="submit"], div.button {
     cursor: pointer;
 }
 
+button.disabled, input[type="submit"].disabled, div.button.disabled {
+    background-color: #888;
+    cursor: default;
+}
+
+.grey-button {
+    background-color: #888 !important;
+}
+
 .delete-button {
     background-color: #F33 !important;
 }

@@ -95,7 +95,7 @@ def formalSystemView(request, system_id, system_slug):
     return render(request, "website/formal_system.html", {
         "system": system,
         "title": system.name,
-        "proofs": ProofModel.objects.filter(folder_entry__formal_system=system, published__isnull=False),
+        "proofs": ProofModel.objects.filter(folder_entry__formal_system=system, folder_entry__published__isnull=False),
         "user_proofs": user_proofs
     })
 
@@ -206,7 +206,7 @@ def folderView(request, folder_id, folder_slug):
 
     folder = ProofFolder.objects.get(id=folder_id)
 
-    if folder.published is not None or (request.user.is_authenticated and request.user.profile == folder.owner()):
+    if folder.datetime_published() is not None or (request.user.is_authenticated and request.user.profile == folder.owner()):
         return render(request, "website/folder.html", {
             "folder": folder,
             "system": folder.formal_system(),
@@ -228,7 +228,7 @@ def folderExpandView(request):
         folder = entry.prooffolder
 
         # Check the entry belongs to the owner or is published
-        if (not entry.owner == request.user.profile) and folder.published is None:
+        if (not entry.owner == request.user.profile) and folder.datetime_published() is None:
             return HttpResponse(json.dumps({
                 "success": False,
                 "errorMessage": "Authentication error."
@@ -325,12 +325,12 @@ def proofView(request, proof_id, proof_slug):
     proof = ProofModel.objects.get(id=proof_id)
 
     # Proof must be published or belong to the user
-    if proof.published is not None or (request.user.is_authenticated and request.user.profile == proof.owner()):
+    if proof.datetime_published() is not None or (request.user.is_authenticated and request.user.profile == proof.owner()):
         return render(request, "website/proof.html", {
             "proof": proof,
             "system": proof.formal_system(),
             "title": proof.formal_system().name + " / " + proof.name,
-            "editable": proof.published is None and request.user.is_authenticated and
+            "editable": proof.datetime_published() is None and request.user.is_authenticated and
                         request.user.profile == proof.owner()
         })
 
@@ -540,31 +540,53 @@ def proofDeleteSubmitView(request, proof_id, proof_slug):
 
 @login_required
 def publishView(request):
-    # Ajax view to publish a folder
+    # Ajax view to publish an entry
 
     try:
 
-        folder_id = request.POST.get("folder_id", False)
-        folder = ProofFolder.objects.get(id=folder_id)
+        entry_id = request.POST.get("entry_id")
+        entry = FolderEntry.objects.get(id=entry_id)
 
-        if not request.user.profile == folder.owner():
-            # User is not the owner of the folder
+        if not request.user.profile == entry.owner:
+            # User is not the owner
             return HttpResponse(json.dumps({
                 "success": False,
                 "errorMessage": "Authentication error."
             }))
 
-        if not proof.proof.valid:
+        item = entry.item()
+
+        # Check if the item is publishable
+        if not item.publishable():
+            # This can't be published
             return HttpResponse(json.dumps({
                 "success": False,
-                "errorMessage": "Cannot publish an invalid proof."
+                "errorMessage": "This item is not ready to be published."
             }))
 
-        proof.published = datetime.datetime.now()
+        # Create a new published entry instance
+        publication = PublishedEntry()
+        publication.folder_entry = entry
+        publication.save()
+
+        # Associate the root entry with the publication
+        entry.published = publication
+        entry.save()
+
+        if item.model_name == "ProofFolder":
+            # We need to associate all sub folders and proofs with this publication
+
+            for folder in item.nested_sub_folders():
+                folder.folder_entry.published = publication
+                folder.folder_entry.save()
+
+            for proof in item.nested_proofs():
+                proof.folder_entry.published = publication
+                proof.folder_entry.save()
 
         return HttpResponse(json.dumps({
             "success": True,
-            "message": "Proof published!"
+            "message": "Published!"
         }))
 
     except Exception as e:

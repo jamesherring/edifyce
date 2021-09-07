@@ -22,7 +22,7 @@ div.table-cell {
     padding: 0.5rem 0.8rem;
 }
 
-div.table-cell img.folder {
+div.table-cell img.folder, div.table-cell img.tick {
     height: 1rem;
     vertical-align: top;
 }

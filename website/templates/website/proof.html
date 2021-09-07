@@ -6,6 +6,9 @@
 
 {% block main_content %}
 
+    <p id="proof_id" class="hidden">{{ proof.id }}</p>
+    <p id="entry_id" class="hidden">{{ proof.folder_entry.id }}</p>
+
     {{ proof.proof.data|json_script:"proof_data" }}
 
     <h3 style="margin-top: 0;">
@@ -19,7 +22,7 @@
         </span>
     </h3>
 
-    {% if not proof.published %}
+    {% if not proof.datetime_published %}
         <div class="note">This proof is not published and is only visible to you.</div>
     {% endif %}
 
@@ -31,17 +34,25 @@
 
     <div id="output" class="proof-display" style="margin: 2rem -2rem;"></div>
 
-    {% if proof.published %}
-        <p>Published on {{ proof.published|date:"jS F Y" }}.</p>
+    {% if proof.datetime_published %}
+        <p>Published on {{ proof.datetime_published|date:"jS F Y" }}.</p>
     {% else %}
         <p>Last saved {{ proof.updated|naturaltime }}.</p>
     {% endif %}
 
     <div class="centered">
         {% if request.user.is_authenticated and request.user.profile == proof.owner %}
-            <a href="{% url 'website:proof_edit' proof.id proof.slug %}"><div class="button">Edit</div></a>
-            <div class="button publish-button">Publish</div>
-            <a href="{% url 'website:proof_delete' proof.id proof.slug %}"><div class="button delete-button">Delete</div></a>
+
+            {% if editable %}
+                <a href="{% url 'website:proof_edit' proof.id proof.slug %}"><div class="button">Edit</div></a>
+
+                {% if proof.publishable %}
+                    <div class="button publish-button">Publish</div>
+                {% endif %}
+
+                <a href="{% url 'website:proof_delete' proof.id proof.slug %}"><div class="button delete-button">Delete</div></a>
+            {% endif %}
+
         {% endif %}
     </div>
 
@@ -52,15 +63,31 @@
         <p>None</p>
     {% endfor %}
 
-    <h3>Dependent proofs</h3>
+    <h3>Dependant proofs</h3>
     {% for p in proof.dependants.all %}
         <a href="{% url 'website:proof' p.id p.slug %}">{{ p.name }}</a>
     {% empty %}
         <p>None</p>
     {% endfor %}
 
-
 {% endblock %}
+
+
+
+{% block modal %}
+    <div id="confirm-publish-modal" class="modal-outer hidden">
+        <div class="modal-inner" style="text-align: left;">
+            <h3>Are you sure you want to publish?</h3>
+            <p>You will not be able to edit or unpublish this proof.</p>
+            <div class="centered">
+                <div class="button confirm-publish-button">Publish</div>
+                <div class="button grey-button">Cancel</div>
+            </div>
+        </div>
+
+    </div>
+{% endblock %}
+
 
 {% block js %}
     <script src="{% static 'website/proof_display.js' %}"></script>

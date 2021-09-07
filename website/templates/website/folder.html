@@ -24,7 +24,7 @@
             <a href="{% url 'website:proof_create_in_folder' system.id system.slug folder.id %}"><div class="button">New Proof</div></a>
             <div id="create-folder" class="button">New Folder</div>
 
-            {% if folder.is_root %}
+            {% if folder.publishable %}
                 <div class="button publish-button">Publish</div>
             {% endif %}
 
@@ -44,5 +44,17 @@
 
 {% block modal %}
     {% include "website/create_folder_modal.html" %}
+
+    <div id="confirm-publish-modal" class="modal-outer hidden">
+        <div class="modal-inner" style="text-align: left;">
+            <h3>Are you sure you want to publish?</h3>
+            <p>You will not be able to edit or unpublish this proof.</p>
+            <div class="centered">
+                <div class="button confirm-publish-button">Publish</div>
+                <div class="button grey-button">Cancel</div>
+            </div>
+        </div>
+
+    </div>
 {% endblock %}
 
