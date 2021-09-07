@@ -4,21 +4,47 @@
 
 
 {% block main_content %}
-    <h1>Formal Systems</h1>
-
-    {% for system in formal_systems %}
-
-        <a href="{% url 'website:formal_system' system.id system.slug %}">{{ system.name }}</a></br>
-
-    {% endfor %}
 
     <div class="centered">
-        <a href="{% url 'website:formal_system_create' %}">
-            <div class="button">New System</div>
-        </a>
+        <div style="display: inline-block; text-align: left;">
+            <h1 style="line-height: 3rem;"><i>Human-Readable,<br/>Computer-Verifiable<br/>Mathematics</i></h1>
+        </div>
     </div>
+
+    <div class="note">
+        <p style="line-height: 1.5rem;">Edifyce is a tool for the digitisation of mathematics, with the mission of creating a verified library of definitions and proofs which are readable by both humans and computers.</p>
+    </div>
+
+    <h2>Human Readable</h2>
+    <p>Syntactical definitions can be made in line with TeX, to allow proofs to be written in a familiar language, and be presented naturally.</p>
+
+    <h3>Input</h3>
+    <img class="example" src="{% static 'website/images/a3_example_input.png' %}"/>
+
+    <h3>Output</h3>
+    <img class="example" src="{% static 'website/images/a3_example_output.png' %}"/>
+
+    <h2>Computer Verifiable</h2>
+    <p>All proofs are given within formal systems whose rules of inference are encoded, and therefore can be computer validated.</p>
+
+    <p>Proofs can reference previously proven results, and so can be built on one another to perform higher-level mathematics.</p>
+
+    <h2>Formal Systems</h2>
+
+    {% include "website/formal_system_list.html" %}
+
+    {% if request.user.is_superuser %}
+        <div class="centered">
+            <a href="{% url 'website:formal_system_create' %}">
+                <div class="button">New System</div>
+            </a>
+        </div>
+    {% endif %}
+
 
 
 {% endblock %}
 
-
+{% block css %}
+    <link rel="stylesheet" href="{% static '/website/index.css' %}">
+{% endblock %}

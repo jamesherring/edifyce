@@ -25,13 +25,17 @@
     {% endif %}
 
     <h2>Recently Published</h2>
-    {% include 'website/proof_list.html' with system=False %}
+    {% include 'website/folder_list.html' with system=False entries=entries %}
 
 
     {% if request.user.is_authenticated %}
         <h2>Your Proofs</h2>
 
-        {% include 'website/folder_list.html' with author=False editable=True system=False entries=user_proofs %}
+        <h3>Published</h3>
+        {% include 'website/folder_list.html' with author=False system=False entries=user_proofs_published %}
+
+        <h3>Not Published</h3>
+        {% include 'website/folder_list.html' with author=False editable=True system=False entries=user_proofs_not_published %}
 
         <div class="centered">
             <a href="{% url 'website:proof_create' system.id system.slug %}"><div class="button">New Proof</div></a>

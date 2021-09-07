@@ -10,7 +10,7 @@ urlpatterns = [
     path("", indexView, name="index"),
 
     # Profile
-    path("profile/<profile_slug>/", profileView, name="profile_view"),
+    path("profile/<profile_id>/<profile_slug>/", profileView, name="profile_view"),
 
     # Admin views
     path("superadmin/", adminView, name="admin"),
