@@ -1,17 +1,9 @@
 
-
 $(function() {
 
-    // Get the output div and build a table class in it
-    var output_parent = $("#output");
-    var output = new proofDisplayClass(output_parent);
+    var system_id = $("#system_id").text();
 
-     var data = JSON.parse(document.getElementById("proof_data").innerHTML);
-     output.populate(data);
-
-     var entry_id = $("#entry_id").text();
-
-     // Publish buttons
+    // Publish buttons
      var confirm_publish_modal = $("#confirm-publish-modal");
 
      $(".publish-button").on("click", function() {
@@ -34,17 +26,13 @@ $(function() {
      $(confirm_publish_modal).on("click", ".confirm-publish-button", function() {
         // confirm publish
         AJAX(
-            "/folderentry/ajax/publish/",
+            "/system/ajax/publish/",
             {
-                "entry_id": entry_id
+                "system_id": system_id
             },
             function(response) {
                 window.location.reload();
             }
         );
      });
-
-
 })
-
-

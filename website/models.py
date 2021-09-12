@@ -1,4 +1,5 @@
 from django.db import models
+from django.contrib import messages
 from ordered_model.models import OrderedModel
 from django.contrib.auth.models import User
 from django.db.models.signals import post_save, pre_save
@@ -91,7 +92,7 @@ class FormalSystemModel(models.Model):
     formal_system = PickledObjectField(default=None, blank=True, null=True, editable=True)
 
     # The system source text
-    formal_system_text =  models.TextField(default="")
+    formal_system_text = models.TextField(default="")
 
     # Formal system this inherits from
     inherits_from = models.ForeignKey("self", on_delete=models.SET_NULL, default=None, blank=True, null=True,
@@ -152,9 +153,22 @@ class FormalSystemModel(models.Model):
                 system_dict[slug] = self.inherits_from.formal_system
 
         # Refresh the formal system instance according to the file
-        self.formal_system = compile(code, system_dict=system_dict)
+        result = compile(code, system_dict=system_dict)
 
+        if "errors" in result:
+            # There are errors
+            return result
+
+        # Otherwise ok
+        self.formal_system = result["system"]
         self.save()
+
+        # Refresh all proofs in the system (no need to cascade)
+        proofs = ProofModel.objects.filter(folder_entry__formal_system=self)
+        for proof in proofs:
+            proof.refresh(refresh_system=False, cascade=None)
+
+        return result
 
     def refresh(self):
         # Refresh the instance
@@ -187,7 +201,6 @@ class FormalSystemModel(models.Model):
                 # Target is a formal system
                 if target not in self.inherited_systems():
                     reference_dict[key]["errorMessage"] = "Cannot reference from a formal system not inherited by " + self.name + "."
-
                 continue
 
             if proof_folder_entry.comes_before(target.folder_entry):
@@ -195,18 +208,23 @@ class FormalSystemModel(models.Model):
                 reference_dict[key]["errorMessage"] = "Cannot reference a later proof."
                 continue
 
+            if proof_folder_entry == target.folder_entry:
+                # Trying to self-reference
+                reference_dict[key]["errorMessage"] = "A proof cannot reference itself."
+                continue
+
             if isinstance(target, ProofModel):
                 # Use the pickled proof object rather than the django class.
                 reference_dict[key]["target"] = target.proof
 
         # Create a proof instance
-        proof = self.formal_system.parse(code, reference_proofs=reference_dict)
+        proof = self.formal_system.parse(code, proof_model_id=proof_model.id, reference_proofs=reference_dict)
 
         return proof
 
     def proof_count(self):
         return ProofModel.objects.filter(folder_entry__formal_system=self).count()
-    
+
     def __str__(self):
         return self.name
 
@@ -227,8 +245,8 @@ class FolderEntry(OrderedModel):
     # The published entry (if this item is published)
     published = models.ForeignKey("PublishedEntry", on_delete=models.SET_NULL, blank=True, null=True)
 
-    # Order with respect to parent folder - and owner and system in case of root level items
-    order_with_respect_to = ('parent_folder', 'owner', 'formal_system')
+    # Order with respect to parent folder - and owner and system and published in case of root level items
+    order_with_respect_to = ('parent_folder', 'owner', 'formal_system', 'published')
 
     def item(self):
         # Return the sub-item (proof folder or proof model) this entry corresponds to
@@ -447,6 +465,10 @@ class ProofFolder(models.Model):
         if not self.is_root():
             return False
 
+        # The formal system has to be published
+        if self.formal_system().published is None:
+            return False
+
         # All the proofs inside have to be valid
         nested_proofs = self.nested_proofs()
         for proof in nested_proofs:
@@ -461,7 +483,7 @@ class ProofFolder(models.Model):
         references = references.distinct()
 
         for proof in references:
-            if (not self.contains(proof.folder_entry)) and (proof.published is None):
+            if (not self.contains(proof.folder_entry)) and (proof.datetime_published() is None):
                 # External reference is not published
                 return False
 
@@ -473,10 +495,14 @@ class ProofFolder(models.Model):
         return self in entry.parent_folders()
 
     def get_reference(self, ref, context):
-        # Get a reference
+        # Get a reference. Optionally specify the proof model making the reference, to exclude any entries after it.
 
         initial = ref
         remainder = None
+
+        importing_proof_entry = None
+        if context.proof_model_id is not None:
+            importing_proof_entry = ProofModel.objects.get(id=context.proof_model_id).folder_entry
 
         if "." in ref:
             index = ref.find(".")
@@ -486,6 +512,11 @@ class ProofFolder(models.Model):
         # Try folder
         folder = self.sub_folders().filter(slug=initial).first()
         if folder is not None:
+
+            # Check the importing proof comes later
+            if importing_proof_entry is not None and not folder.folder_entry.comes_before(importing_proof_entry):
+                raise Exception("Cannot import a later folder.")
+
             if remainder is None:
                 return folder
 
@@ -494,13 +525,18 @@ class ProofFolder(models.Model):
         # Try proof
         proof = self.proofs().filter(slug=initial).first()
         if proof is not None:
+
+            # Check the importing proof comes later
+            if importing_proof_entry is not None and not proof.folder_entry.comes_before(importing_proof_entry):
+                raise Exception("Cannot import a later proof.")
+
             if remainder is None:
                 return proof
 
             return proof.proof.get_reference(remainder, context)
 
         # No luck
-        return None
+        raise Exception("Could not parse reference: " + ref)
 
     def __str__(self):
         return self.name
@@ -548,10 +584,14 @@ class ProofModel(models.Model):
         # Get the code for this proof
         return self.proof_text
 
-    def set_code(self, code, validity_changed=None):
+    def set_code(self, code, validity_changed=None, cascade="default"):
         # Set the proof code. Optionally keep a set of proofs whose validity changes.
+        # Choose a cascade option out of:
+        #   cascade == None - don't refresh any dependants
+        #   cascade == "all" - refresh all immediate dependants
+        #   cascade == "default" - refresh dependants only if validity has changed
 
-        validity = self.proof.valid
+        previous_validity = self.proof.valid if self.proof is not None else True
 
         self.proof_text = code
 
@@ -572,13 +612,13 @@ class ProofModel(models.Model):
 
         self.save()
 
-        if not self.proof.valid == validity:
+        if (cascade == "all") or (cascade == "default" and not (self.proof.valid == previous_validity)):
             if validity_changed is not None:
                 validity_changed.add(self)
 
             # Validity has changed - refresh the dependant proofs
             for p in self.dependants.all():
-                p.refresh(refresh_system=False, validity_changed=validity_changed)
+                p.refresh(refresh_system=False, validity_changed=validity_changed, cascade=cascade)
 
     def parse_import(self, path, reference_dict=None, parent=None, parent_path=None):
         # Parse an import path on this proof and store it in the reference dictionary.
@@ -821,11 +861,11 @@ class ProofModel(models.Model):
 
         return options
 
-    def refresh(self, refresh_system=True, validity_changed=None):
+    def refresh(self, refresh_system=True, validity_changed=None, cascade="default"):
         # Set a new instance of the proof. Optionally keep a set of proofs whose validity changes.
         if refresh_system:
             self.formal_system().refresh()
-        self.set_code(self.code(), validity_changed)
+        self.set_code(self.code(), validity_changed, cascade)
 
     def parent_folder(self):
         return self.folder_entry.parent_folder
@@ -843,15 +883,19 @@ class ProofModel(models.Model):
         # Is this proof publishable?
 
         # First, the proof has to be not published already
-        if self.folder_entry.published is not None:
+        if self.datetime_published() is not None:
             return False
 
         # It has to be root level
-        if self.folder_entry.parent_folder is not None:
+        if self.parent_folder() is not None:
             return False
 
         # It has to be valid
         if not self.proof.valid:
+            return False
+
+        # The formal system has to be published
+        if self.formal_system().published is None:
             return False
 
         # Referenced proofs have to be published

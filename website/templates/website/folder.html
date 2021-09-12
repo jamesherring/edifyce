@@ -14,7 +14,7 @@
         {% include "website/folder_path.html" with edit_last=editable %}
     </h2>
 
-    <p>Owner: <a href="{% url 'website:profile_view' folder.owner.slug %}">{{ folder.owner.name }}</a></p>
+    <p>Owner: <a href="{% url 'website:profile_view' folder.owner.id folder.owner.slug %}">{{ folder.owner.name }}</a></p>
     <br/>
 
     {% include 'website/folder_list.html' with system=False author=False entries=folder.entries.all %}
@@ -48,7 +48,7 @@
     <div id="confirm-publish-modal" class="modal-outer hidden">
         <div class="modal-inner" style="text-align: left;">
             <h3>Are you sure you want to publish?</h3>
-            <p>You will not be able to edit or unpublish this proof.</p>
+            <p>You will not be able to edit or unpublish any proofs in this folder.</p>
             <div class="centered">
                 <div class="button confirm-publish-button">Publish</div>
                 <div class="button grey-button">Cancel</div>

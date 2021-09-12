@@ -24,6 +24,7 @@ urlpatterns = [
 
     path("system/ajax/create/", formalSystemCreateSubmitView, name="formal_system_create_submit"),
     path("system/ajax/save/", formalSystemSaveView, name="formal_system_save"),
+    path("system/ajax/publish/", formalSystemPublishView, name="formal_system_publish"),
 
     # Folders
     path("folder/view/<folder_id>/<folder_slug>/", folderView, name="folder"),
