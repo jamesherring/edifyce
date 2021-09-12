@@ -1,3 +1,5 @@
+import datetime
+
 from django.shortcuts import render
 from django.http import HttpResponse
 from django.contrib.auth.decorators import login_required
@@ -204,11 +206,51 @@ def formalSystemSaveView(request):
         new_code = request.POST.get("code", False)
 
         # Set the system code
-        system.set_code(new_code)
+        result = system.set_code(new_code)
+
+        if "errors" in result:
+            return HttpResponse(json.dumps({
+                "success": False,
+                "errorMessage": "Please fix the following error(s):<br/>" + "<br/>".join(result["errors"])
+            }))
 
         return HttpResponse(json.dumps({
             "success": True,
             "message": "Saved"
+        }))
+
+    except Exception as e:
+        return HttpResponse(json.dumps({
+            "success": False,
+            "errorMessage": str(e)
+        }))
+
+
+@login_required
+def formalSystemPublishView(request):
+    # Ajax view to publish a formal system
+
+    try:
+
+        system_id = request.POST.get("system_id", False)
+        system = FormalSystemModel.objects.get(id=system_id)
+
+        if not request.user.profile == system.owner:
+            # User is not the owner of this system
+            return HttpResponse(json.dumps({
+                "success": False,
+                "errorMessage": "Authentication error."
+            }))
+
+        # The system can't be published already
+        assert system.published is None
+
+        # Publish the system
+        system.published = datetime.datetime.now()
+        system.save()
+
+        return HttpResponse(json.dumps({
+            "success": True,
         }))
 
     except Exception as e:
@@ -307,8 +349,8 @@ def folderCreateView(request):
 def folderDeleteView(request, folder_id, folder_slug):
     folder = ProofFolder.objects.get(id=folder_id)
 
-    if not request.user.profile == folder.owner():
-        # User is not the owner of the proof
+    if (not request.user.profile == folder.owner()) or (folder.datetime_published() is not None):
+        # User is not the owner of the proof, or the folder is published
         return redirect(folder.get_absolute_url())
 
     return render(request, "website/folder_delete.html", {
@@ -322,8 +364,8 @@ def folderDeleteSubmitView(request, folder_id, folder_slug):
 
     folder = ProofFolder.objects.get(id=folder_id)
 
-    if not request.user.profile == folder.owner():
-        # User is not the owner of the proof
+    if (not request.user.profile == folder.owner()) or (folder.datetime_published() is not None):
+        # User is not the owner of the proof, or the folder is published
         return redirect(folder.get_absolute_url())
 
     # Delete the folder entry, which cascades to delete the folder.
@@ -414,8 +456,8 @@ def proofEditView(request, proof_id, proof_slug):
 
     proof = ProofModel.objects.get(id=proof_id)
 
-    if not request.user.profile == proof.owner():
-        # Redirect
+    if (not request.user.profile == proof.owner()) or (proof.datetime_published() is not None):
+        # User is not the owner of the proof, or the proof is published
         return redirect(proof.get_absolute_url())
 
     proof.refresh()
@@ -437,8 +479,8 @@ def proofSaveView(request):
         proof_id = request.POST.get("proof_id", False)
         proof = ProofModel.objects.get(id=proof_id)
 
-        if not request.user.profile == proof.owner():
-            # User is not the owner of the proof
+        if (not request.user.profile == proof.owner()) or (proof.datetime_published() is not None):
+            # User is not the owner of the proof, or the proof is published
             return HttpResponse(json.dumps({
                 "success": False,
                 "errorMessage": "Authentication error."
@@ -525,8 +567,8 @@ def proofDeleteView(request, proof_id, proof_slug):
 
     proof = ProofModel.objects.get(id=proof_id)
 
-    if not request.user.profile == proof.owner():
-        # User is not the owner of the proof
+    if (not request.user.profile == proof.owner()) or (proof.datetime_published() is not None):
+        # User is not the owner of the proof, or the proof is published
         return redirect(proof.get_absolute_url())
 
     return render(request, "website/proof_delete.html", {
@@ -540,8 +582,8 @@ def proofDeleteSubmitView(request, proof_id, proof_slug):
 
     proof = ProofModel.objects.get(id=proof_id)
 
-    if not request.user.profile == proof.owner():
-        # User is not the owner of the proof
+    if (not request.user.profile == proof.owner()) or (proof.datetime_published() is not None):
+        # User is not the owner of the proof, or the proof is published
         return redirect(proof.get_absolute_url())
 
     # Delete the folder entry, which cascades to delete the proof
@@ -550,7 +592,6 @@ def proofDeleteSubmitView(request, proof_id, proof_slug):
     messages.add_message(request, messages.INFO, "Proof deleted.")
 
     return redirect(request.user.profile)
-
 
 
 @login_required

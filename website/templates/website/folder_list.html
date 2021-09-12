@@ -22,6 +22,8 @@
 
             <div class="table-cell" data-name="published">Published</div>
 
+            <div class="table-cell" data-name="order">Order</div>
+
         </div>
 
         {% for entry in entries %}
@@ -54,6 +56,8 @@
                                 {{ entry.published.published|naturaltime }}
                             {% endif %}
                         </div>
+
+                        <div class="table-cell" data-name="order">{{ entry.order }}</div>
 
                     </div>
 
@@ -89,6 +93,8 @@
                                 {{ entry.published.published|naturaltime }}
                             {% endif %}
                         </div>
+
+                        <div class="table-cell" data-name="order">{{ entry.order }}</div>
 
                     </div>
                 {% endwith %}

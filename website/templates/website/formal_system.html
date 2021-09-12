@@ -1,6 +1,7 @@
 {% extends 'base.html' %}
 
 {% load static %}
+{% load humanize %}
 
 
 {% block main_content %}
@@ -92,18 +93,32 @@
 
     <div class="centered">
         <a href="{% url 'website:formal_system_code' system.id system.slug %}"><div class="button">View</div></a>
-        {% if request.user.is_authenticated and request.user.profile == system.owner %}
+        {% if request.user.is_authenticated and request.user.profile == system.owner and system.published == None %}
             <a href="{% url 'website:formal_system_edit' system.id system.slug %}">
                 <div class="button">Edit</div>
             </a>
         {% endif %}
     </div>
 
+    {% if request.user.is_authenticated and request.user.profile == system.owner and system.published == None %}
+        <h2>Publish</h2>
+        <p>Publish the system so that other users can use it to write proofs.</p>
+        <div class="centered">
+            <div class="button publish-button">Publish</div>
+        </div>
+    {% endif %}
+
+    {% if not system.published == None %}
+        <p style="margin-top: 4rem;">Published {{ system.published|naturaltime }}.</p>
+    {% endif %}
+
+
 
 {% endblock %}
 
 
 {% block js %}
+    <script src="{% static 'website/formal_system.js' %}"></script>
     <script src="{% static 'website/folder.js' %}"></script>
     <script src="{% static 'website/folder_list.js' %}"></script>
 {% endblock %}
@@ -111,5 +126,17 @@
 
 {% block modal %}
     {% include "website/create_folder_modal.html" %}
+
+    <div id="confirm-publish-modal" class="modal-outer hidden">
+        <div class="modal-inner" style="text-align: left;">
+            <h3>Are you sure you want to publish?</h3>
+            <p>You will not be able to edit the source code for this system.</p>
+            <div class="centered">
+                <div class="button confirm-publish-button">Publish</div>
+                <div class="button grey-button">Cancel</div>
+            </div>
+        </div>
+
+    </div>
 {% endblock %}
 

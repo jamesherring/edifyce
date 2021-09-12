@@ -61,7 +61,7 @@ class FormalSystem(object):
 
         return references
 
-    def parse(self, text, proof=None, reference_proofs=None, context=None, line_number_offset=0):
+    def parse(self, text, proof=None, proof_model_id=None, reference_proofs=None, context=None, line_number_offset=0):
         # Parse the text into a proof
 
         lines = text.split("\n")
@@ -74,6 +74,7 @@ class FormalSystem(object):
         if context is None:
             # Create a new proof context instance
             context = copy(self.context)
+            context.proof_model_id = proof_model_id
 
         i = -1
         while i + 1 < len(lines):
@@ -770,6 +771,9 @@ class Proof(object):
                             # Probably a mapping
                             mapping.update(self.get_reference_mapping(r, last_proof_line, context))
 
+                        # Otherwise this is not a proof line
+                        raise Exception(r + " is not a proof line.")
+
                     return {
                         "inference_rule": ir,
                         "antecedents": antecedents,
@@ -783,6 +787,7 @@ class Proof(object):
             index = ref.index(".")
             proof_ref = ref[:index]
             remainder = ref[index + 1:]
+
             item = self.get_reference(proof_ref, context)
 
             if isinstance(item, str):
@@ -803,7 +808,7 @@ class Proof(object):
             pass
 
         # Nothing works
-        return None
+        raise Exception("Invalid reference: " + ref)
 
     @staticmethod
     def get_reference_mapping(ref, source_proof_line, context):
@@ -846,7 +851,7 @@ class Proof(object):
         try:
             reference = self.get_reference(proof_line.reference_string, context)
         except Exception as e:
-            proof_line.invalid_message = "Could not parse reference: " + str(e)
+            proof_line.invalid_message = str(e)
             proof_line.valid = False
             return False
 
@@ -939,11 +944,38 @@ class Proof(object):
 
             ref_item = item["target"]
 
+        elif path in self.reference_context:
+            # Found it
+            ref_item = self.reference_context[path]
+
+            if hasattr(ref_item, "proof"):
+                # This is probably a ProofModel
+                ref_item = ref_item.proof
+
         else:
             parts = path.split(".")
-            initial = ".".join(parts[:-1])
 
-            if initial in self.reference_proofs:
+            initial = parts[0]
+            remainder = ".".join(parts[1:])
+
+            if initial in self.reference_context:
+                # Check reference context first
+                obj = self.reference_context[initial]
+
+                try:
+                    ref_item = obj.get_reference(remainder, context)
+
+                    if hasattr(ref_item, "proof"):
+                        # This is probably a ProofModel
+                        ref_item = ref_item.proof
+
+                except Exception as e:
+                    return {
+                        "success": False,
+                        "errorMessage": str(e)
+                    }
+
+            elif initial in self.reference_proofs:
                 # Found it
                 ref_dict = self.reference_proofs[initial]
 
@@ -957,14 +989,14 @@ class Proof(object):
                     }
 
                 ref_proof = ref_dict["target"]
-                ref_item = ref_proof.get_reference(parts[-1], context)
+                ref_item = ref_proof.get_reference(remainder, context)
 
                 if ref_item is None:
                     # No such label in the ref proof
                     add_reference(ref_proof)
                     return {
                         "success": False,
-                        "errorMessage": initial + " does not have a line with label " + parts[-1] + ".",
+                        "errorMessage": initial + " does not have a line with label " + remainder + ".",
                         "target": ref_proof
                     }
 
@@ -986,8 +1018,8 @@ class Proof(object):
 
         # Add the reference
         self.reference_context[label] = ref_item
-
         add_reference(ref_item)
+
         return {
             "success": True,
             "target": ref_item

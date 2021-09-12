@@ -280,7 +280,7 @@ def path_maps_to(path, other_path, context, other_context, mapping):
 class Context(object):
 
     def __init__(self, variables=None, string_variables=None, string_variable_matches=None, definitions=None,
-                 logical=None, reference_object=None, mapping=None, condition_validation=False):
+                 logical=None, reference_object=None, mapping=None, condition_validation=False, proof_model_id=None):
 
         self.variables = variables if variables is not None else dict()
         self.string_variables = string_variables if string_variables is not None else dict()
@@ -302,6 +302,9 @@ class Context(object):
 
         # Whether we are validating a condition
         self.condition_validation = condition_validation
+
+        # The proof model id
+        self.proof_model_id = proof_model_id
 
     def set_string_variable_matches(self):
         # Set string variable matches
@@ -342,6 +345,9 @@ class Context(object):
             return False
 
         if not self.condition_validation == other.condition_validation:
+            return False
+
+        if not self.proof_model_id == other.proof_model_id:
             return False
 
         # Assume True for recursive checks
@@ -410,7 +416,8 @@ class Context(object):
             reference_object=self.reference_object,
             mapping=copy(self.mapping),
 
-            condition_validation=self.condition_validation
+            condition_validation=self.condition_validation,
+            proof_model_id=self.proof_model_id
         )
 
 

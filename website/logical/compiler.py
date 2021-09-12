@@ -33,13 +33,17 @@ def compile(code, system_dict=None):
 
     context = root.run(context)
 
+    # Return error log if there are errors
+    if len(context.error_log) > 0:
+        return {"errors": context.error_log}
+
     # Return the formal system
     for item in context.variables.values():
         if type(item) is FormalSystem:
-            return item
+            return {"system": item}
 
     # Return an empty formal system
-    return FormalSystem(name="")
+    return {"system": FormalSystem(name="")}
 
 
 def constant(s):
@@ -174,6 +178,9 @@ class Context(object):
         # External systems for reference
         self.system_dict = dict()
 
+        # Error log
+        self.error_log = []
+
     def inherit(self, parent):
         # Inherit from parent context
 
@@ -193,6 +200,7 @@ class Context(object):
         new_context.proof_context = copy(self.proof_context)
         new_context.pre_format = copy(self.pre_format)
         new_context.system_dict = copy(self.system_dict)
+        new_context.error_log = copy(self.error_log)
 
         return new_context
 
@@ -924,7 +932,7 @@ class AbstractSyntaxTree(object):
             tree.run(sub_context)
 
             if tree.error is not None:
-                print(str(tree.line_number) + ": " + tree.error)
+                context.error_log.append(str(tree.line_number) + ": " + tree.error)
 
         # Add inference rules to formal systems
         if isinstance(new_object, InferenceRule) and isinstance(current_object, FormalSystem):
