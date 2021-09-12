@@ -917,3 +917,32 @@ def save_slug(sender, instance, **kwargs):
     if sender in (FormalSystemModel, ProofFolder, ProofModel):
         # It's a model that uses slugs
         instance.slug = import_slug(instance.name)
+
+
+# Check for slug conflicts whenever a new folder entry is saved
+@receiver(pre_save)
+def check_for_slug_conflicts(sender, instance, **kwargs):
+    # Filter for other entries in the same folder
+
+    if sender not in (ProofFolder, ProofModel):
+        return
+
+    entry = instance.folder_entry
+
+    other_entries = FolderEntry.objects.filter(
+        parent_folder=entry.parent_folder,
+        owner=entry.owner,
+        formal_system=entry.formal_system,
+        published=entry.published
+    )
+
+    for other_entry in other_entries:
+        if other_entry == entry:
+            continue
+
+        other_entry_item = other_entry.item()
+        if other_entry_item.slug == instance.slug:
+            entry.delete()
+            instance.delete()
+            raise Exception("Could not save item - " + instance.name +
+                            " has a slug that collides with another entry in this folder.")
