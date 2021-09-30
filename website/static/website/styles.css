@@ -66,6 +66,7 @@ div#page-header {
     top: 0;
     left: 0;
     width: 100%;
+    z-index: 20;
 }
 
 /* Centered header div */

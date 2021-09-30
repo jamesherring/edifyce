@@ -14,7 +14,7 @@ def indexView(request):
     # Index view
 
     return render(request, "website/index.html", {
-        "systems": FormalSystemModel.objects.all(),
+        "systems": FormalSystemModel.objects.filter(published__isnull=False),
         "title": "Edifyce"
     })
 
@@ -100,23 +100,29 @@ def formalSystemView(request, system_id, system_slug):
 
     system = FormalSystemModel.objects.get(id=system_id)
 
-    entries = FolderEntry.objects.filter(parent_folder__isnull=True, formal_system=system, published__isnull=False).order_by("-published__published")
+    # System must be published or belong to the user
+    if system.published is not None or (request.user.is_authenticated and request.user.profile == system.owner):
 
-    user_proofs_published = None
-    user_proofs_not_published = None
-    if request.user.is_authenticated:
-        user_proofs = FolderEntry.objects.filter(parent_folder__isnull=True, owner=request.user.profile, formal_system=system)
+        entries = FolderEntry.objects.filter(parent_folder__isnull=True, formal_system=system, published__isnull=False).order_by("-published__published")
 
-        user_proofs_published = user_proofs.filter(published__isnull=False)
-        user_proofs_not_published = user_proofs.filter(published__isnull=True)
+        user_proofs_published = None
+        user_proofs_not_published = None
+        if request.user.is_authenticated:
+            user_proofs = FolderEntry.objects.filter(parent_folder__isnull=True, owner=request.user.profile, formal_system=system)
 
-    return render(request, "website/formal_system.html", {
-        "system": system,
-        "title": system.name,
-        "entries": entries,
-        "user_proofs_published": user_proofs_published,
-        "user_proofs_not_published": user_proofs_not_published
-    })
+            user_proofs_published = user_proofs.filter(published__isnull=False)
+            user_proofs_not_published = user_proofs.filter(published__isnull=True)
+
+        return render(request, "website/formal_system.html", {
+            "system": system,
+            "title": system.name,
+            "entries": entries,
+            "user_proofs_published": user_proofs_published,
+            "user_proofs_not_published": user_proofs_not_published
+        })
+
+    # Not authenticated
+    return redirect("website:index")
 
 
 @login_required
@@ -245,6 +251,14 @@ def formalSystemPublishView(request):
         # The system can't be published already
         assert system.published is None
 
+        # Check there is not already a published system with the same slug
+        count = FormalSystemModel.objects.filter(published__isnull=False, slug=system.slug).count()
+        if count > 0:
+            return HttpResponse(json.dumps({
+                "success": False,
+                "errorMessage": "A formal system with this slug already exists."
+            }))
+
         # Publish the system
         system.published = datetime.datetime.now()
         system.save()
@@ -287,7 +301,7 @@ def folderExpandView(request):
         folder = entry.prooffolder
 
         # Check the entry belongs to the owner or is published
-        if (not entry.owner == request.user.profile) and folder.datetime_published() is None:
+        if (not (request.user.is_authenticated and entry.owner == request.user.profile)) and folder.datetime_published() is None:
             return HttpResponse(json.dumps({
                 "success": False,
                 "errorMessage": "Authentication error."
@@ -618,6 +632,27 @@ def publishView(request):
             return HttpResponse(json.dumps({
                 "success": False,
                 "errorMessage": "This item is not ready to be published."
+            }))
+
+        # Check there is not already a published entry with the same slug
+        proof_count = ProofModel.objects.filter(
+            folder_entry__formal_system=entry.formal_system,
+            folder_entry__parent_folder__isnull=True,
+            folder_entry__published__isnull=False,
+            slug=item.slug
+        ).count()
+
+        folder_count = ProofFolder.objects.filter(
+            folder_entry__formal_system=entry.formal_system,
+            folder_entry__parent_folder__isnull=True,
+            folder_entry__published__isnull=False,
+            slug=item.slug
+        ).count()
+
+        if proof_count + folder_count > 0:
+            return HttpResponse(json.dumps({
+                "success": False,
+                "errorMessage": "A published entry with this slug already exists."
             }))
 
         # Create a new published entry instance
