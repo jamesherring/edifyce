@@ -947,8 +947,9 @@ class AbstractSyntaxTree(object):
             context = new_object.context
             context.variables.update(sub_context.variables)
 
-            # Set the formal system build context
+            # Set the formal system build context and build the pattern dictionary
             new_object.build_context = sub_context
+            new_object.build_pattern_dictionary()
 
         return context
 

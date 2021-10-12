@@ -20,10 +20,45 @@ class FormalSystem(object):
         # The build context from compiler
         self.build_context = build_context
 
+        # A pattern dictionary of all the patterns used in build context
+        self.pattern_dictionary = {}
+
         # Default proof context
         self.context = Context(
             logical=context if context is not None else dict()
         )
+
+    def build_pattern_dictionary(self):
+        # Build the pattern dictionary using items included in the build context
+
+        if self.build_context is None:
+            return
+
+        def add_pattern(dct, pattern):
+            # Add a pattern to the dictionary
+
+            if pattern.url_id in dct:
+                return
+
+            # Add the pattern to the dictionary
+            dct[pattern.url_id] = pattern
+
+            # Look for subpatterns
+            if isinstance(pattern, StringPattern):
+                for sub_pattern in pattern.variables.values():
+                    add_pattern(dct, sub_pattern)
+
+            elif isinstance(pattern, UnionPattern):
+                for sub_pattern in pattern.patterns:
+                    add_pattern(dct, sub_pattern)
+
+        # Look in the build dictionary variables for patterns
+        for item in self.build_context.variables.values():
+            if not isinstance(item, Pattern):
+                continue
+
+            # Add the pattern
+            add_pattern(self.pattern_dictionary, item)
 
     def get_references(self, text):
         # Get references to external proofs from the given code.
@@ -318,9 +353,6 @@ class FormalSystem(object):
             return False
 
         if not self.name == other.name:
-            return False
-
-        if not self.formatting == other.formatting:
             return False
 
         if not len(self.line_types) == other.line_types:
@@ -1000,7 +1032,7 @@ class Proof(object):
                         "target": ref_proof
                     }
 
-                if ref_proof.has_warnings or not ref_proof.valid:
+                if isinstance(ref_proof, Proof) and (ref_proof.has_warnings or not ref_proof.valid):
                     # Referenced proof has errors
                     add_reference(ref_proof)
                     return {

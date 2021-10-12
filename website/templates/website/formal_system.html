@@ -44,20 +44,10 @@
         </div>
     {% endif %}
 
-    <h2>Patterns</h2>
-
-    {% include "website/pattern_structure.html" with p=system.formal_system.context.variables.formula %}
-
-    <h2>Axioms</h2>
-
-    {% for axiom in system.formal_system.axioms %}
-        <p class="bold pattern">{{ axiom.name }}</p>
-
-        {% include "website/pattern.html" with p=axiom %}
-
-    {% empty %}
-        <p>No axioms to show.</p>
-    {% endfor %}
+    {% if formula %}
+        <h2>Formula</h2>
+        {% include "website/pattern_structure.html" with p=formula %}
+    {% endif %}
 
     <h2>Inference Rules</h2>
 
