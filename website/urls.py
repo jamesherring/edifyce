@@ -21,6 +21,7 @@ urlpatterns = [
     path("system/create/", formalSystemCreateView, name="formal_system_create"),
     path("system/edit/<system_id>/<system_slug>/", formalSystemEditView, name="formal_system_edit"),
     path("system/view_source/<system_id>/<system_slug>/", formalSystemCodeView, name="formal_system_code"),
+    path("system/view/<system_id>/<system_slug>/pattern/<pattern_id>/", formalSystemPattern, name="formal_system_pattern"),
 
     path("system/ajax/create/", formalSystemCreateSubmitView, name="formal_system_create_submit"),
     path("system/ajax/save/", formalSystemSaveView, name="formal_system_save"),

@@ -232,6 +232,9 @@ class FormalSystemModel(models.Model):
 class FolderEntry(OrderedModel):
     # A folder entry (either a proof or a folder)
 
+    class Meta:
+        verbose_name_plural = "Folder entries"
+
     id = models.CharField(default=id_gen, max_length=64, primary_key=True, editable=False)
 
     parent_folder = models.ForeignKey("ProofFolder", on_delete=models.CASCADE, blank=True, null=True, related_name="entries")
@@ -345,7 +348,7 @@ class FolderEntry(OrderedModel):
                 continue
 
             # Otherwise, we found a difference
-            return self_parent.order < other_parent.order
+            return self_parent.folder_entry.order < other_parent.folder_entry.order
 
     def validate(self):
         # Check this entry (and any sub-entries) are valid proofs
@@ -369,11 +372,14 @@ class FolderEntry(OrderedModel):
 
     def __str__(self):
         item = self.item()
-        return item.model_name + ":" + str(item)
+        return item.model_name + ": " + str(item)
 
 
 class PublishedEntry(models.Model):
     # A published entry
+
+    class Meta:
+        verbose_name_plural = "Published entries"
 
     id = models.CharField(default=id_gen, max_length=64, primary_key=True, editable=False)
 
@@ -388,6 +394,9 @@ class PublishedEntry(models.Model):
 
     def owner(self):
         return self.folder_entry.owner
+
+    def __str__(self):
+        return str(self.folder_entry)
 
 
 class ProofFolder(models.Model):
@@ -408,6 +417,10 @@ class ProofFolder(models.Model):
 
     def get_absolute_url(self):
         return "/folder/view/" + self.id + "/" + self.slug + "/"
+
+    def items(self):
+        # Return an ordered queryset of entries in the folder
+        return FolderEntry.objects.filter(parent_folder=self).order_by("order")
 
     def parent_folder(self):
         return self.folder_entry.parent_folder

@@ -113,12 +113,22 @@ def formalSystemView(request, system_id, system_slug):
             user_proofs_published = user_proofs.filter(published__isnull=False)
             user_proofs_not_published = user_proofs.filter(published__isnull=True)
 
+        # Get the formula pattern definition
+        formula = None
+        if "formula" in system.formal_system.build_context.variables:
+            formula = system.formal_system.build_context.variables["formula"]
+
+            if not isinstance(formula, Pattern):
+                # Formula needs to be a pattern
+                formula = None
+
         return render(request, "website/formal_system.html", {
             "system": system,
             "title": system.name,
             "entries": entries,
             "user_proofs_published": user_proofs_published,
-            "user_proofs_not_published": user_proofs_not_published
+            "user_proofs_not_published": user_proofs_not_published,
+            "formula": formula
         })
 
     # Not authenticated
@@ -272,6 +282,25 @@ def formalSystemPublishView(request):
             "success": False,
             "errorMessage": str(e)
         }))
+
+
+def formalSystemPattern(request, system_id, system_slug, pattern_id):
+    # View the structure of a pattern in a formal system
+
+    system = FormalSystemModel.objects.get(id=system_id)
+
+    if pattern_id not in system.formal_system.pattern_dictionary:
+        # Redirect
+        return redirect(system.get_absolute_url())
+
+    pattern = system.formal_system.pattern_dictionary[pattern_id]
+
+    return render(request, "website/formal_system_pattern.html", {
+        "system": system,
+        "pattern": pattern
+    })
+
+
 
 
 def folderView(request, folder_id, folder_slug):

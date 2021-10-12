@@ -1,5 +1,6 @@
 import regex as re
 from copy import copy
+import random
 
 
 def parse_path(path):
@@ -2141,6 +2142,9 @@ class Pattern(object):
 
         # Default certainty of 0
         self.certainty = 0
+
+        # Arbitrary id for use in URLs
+        self.url_id = "".join(random.SystemRandom().choice("0123456789abcdef") for _ in range(8))
 
     def pre_format_apply(self, s):
         # Remove formatting in the given string before matching

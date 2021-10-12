@@ -17,7 +17,7 @@
     <p>Owner: <a href="{% url 'website:profile_view' folder.owner.id folder.owner.slug %}">{{ folder.owner.name }}</a></p>
     <br/>
 
-    {% include 'website/folder_list.html' with system=False author=False entries=folder.entries.all %}
+    {% include 'website/folder_list.html' with system=False author=False entries=folder.items %}
 
     {% if editable %}
         <div class="centered">
