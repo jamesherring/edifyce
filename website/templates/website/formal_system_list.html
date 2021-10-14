@@ -2,7 +2,11 @@
 {% load humanize %}
 
 {% if systems.count == 0 %}
-    <p>None</p>
+    <div class="note">
+        <div class="centered">
+            <p>No formal systems.</p>
+        </div>
+    </div>
 {% else %}
     <div class="table system-list-table">
 
