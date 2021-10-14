@@ -12,8 +12,10 @@ urlpatterns = [
     # Profile
     path("profile/<profile_id>/<profile_slug>/", profileView, name="profile_view"),
 
-    # Admin views
-    path("superadmin/", adminView, name="admin"),
+    # Settings
+    path("settings/", settingsView, name="settings"),
+
+    # Admin ajax views
     path("ajax/admin/refresh-proofs/", refreshProofsView, name="refresh_proofs"),
 
     # Formal systems

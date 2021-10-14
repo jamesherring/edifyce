@@ -73,15 +73,10 @@ def profileView(request, profile_id, profile_slug):
 
 
 @login_required
-def adminView(request):
-    # Admin view with powerful buttons
-
-    if not request.user.is_superuser:
-        # User not an admin
-        return redirect("website:index")
-
-    return render(request, "website/admin.html", {
-        "title": "Admin"
+def settingsView(request):
+    # View for user settings (also includes admin buttons for admins)
+    return render(request, "website/settings.html", {
+        "title": "Settings"
     })
 
 

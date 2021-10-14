@@ -64,12 +64,8 @@
                     </div><br/>
                     <div id="user-menu" class="hidden">
                         <a href="{% url 'website:profile_view' request.user.profile.id request.user.profile.slug %}">Profile</a>
-                        <a>Settings</a>
-
-                        {% if request.user.is_superuser %}
-                            <a href="{% url 'website:admin' %}">Admin</a>
-                        {% endif %}
-                        <a href="{% url 'account_logout' %}">Logout</a>
+                        <a href="{% url 'website:settings' %}">Settings</a>
+                        <a href="{% url 'account_logout' %}">Sign Out</a>
                     </div>
                 {% else %}
                     <a href="{% url 'account_login' %}">Sign In</a>
