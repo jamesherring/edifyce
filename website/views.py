@@ -24,19 +24,33 @@ def profileView(request, profile_id, profile_slug):
 
     profile = Profile.objects.get(id=profile_id)
 
+    # By default - a user cannot see another user's unpublished proofs
+    unpublished_viewable = False
+    if request.user.is_authenticated and request.user.profile == profile:
+        # A user can view their own proofs
+        unpublished_viewable = True
+
+    if request.user.is_superuser:
+        # An admin can see everything
+        unpublished_viewable = True
+
     # Get the top level entries for this profile
     entries = FolderEntry.objects.filter(parent_folder__isnull=True, owner=profile)
+
+    if not unpublished_viewable:
+        # Remove unpublished entries
+        entries = entries.filter(published__isnull=False)
 
     # Get the formal systems used
     systems = FormalSystemModel.objects.filter(entries__in=entries).distinct()
 
     # Sort the entries by systems
-    if request.user.is_authenticated and request.user.profile == profile:
-        # The user is viewing their own profile - include unpublished proofs
+    if unpublished_viewable:
         system_list = [
             {
                 "system": system,
-                "entries": entries.filter(formal_system=system).order_by("order")
+                "entries": entries.filter(formal_system=system, published__isnull=False).order_by("order"),
+                "unpublished_entries": entries.filter(formal_system=system, published__isnull=True).order_by("order")
             } for system in systems
         ]
 
@@ -44,14 +58,17 @@ def profileView(request, profile_id, profile_slug):
         system_list = [
             {
                 "system": system,
-                "entries": entries.filter(formal_system=system, published__isnull=False).order_by("order")
+                "entries": entries.filter(formal_system=system).order_by("order"),
+                "unpublished_entries": FolderEntry.objects.none()
             } for system in systems
         ]
 
     return render(request, "website/profile.html", {
         "title": profile.name(),
         "profile": profile,
-        "system_list": system_list
+        "system_list": system_list,
+        "editable": request.user.is_authenticated and request.user.profile == profile,
+        "unpublished_viewable": unpublished_viewable
     })
 
 
@@ -299,8 +316,6 @@ def formalSystemPattern(request, system_id, system_slug, pattern_id):
         "system": system,
         "pattern": pattern
     })
-
-
 
 
 def folderView(request, folder_id, folder_slug):
