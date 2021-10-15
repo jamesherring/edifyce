@@ -127,7 +127,7 @@ def formalSystemView(request, system_id, system_slug):
 
         # Get the formula pattern definition
         formula = None
-        if "formula" in system.formal_system.build_context.variables:
+        if system.formal_system.build_context is not None and "formula" in system.formal_system.build_context.variables:
             formula = system.formal_system.build_context.variables["formula"]
 
             if not isinstance(formula, Pattern):

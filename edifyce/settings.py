@@ -143,7 +143,7 @@ else:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.mysql',
-            'NAME': 'default',
+            'NAME': 'edifyce$default',
             'USER': 'edifyce',
             'PASSWORD': os.environ.get('DB_PASSWORD', ''),
             'HOST': 'edifyce.mysql.pythonanywhere-services.com',  # Or an IP Address that your DB is hosted on
