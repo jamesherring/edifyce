@@ -349,7 +349,7 @@ def folderExpandView(request):
         return HttpResponse(json.dumps({
             "success": True,
             "html": render_to_string("website/folder_list.html", {
-                "entries": folder.entries.all()
+                "entries": folder.entries.order_by("order")
             })
         }))
 

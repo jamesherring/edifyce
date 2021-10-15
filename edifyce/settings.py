@@ -12,6 +12,8 @@ https://docs.djangoproject.com/en/3.0/ref/settings/
 
 import os
 
+ENVIRONMENT = os.environ.get("ENVIRONMENT")
+
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -25,11 +27,16 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'change-me-in-production')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = [
-    "localhost",
-    "127.0.0.1",
-    "edifyce.pythonanywhere.com"
-]
+if ENVIRONMENT == "local":
+    ALLOWED_HOSTS = [
+        "localhost",
+        "127.0.0.1",
+        "edifyce.pythonanywhere.com"
+    ]
+else:
+    ALLOWED_HOSTS = [
+        "edifyce.pythonanywhere.com"
+    ]
 
 
 # Application definition
@@ -124,12 +131,24 @@ WSGI_APPLICATION = 'edifyce.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/3.0/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': os.path.join(BASE_DIR, 'db.sqlite3'),
+
+if ENVIRONMENT == "local":
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': os.path.join(BASE_DIR, 'db.sqlite3'),
+        }
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.mysql',
+            'NAME': 'default',
+            'USER': 'edifyce',
+            'PASSWORD': os.environ.get('DB_PASSWORD', ''),
+            'HOST': 'edifyce.mysql.pythonanywhere-services.com',  # Or an IP Address that your DB is hosted on
+        }
+    }
 
 
 # Password validation
@@ -169,9 +188,18 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/3.0/howto/static-files/
 
 STATIC_URL = '/static/'
+STATIC_ROOT = 'static_root/'
 
+if ENVIRONMENT == "local":
+    EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+else:
+    EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 
-EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+    EMAIL_USE_TLS = True
+    EMAIL_HOST = 'smtp.gmail.com'
+    EMAIL_PORT = 587
+    EMAIL_HOST_USER = 'REDACTED_EMAIL'
+    EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 
 # Default primary key
 DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'

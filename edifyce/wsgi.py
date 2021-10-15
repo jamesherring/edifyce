@@ -13,4 +13,7 @@ from django.core.wsgi import get_wsgi_application
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'edifyce.settings')
 
+# Assume we are in the local environment
+os.environ.setdefault('ENVIRONMENT', 'local')
+
 application = get_wsgi_application()
