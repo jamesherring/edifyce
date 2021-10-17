@@ -1052,6 +1052,15 @@ class Proof(object):
         self.reference_context[label] = ref_item
         add_reference(ref_item)
 
+        # Add any definitions we have imported
+        if isinstance(ref_item, ProofLine) and ref_item.line_type is not None and ref_item.line_type.behaviour == "definition":
+            context.definitions.append(ref_item.definition)
+
+        elif isinstance(ref_item, Proof):
+            for line in ref_item.proof_lines:
+                if isinstance(line, ProofLine) and line.line_type is not None and line.line_type.behaviour == "definition":
+                    context.definitions.append(line.definition)
+
         return {
             "success": True,
             "target": ref_item
