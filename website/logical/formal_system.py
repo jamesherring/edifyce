@@ -913,7 +913,7 @@ class Proof(object):
                 proof_line.inference_rule = inference_rule
                 return True
 
-        if len(antecedents) == 0 and len(inference_rule.antecedents) < 5:
+        elif len(antecedents) == 0 and len(inference_rule.antecedents) < 5:
             # Antecedents not provided. Try to justify:
             return self.justify(
                 deduction=proof_line,
