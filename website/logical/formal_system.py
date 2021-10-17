@@ -211,7 +211,7 @@ class FormalSystem(object):
                     proof_line.edit_context(new_context)
 
                     # Find the next line with this indent
-                    j = line_number + 1
+                    j = i + 1
                     while j < len(lines):
                         block_line = lines[j]
 
