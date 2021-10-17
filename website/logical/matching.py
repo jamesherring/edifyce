@@ -1340,7 +1340,7 @@ class Match(object):
             # Don't consider this incomplete - as we have the whole variable instance
             match_set.complete = True
 
-        if self.pattern is pattern:
+        if self.pattern.equivalent(pattern, context):
             # Include self
 
             if label is not None:
@@ -1349,7 +1349,7 @@ class Match(object):
             if condition is None or self.check_condition(condition, context):
                 match_set.add(self, context)
 
-        if shallow and self.pattern is pattern:
+        if shallow and self.pattern.equivalent(pattern, context):
             # Don't check sub matches
             pass
 
