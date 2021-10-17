@@ -36,7 +36,7 @@
         {% include 'website/folder_list.html' with author=False system=False entries=user_proofs_published %}
 
         <h3>Not Published</h3>
-        {% include 'website/folder_list.html' with author=False editable=True system=False entries=user_proofs_not_published %}
+        {% include 'website/folder_list.html' with author=False editable=True system=False entries=user_proofs_not_published published=False %}
 
         <div class="centered">
             <a href="{% url 'website:proof_create' system.id system.slug %}"><div class="button">New Proof</div></a>
