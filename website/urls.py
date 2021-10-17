@@ -39,6 +39,7 @@ urlpatterns = [
 
     # Proofs
     path("proof/view/<proof_id>/<proof_slug>/", proofView, name="proof"),
+    path("proof/view_source/<proof_id>/<proof_slug>/", proofSourceView, name="proof_source"),
     path("proof/create/<system_id>/<system_slug>/<folder_id>/", proofCreateView, name="proof_create_in_folder"),
     path("proof/create/<system_id>/<system_slug>/", proofCreateView, name="proof_create"),
     path("proof/edit/<proof_id>/<proof_slug>/", proofEditView, name="proof_edit"),

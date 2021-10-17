@@ -474,6 +474,24 @@ def proofView(request, proof_id, proof_slug):
     return redirect("website:index")
 
 
+def proofSourceView(request, proof_id, proof_slug):
+    # View for a proof.
+
+    proof = ProofModel.objects.get(id=proof_id)
+
+    # Proof must be published or belong to the user
+    if proof.datetime_published() is not None or (request.user.is_authenticated and request.user.profile == proof.owner()):
+        return render(request, "website/proof_edit.html", {
+            "proof": proof,
+            "system": proof.formal_system(),
+            "title": proof.formal_system().name + " / " + proof.name,
+            "editable": False
+        })
+
+    # Not authenticated
+    return redirect("website:index")
+
+
 @login_required
 def proofCreateView(request, system_id, system_slug, folder_id=None):
     # Form for creating a proof

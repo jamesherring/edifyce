@@ -15,14 +15,16 @@
         <a href="{% url 'website:proof' proof.id proof.slug %}">{{ proof.name }}</a>
     </h3>
 
-    <div class="top-right">
-        <a id="save">
-            <div class="button">Save</div>
-        </a>
-    </div>
+    {% if editable %}
+        <div class="top-right">
+            <a id="save">
+                <div class="button">Save</div>
+            </a>
+        </div>
+    {% endif %}
 
     <div class="mathjax_ignore">
-        <div id="ace-container">{{ proof.code }}</div><div id="output" class="proof-display"></div>
+        <div id="ace-container"{% if not editable %} class="uneditable"{% endif %}>{{ proof.code }}</div><div id="output" class="proof-display"></div>
     </div>
 
     {{ proof.proof.data|json_script:"proof_data" }}
