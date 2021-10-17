@@ -35,9 +35,9 @@
     <div id="output" class="proof-display" style="margin: 2rem -2rem;"></div>
 
     {% if proof.datetime_published %}
-        <p>Published on {{ proof.datetime_published|date:"jS F Y" }}.</p>
+        <p>Published by <a href="{% url 'website:profile_view' proof.owner.id proof.owner.slug %}">{{ proof.owner.name }}</a> on {{ proof.datetime_published|date:"jS F Y" }}.</p>
     {% else %}
-        <p>Last saved {{ proof.updated|naturaltime }}.</p>
+        <p>Last saved {{ proof.updated|naturaltime }} by <a href="{% url 'website:profile_view' proof.owner.id proof.owner.slug %}">{{ proof.owner.name }}</a>.</p>
     {% endif %}
 
     <div class="centered">

@@ -1770,22 +1770,26 @@ class Match(object):
         return True
 
     def duplicate(self, parent_match=None):
-        # Create a copy of this match.
+        # Create a copy of this match and assign it to the parent
+        m = copy(self)
+        m.parent_match = parent_match
+        return m
+
+    def __str__(self):
+        return self.string
+
+    def __copy__(self):
+        # Create a copy of this match (ignoring the parent match)
         m = Match(
             pattern=copy(self.pattern),
             string=self.string,
             is_variable=self.is_variable
         )
 
-        m.parent_match = parent_match
         m.sub_matches = {key: self.sub_matches[key].duplicate(parent_match=m) for key in self.sub_matches}
-
         m.definition = self.definition
 
         return m
-
-    def __str__(self):
-        return self.string
 
 
 class MatchSet(object):
@@ -2122,6 +2126,17 @@ class MatchSet(object):
             return "Incomplete instances: (" + str_instances + ")"
 
         return "Incomplete instances: (" + str_instances + "), negatives: " + str_negatives
+
+    def __copy__(self):
+        # Make a copy of this matchset
+        return MatchSet(
+            instances=copy(self.instances),
+            negatives=copy(self.negatives),
+            complete=self.complete,
+            allow_multiple=self.allow_multiple,
+            attribute_match=copy(self.attribute_match),
+            attribute_name=self.attribute_name
+        )
 
 
 class Pattern(object):
