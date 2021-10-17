@@ -70,6 +70,12 @@
         <p>None</p>
     {% endfor %}
 
+    <div class="centered">
+        <a href="{% url 'website:proof_source' proof.id proof.slug %}">
+            <div class="button">View Source</div>
+        </a>
+    </div>
+
 {% endblock %}
 
 

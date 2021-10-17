@@ -5,6 +5,11 @@ $(function() {
     var container = $("div#ace-container");
     var editor = new codeEditorClass(container);
 
+    if ($(container).hasClass("uneditable")) {
+        // Set the editor to be read-only
+        editor.editor.setReadOnly(true);
+    }
+
     var root_autocomplete = JSON.parse(document.getElementById("root_autocomplete").innerHTML);
 
     var autocomplete_paths = {};
