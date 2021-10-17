@@ -64,7 +64,7 @@
     {% endfor %}
 
     <h3>Dependant proofs</h3>
-    {% for p in proof.dependants.all %}
+    {% for p in dependants.all %}
         <a href="{% url 'website:proof' p.id p.slug %}">{{ p.name }}</a>
     {% empty %}
         <p>None</p>

@@ -462,12 +462,28 @@ def proofView(request, proof_id, proof_slug):
 
     # Proof must be published or belong to the user
     if proof.datetime_published() is not None or (request.user.is_authenticated and request.user.profile == proof.owner()):
+
+        # Filter dependant proofs that are visible to the user
+        dependants = proof.dependants.all()
+
+        if request.user.is_superuser:
+            # Superuser can see everything
+            pass
+        else:
+            if request.user.is_authenticated:
+                # User can see their proofs and published proofs
+                dependants = dependants.filter(published__isnull=False) | dependants.filter(folder_entry__owner=request.user.profile)
+            else:
+                # User not logged in - can only see their proofs
+                dependants = dependants.filter(published__isnull=False)
+
         return render(request, "website/proof.html", {
             "proof": proof,
             "system": proof.formal_system(),
             "title": proof.formal_system().name + " / " + proof.name,
             "editable": proof.datetime_published() is None and request.user.is_authenticated and
-                        request.user.profile == proof.owner()
+                        request.user.profile == proof.owner(),
+            "dependants": dependants
         })
 
     # Not authenticated
