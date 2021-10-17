@@ -15,11 +15,11 @@
         <p>This system inherits from <a href="{% url 'website:formal_system' system.inherits_from.id system.inherits_from.slug %}">{{ system.inherits_from.name }}</a>.</p>
     {% endif %}
 
-    {% if system.inherited_by.all %}
+    {% if inherited_by.all %}
         <h2>Sub Systems</h2>
         <p>The following systems inherit from {{ system.name }}.</p>
         <ul>
-            {% for sub_system in system.inherited_by.all %}
+            {% for sub_system in inherited_by %}
                 <li><a href="{% url 'website:formal_system' sub_system.id sub_system.slug %}">{{ sub_system.name }}</a></li>
             {% endfor %}
         </ul>

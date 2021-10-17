@@ -42,7 +42,16 @@ def profileView(request, profile_id, profile_slug):
         entries = entries.filter(published__isnull=False)
 
     # Get the formal systems used
-    systems = FormalSystemModel.objects.filter(entries__in=entries).distinct()
+    systems = FormalSystemModel.objects.filter(entries__in=entries)
+
+    # Make sure to include formal systems owned by this user
+    if unpublished_viewable:
+        systems = systems | FormalSystemModel.objects.filter(owner=profile)
+    else:
+        systems = systems | FormalSystemModel.objects.filter(owner=profile, published__isnull=False)
+
+    # Make distinct
+    systems = systems.distinct()
 
     # Sort the entries by systems
     if unpublished_viewable:
@@ -127,12 +136,28 @@ def formalSystemView(request, system_id, system_slug):
 
         # Get the formula pattern definition
         formula = None
-        if system.formal_system.build_context is not None and "formula" in system.formal_system.build_context.variables:
+        if (system.formal_system.build_context is not None) and ("formula" in system.formal_system.build_context.variables):
             formula = system.formal_system.build_context.variables["formula"]
 
             if not isinstance(formula, Pattern):
                 # Formula needs to be a pattern
                 formula = None
+
+        # Filter inherited by to include only those that are viewable by the user.
+        # Inherits from is unique and is assumed to be visible.
+        inherited_by = system.inherited_by.all()
+
+        if request.user.is_superuser:
+            # Admins can see everything
+            pass
+        else:
+            if request.user.is_authenticated:
+                # User is logged in. Can see their own systems and any that are published
+                inherited_by = inherited_by.filter(published__isnull=False) | inherited_by.filter(owner=request.user.profile)
+
+            else:
+                # User not logged in. Can only see published systems
+                inherited_by = inherited_by.filter(published__isnull=False)
 
         return render(request, "website/formal_system.html", {
             "system": system,
@@ -140,6 +165,7 @@ def formalSystemView(request, system_id, system_slug):
             "entries": entries,
             "user_proofs_published": user_proofs_published,
             "user_proofs_not_published": user_proofs_not_published,
+            "inherited_by": inherited_by,
             "formula": formula
         })
 
