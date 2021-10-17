@@ -579,7 +579,8 @@ def proofEditView(request, proof_id, proof_slug):
         "proof": proof,
         "root_autocomplete": proof.autocomplete_suggestions(),
         "system": proof.formal_system(),
-        "title": proof.formal_system().name + " / " + proof.name
+        "title": proof.formal_system().name + " / " + proof.name,
+        "editable": True
     })
 
 
