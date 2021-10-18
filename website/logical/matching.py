@@ -1,3 +1,5 @@
+import itertools
+
 import regex as re
 from copy import copy
 import random
@@ -890,7 +892,7 @@ class Definition(object):
         assert match is not None
 
         # Create a lower pattern
-        self.lower = match.create_pattern(context.string_variables)
+        self.lower = match.create_pattern(context)
 
         # Create a higher pattern
         self.higher = StringPattern(
@@ -1445,9 +1447,9 @@ class Match(object):
         # Otherwise false
         return False
 
-    def replace(self, needle, value, context, condition=None):
+    def replace(self, needle, value, context, condition=None, allow_variables=False):
         # Return a new match replacing sub matches equivalent to needle with value. Optionally specify condition for
-        # needles
+        # needles. Optionally allow variables which may contain needles without raising an error.
 
         # Start with a copy of the same match
         m = self.duplicate()
@@ -1464,6 +1466,11 @@ class Match(object):
             sub = m
             while isinstance(sub.pattern, UnionPattern):
                 # Check the sub-match
+
+                if len(sub.sub_matches) == 0:
+                    # No submatches
+                    break
+
                 sub = list(sub.sub_matches.values())[0]
                 if sub.equivalent(needle, context):
                     # Looks like a needle
@@ -1473,27 +1480,17 @@ class Match(object):
         if m.is_variable and m.pattern.may_contain(needle.pattern, context):
             # This is a variable match not equivalent to needle. We can't check or replace submatches.
 
-            if context.condition_validation:
+            if context.condition_validation or allow_variables:
                 # Don't raise an exception. This is a variable which will map to something else before replacement.
                 return m
 
             raise Exception("Cannot replace instances in a variable match.")
 
         # Go through the submatches
-        new_sub_matches = dict()
         for key, sub_match in m.sub_matches.items():
-            m.sub_matches[key] = sub_match.replace(needle, value, context, condition)
-
-            if not m.sub_matches[key].string == sub_match.string and sub_match.is_variable and \
-                    sub_match.string == needle.string:
-                # This sub match been changed - update the key
-                new_sub_matches[value.string] = m.sub_matches[key]
-
-            else:
-                new_sub_matches[key] = m.sub_matches[key]
+            m.sub_matches[key] = sub_match.replace(needle, value, context, condition, allow_variables)
 
         if isinstance(m.pattern, StringPattern):
-
             # Reset the match string
             m.string = ""
             i = 0
@@ -1514,17 +1511,24 @@ class Match(object):
                         # This sub match been changed
                         match_part = new.string
 
-                m.string += match_part
+                m.string += self.pattern.pre_format_apply(match_part)
                 i += len(part)
 
         elif isinstance(m.pattern, UnionPattern):
+
             if not m.is_variable:
                 m.string = list(m.sub_matches.values())[0].string
 
-        # Replace sub_matches with the dictionary with updated keys
-        m.sub_matches = new_sub_matches
-
         return m
+
+    def replace_variables(self, variable_dict, context):
+        # Replace variables according the matches in the dictionary. This should be a match: match dictionary
+
+        result = copy(self)
+        for key, value in variable_dict.items():
+            result = result.replace(key, value, context, allow_variables=True)
+
+        return result
 
     def pretty_print(self, depth=0):
         # Print the match tree
@@ -1600,16 +1604,16 @@ class Match(object):
             return weakest
 
         # Otherwise, no sub_matches. Are we dealing with variables?
-        self_var = self.string in context.string_variables
-        other_var = other.string in context.string_variables
+        self_var = self.formatted_string() in context.string_variables
+        other_var = other.formatted_string() in context.string_variables
 
         if not self_var and not other_var:
             # Neither are variables
-            memo[(self, other)] = self.string == other.string
-            return self.string == other.string
+            memo[(self, other)] = self.formatted_string() == other.formatted_string()
+            return self.formatted_string() == other.formatted_string()
 
         # Otherwise, at least one variable.
-        if self.string == other.string:
+        if self.formatted_string() == other.formatted_string():
             # We can take this as equal
             memo[(self, other)] = True
             return True
@@ -1682,7 +1686,7 @@ class Match(object):
             variables.add(self, context)
 
         for m in self.sub_matches.values():
-            variables = variables.union(m.variables(context, variables), context)
+            variables = variables.union(m.variables(context, variables), context, allow_multiple=True)
 
         return variables
 
@@ -1888,10 +1892,11 @@ class MatchSet(object):
         # Add to negatives
         self.negatives.add(match)
 
-    def union(self, other, context):
-        # Return the union of this match set with another, leaving both unchanged
+    def union(self, other, context, allow_multiple=False):
+        # Return the union of this match set with another, leaving both unchanged.
+        # By default ignore duplicates
 
-        new_match_set = MatchSet()
+        new_match_set = MatchSet(allow_multiple=allow_multiple)
 
         # Complete only if both sets are complete
         new_match_set.complete = self.complete and other.complete
@@ -2051,9 +2056,25 @@ class MatchSet(object):
 
         return True
 
+    def variables(self, context):
+        # Get the variables used in this matchset
+
+        result = MatchSet(allow_multiple=False)
+
+        for instance in self.instances:
+            result = result.union(instance.variables(context), context)
+
+        return result
+
     def maps_to(self, other, context, mapping=None):
         # Check if this matchset maps to the other one.
         # Optionally specify a mapping dictionary that must be consistent.
+
+        if mapping is None:
+            mapping = dict()
+        else:
+            # Format the mapping keys
+            mapping = {value.pattern.pre_format_apply(key): value for key, value in mapping.items()}
 
         if type(other) is not MatchSet:
             # Other must also be a match set
@@ -2066,54 +2087,60 @@ class MatchSet(object):
             # Can't map an incomplete set
             return False
 
+        if len(self.instances) == 0:
+            # Vacuously True - every item in instances maps to other_instances
+            return True
+
         # Every item in instances must have a corresponding item in other instances
         if len(self.instances) > 0 and len(other.instances) == 0:
             # Nothing to map to
             return False
 
-        def sub_maps_to(source, target, map):
-            # Recursive function to try mappings
+        # First get the variables used in each set tuples
+        self_vars = self.variables(context).instances
+        other_vars = other.variables(context).instances
 
-            for s in source.instances:
-                if s.string in map:
-                    t = map[s.string]
+        # We need to map the variables in self_vars to the variables in other_vars
 
-                    if not other.contains(t, context):
-                        # Target is not here
-                        return False
+        # Try every permutation of other vars on self vars
+        for permutation in itertools.permutations(other_vars):
+            zipped = zip(self_vars, permutation)
+            test_map = {entry[0]: entry[1] for entry in zipped}
 
-                    continue
+            # Check if the map is consistent in mapping variables
+            consistent = True
+            map_copy = mapping.copy()
+            for var, target in test_map.items():
+                if not var.maps_to(target, context, map_copy):
+                    consistent = False
+                    break
 
-                for t in target.instances:
-                    new_map = map.copy()
-                    if s.maps_to(t, context, new_map):
-                        # Try with this new mapping
+            if not consistent:
+                continue
 
-                        # Recurse
-                        result_map = sub_maps_to(source, target, new_map)
+            # We have a variable-consistent mapping. Now test it on the instances
 
-                        if result_map is False:
-                            # This one is not consistent
-                            continue
+            # Create a match: match map
+            match_map = {}
+            for key, value in map_copy.items():
+                match_key = [var for var in self_vars if var.formatted_string() == key][0]
+                match_map[match_key] = value
 
-                        # The result works
-                        return result_map
+            consistent = True
+            for instance in self.instances:
+                # Replace the variables in the instance
+                translated_instance = instance.replace_variables(match_map, context)
 
-                # No consistent mapping
-                return False
+                if not other.contains(translated_instance, context):
+                    consistent = False
+                    break
 
-            # All source instances are mapped
-            return map
+            if not consistent:
+                continue
 
-        result = sub_maps_to(self, other, mapping.copy())
-
-        if result is False:
-            return False
-
-        # Success
-        mapping.update(result)
-
-        return True
+            # Success! Update the mapping and return True
+            mapping.update(map_copy)
+            return True
 
     def __str__(self):
         str_instances = ", ".join(sorted([str(m) for m in self.instances]))
@@ -2292,6 +2319,7 @@ class Pattern(object):
             return None
 
         defn = Definition(lower, higher, self, context)
+
         context.definitions.append(defn)
 
         return defn

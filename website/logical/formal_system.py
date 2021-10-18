@@ -792,16 +792,24 @@ class Proof(object):
                     mapping = {}
                     last_proof_line = None
                     for r in ref_parts[1:]:
-                        item = self.get_reference(r, context)
+                        try:
+                            item = self.get_reference(r, context)
 
-                        if isinstance(item, ProofLine):
-                            antecedents.append(item)
-                            last_proof_line = item
-                            continue
+                            if isinstance(item, ProofLine):
+                                antecedents.append(item)
+                                last_proof_line = item
+                                continue
 
-                        if item is None and last_proof_line is not None:
+                        except Exception as e:
+                            # if item is None and last_proof_line is not None:
                             # Probably a mapping
-                            mapping.update(self.get_reference_mapping(r, last_proof_line, context))
+                            try:
+                                if last_proof_line is not None:
+                                    mapping.update(self.get_reference_mapping(r, last_proof_line, context))
+                                    continue
+
+                            except Exception as e:
+                                pass
 
                         # Otherwise this is not a proof line
                         raise Exception(r + " is not a proof line.")
