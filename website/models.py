@@ -217,8 +217,16 @@ class FormalSystemModel(models.Model):
                 # Use the pickled proof object rather than the django class.
                 reference_dict[key]["target"] = target.proof
 
+        # Get the previous proof instance
+        previous_proof = proof_model.unsaved_proof if proof_model.unsaved_proof is not None else proof_model.proof
+
         # Create a proof instance
-        proof = self.formal_system.parse(code, proof_model_id=proof_model.id, reference_proofs=reference_dict)
+        proof = self.formal_system.parse(
+            code,
+            proof_model_id=proof_model.id,
+            reference_proofs=reference_dict,
+            previous_proof=previous_proof
+        )
 
         return proof
 
@@ -574,6 +582,9 @@ class ProofModel(models.Model):
     # Field pointing to an instance of a Proof class
     proof = PickledObjectField(default=None, blank=True, null=True, editable=True)
 
+    # An unsaved instance of the Proof class - used to save processing the same edits in validate calls
+    unsaved_proof = PickledObjectField(default=None, blank=True, null=True, editable=True)
+
     # Proof text
     proof_text = models.TextField(default="")
 
@@ -611,6 +622,9 @@ class ProofModel(models.Model):
         # Refresh the proof instance according to the file
         self.proof = self.formal_system().parse(self, code)
         self.proof.model_id = self.id
+
+        # Clear the unsaved proof
+        self.unsaved_proof = None
 
         # Get the proofs used
         references = self.proof.proofs_used
