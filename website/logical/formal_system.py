@@ -96,8 +96,14 @@ class FormalSystem(object):
 
         return references
 
-    def parse(self, text, proof=None, proof_model_id=None, reference_proofs=None, context=None, line_number_offset=0):
-        # Parse the text into a proof
+    def parse(self, text, proof=None, proof_model_id=None, reference_proofs=None, context=None, line_number_offset=0,
+              previous_proof=None, previous_proof_lines_mapped=None):
+        # Parse the text into a proof.
+
+        # Optionally specify a previous version of the same proof to save processing the same lines.
+
+        # Maintain a dictionary of previous proof lines: new proof lines
+        previous_proof_lines_mapped = previous_proof_lines_mapped if previous_proof_lines_mapped is not None else dict()
 
         lines = text.split("\n")
 
@@ -118,7 +124,6 @@ class FormalSystem(object):
             i += 1
 
             line = lines[i].rstrip()
-            line_number = line_number_offset + i + 1
 
             # Create a proof line for this line
             proof_line = proof.add_proof_line(line, context)
@@ -130,69 +135,106 @@ class FormalSystem(object):
                 # Ignore blank lines
                 continue
 
-            # Check the line is of a given line type
+            # Check if this line was in the previous proof
+            found_previous_line = False
+
+            if previous_proof is not None:
+                line_matches = [pl for pl in previous_proof.proof_lines if
+                                pl.text == line and pl not in previous_proof_lines_mapped]
+
+                if len(line_matches) > 0:
+                    previous_line = line_matches[0]
+
+                    # Add this line to the proof line dictionary
+                    previous_proof_lines_mapped[previous_line] = proof_line
+
+                    # Populate the new line (returns boolean for success) - if False the proof line is unchanged.
+                    result = proof_line.copy_from_previous_proof(previous_line, previous_proof_lines_mapped)
+
+                    # Still need to follow indent/non-indent line rules
+
+                    if result:
+                        # Successfully copied the previous line
+                        found_previous_line = True
+
+                    else:
+                        # Remove the line from the dictionary
+                        del previous_proof_lines_mapped[previous_line]
+
             found = False
-            for line_type in self.line_types:
+            if not found_previous_line:
+                # Check the line is of a given line type
+                for line_type in self.line_types:
 
-                line = line.lstrip()
-                result = line_type.parse_line(line, context)
+                    line = line.lstrip()
+                    result = line_type.parse_line(line, context)
 
-                if result is None:
-                    continue
+                    if result is None:
+                        continue
 
-                # Otherwise meets this line type
-                found = True
+                    # Otherwise meets this line type
+                    found = True
 
-                # Record the line_type of this line
-                proof_line.line_type = line_type
-                proof_line.match = result
+                    # Record the line_type of this line
+                    proof_line.line_type = line_type
+                    proof_line.match = result
 
-                # Check for main line type attributes
-                # Try to get the formula, reference, label, display, is_axiom
-                try:
-                    # Add formula to the proof line
-                    proof_line.formula = result.get_by_path("formula()", context)
+                    # Check for main line type attributes
+                    # Try to get the formula, reference, label, display, is_axiom
+                    try:
+                        # Add formula to the proof line
+                        proof_line.formula = result.get_by_path("formula()", context)
 
-                    # It has to be a match
-                    if type(proof_line.formula) is not Match:
-                        proof_line.formula = None
+                        # It has to be a match
+                        if type(proof_line.formula) is not Match:
+                            proof_line.formula = None
 
-                except Exception as e:
-                    pass
+                    except Exception as e:
+                        pass
 
-                try:
-                    reference_match = result.get_by_path("reference()", context)
+                    try:
+                        reference_match = result.get_by_path("reference()", context)
 
-                    proof_line.reference_string = reference_match.formatted_string()
-                    proof_line.reference_string_display = reference_match.string
+                        proof_line.reference_string = reference_match.formatted_string()
+                        proof_line.reference_string_display = reference_match.string
 
-                except Exception as e:
-                    pass
+                    except Exception as e:
+                        pass
 
-                try:
-                    label = result.get_by_path("label()", context)
-                    proof_line.label = label
-                    proof.reference_context[label] = proof_line
+                    try:
+                        label = result.get_by_path("label()", context)
+                        proof_line.label = label
 
-                except Exception as e:
-                    pass
+                    except Exception as e:
+                        pass
 
-                # Check if the line type has a 'display' value
-                try:
-                    proof_line.display = result.get_by_path("display()", context)
-                except Exception as e:
-                    # No valid display path
-                    pass
+                    # Check if the line type has a 'display' value
+                    try:
+                        proof_line.display = result.get_by_path("display()", context)
+                    except Exception as e:
+                        # No valid display path
+                        pass
 
-                try:
-                    # Check if there is a valid axiom
-                    result.get_by_path("axiom()", context)
-                    proof_line.is_axiom = True
-                except Exception as e:
-                    # Not an axiom
-                    pass
+                    try:
+                        # Check if there is a valid axiom
+                        result.get_by_path("axiom()", context)
+                        proof_line.is_axiom = True
+                    except Exception as e:
+                        # Not an axiom
+                        pass
 
-                if not line_type.behaviour == "indent":
+                    # No need to check other line types
+                    break
+
+                if not found:
+                    # The line doesn't match any of the line types. Invalid proof
+                    proof_line.invalid_message = "Could not parse line."
+                    proof_line.valid = False
+
+            if found_previous_line or found:
+                # Follow indent/non-indent line rules
+
+                if not proof_line.line_type.behaviour == "indent":
                     # Check for data to add to context
                     try:
                         proof_line.edit_context(context)
@@ -202,7 +244,8 @@ class FormalSystem(object):
                         proof_line.valid = False
                         proof_line.invalid_message = str(e)
 
-                if line_type.behaviour == "indent":
+                else:
+                    # This is an indent line.
                     # Parse the block with a copied context
 
                     new_context = copy(context)
@@ -225,82 +268,21 @@ class FormalSystem(object):
                     # Compile the block
                     block = "\n".join(lines[i + 1:j])
 
-                    self.parse(text=block, proof=proof, context=new_context, line_number_offset=i + 1)
+                    self.parse(
+                        text=block,
+                        proof=proof,
+                        context=new_context,
+                        line_number_offset=i + 1,
+                        previous_proof=previous_proof,
+                        previous_proof_lines_mapped=previous_proof_lines_mapped
+                    )
 
                     # Continue from after the block
                     i = j - 1
-                    break
+                    continue
 
-                elif line_type.behaviour == "logical":
-                    # Logical lines for parsing
-                    proof.check_logical_line(proof_line, context)
-
-                elif line_type.behaviour == "axiom":
-                    # Introduce an axiom to the system
-
-                    # Add the proof line to the proof's reference context
-                    proof.reference_context[proof_line.label] = proof_line
-                    proof_line.is_axiom = True
-
-                    proof_line.axiom_pattern = proof_line.formula.create_pattern(context.string_variables)
-                    proof_line.axiom_pattern.name = proof_line.label
-
-                elif line_type.behaviour == "definition":
-                    # Introduce a new definition to context
-
-                    try:
-                        # Get the higher and lower strings, and the pattern it should apply to
-                        lower = result.get_by_path("lower()", context)
-                        higher = result.get_by_path("higher()", context)
-                        pattern = result.get_by_path("for()", context)
-                    except Exception as e:
-                        # Not a valid definition
-                        proof_line.valid = False
-                        proof_line.invalid_message = "Missing higher or lower for definition."
-                        continue
-
-                    if pattern.match(lower.string, context) is None:
-                        proof_line.valid = False
-                        proof_line.invalid_message = lower.string + " is not an instance of " + pattern.name + "."
-                        continue
-
-                    # Add the definition
-                    proof_line.definition = pattern.add_definition(lower.formatted_string(), higher.formatted_string(), context)
-
-                elif line_type.behaviour == "import":
-                    # Import a file or result
-
-                    try:
-
-                        if proof_line.label is None:
-                            proof_line.valid = False
-                            proof_line.invalid_message = "Line has missing label."
-                            continue
-
-                        path = result.get_by_path("path()", context)
-                        result = proof.import_path(path, proof_line.label, context)
-
-                        if not result["success"]:
-                            # Error
-                            proof_line.valid = False
-                            proof_line.invalid_message = result["errorMessage"]
-
-                    except Exception as e:
-                        # No valid path or label
-                        proof_line.valid = False
-                        proof_line.invalid_message = "Could not get path or label from import line: " + str(e)
-
-                elif line_type.behaviour in ("none", "comment"):
-                    # Don't need to do anything :)
-                    pass
-
-                # No need to check other line types
-                break
-
-            if not found:
-                # The line doesn't match any of the line types. Invalid proof
-                proof_line.invalid_message = "Could not parse line."
-                proof_line.valid = False
+                # Execute the proof line
+                proof_line.execute(context)
 
         if line_number_offset == 0:
             # Check if the proof is valid or has warnings
@@ -568,7 +550,6 @@ class InferenceRule(object):
 
             except Exception as e:
                 # Error trying to apply the condition
-                print(e)
                 return False
 
         # Otherwise ok
@@ -692,6 +673,34 @@ class Inference(object):
 
         # All consistent
         return True
+
+    def copy_to_new_proof(self, proof_line_dictionary):
+        # Copy this inference to a new proof with the given mapping for proof lines
+
+        new_antecedents = []
+        for ant in self.antecedents:
+            if ant not in proof_line_dictionary:
+                # Antecedent not mapped.
+                return None
+
+            # Add the new antecedent
+            new_antecedents.append(proof_line_dictionary[ant])
+
+        if self.deduction not in proof_line_dictionary:
+            # Deduction not mapped
+            return None
+
+        # Get the new deduction
+        new_deduction = proof_line_dictionary[self.deduction]
+
+        inf = Inference(self.inference_rule, new_antecedents, new_deduction)
+
+        inf.antecedent_inference_matches = self.antecedent_inference_matches
+        inf.deduction_inference_match = self.deduction_inference_match
+
+        inf.variables = self.variables
+
+        return inf
 
 
 class Proof(object):
@@ -1180,6 +1189,76 @@ class ProofLine(object):
         # Line may be empty
         self.empty = len(self.text) == 0
 
+    def execute(self, context):
+        # Execute this proof line in the system.
+
+        line_type = self.line_type
+
+        if self.label is not None:
+            # Add the proof line to the proof's reference context
+            self.proof.reference_context[self.label] = self
+
+        if line_type.behaviour == "logical":
+            # Logical lines for parsing
+            self.proof.check_logical_line(self, context)
+
+        elif line_type.behaviour == "axiom":
+            # Introduce an axiom to the system
+
+            self.is_axiom = True
+
+            self.axiom_pattern = self.formula.create_pattern(context.string_variables)
+            self.axiom_pattern.name = self.label
+
+        elif line_type.behaviour == "definition":
+            # Introduce a new definition to context
+
+            try:
+                # Get the higher and lower strings, and the pattern it should apply to
+                lower = self.match.get_by_path("lower()", context)
+                higher = self.match.get_by_path("higher()", context)
+                pattern = self.match.get_by_path("for()", context)
+            except Exception as e:
+                # Not a valid definition
+                self.valid = False
+                self.invalid_message = "Missing higher or lower for definition."
+                return
+
+            if pattern.match(lower.string, context) is None:
+                self.valid = False
+                self.invalid_message = lower.string + " is not an instance of " + pattern.name + "."
+                return
+
+            # Add the definition
+            self.definition = pattern.add_definition(lower.formatted_string(), higher.formatted_string(), context)
+
+        elif line_type.behaviour == "import":
+            # Import a file or result
+
+            try:
+
+                if self.label is None:
+                    self.valid = False
+                    self.invalid_message = "Line has missing label."
+                    return
+
+                path = self.match.get_by_path("path()", context)
+                result = self.proof.import_path(path, self.label, context)
+
+                if not result["success"]:
+                    # Error
+                    self.valid = False
+                    self.invalid_message = result["errorMessage"]
+
+            except Exception as e:
+                # No valid path or label
+                self.valid = False
+                self.invalid_message = "Could not get path or label from import line: " + str(e)
+
+        elif line_type.behaviour in ("none", "comment"):
+            # Don't need to do anything :)
+            pass
+
     def index(self):
         # Get the index of this line in the proof
         return self.proof.proof_lines.index(self)
@@ -1444,6 +1523,125 @@ class ProofLine(object):
 
         result = tree.run_function(item=self, context=context_copy, params=param_mapping, param_types=fn["params"])
         return result
-    
+
+    def copy_from_previous_proof(self, previous_line, proof_line_dictionary):
+        # Update this line to be a copy of the previous line.
+
+        # First check if this is even valid. We need to have the right variables.
+        if previous_line.match is None:
+            return False
+
+        match_vars = previous_line.match.variables(previous_line.context)
+
+        # Check all string variables in the previous match are present with equivalent pattern in this context
+        for var in match_vars.instances:
+            s = var.formatted_string()
+            if s not in self.context.string_variables:
+                return False
+
+            if not var.pattern.equivalent(self.context.string_variables[s], self.context):
+                return False
+
+        # All good - check definition variables if these are used
+        if previous_line.definition is not None:
+            for key, pattern in previous_line.definition.variables.items():
+                if key not in self.context.string_variables:
+                    return False
+
+                if not pattern.equivalent(self.context.string_variables[key], self.context):
+                    return False
+
+        # Get a new inference
+        new_inference = None
+        if previous_line.inference is not None:
+            # Check the reference is still valid
+            try:
+                ants = self.proof.get_reference(previous_line.reference_string, self.context)["antecedents"]
+
+            except Exception as e:
+                # Failed to get reference
+                return False
+
+            # Look for antecedent lines pointing to other proofs - and add them to our context dictionary if they aren't
+            # already there
+            for ant in ants:
+                if ant.proof.model_id == self.proof.model_id:
+                    continue
+
+                # This line is in another proof.
+                for previous_ant in previous_line.inference.antecedents:
+                    if previous_ant in proof_line_dictionary:
+                        # Already mapped
+                        continue
+
+                    if ant.equivalent(previous_ant):
+                        # These antecedents are the same. Add to the dictionary
+                        proof_line_dictionary[previous_ant] = ant
+
+            # Try getting a copy of the inference
+            new_inference = previous_line.inference.copy_to_new_proof(proof_line_dictionary)
+
+            if new_inference is None:
+                # Failed to get a compatible inference
+                return False
+
+        # Check logical context - this needs to match!
+        if len(self.context.logical["given"].instances) > 0:
+            for key, previous_obj in previous_line.context.logical.items():
+                current_obj = self.context.logical[key]
+
+                # We need to confirm the previous and new objects are the same or equivalent
+
+                if previous_obj == current_obj:
+                    continue
+
+                if not type(previous_obj) == type(current_obj):
+                    return False
+
+                if not hasattr(previous_obj, "equivalent"):
+                    # No way to check equivalence
+                    return False
+
+                try:
+                    if not previous_obj.equivalent(current_obj, self.context):
+                        return False
+                except Exception as e:
+                    return False
+
+                # Otherwise ok
+
+        self.__init__(
+            proof=self.proof,
+            text=previous_line.text,
+            context=self.context,
+            reference_string=previous_line.reference_string,
+            label=previous_line.label
+        )
+
+        # Set all the other needed attributes
+        self.display = previous_line.display
+        self.reference_mapping = previous_line.reference_mapping
+        self.formula = previous_line.formula
+        self.definition = previous_line.definition
+        self.line_type = previous_line.line_type
+        self.match = previous_line.match
+        self.indent = previous_line.indent
+        self.is_axiom = previous_line.is_axiom
+
+        self.inference = new_inference
+
+        self.valid = previous_line.valid
+        self.invalid_message = previous_line.invalid_message
+        self.warning_message = previous_line.warning_message
+
+        # Ignore dependent lines
+
+        # All ok
+        return True
+
+    def equivalent(self, other):
+        # Check if this is the same as the other proof line
+        return self.proof.model_id == other.proof.model_id and self.index() == other.index()
+
     def __str__(self):
         return "ProofLine: " + self.text

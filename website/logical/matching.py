@@ -1,5 +1,4 @@
 import itertools
-
 import regex as re
 from copy import copy
 import random

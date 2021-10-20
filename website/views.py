@@ -131,8 +131,8 @@ def formalSystemView(request, system_id, system_slug):
         if request.user.is_authenticated:
             user_proofs = FolderEntry.objects.filter(parent_folder__isnull=True, owner=request.user.profile, formal_system=system)
 
-            user_proofs_published = user_proofs.filter(published__isnull=False)
-            user_proofs_not_published = user_proofs.filter(published__isnull=True)
+            user_proofs_published = user_proofs.filter(published__isnull=False).order_by("order")
+            user_proofs_not_published = user_proofs.filter(published__isnull=True).order_by("order")
 
         # Get the formula pattern definition
         formula = None
@@ -573,7 +573,7 @@ def proofEditView(request, proof_id, proof_slug):
         # User is not the owner of the proof, or the proof is published
         return redirect(proof.get_absolute_url())
 
-    proof.refresh()
+    proof.refresh(refresh_system=False)
 
     return render(request, "website/proof_edit.html", {
         "proof": proof,
@@ -627,14 +627,18 @@ def proofValidateView(request):
 
         # Get the proof
         proof_id = request.POST.get("proof_id", False)
-        proof = ProofModel.objects.get(id=proof_id)
-        system = proof.formal_system()
+        proof_model = ProofModel.objects.get(id=proof_id)
+        system = proof_model.formal_system()
 
         # Get the proof code
         code = request.POST.get("code", False)
 
         # Parse the code in the system
-        proof = system.parse(proof, code)
+        proof = system.parse(proof_model, code)
+
+        # Cache this interim edited proof
+        proof_model.unsaved_proof = proof
+        proof_model.save()
 
         # Return the results
         return HttpResponse(json.dumps({
