@@ -218,8 +218,7 @@ class FormalSystemModel(models.Model):
                 reference_dict[key]["target"] = target.proof
 
         # Get the previous proof instance
-        # previous_proof = proof_model.unsaved_proof if proof_model.unsaved_proof is not None else proof_model.proof
-        previous_proof = None
+        previous_proof = proof_model.unsaved_proof if proof_model.unsaved_proof is not None else proof_model.proof
 
         # Create a proof instance
         proof = self.formal_system.parse(
