@@ -175,7 +175,7 @@ class FormalSystemModel(models.Model):
         self.set_code(self.code())
 
     def parse(self, proof_model, code):
-        # Parse proof code into a proof instance
+        # Parse proof code into a proof instance.
 
         # Find any references to other proofs
         reference_paths = self.formal_system.get_references(code)
@@ -218,7 +218,8 @@ class FormalSystemModel(models.Model):
                 reference_dict[key]["target"] = target.proof
 
         # Get the previous proof instance
-        previous_proof = proof_model.unsaved_proof if proof_model.unsaved_proof is not None else proof_model.proof
+        # previous_proof = proof_model.unsaved_proof if proof_model.unsaved_proof is not None else proof_model.proof
+        previous_proof = None
 
         # Create a proof instance
         proof = self.formal_system.parse(
@@ -892,6 +893,11 @@ class ProofModel(models.Model):
         # Set a new instance of the proof. Optionally keep a set of proofs whose validity changes.
         if refresh_system:
             self.formal_system().refresh()
+
+        # Clear the unsaved proof and the proof objects.
+        self.unsaved_proof = None
+        self.proof = None
+
         self.set_code(self.code(), validity_changed, cascade)
 
     def parent_folder(self):

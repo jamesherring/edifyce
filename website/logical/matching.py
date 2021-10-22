@@ -1743,8 +1743,8 @@ class Match(object):
         if mapping is None:
             mapping = dict()
 
-        if self.is_variable and self.string in mapping:
-            return other.equivalent(mapping[self.string], context)
+        if self.is_variable and self.formatted_string() in mapping:
+            return other.equivalent(mapping[self.formatted_string()], context)
 
         # Must have consistent patterns
         if not self.pattern.equivalent(other.pattern, context):
@@ -1752,7 +1752,7 @@ class Match(object):
 
         if self.is_variable and len(self.sub_matches) == 0:
             # Add variable to mapping
-            mapping[self.string] = other
+            mapping[self.formatted_string()] = other
             return True
 
         # Otherwise depends on sub matches
@@ -1999,6 +1999,12 @@ class MatchSet(object):
             return get_by_path(self, path, context)
 
         # Otherwise, only one part
+        if path.startswith("add(") and path[-1] == ")":
+            # Add (doesn't return anything)
+            inner = path[4:-1]
+            match = get_by_path(context.reference_object, inner, context)
+            self.add(match, context)
+            return
 
         if path.startswith("issubset(") and path[-1] == ")":
             inner = path[9:-1]
@@ -2095,42 +2101,17 @@ class MatchSet(object):
             # Nothing to map to
             return False
 
-        # First get the variables used in each set tuples
-        self_vars = self.variables(context).instances
-        other_vars = other.variables(context).instances
-
-        # We need to map the variables in self_vars to the variables in other_vars
-
-        # Try every permutation of other vars on self vars
-        for permutation in itertools.permutations(other_vars):
-            zipped = zip(self_vars, permutation)
+        # Try every permutation of other instances on self instances
+        for permutation in itertools.permutations(other.instances):
+            zipped = zip(self.instances, permutation)
             test_map = {entry[0]: entry[1] for entry in zipped}
 
-            # Check if the map is consistent in mapping variables
+            # Check if the test map is consistent with the given mapping
             consistent = True
             map_copy = mapping.copy()
-            for var, target in test_map.items():
-                if not var.maps_to(target, context, map_copy):
-                    consistent = False
-                    break
-
-            if not consistent:
-                continue
-
-            # We have a variable-consistent mapping. Now test it on the instances
-
-            # Create a match: match map
-            match_map = {}
-            for key, value in map_copy.items():
-                match_key = [var for var in self_vars if var.formatted_string() == key][0]
-                match_map[match_key] = value
-
-            consistent = True
-            for instance in self.instances:
-                # Replace the variables in the instance
-                translated_instance = instance.replace_variables(match_map, context)
-
-                if not other.contains(translated_instance, context):
+            for source, target in test_map.items():
+                if not source.maps_to(target, context, map_copy):
+                    # This one doesn't work
                     consistent = False
                     break
 
@@ -2139,7 +2120,11 @@ class MatchSet(object):
 
             # Success! Update the mapping and return True
             mapping.update(map_copy)
+
             return True
+
+        # Otherwise, no permutation works
+        return False
 
     def __str__(self):
         str_instances = ", ".join(sorted([str(m) for m in self.instances]))
