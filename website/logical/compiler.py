@@ -58,6 +58,9 @@ def constant(s):
     if s == "set()":
         return set()
 
+    if s == "MatchSet()":
+        return MatchSet()
+
     if s == "tuple()":
         return tuple()
 
@@ -815,6 +818,22 @@ class AbstractSyntaxTree(object):
                     new_object = Condition(string="")
                     current_object.condition = new_object
 
+                elif stripped == "allow_extra_antecedents:":
+                    # Maybe allow extra antecedents (should be True or False)
+                    value = None
+                    for line in self.sub_trees:
+                        stripped_line = line.line.strip()
+                        if stripped_line == "True":
+                            value = True
+                        elif stripped_line == "False":
+                            value = False
+
+                    if value is None:
+                        raise Exception("Could not parse label for '" + current_object.name + "'.")
+
+                    current_object.allow_extra_antecedents = value
+                    return
+
                 elif stripped == "format:":
                     # Create a format dictionary
 
@@ -888,7 +907,7 @@ class AbstractSyntaxTree(object):
                             self.error = "Invalid variable name: '" + key + "'."
                             return
 
-                        if value not in context.variables and value not in ("dict", "list", "set"):
+                        if value not in context.variables and value not in ("dict", "list", "set", "tuple", "matchset"):
                             self.error = "'" + value + "' is not defined."
                             return
 
@@ -987,12 +1006,20 @@ class AbstractSyntaxTree(object):
                 if not value.pattern.equivalent(param_type, context):
                     raise Exception("Incorrect argument type.")
 
+            elif isinstance(value, MatchSet) and param_type == "matchset":
+                pass
+
             elif isinstance(value, ProofLine):
                 if not value.line_type.equivalent(param_type, context):
                     raise Exception("Incorrect argument type.")
 
             elif isinstance(value, dict) and param_type == "dict":
-                # Ok
+                pass
+            elif isinstance(value, set) and param_type == "set":
+                pass
+            elif isinstance(value, list) and param_type == "list":
+                pass
+            elif isinstance(value, tuple) and param_type == "tuple":
                 pass
 
             else:
@@ -1069,14 +1096,14 @@ class AbstractSyntaxTree(object):
                 break_flag = False
 
                 for obj in iterable:
-                    context_copy = copy(context)
+                    # context_copy = copy(context)
 
                     # Add the object to context
-                    context_copy.variables[var_name] = obj
+                    context.variables[var_name] = obj
 
                     for sub_tree in self.sub_trees:
 
-                        result = sub_tree.run_function_line(item, context_copy)
+                        result = sub_tree.run_function_line(item, context)
 
                         if result is not None:
                             if "loop" in result:
@@ -1123,6 +1150,13 @@ class AbstractSyntaxTree(object):
             # Loop keywords
             return {"loop": stripped}
 
+        # Try just evaluating the line as a part
+        try:
+            self.evaluate_line_part(item, stripped, context)
+            return None
+        except Exception as e:
+            pass
+
         # Otherwise stuck
         raise Exception("Could not parse '" + stripped + "'.")
 
@@ -1157,20 +1191,20 @@ class AbstractSyntaxTree(object):
             # Get the parameter named for the loop
             name = stripped[index + 6:-2]
 
-            # Create a copy of context
-            context_copy = copy(context)
+            # # Create a copy of context
+            # context_copy = copy(context)
 
             # Loop through the match set
             for i in items:
 
                 # Add this match to context
-                context_copy.variables[name] = i
+                context.variables[name] = i
 
                 result = None
 
                 # Run sub-trees
                 for sub_tree in self.sub_trees:
-                    result = sub_tree.evaluate_line_part(item, sub_tree.line.strip(), context_copy)
+                    result = sub_tree.evaluate_line_part(item, sub_tree.line.strip(), context)
 
                 if not result:
                     # This instance fails

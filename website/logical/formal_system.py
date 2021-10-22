@@ -465,7 +465,8 @@ class LineType(object):
 class InferenceRule(object):
     # Inference rules for deduction
 
-    def __init__(self, name, label=None, antecedents=None, deduction=None, condition=None):
+    def __init__(self, name, label=None, antecedents=None, deduction=None, condition=None,
+                 allow_extra_antecedents=False):
 
         # The inference rule name
         self.name = name.replace("_", " ")
@@ -482,7 +483,10 @@ class InferenceRule(object):
         # Condition for the rule to apply
         self.condition = condition
 
-    def check(self, antecedents, deduction, context):
+        # Optionally allow extra antecedents
+        self.allow_extra_antecedents = allow_extra_antecedents
+
+    def check(self, antecedents, extra_antecedents, deduction, context):
         # Check to see if the proposed proof lines are valid under this inference rule
 
         # Check the number of antecedents matches
@@ -494,7 +498,7 @@ class InferenceRule(object):
             return False
 
         # Deduction must be after the antecedents
-        for ant in antecedents:
+        for ant in antecedents + extra_antecedents:
             if type(ant) is not ProofLine:
                 # antecedent isn't a proof line
                 return False
@@ -504,7 +508,7 @@ class InferenceRule(object):
                 return False
 
         # Create an inference instance
-        inference = Inference(self, antecedents, deduction)
+        inference = Inference(self, antecedents, extra_antecedents, deduction)
 
         # First check if the deduction matches
         inference.deduction_inference_match = self.deduction.match(deduction.formula.formatted_string(), context)
@@ -553,6 +557,7 @@ class InferenceRule(object):
                 return False
 
         # Otherwise ok
+        deduction.inference_rule = self
         deduction.inference = inference
         deduction.valid = True
 
@@ -586,6 +591,9 @@ class InferenceRule(object):
         if not len(self.antecedents) == len(other.antecedents):
             return False
 
+        if not self.allow_extra_antecedents == other.allow_extra_antecedents:
+            return False
+
         # Assume true
         memo[(self, other)] = True
 
@@ -609,12 +617,14 @@ class InferenceRule(object):
 class Inference(object):
     # An application of an inference rule
 
-    def __init__(self, inference_rule, antecedents, deduction):
+    def __init__(self, inference_rule, antecedents, extra_antecedents, deduction):
 
         self.inference_rule = inference_rule
 
         # Antecedents should be a list of proof lines, deduction should be a proof line
         self.antecedents = antecedents
+        self.extra_antecedents = extra_antecedents
+
         self.deduction = deduction
 
         # Store inference matches here
@@ -643,6 +653,9 @@ class Inference(object):
 
         if path == "antecedents":
             return self.antecedents
+
+        if path == "extra_antecedents":
+            return self.extra_antecedents
 
         if path == "antecedent":
             return self.antecedents[0]
@@ -677,6 +690,10 @@ class Inference(object):
     def copy_to_new_proof(self, proof_line_dictionary):
         # Copy this inference to a new proof with the given mapping for proof lines
 
+        if self.deduction not in proof_line_dictionary:
+            # Deduction not mapped
+            return None
+
         new_antecedents = []
         for ant in self.antecedents:
             if ant not in proof_line_dictionary:
@@ -686,14 +703,20 @@ class Inference(object):
             # Add the new antecedent
             new_antecedents.append(proof_line_dictionary[ant])
 
-        if self.deduction not in proof_line_dictionary:
-            # Deduction not mapped
-            return None
+        # Do the same with extra antecedents
+        new_extra_antecedents = []
+        for ant in self.extra_antecedents:
+            if ant not in proof_line_dictionary:
+                # Antecedent not mapped.
+                return None
+
+            # Add the new antecedent
+            new_extra_antecedents.append(proof_line_dictionary[ant])
 
         # Get the new deduction
         new_deduction = proof_line_dictionary[self.deduction]
 
-        inf = Inference(self.inference_rule, new_antecedents, new_deduction)
+        inf = Inference(self.inference_rule, new_antecedents, new_extra_antecedents, new_deduction)
 
         inf.antecedent_inference_matches = self.antecedent_inference_matches
         inf.deduction_inference_match = self.deduction_inference_match
@@ -921,13 +944,12 @@ class Proof(object):
         if len(antecedents) == 0 and len(inference_rule.antecedents) == 0:
             # No antecedents for this inference rule
             if inference_rule.check(
-                    antecedents=[],
+                    antecedents=(),
+                    extra_antecedents=(),
                     deduction=proof_line,
                     context=context
             ):
                 # It's a valid line
-                proof_line.antecedents = []
-                proof_line.inference_rule = inference_rule
                 return True
 
         elif len(antecedents) == 0 and len(inference_rule.antecedents) < 5:
@@ -939,24 +961,44 @@ class Proof(object):
             )
 
         # Otherwise, check the number of antecedents given
-        if not len(antecedents) == len(inference_rule.antecedents):
-            # Wrong number of antecedents
+        if len(antecedents) < len(inference_rule.antecedents):
+            # Not enough antecedents
             proof_line.valid = False
             proof_line.invalid_message = key + " requires " + str(len(inference_rule.antecedents)) + " antecedent(s)."
             return False
 
+        if len(antecedents) > len(inference_rule.antecedents) and not inference_rule.allow_extra_antecedents:
+            # Too many antecedents
+            proof_line.valid = False
+            proof_line.invalid_message = key + " requires exactly " + str(len(inference_rule.antecedents)) + \
+                " antecedent(s)."
+            return False
+
+        if len(antecedents) > 6:
+            # Too many permutations to handle
+            raise Exception("Server error: too many permutations to consider!")
+
+        extra_antecedents = []
+        if inference_rule.allow_extra_antecedents:
+            # Split the extra antecedents into a different list
+            extra_antecedents = antecedents[len(inference_rule.antecedents):]
+            antecedents = antecedents[:len(inference_rule.antecedents)]
+
         # Try any permutation of the given antecedents
         for permutation in list(itertools.permutations(antecedents)):
-            if inference_rule.check(
+            for extra_permutation in list(itertools.permutations(extra_antecedents)):
+                if inference_rule.check(
                     antecedents=permutation,
+                    extra_antecedents=extra_permutation,
                     deduction=proof_line,
                     context=context
-            ):
-                # It's a valid permutation
-                proof_line.antecedents = permutation
-                proof_line.inference_rule = inference_rule
+                ):
+                    # It's a valid permutation
+                    proof_line.antecedents = permutation
+                    proof_line.extra_antecedents = extra_permutation
+                    proof_line.inference_rule = inference_rule
 
-                return True
+                    return True
 
         # No valid permutation found, not a valid line
         proof_line.valid = False
@@ -1103,6 +1145,7 @@ class Proof(object):
 
                 if inference_rule.check(
                         antecedents=permutation,
+                        extra_antecedents=(),
                         deduction=deduction,
                         context=context
                 ):
@@ -1293,6 +1336,9 @@ class ProofLine(object):
 
         if path == "reference_mapping()":
             return copy(self.reference_mapping)
+
+        if path == "previous_formulae()":
+            return self.previous_formulae()
 
         if "(" in path and path[:path.index("(")] in self.line_type.functions:
             # An attribute function with parameters
@@ -1523,6 +1569,36 @@ class ProofLine(object):
 
         result = tree.run_function(item=self, context=context_copy, params=param_mapping, param_types=fn["params"])
         return result
+
+    def previous_formulae(self):
+        # Return a matchset of formulae that have been proven before this statement in the proof and share the same
+        # logical context.
+
+        # N.B. we don't require that the previous proof lines are valid
+        formulae = MatchSet(allow_multiple=False)
+        indent = self.indent
+
+        # Loop through the previous lines and select only those that are parents/siblings of this line context
+        for i in range(self.index() - 1, -1, -1):
+            line = self.proof.proof_lines[i]
+
+            if line.indent > indent:
+                # This line is more indented - ignore
+                continue
+
+            if line.indent < indent:
+                # This line is less indented - ie. it's a parent line in the abstract syntax tree.
+                indent = line.indent
+                continue
+
+            if line.line_type is None or not line.line_type.behaviour == "logical":
+                # It's not a logical line
+                continue
+
+            # Otherwise, it's a relevant logical line
+            formulae.add(line.formula, self.context)
+
+        return formulae
 
     def copy_from_previous_proof(self, previous_line, proof_line_dictionary):
         # Update this line to be a copy of the previous line.
