@@ -10,10 +10,17 @@ $(function() {
         editor.editor.setReadOnly(true);
     }
 
-    // Set the editor height
-    var y = $(container).offset().top;
-    var height = $(window).height() - y;
-    $(container).css("height", String(height) + "px");
+    function setHeight() {
+        // Set the editor height
+        var y = $(container).offset().top;
+        var height = $(window).height() - y;
+        $(container).css("height", String(height) + "px");
+        editor.editor.resize();
+    }
+
+    setHeight();
+
+    $(window).on("resize", setHeight);
 
     // Get the formal system id
     var system_id = $("#system_id").text();
