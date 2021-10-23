@@ -56,12 +56,6 @@ $(function() {
 
     editor.editor.completers = [staticWordCompleter];
 
-
-    // Set the editor height
-    var y = $(container).offset().top;
-    var height = $(window).height() - y;
-    $(container).css("height", String(height) + "px");
-
     // Get the proof and system ids
     var proof_id = $("#proof_id").text();
     var system_id = $("#system_id").text();
@@ -70,7 +64,20 @@ $(function() {
     var output_parent = $("#output");
     var output = new proofDisplayClass(output_parent);
 
-    $(output_parent).css("height", String(height) + "px");
+    function setHeight() {
+        // Set the editor height
+        var y = $(container).offset().top;
+        var height = $(window).height() - y;
+        $(container).css("height", String(height) + "px");
+        $(output_parent).css("height", String(height) + "px");
+
+        editor.editor.resize();
+    }
+
+    setHeight();
+
+    // Also resize on window change
+    $(window).on("resize", setHeight);
 
     // Get the validation data script
     var proof_data = JSON.parse(document.getElementById("proof_data").innerHTML);
