@@ -504,7 +504,7 @@ class InferenceRule(object):
                 return False
 
             # Deduction in the same proof must come after the antecedents
-            if deduction.proof is ant.proof and deduction.index() < ant.index():
+            if deduction.proof is ant.proof and deduction.index() <= ant.index():
                 return False
 
         # Create an inference instance

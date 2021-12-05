@@ -1080,7 +1080,7 @@ class AbstractSyntaxTree(object):
             try:
                 set_value = item.get_by_path(set_string, context)
 
-                assert isinstance(set_value, (list, tuple, set, MatchSet))
+                assert isinstance(set_value, (list, tuple, set, MatchSet, dict))
 
                 if isinstance(set_value, MatchSet):
                     if not set_value.complete:
@@ -1096,8 +1096,6 @@ class AbstractSyntaxTree(object):
                 break_flag = False
 
                 for obj in iterable:
-                    # context_copy = copy(context)
-
                     # Add the object to context
                     context.variables[var_name] = obj
 
@@ -1111,6 +1109,7 @@ class AbstractSyntaxTree(object):
 
                                 if command == "break":
                                     break_flag = True
+                                    break
 
                                 elif command == "continue":
                                     # Go to the next object
@@ -1128,6 +1127,42 @@ class AbstractSyntaxTree(object):
 
             except Exception as e:
                 raise Exception("Could not parse function line '" + stripped + "'.")
+
+        if stripped.startswith("while ") and stripped[-1] == ":":
+            # Looks like a while loop
+
+            condition_string = stripped[6:-1]
+            condition = Condition(string=condition_string)
+
+            while item.check_condition(condition, context):
+                # Evaluate the sub trees
+
+                break_flag = False
+                for sub_tree in self.sub_trees:
+
+                    result = sub_tree.run_function_line(item, context)
+
+                    if result is not None:
+                        if "loop" in result:
+                            command = result["loop"]
+
+                            if command == "break":
+                                break_flag = True
+                                break
+
+                            elif command == "continue":
+                                # Go to the next iteration
+                                break
+
+                        else:
+                            # Otherwise, return value
+                            return result
+
+                if break_flag:
+                    break
+
+            # No return value
+            return None
 
         if stripped.startswith("print(") and stripped[-1] == ")":
             # Print a value
@@ -1220,11 +1255,83 @@ class AbstractSyntaxTree(object):
         if c is not None:
             return c
 
+        if stripped[0] == "[":
+            # Maybe it's a list
+
+            # Search for top-level commas or closing bracket
+            entries = []
+            entry_start_index = 1
+            depth = 0
+            is_string = False
+            string_delimiter = None
+            found_end = False
+            remainder = ""
+
+            for index in range(1, len(stripped)):
+                char = stripped[index]
+
+                if is_string and char == string_delimiter:
+                    # End string
+                    is_string = False
+                    depth -= 1
+                    continue
+
+                if is_string:
+                    # Not ending our string
+                    continue
+
+                if char == "'" or char == '"':
+                    # Starting a string
+                    is_string = True
+                    string_delimiter = char
+                    depth += 1
+                    continue
+
+                if char == "," and depth == 0:
+                    # Zero-depth comma - add the entry
+                    entries.append(stripped[entry_start_index:index].strip())
+                    entry_start_index = index + 1
+                    continue
+
+                if char == "]" and depth == 0:
+                    # This is the end
+                    found_end = True
+                    entries.append(stripped[entry_start_index:index].strip())
+                    remainder = stripped[index + 1:]
+                    break
+
+                if char in ("[", "(", "{"):
+                    depth += 1
+                    continue
+
+                if char in ("]", ")", "}"):
+                    depth -= 1
+                    continue
+
+            if not found_end or len(remainder) > 0:
+                # Currently don't support list indexing, ie ["x", "y"][0]
+                raise Exception("Could not parse '" + stripped + "'.")
+
+            return [self.evaluate_line_part(item, entry, context) for entry in entries]
+
         # Try to get by path
         try:
             return item.get_by_path(stripped, context)
         except Exception as e:
             pass
+
+        if stripped[-1] == "]":
+            # Maybe ends with an index
+            i = stripped.rfind("[")
+
+            if i > -1:
+                key = self.evaluate_line_part(item, stripped[i + 1:-1], context)
+                initial = self.evaluate_line_part(item, stripped[:i], context)
+
+                try:
+                    return initial[key]
+                except Exception as e:
+                    pass
 
         # Try making a condition
         try:
