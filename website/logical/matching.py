@@ -35,6 +35,9 @@ def parse_arguments(args_string, obj, context, arg_names=None):
     args = []
     kwargs = {}
 
+    if args_string == "":
+        return args, kwargs
+
     depth = 0
     start_index = 0
     keyword = None
@@ -130,6 +133,10 @@ def get_by_path(obj, path, context, recurse=True):
     if initial == "set()":
         return set()
 
+    # Check for strings
+    if len(path) > 1 and ((path[0] == '"' and path[-1] == '"') or (path[0] == "'" and path[-1] == "'")):
+        return path[1:-1]
+
     # Otherwise, only one part
     if hasattr(obj, "get_by_path") and recurse:
         # Try the obj get_by_path first
@@ -161,11 +168,27 @@ def get_by_path(obj, path, context, recurse=True):
         return context.logical[path]
 
     if "[" in path and path[-1] == "]":
-        # Looks like list lookup
+        # Looks like list or dict lookup
+
         index = path.index("[")
         initial = path[:index]
-        i = int(path[index + 1:-1])
-        return get_by_path(obj, initial, context)[i]
+        inner = path[index + 1:-1]
+
+        initial = get_by_path(obj, initial, context)
+
+        if isinstance(initial, dict):
+            # Dictionary lookup
+
+            if inner in initial:
+                return initial[inner]
+
+            if len(inner) > 1 and ((inner[0] == '"' and inner[-1] == '"') or (inner[0] == "'" and inner[-1] == "'")):
+                str_inner = inner[1:-1]
+                if str_inner in initial:
+                    return initial[str_inner]
+
+        # Otherwise looks like a list index
+        return initial[int(inner)]
 
     if path.startswith("set(") and path[-1] == ")":
         # Make a new set
@@ -674,12 +697,18 @@ class Condition(object):
         # Otherwise, an atomic condition
 
         if self.type in ("in", "not in"):
-            # Must be for a match set
+            # Must be for a match set or dictionary
 
             item = get_by_path(obj, self.sub_items[0], context)
-            match_set = get_by_path(obj, self.sub_items[1], context)
+            rhs = get_by_path(obj, self.sub_items[1], context)
 
-            result = match_set.contains(item, context)
+            if isinstance(rhs, dict):
+                # It's a normal dictionary
+                result = item in rhs
+
+            else:
+                # Assume it's a match set
+                result = rhs.contains(item, context)
 
             if self.type == "in":
                 return result
@@ -1094,6 +1123,9 @@ class Match(object):
 
             raise Exception("Could not find '" + self.string + "' in context.")
 
+        elif path == "sub_matches()":
+            return self.sub_matches
+
         elif path == "union_submatch()":
             # Get the only submatch
             assert type(self.pattern) is UnionPattern
@@ -1201,6 +1233,12 @@ class Match(object):
             inner = path[8:-1]
             kwargs = parse_arguments(inner, self, context, arg_names=("other", "mapping"))[1]
             return self.maps_to(kwargs["other"], context, kwargs["mapping"])
+
+        elif path.startswith("apply_mapping(") and path[-1] == ")":
+            # Try applying a mapping to this match
+            inner = path[14:-1]
+            kwargs = parse_arguments(inner, self, context, arg_names=("mapping",))[1]
+            return self.apply_mapping(kwargs["mapping"], context)
 
         else:
             condition_fns = ["has_parent", "equal_any"]
@@ -1550,7 +1588,6 @@ class Match(object):
         # equal but it can't be guaranteed or ruled out.
 
         # Does not require equivalence of parent_match
-
         if memo is None:
             memo = dict()
 
@@ -1771,6 +1808,23 @@ class Match(object):
 
         # All ok
         return True
+
+    def apply_mapping(self, mapping, context):
+        # Apply the given string: match dictionary to get a mapped version of this match.
+
+        # First build a match: match variable dictionary
+        variable_dict = dict()
+
+        # Loop through the variables and map them
+        for var in self.variables(context).instances:
+            if var.string not in mapping:
+                # This contains a variable not in the mapping and so can't be mapped.
+                return False
+
+            variable_dict[var] = mapping[var.string]
+
+        # Replace the variables
+        return self.replace_variables(variable_dict, context)
 
     def duplicate(self, parent_match=None):
         # Create a copy of this match and assign it to the parent
@@ -2006,6 +2060,13 @@ class MatchSet(object):
             self.add(match, context)
             return
 
+        if path.startswith("remove(") and path[-1] == ")":
+            # Remove (doesn't return anything)
+            inner = path[7:-1]
+            match = get_by_path(context.reference_object, inner, context)
+            self.remove(match, context)
+            return
+
         if path.startswith("issubset(") and path[-1] == ")":
             inner = path[9:-1]
 
@@ -2029,7 +2090,7 @@ class MatchSet(object):
 
             return {match.string for match in self.instances}
 
-        if path[:8] == "maps_to(" and path[-1] == ")":
+        if path.startswith("maps_to(") and path[-1] == ")":
             # Check if this matchset maps to the other one. Return the mapping if it exists.
             # Optionally specify a mapping dictionary that must be consistent.
 
@@ -2040,6 +2101,16 @@ class MatchSet(object):
             mapping = kwargs["mapping"]
 
             return self.maps_to(other, context, mapping)
+
+        if path.startswith("get_mappings_to(") and path[-1] == ")":
+            # Get a list of possible mappings
+            inner = path[16:-1]
+            kwargs = parse_arguments(inner, self, context, arg_names=("other", "mapping"))[1]
+
+            other = kwargs["other"]
+            mapping = kwargs["mapping"]
+
+            return self.get_mappings_to(other, context, mapping)
 
         if recurse:
             # Try generic get_by_path
@@ -2072,34 +2143,39 @@ class MatchSet(object):
         return result
 
     def maps_to(self, other, context, mapping=None):
-        # Check if this matchset maps to the other one.
+        # Check if this everything in this matchset maps to the target one. This may not be surjective.
+        # Optionally specify a mapping dictionary that must be consistent.
+        return len(self.get_mappings_to(other, context, mapping)) > 0
+
+    def get_mappings_to(self, other, context, mapping=None):
+        # Get a list of all possible mappings from this set to the target one. Mappings don't need to be surjective.
         # Optionally specify a mapping dictionary that must be consistent.
 
         if mapping is None:
             mapping = dict()
-        else:
-            # Format the mapping keys
-            mapping = {value.pattern.pre_format_apply(key): value for key, value in mapping.items()}
 
         if type(other) is not MatchSet:
             # Other must also be a match set
-            return False
+            return []
 
         if mapping is False:
-            return False
+            return []
 
         if not self.complete:
             # Can't map an incomplete set
-            return False
+            return []
 
         if len(self.instances) == 0:
             # Vacuously True - every item in instances maps to other_instances
-            return True
+            return [mapping.copy()]
 
         # Every item in instances must have a corresponding item in other instances
         if len(self.instances) > 0 and len(other.instances) == 0:
             # Nothing to map to
-            return False
+            return []
+
+        # Start with an empty list of mappings
+        mapping_list = []
 
         # Try every permutation of other instances on self instances
         for permutation in itertools.permutations(other.instances):
@@ -2118,13 +2194,10 @@ class MatchSet(object):
             if not consistent:
                 continue
 
-            # Success! Update the mapping and return True
-            mapping.update(map_copy)
+            # Add it to the list
+            mapping_list.append(map_copy)
 
-            return True
-
-        # Otherwise, no permutation works
-        return False
+        return mapping_list
 
     def __str__(self):
         str_instances = ", ".join(sorted([str(m) for m in self.instances]))

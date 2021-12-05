@@ -70,7 +70,6 @@ $(function() {
         var height = $(window).height() - y;
         $(container).css("height", String(height) + "px");
         $(output_parent).css("height", String(height) + "px");
-
         editor.editor.resize();
     }
 
@@ -86,7 +85,6 @@ $(function() {
 
     function validate_proof() {
         // Validate the proof
-
         AJAX(
             "/proof/ajax/validate/",
             {
