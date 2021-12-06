@@ -77,7 +77,7 @@ def constant(s):
     except ValueError as e:
         pass
 
-    if len(s) > 1 and s[0] in ("'", '"') and s[0] == s[-1]:
+    if len(s) > 1 and s[0] in ("'", '"') and s[0] == s[-1] and s[0] not in s[1:-1]:
         # Looks like a string
         inner = s[1:-1]
         return inner
@@ -1313,6 +1313,23 @@ class AbstractSyntaxTree(object):
                 raise Exception("Could not parse '" + stripped + "'.")
 
             return [self.evaluate_line_part(item, entry, context) for entry in entries]
+
+        # It may be a calculation
+        if " + " in stripped:
+            try:
+                parts = stripped.split(" + ")
+
+                if len(parts) >= 2:
+                    evaluated_parts = [self.evaluate_line_part(item, part, context) for part in parts]
+
+                    result = evaluated_parts[0]
+                    for part in evaluated_parts[1:]:
+                        result = result + part
+
+                    return result
+
+            except Exception as e:
+                pass
 
         # Try to get by path
         try:

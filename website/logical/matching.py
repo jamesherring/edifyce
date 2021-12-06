@@ -200,6 +200,12 @@ def get_by_path(obj, path, context, recurse=True):
         inner = path[10:-1]
         return Condition(string=inner, context=context)
 
+    # Try a pattern match
+    if isinstance(obj, Pattern) and path.startswith("match(") and path[-1] == ")":
+        inner = path[6:-1]
+        inner_value = get_by_path(obj, inner, context)
+        return obj.match(inner_value, context)
+
     if type(obj) is set:
         # obj is a set - need to perform a set operation
 
@@ -1226,6 +1232,9 @@ class Match(object):
         elif path == "string()":
             return self.string
 
+        elif path == "formatted_string()":
+            return self.formatted_string()
+
         elif path == "condition()":
             return Condition(string=self.string, context=context)
 
@@ -2177,11 +2186,10 @@ class MatchSet(object):
         # Start with an empty list of mappings
         mapping_list = []
 
-        # Try every permutation of other instances on self instances
-        for permutation in itertools.permutations(other.instances):
-            zipped = zip(self.instances, permutation)
-            test_map = {entry[0]: entry[1] for entry in zipped}
+        # Generate and test every possible mapping of other instances on self instances
+        maps = [dict(zip(self.instances, values)) for values in itertools.product(other.instances, repeat=len(self.instances))]
 
+        for test_map in maps:
             # Check if the test map is consistent with the given mapping
             consistent = True
             map_copy = mapping.copy()
