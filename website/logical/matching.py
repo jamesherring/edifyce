@@ -108,6 +108,45 @@ def parse_arguments(args_string, obj, context, arg_names=None):
     return [], kwargs
 
 
+def constant(s):
+    # Parse a string s to a constant
+
+    if s == "True":
+        return True
+
+    if s == "False":
+        return False
+
+    if s == "set()":
+        return set()
+
+    if s == "MatchSet()":
+        return MatchSet()
+
+    if s == "tuple()":
+        return tuple()
+
+    if s == "list()" or s == "[]":
+        return list()
+
+    if s == "dict()" or s == "{}":
+        return dict()
+
+    try:
+        if "." not in s:
+            return int(s)
+        return float(s)
+    except ValueError as e:
+        pass
+
+    if len(s) > 1 and s[0] in ("'", '"') and s[0] == s[-1] and s[0] not in s[1:-1]:
+        # Looks like a string
+        inner = s[1:-1]
+        return inner
+
+    return None
+
+
 def get_by_path(obj, path, context, recurse=True):
     # General function to get an object by a path.
 
@@ -123,19 +162,14 @@ def get_by_path(obj, path, context, recurse=True):
 
         return get_by_path(initial, remainder, context)
 
-    # Check for keywords
-    if initial == "True":
-        return True
+    # Check none
+    if path == "None":
+        return None
 
-    if initial == "False":
-        return False
-
-    if initial == "set()":
-        return set()
-
-    # Check for strings
-    if len(path) > 1 and ((path[0] == '"' and path[-1] == '"') or (path[0] == "'" and path[-1] == "'")):
-        return path[1:-1]
+    # Check for constants
+    c = constant(path)
+    if c is not None:
+        return c
 
     # Otherwise, only one part
     if hasattr(obj, "get_by_path") and recurse:
@@ -194,6 +228,11 @@ def get_by_path(obj, path, context, recurse=True):
         # Make a new set
         inner = path[4:-1]
         return MatchSet(instances={get_by_path(obj, inner, context)})
+
+    if path.startswith("len(") and path[-1] == ")":
+        # Get the length of the inner
+        inner = path[4:-1]
+        return len(get_by_path(obj, inner, context))
 
     if path.startswith("Condition(") and path[-1] == ")":
         # Make a new condition
@@ -2189,6 +2228,8 @@ class MatchSet(object):
         # Generate and test every possible mapping of other instances on self instances
         maps = [dict(zip(self.instances, values)) for values in itertools.product(other.instances, repeat=len(self.instances))]
 
+        # print(len(other.instances))
+
         for test_map in maps:
             # Check if the test map is consistent with the given mapping
             consistent = True
@@ -2218,6 +2259,12 @@ class MatchSet(object):
             return "Incomplete instances: (" + str_instances + ")"
 
         return "Incomplete instances: (" + str_instances + "), negatives: " + str_negatives
+
+    def __len__(self):
+        if not self.complete:
+            raise Exception("Cannot get the length of an incomplete match set")
+
+        return len(self.instances)
 
     def __copy__(self):
         # Make a copy of this matchset
