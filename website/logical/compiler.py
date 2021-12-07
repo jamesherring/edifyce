@@ -1,6 +1,6 @@
 from website.logical.matching import Condition, Match, MatchSet, Pattern, StringPattern, UnionPattern, RegexPattern, \
     AbstractPattern, SystemConditionPattern
-from website.logical.formal_system import FormalSystem, LineType, InferenceRule, ProofLine
+from website.logical.formal_system import constant, FormalSystem, LineType, InferenceRule, ProofLine
 from copy import copy
 
 
@@ -44,45 +44,6 @@ def compile(code, system_dict=None):
 
     # Return an empty formal system
     return {"system": FormalSystem(name="")}
-
-
-def constant(s):
-    # Parse a string s to a constant
-
-    if s == "True":
-        return True
-
-    if s == "False":
-        return False
-
-    if s == "set()":
-        return set()
-
-    if s == "MatchSet()":
-        return MatchSet()
-
-    if s == "tuple()":
-        return tuple()
-
-    if s == "list()" or s == "[]":
-        return list()
-
-    if s == "dict()" or s == "{}":
-        return dict()
-
-    try:
-        if "." not in s:
-            return int(s)
-        return float(s)
-    except ValueError as e:
-        pass
-
-    if len(s) > 1 and s[0] in ("'", '"') and s[0] == s[-1] and s[0] not in s[1:-1]:
-        # Looks like a string
-        inner = s[1:-1]
-        return inner
-
-    return None
 
 
 def parse_arguments(s):
