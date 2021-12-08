@@ -269,8 +269,7 @@ def formalSystemSaveView(request):
             }))
 
         return HttpResponse(json.dumps({
-            "success": True,
-            "message": "Saved"
+            "success": True
         }))
 
     except Exception as e:

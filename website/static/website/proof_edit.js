@@ -154,12 +154,20 @@ $(function() {
     // Save the file
     $(save_button).on("click", function() {
 
+        if (!unsaved) {
+            // Nothing to save
+            return;
+        }
+
         var compile_button = $("#compile-button");
 
         // Grey out the output
         $(output_parent).addClass("updating");
         $(compile_button).addClass("hidden");
         $(save_button).addClass("disabled");
+
+        // Now saved
+        unsaved = false;
 
         AJAX(
             "/proof/ajax/save/",
@@ -176,9 +184,6 @@ $(function() {
 
                 // Add the compile button
                 $(output_parent).append(compile_button);
-
-                // Now saved
-                unsaved = false;
 
                 // Update previous_codes
                 previous_code = editor.editor.getValue();
