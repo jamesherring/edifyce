@@ -6,6 +6,8 @@ from django.shortcuts import redirect
 import json
 from .models import *
 from django.template.loader import render_to_string
+from django.contrib import messages
+
 
 
 def indexView(request):
@@ -48,8 +50,8 @@ def profileView(request, profile_id, profile_slug):
     else:
         systems = systems | FormalSystemModel.objects.filter(owner=profile, published__isnull=False)
 
-    # Make distinct
-    systems = systems.distinct()
+    # Make distinct and order them
+    systems = systems.distinct().order_by("name")
 
     # Sort the entries by systems
     if unpublished_viewable:
@@ -606,7 +608,6 @@ def proofSaveView(request):
 
         return HttpResponse(json.dumps({
             "success": True,
-            "message": "Saved",
             "data": proof.proof.data()
         }))
 
