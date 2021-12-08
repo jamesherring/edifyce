@@ -1,17 +1,16 @@
 
-div#ace-container, div#output {
+div#ace-container, div#output-wrapper {
     width: 50%;
     display: inline-block;
     vertical-align: top;
+    position: relative;
 }
 
 div#output {
     overflow: scroll;
-    position: relative;
 }
 
 div#output.updating {
-    /*background-color: #DDD; */
     -webkit-filter: blur(5px);
     -moz-filter: blur(5px);
     -o-filter: blur(5px);
