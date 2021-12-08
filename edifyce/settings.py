@@ -137,6 +137,7 @@ if ENVIRONMENT == "local":
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
             'NAME': os.path.join(BASE_DIR, 'db.sqlite3'),
+            'ATOMIC_REQUESTS': True
         }
     }
 else:
@@ -147,6 +148,7 @@ else:
             'USER': 'edifyce',
             'PASSWORD': 'REDACTED_DB_PASSWORD',
             'HOST': 'edifyce.mysql.pythonanywhere-services.com',  # Or an IP Address that your DB is hosted on
+            'ATOMIC_REQUESTS': True
         }
     }
 

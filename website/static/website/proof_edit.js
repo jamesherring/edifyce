@@ -82,9 +82,22 @@ $(function() {
     var proof_data = JSON.parse(document.getElementById("proof_data").innerHTML);
     output.populate(proof_data, false);
 
+    // Add the compile button
+    var compile_button = $("#compile-button");
+    $(output_parent).append(compile_button);
+
+    var save_button = $("#save > div.button");
+
 
     function validate_proof() {
         // Validate the proof
+
+        var compile_button = $("#compile-button");
+
+        // Grey out the output
+        $(output_parent).addClass("updating");
+        $(compile_button).addClass("hidden");
+
         AJAX(
             "/proof/ajax/validate/",
             {
@@ -94,22 +107,60 @@ $(function() {
             function(response) {
                 // Populate the output with the validation data
                 output.populate(response.data, true);
+
+                // Remove the updating styles
+                $(output_parent).removeClass("updating");
+
+                // Add the compile button
+                $(output_parent).append(compile_button);
+
+                // Update previous_code
+                previous_code = editor.editor.getValue();
             }
         )
     }
 
     var previous_code = editor.editor.getValue();
+    var previous_saved_code = previous_code;
+    var unsaved = false;
 
     editor.editor.session.on("change", function(e) {
-        // Validate the proof 500ms after any changes
-        window.clearTimeout(window.timeout);
-        window.timeout = setTimeout(validate_proof, 1000);
+
+        var current_code = editor.editor.getValue();
+        var compile_button = $("#compile-button");
+
+        // Look for changes and show the compile button if necessary
+        if (previous_code == current_code) {
+            // Code unchanged
+            $(compile_button).addClass("hidden");
+        } else {
+            $(compile_button).removeClass("hidden");
+        }
+
+        if (previous_saved_code == current_code) {
+            // Code the same as previously saved
+            $(save_button).addClass("disabled");
+            unsaved = false;
+        } else {
+            $(save_button).removeClass("disabled");
+            unsaved = true;
+        }
 
     });
 
+    // Re-compile on compile button click
+    $(document.body).on("click", "#compile-button", validate_proof);
 
     // Save the file
-    $("#save").on("click", function() {
+    $(save_button).on("click", function() {
+
+        var compile_button = $("#compile-button");
+
+        // Grey out the output
+        $(output_parent).addClass("updating");
+        $(compile_button).addClass("hidden");
+        $(save_button).addClass("disabled");
+
         AJAX(
             "/proof/ajax/save/",
             {
@@ -119,11 +170,32 @@ $(function() {
             function(response) {
                 // Populate the output with the validation data
                 output.populate(response.data, true);
+
+                // Remove the updating styles
+                $(output_parent).removeClass("updating");
+
+                // Add the compile button
+                $(output_parent).append(compile_button);
+
+                // Now saved
+                unsaved = false;
+
+                // Update previous_codes
+                previous_code = editor.editor.getValue();
+                previous_saved_code = previous_code;
             }
         )
     });
 
 
+    // Look out for unsaved changes
+    const unloadPage = () => {
+        if (unsaved) {
+            return "Careful! You have unsaved changes.";
+        }
+    };
+
+    window.onbeforeunload = unloadPage;
 
 
-})
+});
