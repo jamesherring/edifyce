@@ -84,15 +84,11 @@ $(function() {
 
     // Add the compile button
     var compile_button = $("#compile-button");
-    $(output_parent).append(compile_button);
-
     var save_button = $("#save > div.button");
 
 
     function validate_proof() {
         // Validate the proof
-
-        var compile_button = $("#compile-button");
 
         // Grey out the output
         $(output_parent).addClass("updating");
@@ -111,9 +107,6 @@ $(function() {
                 // Remove the updating styles
                 $(output_parent).removeClass("updating");
 
-                // Add the compile button
-                $(output_parent).append(compile_button);
-
                 // Update previous_code
                 previous_code = editor.editor.getValue();
             }
@@ -127,7 +120,6 @@ $(function() {
     editor.editor.session.on("change", function(e) {
 
         var current_code = editor.editor.getValue();
-        var compile_button = $("#compile-button");
 
         // Look for changes and show the compile button if necessary
         if (previous_code == current_code) {
@@ -159,8 +151,6 @@ $(function() {
             return;
         }
 
-        var compile_button = $("#compile-button");
-
         // Grey out the output
         $(output_parent).addClass("updating");
         $(compile_button).addClass("hidden");
@@ -181,9 +171,6 @@ $(function() {
 
                 // Remove the updating styles
                 $(output_parent).removeClass("updating");
-
-                // Add the compile button
-                $(output_parent).append(compile_button);
 
                 // Update previous_codes
                 previous_code = editor.editor.getValue();

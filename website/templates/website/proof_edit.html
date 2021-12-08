@@ -24,10 +24,9 @@
     {% endif %}
 
     <div class="mathjax_ignore">
-        <div id="ace-container"{% if not editable %} class="uneditable"{% endif %}>{{ proof.code }}</div><div id="output" class="proof-display"></div>
+        <div id="ace-container"{% if not editable %} class="uneditable"{% endif %}>{{ proof.code }}</div><!--
+        --><div id="output-wrapper"><div id="compile-button" class="hidden"><div class="button">Compile</div></div><div id="output" class="proof-display"></div></div>
     </div>
-
-    <div id="compile-button" class="hidden"><div class="button">Compile</div></div>
 
     {{ proof.proof.data|json_script:"proof_data" }}
     {{ root_autocomplete|json_script:"root_autocomplete" }}
