@@ -1,7 +1,7 @@
 from website.logical.matching import Condition, Match, MatchSet, Pattern, StringPattern, UnionPattern, RegexPattern, \
     AbstractPattern, SystemConditionPattern
 from website.logical.formal_system import constant, FormalSystem, LineType, InferenceRule, ProofLine
-from copy import copy
+from copy import copy, deepcopy
 
 
 def get_inherited_system(code):
@@ -154,6 +154,14 @@ class Context(object):
         self.system_dict.update(parent.system_dict)
 
         # Don't inherit string_variables or current_object
+
+        # Inherit union patterns
+        for pattern in self.variables.values():
+            if not isinstance(pattern, UnionPattern):
+                continue
+
+            # Pattern is a union pattern. Set the inheritance
+            pattern.inherits = deepcopy(pattern)
 
     def __copy__(self):
         new_context = Context()
@@ -319,6 +327,9 @@ class AbstractSyntaxTree(object):
 
                     for lt in system.line_types:
                         current_object.add_line_type(lt)
+
+                    # Add proof context
+                    current_object.context.logical.update(deepcopy(system.context.logical))
 
             elif stripped.startswith("FormalSystem ") and stripped[-1] == ":":
                 # Looks like a formal system declaration
