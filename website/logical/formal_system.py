@@ -392,6 +392,10 @@ class LineType(object):
         # Check if the given line string is of this type
         return self.pattern.match(line, context)
 
+    def inherited_functions(self, context):
+        # Get all functions associated with this line type. This is to cover functions from formal system inheritance
+        return context.variables[self.name].functions
+
     def add_function(self, name, tree, params=None):
         # Add an function to this pattern. tree is an AbstractSyntaxTree instance
 
@@ -404,11 +408,12 @@ class LineType(object):
             "params": params
         }
 
-    def get_function(self, name):
+    def get_function(self, name, context):
         # Get the given attribute function
 
-        if name in self.functions:
-            return self.functions[name]
+        fns = self.inherited_functions(context)
+        if name in fns:
+            return fns[name]
 
         return None
 
@@ -546,7 +551,6 @@ class InferenceRule(object):
         # Check the rule condition
         if self.condition is not None:
             # Make a condition context with antecedents and deduction
-
             try:
                 if not self.condition.check_condition(inference, context):
                     # Doesn't meet the condition
@@ -1340,7 +1344,7 @@ class ProofLine(object):
         if path == "previous_formulae()":
             return self.previous_formulae()
 
-        if "(" in path and path[:path.index("(")] in self.line_type.functions:
+        if "(" in path and path[:path.index("(")] in self.line_type.inherited_functions(context):
             # An attribute function with parameters
 
             index = path.index("(")
@@ -1525,7 +1529,7 @@ class ProofLine(object):
     def run_function(self, name, context, args=None, kwargs=None):
         # Run a custom function with the given name, args and kwargs
 
-        fn = self.line_type.get_function(name)
+        fn = self.line_type.get_function(name, context)
 
         if fn is None:
             raise Exception("'" + self.line_type.name + "' does not have function '" + name + "'.")
@@ -1567,8 +1571,7 @@ class ProofLine(object):
         # Run the tree as a function
         tree = fn["tree"]
 
-        result = tree.run_function(item=self, context=context_copy, params=param_mapping, param_types=fn["params"])
-        return result
+        return tree.run_function(item=self, context=context_copy, params=param_mapping, param_types=fn["params"])
 
     def previous_formulae(self):
         # Return a matchset of formulae that have been proven before this statement in the proof and share the same
@@ -1662,29 +1665,32 @@ class ProofLine(object):
                 return False
 
         # Check logical context - this needs to match!
-        if len(self.context.logical["given"].instances) > 0:
-            for key, previous_obj in previous_line.context.logical.items():
-                current_obj = self.context.logical[key]
+        for key, previous_obj in previous_line.context.logical.items():
+            if key not in self.context.logical:
+                # No match
+                return False
 
-                # We need to confirm the previous and new objects are the same or equivalent
+            current_obj = self.context.logical[key]
 
-                if previous_obj == current_obj:
-                    continue
+            # We need to confirm the previous and new objects are the same or equivalent
 
-                if not type(previous_obj) == type(current_obj):
+            if previous_obj == current_obj:
+                continue
+
+            if not type(previous_obj) == type(current_obj):
+                return False
+
+            if not hasattr(previous_obj, "equivalent"):
+                # No way to check equivalence
+                return False
+
+            try:
+                if not previous_obj.equivalent(current_obj, self.context):
                     return False
+            except Exception as e:
+                return False
 
-                if not hasattr(previous_obj, "equivalent"):
-                    # No way to check equivalence
-                    return False
-
-                try:
-                    if not previous_obj.equivalent(current_obj, self.context):
-                        return False
-                except Exception as e:
-                    return False
-
-                # Otherwise ok
+            # Otherwise ok
 
         self.__init__(
             proof=self.proof,

@@ -122,7 +122,7 @@ class FormalSystemModel(models.Model):
         if self.inherits_from is None:
             return set()
 
-        return {self.inherits_from}.union(self.inherits_from.inherited_systems)
+        return {self.inherits_from}.union(self.inherits_from.inherited_systems())
 
     def code(self):
         # Get the code for this formal system

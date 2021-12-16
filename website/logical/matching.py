@@ -1832,7 +1832,7 @@ class Match(object):
             return other.equivalent(mapping[self.formatted_string()], context)
 
         # Must have consistent patterns
-        if not self.pattern.equivalent(other.pattern, context):
+        if not self.pattern.can_map_to(other.pattern, context):
             return False
 
         if self.is_variable and len(self.sub_matches) == 0:
@@ -2450,6 +2450,18 @@ class Pattern(object):
 
         # No definitions work
         return None
+
+    def can_map_to(self, other, context):
+        # Check if this pattern can map to the other pattern, taking into account pattern inheritance.
+
+        if self.equivalent(other, context):
+            # Easy case
+            return True
+
+        # More fundamental patterns can map to inherited patterns, but not the other way around
+
+        if hasattr(other, "inherits"):
+            return self.can_map_to(other.inherits, context)
 
 
 class RegexPattern(Pattern):
@@ -3171,7 +3183,7 @@ class StringPattern(Pattern):
 class UnionPattern(Pattern):
     # A union of patterns
 
-    def __init__(self, name, patterns, respect_brackets=None, pre_format=None):
+    def __init__(self, name, patterns, respect_brackets=None, pre_format=None, inherits=None):
 
         Pattern.__init__(self, name, respect_brackets, pre_format)
 
@@ -3179,6 +3191,9 @@ class UnionPattern(Pattern):
         self.patterns = patterns
 
         self.pattern_type = "UnionPattern"
+
+        # Inherits from a previous unionpattern
+        self.inherits = inherits
 
     def match(self, s, context, debug=None):
         # Match s against one of the patterns.
@@ -3214,6 +3229,14 @@ class UnionPattern(Pattern):
             pattern = string_variables[s]
 
             if self.equivalent(pattern, context):
+                return Match(
+                    pattern=self,
+                    string=s,
+                    is_variable=True
+                )
+
+            # Also check for match against inherited patterns
+            if self.inherits is not None and self.inherits.match(s, context, debug):
                 return Match(
                     pattern=self,
                     string=s,
@@ -3326,6 +3349,18 @@ class UnionPattern(Pattern):
     def set_pre_format(self, pre_format):
         # Set the pre-format dictionary.
         self.pre_format = pre_format
+
+    def inherits_from(self, other, context):
+        # Check if this pattern inherits from another
+
+        if self.inherits is None:
+            return False
+
+        if self.inherits.equivalent(other, context):
+            return True
+
+        # Could be nested inheritance
+        return self.inherits.inherits_from(other, context)
 
     def equivalent(self, other, context, memo=None):
         # Check if two patterns are the same
