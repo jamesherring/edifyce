@@ -350,7 +350,7 @@ def path_maps_to(path, other_path, context, other_context, mapping):
 class Context(object):
 
     def __init__(self, variables=None, string_variables=None, string_variable_matches=None, definitions=None,
-                 logical=None, reference_object=None, mapping=None, condition_validation=False, proof_model_id=None):
+                 logical=None, reference_object=None, mapping=None, proof_model_id=None):
 
         self.variables = variables if variables is not None else dict()
         self.string_variables = string_variables if string_variables is not None else dict()
@@ -369,9 +369,6 @@ class Context(object):
 
         # Mapping on string variables - string: string dictionary
         self.mapping = mapping
-
-        # Whether we are validating a condition
-        self.condition_validation = condition_validation
 
         # The proof model id
         self.proof_model_id = proof_model_id
@@ -412,9 +409,6 @@ class Context(object):
             return False
 
         if not self.mapping == other.mapping:
-            return False
-
-        if not self.condition_validation == other.condition_validation:
             return False
 
         if not self.proof_model_id == other.proof_model_id:
@@ -486,7 +480,6 @@ class Context(object):
             reference_object=self.reference_object,
             mapping=copy(self.mapping),
 
-            condition_validation=self.condition_validation,
             proof_model_id=self.proof_model_id
         )
 
@@ -733,8 +726,11 @@ class Condition(object):
                    self.sub_conditions[1].check_condition(obj, context)
 
         if self.type == "or":
-            return self.sub_conditions[0].check_condition(obj, context) or \
-                   self.sub_conditions[1].check_condition(obj, context)
+
+            left = self.sub_conditions[0].check_condition(obj, context)
+            right = self.sub_conditions[1].check_condition(obj, context)
+
+            return left or right
 
         if self.type == "not":
             return not self.sub_conditions[0].check_condition(obj, context)
@@ -801,31 +797,6 @@ class Condition(object):
             return obj.get_by_path(self.string, context)
 
         raise Exception("Couldn't evaluate condition '" + self.string + "'.")
-
-    def validate(self):
-        # See if this is a valid condition with the given context
-
-        # Work with a copy of context
-        context_copy = copy(self.context)
-
-        # Set string variable matches
-        context_copy.set_string_variable_matches()
-
-        # We are validating a condition
-        context_copy.condition_validation = True
-
-        try:
-            result = self.check_condition(None, context_copy)
-        except Exception as e:
-            # Not valid condition
-            return False
-
-        if result not in (True, False, None):
-            # result needs to be boolean or None (uncertain)
-            return False
-
-        # Otherwise ok
-        return True
 
     def maps_to(self, other, mapping):
         # Check if this condition maps to the other one under the string variable mapping
@@ -896,6 +867,10 @@ class Condition(object):
 
         # No luck
         return False
+
+    def validate(self):
+        # Check if the condition is valid.
+        return True
 
     def conjunctive_parts(self):
         # Get the conjunctive parts of this condition.
@@ -1321,17 +1296,20 @@ class Match(object):
             # Has parent of the given pattern
 
             inner = c.string[11:-1]
-            index = inner.find(";")
 
+            parts = inner.split("; ")
+
+            assert 1 <= len(parts) <= 3
+
+            pattern_string = parts[0]
+            within_match = None
             sub_condition_string = None
-            if index == -1:
-                # No sub condition
-                pattern_string = inner
 
-            else:
-                # There is a sub condition
-                pattern_string = inner[:index]
-                sub_condition_string = inner[index + 2:]
+            if len(parts) > 1:
+                within_match = parts[1]
+
+            if len(parts) == 3:
+                sub_condition_string = parts[2]
 
             condition = None if sub_condition_string is None else Condition(sub_condition_string, context=context)
 
@@ -1344,7 +1322,7 @@ class Match(object):
             # Get the pattern
             pattern = context.variables[pattern_name]
 
-            return self.has_parent(pattern, condition, copy(context), label=pattern_label)
+            return self.has_parent(pattern, within_match, condition, copy(context), label=pattern_label)
 
         elif c.string[:10] == "equal_any(":
             # Check if a value is equal to any of a matchset
@@ -1493,14 +1471,27 @@ class Match(object):
 
         return match_set
 
-    def has_parent(self, pattern, condition=None, context=None, label=None):
+    def has_parent(self, pattern, within_match=None, condition=None, context=None, label=None):
         # Return True if self has a parent match of the given pattern.
         # Optionally specify a label to add matches to context - useful if they are referenced in the condition
+        # Optionally specify within_match that the parent must be within
 
         if self.parent_match is None:
             return False
 
-        if self.parent_match.pattern is pattern:
+        if within_match is not None and not self.is_descendant_of(within_match):
+            # Weird within_match. Should be a parent of self.
+            return False
+
+        if self is within_match:
+            # Parent will be outside
+            return False
+
+        p = False
+        if condition.string == "f.x.equal_any(self.instances(variable))":
+            p = True
+
+        if self.parent_match.pattern.equivalent(pattern, context):
 
             if label is not None:
                 context.variables[label] = self.parent_match
@@ -1509,11 +1500,11 @@ class Match(object):
             if condition is None or self.parent_match.check_condition(condition, context):
                 return True
 
-        return self.parent_match.has_parent(pattern, condition, context, label)
+        return self.parent_match.has_parent(pattern, within_match, condition, context, label)
 
     def equal_any(self, matchset, context):
         # Check if this match is equal to any item in the matchset
-
+        print("equal_any")
         for match in matchset.instances:
             if self.equivalent(match, context):
                 return True
@@ -1565,7 +1556,7 @@ class Match(object):
         if m.is_variable and m.pattern.may_contain(needle.pattern, context):
             # This is a variable match not equivalent to needle. We can't check or replace submatches.
 
-            if context.condition_validation or allow_variables:
+            if allow_variables:
                 # Don't raise an exception. This is a variable which will map to something else before replacement.
                 return m
 

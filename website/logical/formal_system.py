@@ -1702,6 +1702,7 @@ class ProofLine(object):
 
         # Set all the other needed attributes
         self.display = previous_line.display
+        self.reference_string_display = previous_line.reference_string_display
         self.reference_mapping = previous_line.reference_mapping
         self.formula = previous_line.formula
         self.definition = previous_line.definition
