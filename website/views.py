@@ -451,7 +451,7 @@ def folderDeleteSubmitView(request, folder_id, folder_slug):
 
     messages.add_message(request, messages.INFO, "Folder deleted.")
 
-    return redirect(request.user.profile)
+    return redirect(request.user.profile.get_absolute_url())
 
 
 def proofView(request, proof_id, proof_slug):
@@ -707,7 +707,7 @@ def proofDeleteSubmitView(request, proof_id, proof_slug):
 
     messages.add_message(request, messages.INFO, "Proof deleted.")
 
-    return redirect(request.user.profile)
+    return redirect(request.user.profile.get_absolute_url())
 
 
 @login_required
