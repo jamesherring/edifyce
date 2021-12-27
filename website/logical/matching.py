@@ -726,11 +726,8 @@ class Condition(object):
                    self.sub_conditions[1].check_condition(obj, context)
 
         if self.type == "or":
-
-            left = self.sub_conditions[0].check_condition(obj, context)
-            right = self.sub_conditions[1].check_condition(obj, context)
-
-            return left or right
+            return self.sub_conditions[0].check_condition(obj, context) or \
+                   self.sub_conditions[1].check_condition(obj, context)
 
         if self.type == "not":
             return not self.sub_conditions[0].check_condition(obj, context)

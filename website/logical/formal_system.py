@@ -1083,25 +1083,25 @@ class Proof(object):
                         "target": ref_dict["target"]
                     }
 
-                ref_proof = ref_dict["target"]
-                ref_item = ref_proof.get_reference(remainder, context)
+                ref_target = ref_dict["target"]
+                ref_item = ref_target.get_reference(remainder, context)
 
                 if ref_item is None:
                     # No such label in the ref proof
-                    add_reference(ref_proof)
+                    add_reference(ref_target)
                     return {
                         "success": False,
                         "errorMessage": initial + " does not have a line with label " + remainder + ".",
-                        "target": ref_proof
+                        "target": ref_target
                     }
 
-                if isinstance(ref_proof, Proof) and (ref_proof.has_warnings or not ref_proof.valid):
+                if isinstance(ref_target, Proof) and (ref_target.has_warnings or not ref_target.valid):
                     # Referenced proof has errors
-                    add_reference(ref_proof)
+                    add_reference(ref_target)
                     return {
                         "success": False,
                         "errorMessage": path + " has unresolved errors.",
-                        "target": ref_proof
+                        "target": ref_target
                     }
 
             else:
@@ -1324,6 +1324,8 @@ class ProofLine(object):
             return get_by_path(self, path, context)
 
         # Otherwise, only one part
+        if path == "text()":
+            return self.text
 
         if path == "match()":
             # Get the match

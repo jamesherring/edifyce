@@ -1,5 +1,4 @@
 from django.db import models
-from django.contrib import messages
 from ordered_model.models import OrderedModel
 from django.contrib.auth.models import User
 from django.db.models.signals import post_save, pre_save
@@ -112,10 +111,6 @@ class FormalSystemModel(models.Model):
 
     def get_absolute_url(self):
         return "/system/view/" + self.id + "/" + self.slug + "/"
-
-    def path_to_file(self):
-        # Get the path to the file defining this formal system
-        return "website/formal_systems/" + self.id + "/" + self.slug + ".txt"
 
     def inherited_systems(self):
         # Return a set of slugs of the chain of systems
@@ -232,6 +227,50 @@ class FormalSystemModel(models.Model):
 
     def proof_count(self):
         return ProofModel.objects.filter(folder_entry__formal_system=self).count()
+
+    def get_reference(self, ref, context):
+        # Get a reference
+
+        initial = ref
+        remainder = None
+
+        if "." in ref:
+            index = ref.find(".")
+            initial = ref[:index]
+            remainder = ref[index + 1:]
+
+        # Try published folder
+        published_folder = ProofFolder.objects.filter(
+            folder_entry__parent_folder__isnull=True,
+            folder_entry__formal_system=self,
+            folder_entry__published__isnull=False,
+            slug=initial
+        ).first()
+
+        if published_folder is not None:
+
+            if remainder is None:
+                return published_folder
+
+            return published_folder.get_reference(remainder, context)
+
+        # Try published proof
+        published_proof = ProofModel.objects.filter(
+            folder_entry__parent_folder__isnull=True,
+            folder_entry__formal_system=self,
+            folder_entry__published__isnull=False,
+            slug=initial
+        ).first()
+
+        if published_proof is not None:
+
+            if remainder is None:
+                return published_proof
+
+            return published_proof.proof.get_reference(remainder, context)
+
+        # No luck
+        raise Exception("Could not parse reference: " + ref)
 
     def __str__(self):
         return self.name
@@ -516,7 +555,7 @@ class ProofFolder(models.Model):
         return self in entry.parent_folders()
 
     def get_reference(self, ref, context):
-        # Get a reference. Optionally specify the proof model making the reference, to exclude any entries after it.
+        # Get a reference.
 
         initial = ref
         remainder = None
@@ -599,10 +638,6 @@ class ProofModel(models.Model):
 
     def get_absolute_edit_url(self):
         return "/proof/edit/" + self.id + "/" + self.slug + "/"
-
-    def path_to_file(self):
-        # Get the path to the file defining this proof
-        return "website/proofs/" + self.id + ".txt"
 
     def code(self):
         # Get the code for this proof
@@ -706,7 +741,8 @@ class ProofModel(models.Model):
             # Try proofs
 
             # Try an earlier proof in the same folder
-            proof = ProofModel.objects.filter(slug=initial, folder_entry__parent_folder=self_parent_folder,
+            proof = ProofModel.objects.filter(slug=initial, folder_entry__formal_system=self_system,
+                                              folder_entry__parent_folder=self_parent_folder,
                                               folder_entry__order__lt=self.folder_entry.order).first()
 
             if proof is None:
