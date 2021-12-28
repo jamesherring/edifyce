@@ -1501,7 +1501,6 @@ class Match(object):
 
     def equal_any(self, matchset, context):
         # Check if this match is equal to any item in the matchset
-        print("equal_any")
         for match in matchset.instances:
             if self.equivalent(match, context):
                 return True
@@ -1563,34 +1562,8 @@ class Match(object):
         for key, sub_match in m.sub_matches.items():
             m.sub_matches[key] = sub_match.replace(needle, value, context, condition, allow_variables)
 
-        if isinstance(m.pattern, StringPattern):
-            # Reset the match string
-            m.string = ""
-            i = 0
-            while i < len(self.pattern.pattern):
-                if i in self.pattern.non_variable_locations:
-                    part = self.pattern.non_variable_locations[i]
-                    match_part = part
-
-                else:
-                    part = self.pattern.variable_locations[i]["label"]
-                    match_part = m.sub_matches[part].string
-
-                    # Check if this value has changed
-                    original = self.sub_matches[part]
-                    new = m.sub_matches[part]
-
-                    if (not new.string == original.string) and original.is_variable and original.string == needle.string:
-                        # This sub match been changed
-                        match_part = new.string
-
-                m.string += self.pattern.pre_format_apply(match_part)
-                i += len(part)
-
-        elif isinstance(m.pattern, UnionPattern):
-
-            if not m.is_variable:
-                m.string = list(m.sub_matches.values())[0].string
+        # Reset the match string
+        m.reset_string()
 
         return m
 
@@ -1602,6 +1575,37 @@ class Match(object):
             result = result.replace(key, value, context, allow_variables=True)
 
         return result
+
+    def reset_string(self):
+        # Reset the match string according to the patterns
+
+        if isinstance(self.pattern, StringPattern) or self.definition is not None:
+
+            pattern_used = self.pattern if self.definition is None else self.definition.higher
+
+            new_string = ""
+            i = 0
+            while i < len(pattern_used.pattern):
+                if i in pattern_used.non_variable_locations:
+                    part = pattern_used.non_variable_locations[i]
+                    match_part = part
+
+                else:
+                    part = pattern_used.variable_locations[i]["label"]
+                    match_part = self.sub_matches[part].string
+
+                new_string += self.pattern.pre_format_apply(match_part)
+                i += len(part)
+
+            self.string = new_string
+
+        elif isinstance(self.pattern, UnionPattern):
+            if not self.is_variable:
+                sub_match = list(self.sub_matches.values())[0]
+                sub_match.reset_string()
+                self.string = sub_match.string
+
+        # Otherwise nothing to do
 
     def pretty_print(self, depth=0):
         # Print the match tree
@@ -1802,7 +1806,7 @@ class Match(object):
                 old_variable_match = Match(string=variable, pattern=variable_pattern, is_variable=True)
                 new_variable_match = Match(string=new_var, pattern=variable_pattern, is_variable=True)
 
-                new_match = self.replace(needle=old_variable_match, value=new_variable_match, context=context)
+                new_match = self.replace(needle=old_variable_match, value=new_variable_match, context=context, allow_variables=True)
 
                 # Use new_match to create a pattern
                 return new_match.create_pattern(context)
@@ -2216,8 +2220,6 @@ class MatchSet(object):
         # Generate and test every possible mapping of other instances on self instances
         maps = [dict(zip(self.instances, values)) for values in itertools.product(other.instances, repeat=len(self.instances))]
 
-        # print(len(other.instances))
-
         for test_map in maps:
             # Check if the test map is consistent with the given mapping
             consistent = True
@@ -2420,6 +2422,11 @@ class Pattern(object):
 
         defn = Definition(lower, higher, self, context)
 
+        for d in context.definitions:
+            if d.equivalent(defn, context):
+                # This definition has already been created
+                return None
+
         context.definitions.append(defn)
 
         return defn
@@ -2428,7 +2435,7 @@ class Pattern(object):
         # Try definitions to see if they can give a match for s
 
         for definition in context.definitions:
-            if not definition.pattern.equivalent(self, context):
+            if not definition.pattern.can_map_to(self, context):
                 continue
 
             result = definition.match(s, context)
@@ -2635,7 +2642,7 @@ class StringPattern(Pattern):
 
             # Check if the whole string is a variable
             for svar, sub_pattern in string_variables.items():
-                if s == svar and self == sub_pattern:
+                if s == svar and self.can_map_to(sub_pattern, context):
                     # Match!
                     m.is_variable = True
                     return m
@@ -3216,7 +3223,7 @@ class UnionPattern(Pattern):
         if s in string_variables:
             pattern = string_variables[s]
 
-            if self.equivalent(pattern, context):
+            if self.can_map_to(pattern, context):
                 return Match(
                     pattern=self,
                     string=s,
