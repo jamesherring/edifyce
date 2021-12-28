@@ -1118,16 +1118,39 @@ class Proof(object):
         # Add any definitions we have imported
         if isinstance(ref_item, ProofLine) and ref_item.line_type is not None and ref_item.line_type.behaviour == "definition":
             context.definitions.append(ref_item.definition)
+            self.import_definition(ref_item.definition, context)
 
         elif isinstance(ref_item, Proof):
             for line in ref_item.proof_lines:
                 if isinstance(line, ProofLine) and line.line_type is not None and line.line_type.behaviour == "definition":
                     context.definitions.append(line.definition)
+                    self.import_definition(line.definition, context)
 
         return {
             "success": True,
             "target": ref_item
         }
+
+    def import_definition(self, definition, context):
+        # Import the given definition from one proof to another. Requires careful handling with inherited patterns
+
+        # Get the pattern name
+        pattern_name = definition.pattern.name
+
+        # Get the instance of this pattern in this formal system
+        pattern = self.formal_system.build_context.variables[pattern_name]
+
+        # Get a copy of context to add the variables needed for this pattern
+        context_copy = copy(context)
+        context_copy.string_variables.update(definition.variables)
+
+        result = pattern.add_definition(definition.lower.pattern, definition.higher.pattern, context_copy)
+
+        if result is None:
+            raise Exception("Failed to import definition: " + definition.higher.pattern)
+
+        # Add the definition to context
+        context.definitions.append(result)
 
     def justify(self, deduction, context, inference_rule=None):
         # Artificially try to find a justification for the given reference. Optionally specify a inference rule.
