@@ -117,6 +117,9 @@ class FormalSystem(object):
             context = copy(self.context)
             context.proof_model_id = proof_model_id
 
+            # Add any definitions created in the formal system
+            context.definitions = copy(self.build_context.definitions)
+
         i = -1
         while i + 1 < len(lines):
 
@@ -362,6 +365,11 @@ class FormalSystem(object):
 
         # Otherwise ok
         return True
+
+    def format_string(self, s):
+        # Format a string s
+        pattern = StringPattern(name="temporary", pattern="", pre_format=self.build_context.pre_format)
+        return pattern.pre_format_apply(s)
 
     def __str__(self):
         return self.name
@@ -806,7 +814,8 @@ class Proof(object):
             return self.reference_context[ref]
 
         for ir in self.formal_system.inference_rules:
-            if ref == ir.label:
+            # Compare against the ir label and formatted label
+            if ref == ir.label or ref == self.formal_system.format_string(ir.label):
                 return {
                     "inference_rule": ir,
                     "antecedents": [],
@@ -1134,23 +1143,39 @@ class Proof(object):
     def import_definition(self, definition, context):
         # Import the given definition from one proof to another. Requires careful handling with inherited patterns
 
+        build_context = self.formal_system.build_context
+
         # Get the pattern name
         pattern_name = definition.pattern.name
 
         # Get the instance of this pattern in this formal system
-        pattern = self.formal_system.build_context.variables[pattern_name]
+        pattern = build_context.variables[pattern_name]
 
         # Get a copy of context to add the variables needed for this pattern
         context_copy = copy(context)
         context_copy.string_variables.update(definition.variables)
+
+        # Use the build context pattern if it exists
+        for key, value in definition.variables.items():
+            name = value.name
+            if name in build_context.variables:
+                context_copy.string_variables[key] = build_context.variables[name]
 
         result = pattern.add_definition(definition.lower.pattern, definition.higher.pattern, context_copy)
 
         if result is None:
             raise Exception("Failed to import definition: " + definition.higher.pattern)
 
-        # Add the definition to context
-        context.definitions.append(result)
+        # Remove any existing (possibly duplicate) conditions
+        if result not in context.definitions:
+            for defn in context.definitions:
+                if defn.higher.pattern == result.higher.pattern and defn.lower.pattern == result.lower.pattern and \
+                        defn.pattern.can_map_to(pattern, context):
+                    # Can be removed
+                    context.definitions.remove(defn)
+
+            # Add the definition to context
+            context.definitions.append(result)
 
     def justify(self, deduction, context, inference_rule=None):
         # Artificially try to find a justification for the given reference. Optionally specify a inference rule.
