@@ -224,6 +224,23 @@ def get_by_path(obj, path, context, recurse=True):
         # Otherwise looks like a list index
         return initial[int(inner)]
 
+    # Try addition of parts
+    if " + " in path:
+        try:
+            parts = path.split(" + ")
+
+            if len(parts) >= 2:
+                evaluated_parts = [get_by_path(obj, part, context) for part in parts]
+
+                result = evaluated_parts[0]
+                for part in evaluated_parts[1:]:
+                    result = result + part
+
+                return result
+
+        except Exception as e:
+            pass
+
     if path.startswith("set(") and path[-1] == ")":
         # Make a new set
         inner = path[4:-1]
@@ -899,6 +916,9 @@ class Condition(object):
 
             return self.maps_into_set(kwargs["target_condition_set"], kwargs["mapping"])
 
+        if path == "string()":
+            return self.string
+
         if path == "conjunctive_parts()":
             return self.conjunctive_parts()
 
@@ -1149,6 +1169,11 @@ class Match(object):
 
             return list(self.sub_matches.values())[0]
 
+        elif path.startswith("contains(") and path[-1] == ")":
+            inner = path[9:-1]
+            needle = get_by_path(None, inner, context)
+            return self.contains(needle, context)
+
         elif path.startswith("instances(") and path[-1] == ")":
             # Call for instances
 
@@ -1245,6 +1270,9 @@ class Match(object):
 
         elif path == "formatted_string()":
             return self.formatted_string()
+
+        elif path == "variables()":
+            return self.variables(context)
 
         elif path == "condition()":
             return Condition(string=self.string, context=context)
@@ -1380,6 +1408,19 @@ class Match(object):
         result = tree.run_function(item=self, context=context_copy, params=param_mapping, param_types=fn["params"])
 
         return result
+
+    def contains(self, other, context):
+        # Check if this match contains other (ie is equivalent to self or some submatch)
+
+        if self.equivalent(other, context):
+            return True
+
+        for sub in self.sub_matches.values():
+            if sub.contains(other, context):
+                return True
+
+        # Otherwise not
+        return False
 
     def instances(self, pattern, context, condition=None, attribute_name=None, shallow=False, label=None):
         # Get instances of the pattern in nested sub matches, which meet the specified condition.
@@ -1756,7 +1797,7 @@ class Match(object):
         # Get the variable leaves in this match structure
 
         if variables is None:
-            variables = MatchSet()
+            variables = MatchSet(allow_multiple=True)
 
         if len(self.sub_matches) == 0 and self.is_variable:
             variables.add(self, context)
@@ -2123,6 +2164,24 @@ class MatchSet(object):
             item = get_by_path(context.reference_object, inner, context)
             return self.contains(item, context)
 
+        if path.startswith("each(") and path[-1] == ")":
+            # Condition on each element
+            inner = path[5:-1]
+
+            parts = inner.split("; ")
+
+            if len(parts) == 1:
+                # Only one part - the condition
+                condition = Condition(string=inner, context=context)
+                return self.each(condition, context)
+
+            # Otherwise we have named instances
+            assert len(parts) == 2
+            var_name = parts[0]
+            condition = Condition(string=parts[1], context=context)
+
+            return self.each(condition, context, var_name)
+
         if path == "strings()":
             # Return the matches as a set of strings
             if not self.complete:
@@ -2158,15 +2217,22 @@ class MatchSet(object):
 
         raise Exception("Could not find value from path '" + path + "'.")
 
-    def each(self, condition, context):
-        # Check if every element meets a condition
+    def each(self, condition, context, var_name=None):
+        # Check if every element meets a condition. Optionally specify a variable name.
 
         if not self.complete:
             # Can't check the missing elements
             return False
 
+        # Work with a copy of context
+        context_copy = copy(context)
+
         for item in self.instances:
-            if not condition.check(item, context):
+
+            if var_name is not None:
+                context_copy.variables[var_name] = item
+
+            if not condition.check_condition(item, context_copy):
                 # This match fails
                 return False
 
@@ -2425,7 +2491,7 @@ class Pattern(object):
         for d in context.definitions:
             if d.equivalent(defn, context):
                 # This definition has already been created
-                return None
+                return d
 
         context.definitions.append(defn)
 

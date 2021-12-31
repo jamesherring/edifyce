@@ -39,7 +39,7 @@ class Profile(models.Model):
 
     def get_absolute_url(self):
         # Return the absolute url for the profile
-        return "/profile/" + self.slug + "/"
+        return "/profile/" + self.id + "/" + self.slug + "/"
 
     def name(self):
         # Get the full name
@@ -311,6 +311,9 @@ class FolderEntry(OrderedModel):
 
         raise Exception("Couldn't find a proof or folder corresponding to the folder entry.")
 
+    def is_root(self):
+        return self.parent_folder is None
+
     def parent_folders(self):
         # Get the set of parent folders
         if self.parent_folder is None:
@@ -384,9 +387,24 @@ class FolderEntry(OrderedModel):
             # other is a folder in the ancestor list of self. So other comes first.
             return False
 
+        if self.is_root():
+            # No ancestors to self.
+            if other.is_root():
+                # Both root entries
+                return self.order < other.order
+
+            else:
+                # Compare to other's root ancestor
+                return self.order < other_ancestors[0].folder_entry.order
+
+        elif other.is_root():
+            # No ancestors to other
+            # self is not a root
+            return self_ancestors[0].folder_entry.order < other.order
+
         # Otherwise these are on branches that separate somewhere.
         i = 0
-        max_depth = max(len(self_ancestors), len(other_ancestors))
+        max_depth = min(len(self_ancestors), len(other_ancestors))
         while i < max_depth:
             self_parent = self_ancestors[i]
             other_parent = other_ancestors[i]
@@ -396,6 +414,8 @@ class FolderEntry(OrderedModel):
 
             # Otherwise, we found a difference
             return self_parent.folder_entry.order < other_parent.folder_entry.order
+
+        raise Exception("Could not identify which entry comes first.")
 
     def validate(self):
         # Check this entry (and any sub-entries) are valid proofs

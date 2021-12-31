@@ -1,5 +1,4 @@
-from website.logical.matching import Condition, Match, MatchSet, Pattern, StringPattern, UnionPattern, RegexPattern, \
-    AbstractPattern, SystemConditionPattern
+from website.logical.matching import *
 from website.logical.formal_system import constant, FormalSystem, LineType, InferenceRule, ProofLine
 from copy import copy, deepcopy
 
@@ -39,7 +38,7 @@ def compile(code, system_dict=None):
 
     # Return the formal system
     for item in context.variables.values():
-        if type(item) is FormalSystem:
+        if isinstance(item, FormalSystem):
             return {"system": item}
 
     # Return an empty formal system
@@ -130,6 +129,9 @@ class Context(object):
         # String variables for inside patterns
         self.string_variables = dict()
 
+        # Definitions created along the way
+        self.definitions = []
+
         # Current object at a point in the code
         self.current_object = None
 
@@ -149,6 +151,7 @@ class Context(object):
         # Inherit from parent context
 
         self.variables.update(parent.variables)
+        self.definitions.extend(parent.definitions)
         self.proof_context.update(parent.proof_context)
         self.pre_format.update(parent.pre_format)
         self.system_dict.update(parent.system_dict)
@@ -168,6 +171,7 @@ class Context(object):
 
         new_context.variables = copy(self.variables)
         new_context.string_variables = copy(self.string_variables)
+        new_context.definitions = copy(self.definitions)
         new_context.current_object = self.current_object
         new_context.proof_context = copy(self.proof_context)
         new_context.pre_format = copy(self.pre_format)
@@ -449,6 +453,24 @@ class AbstractSyntaxTree(object):
                 context.variables[name] = union
 
                 new_object = union
+
+            elif stripped.startswith("Define ") and " as " in stripped:
+                # Definition
+                self.type = "Definition"
+
+                remainder = stripped[7:]
+                index = remainder.index(" as ")
+                lower = remainder[:index]
+                higher = remainder[index + 4:]
+
+                if not isinstance(current_object, e):
+                    self.error = "Definitions must be created inside a pattern block."
+                    return
+
+                # Create the definition
+                new_object = Definition(lower=lower, higher=higher, pattern=current_object, context=context)
+                print(context.definitions)
+                context.definitions.append(new_object)
 
             elif stripped.startswith("LineType ") and stripped[-1] == ":":
                 # New linetype
@@ -879,7 +901,7 @@ class AbstractSyntaxTree(object):
                             self.error = "Invalid variable name: '" + key + "'."
                             return
 
-                        if value not in context.variables and value not in ("dict", "list", "set", "tuple", "matchset"):
+                        if value not in context.variables and value not in ("dict", "list", "set", "tuple", "MatchSet"):
                             self.error = "'" + value + "' is not defined."
                             return
 
@@ -978,7 +1000,7 @@ class AbstractSyntaxTree(object):
                 if not value.pattern.equivalent(param_type, context):
                     raise Exception("Incorrect argument type.")
 
-            elif isinstance(value, MatchSet) and param_type == "matchset":
+            elif isinstance(value, MatchSet) and param_type == "MatchSet":
                 pass
 
             elif isinstance(value, ProofLine):
