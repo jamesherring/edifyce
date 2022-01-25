@@ -4,7 +4,17 @@ table {
 
     /* Make the indicator column flush with screen right */
     width: 100%;
+    margin-right: 0.7rem;
 }
+
+tr {
+    min-height: 1rem;
+}
+
+tr.highlighted {
+    background-color: #EEE;
+}
+
 td {
     vertical-align: top;
     padding: 0 2em 0 0.5em;
@@ -12,8 +22,9 @@ td {
 }
 
 td.indicator {
-    padding: 0 0.1em;
+    padding: 0 0.5em;
     width: 0.4rem;
+    min-width: 10px;
     max-width: 0.4rem;
 }
 
@@ -38,6 +49,8 @@ td.line-number {
 div.proof-display {
     white-space: pre-wrap;
     font-family: monospace;
+    overflow: scroll;
+    position: relative;
 }
 
 

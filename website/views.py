@@ -471,10 +471,10 @@ def proofView(request, proof_id, proof_slug):
         else:
             if request.user.is_authenticated:
                 # User can see their proofs and published proofs
-                dependants = dependants.filter(published__isnull=False) | dependants.filter(folder_entry__owner=request.user.profile)
+                dependants = dependants.filter(folder_entry__published__isnull=False) | dependants.filter(folder_entry__owner=request.user.profile)
             else:
                 # User not logged in - can only see their proofs
-                dependants = dependants.filter(published__isnull=False)
+                dependants = dependants.filter(folder_entry__published__isnull=False)
 
         return render(request, "website/proof.html", {
             "proof": proof,
