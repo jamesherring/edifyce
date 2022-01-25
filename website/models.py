@@ -125,6 +125,7 @@ class FormalSystemModel(models.Model):
 
     def set_code(self, code):
         # Set the system code
+
         self.formal_system_text = code
 
         # Get the inherited system slug
@@ -162,6 +163,10 @@ class FormalSystemModel(models.Model):
         proofs = ProofModel.objects.filter(folder_entry__formal_system=self)
         for proof in proofs:
             proof.refresh(refresh_system=False, cascade=None)
+
+        # Refresh any dependant systems
+        for inherited_system in self.inherited_by.all():
+            inherited_system.refresh()
 
         return result
 

@@ -140,6 +140,25 @@ $(function() {
 
     });
 
+    editor.editor.session.selection.on("changeCursor", function(e) {
+        var start_row = editor.editor.getSelectionRange().start.row;
+        var end_row = editor.editor.getSelectionRange().end.row;
+
+        var table = $(output_parent).find("table");
+
+        // Un-highlight already highlighted rows
+        var already_highlighted = $(table).find("tr.highlighted");
+        $(already_highlighted).removeClass("highlighted");
+
+        // Get the corresponding output rows and highlight them (if there are no edits)
+        if (previous_code == editor.editor.getValue()) {
+            var rows = $(table).children();
+            rows = $(rows).slice(start_row, end_row + 1);
+            $(rows).addClass("highlighted");
+        }
+
+    });
+
     // Re-compile on compile button click
     $(document.body).on("click", "#compile-button", validate_proof);
 

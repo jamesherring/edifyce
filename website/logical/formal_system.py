@@ -101,6 +101,7 @@ class FormalSystem(object):
         # Parse the text into a proof.
 
         # Optionally specify a previous version of the same proof to save processing the same lines.
+        previous_proof = None
 
         # Maintain a dictionary of previous proof lines: new proof lines
         previous_proof_lines_mapped = previous_proof_lines_mapped if previous_proof_lines_mapped is not None else dict()
@@ -116,9 +117,6 @@ class FormalSystem(object):
             # Create a new proof context instance
             context = copy(self.context)
             context.proof_model_id = proof_model_id
-
-            # Add any definitions created in the formal system
-            context.definitions = copy(self.build_context.definitions)
 
         i = -1
         while i + 1 < len(lines):
@@ -280,6 +278,9 @@ class FormalSystem(object):
                         previous_proof_lines_mapped=previous_proof_lines_mapped
                     )
 
+                    # Update context with definitions created in the block
+                    context.definitions = new_context.definitions
+
                     # Continue from after the block
                     i = j - 1
                     continue
@@ -388,7 +389,8 @@ class LineType(object):
 
         # The behaviour of these lines
         self.behaviour = behaviour
-        assert self.behaviour in ("none", "import", "logical", "axiom", "indent", "definition", "comment")
+        assert self.behaviour in ("none", "import", "logical", "axiom", "indent", "definition", "comment"), \
+            "'%s' is not a valid LineType behaviour." % self.behaviour
 
         # The data paths (and their values) to add to context, if any
         self.add_context = add_context if add_context is not None else dict()
@@ -479,7 +481,7 @@ class InferenceRule(object):
     # Inference rules for deduction
 
     def __init__(self, name, label=None, antecedents=None, deduction=None, condition=None,
-                 allow_extra_antecedents=False):
+                 allow_extra_antecedents=False, variables=None):
 
         # The inference rule name
         self.name = name.replace("_", " ")
@@ -498,6 +500,9 @@ class InferenceRule(object):
 
         # Optionally allow extra antecedents
         self.allow_extra_antecedents = allow_extra_antecedents
+
+        # Keep a set of variables handy
+        self.variables = variables
 
     def check(self, antecedents, extra_antecedents, deduction, context):
         # Check to see if the proposed proof lines are valid under this inference rule
@@ -558,9 +563,12 @@ class InferenceRule(object):
 
         # Check the rule condition
         if self.condition is not None:
-            # Make a condition context with antecedents and deduction
+            # Add contextual variables for the condition
+            context_copy = copy(context)
+            context_copy.mapping = copy(inference.variables)
+
             try:
-                if not self.condition.check_condition(inference, context):
+                if not self.condition.check_condition(inference, context_copy):
                     # Doesn't meet the condition
                     return False
 
@@ -643,7 +651,8 @@ class Inference(object):
         self.antecedent_inference_matches = []
         self.deduction_inference_match = None
 
-        self.variables = None
+        # Variables used in this inference
+        self.variables = dict()
 
     def get_by_path(self, path, context, recurse=True):
         # Get information from the given path
@@ -673,6 +682,7 @@ class Inference(object):
             return self.antecedents[0]
 
         if path in self.variables:
+            # Get this variable
             return self.variables[path]
 
         if recurse:
@@ -684,7 +694,10 @@ class Inference(object):
     def check_variables(self, context):
         # Check the variables for antecedent and deduction matches are consistent
 
+        # Start with a copy of deduction inference match variables
         self.variables = copy(self.deduction_inference_match.sub_matches)
+
+        # Check consistent with antecedents
         for ant_match in self.antecedent_inference_matches:
             for name, sub_match in ant_match.sub_matches.items():
                 if name in self.variables:
@@ -1126,13 +1139,13 @@ class Proof(object):
 
         # Add any definitions we have imported
         if isinstance(ref_item, ProofLine) and ref_item.line_type is not None and ref_item.line_type.behaviour == "definition":
-            context.definitions.append(ref_item.definition)
+            context.definitions.add(ref_item.definition)
             self.import_definition(ref_item.definition, context)
 
         elif isinstance(ref_item, Proof):
             for line in ref_item.proof_lines:
                 if isinstance(line, ProofLine) and line.line_type is not None and line.line_type.behaviour == "definition":
-                    context.definitions.append(line.definition)
+                    context.definitions.add(line.definition)
                     self.import_definition(line.definition, context)
 
         return {
@@ -1161,21 +1174,29 @@ class Proof(object):
             if name in build_context.variables:
                 context_copy.string_variables[key] = build_context.variables[name]
 
-        result = pattern.add_definition(definition.lower.pattern, definition.higher.pattern, context_copy)
+        # Get the condition string if it exists
+        condition_string = None if definition.condition is None else definition.condition.string
+
+        result = pattern.add_definition(definition.lower.pattern, definition.higher.pattern, context_copy,
+                                        condition_string, require_lower_match=False)
 
         if result is None:
             raise Exception("Failed to import definition: " + definition.higher.pattern)
 
         # Remove any existing (possibly duplicate) conditions
         if result not in context.definitions:
+            remove_items = set()
+
             for defn in context.definitions:
-                if defn.higher.pattern == result.higher.pattern and defn.lower.pattern == result.lower.pattern and \
-                        defn.pattern.can_map_to(pattern, context):
+                if defn.higher.pattern == result.higher.pattern and defn.pattern.can_map_to(pattern, context):
                     # Can be removed
-                    context.definitions.remove(defn)
+                    remove_items.add(defn)
+
+            for item in remove_items:
+                context.definitions.remove(item)
 
             # Add the definition to context
-            context.definitions.append(result)
+            context.definitions.add(result)
 
     def justify(self, deduction, context, inference_rule=None):
         # Artificially try to find a justification for the given reference. Optionally specify a inference rule.
@@ -1309,7 +1330,7 @@ class ProofLine(object):
             # Introduce a new definition to context
 
             try:
-                # Get the higher and lower strings, and the pattern it should apply to
+                # Get the higher and lower strings, and the pattern it should apply to.
                 lower = self.match.get_by_path("lower()", context)
                 higher = self.match.get_by_path("higher()", context)
                 pattern = self.match.get_by_path("for()", context)
@@ -1324,8 +1345,18 @@ class ProofLine(object):
                 self.invalid_message = lower.string + " is not an instance of " + pattern.name + "."
                 return
 
+            # Also try to get conditions
+            condition_string = None
+            try:
+                conditions = self.get_by_path("conditions()", context)
+                if len(conditions) > 0:
+                    condition_string = " and ".join([c.string for c in conditions])
+            except Exception as e:
+                pass
+
             # Add the definition
-            self.definition = pattern.add_definition(lower.formatted_string(), higher.formatted_string(), context)
+            self.definition = pattern.add_definition(lower.formatted_string(), higher.formatted_string(), context,
+                                                     condition_string)
 
         elif line_type.behaviour == "import":
             # Import a file or result
@@ -1385,8 +1416,14 @@ class ProofLine(object):
         if path == "formula()":
             return self.formula
 
+        if path == "label()":
+            return self.label
+
         if path == "definition()":
             return self.definition
+
+        if path == "conditions()":
+            return self.context.conditions
 
         if path == "reference_mapping()":
             return copy(self.reference_mapping)
@@ -1414,17 +1451,13 @@ class ProofLine(object):
         if path.startswith("follows_from_definition(") and path[-1] == ")":
             # Follows from definition
             inner = path[24:-1]
-            kwargs = parse_arguments(inner, self, context, arg_names=("other", "definition"))[1]
+            kwargs = parse_arguments(inner, self, context, arg_names=("other", "definition", "mapping"))[1]
 
-            return self.follows_from_definition(kwargs["other"], kwargs["definition"], context)
+            return self.follows_from_definition(kwargs["other"], kwargs["definition"], kwargs["mapping"], context)
 
         # Try to get path using the frozen context
-        if context.mapping is None:
-            try:
-                return get_by_path(self, path, self.context, recurse=False)
-            except Exception as e:
-                # No luck
-                pass
+        if path in self.context.logical:
+            return self.context.logical[path]
 
         if recurse:
             # Try generic get_by_path
@@ -1440,7 +1473,7 @@ class ProofLine(object):
 
         if mapping is not None:
             # Set context mapping
-            assert isinstance(mapping, dict)
+            assert isinstance(mapping, dict), "Mapping dictionary must be a dictionary, not %s." % str(type(mapping))
             context.mapping = mapping
 
         # Set string variable matches
@@ -1451,7 +1484,7 @@ class ProofLine(object):
         except Exception as e:
             return False
 
-    def follows_from_definition(self, other, definition, context):
+    def follows_from_definition(self, other, definition, mapping, context):
         # Check if this proof line follows from the other by means of a definition.
 
         if (not self.line_type.behaviour == "logical") or (not other.line_type.behaviour == "logical"):
@@ -1459,8 +1492,17 @@ class ProofLine(object):
             return False
 
         # Check if the definition applies - in either direction
-        return definition.check_application(lower=other.formula, higher=self.formula, context=context) or \
-            definition.check_application(lower=self.formula, higher=other.formula, context=context)
+        return definition.check_application(
+            lower=other.formula,
+            higher=self.formula,
+            context=context,
+            mapping=mapping
+        ) or definition.check_application(
+            lower=self.formula,
+            higher=other.formula,
+            context=context,
+            mapping=mapping
+        )
 
     def edit_context(self, context):
         # Edit the proof context according to the rule on this line type

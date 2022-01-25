@@ -1,6 +1,7 @@
 from website.logical.matching import *
 from website.logical.formal_system import constant, FormalSystem, LineType, InferenceRule, ProofLine
 from copy import copy, deepcopy
+from collections import OrderedDict
 
 
 def get_inherited_system(code):
@@ -23,7 +24,7 @@ def compile(code, system_dict=None):
     # Optionally specify a system_dict of reference systems
 
     # Create an initial context
-    context = Context()
+    context = FormalSystemContext()
     context.system_dict = system_dict if system_dict is not None else dict()
 
     # Create a root node
@@ -116,7 +117,7 @@ def parse_arguments(s):
     return args
 
 
-class Context(object):
+class FormalSystemContext(object):
 
     def __init__(self):
 
@@ -167,7 +168,7 @@ class Context(object):
             pattern.inherits = deepcopy(pattern)
 
     def __copy__(self):
-        new_context = Context()
+        new_context = FormalSystemContext()
 
         new_context.variables = copy(self.variables)
         new_context.string_variables = copy(self.string_variables)
@@ -284,7 +285,7 @@ class AbstractSyntaxTree(object):
 
         if context is None:
             # Create a context
-            context = Context()
+            context = FormalSystemContext()
 
         if self.is_root():
             # Just run the sub trees
@@ -367,8 +368,8 @@ class AbstractSyntaxTree(object):
                     self.error = "Invalid variable name: '" + name + "'."
                     return
 
-                # Create a new dictionary to keep the format
-                new_object = dict()
+                # Create a new ordered dictionary to keep the format
+                new_object = OrderedDict()
 
                 context.variables[name] = new_object
 
@@ -381,9 +382,6 @@ class AbstractSyntaxTree(object):
                     raise Exception("Could not find format dictionary '" + name + "'.")
 
                 pre_format = context.variables[name]
-
-                if type(current_object) is FormalSystem:
-                    current_object.pre_format = pre_format
 
                 # Update context formatting, which is used for patterns, string variables, etc.
                 context.pre_format.update(pre_format)
@@ -460,17 +458,28 @@ class AbstractSyntaxTree(object):
 
                 remainder = stripped[7:]
                 index = remainder.index(" as ")
-                lower = remainder[:index]
-                higher = remainder[index + 4:]
+                higher = remainder[:index]
+                lower = remainder[index + 4:]
 
-                if not isinstance(current_object, e):
+                # Check for condition
+                condition_string = None
+                if " if " in lower:
+                    index = lower.index(" if ")
+                    condition_string = lower[index + 4:]
+                    lower = lower[:index]
+
+                if not isinstance(current_object, Pattern):
                     self.error = "Definitions must be created inside a pattern block."
                     return
 
-                # Create the definition
-                new_object = Definition(lower=lower, higher=higher, pattern=current_object, context=context)
-                print(context.definitions)
-                context.definitions.append(new_object)
+                # Create the definition - just stored as a dictionary for future parsing
+                context.definitions.append({
+                    "lower": lower,
+                    "higher": higher,
+                    "pattern": current_object,
+                    "variables": {current_object.pre_format_apply(key): context.string_variables[key] for key in context.string_variables},
+                    "condition_string": condition_string
+                })
 
             elif stripped.startswith("LineType ") and stripped[-1] == ":":
                 # New linetype
@@ -503,8 +512,12 @@ class AbstractSyntaxTree(object):
                     self.error = "Invalid variable name: '" + name + "'."
                     return
 
+                # Gather variables
+                temp_pattern = StringPattern(name="temporary", pattern="", pre_format=context.pre_format)
+                variables = {temp_pattern.pre_format_apply(var): context.string_variables[var] for var in context.string_variables}
+
                 # Create the rule
-                new_object = InferenceRule(name=name)
+                new_object = InferenceRule(name=name, variables=variables)
 
             elif stripped.startswith("with ") and stripped[-1] == ":":
                 # Define string variables
@@ -682,10 +695,15 @@ class AbstractSyntaxTree(object):
             elif type(current_object) is UnionPattern:
                 # Add a pattern to the union
 
-                pattern = StringPattern(name=current_object.name, pattern=stripped, pre_format=context.pre_format)
+                if stripped in context.string_variables and isinstance(context.string_variables[stripped], Pattern):
+                    # Looks like a reference to another pattern
+                    pattern = context.string_variables[stripped]
 
-                # Add any relevant string variables
-                pattern.add_variables(context.string_variables)
+                else:
+                    pattern = StringPattern(name=current_object.name, pattern=stripped, pre_format=context.pre_format)
+
+                    # Add any relevant string variables
+                    pattern.add_variables(context.string_variables)
 
                 current_object.patterns.append(pattern)
 
@@ -707,7 +725,7 @@ class AbstractSyntaxTree(object):
                 if key == "pattern":
 
                     # Get the value
-                    assert value_string in context.variables
+                    assert value_string in context.variables, "Couldn't find %s in variables." % value_string
 
                     # Update the line type accordingly
                     current_object.pattern = context.variables[value_string]
@@ -839,7 +857,7 @@ class AbstractSyntaxTree(object):
                     for ant in current_object.antecedents:
                         ant.pre_format = new_object
 
-            elif type(current_object) is dict:
+            elif type(current_object) in (dict, OrderedDict):
                 # Add a key value pair to the dictionary
 
                 index = stripped.find(":")
@@ -854,6 +872,14 @@ class AbstractSyntaxTree(object):
 
                 key = stripped[:index]
                 value_string = stripped[index + 2:]
+
+                # Check for strings
+                if len(key) >= 2 and (key[0] == key[-1] == "'" or key[0] == key[-1] == '"'):
+                    key = key[1:-1]
+
+                if len(value_string) >= 2 and (value_string[0] == value_string[-1] == "'" or
+                                               value_string[0] == value_string[-1] == '"'):
+                    value_string = value_string[1:-1]
 
                 current_object[key] = value_string
 
@@ -955,10 +981,27 @@ class AbstractSyntaxTree(object):
         if isinstance(new_object, LineType) and isinstance(current_object, FormalSystem):
             current_object.add_line_type(new_object)
 
+        # Add definitions to parent context
+        context.definitions = sub_context.definitions
+
         # Add context to formal systems
         if self.type == "FormalSystem":
-            context = new_object.context
-            context.variables.update(sub_context.variables)
+            new_object.context.variables.update(sub_context.variables)
+
+            # Add in the default definitions
+            for defn in context.definitions:
+
+                # Make a copy of context
+                context_copy = copy(new_object.context)
+
+                # Add variables
+                context_copy.string_variables.update(defn["variables"])
+
+                # Get the definition
+                result = defn["pattern"].add_definition(defn["lower"], defn["higher"], context_copy, defn["condition_string"])
+
+                if result is not None:
+                    new_object.context.definitions.add(result)
 
             # Set the formal system build context and build the pattern dictionary
             new_object.build_context = sub_context
@@ -1074,12 +1117,13 @@ class AbstractSyntaxTree(object):
             try:
                 set_value = item.get_by_path(set_string, context)
 
-                assert isinstance(set_value, (list, tuple, set, MatchSet, dict))
+                assert isinstance(set_value, (list, tuple, set, MatchSet, dict)), \
+                    "Set value %s is not iterable." % set_string
 
                 if isinstance(set_value, MatchSet):
                     if not set_value.complete:
                         # Can't iterate over an incomplete set
-                        raise Exception("Could not parse function line '" + stripped + "'." + \
+                        raise Exception("Could not parse function line '" + stripped + "'." +
                                         " Can't iterate over an incomplete set")
 
                     iterable = set_value.instances
@@ -1120,7 +1164,7 @@ class AbstractSyntaxTree(object):
                 return None
 
             except Exception as e:
-                raise Exception("Could not parse function line '" + stripped + "'.")
+                raise Exception("Could not parse function line '" + stripped + "'. %s." % str(e))
 
         if stripped.startswith("while ") and stripped[-1] == ":":
             # Looks like a while loop
@@ -1219,9 +1263,6 @@ class AbstractSyntaxTree(object):
 
             # Get the parameter named for the loop
             name = stripped[index + 6:-2]
-
-            # # Create a copy of context
-            # context_copy = copy(context)
 
             # Loop through the match set
             for i in items:
