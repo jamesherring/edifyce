@@ -1,21 +1,19 @@
 # Edifyce
 
-A web-based formal proof assistant built with Django. Edifyce lets users define formal systems, write proofs, and have them mechanically verified.
+A web-based formal proof assistant API built with FastAPI. Edifyce lets clients compile formal systems, write proofs, and have them mechanically verified.
 
 ## Features
 
-- Define custom formal systems with axioms and inference rules
-- Write and verify formal proofs step-by-step
-- Import and build on existing formal systems
-- Google OAuth authentication
-- Collaborative proof sharing
+- Compile custom formal systems from Edifyce source code
+- Verify formal proofs step-by-step and return structured line-level diagnostics
+- OpenAPI schema + interactive docs via Swagger UI
 
 ## Tech Stack
 
-- **Backend:** Django 3.2
-- **Auth:** django-allauth with Google OAuth
-- **Database:** SQLite (development) / MySQL (production)
-- **Frontend:** Django templates, CSS
+- **Backend:** FastAPI
+- **ASGI Server:** Uvicorn
+- **Validation:** Pydantic v2
+- **Core Logic Engine:** Existing Edifyce formal-system compiler/proof checker
 
 ## Setup
 
@@ -36,26 +34,20 @@ A web-based formal proof assistant built with Django. Edifyce lets users define 
    pip install -r requirements.txt
    ```
 
-4. **Configure environment variables**
+4. **Start the development server**
    ```bash
-   cp .env.example .env
-   # Edit .env with your values
+   uvicorn app.main:app --reload
    ```
 
-5. **Run migrations**
-   ```bash
-   python manage.py migrate
-   ```
+5. **Open API docs**
+   - Swagger UI: http://127.0.0.1:8000/docs
+   - ReDoc: http://127.0.0.1:8000/redoc
 
-6. **Collect static files**
-   ```bash
-   python manage.py collectstatic
-   ```
+## API Endpoints
 
-7. **Start the development server**
-   ```bash
-   python manage.py runserver
-   ```
+- `GET /health` — Health check.
+- `POST /formal-systems/compile` — Compile system code and return summary metadata.
+- `POST /proofs/verify` — Compile a system and verify a proof against it.
 
 ## License
 
