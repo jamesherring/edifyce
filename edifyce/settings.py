@@ -11,6 +11,9 @@ https://docs.djangoproject.com/en/3.0/ref/settings/
 """
 
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 ENVIRONMENT = os.environ.get("ENVIRONMENT")
 
@@ -21,22 +24,11 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/3.0/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'REDACTED_SECRET_KEY'
+SECRET_KEY = os.environ.get('SECRET_KEY', 'change-me-in-production')
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get('DEBUG', 'False').lower() in ('true', '1', 'yes')
 
-if ENVIRONMENT == "local":
-    ALLOWED_HOSTS = [
-        "localhost",
-        "127.0.0.1",
-        "edifyce.pythonanywhere.com"
-    ]
-else:
-    ALLOWED_HOSTS = [
-        "edifyce.pythonanywhere.com"
-    ]
+ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
 
 # Application definition
@@ -66,13 +58,10 @@ SITE_ID = 1
 # Provider specific settings
 SOCIALACCOUNT_PROVIDERS = {
     'google': {
-        # For each OAuth based provider, either add a ``SocialApp``
-        # (``socialaccount`` app) containing the required client
-        # credentials, or list them here:
         'APP': {
-            'client_id': 'REDACTED_GOOGLE_CLIENT_ID',
-            'secret': 'REDACTED_GOOGLE_SECRET',
-            'key': 'agoralink'
+            'client_id': os.environ.get('GOOGLE_CLIENT_ID', ''),
+            'secret': os.environ.get('GOOGLE_SECRET', ''),
+            'key': os.environ.get('GOOGLE_KEY', '')
         }
     }
 }
@@ -131,7 +120,6 @@ WSGI_APPLICATION = 'edifyce.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/3.0/ref/settings/#databases
 
-
 if ENVIRONMENT == "local":
     DATABASES = {
         'default': {
@@ -144,10 +132,10 @@ else:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.mysql',
-            'NAME': 'edifyce$default',
-            'USER': 'edifyce',
-            'PASSWORD': 'REDACTED_DB_PASSWORD',
-            'HOST': 'edifyce.mysql.pythonanywhere-services.com',  # Or an IP Address that your DB is hosted on
+            'NAME': os.environ.get('DB_NAME', ''),
+            'USER': os.environ.get('DB_USER', ''),
+            'PASSWORD': os.environ.get('DB_PASSWORD', ''),
+            'HOST': os.environ.get('DB_HOST', ''),
             'ATOMIC_REQUESTS': True
         }
     }
@@ -200,9 +188,8 @@ else:
     EMAIL_USE_TLS = True
     EMAIL_HOST = 'smtp.gmail.com'
     EMAIL_PORT = 587
-    EMAIL_HOST_USER = 'REDACTED_EMAIL'
-    EMAIL_HOST_PASSWORD = 'REDACTED_EMAIL_PASSWORD'
+    EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
+    EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 
 # Default primary key
 DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
-
