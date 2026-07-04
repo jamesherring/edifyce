@@ -8,7 +8,7 @@ import-time dependency on its siblings.
 from copy import copy
 
 
-def parse_path(path):
+def parse_path(path: str) -> tuple[str, str | None]:
     # Parse a path string to get the initial (and remainder if applicable)
 
     if "." not in path:

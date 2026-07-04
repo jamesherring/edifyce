@@ -6,7 +6,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 
 
-def get_inherited_system(code):
+def get_inherited_system(code: str) -> str | None:
     # Get referenced systems from the given code
 
     slug = None
@@ -20,7 +20,7 @@ def get_inherited_system(code):
     return slug
 
 
-def compile(code, system_dict=None):
+def compile(code: str, system_dict: dict | None = None) -> dict:
     # Compile the given code string into a tree. Return the formal system.
 
     # Optionally specify a system_dict of reference systems
@@ -48,7 +48,7 @@ def compile(code, system_dict=None):
     return {"system": FormalSystem(name="")}
 
 
-def parse_arguments(s):
+def parse_arguments(s: str) -> list[tuple[str, str]] | None:
     # Parse comma separated arguments from a string s
 
     if len(s) == 0:
