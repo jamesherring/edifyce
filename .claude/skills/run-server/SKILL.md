@@ -1,41 +1,52 @@
 ---
 name: run-server
 description: >-
-  Launch the Edifyce FastAPI server and optionally drive headless Playwright to
-  screenshot the browsable API docs (/docs Swagger UI, /redoc). Use when asked
-  to run/start/serve/boot the app, hit the API, inspect the frontend, or take
-  screenshots of the running site. Encodes the sandbox-specific fixes (blocked
-  doc CDNs, global-only Playwright) so they don't have to be rediscovered.
+  Launch the Edifyce FastAPI server and (once it exists) drive headless
+  Playwright to screenshot the frontend. Use when asked to run/start/serve/boot
+  the app, hit the API, inspect the frontend, or take screenshots of the
+  running site. Encodes the sandbox-specific fixes (global-only Playwright,
+  blocked external CDNs) so they don't have to be rediscovered.
 ---
 
-# Run the Edifyce server & inspect it with Playwright
+# Run the Edifyce server & inspect the frontend with Playwright
 
-Edifyce is an **API-only FastAPI service** — there is no server-rendered HTML
-app. The only browser-facing pages are the auto-generated API docs:
+## What Edifyce is right now
 
-- `GET /health` — JSON health check
-- `POST /formal-systems/compile`, `POST /proofs/verify` — JSON endpoints
-- `/docs` — Swagger UI (interactive), `/redoc` — ReDoc (read-only)
-- `/openapi.json` — raw OpenAPI schema
+- **`app/`** — a stateless **FastAPI** API over the proof engine. This is the
+  runtime (`uvicorn app.main:app`). Endpoints: `GET /health`,
+  `POST /formal-systems/compile`, `POST /proofs/verify`.
+- **`website/logical/`** — the core proof engine (`compiler.py`,
+  `formal_system.py`, `matching.py`), imported by `app.main`. **Not** a web
+  app despite the `website` name; the Django parts were removed.
+- **`deprecated/frontend/`** — the **old Django UI, deprecated and not served**.
+  Kept purely as reference (see `deprecated/README.md`): Django HTML templates
+  under `templates/` and client assets under `static/` (per-page CSS/JS + the
+  vendored Ace editor). Do not try to run or import any of it.
 
-(The legacy Django `website/` package is dormant — the runtime is `app.main`.
-`website.logical.compiler` is imported by the API as the core engine, but the
-Django views/templates are **not** served. Don't try to `runserver` it.)
+### The frontend this skill targets
 
-## 1. Launch the server
+There is **no live browser frontend yet.** The plan (per
+`deprecated/README.md`) is a standalone **Svelte** app that talks to the FastAPI
+endpoints, porting the design/behaviour of the deprecated Django UI. **This
+skill's Playwright screenshot capability exists for that Svelte frontend once
+it's built.** The FastAPI auto-docs (`/docs` Swagger, `/redoc`) are **out of
+scope** for this skill — don't screenshot them as "the frontend."
 
-Dependencies may not be installed in a fresh container. Install whichever way
-the repo is set up — it has both a `pip`/`requirements.txt` and a `uv`/`uv.lock`
-lineage in flight, so pick by which files are present:
+When the Svelte app lands, revisit this skill: fill in its dev-server launch
+command (likely `npm install && npm run dev` → a Vite server on e.g.
+`http://127.0.0.1:5173`) in the section below.
+
+## 1. Launch the backend server
+
+Dependencies may not be installed in a fresh container. Install, then run:
 
 ```bash
-# uv-managed checkout (pyproject.toml + uv.lock present):
-uv sync                                   # then prefix commands with `uv run`
-# pip-managed checkout (requirements.txt present):
-pip install -r requirements.txt           # fastapi, uvicorn, pydantic, ...
-
-uvicorn app.main:app --host 127.0.0.1 --port 8000   # `uv run uvicorn ...` under uv
+pip install -r requirements.txt          # fastapi, uvicorn, pydantic, ...
+uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
+
+(If the repo has since migrated to uv — `pyproject.toml` + `uv.lock` present —
+use `uv sync` and prefix commands with `uv run`.)
 
 Run it in the background so you can probe it, and confirm it's up:
 
@@ -45,65 +56,54 @@ sleep 3
 curl -s http://127.0.0.1:8000/health          # -> {"status":"ok"}
 ```
 
-Stop it with `pkill -f "uvicorn app.main"`. Add `--reload` for live-reload
-during iterative work. Check `/tmp/uvicorn.log` if `/health` doesn't answer.
-
-Exercise the endpoints directly without a browser:
+Stop it with `pkill -f "uvicorn app.main"`. Add `--reload` for live-reload.
+Check `/tmp/uvicorn.log` if `/health` doesn't answer. Exercise endpoints
+directly without a browser:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/formal-systems/compile \
   -H 'content-type: application/json' -d '{"code":"..."}'
 ```
 
-## 2. Screenshot / inspect the docs with Playwright
+## 2. Launch the Svelte frontend  *(to be filled in when it exists)*
 
-Use the bundled helper — do **not** hand-roll a Playwright script, it already
-solves the two sandbox gotchas below:
+Once the Svelte app is added to the repo, start its dev server here and point
+Playwright at it. Expected shape (update with the real paths/ports):
+
+```bash
+# cd <svelte-app-dir>
+# npm install
+# npm run dev -- --host 127.0.0.1 --port 5173
+```
+
+## 3. Screenshot / inspect a page with Playwright
+
+Use the bundled helper — it resolves the globally-installed Playwright for you:
 
 ```bash
 node .claude/skills/run-server/scripts/screenshot.cjs <url> <out.png> [--full] [--wait=<css-selector>]
 
-# Swagger UI (full page):
-node .claude/skills/run-server/scripts/screenshot.cjs http://127.0.0.1:8000/docs docs.png --full
-# ReDoc:
-node .claude/skills/run-server/scripts/screenshot.cjs http://127.0.0.1:8000/redoc redoc.png --full --wait=h1
+# e.g. once the Svelte dev server is up:
+node .claude/skills/run-server/scripts/screenshot.cjs http://127.0.0.1:5173/ home.png --full
 ```
 
-Then view the PNG with the Read tool. To surface it to the user, use
-SendUserFile.
+Then view the PNG with the Read tool; use SendUserFile to surface it to the user.
 
-### Why the helper exists — sandbox gotchas (already handled)
+### Sandbox gotchas (already handled / good to know)
 
 1. **Playwright is installed globally, not in this repo.** A plain
    `require('playwright')` / `import 'playwright'` fails with
-   `ERR_MODULE_NOT_FOUND`. Chromium is pre-installed at
-   `/opt/pw-browsers` (`PLAYWRIGHT_BROWSERS_PATH`) — never run
-   `playwright install`. The helper resolves the module via `npm root -g`.
+   `ERR_MODULE_NOT_FOUND`. Chromium is pre-installed at `/opt/pw-browsers`
+   (`PLAYWRIGHT_BROWSERS_PATH`) — **never run `playwright install`**. The helper
+   resolves the module via `npm root -g`.
 
-2. **The doc CDN is blocked.** `/docs` and `/redoc` load their JS/CSS from
-   `cdn.jsdelivr.net`, which the sandbox network policy **denies** (403 on the
-   proxy CONNECT; `curl` gets `http=000`). A raw browser screenshot of `/docs`
-   is therefore blank. Do **not** try to route the browser through
-   `$HTTPS_PROXY` — that proxy only tunnels HTTPS CONNECT, so it mangles the
-   `http://127.0.0.1` request and returns its own error page. Instead the
-   helper **intercepts** requests to jsdelivr/unpkg and serves the assets from
-   a local cache, vendored on demand via `npm pack` (the npm registry *is*
-   allowed). First run downloads ~3 MB into `scripts/.vendor-cache/`
-   (git-ignored); later runs are offline.
-
-   Cosmetic-only: ReDoc additionally requests Google Fonts and an external
-   logo that stay blocked. The page still renders fully; ignore those two
-   `failed:` lines.
-
-If a page pulls in another blocked CDN asset, add an entry to the `SOURCES`
-map at the top of `screenshot.cjs` (basename → npm package + path inside it).
-
-## Quick end-to-end recipe
-
-```bash
-pip install -r requirements.txt          # or: uv sync  (see step 1)
-(uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/uvicorn.log 2>&1 &)
-sleep 3 && curl -s http://127.0.0.1:8000/health
-node .claude/skills/run-server/scripts/screenshot.cjs http://127.0.0.1:8000/docs /tmp/docs.png --full
-# then Read /tmp/docs.png
-```
+2. **External hosts are blocked by the network policy.** The sandbox allows
+   pypi, the npm registry, and github, but denies general CDNs / Google Fonts
+   etc. (403 on the proxy CONNECT). A Vite-bundled Svelte app serves its own
+   JS/CSS locally, so it renders fine — only genuinely external references
+   (web fonts, third-party widgets) fail; those show up as `failed:` lines in
+   the helper output and are usually cosmetic. **Do not** route the browser
+   through `$HTTPS_PROXY` to reach them — that proxy only tunnels HTTPS
+   CONNECT, so it mangles `http://127.0.0.1` requests and returns its own error
+   page. If a page genuinely needs a blocked asset, vendor it from the npm
+   registry (`npm pack <pkg>`, which *is* allowed) and serve it locally.
