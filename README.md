@@ -23,25 +23,25 @@ A web-based formal proof assistant API built with FastAPI. Edifyce lets clients 
    cd edifyce
    ```
 
-2. **Create a virtual environment**
+2. **Install dependencies** (requires [uv](https://docs.astral.sh/uv/))
    ```bash
-   python -m venv venv
-   source venv/bin/activate
+   uv sync
    ```
 
-3. **Install dependencies**
+3. **Start the development server**
    ```bash
-   pip install -r requirements.txt
+   uv run uvicorn app.main:app --reload
    ```
 
-4. **Start the development server**
-   ```bash
-   uvicorn app.main:app --reload
-   ```
-
-5. **Open API docs**
+4. **Open API docs**
    - Swagger UI: http://127.0.0.1:8000/docs
    - ReDoc: http://127.0.0.1:8000/redoc
+
+## Running Tests
+
+```bash
+uv run pytest
+```
 
 ## API Endpoints
 
