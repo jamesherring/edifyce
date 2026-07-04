@@ -725,7 +725,8 @@ class AbstractSyntaxTree:
                 if key == "pattern":
 
                     # Get the value
-                    assert value_string in context.variables, f"Couldn't find {value_string} in variables."
+                    if not (value_string in context.variables):
+                        raise ValueError(f"Couldn't find {value_string} in variables.")
 
                     # Update the line type accordingly
                     current_object.pattern = context.variables[value_string]
@@ -1116,8 +1117,8 @@ class AbstractSyntaxTree:
             try:
                 set_value = item.get_by_path(set_string, context)
 
-                assert isinstance(set_value, (list, tuple, set, MatchSet, dict)), \
-                    f"Set value {set_string} is not iterable."
+                if not isinstance(set_value, (list, tuple, set, MatchSet, dict)):
+                    raise ValueError(f"Set value {set_string} is not iterable.")
 
                 if isinstance(set_value, MatchSet):
                     if not set_value.complete:

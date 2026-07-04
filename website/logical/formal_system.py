@@ -17,7 +17,7 @@ from .matching import (
 
 
 class FormalSystem:
-    # A formal system
+    """A formal system."""
 
     def __init__(self, name, line_types=None, inference_rules=None, build_context=None, context=None):
 
@@ -390,7 +390,7 @@ class FormalSystem:
 
 
 class LineType:
-    # Class for types of lines in formal proofs
+    """Class for types of lines in formal proofs."""
 
     def __init__(self, name, pattern=None, behaviour="none", add_context=None):
 
@@ -402,8 +402,8 @@ class LineType:
 
         # The behaviour of these lines
         self.behaviour = behaviour
-        assert self.behaviour in ("none", "import", "logical", "axiom", "indent", "definition", "comment"), \
-            f"'{self.behaviour}' is not a valid LineType behaviour."
+        if self.behaviour not in ("none", "import", "logical", "axiom", "indent", "definition", "comment"):
+            raise ValueError(f"'{self.behaviour}' is not a valid LineType behaviour.")
 
         # The data paths (and their values) to add to context, if any
         self.add_context = add_context if add_context is not None else {}
@@ -485,7 +485,7 @@ class LineType:
 
 
 class InferenceRule:
-    # Inference rules for deduction
+    """Inference rules for deduction."""
 
     def __init__(self, name, label=None, antecedents=None, deduction=None, condition=None,
                  allow_extra_antecedents=False, variables=None):
@@ -757,7 +757,7 @@ class Inference:
 
 
 class Proof:
-    # A proof in a formal system
+    """A proof in a formal system."""
 
     def __init__(self, formal_system, reference_proofs=None, result=None):
 
@@ -1244,7 +1244,7 @@ class Proof:
 
 
 class ProofLine:
-    # A line in a proof
+    """A line in a proof."""
 
     def __init__(self, proof, text, context, reference_string=None, label=None):
 
@@ -1478,7 +1478,8 @@ class ProofLine:
 
         if mapping is not None:
             # Set context mapping
-            assert isinstance(mapping, dict), f"Mapping dictionary must be a dictionary, not {type(mapping)!s}."
+            if not isinstance(mapping, dict):
+                raise ValueError(f"Mapping dictionary must be a dictionary, not {type(mapping)!s}.")
             context.mapping = mapping
 
         # Set string variable matches

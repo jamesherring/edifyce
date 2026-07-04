@@ -541,7 +541,7 @@ class Context:
 
 
 class Condition:
-    # A condition tree object
+    """A condition tree object."""
 
     def __init__(self, string, parts=None, context=None):
 
@@ -993,7 +993,7 @@ class Condition:
 
 
 class Definition:
-    # A definition class - linking higher level string patterns with lower level ones
+    """A definition class - linking higher level string patterns with lower level ones."""
 
     def __init__(self, lower, higher, pattern, context, condition_string=None):
 
@@ -1018,7 +1018,8 @@ class Definition:
 
             # Get the match for variables
             match = self.pattern.match(lower, context)
-            assert match is not None, f"Lower pattern for definition must match the pattern. '{lower}' is not an instance of {pattern.name}."
+            if match is None:
+                raise ValueError(f"Lower pattern for definition must match the pattern. '{lower}' is not an instance of {pattern.name}.")
 
             # Create a lower pattern
             self.lower = match.create_pattern(context)
@@ -1221,16 +1222,18 @@ class Definition:
             label = self.lower.variable_locations[i]["label"]
             pattern = self.lower.variable_locations[i]["pattern"]
 
-            assert label in variables, f"Could not build lower pattern - missing variable {label}."
+            if not (label in variables):
+                raise ValueError(f"Could not build lower pattern - missing variable {label}.")
 
-            assert pattern.equivalent(variables[label].pattern, context, allow_mapping_to=True), \
-                f"Could not build lower pattern - mismatched patterns for variable {label}."
+            if not (pattern.equivalent(variables[label].pattern, context, allow_mapping_to=True)):
+                raise ValueError(f"Could not build lower pattern - mismatched patterns for variable {label}.")
 
             s += variables[label].formatted_string()
 
         result = self.pattern.match(s, context)
 
-        assert result is not None, f"Could not build lower pattern - no match for {s}."
+        if result is None:
+            raise ValueError(f"Could not build lower pattern - no match for {s}.")
 
         return result
 
@@ -1242,7 +1245,7 @@ class Definition:
 
 
 class Match:
-    # Match object
+    """Match object."""
 
     def __init__(self, pattern, string, is_variable=False, definition=None):
 
@@ -1320,9 +1323,11 @@ class Match:
 
         elif path == "union_submatch()":
             # Get the only submatch
-            assert type(self.pattern) is UnionPattern, \
-                "Cannot take union_submatch() of %s, as the corresponding pattern %s is not a UnionPattern." % \
-                (self.string, self.pattern.name)
+            if type(self.pattern) is not UnionPattern:
+                raise ValueError(
+                    f"Cannot take union_submatch() of {self.string}, as the corresponding pattern "
+                    f"{self.pattern.name} is not a UnionPattern."
+                )
 
             return list(self.sub_matches.values())[0]
 
@@ -1489,7 +1494,8 @@ class Match:
 
             parts = inner.split("; ")
 
-            assert 1 <= len(parts) <= 3, f"Condition {self.string} has too many parts."
+            if not 1 <= len(parts) <= 3:
+                raise ValueError(f"Condition {self.string} has too many parts.")
 
             pattern_string = parts[0]
             within_match = None
@@ -2280,7 +2286,7 @@ class Match:
 
 
 class MatchSet:
-    # Class for a set of match instances
+    """Class for a set of match instances."""
 
     def __init__(self, instances=None, negatives=None, complete=True, allow_multiple=True, attribute_match=None,
                  attribute_name=None):
@@ -2308,8 +2314,8 @@ class MatchSet:
     def contains(self, match, context):
         # Check if the set contains the match. Return True if positive, False if negative, or None, if uncertain
 
-        assert isinstance(match, Match), \
-            f"MatchSet.contains() requires an argument of type Match, received {type(match)!s} instead."
+        if not isinstance(match, Match):
+            raise ValueError(f"MatchSet.contains() requires an argument of type Match, received {type(match)!s} instead.")
 
         # Check positives
         for item in self.instances:
@@ -2526,7 +2532,8 @@ class MatchSet:
                 return self.each(condition, context)
 
             # Otherwise we have named instances
-            assert len(parts) == 2, f"'each' function must have two parameters. '{path}' contains {len(parts)}."
+            if len(parts) != 2:
+                raise ValueError(f"'each' function must have two parameters. '{path}' contains {len(parts)}.")
             var_name = parts[0]
             condition = Condition(string=parts[1], context=context)
 
@@ -2685,7 +2692,7 @@ class MatchSet:
 
 
 class Pattern:
-    # Parent class for Pattern objects StringPattern and UnionPattern
+    """Parent class for Pattern objects StringPattern and UnionPattern."""
 
     def __init__(self, name, respect_brackets=None, pre_format=None):
 
@@ -2884,7 +2891,7 @@ class Pattern:
 
 
 class RegexPattern(Pattern):
-    # RegEx pattern matching
+    """RegEx pattern matching."""
 
     def __init__(self, name, pattern, pre_format=None):
 
@@ -3258,8 +3265,8 @@ class StringPattern(Pattern):
 
             else:
                 # Must be a non-variable string
-                assert next_offset in self.non_variable_locations, \
-                    f"Invalid offset in StringPattern matching - matching {s} in {self.name}."
+                if not (next_offset in self.non_variable_locations):
+                    raise ValueError(f"Invalid offset in StringPattern matching - matching {s} in {self.name}.")
 
                 # Get the possible positions of the pattern part in s
                 possible_js = non_variable_mapping[next_offset]
@@ -3605,7 +3612,7 @@ class StringPattern(Pattern):
 
 
 class UnionPattern(Pattern):
-    # A union of patterns
+    """A union of patterns."""
 
     def __init__(self, name, patterns, respect_brackets=None, pre_format=None, inherits=None):
 
@@ -3917,7 +3924,7 @@ class UnionPattern(Pattern):
 
 
 class AbstractPattern(Pattern):
-    # Abstract string pattern - used only as a variable
+    """Abstract string pattern - used only as a variable."""
 
     def __init__(self, name):
 
@@ -3966,7 +3973,7 @@ class AbstractPattern(Pattern):
 
 
 class SystemConditionPattern(Pattern):
-    # Special pattern used to check if strings can be parsed as a Condition
+    """Special pattern used to check if strings can be parsed as a Condition."""
 
     def __init__(self, name):
         Pattern.__init__(self, name)
