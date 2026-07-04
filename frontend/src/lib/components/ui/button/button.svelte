@@ -50,6 +50,7 @@
 		variant = 'default',
 		size = 'default',
 		href = undefined,
+		type = 'button',
 		children,
 		...restProps
 	}: Props = $props();
@@ -60,7 +61,7 @@
 		{@render children?.()}
 	</a>
 {:else}
-	<button class={cn(buttonVariants({ variant, size }), className)} {...restProps}>
+	<button {type} class={cn(buttonVariants({ variant, size }), className)} {...restProps}>
 		{@render children?.()}
 	</button>
 {/if}

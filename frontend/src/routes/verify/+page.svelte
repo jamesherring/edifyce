@@ -7,6 +7,7 @@
 	import CodeEditor from '$lib/components/code-editor.svelte';
 	import { api, ApiError, type VerifyResponse, type ProofLine } from '$lib/api';
 	import { EXAMPLE_SYSTEM, EXAMPLE_PROOF } from '$lib/examples';
+	import type { Component } from 'svelte';
 	import Play from '@lucide/svelte/icons/play';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
@@ -14,6 +15,29 @@
 	import CircleX from '@lucide/svelte/icons/circle-x';
 	import CircleAlert from '@lucide/svelte/icons/circle-alert';
 	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
+
+	type Tone = 'ok' | 'warning' | 'error';
+
+	// Single source of truth for how each diagnostic level is presented, used by
+	// both the overall badge and the per-line markers.
+	const TONE: Record<
+		Tone,
+		{ icon: Component; badge: 'success' | 'warning' | 'destructive'; text: string; row: string }
+	> = {
+		ok: { icon: CircleCheck, badge: 'success', text: 'Valid', row: 'bg-muted/30' },
+		warning: {
+			icon: CircleAlert,
+			badge: 'warning',
+			text: 'Warnings',
+			row: 'border-warning/40 bg-warning/5'
+		},
+		error: {
+			icon: CircleX,
+			badge: 'destructive',
+			text: 'Invalid',
+			row: 'border-destructive/40 bg-destructive/5'
+		}
+	};
 
 	let systemCode = $state(EXAMPLE_SYSTEM);
 	let proofText = $state(EXAMPLE_PROOF);
@@ -28,15 +52,13 @@
 		try {
 			result = await api.verify(systemCode, proofText);
 		} catch (err) {
-			if (err instanceof ApiError && err.status === 400) {
-				// The system failed to compile — the backend returns the compile
-				// errors under `detail`.
-				const detail = err.detail;
-				requestError = Array.isArray(detail)
-					? `System did not compile:\n${detail.join('\n')}`
-					: err.message;
+			if (err instanceof ApiError) {
+				// A 400 means the system failed to compile; the backend returns the
+				// compile errors as detail, already formatted into err.message.
+				requestError =
+					err.status === 400 ? `System did not compile:\n${err.message}` : err.message;
 			} else {
-				requestError = err instanceof ApiError ? err.message : String(err);
+				requestError = String(err);
 			}
 		} finally {
 			loading = false;
@@ -50,10 +72,16 @@
 		requestError = null;
 	}
 
-	function lineTone(line: ProofLine): 'error' | 'warning' | 'ok' {
+	function lineTone(line: ProofLine): Tone {
 		if (!line.valid) return 'error';
 		if (line.warning_message) return 'warning';
 		return 'ok';
+	}
+
+	// The overall proof indicator ("ok"/"warning"/"error") maps onto the same
+	// tone vocabulary; fall back to "error" for any unexpected value.
+	function indicatorTone(indicator: string): Tone {
+		return indicator === 'ok' || indicator === 'warning' ? indicator : 'error';
 	}
 </script>
 
@@ -109,13 +137,9 @@
 			<div class="flex items-center justify-between gap-2">
 				<Card.Title>Verification</Card.Title>
 				{#if result?.proof}
-					{#if result.proof.indicator === 'ok'}
-						<Badge variant="success"><CircleCheck /> Valid</Badge>
-					{:else if result.proof.indicator === 'warning'}
-						<Badge variant="warning"><CircleAlert /> Warnings</Badge>
-					{:else}
-						<Badge variant="destructive"><CircleX /> Invalid</Badge>
-					{/if}
+					{@const meta = TONE[indicatorTone(result.proof.indicator)]}
+					{@const Icon = meta.icon}
+					<Badge variant={meta.badge}><Icon /> {meta.text}</Badge>
 				{/if}
 			</div>
 			<Card.Description>Each proof line and its diagnostics.</Card.Description>
@@ -133,8 +157,9 @@
 				<p class="text-muted-foreground py-8 text-center text-sm">
 					Verify a proof to see line-by-line results here.
 				</p>
-			{:else if !result.success && result.errors.length > 0 && !result.proof}
-				<!-- The system compiled but the checker raised (structured error). -->
+			{:else if !result.proof}
+				<!-- The system compiled but the checker raised (structured error);
+				     `proof` is null only on that path. -->
 				<Alert.Root variant="destructive">
 					<TriangleAlert />
 					<Alert.Title>Proof could not be checked</Alert.Title>
@@ -144,18 +169,13 @@
 						{/each}
 					</Alert.Description>
 				</Alert.Root>
-			{:else if result.proof}
+			{:else}
 				<ol class="flex flex-col gap-2">
 					{#each result.proof.lines as line, i (i)}
 						{@const tone = lineTone(line)}
-						<li
-							class={[
-								'rounded-md border px-3 py-2',
-								tone === 'error' && 'border-destructive/40 bg-destructive/5',
-								tone === 'warning' && 'border-warning/40 bg-warning/5',
-								tone === 'ok' && 'bg-muted/30'
-							]}
-						>
+						{@const meta = TONE[tone]}
+						{@const Icon = meta.icon}
+						<li class={['rounded-md border px-3 py-2', meta.row]}>
 							<div class="flex items-start gap-3">
 								<span class="text-muted-foreground w-5 pt-0.5 text-right text-xs tabular-nums">
 									{i + 1}
@@ -169,13 +189,14 @@
 									</div>
 
 									<div class="mt-1.5 flex flex-wrap items-center gap-1.5">
-										{#if tone === 'ok'}
-											<CircleCheck class="text-success size-3.5" />
-										{:else if tone === 'warning'}
-											<CircleAlert class="text-warning size-3.5" />
-										{:else}
-											<CircleX class="text-destructive size-3.5" />
-										{/if}
+										<Icon
+											class={[
+												'size-3.5',
+												tone === 'ok' && 'text-success',
+												tone === 'warning' && 'text-warning',
+												tone === 'error' && 'text-destructive'
+											]}
+										/>
 										{#if line.name}
 											<Badge variant="outline">{line.name}</Badge>
 										{/if}

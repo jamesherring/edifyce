@@ -3,7 +3,11 @@ import { browser } from '$app/environment';
 type Theme = 'light' | 'dark';
 
 function createTheme() {
-	let current = $state<Theme>('light');
+	// Initialise from the class the pre-hydration script in app.html already
+	// applied, so the toggle icon matches the rendered theme from the first paint.
+	let current = $state<Theme>(
+		browser && document.documentElement.classList.contains('dark') ? 'dark' : 'light'
+	);
 
 	function apply(theme: Theme) {
 		current = theme;

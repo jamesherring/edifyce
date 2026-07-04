@@ -30,10 +30,13 @@ The dev server runs on http://localhost:5173. Start the backend separately:
 uv run uvicorn app.main:app --reload
 ```
 
-The app calls the backend at the URL in `VITE_API_BASE_URL` (default
-`http://localhost:8000`). The backend enables CORS for the dev/preview origins,
-so the two servers work together out of the box. Copy `.env.example` to `.env`
-to point the frontend at a different backend.
+The app makes same-origin (relative) API requests. In development the dev
+server proxies the API paths (`/health`, `/formal-systems`, `/proofs`) to the
+backend at `http://localhost:8000`, so the two servers work together with no
+extra configuration. Override the proxy target with `VITE_API_PROXY_TARGET`, or
+point the app at a backend on a different origin with `VITE_API_BASE_URL` (that
+origin must then be listed in the backend's `EDIFYCE_CORS_ORIGINS`). See
+`.env.example`.
 
 ## Building
 
@@ -57,12 +60,9 @@ uv run uvicorn app.main:app
 # open http://localhost:8000
 ```
 
-For that same-origin setup, build with an empty base URL so requests are made
-relative to the current origin:
-
-```bash
-VITE_API_BASE_URL= npm run build
-```
+No configuration is needed: the app makes same-origin requests by default, so
+the bundle served by FastAPI talks to the API on the same origin. (Set
+`VITE_API_BASE_URL` at build time only if the API lives on a different origin.)
 
 ## Type checking
 

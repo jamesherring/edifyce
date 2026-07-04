@@ -82,7 +82,9 @@
 				<Alert.Root variant="destructive">
 					<TriangleAlert />
 					<Alert.Title>Request failed</Alert.Title>
-					<Alert.Description>{requestError}</Alert.Description>
+					<Alert.Description>
+						<span class="whitespace-pre-wrap">{requestError}</span>
+					</Alert.Description>
 				</Alert.Root>
 			{:else if result === null}
 				<p class="text-muted-foreground py-8 text-center text-sm">

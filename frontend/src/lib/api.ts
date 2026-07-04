@@ -39,7 +39,7 @@ export interface VerifyResponse {
 	proof: ProofData | null;
 }
 
-/** Raised when the backend answers with a non-2xx status. */
+/** Raised when the backend answers with a non-2xx status or is unreachable. */
 export class ApiError extends Error {
 	status: number;
 	detail: unknown;
@@ -68,20 +68,57 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	}
 
 	const text = await response.text();
-	const body = text ? JSON.parse(text) : null;
+
+	// The body should be JSON, but a proxy error page or the SPA index.html
+	// fallback can return HTML. Parse defensively so a non-JSON body surfaces as
+	// an ApiError rather than an unwrapped SyntaxError.
+	let body: unknown = null;
+	if (text) {
+		try {
+			body = JSON.parse(text);
+		} catch {
+			throw new ApiError(
+				response.status,
+				text,
+				response.ok
+					? 'The backend returned an unexpected non-JSON response.'
+					: `Request failed with status ${response.status}.`
+			);
+		}
+	}
 
 	if (!response.ok) {
-		throw new ApiError(response.status, body?.detail ?? body, describeError(body));
+		const detail = extractDetail(body);
+		throw new ApiError(response.status, detail, formatDetail(detail));
 	}
 
 	return body as T;
 }
 
-function describeError(body: unknown): string | undefined {
+function extractDetail(body: unknown): unknown {
 	if (body && typeof body === 'object' && 'detail' in body) {
-		const detail = (body as { detail: unknown }).detail;
-		if (Array.isArray(detail)) return detail.join('\n');
-		if (typeof detail === 'string') return detail;
+		return (body as { detail: unknown }).detail;
+	}
+	return body;
+}
+
+/**
+ * Render a FastAPI `detail` into a readable message. `detail` may be a plain
+ * string, a list of strings (our compile-error path), or a list of Pydantic
+ * validation-error objects (`{ msg, loc, ... }`).
+ */
+function formatDetail(detail: unknown): string | undefined {
+	if (typeof detail === 'string') return detail;
+	if (Array.isArray(detail)) {
+		return detail
+			.map((item) => {
+				if (typeof item === 'string') return item;
+				if (item && typeof item === 'object' && 'msg' in item) {
+					return String((item as { msg: unknown }).msg);
+				}
+				return JSON.stringify(item);
+			})
+			.join('\n');
 	}
 	return undefined;
 }

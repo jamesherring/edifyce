@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { tick } from 'svelte';
+	import { Textarea } from '$lib/components/ui/textarea';
 	import { cn } from '$lib/utils';
 
 	let {
@@ -16,8 +18,9 @@
 	} = $props();
 
 	// Insert spaces instead of moving focus when Tab is pressed inside the editor.
-	function handleKeydown(event: KeyboardEvent) {
-		if (event.key !== 'Tab') return;
+	// Shift+Tab is left alone so keyboard users can still move focus backward.
+	async function handleKeydown(event: KeyboardEvent) {
+		if (event.key !== 'Tab' || event.shiftKey) return;
 		event.preventDefault();
 
 		const el = event.currentTarget as HTMLTextAreaElement;
@@ -26,13 +29,15 @@
 		const indent = '    ';
 
 		value = value.slice(0, start) + indent + value.slice(end);
-		requestAnimationFrame(() => {
-			el.selectionStart = el.selectionEnd = start + indent.length;
-		});
+
+		// Wait for Svelte to flush the bound value to the DOM before restoring
+		// the caret, otherwise the selection is clobbered by the re-render.
+		await tick();
+		el.selectionStart = el.selectionEnd = start + indent.length;
 	}
 </script>
 
-<textarea
+<Textarea
 	{id}
 	bind:value
 	{placeholder}
@@ -40,8 +45,5 @@
 	spellcheck="false"
 	autocapitalize="off"
 	onkeydown={handleKeydown}
-	class={cn(
-		'border-input placeholder:text-muted-foreground focus-visible:ring-ring bg-muted/30 w-full resize-y rounded-md border px-3 py-2 font-mono text-sm leading-relaxed shadow-sm focus-visible:outline-none focus-visible:ring-1 disabled:cursor-not-allowed disabled:opacity-50',
-		className
-	)}
-></textarea>
+	class={cn('bg-muted/30 resize-y font-mono leading-relaxed', className)}
+/>

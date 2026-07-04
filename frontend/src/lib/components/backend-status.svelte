@@ -15,7 +15,9 @@
 		}
 	}
 
-	onMount(check);
+	onMount(() => {
+		check();
+	});
 </script>
 
 <button onclick={check} title="Backend status — click to re-check" class="cursor-pointer">
