@@ -1,7 +1,9 @@
 import itertools
-import regex as re
-from copy import copy
 import random
+from copy import copy
+from dataclasses import dataclass, field
+
+import regex as re
 
 
 def parse_path(path):
@@ -361,34 +363,44 @@ def path_maps_to(path, other_path, context, other_context, mapping):
     return False
 
 
+@dataclass(eq=False)
+class PatternFunction:
+    """A user-defined function attached to a Pattern or LineType.
+
+    ``tree`` is the AbstractSyntaxTree to run; ``params`` is a tuple of
+    (variable, pattern) parameter pairs.
+    """
+
+    tree: object
+    params: tuple = ()
+
+
+@dataclass(eq=False)
 class Context:
 
-    def __init__(self, variables=None, string_variables=None, string_variable_matches=None, definitions=None,
-                 conditions=None, logical=None, reference_object=None, mapping=None, proof_model_id=None):
+    variables: dict = field(default_factory=dict)
+    string_variables: dict = field(default_factory=dict)
 
-        self.variables = variables if variables is not None else {}
-        self.string_variables = string_variables if string_variables is not None else {}
+    # Simple matches for string variables.
+    string_variable_matches: dict = field(default_factory=dict)
 
-        # Simple matches for string variables.
-        self.string_variable_matches = string_variable_matches if string_variable_matches is not None else {}
+    # Definitions
+    definitions: set = field(default_factory=set)
 
-        # Definitions
-        self.definitions = definitions if definitions is not None else set()
+    # Conditions
+    conditions: set = field(default_factory=set)
 
-        # Conditions
-        self.conditions = conditions if conditions is not None else set()
+    # Logical context for inside proofs
+    logical: dict = field(default_factory=dict)
 
-        # Logical context for inside proofs
-        self.logical = logical if logical is not None else {}
+    # Reference object
+    reference_object: object = None
 
-        # Reference object
-        self.reference_object = reference_object
+    # Mapping on string variables - string: string dictionary
+    mapping: object = None
 
-        # Mapping on string variables - string: string dictionary
-        self.mapping = mapping
-
-        # The proof model id
-        self.proof_model_id = proof_model_id
+    # The proof model id
+    proof_model_id: object = None
 
     def set_string_variable_matches(self):
         # Set string variable matches
@@ -1530,7 +1542,7 @@ class Match:
             kwargs = {}
 
         arg_count = len(args) + len(kwargs)
-        if not arg_count == len(fn["params"]):
+        if not arg_count == len(fn.params):
             # Wrong number of parameters provided
             raise Exception(f"'{name}' expected {len(fn['params'])!s} argument(s), {arg_count!s} provided.")
 
@@ -1538,11 +1550,11 @@ class Match:
         param_mapping = {}
 
         # Check args
-        for given, fn_param in zip(args, fn["params"][:len(args)]):
+        for given, fn_param in zip(args, fn.params[:len(args)]):
             param_mapping[fn_param[0]] = given
 
         # kwargs don't have to be in order
-        remaining_fn_params = fn["params"][len(args):]
+        remaining_fn_params = fn.params[len(args):]
         remaining_fn_param_dict = {param[0]: param[1] for param in remaining_fn_params}
 
         # Check kwargs
@@ -1557,8 +1569,8 @@ class Match:
 
         try:
             # Run the tree as a function
-            tree = fn["tree"]
-            result = tree.run_function(item=self, context=context_copy, params=param_mapping, param_types=fn["params"])
+            tree = fn.tree
+            result = tree.run_function(item=self, context=context_copy, params=param_mapping, param_types=fn.params)
 
             return result
         except Exception as e:
@@ -2729,13 +2741,7 @@ class Pattern:
         # Add an function to this pattern. tree is an AbstractSyntaxTree instance
 
         # Optionally specify a list of (variable, pattern) tuples of parameters
-        if params is None:
-            params = ()
-
-        self.functions[name] = {
-            "tree": tree,
-            "params": params
-        }
+        self.functions[name] = PatternFunction(tree=tree, params=() if params is None else params)
 
     def get_function(self, name):
         # Get the given attribute function

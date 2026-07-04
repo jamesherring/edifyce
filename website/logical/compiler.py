@@ -3,6 +3,7 @@ from website.logical.matching import constant
 from website.logical.formal_system import FormalSystem, LineType, InferenceRule, ProofLine
 from copy import copy, deepcopy
 from collections import OrderedDict
+from dataclasses import dataclass, field
 
 
 def get_inherited_system(code):
@@ -118,36 +119,34 @@ def parse_arguments(s):
     return args
 
 
+@dataclass(eq=False)
 class FormalSystemContext:
 
-    def __init__(self):
+    # Variables in the code (the system condition pattern is included by default)
+    variables: dict = field(
+        default_factory=lambda: {"_system_condition_": SystemConditionPattern(name="System Condition")}
+    )
 
-        # Variables in the code
-        self.variables = {
-            # Include system condition by default
-            "_system_condition_": SystemConditionPattern(name="System Condition")
-        }
+    # String variables for inside patterns
+    string_variables: dict = field(default_factory=dict)
 
-        # String variables for inside patterns
-        self.string_variables = {}
+    # Definitions created along the way
+    definitions: list = field(default_factory=list)
 
-        # Definitions created along the way
-        self.definitions = []
+    # Current object at a point in the code
+    current_object: object = None
 
-        # Current object at a point in the code
-        self.current_object = None
+    # Proof context
+    proof_context: dict = field(default_factory=dict)
 
-        # Proof context
-        self.proof_context = {}
+    # Formatting context
+    pre_format: dict = field(default_factory=dict)
 
-        # Formatting context
-        self.pre_format = {}
+    # External systems for reference
+    system_dict: dict = field(default_factory=dict)
 
-        # External systems for reference
-        self.system_dict = {}
-
-        # Error log
-        self.error_log = []
+    # Error log
+    error_log: list = field(default_factory=list)
 
     def inherit(self, parent):
         # Inherit from parent context

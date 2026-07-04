@@ -1,4 +1,5 @@
 from copy import copy
+from dataclasses import dataclass, field
 import itertools
 
 from .matching import (
@@ -6,6 +7,7 @@ from .matching import (
     Match,
     MatchSet,
     Pattern,
+    PatternFunction,
     StringPattern,
     UnionPattern,
     get_by_path,
@@ -421,13 +423,7 @@ class LineType:
         # Add an function to this pattern. tree is an AbstractSyntaxTree instance
 
         # Optionally specify a list of (variable, pattern) tuples of parameters
-        if params is None:
-            params = ()
-
-        self.functions[name] = {
-            "tree": tree,
-            "params": params
-        }
+        self.functions[name] = PatternFunction(tree=tree, params=() if params is None else params)
 
     def get_function(self, name, context):
         # Get the given attribute function
@@ -645,25 +641,23 @@ class InferenceRule:
         return True
 
 
+@dataclass(eq=False)
 class Inference:
-    # An application of an inference rule
+    """An application of an inference rule."""
 
-    def __init__(self, inference_rule, antecedents, extra_antecedents, deduction):
+    inference_rule: "InferenceRule"
 
-        self.inference_rule = inference_rule
+    # Antecedents should be a list of proof lines, deduction should be a proof line
+    antecedents: list
+    extra_antecedents: list
+    deduction: "ProofLine"
 
-        # Antecedents should be a list of proof lines, deduction should be a proof line
-        self.antecedents = antecedents
-        self.extra_antecedents = extra_antecedents
+    # Inference matches, populated as the rule is checked
+    antecedent_inference_matches: list = field(default_factory=list)
+    deduction_inference_match: "Match | None" = None
 
-        self.deduction = deduction
-
-        # Store inference matches here
-        self.antecedent_inference_matches = []
-        self.deduction_inference_match = None
-
-        # Variables used in this inference
-        self.variables = {}
+    # Variables used in this inference
+    variables: dict = field(default_factory=dict)
 
     def get_by_path(self, path, context, recurse=True):
         # Get information from the given path
@@ -1645,7 +1639,7 @@ class ProofLine:
             kwargs = {}
 
         arg_count = len(args) + len(kwargs)
-        if not arg_count == len(fn["params"]):
+        if not arg_count == len(fn.params):
             # Wrong number of parameters provided
             raise Exception(f"'{name}' expected {len(fn['params'])!s} argument(s), {arg_count!s} provided.")
 
@@ -1653,11 +1647,11 @@ class ProofLine:
         param_mapping = {}
 
         # Check args
-        for given, fn_param in zip(args, fn["params"][:len(args)]):
+        for given, fn_param in zip(args, fn.params[:len(args)]):
             param_mapping[fn_param[0]] = given
 
         # kwargs don't have to be in order
-        remaining_fn_params = fn["params"][len(args):]
+        remaining_fn_params = fn.params[len(args):]
         remaining_fn_param_dict = {param[0]: param[1] for param in remaining_fn_params}
 
         # Check kwargs
@@ -1671,9 +1665,9 @@ class ProofLine:
         context_copy = copy(context)
 
         # Run the tree as a function
-        tree = fn["tree"]
+        tree = fn.tree
 
-        return tree.run_function(item=self, context=context_copy, params=param_mapping, param_types=fn["params"])
+        return tree.run_function(item=self, context=context_copy, params=param_mapping, param_types=fn.params)
 
     def previous_formulae(self):
         # Return a matchset of formulae that have been proven before this statement in the proof and share the same
