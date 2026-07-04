@@ -1,9 +1,20 @@
 from website.logical.matching import *
-from website.logical.matching import constant
+from website.logical.matching import Pattern, constant
 from website.logical.formal_system import FormalSystem, LineType, InferenceRule, ProofLine
 from copy import copy, deepcopy
 from collections import OrderedDict
 from dataclasses import dataclass, field
+
+
+@dataclass(eq=False)
+class PendingDefinition:
+    """A definition staged during compilation, resolved into a matching.Definition later."""
+
+    lower: str
+    higher: str
+    pattern: Pattern
+    variables: dict = field(default_factory=dict)
+    condition_string: str | None = None
 
 
 def get_inherited_system(code: str) -> str | None:
@@ -472,14 +483,14 @@ class AbstractSyntaxTree:
                     self.error = "Definitions must be created inside a pattern block."
                     return
 
-                # Create the definition - just stored as a dictionary for future parsing
-                context.definitions.append({
-                    "lower": lower,
-                    "higher": higher,
-                    "pattern": current_object,
-                    "variables": {current_object.pre_format_apply(key): context.string_variables[key] for key in context.string_variables},
-                    "condition_string": condition_string
-                })
+                # Create the definition - staged for parsing once the pattern block is complete
+                context.definitions.append(PendingDefinition(
+                    lower=lower,
+                    higher=higher,
+                    pattern=current_object,
+                    variables={current_object.pre_format_apply(key): context.string_variables[key] for key in context.string_variables},
+                    condition_string=condition_string,
+                ))
 
             elif stripped.startswith("LineType ") and stripped[-1] == ":":
                 # New linetype
@@ -996,10 +1007,10 @@ class AbstractSyntaxTree:
                 context_copy = copy(new_object.context)
 
                 # Add variables
-                context_copy.string_variables.update(defn["variables"])
+                context_copy.string_variables.update(defn.variables)
 
                 # Get the definition
-                result = defn["pattern"].add_definition(defn["lower"], defn["higher"], context_copy, defn["condition_string"])
+                result = defn.pattern.add_definition(defn.lower, defn.higher, context_copy, defn.condition_string)
 
                 if result is not None:
                     new_object.context.definitions.add(result)
