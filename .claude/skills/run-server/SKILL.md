@@ -24,11 +24,17 @@ Django views/templates are **not** served. Don't try to `runserver` it.)
 
 ## 1. Launch the server
 
-Dependencies may not be installed in a fresh container. Install, then run:
+Dependencies may not be installed in a fresh container. Install whichever way
+the repo is set up — it has both a `pip`/`requirements.txt` and a `uv`/`uv.lock`
+lineage in flight, so pick by which files are present:
 
 ```bash
-pip install -r requirements.txt          # fastapi, uvicorn, pydantic, ...
-uvicorn app.main:app --host 127.0.0.1 --port 8000
+# uv-managed checkout (pyproject.toml + uv.lock present):
+uv sync                                   # then prefix commands with `uv run`
+# pip-managed checkout (requirements.txt present):
+pip install -r requirements.txt           # fastapi, uvicorn, pydantic, ...
+
+uvicorn app.main:app --host 127.0.0.1 --port 8000   # `uv run uvicorn ...` under uv
 ```
 
 Run it in the background so you can probe it, and confirm it's up:
@@ -95,7 +101,7 @@ map at the top of `screenshot.cjs` (basename → npm package + path inside it).
 ## Quick end-to-end recipe
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt          # or: uv sync  (see step 1)
 (uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/uvicorn.log 2>&1 &)
 sleep 3 && curl -s http://127.0.0.1:8000/health
 node .claude/skills/run-server/scripts/screenshot.cjs http://127.0.0.1:8000/docs /tmp/docs.png --full
