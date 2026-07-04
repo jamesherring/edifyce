@@ -26,7 +26,7 @@ def compile(code, system_dict=None):
 
     # Create an initial context
     context = FormalSystemContext()
-    context.system_dict = system_dict if system_dict is not None else dict()
+    context.system_dict = system_dict if system_dict is not None else {}
 
     # Create a root node
     root = AbstractSyntaxTree()
@@ -73,7 +73,7 @@ def parse_arguments(s):
                 # Invalid input
                 return None
 
-            parts[i] = parts[i] + ", " + parts[i + 1]
+            parts[i] = f"{parts[i]}, {parts[i + 1]}"
             parts.pop(i + 1)
             continue
 
@@ -95,7 +95,7 @@ def parse_arguments(s):
                     # Invalid input
                     return None
 
-                parts[i] = parts[i] + ", " + parts[i + 1]
+                parts[i] = f"{parts[i]}, {parts[i + 1]}"
                 parts.pop(i + 1)
 
                 continue_flag = True
@@ -129,7 +129,7 @@ class FormalSystemContext:
         }
 
         # String variables for inside patterns
-        self.string_variables = dict()
+        self.string_variables = {}
 
         # Definitions created along the way
         self.definitions = []
@@ -138,13 +138,13 @@ class FormalSystemContext:
         self.current_object = None
 
         # Proof context
-        self.proof_context = dict()
+        self.proof_context = {}
 
         # Formatting context
-        self.pre_format = dict()
+        self.pre_format = {}
 
         # External systems for reference
-        self.system_dict = dict()
+        self.system_dict = {}
 
         # Error log
         self.error_log = []
@@ -305,7 +305,7 @@ class AbstractSyntaxTree:
 
         # New data to add to inner context
         new_object = None
-        new_string_variables = dict()
+        new_string_variables = {}
 
         try:
 
@@ -318,7 +318,7 @@ class AbstractSyntaxTree:
 
                 name = stripped[8:]
                 if name not in context.system_dict:
-                    self.error = "Could not find formal system with slug: " + name + "."
+                    self.error = f"Could not find formal system with slug: {name}."
                     return
 
                 system = context.system_dict[name]
@@ -345,7 +345,7 @@ class AbstractSyntaxTree:
                 name = stripped[13:-1]
 
                 if not self.valid_variable_name(name):
-                    self.error = "Invalid variable name: '" + name + "'."
+                    self.error = f"Invalid variable name: '{name}'."
                     return
 
                 # Add the formal system to context
@@ -366,7 +366,7 @@ class AbstractSyntaxTree:
                 name = stripped[7:-1]
 
                 if not self.valid_variable_name(name):
-                    self.error = "Invalid variable name: '" + name + "'."
+                    self.error = f"Invalid variable name: '{name}'."
                     return
 
                 # Create a new ordered dictionary to keep the format
@@ -380,7 +380,7 @@ class AbstractSyntaxTree:
                 name = stripped[7:]
 
                 if name not in context.variables:
-                    raise Exception("Could not find format dictionary '" + name + "'.")
+                    raise Exception(f"Could not find format dictionary '{name}'.")
 
                 pre_format = context.variables[name]
 
@@ -396,7 +396,7 @@ class AbstractSyntaxTree:
 
                 for name in names:
                     if not self.valid_variable_name(name):
-                        self.error = "Invalid variable name: '" + name + "'."
+                        self.error = f"Invalid variable name: '{name}'."
                         return
 
                     # Add to context
@@ -410,7 +410,7 @@ class AbstractSyntaxTree:
                 name = stripped[6:-1]
 
                 if not self.valid_variable_name(name):
-                    self.error = "Invalid variable name: '" + name + "'."
+                    self.error = f"Invalid variable name: '{name}'."
                     return
 
                 # Add to context with placeholder pattern
@@ -427,7 +427,7 @@ class AbstractSyntaxTree:
                 name = stripped[8:-1]
 
                 if not self.valid_variable_name(name):
-                    self.error = "Invalid variable name: '" + name + "'."
+                    self.error = f"Invalid variable name: '{name}'."
                     return
 
                 # Create the pattern
@@ -444,7 +444,7 @@ class AbstractSyntaxTree:
                 name = stripped[13:-1]
 
                 if not self.valid_variable_name(name):
-                    self.error = "Invalid variable name: '" + name + "'."
+                    self.error = f"Invalid variable name: '{name}'."
                     return
 
                 # Create the union with no patterns to begin with
@@ -490,7 +490,7 @@ class AbstractSyntaxTree:
                 name = stripped[9:-1]
 
                 if not self.valid_variable_name(name):
-                    self.error = "Invalid variable name: '" + name + "'."
+                    self.error = f"Invalid variable name: '{name}'."
                     return
 
                 # Create the linetype
@@ -498,7 +498,7 @@ class AbstractSyntaxTree:
 
                 # Add to formal system
                 if type(current_object) is not FormalSystem:
-                    raise Exception("Cannot add LineType to object of type " + str(type(current_object)) + ".")
+                    raise Exception(f"Cannot add LineType to object of type {type(current_object)!s}.")
 
                 context.variables[name] = new_object
 
@@ -510,7 +510,7 @@ class AbstractSyntaxTree:
                 name = stripped[14:-1]
 
                 if not self.valid_variable_name(name):
-                    self.error = "Invalid variable name: '" + name + "'."
+                    self.error = f"Invalid variable name: '{name}'."
                     return
 
                 # Gather variables
@@ -538,13 +538,13 @@ class AbstractSyntaxTree:
 
                         if reference not in context.variables:
                             # Can't find reference
-                            self.error = "Could not find pattern with name '" + reference + "'."
+                            self.error = f"Could not find pattern with name '{reference}'."
                             return
 
                         pattern = context.variables[reference]
 
                         if not isinstance(pattern, Pattern):
-                            self.error = "'" + reference + "' is not a pattern."
+                            self.error = f"'{reference}' is not a pattern."
                             return
 
                         # Add to inner context
@@ -565,7 +565,7 @@ class AbstractSyntaxTree:
                 obj = context.variables[stripped]
 
                 if type(obj) not in (StringPattern, UnionPattern, RegexPattern, AbstractPattern):
-                    self.error = "Can't add object of type '" + str(type(obj)) + "' to UnionPattern."
+                    self.error = f"Can't add object of type '{type(obj)!s}' to UnionPattern."
                     return
 
                 # Append the pattern
@@ -579,7 +579,7 @@ class AbstractSyntaxTree:
                 pattern = context.variables[stripped[:-1]]
 
                 if type(pattern) is not UnionPattern:
-                    self.error = "Can't start a block with '" + stripped + "'."
+                    self.error = f"Can't start a block with '{stripped}'."
                     return
 
                 new_object = pattern
@@ -591,13 +591,13 @@ class AbstractSyntaxTree:
                 name = stripped[:-15]
 
                 if name not in context.variables:
-                    raise Exception("Could not find pattern '" + name + ".")
+                    raise Exception(f"Could not find pattern '{name}.")
 
                 # Pattern is a StringPattern or UnionPattern instance
                 pattern = context.variables[name]
 
                 # Construct a dictionary of variables to add
-                variable_dict = dict()
+                variable_dict = {}
                 for sub_tree in self.sub_trees:
                     s = sub_tree.line.strip()
                     if len(s) == 0 or s[0] == "#":
@@ -606,13 +606,13 @@ class AbstractSyntaxTree:
                     index = s.find(":")
 
                     if index == -1:
-                        raise Exception("Could not parse line '" + stripped + "'.")
+                        raise Exception(f"Could not parse line '{stripped}'.")
 
                     name = s[:index]
                     value = s[index + 2:]
 
                     if value not in context.variables:
-                        raise Exception("Could not find pattern: '" + value + "'.")
+                        raise Exception(f"Could not find pattern: '{value}'.")
 
                     variable_dict[name] = context.variables[value]
 
@@ -626,7 +626,7 @@ class AbstractSyntaxTree:
                 name = stripped[:-8]
 
                 if name not in context.variables:
-                    raise Exception("Could not find pattern '" + name + ".")
+                    raise Exception(f"Could not find pattern '{name}.")
 
                 # Pattern is a StringPattern or UnionPattern instance
                 pattern = context.variables[name]
@@ -642,7 +642,7 @@ class AbstractSyntaxTree:
 
                     if s == "clear":
                         # Clear the format so far
-                        format_dict = dict()
+                        format_dict = {}
                         continue
 
                     if s in context.variables and type(context.variables[s]) is dict:
@@ -653,7 +653,7 @@ class AbstractSyntaxTree:
                     index = s.find(":")
 
                     if index == -1:
-                        raise Exception("Could not parse line '" + stripped + "'.")
+                        raise Exception(f"Could not parse line '{stripped}'.")
 
                     key = s[:index]
                     value = s[index + 2:]
@@ -669,7 +669,7 @@ class AbstractSyntaxTree:
                 index = stripped.find(": ")
 
                 if index == -1:
-                    raise Exception("Could not parse line '" + stripped + "'.")
+                    raise Exception(f"Could not parse line '{stripped}'.")
 
                 key = stripped[:index]
                 value_string = stripped[index + 2:]
@@ -681,10 +681,10 @@ class AbstractSyntaxTree:
                     current_object[key] = MatchSet()
 
                 elif value_string == "dict()":
-                    current_object[key] = dict()
+                    current_object[key] = {}
 
                 else:
-                    raise Exception("Could not parse value '" + value_string + "'.")
+                    raise Exception(f"Could not parse value '{value_string}'.")
 
             elif type(current_object) is StringPattern:
                 # Define the pattern
@@ -718,7 +718,7 @@ class AbstractSyntaxTree:
                 index = stripped.find(":")
 
                 if index == -1:
-                    raise Exception("Could not parse line '" + stripped + "'.")
+                    raise Exception(f"Could not parse line '{stripped}'.")
 
                 key = stripped[:index]
                 value_string = stripped[index + 2:]
@@ -726,7 +726,7 @@ class AbstractSyntaxTree:
                 if key == "pattern":
 
                     # Get the value
-                    assert value_string in context.variables, "Couldn't find %s in variables." % value_string
+                    assert value_string in context.variables, f"Couldn't find {value_string} in variables."
 
                     # Update the line type accordingly
                     current_object.pattern = context.variables[value_string]
@@ -745,17 +745,17 @@ class AbstractSyntaxTree:
                         # Some path within the context
                         index = key.find(".")
                         if index == -1:
-                            raise Exception("Could not parse context key '" + key + "'.")
+                            raise Exception(f"Could not parse context key '{key}'.")
 
                         sub_key = key[index + 1:]
 
                         if sub_key not in current_object.add_context:
-                            current_object.add_context[sub_key] = dict()
+                            current_object.add_context[sub_key] = {}
 
                         new_object = current_object.add_context[sub_key]
 
                 else:
-                    raise Exception("Unrecognised parameter for LineType '" + key + "'.")
+                    raise Exception(f"Unrecognised parameter for LineType '{key}'.")
 
             elif self.parent.type == "InferenceRule":
                 # Inference rule
@@ -769,7 +769,7 @@ class AbstractSyntaxTree:
                             label = stripped_line
 
                     if label is None:
-                        raise Exception("Could not parse label for '" + current_object.name + "'.")
+                        raise Exception(f"Could not parse label for '{current_object.name}'.")
 
                     current_object.label = label
                     return
@@ -842,7 +842,7 @@ class AbstractSyntaxTree:
                             value = False
 
                     if value is None:
-                        raise Exception("Could not parse label for '" + current_object.name + "'.")
+                        raise Exception(f"Could not parse label for '{current_object.name}'.")
 
                     current_object.allow_extra_antecedents = value
                     return
@@ -850,7 +850,7 @@ class AbstractSyntaxTree:
                 elif stripped == "format:":
                     # Create a format dictionary
 
-                    new_object = dict()
+                    new_object = {}
 
                     if current_object.deduction is not None:
                         current_object.deduction.pre_format = new_object
@@ -869,7 +869,7 @@ class AbstractSyntaxTree:
                         current_object.update(context.variables[stripped])
 
                     else:
-                        raise Exception("Could not parse line '" + stripped + "'.")
+                        raise Exception(f"Could not parse line '{stripped}'.")
 
                 key = stripped[:index]
                 value_string = stripped[index + 2:]
@@ -900,18 +900,18 @@ class AbstractSyntaxTree:
                     remainder = stripped[index + 1:-1]
 
                     if name not in context.variables:
-                        self.error = "Unrecognised variable '" + name + "'."
+                        self.error = f"Unrecognised variable '{name}'."
                         return
 
                     obj = context.variables[name]
 
                     if not isinstance(obj, (Pattern, LineType)):
-                        self.error = "'" + name + "' is not a pattern or LineType."
+                        self.error = f"'{name}' is not a pattern or LineType."
                         return
 
                     index = remainder.find("(")
                     if index == -1:
-                        self.error = "Could not parse '" + stripped + "'."
+                        self.error = f"Could not parse '{stripped}'."
                         return
 
                     fn_name = remainder[:index]
@@ -925,11 +925,11 @@ class AbstractSyntaxTree:
                         key, value = arg
 
                         if not self.valid_variable_name(key):
-                            self.error = "Invalid variable name: '" + key + "'."
+                            self.error = f"Invalid variable name: '{key}'."
                             return
 
                         if value not in context.variables and value not in ("dict", "list", "set", "tuple", "MatchSet"):
-                            self.error = "'" + value + "' is not defined."
+                            self.error = f"'{value}' is not defined."
                             return
 
                     # Change dictionary values from strings to the corresponding patterns
@@ -950,7 +950,7 @@ class AbstractSyntaxTree:
                     return
 
                 # Can't parse line
-                self.error = "Could not parse '" + stripped + "'."
+                self.error = f"Could not parse '{stripped}'."
                 return
 
         except Exception as e:
@@ -972,7 +972,7 @@ class AbstractSyntaxTree:
             tree.run(sub_context)
 
             if tree.error is not None:
-                context.error_log.append(str(tree.line_number) + ": " + tree.error)
+                context.error_log.append(f"{tree.line_number!s}: {tree.error}")
 
         # Add inference rules to formal systems
         if isinstance(new_object, InferenceRule) and isinstance(current_object, FormalSystem):
@@ -1020,7 +1020,7 @@ class AbstractSyntaxTree:
             params = {}
 
         if param_types is None:
-            param_types = tuple()
+            param_types = ()
 
         # Update the context reference object
         context = copy(context)
@@ -1028,15 +1028,14 @@ class AbstractSyntaxTree:
 
         # Check the number of parameters is correct
         if not len(params) == len(param_types):
-            raise Exception("Expected " + str(len(param_types)) + " arguments, but " + str(len(params)) +
-                            " were given.")
+            raise Exception(f"Expected {len(param_types)!s} arguments, but {len(params)!s} were given.")
 
         # Check the parameters are of the right type
         param_type_dict = {param[0]: param[1] for param in param_types}
 
         for key, value in params.items():
             if key not in param_type_dict:
-                raise Exception("Unexpected argument '" + key + "'.")
+                raise Exception(f"Unexpected argument '{key}'.")
 
             param_type = param_type_dict[key]
 
@@ -1110,7 +1109,7 @@ class AbstractSyntaxTree:
             # Looks like a loop
             index = stripped.find(" in ")
             if index == -1:
-                raise Exception("Could not parse function line '" + stripped + ".")
+                raise Exception(f"Could not parse function line '{stripped}.")
 
             var_name = stripped[4:index]
             set_string = stripped[index + 4:-1]
@@ -1119,7 +1118,7 @@ class AbstractSyntaxTree:
                 set_value = item.get_by_path(set_string, context)
 
                 assert isinstance(set_value, (list, tuple, set, MatchSet, dict)), \
-                    "Set value %s is not iterable." % set_string
+                    f"Set value {set_string} is not iterable."
 
                 if isinstance(set_value, MatchSet):
                     if not set_value.complete:
@@ -1165,7 +1164,7 @@ class AbstractSyntaxTree:
                 return None
 
             except Exception as e:
-                raise Exception("Could not parse function line '" + stripped + "'. %s." % str(e))
+                raise Exception(f"Could not parse function line '{stripped}'. {e!s}.")
 
         if stripped.startswith("while ") and stripped[-1] == ":":
             # Looks like a while loop
@@ -1228,11 +1227,11 @@ class AbstractSyntaxTree:
         try:
             self.evaluate_line_part(item, stripped, context)
             return None
-        except Exception as e:
+        except Exception:
             pass
 
         # Otherwise stuck
-        raise Exception("Could not parse '" + stripped + "'.")
+        raise Exception(f"Could not parse '{stripped}'.")
 
     def evaluate_line_part(self, item, line, context):
         # Evaluate part of this line, which may utilise subtrees. Gets a value.
@@ -1260,7 +1259,7 @@ class AbstractSyntaxTree:
                 items = obj
 
             else:
-                raise Exception("Cannot iterate over '" + str(type(obj)) + ".")
+                raise Exception(f"Cannot iterate over '{type(obj)!s}.")
 
             # Get the parameter named for the loop
             name = stripped[index + 6:-2]
@@ -1346,7 +1345,7 @@ class AbstractSyntaxTree:
 
             if not found_end or len(remainder) > 0:
                 # Currently don't support list indexing, ie ["x", "y"][0]
-                raise Exception("Could not parse '" + stripped + "'.")
+                raise Exception(f"Could not parse '{stripped}'.")
 
             return [self.evaluate_line_part(item, entry, context) for entry in entries]
 
@@ -1364,13 +1363,13 @@ class AbstractSyntaxTree:
 
                     return result
 
-            except Exception as e:
+            except Exception:
                 pass
 
         # Try to get by path
         try:
             return item.get_by_path(stripped, context)
-        except Exception as e:
+        except Exception:
             pass
 
         if stripped[-1] == "]":
@@ -1383,7 +1382,7 @@ class AbstractSyntaxTree:
 
                 try:
                     return initial[key]
-                except Exception as e:
+                except Exception:
                     pass
 
         # Try making a condition
@@ -1391,10 +1390,10 @@ class AbstractSyntaxTree:
             c = Condition(string=stripped)
             return item.check_condition(c, context)
 
-        except Exception as e:
+        except Exception:
             pass
 
-        raise Exception("Could not parse '" + stripped + "'.")
+        raise Exception(f"Could not parse '{stripped}'.")
 
     @staticmethod
     def valid_variable_name(var):
@@ -1409,4 +1408,4 @@ class AbstractSyntaxTree:
         if self.is_root():
             return "Tree root"
 
-        return str(self.line_number) + ": " + self.line
+        return f"{self.line_number!s}: {self.line}"

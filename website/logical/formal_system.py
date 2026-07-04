@@ -36,7 +36,7 @@ class FormalSystem:
 
         # Default proof context
         self.context = Context(
-            logical=context if context is not None else dict()
+            logical=context if context is not None else {}
         )
 
     def build_pattern_dictionary(self):
@@ -98,7 +98,7 @@ class FormalSystem:
                 try:
                     path = result.get_by_path("path()", context)
 
-                except Exception as e:
+                except Exception:
                     # No valid path here
                     continue
 
@@ -115,7 +115,7 @@ class FormalSystem:
         # reprocessing unchanged lines.
 
         # Maintain a dictionary of previous proof lines: new proof lines
-        previous_proof_lines_mapped = previous_proof_lines_mapped if previous_proof_lines_mapped is not None else dict()
+        previous_proof_lines_mapped = previous_proof_lines_mapped if previous_proof_lines_mapped is not None else {}
 
         lines = text.split("\n")
 
@@ -201,7 +201,7 @@ class FormalSystem:
                         if type(proof_line.formula) is not Match:
                             proof_line.formula = None
 
-                    except Exception as e:
+                    except Exception:
                         pass
 
                     try:
@@ -210,20 +210,20 @@ class FormalSystem:
                         proof_line.reference_string = reference_match.formatted_string()
                         proof_line.reference_string_display = reference_match.string
 
-                    except Exception as e:
+                    except Exception:
                         pass
 
                     try:
                         label = result.get_by_path("label()", context)
                         proof_line.label = label
 
-                    except Exception as e:
+                    except Exception:
                         pass
 
                     # Check if the line type has a 'display' value
                     try:
                         proof_line.display = result.get_by_path("display()", context)
-                    except Exception as e:
+                    except Exception:
                         # No valid display path
                         pass
 
@@ -231,7 +231,7 @@ class FormalSystem:
                         # Check if there is a valid axiom
                         result.get_by_path("axiom()", context)
                         proof_line.is_axiom = True
-                    except Exception as e:
+                    except Exception:
                         # Not an axiom
                         pass
 
@@ -339,7 +339,7 @@ class FormalSystem:
         # Check if two formal systems are equivalent
 
         if memo is None:
-            memo = dict()
+            memo = {}
 
         if (self, other) in memo:
             return memo[(self, other)]
@@ -401,13 +401,13 @@ class LineType:
         # The behaviour of these lines
         self.behaviour = behaviour
         assert self.behaviour in ("none", "import", "logical", "axiom", "indent", "definition", "comment"), \
-            "'%s' is not a valid LineType behaviour." % self.behaviour
+            f"'{self.behaviour}' is not a valid LineType behaviour."
 
         # The data paths (and their values) to add to context, if any
-        self.add_context = add_context if add_context is not None else dict()
+        self.add_context = add_context if add_context is not None else {}
 
         # Custom functions
-        self.functions = dict()
+        self.functions = {}
 
     def parse_line(self, line, context):
         # Check if the given line string is of this type
@@ -422,7 +422,7 @@ class LineType:
 
         # Optionally specify a list of (variable, pattern) tuples of parameters
         if params is None:
-            params = tuple()
+            params = ()
 
         self.functions[name] = {
             "tree": tree,
@@ -442,7 +442,7 @@ class LineType:
         # Check equivalence
 
         if memo is None:
-            memo = dict()
+            memo = {}
 
         if (self, other) in memo:
             return memo[(self, other)]
@@ -501,7 +501,7 @@ class InferenceRule:
         self.label = label if label is not None else ""
 
         # List of antecedent patterns
-        self.antecedents = antecedents if antecedents is not None else list()
+        self.antecedents = antecedents if antecedents is not None else []
 
         # Deduction pattern
         self.deduction = deduction
@@ -583,7 +583,7 @@ class InferenceRule:
                     # Doesn't meet the condition
                     return False
 
-            except Exception as e:
+            except Exception:
                 # Error trying to apply the condition
                 return False
 
@@ -602,7 +602,7 @@ class InferenceRule:
         # Check equivalent
 
         if memo is None:
-            memo = dict()
+            memo = {}
 
         if (self, other) in memo:
             return memo[(self, other)]
@@ -663,7 +663,7 @@ class Inference:
         self.deduction_inference_match = None
 
         # Variables used in this inference
-        self.variables = dict()
+        self.variables = {}
 
     def get_by_path(self, path, context, recurse=True):
         # Get information from the given path
@@ -700,7 +700,7 @@ class Inference:
             # Try generic get_by_path
             return get_by_path(self, path, context, recurse=False)
 
-        raise Exception("Could not find value from path '" + path + "'.")
+        raise Exception(f"Could not find value from path '{path}'.")
 
     def check_variables(self, context):
         # Check the variables for antecedent and deduction matches are consistent
@@ -786,7 +786,7 @@ class Proof:
         self.reference_proofs = reference_proofs
 
         # A reference for labelled lines
-        self.reference_context = dict()
+        self.reference_context = {}
 
         # Keep a set of proof models referenced from this one (no folders)
         self.proofs_used = set()
@@ -870,7 +870,7 @@ class Proof:
                                 last_proof_line = item
                                 continue
 
-                        except Exception as e:
+                        except Exception:
                             # if item is None and last_proof_line is not None:
                             # Probably a mapping
                             try:
@@ -878,11 +878,11 @@ class Proof:
                                     mapping.update(self.get_reference_mapping(r, last_proof_line, context))
                                     continue
 
-                            except Exception as e:
+                            except Exception:
                                 pass
 
                         # Otherwise this is not a proof line
-                        raise Exception(r + " is not a proof line.")
+                        raise Exception(f"{r} is not a proof line.")
 
                     return {
                         "inference_rule": ir,
@@ -891,7 +891,7 @@ class Proof:
                         "mapping": mapping
                     }
 
-            raise Exception("'" + key + "' is not a valid inference rule key.")
+            raise Exception(f"'{key}' is not a valid inference rule key.")
 
         if "." in ref:
             index = ref.index(".")
@@ -918,7 +918,7 @@ class Proof:
             pass
 
         # Nothing works
-        raise Exception("Invalid reference: " + ref)
+        raise Exception(f"Invalid reference: {ref}")
 
     @staticmethod
     def get_reference_mapping(ref, source_proof_line, context):
@@ -936,7 +936,7 @@ class Proof:
         target_match = pattern.match(target, context)
 
         if target_match is None:
-            raise Exception("Cannot map " + source + " to " + target + ".")
+            raise Exception(f"Cannot map {source} to {target}.")
 
         return {source: target_match}
 
@@ -966,7 +966,7 @@ class Proof:
             return False
 
         if not (type(reference) is dict and "inference_rule" in reference):
-            proof_line.invalid_message = "Invalid reference '" + proof_line.reference_string + "'."
+            proof_line.invalid_message = f"Invalid reference '{proof_line.reference_string}'."
             proof_line.valid = False
             return False
 
@@ -1002,14 +1002,13 @@ class Proof:
         if len(antecedents) < len(inference_rule.antecedents):
             # Not enough antecedents
             proof_line.valid = False
-            proof_line.invalid_message = key + " requires " + str(len(inference_rule.antecedents)) + " antecedent(s)."
+            proof_line.invalid_message = f"{key} requires {len(inference_rule.antecedents)!s} antecedent(s)."
             return False
 
         if len(antecedents) > len(inference_rule.antecedents) and not inference_rule.allow_extra_antecedents:
             # Too many antecedents
             proof_line.valid = False
-            proof_line.invalid_message = key + " requires exactly " + str(len(inference_rule.antecedents)) + \
-                " antecedent(s)."
+            proof_line.invalid_message = f"{key} requires exactly {len(inference_rule.antecedents)!s} antecedent(s)."
             return False
 
         if len(antecedents) > 6:
@@ -1040,7 +1039,7 @@ class Proof:
 
         # No valid permutation found, not a valid line
         proof_line.valid = False
-        proof_line.invalid_message = key + " does not apply."
+        proof_line.invalid_message = f"{key} does not apply."
         return False
 
     def import_path(self, path, label, context):
@@ -1125,7 +1124,7 @@ class Proof:
                     add_reference(ref_target)
                     return {
                         "success": False,
-                        "errorMessage": initial + " does not have a line with label " + remainder + ".",
+                        "errorMessage": f"{initial} does not have a line with label {remainder}.",
                         "target": ref_target
                     }
 
@@ -1134,7 +1133,7 @@ class Proof:
                     add_reference(ref_target)
                     return {
                         "success": False,
-                        "errorMessage": path + " has unresolved errors.",
+                        "errorMessage": f"{path} has unresolved errors.",
                         "target": ref_target
                     }
 
@@ -1142,7 +1141,7 @@ class Proof:
                 # Don't recognise the path
                 return {
                     "success": False,
-                    "errorMessage": "Could not find '" + path + "'."
+                    "errorMessage": f"Could not find '{path}'."
                 }
 
         # Add the reference
@@ -1193,7 +1192,7 @@ class Proof:
                                         condition_string, require_lower_match=False)
 
         if result is None:
-            raise Exception("Failed to import definition: " + definition.higher.pattern)
+            raise Exception(f"Failed to import definition: {definition.higher.pattern}")
 
         # Remove any existing (possibly duplicate) conditions
         if result not in context.definitions:
@@ -1242,7 +1241,7 @@ class Proof:
 
             # Otherwise, no justification found
             deduction.valid = False
-            deduction.invalid_message = inference_rule.label + " does not apply."
+            deduction.invalid_message = f"{inference_rule.label} does not apply."
 
             return False
 
@@ -1272,7 +1271,7 @@ class ProofLine:
         self.reference_string_display = reference_string
 
         # A reference mapping given on the line
-        self.reference_mapping = dict()
+        self.reference_mapping = {}
 
         # The label for this line (if any)
         self.label = label
@@ -1346,7 +1345,7 @@ class ProofLine:
                 lower = self.match.get_by_path("lower()", context)
                 higher = self.match.get_by_path("higher()", context)
                 pattern = self.match.get_by_path("for()", context)
-            except Exception as e:
+            except Exception:
                 # Not a valid definition
                 self.valid = False
                 self.invalid_message = "Missing higher or lower for definition."
@@ -1354,7 +1353,7 @@ class ProofLine:
 
             if pattern.match(lower.string, context) is None:
                 self.valid = False
-                self.invalid_message = lower.string + " is not an instance of " + pattern.name + "."
+                self.invalid_message = f"{lower.string} is not an instance of {pattern.name}."
                 return
 
             # Also try to get conditions
@@ -1363,7 +1362,7 @@ class ProofLine:
                 conditions = self.get_by_path("conditions()", context)
                 if len(conditions) > 0:
                     condition_string = " and ".join([c.string for c in conditions])
-            except Exception as e:
+            except Exception:
                 pass
 
             # Add the definition
@@ -1391,7 +1390,7 @@ class ProofLine:
             except Exception as e:
                 # No valid path or label
                 self.valid = False
-                self.invalid_message = "Could not get path or label from import line: " + str(e)
+                self.invalid_message = f"Could not get path or label from import line: {e!s}"
 
         elif line_type.behaviour in ("none", "comment"):
             # Don't need to do anything :)
@@ -1475,7 +1474,7 @@ class ProofLine:
             # Try generic get_by_path
             return get_by_path(self, path, context, recurse=False)
 
-        raise Exception("Could not find value from path '" + path + "'.")
+        raise Exception(f"Could not find value from path '{path}'.")
 
     def check_condition(self, condition, context, mapping=None):
         # Check a condition using the given context. Optionally specify a string variable mapping
@@ -1485,7 +1484,7 @@ class ProofLine:
 
         if mapping is not None:
             # Set context mapping
-            assert isinstance(mapping, dict), "Mapping dictionary must be a dictionary, not %s." % str(type(mapping))
+            assert isinstance(mapping, dict), f"Mapping dictionary must be a dictionary, not {type(mapping)!s}."
             context.mapping = mapping
 
         # Set string variable matches
@@ -1493,7 +1492,7 @@ class ProofLine:
 
         try:
             return condition.check_condition(self, context)
-        except Exception as e:
+        except Exception:
             return False
 
     def follows_from_definition(self, other, definition, mapping, context):
@@ -1527,7 +1526,7 @@ class ProofLine:
         for key, value in self.line_type.add_context.items():
 
             if key not in context.__dict__ and key not in context.logical:
-                raise Exception("Can't find '" + key + "' in proof context.")
+                raise Exception(f"Can't find '{key}' in proof context.")
 
             # Get the current value and target dictionary
             if key in context.logical:
@@ -1601,7 +1600,7 @@ class ProofLine:
 
                         else:
                             # Has to be a match or a match set
-                            raise Exception("Cannot union a set with object of type '" + str(type(sub_value)) + "'.")
+                            raise Exception(f"Cannot union a set with object of type '{type(sub_value)!s}'.")
 
                     elif edit_type == "add":
                         # Add the value to the set
@@ -1612,7 +1611,7 @@ class ProofLine:
                         current_value.add(sub_value, context)
 
                     else:
-                        raise Exception("Cannot edit a set with operator '" + edit_type + "'.")
+                        raise Exception(f"Cannot edit a set with operator '{edit_type}'.")
 
         return context
 
@@ -1636,7 +1635,7 @@ class ProofLine:
         fn = self.line_type.get_function(name, context)
 
         if fn is None:
-            raise Exception("'" + self.line_type.name + "' does not have function '" + name + "'.")
+            raise Exception(f"'{self.line_type.name}' does not have function '{name}'.")
 
         # Check the params matches have the correct pattern
         if args is None:
@@ -1648,11 +1647,10 @@ class ProofLine:
         arg_count = len(args) + len(kwargs)
         if not arg_count == len(fn["params"]):
             # Wrong number of parameters provided
-            raise Exception("'" + name + "' expected " + str(len(fn["params"])) + " argument(s), " + str(arg_count) +
-                            " provided.")
+            raise Exception(f"'{name}' expected {len(fn['params'])!s} argument(s), {arg_count!s} provided.")
 
         # Build a parameter mapping
-        param_mapping = dict()
+        param_mapping = {}
 
         # Check args
         for given, fn_param in zip(args, fn["params"][:len(args)]):
@@ -1665,7 +1663,7 @@ class ProofLine:
         # Check kwargs
         for given_name, given in kwargs.items():
             if given_name not in remaining_fn_param_dict:
-                raise Exception("'" + name + "' does not accept parameter '" + given_name + ".")
+                raise Exception(f"'{name}' does not accept parameter '{given_name}.")
 
             param_mapping[given_name] = given
 
@@ -1741,7 +1739,7 @@ class ProofLine:
             try:
                 ants = self.proof.get_reference(previous_line.reference_string, self.context)["antecedents"]
 
-            except Exception as e:
+            except Exception:
                 # Failed to get reference
                 return False
 
@@ -1791,7 +1789,7 @@ class ProofLine:
             try:
                 if not previous_obj.equivalent(current_obj, self.context):
                     return False
-            except Exception as e:
+            except Exception:
                 return False
 
             # Otherwise ok
@@ -1831,4 +1829,4 @@ class ProofLine:
         return self.proof.model_id == other.proof.model_id and self.index() == other.index()
 
     def __str__(self):
-        return "ProofLine: " + self.text
+        return f"ProofLine: {self.text}"

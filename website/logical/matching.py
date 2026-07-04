@@ -91,7 +91,7 @@ def parse_arguments(args_string, obj, context, arg_names=None):
 
     for key in kwargs.keys():
         if key not in arg_names[len(args):]:
-            raise Exception("Unexpected argument: '" + key + "'.")
+            raise Exception(f"Unexpected argument: '{key}'.")
 
     # Otherwise, kwargs match.
 
@@ -124,19 +124,19 @@ def constant(s):
         return MatchSet()
 
     if s == "tuple()":
-        return tuple()
+        return ()
 
     if s == "list()" or s == "[]":
-        return list()
+        return []
 
     if s == "dict()" or s == "{}":
-        return dict()
+        return {}
 
     try:
         if "." not in s:
             return int(s)
         return float(s)
-    except ValueError as e:
+    except ValueError:
         pass
 
     if len(s) > 1 and s[0] in ("'", '"') and s[0] == s[-1] and s[0] not in s[1:-1]:
@@ -176,7 +176,7 @@ def get_by_path(obj, path, context, recurse=True):
         # Try the obj get_by_path first
         try:
             return obj.get_by_path(path, context)
-        except Exception as e:
+        except Exception:
             pass
 
     if path in context.variables:
@@ -233,7 +233,7 @@ def get_by_path(obj, path, context, recurse=True):
 
                 return result
 
-        except Exception as e:
+        except Exception:
             pass
 
     if path.startswith("set(") and path[-1] == ")":
@@ -285,7 +285,7 @@ def get_by_path(obj, path, context, recurse=True):
         # Try the reference object
         return context.reference_object.get_by_path(path, context)
 
-    raise Exception("Could not find value from path '" + path + "'.")
+    raise Exception(f"Could not find value from path '{path}'.")
 
 
 def path_maps_to(path, other_path, context, other_context, mapping):
@@ -366,11 +366,11 @@ class Context:
     def __init__(self, variables=None, string_variables=None, string_variable_matches=None, definitions=None,
                  conditions=None, logical=None, reference_object=None, mapping=None, proof_model_id=None):
 
-        self.variables = variables if variables is not None else dict()
-        self.string_variables = string_variables if string_variables is not None else dict()
+        self.variables = variables if variables is not None else {}
+        self.string_variables = string_variables if string_variables is not None else {}
 
         # Simple matches for string variables.
-        self.string_variable_matches = string_variable_matches if string_variable_matches is not None else dict()
+        self.string_variable_matches = string_variable_matches if string_variable_matches is not None else {}
 
         # Definitions
         self.definitions = definitions if definitions is not None else set()
@@ -379,7 +379,7 @@ class Context:
         self.conditions = conditions if conditions is not None else set()
 
         # Logical context for inside proofs
-        self.logical = logical if logical is not None else dict()
+        self.logical = logical if logical is not None else {}
 
         # Reference object
         self.reference_object = reference_object
@@ -399,7 +399,7 @@ class Context:
         # Check equivalence
 
         if memo is None:
-            memo = dict()
+            memo = {}
 
         if (self, other) in memo:
             return memo[(self, other)]
@@ -593,7 +593,7 @@ class Condition:
                     depth -= 1
 
                     if depth < 0:
-                        raise Exception("Could not parse condition '" + self.string + "', mismatched parentheses.")
+                        raise Exception(f"Could not parse condition '{self.string}', mismatched parentheses.")
 
                 if depth > 0:
                     # Don't need to parse today
@@ -610,7 +610,7 @@ class Condition:
                 i += 1
 
             if depth > 0:
-                raise Exception("Could not parse condition '" + self.string + "', mismatched parentheses.")
+                raise Exception(f"Could not parse condition '{self.string}', mismatched parentheses.")
 
             # Add any trailing part
             if part_start_index < i:
@@ -643,7 +643,7 @@ class Condition:
 
             if part in ("and", "or"):
                 if i == 0 or i == len(parts) - 1:
-                    raise Exception("Could not parse condition '" + self.string + "'.")
+                    raise Exception(f"Could not parse condition '{self.string}'.")
 
                 self.type = part
 
@@ -664,7 +664,7 @@ class Condition:
 
             if part == "in":
                 if i == 0 or i == len(parts) - 1:
-                    raise Exception("Could not parse condition '" + self.string + "'.")
+                    raise Exception(f"Could not parse condition '{self.string}'.")
 
                 self.type = "in"
 
@@ -675,7 +675,7 @@ class Condition:
                     # Not in
                     self.type = "not in"
                     if i - 1 == 0:
-                        raise Exception("Could not parse condition '" + self.string + "'.")
+                        raise Exception(f"Could not parse condition '{self.string}'.")
 
                     left = parts[:i - 1]
 
@@ -690,7 +690,7 @@ class Condition:
 
             if part == "is":
                 if i == 0 or i == len(parts) - 1:
-                    raise Exception("Could not parse condition '" + self.string + "'.")
+                    raise Exception(f"Could not parse condition '{self.string}'.")
 
                 self.type = "is"
 
@@ -701,7 +701,7 @@ class Condition:
                     # Not in
                     self.type = "is not"
                     if i + 1 == len(parts) - 1:
-                        raise Exception("Could not parse condition '" + self.string + "'.")
+                        raise Exception(f"Could not parse condition '{self.string}'.")
 
                     right = parts[i + 2:]
 
@@ -842,7 +842,7 @@ class Condition:
         if hasattr(obj, "get_by_path"):
             return obj.get_by_path(self.string, context)
 
-        raise Exception("Couldn't evaluate condition '" + self.string + "'.")
+        raise Exception(f"Couldn't evaluate condition '{self.string}'.")
 
     def maps_to(self, other, mapping):
         # Check if this condition maps to the other one under the string variable mapping
@@ -886,7 +886,7 @@ class Condition:
                     if not left.maps_to(other_left, self_context, mapping):
                         return False
 
-                except Exception as e:
+                except Exception:
                     return False
 
             if not path_maps_to(right_path, other_right_path, self_context, other_context, mapping):
@@ -898,7 +898,7 @@ class Condition:
 
                     return right.maps_to(other_right, self_context, mapping)
 
-                except Exception as e:
+                except Exception:
                     return False
 
             # Otherwise both paths map successfully
@@ -962,13 +962,13 @@ class Condition:
             # Try generic get_by_path
             return get_by_path(self, path, context, recurse=False)
 
-        raise Exception("Could not find value from path '" + path + "'.")
+        raise Exception(f"Could not find value from path '{path}'.")
 
     def equivalent(self, other, context, memo=None):
         # Check equivalence
 
         if memo is None:
-            memo = dict()
+            memo = {}
 
         if (self, other) in memo:
             return memo[(self, other)]
@@ -977,7 +977,7 @@ class Condition:
         return self.string == other.string
 
     def __str__(self):
-        return "Condition: " + self.string
+        return f"Condition: {self.string}"
 
 
 class Definition:
@@ -1006,7 +1006,7 @@ class Definition:
 
             # Get the match for variables
             match = self.pattern.match(lower, context)
-            assert match is not None, "Lower pattern for definition must match the pattern. '%s' is not an instance of %s." % (lower, pattern.name)
+            assert match is not None, f"Lower pattern for definition must match the pattern. '{lower}' is not an instance of {pattern.name}."
 
             # Create a lower pattern
             self.lower = match.create_pattern(context)
@@ -1053,10 +1053,10 @@ class Definition:
             return False
 
         if mapping is None:
-            mapping = dict()
+            mapping = {}
 
         if lower_to_higher_mapping is None:
-            lower_to_higher_mapping = dict()
+            lower_to_higher_mapping = {}
 
         if lower.formatted_string() in lower_to_higher_mapping and \
                 not lower_to_higher_mapping[lower.formatted_string()] == higher.string:
@@ -1141,13 +1141,13 @@ class Definition:
             # Try generic get_by_path
             return get_by_path(self, path, context, recurse=False)
 
-        raise Exception("Could not find value from path '" + path + "'.")
+        raise Exception(f"Could not find value from path '{path}'.")
 
     def equivalent(self, other, context, memo=None, allow_mapping_to=False):
         # Check if two definitions are the same.
 
         if memo is None:
-            memo = dict()
+            memo = {}
 
         if (self, other) in memo:
             return memo[(self, other)]
@@ -1195,8 +1195,8 @@ class Definition:
         s = ""
 
         # First get all the locations
-        var_locations = [i for i in self.lower.variable_locations]
-        non_var_locations = [i for i in self.lower.non_variable_locations]
+        var_locations = list(self.lower.variable_locations)
+        non_var_locations = list(self.lower.non_variable_locations)
         locations = var_locations + non_var_locations
         locations.sort()
 
@@ -1209,25 +1209,24 @@ class Definition:
             label = self.lower.variable_locations[i]["label"]
             pattern = self.lower.variable_locations[i]["pattern"]
 
-            assert label in variables, "Could not build lower pattern - missing variable %s." % label
+            assert label in variables, f"Could not build lower pattern - missing variable {label}."
 
             assert pattern.equivalent(variables[label].pattern, context, allow_mapping_to=True), \
-                "Could not build lower pattern - mismatched patterns for variable %s." % label
+                f"Could not build lower pattern - mismatched patterns for variable {label}."
 
             s += variables[label].formatted_string()
 
         result = self.pattern.match(s, context)
 
-        assert result is not None, "Could not build lower pattern - no match for %s." % s
+        assert result is not None, f"Could not build lower pattern - no match for {s}."
 
         return result
 
     def __str__(self):
         if self.lower is None:
-            return "Definition: '%s' is unknown for %s" % (self.higher.pattern, self.pattern.name)
+            return f"Definition: '{self.higher.pattern}' is unknown for {self.pattern.name}"
 
-        return "Definition: '%s' is defined as '%s' for %s" % \
-               (self.higher.pattern, self.lower.pattern, self.pattern.name)
+        return f"Definition: '{self.higher.pattern}' is defined as '{self.lower.pattern}' for {self.pattern.name}"
 
 
 class Match:
@@ -1242,7 +1241,7 @@ class Match:
         self.is_variable = is_variable
 
         # List of sub matches
-        self.sub_matches = dict()
+        self.sub_matches = {}
 
         # The parent match
         self.parent_match = None
@@ -1302,7 +1301,7 @@ class Match:
             if self.string in context.variables:
                 return context.variables[self.string]
 
-            raise Exception("Could not find '" + self.string + "' in context.")
+            raise Exception(f"Could not find '{self.string}' in context.")
 
         elif path == "sub_matches()":
             return self.sub_matches
@@ -1342,7 +1341,7 @@ class Match:
                 pattern_label, pattern_name = pattern_name.split(" as ")
 
             if pattern_name not in context.variables:
-                raise Exception("Unrecognised pattern '" + pattern_name + "'.")
+                raise Exception(f"Unrecognised pattern '{pattern_name}'.")
 
             pattern = context.variables[pattern_name]
 
@@ -1375,7 +1374,7 @@ class Match:
                 pattern_label, pattern_name = pattern_name.split(" as ")
 
             if pattern_name not in context.variables:
-                raise Exception("Unrecognised pattern '" + pattern_name + "'.")
+                raise Exception(f"Unrecognised pattern '{pattern_name}'.")
 
             pattern = context.variables[pattern_name]
 
@@ -1455,7 +1454,7 @@ class Match:
             # Try generic get_by_path
             return get_by_path(self, path, context, recurse=False)
 
-        raise Exception("Could not find value from path '" + path + "'.")
+        raise Exception(f"Could not find value from path '{path}'.")
 
     def check_condition(self, c, context):
         # Check a condition c - returns true or false
@@ -1478,7 +1477,7 @@ class Match:
 
             parts = inner.split("; ")
 
-            assert 1 <= len(parts) <= 3, "Condition %s has too many parts." % self.string
+            assert 1 <= len(parts) <= 3, f"Condition {self.string} has too many parts."
 
             pattern_string = parts[0]
             within_match = None
@@ -1496,7 +1495,7 @@ class Match:
             pattern_label, pattern_name = pattern_string.split(" as ")
 
             if pattern_name not in context.variables:
-                raise Exception("Could not find pattern '" + pattern_string + "'.")
+                raise Exception(f"Could not find pattern '{pattern_string}'.")
 
             # Get the pattern
             pattern = context.variables[pattern_name]
@@ -1521,7 +1520,7 @@ class Match:
         fn = self.pattern.get_function(name)
 
         if fn is None:
-            raise Exception("'" + self.pattern.name + "' does not have function '" + name + "'.")
+            raise Exception(f"'{self.pattern.name}' does not have function '{name}'.")
 
         # Check the params matches have the correct pattern
         if args is None:
@@ -1533,11 +1532,10 @@ class Match:
         arg_count = len(args) + len(kwargs)
         if not arg_count == len(fn["params"]):
             # Wrong number of parameters provided
-            raise Exception("'" + name + "' expected " + str(len(fn["params"])) + " argument(s), " + str(arg_count) +
-                            " provided.")
+            raise Exception(f"'{name}' expected {len(fn['params'])!s} argument(s), {arg_count!s} provided.")
 
         # Build a parameter mapping
-        param_mapping = dict()
+        param_mapping = {}
 
         # Check args
         for given, fn_param in zip(args, fn["params"][:len(args)]):
@@ -1550,7 +1548,7 @@ class Match:
         # Check kwargs
         for given_name, given in kwargs.items():
             if given_name not in remaining_fn_param_dict:
-                raise Exception("'" + name + "' does not accept parameter '" + given_name + ".")
+                raise Exception(f"'{name}' does not accept parameter '{given_name}.")
 
             param_mapping[given_name] = given
 
@@ -1564,7 +1562,7 @@ class Match:
 
             return result
         except Exception as e:
-            raise Exception("Error runnning function %s: %s" % (name, str(e)))
+            raise Exception(f"Error runnning function {name}: {e!s}")
 
     def contains(self, other, context):
         # Check if this match contains other (ie is equivalent to self or some submatch)
@@ -1649,7 +1647,7 @@ class Match:
                 else:
                     continue
 
-                if subs["set"].string == self.string + "." + attribute_name:
+                if subs["set"].string == f"{self.string}.{attribute_name}":
                     # This membership restriction applies
 
                     item = pattern.match(subs["item"].string, context)
@@ -1682,10 +1680,6 @@ class Match:
         if self is within_match:
             # Parent will be outside
             return False
-
-        p = False
-        if condition.string == "f.x.equal_any(self.instances(variable))":
-            p = True
 
         if self.parent_match.pattern.equivalent(pattern, context):
 
@@ -1821,7 +1815,7 @@ class Match:
             return "Exceeded maximum match depth"
 
         spaces = " " * depth * 4
-        s = spaces + "> " + str(self) + ": " + str(self.pattern.name) + "\n"
+        s = f"{spaces}> {self!s}: {self.pattern.name!s}\n"
 
         for key, item in self.sub_matches.items():
             s += item.pretty_print(depth + 1)
@@ -1836,7 +1830,7 @@ class Match:
 
         # Does not require equivalence of parent_match
         if memo is None:
-            memo = dict()
+            memo = {}
 
         if (self, other) in memo:
             return memo[(self, other)]
@@ -2000,7 +1994,7 @@ class Match:
                 if lower.equivalent_under_definitions(other, context):
                     return True
 
-            except Exception as e:
+            except Exception:
                 # Can't get lower. Try applying the definition instead
                 if self.definition.check_application(other, self, context):
                     return True
@@ -2012,7 +2006,7 @@ class Match:
                 if self.equivalent_under_definitions(lower, context):
                     return True
 
-            except Exception as e:
+            except Exception:
                 # Can't get lower. Try applying the definition instead
                 if other.definition.check_application(self, other, context):
                     return True
@@ -2081,7 +2075,7 @@ class Match:
             i = 0
             while True:
                 # Create the new variable
-                new_var = variable + "_" + str(i)
+                new_var = f"{variable}_{i!s}"
 
                 # New variable needs to not exist in var_names and not appear in pattern
                 if new_var in variable or new_var in pattern.pattern:
@@ -2103,8 +2097,8 @@ class Match:
         # Check if this match maps to the other. Changes mapping and returns a boolean
 
         if mapping is None:
-            mapping = dict()
-            new_mapping = dict()
+            mapping = {}
+            new_mapping = {}
         else:
             new_mapping = copy(mapping)
 
@@ -2147,32 +2141,32 @@ class Match:
         next_debug = None
         if debug is not None:
             spaces = 4 * debug * " "
-            print(spaces + "Attempting to map %s to %s." % (self.formatted_string(), other.formatted_string()))
+            print(f"{spaces}Attempting to map {self.formatted_string()} to {other.formatted_string()}.")
             next_debug = debug + 1
 
         if mapping is None:
-            mapping = dict()
-            new_mapping = dict()
+            mapping = {}
+            new_mapping = {}
         else:
             new_mapping = copy(mapping)
 
         if self.is_variable and self.formatted_string() in new_mapping:
             result = other.equivalent_under_definitions(new_mapping[self.formatted_string()], context)
             if debug is not None:
-                print(spaces + "Existing variable '%s' %s." % (self.string, "passed" if result else "failed."))
+                print(f"{spaces}Existing variable '{self.string}' {'passed' if result else 'failed.'}.")
             return result
 
         # Must have consistent patterns
         if not self.pattern.can_map_to(other.pattern, context):
             if debug is not None:
-                print(spaces + "Failed too map patterns %s to %s." % (self.pattern.name, other.pattern.name))
+                print(f"{spaces}Failed too map patterns {self.pattern.name} to {other.pattern.name}.")
             return False
 
         if self.is_variable and len(self.sub_matches) == 0:
             # Add variable to (original) mapping
             mapping[self.formatted_string()] = other
             if debug is not None:
-                print(spaces + "Setting variable %s as %s." % (self.formatted_string(), other.formatted_string()))
+                print(f"{spaces}Setting variable {self.formatted_string()} as {other.formatted_string()}.")
             return True
 
         if (self.definition is None and other.definition is None) or \
@@ -2183,14 +2177,14 @@ class Match:
             if not len(self.sub_matches) == len(other.sub_matches):
                 # Mismatched sub matches
                 if debug is not None:
-                    print(spaces + "Failed: mismatched submatch count.")
+                    print(f"{spaces}Failed: mismatched submatch count.")
                 return False
 
             for var in self.sub_matches:
                 if var not in other.sub_matches:
                     # Mismatched sub matches
                     if debug is not None:
-                        print(spaces + "Failed: mismatched submatch names.")
+                        print(f"{spaces}Failed: mismatched submatch names.")
                     return False
 
                 self_sub = self.sub_matches[var]
@@ -2212,7 +2206,7 @@ class Match:
                     mapping.update(new_mapping)
                     return True
 
-            except Exception as e:
+            except Exception:
                 # Can't get lower
                 pass
 
@@ -2224,20 +2218,20 @@ class Match:
                 if lower.maps_to_up_to_definition(other, context, new_mapping, next_debug):
                     mapping.update(new_mapping)
                     return True
-            except Exception as e:
+            except Exception:
                 # Can't get lower
                 pass
 
         # No luck
         if debug is not None:
-            print(spaces + "Failed: no options passed.")
+            print(f"{spaces}Failed: no options passed.")
         return False
 
     def apply_mapping(self, mapping, context):
         # Apply the given string: match dictionary to get a mapped version of this match.
 
         # First build a match: match variable dictionary
-        variable_dict = dict()
+        variable_dict = {}
 
         # Loop through the variables and map them
         for var in self.variables(context).instances:
@@ -2257,7 +2251,7 @@ class Match:
         return m
 
     def __str__(self):
-        return "Match for %s: %s" % (self.pattern.name, self.string)
+        return f"Match for {self.pattern.name}: {self.string}"
 
     def __copy__(self):
         # Create a copy of this match (ignoring the parent match)
@@ -2303,7 +2297,7 @@ class MatchSet:
         # Check if the set contains the match. Return True if positive, False if negative, or None, if uncertain
 
         assert isinstance(match, Match), \
-            "MatchSet.contains() requires an argument of type Match, received " + str(type(match)) + " instead."
+            f"MatchSet.contains() requires an argument of type Match, received {type(match)!s} instead."
 
         # Check positives
         for item in self.instances:
@@ -2417,7 +2411,7 @@ class MatchSet:
         # Test equivalence of match sets
 
         if memo is None:
-            memo = dict()
+            memo = {}
 
         if (self, other) in memo:
             return memo[(self, other)]
@@ -2520,7 +2514,7 @@ class MatchSet:
                 return self.each(condition, context)
 
             # Otherwise we have named instances
-            assert len(parts) == 2, "'each' function must have two parameters. '%s' contains %s." % (path, len(parts))
+            assert len(parts) == 2, f"'each' function must have two parameters. '{path}' contains {len(parts)}."
             var_name = parts[0]
             condition = Condition(string=parts[1], context=context)
 
@@ -2559,7 +2553,7 @@ class MatchSet:
             # Try generic get_by_path
             return get_by_path(self, path, context, recurse=False)
 
-        raise Exception("Could not find value from path '" + path + "'.")
+        raise Exception(f"Could not find value from path '{path}'.")
 
     def each(self, condition, context, var_name=None):
         # Check if every element meets a condition. Optionally specify a variable name.
@@ -2602,7 +2596,7 @@ class MatchSet:
         # Optionally specify a mapping dictionary that must be consistent.
 
         if mapping is None:
-            mapping = dict()
+            mapping = {}
 
         if type(other) is not MatchSet:
             # Other must also be a match set
@@ -2653,12 +2647,12 @@ class MatchSet:
         str_negatives = ", ".join(sorted([str(m) for m in self.negatives]))
 
         if self.complete:
-            return "Complete instances: (" + str_instances + ")"
+            return f"Complete instances: ({str_instances})"
 
         if len(self.negatives) == 0:
-            return "Incomplete instances: (" + str_instances + ")"
+            return f"Incomplete instances: ({str_instances})"
 
-        return "Incomplete instances: (" + str_instances + "), negatives: " + str_negatives
+        return f"Incomplete instances: ({str_instances}), negatives: {str_negatives}"
 
     def __len__(self):
         if not self.complete:
@@ -2686,7 +2680,7 @@ class Pattern:
         self.name = name
 
         # Keep a dictionary of functions on the pattern
-        self.functions = dict()
+        self.functions = {}
 
         # Note any bracket pairs that should be respected
         self.respect_brackets = respect_brackets
@@ -2717,7 +2711,7 @@ class Pattern:
 
             if depth > 1000 or len(t) > 1000:
                 # This is getting out of hand
-                raise Exception("Limit exceeded in apply pre-format replacements for %s" % t)
+                raise Exception(f"Limit exceeded in apply pre-format replacements for {t}")
 
             for pattern, replacement in pre_format.items():
                 new_t = re.sub(pattern, replacement, t)
@@ -2736,7 +2730,7 @@ class Pattern:
 
         # Optionally specify a list of (variable, pattern) tuples of parameters
         if params is None:
-            params = tuple()
+            params = ()
 
         self.functions[name] = {
             "tree": tree,
@@ -2836,7 +2830,7 @@ class Pattern:
 
         try:
             defn = Definition(lower, higher, self, context, condition_string)
-        except Exception as e:
+        except Exception:
             if not require_lower_match:
                 # Try without the lower match
                 defn = Definition(None, higher, self, context, condition_string)
@@ -2918,7 +2912,7 @@ class RegexPattern(Pattern):
         # Check equivalence
 
         if memo is None:
-            memo = dict()
+            memo = {}
 
         if (self, other) in memo:
             return memo[(self, other)]
@@ -2939,7 +2933,7 @@ class RegexPattern(Pattern):
         return True
 
     def __str__(self):
-        return "RegexPattern: " + self.name
+        return f"RegexPattern: {self.name}"
 
 
 class StringPattern(Pattern):
@@ -2956,13 +2950,13 @@ class StringPattern(Pattern):
         self.display_pattern = pattern
 
         # Variables for sub patterns - a dictionary mapping to other StringPatterns or UnionPattern objects
-        self.variables = dict()
+        self.variables = {}
 
         # Display variables
-        self.display_variables = dict()
+        self.display_variables = {}
 
         # Record the variable locations for speed
-        self.variable_locations = dict()
+        self.variable_locations = {}
 
         if variables is not None:
             self.add_variables(variables)
@@ -2992,9 +2986,9 @@ class StringPattern(Pattern):
 
     def get_non_variable_locations(self):
 
-        var_locations = [index for index in self.variable_locations]
+        var_locations = list(self.variable_locations)
 
-        self.non_variable_locations = dict()
+        self.non_variable_locations = {}
         i = 0
         while i < len(self.pattern):
             if i in self.variable_locations:
@@ -3259,7 +3253,7 @@ class StringPattern(Pattern):
             else:
                 # Must be a non-variable string
                 assert next_offset in self.non_variable_locations, \
-                    "Invalid offset in StringPattern matching - matching %s in %s." % (s, self.name)
+                    f"Invalid offset in StringPattern matching - matching {s} in {self.name}."
 
                 # Get the possible positions of the pattern part in s
                 possible_js = non_variable_mapping[next_offset]
@@ -3481,10 +3475,10 @@ class StringPattern(Pattern):
         variables = self.variables
 
         # Clear the variable locations. Non variable locations taken care of automatically
-        self.variables = dict()
-        self.variable_locations = dict()
+        self.variables = {}
+        self.variable_locations = {}
 
-        self.display_variables = dict()
+        self.display_variables = {}
 
         # Add the variables
         self.add_variables(variables)
@@ -3509,7 +3503,7 @@ class StringPattern(Pattern):
     def reverse_variables(self):
         # Get the reverse dictionary for variables
 
-        reverse = dict()
+        reverse = {}
         for var, subpattern in self.variables.items():
             if subpattern not in reverse:
                 reverse[subpattern] = [var]
@@ -3522,7 +3516,7 @@ class StringPattern(Pattern):
     def reverse_display_variables(self):
         # Get the reverse dictionary for display variables
 
-        reverse = dict()
+        reverse = {}
         for var, subpattern in self.display_variables.items():
             if subpattern not in reverse:
                 reverse[subpattern] = [var]
@@ -3538,7 +3532,7 @@ class StringPattern(Pattern):
         s = self.pattern
 
         # Go through variable locations in reverse order
-        indices = sorted([i for i in self.variable_locations], reverse=True)
+        indices = sorted(list(self.variable_locations), reverse=True)
 
         for i in indices:
             var_label = self.variable_locations[i]["label"]
@@ -3552,7 +3546,7 @@ class StringPattern(Pattern):
         # Check if two patterns are the same
 
         if memo is None:
-            memo = dict()
+            memo = {}
 
         if (self, other) in memo:
             return memo[(self, other)]
@@ -3601,7 +3595,7 @@ class StringPattern(Pattern):
         return True
 
     def __str__(self):
-        return "StringPattern: " + self.name
+        return f"StringPattern: {self.name}"
 
 
 class UnionPattern(Pattern):
@@ -3783,7 +3777,7 @@ class UnionPattern(Pattern):
 
         if path_dict:
             # It's a dictionary instead
-            found = dict()
+            found = {}
 
         for p in self.patterns:
 
@@ -3857,7 +3851,7 @@ class UnionPattern(Pattern):
         # Check if two patterns are the same
 
         if memo is None:
-            memo = dict()
+            memo = {}
 
         if (self, other) in memo:
             return memo[(self, other)]
@@ -3913,7 +3907,7 @@ class UnionPattern(Pattern):
         return False
 
     def __str__(self):
-        return "UnionPattern: " + self.name
+        return f"UnionPattern: {self.name}"
 
 
 class AbstractPattern(Pattern):
@@ -3945,7 +3939,7 @@ class AbstractPattern(Pattern):
         # Check equivalence - depends only on name
 
         if memo is None:
-            memo = dict()
+            memo = {}
 
         if (self, other) in memo:
             return memo[(self, other)]
@@ -3962,7 +3956,7 @@ class AbstractPattern(Pattern):
         return True
 
     def __str__(self):
-        return "AbstractPattern: " + self.name
+        return f"AbstractPattern: {self.name}"
 
 
 class SystemConditionPattern(Pattern):
@@ -3992,7 +3986,7 @@ class SystemConditionPattern(Pattern):
                     string=s
                 )
 
-        except Exception as e:
+        except Exception:
             pass
 
         # Otherwise, no match
@@ -4002,7 +3996,7 @@ class SystemConditionPattern(Pattern):
         # Check equivalence
 
         if memo is None:
-            memo = dict()
+            memo = {}
 
         if (self, other) in memo:
             return memo[(self, other)]
