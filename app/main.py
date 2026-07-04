@@ -1,4 +1,9 @@
+import os
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from app.schemas import (
     CompileRequest,
@@ -13,6 +18,29 @@ app = FastAPI(
     title="Edifyce API",
     version="2.0.0",
     description="FastAPI backend for compiling formal systems and verifying proofs.",
+)
+
+# Cross-origin access for the Svelte frontend. During development the SvelteKit
+# dev server (default http://localhost:5173) and the preview server
+# (http://localhost:4173) run on a different origin from this API, so the
+# browser needs an explicit CORS allowance. Override the allowed origins with a
+# comma-separated EDIFYCE_CORS_ORIGINS environment variable in other setups.
+_default_origins = (
+    "http://localhost:5173,http://127.0.0.1:5173,"
+    "http://localhost:4173,http://127.0.0.1:4173"
+)
+_cors_origins = [
+    origin.strip()
+    for origin in os.environ.get("EDIFYCE_CORS_ORIGINS", _default_origins).split(",")
+    if origin.strip()
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -58,3 +86,33 @@ def verify_proof(payload: VerifyProofRequest) -> VerifyProofResponse:
         return VerifyProofResponse(success=False, errors=[str(e)])
 
     return VerifyProofResponse(success=proof.valid, proof=proof.data())
+
+
+# ---------------------------------------------------------------------------
+# Static frontend
+# ---------------------------------------------------------------------------
+#
+# When the Svelte app has been built (`cd frontend && npm run build`), serve the
+# resulting single-page app from this same server so the whole thing runs from
+# one origin. If the build is absent — e.g. a fresh checkout or an API-only
+# deployment — these routes are simply not registered and the API is unaffected.
+
+FRONTEND_BUILD = Path(__file__).resolve().parent.parent / "frontend" / "build"
+
+if FRONTEND_BUILD.is_dir():
+    _index = FRONTEND_BUILD / "index.html"
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def serve_spa(path: str) -> FileResponse:
+        # Serve a real build asset when the path maps to one; otherwise fall
+        # back to index.html so client-side routing handles the URL. The API
+        # routes above are registered first and take precedence, so this only
+        # catches non-API GET requests.
+        candidate = (FRONTEND_BUILD / path).resolve()
+        if (
+            path
+            and FRONTEND_BUILD in candidate.parents
+            and candidate.is_file()
+        ):
+            return FileResponse(candidate)
+        return FileResponse(_index)
