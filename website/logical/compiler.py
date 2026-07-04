@@ -1,5 +1,6 @@
 from website.logical.matching import *
-from website.logical.formal_system import constant, FormalSystem, LineType, InferenceRule, ProofLine
+from website.logical.matching import constant
+from website.logical.formal_system import FormalSystem, LineType, InferenceRule, ProofLine
 from copy import copy, deepcopy
 from collections import OrderedDict
 
@@ -117,7 +118,7 @@ def parse_arguments(s):
     return args
 
 
-class FormalSystemContext(object):
+class FormalSystemContext:
 
     def __init__(self):
 
@@ -182,7 +183,7 @@ class FormalSystemContext(object):
         return new_context
 
 
-class AbstractSyntaxTree(object):
+class AbstractSyntaxTree:
     """A node in an abstract syntax tree"""
 
     def __init__(self, line=None, line_number=0):

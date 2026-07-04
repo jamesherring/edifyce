@@ -361,7 +361,7 @@ def path_maps_to(path, other_path, context, other_context, mapping):
     return False
 
 
-class Context(object):
+class Context:
 
     def __init__(self, variables=None, string_variables=None, string_variable_matches=None, definitions=None,
                  conditions=None, logical=None, reference_object=None, mapping=None, proof_model_id=None):
@@ -528,7 +528,7 @@ class Context(object):
         )
 
 
-class Condition(object):
+class Condition:
     # A condition tree object
 
     def __init__(self, string, parts=None, context=None):
@@ -980,7 +980,7 @@ class Condition(object):
         return "Condition: " + self.string
 
 
-class Definition(object):
+class Definition:
     # A definition class - linking higher level string patterns with lower level ones
 
     def __init__(self, lower, higher, pattern, context, condition_string=None):
@@ -1230,7 +1230,7 @@ class Definition(object):
                (self.higher.pattern, self.lower.pattern, self.pattern.name)
 
 
-class Match(object):
+class Match:
     # Match object
 
     def __init__(self, pattern, string, is_variable=False, definition=None):
@@ -2273,7 +2273,7 @@ class Match(object):
         return m
 
 
-class MatchSet(object):
+class MatchSet:
     # Class for a set of match instances
 
     def __init__(self, instances=None, negatives=None, complete=True, allow_multiple=True, attribute_match=None,
@@ -2678,7 +2678,7 @@ class MatchSet(object):
         )
 
 
-class Pattern(object):
+class Pattern:
     # Parent class for Pattern objects StringPattern and UnionPattern
 
     def __init__(self, name, respect_brackets=None, pre_format=None):

@@ -1,9 +1,20 @@
-from .matching import *
 from copy import copy
 import itertools
 
+from .matching import (
+    Context,
+    Match,
+    MatchSet,
+    Pattern,
+    StringPattern,
+    UnionPattern,
+    get_by_path,
+    parse_arguments,
+    parse_path,
+)
 
-class FormalSystem(object):
+
+class FormalSystem:
     # A formal system
 
     def __init__(self, name, line_types=None, inference_rules=None, build_context=None, context=None):
@@ -100,8 +111,8 @@ class FormalSystem(object):
               previous_proof=None, previous_proof_lines_mapped=None):
         # Parse the text into a proof.
 
-        # Optionally specify a previous version of the same proof to save processing the same lines.
-        previous_proof = None
+        # Optionally specify a previous version of the same proof (via ``previous_proof``) to save
+        # reprocessing unchanged lines.
 
         # Maintain a dictionary of previous proof lines: new proof lines
         previous_proof_lines_mapped = previous_proof_lines_mapped if previous_proof_lines_mapped is not None else dict()
@@ -341,7 +352,7 @@ class FormalSystem(object):
         if not self.name == other.name:
             return False
 
-        if not len(self.line_types) == other.line_types:
+        if not len(self.line_types) == len(other.line_types):
             return False
 
         if not len(self.inference_rules) == len(other.inference_rules):
@@ -376,7 +387,7 @@ class FormalSystem(object):
         return self.name
 
 
-class LineType(object):
+class LineType:
     # Class for types of lines in formal proofs
 
     def __init__(self, name, pattern=None, behaviour="none", add_context=None):
@@ -477,7 +488,7 @@ class LineType(object):
         return self.name
 
 
-class InferenceRule(object):
+class InferenceRule:
     # Inference rules for deduction
 
     def __init__(self, name, label=None, antecedents=None, deduction=None, condition=None,
@@ -634,7 +645,7 @@ class InferenceRule(object):
         return True
 
 
-class Inference(object):
+class Inference:
     # An application of an inference rule
 
     def __init__(self, inference_rule, antecedents, extra_antecedents, deduction):
@@ -751,7 +762,7 @@ class Inference(object):
         return inf
 
 
-class Proof(object):
+class Proof:
     # A proof in a formal system
 
     def __init__(self, formal_system, reference_proofs=None, result=None):
@@ -785,7 +796,8 @@ class Proof(object):
 
     def get_proof_line(self, line_number):
         # Get a proof line by line number
-        if not 0 <= line_number < len(self.proof_lines):
+        # Line numbers are 1-based, matching how references are written in proofs.
+        if not 1 <= line_number <= len(self.proof_lines):
             return None
 
         return self.proof_lines[line_number - 1]
@@ -1238,7 +1250,7 @@ class Proof(object):
         return False
 
 
-class ProofLine(object):
+class ProofLine:
     # A line in a proof
 
     def __init__(self, proof, text, context, reference_string=None, label=None):
