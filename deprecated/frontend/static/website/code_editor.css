@@ -1,0 +1,11 @@
+
+div#ace-container {
+    width: 100%;
+    display: inline-block;
+}
+
+body {
+    overflow: hidden;
+    padding: 0;
+}
+

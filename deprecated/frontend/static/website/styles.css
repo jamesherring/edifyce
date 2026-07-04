@@ -1,0 +1,255 @@
+@import "proof_display.css";
+@import "signin.css";
+@import "form.css";
+@import "table.css";
+
+html, body, div {
+    margin: 0;
+    padding: 0;
+}
+
+html, body {
+    height: 100%;
+    font-family: verdana;
+}
+
+* {
+    -webkit-box-sizing: border-box; /* Safari/Chrome, other WebKit */
+    -moz-box-sizing: border-box;    /* Firefox, other Gecko */
+    box-sizing: border-box;         /* Opera/IE 8+ */
+}
+
+body {
+    text-align: center;
+    background-color: #EEE;
+}
+
+.hidden {
+    display: none !important;
+}
+
+.pattern, .pattern strong {
+    font-family: monospace,monospace;
+}
+.bold {
+    font-weight: bold;
+}
+
+.allow-wrap {
+    white-space: pre-wrap;
+}
+
+h1 {
+    font-size: 2rem;
+    font-weight: normal;
+}
+
+h2 {
+    font-size: 1.4rem;
+    font-weight: normal;
+    margin-top: 4rem;
+}
+
+h3 {
+    font-size: 1.1rem;
+    font-weight: normal;
+    margin-top: 2rem;
+}
+
+h4 {
+    font-weight: normal;
+}
+
+
+/* Header */
+div#page-header {
+    height: 3rem;
+    background-color: #402080;
+    color: #FFF;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    z-index: 20;
+}
+
+/* Centered header div */
+div#page-header-inner {
+    width: 60rem;
+    display: inline-block;
+    text-align: right;
+    padding: 0.9rem 2rem;
+}
+
+/* Home icon */
+img.home-icon {
+    float: left;
+    height: 1.5rem;
+    cursor: pointer;
+}
+img.home-icon:hover {
+    cursor: pointer;
+}
+
+div#page-header-inner > p, div#page-header-inner > a {
+    font-size: 1.1rem;
+    cursor: pointer;
+}
+
+div#page-header-inner p, div#page-header-inner a {
+    padding: 0;
+    margin: 0;
+    color: #FFF;
+}
+
+/* User menu */
+
+div.user-menu-toggle {
+    display: inline;
+    cursor: pointer;
+}
+
+div.user-menu-toggle img {
+    width: 1.5rem;
+    vertical-align: middle;
+    display: inline;
+    margin-right: 0.8rem;
+    border-radius: 10%;
+}
+
+div.user-menu-toggle span {
+    vertical-align: middle;
+}
+
+div#user-menu {
+    background-color: #402080;
+    float: right;
+    font-size: 1rem;
+    padding: 0.5rem 0;
+}
+
+div#user-menu a {
+    padding: 0.5rem 1rem 0.5rem 2rem;
+    display: block;
+    text-decoration: none;
+}
+
+/* Messages */
+div.messages-container {
+    position: absolute;
+    text-align: center;
+    top: 4rem;
+    z-index: 30;
+    width: 100%;
+    pointer-events: none;
+}
+
+div.messages-container .message-container {
+    display: block;
+}
+
+div.messages-container .message {
+    display: inline-block;
+    margin-bottom: 1rem;
+    padding: 1rem;
+    background-color: #90EE90;
+    border: 1px solid #006400;
+    border-radius: 0.25rem;
+    pointer-events: auto;
+}
+
+div.messages-container .close-cross {
+    font-size: 1.5rem;
+    font-weight: bold;
+    margin-left: 1rem;
+    cursor: pointer;
+}
+
+div.messages-container span {
+    vertical-align: middle;
+}
+
+/* Content */
+div#page-content {
+    width: 60rem;
+    min-height: 100%;
+    display: inline-block;
+    background-color: #FFF;
+    text-align: left;
+    padding: 5rem 2rem 2rem 2rem;
+    position: relative;
+}
+
+
+/* Center anything */
+.centered {
+    text-align: center;
+}
+
+/* Centered block */
+.centered-block {
+    display: inline-block;
+    width: 30rem;
+    text-align: left;
+}
+
+
+/* Proof valid indicator */
+span.indicator {
+    display: inline-block;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 0.75rem;
+    vertical-align: top;
+    margin-right: 0.5rem;
+}
+
+span.indicator[data-indicator="error"] {
+    background-color: #F00;
+}
+span.indicator[data-indicator="warning"] {
+    background-color: #FFA500;
+}
+span.indicator[data-indicator="ok"] {
+    background-color: #0F0;
+}
+
+span.indicator[data-size="small"] {
+    width: 1rem;
+    height: 1rem;
+    border-radius: 0.5rem;
+    margin-right: 0.1rem;
+}
+
+
+/* Notes */
+div.note {
+    margin: 1rem 0;
+    padding: 1rem;
+    background-color: #F5F5DC;
+    border-radius: 0.5rem;
+}
+
+
+/* Modal */
+div.modal-outer {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    width: 100%;
+    height: 100%;
+    text-align: center;
+}
+
+div.modal-inner {
+    position: relative;
+    top: 50%;
+    -ms-transform: translateY(-50%);
+    transform: translateY(-50%);
+    width: 35rem;
+    background-color: #EEE;
+    margin: 0 auto;
+    padding: 1rem;
+    border-radius: 0.5rem;
+    box-shadow: 0.5rem 0.5rem 1rem #AAA;
+}

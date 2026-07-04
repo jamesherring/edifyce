@@ -1,0 +1,35 @@
+
+{% block pattern_structure %}
+    {% if p.pattern_type == "StringPattern" %}
+        {% include "website/pattern.html" %}
+
+    {% elif p.pattern_type == "AbstractPattern" %}
+    <p class="pattern"><strong>{{ p.name }}</strong>, an abstract pattern.</p>
+
+    {% elif p.pattern_type == "RegexPattern" %}
+        <p class="pattern">{{ p.pattern }}, a regex pattern.</p>
+
+    {% elif p.pattern_type == "SystemConditionPattern" %}
+        <p class="pattern">{{ p.name }}, a condition pattern.</p>
+
+    {% else %}
+        {# UnionPattern #}
+
+        {% if not inner_pattern %}
+            <p class="pattern">A <strong>{{ p.name }}</strong> is of the form</p>
+        {% else %}
+            <p class="pattern"><strong>{{ p.name }}</strong>, which is of the form</p>
+        {% endif %}
+
+        <ul style="padding-left: 2rem">
+            {% for sub in p.patterns %}
+                <li>{% include "website/pattern_structure.html" with p=sub inner_pattern=True %}</li>
+            {% endfor %}
+        </ul>
+    {% endif %}
+
+    {% if p.condition %}
+        <p class="pattern">if {{ p.condition.condition_match.string }}</p>
+    {% endif %}
+
+{% endblock %}

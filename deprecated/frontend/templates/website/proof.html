@@ -1,0 +1,103 @@
+{% extends 'base.html' %}
+
+{% load static %}
+{% load humanize %}
+
+
+{% block main_content %}
+
+    <p id="proof_id" class="hidden">{{ proof.id }}</p>
+    <p id="entry_id" class="hidden">{{ proof.folder_entry.id }}</p>
+
+    {{ proof.proof.data|json_script:"proof_data" }}
+
+    <h3 style="margin-top: 0;">
+        <a href="{% url 'website:formal_system' system.id system.slug %}">{{ system.name }}</a> /
+        {% if proof.parent_folder %}
+            {% include "website/folder_path.html" with include_link=True folder=proof.parent_folder %} /
+        {% endif %}
+        <span class="indicator" data-indicator="{{ proof.proof.indicator }}"></span>
+        <span id="proof-title" class="small-editable">
+            {% include "website/editable_text.html" with value=proof.name table="proof" target=proof field="name" placeholder="Proof Name"%}
+        </span>
+    </h3>
+
+    {% if not proof.datetime_published %}
+        <div class="note">This proof is not published and is only visible to you.</div>
+    {% endif %}
+
+    {% if proof.description or editable %}
+        <p>
+            {% include "website/editable_text.html" with value=proof.description table="proof" target=proof field="description" placeholder="Description" inputtype="textarea"%}
+        </p>
+    {% endif %}
+
+    <div id="output" class="proof-display" style="margin: 2rem -2rem;"></div>
+
+    {% if proof.datetime_published %}
+        <p>Published by <a href="{% url 'website:profile_view' proof.owner.id proof.owner.slug %}">{{ proof.owner.name }}</a> on {{ proof.datetime_published|date:"jS F Y" }}.</p>
+    {% else %}
+        <p>Last saved {{ proof.updated|naturaltime }} by <a href="{% url 'website:profile_view' proof.owner.id proof.owner.slug %}">{{ proof.owner.name }}</a>.</p>
+    {% endif %}
+
+    <div class="centered">
+        {% if request.user.is_authenticated and request.user.profile == proof.owner %}
+
+            {% if editable %}
+                <a href="{% url 'website:proof_edit' proof.id proof.slug %}"><div class="button">Edit</div></a>
+
+                {% if proof.publishable %}
+                    <div class="button publish-button">Publish</div>
+                {% endif %}
+
+                <a href="{% url 'website:proof_delete' proof.id proof.slug %}"><div class="button delete-button">Delete</div></a>
+            {% endif %}
+
+        {% endif %}
+    </div>
+
+    <h3>Referenced proofs</h3>
+    {% for p in proof.references.all %}
+        <a href="{% url 'website:proof' p.id p.slug %}">{{ p.name }}</a>
+    {% empty %}
+        <p>None</p>
+    {% endfor %}
+
+    <h3>Dependant proofs</h3>
+    {% for p in dependants.all %}
+        <a href="{% url 'website:proof' p.id p.slug %}">{{ p.name }}</a>
+    {% empty %}
+        <p>None</p>
+    {% endfor %}
+
+    <div class="centered">
+        <a href="{% url 'website:proof_source' proof.id proof.slug %}">
+            <div class="button">View Source</div>
+        </a>
+    </div>
+
+{% endblock %}
+
+
+
+{% block modal %}
+    <div id="confirm-publish-modal" class="modal-outer hidden">
+        <div class="modal-inner" style="text-align: left;">
+            <h3>Are you sure you want to publish?</h3>
+            <p>You will not be able to edit or unpublish this proof.</p>
+            <div class="centered">
+                <div class="button confirm-publish-button">Publish</div>
+                <div class="button grey-button">Cancel</div>
+            </div>
+        </div>
+
+    </div>
+{% endblock %}
+
+
+{% block js %}
+    <script src="{% static 'website/proof_display.js' %}"></script>
+    <script src="{% static 'website/proof.js' %}"></script>
+{% endblock %}
+
+

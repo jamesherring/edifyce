@@ -1,0 +1,42 @@
+
+div#ace-container, div#output-wrapper {
+    width: 50%;
+    display: inline-block;
+    vertical-align: top;
+    position: relative;
+}
+
+div#output {
+    overflow: scroll;
+}
+
+div#output.updating {
+    -webkit-filter: blur(5px);
+    -moz-filter: blur(5px);
+    -o-filter: blur(5px);
+    -ms-filter: blur(5px);
+    filter: blur(5px);
+}
+
+
+h3 {
+    padding-left: 2rem;
+}
+
+/* Update the page-content size */
+div#page-content {
+    width: 100%;
+    padding: 0;
+    margin-top: 3rem;
+}
+
+div#compile-button {
+    top: 0;
+    left: 50%;
+    transform: translate(-50%, 0);
+    position: absolute;
+}
+
+div#compile-button > div {
+    margin: 0;
+}

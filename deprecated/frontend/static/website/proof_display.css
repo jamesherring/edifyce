@@ -1,0 +1,101 @@
+/* Table classes */
+table {
+    border-spacing: 0;
+
+    /* Make the indicator column flush with screen right */
+    width: 100%;
+    margin-right: 0.7rem;
+}
+
+tr {
+    min-height: 1rem;
+}
+
+tr.highlighted {
+    background-color: #EEE;
+}
+
+td {
+    vertical-align: top;
+    padding: 0 2em 0 0.5em;
+    white-space: pre;
+}
+
+td.indicator {
+    padding: 0 0.5em;
+    width: 0.4rem;
+    min-width: 10px;
+    max-width: 0.4rem;
+}
+
+td.comment {
+    font-style: italic;
+    color: #666;
+}
+
+td.line-number {
+    text-align: right;
+    background-color: #f0f0f0;
+    color: #333;
+    cursor: default;
+    font: 12px/normal 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace;
+    padding: 0 0.5rem 0 0;
+    max-width: 3rem;
+    width: 3rem;
+}
+
+
+/* Proof display */
+div.proof-display {
+    white-space: pre-wrap;
+    font-family: monospace;
+    overflow: scroll;
+    position: relative;
+}
+
+
+
+/* top right float */
+div.top-right {
+    position: absolute;
+    top: 0.7rem;
+    right: 0.7rem;
+}
+div.top-right div.button {
+    margin: 0;
+}
+
+
+/* Tooltips */
+.tooltip {
+  position: relative;
+}
+
+.tooltip .tooltiptext {
+    visibility: hidden;
+    background-color: black;
+    color: #fff;
+    text-align: center;
+    border-radius: 6px;
+    padding: 0.2rem 0.5rem;
+    position: absolute;
+    z-index: 1;
+    top: -0.1rem;
+    right: 0.8rem;
+}
+
+.tooltip .tooltiptext::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 100%;
+    margin-top: -5px;
+    border-width: 5px;
+    border-style: solid;
+    border-color: transparent transparent transparent black;
+}
+.tooltip:hover .tooltiptext {
+    visibility: visible;
+}
+
+

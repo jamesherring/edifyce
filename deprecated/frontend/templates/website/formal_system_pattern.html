@@ -1,0 +1,19 @@
+{% extends 'base.html' %}
+
+{% load static %}
+{% load humanize %}
+
+
+{% block main_content %}
+
+    <p id="system_id" class="hidden">{{ system.id }}</p>
+
+    <h1><a href="{% url 'website:formal_system' system.id system.slug %}">{{ system.name }}</a> / {{ pattern.name }}</h1>
+
+    {% include "website/pattern_structure.html" with p=pattern %}
+
+{% endblock %}
+
+
+{% block js %}
+{% endblock %}

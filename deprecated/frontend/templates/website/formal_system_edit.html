@@ -1,0 +1,38 @@
+{% extends 'base.html' %}
+
+{% load static %}
+
+
+{% block main_content %}
+
+    <p id="system_id" class="hidden">{{ system.id }}</p>
+
+    <h3 style="margin: 1rem 0;">
+        <a href="{% url 'website:formal_system' system.id system.slug %}">{{ system.name }}</a>
+    </h3>
+
+    {% if editable %}
+        <div class="top-right">
+            <a id="save"><div class="button disabled">Save</div></a>
+        </div>
+    {% endif %}
+
+    <div class="mathjax_ignore">
+        <div id="ace-container"{% if not editable %} class="uneditable"{% endif %}>{{ system.code }}</div>
+    </div>
+
+
+{% endblock %}
+
+
+{% block js %}
+    <script src="{% static 'website/ace/editors.js' %}"></script>
+    <script src="{% static 'website/ace/src/ace.js' %}"></script>
+    <script src="{% static 'website/formal_system_edit.js' %}"></script>
+
+{% endblock %}
+
+{% block css %}
+    <link rel="stylesheet" href="{% static '/website/formal_system_edit.css' %}">
+    <link rel="stylesheet" href="{% static '/website/code_editor.css' %}">
+{% endblock %}

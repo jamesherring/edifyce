@@ -1,0 +1,183 @@
+
+/* Form styling */
+
+/* Form container */
+form {
+    width: 40rem;
+    text-align: left;
+    display: inline-block;
+    margin-bottom: 2rem;
+}
+
+label {
+    display: inline-block;
+    padding: 0.5rem 0 0.5rem 1rem;
+}
+
+button, input[type="submit"], div.button {
+    display: inline-block;
+    background-color: #402080;
+    color: #FFF;
+    padding: 0.5rem 2rem;
+    margin: 1rem 0.3rem;
+    border-radius: 0.25rem;
+    border-style: none;
+    font-family: inherit;
+    font-size: 1rem;
+    cursor: pointer;
+}
+
+button.disabled, input[type="submit"].disabled, div.button.disabled {
+    background-color: #888;
+    cursor: default;
+}
+
+.grey-button {
+    background-color: #888 !important;
+}
+
+.delete-button {
+    background-color: #F33 !important;
+}
+
+input[type="text"], input[type="email"], input[type="password"], textarea {
+    font-size: 1.1rem;
+    font-family: inherit;
+    width: min(100%, 30rem);
+    border: none;
+    border-radius: 0.25rem;
+    margin: 0.2rem 1rem;
+    padding: 0.5rem;
+    outline: none;
+    border: none;
+    border-bottom: 2px solid #FFF;
+    display: inline-block;
+}
+
+input[type="text"]:focus, input[type="email"]:focus, input[type="password"]:focus, textarea:focus {
+    border-bottom: 2px solid #0096FF;
+}
+
+input[type="text"]:placeholder-shown, input[type="email"]:placeholder-shown, input[type="password"]:placeholder-shown, textarea:placeholder-shown {
+    outline: none;
+    border: none;
+    border-bottom: 2px solid #0096FF;
+}
+
+
+fieldset {
+    border: none;
+}
+
+div.ctrlHolder span {
+    font-size: 0.8;
+    font-style: italic;
+    margin: 0 0 0 1rem;
+}
+
+/* Select */
+select {
+    font-size: 1rem;
+    font-family: inherit;
+    border-radius: 0.25rem;
+    margin: 0.2rem 1rem;
+    padding: 0.5rem;
+}
+select:invalid {
+    color: gray;
+}
+
+/* Editable images */
+input.edit-image[type="file"] {
+    display: none;
+}
+
+/* Edit pencil */
+img.edit-pencil, img.edit-text {
+    width: 1.4rem !important;
+    height: 1.4rem !important;
+    padding: 0.2rem;
+    cursor: pointer;
+    visibility: hidden;
+}
+
+/* Edit pencil for text */
+img.edit-text {
+    vertical-align: middle;
+}
+
+*:hover > img.edit-text {
+    visibility: visible;
+}
+
+/* Edit pencil for images */
+img.edit-pencil {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    background-color: #FFF;
+}
+
+div:hover > img.edit-pencil {
+    visibility: visible;
+}
+
+/* Editable text */
+span.editable-container {
+    width: 100%;
+    position: relative;
+    display: inline-block;
+}
+span.editable-value {
+    white-space: pre-wrap;
+    width: 100%;
+}
+.small-editable span.editable-container {
+    /* limit the width of smaller editable containers */
+    width: 20rem;
+}
+
+input.editable-text, textarea.editable-text {
+    font-size: inherit;
+    border: none !important;
+    margin: 0;
+    padding: 0;
+}
+
+textarea.editable-text {
+    width: 100%;
+    resize: none;
+}
+
+.editable-text::placeholder {
+    color: #888;
+    font-style: italic;
+}
+
+.editable-text:not(.hidden) + img.edit-text {
+    display: none;
+}
+
+/* Move the edit pencil to the corner on textareas */
+textarea.editable-text + img.edit-text {
+    position: absolute;
+    top: 0;
+    right: 0;
+    background-color: #FFF;
+}
+
+/* Editable locations */
+input.editable-city {
+    width: 10rem;
+    display: inline;
+}
+
+select.select-country:not(.hidden) + img.edit-text {
+    display: none;
+}
+
+span.save-location {
+    cursor: pointer;
+    text-decoration: underline;
+    color: blue;
+}
