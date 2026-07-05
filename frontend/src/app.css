@@ -1,6 +1,27 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
+/*
+ * Self-hosted Computer Modern (CMU Serif) so the LaTeX look is guaranteed for
+ * every visitor, not just those with Latin Modern / Computer Modern installed.
+ * OFL-licensed; see /fonts/OFL.txt. Only roman + bold are bundled (the app uses
+ * no italics). The roman file is the regular book weight, declared at 400.
+ */
+@font-face {
+	font-family: 'CMU Serif';
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	src: url('/fonts/cmu-serif-roman.woff2') format('woff2');
+}
+@font-face {
+	font-family: 'CMU Serif';
+	font-style: normal;
+	font-weight: 700;
+	font-display: swap;
+	src: url('/fonts/cmu-serif-bold.woff2') format('woff2');
+}
+
 @custom-variant dark (&:is(.dark *));
 
 /*
@@ -98,10 +119,11 @@
 		ui-monospace, 'SF Mono', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas,
 		monospace;
 
-	/* LaTeX-lineage serif for a mathematical feel; falls back to Cambria/Georgia
-	   where Latin Modern / Computer Modern isn't installed. */
+	/* LaTeX-lineage serif for a mathematical feel. 'CMU Serif' is self-hosted
+	   (see @font-face above), so it renders for everyone; the rest are fallbacks
+	   for the brief moment before the webfont loads. */
 	--font-sans:
-		'Latin Modern Roman', 'CMU Serif', 'Computer Modern', 'STIX Two Text', Cambria, Georgia,
+		'CMU Serif', 'Latin Modern Roman', 'Computer Modern', 'STIX Two Text', Cambria, Georgia,
 		'Times New Roman', serif;
 }
 

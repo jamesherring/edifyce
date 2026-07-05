@@ -13,6 +13,13 @@
 
 <svelte:head>
 	<link rel="icon" href={favicon} />
+	<link
+		rel="preload"
+		href="/fonts/cmu-serif-roman.woff2"
+		as="font"
+		type="font/woff2"
+		crossorigin="anonymous"
+	/>
 	<title>Edifyce — Human-Readable, Computer-Verifiable Mathematics</title>
 </svelte:head>
 
