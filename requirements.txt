@@ -1,0 +1,8 @@
+# Dependencies for the Vercel Python serverless function (api/index.py).
+#
+# Vercel's Python runtime installs from this file, not from pyproject.toml /
+# uv.lock. Keep it in sync with the runtime imports of app/ and website/.
+# uvicorn is intentionally omitted: Vercel provides the ASGI server.
+fastapi>=0.115
+pydantic>=2.9
+regex>=2024.9
