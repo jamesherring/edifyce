@@ -316,6 +316,49 @@ def test_alpha_renamed_schema_matches_production_instance():
     assert schema.substitute(binding, context).equal(subject, context)
 
 
+def test_repeated_variable_schema_matches_production_instance():
+    # A rule whose schema repeats a metavariable inside a constructor, e.g.
+    # deduction "(p -> p)", must match a subject "(a -> a)" parsed by the
+    # distinct-slot production "(p -> q)" - the repeated variable binds in both
+    # positions and enforces that they agree.
+    system, context = build(
+        """FormalSystem SelfImplication:
+
+    Regex atom:
+        ^[a-z]$
+
+    UnionPattern formula:
+        atom
+
+    Pattern implication:
+        with p as formula, q as formula:
+            (p -> q)
+
+    formula:
+        implication
+
+    with p as formula:
+        InferenceRule self_implication:
+            label:
+                SELF
+            deduction:
+                (p -> p)
+"""
+    )
+    formula = system.build_context.variables["formula"]
+    schema = from_pattern(rule(system, "SELF").deduction, context)  # (p -> p)
+
+    binding = match(schema, term(formula, context, "(a -> a)"), context)
+    assert binding is not None
+    assert binding["p"].to_string() == "a"
+    assert schema.substitute(binding, context).equal(
+        term(formula, context, "(a -> a)"), context
+    )
+
+    # The two sides must agree: "(a -> b)" is rejected.
+    assert match(schema, term(formula, context, "(a -> b)"), context) is None
+
+
 def test_deeply_nested_match(rich):
     system, context, formula = rich
     schema = from_pattern(rule(system, "MP").antecedents[1], context)  # (p -> q)

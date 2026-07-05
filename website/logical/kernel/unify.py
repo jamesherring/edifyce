@@ -52,9 +52,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..matching.patterns import UnionPattern
-# Reuse the *same* constructor identity and slot ordering that Term.equal uses,
-# so matching and equality stay defined against one source of truth.
-from .terms import Var, _ordered_slots, _signature
+# Reuse the *same* constructor identity and slot alignment that Term.equal
+# uses, so matching and equality stay defined against one source of truth.
+from .terms import Var, _locations, _signature
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -111,16 +111,17 @@ def match(
     if schema.literal is not None or subject.literal is not None:
         return binding if schema.literal == subject.literal else None
 
-    # Match children pairwise by template position - the two constructors may
-    # spell their slots differently - threading one binding so a variable used
-    # in several slots must bind consistently.
-    schema_slots = _ordered_slots(schema.pattern)
-    subject_slots = _ordered_slots(subject.pattern)
-    if len(schema_slots) != len(subject_slots):
+    # Match children pairwise by template position, with repetition - the two
+    # constructors may spell their slots differently, and a schema may repeat a
+    # variable (e.g. "(p -> p)"). Threading one binding makes a repeated - or
+    # cross-antecedent - variable bind consistently.
+    schema_locations = _locations(schema.pattern)
+    subject_locations = _locations(subject.pattern)
+    if len(schema_locations) != len(subject_locations):
         return None
 
     current: Binding = binding
-    for schema_label, subject_label in zip(schema_slots, subject_slots):
+    for schema_label, subject_label in zip(schema_locations, subject_locations):
         if schema_label not in schema.children or subject_label not in subject.children:
             return None
         result = match(

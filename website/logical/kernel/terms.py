@@ -224,17 +224,16 @@ class Node(Term):
         if self.literal is not None or other.literal is not None:
             return self.literal == other.literal
 
-        # Align children by template *position*, not by slot label - the two
-        # constructors may spell their variables differently. For instance a
-        # production `(lhs -> rhs)` and a rule schema `(p -> q)` share a
-        # signature, so `lhs` lines up with `p` and `rhs` with `q`. Matching
-        # signatures guarantee equal arity.
-        self_slots = _ordered_slots(self.pattern)
-        other_slots = _ordered_slots(other.pattern)
-        if len(self_slots) != len(other_slots):
+        # Align children by template position (with repetition), not by slot
+        # label - the two constructors may spell their variables differently
+        # (e.g. `p`/`q` vs `lhs`/`rhs`) and either may repeat a variable.
+        # Matching signatures guarantee an equal number of occurrences.
+        self_locations = _locations(self.pattern)
+        other_locations = _locations(other.pattern)
+        if len(self_locations) != len(other_locations):
             return False
 
-        for self_label, other_label in zip(self_slots, other_slots):
+        for self_label, other_label in zip(self_locations, other_locations):
             if self_label not in self.children or other_label not in other.children:
                 return False
             if not self.children[self_label].equal(other.children[other_label], context):
@@ -288,27 +287,27 @@ class Node(Term):
 
 
 def _signature(pattern: Pattern) -> tuple[str, str]:
-    r"""A constructor identity that ignores the pattern's *name* and its
-    variable spellings, so structurally identical productions - a rule's
-    synthesised "(p -> q)" schema and a system's named `implication` - compare
-    as the same constructor. Each distinct variable is normalised to a
-    positional placeholder, so arity and repetition are encoded.
+    r"""A constructor identity: the template's literal skeleton with every
+    variable *occurrence* replaced by an anonymous hole. It ignores the
+    pattern's name and its variable spellings, so structurally identical
+    productions - a rule's synthesised "(p -> q)" schema and a system's named
+    `implication` - are the same constructor.
 
-    Examples (the placeholder is a NUL byte followed by the slot index)::
+    Repetition is deliberately *not* encoded: both "(p -> q)" and "(p -> p)"
+    give ``'(\x00 -> \x00)'``. That lets a repeated-variable schema like
+    "(p -> p)" share a constructor with the production "(p -> q)" that parses a
+    subject like "(a -> a)"; whether the two holes actually hold *equal*
+    subterms is then enforced by the shared variable binding during child
+    alignment (see :meth:`Node.equal` / :func:`unify.match`), not here.
 
-        "(p -> q)"  ->  ('string', '(\x000 -> \x001)')
-        "(p -> p)"  ->  ('string', '(\x000 -> \x000)')   # repetition preserved
-        "(x -> y)"  ->  ('string', '(\x000 -> \x001)')   # == the "(p -> q)" case
+    Examples::
 
-    So ``(p -> q)`` and ``(x -> y)`` share a signature (alpha-equivalent) while
-    ``(p -> p)`` differs from ``(p -> q)``.
-
-    Step 2's ``unify`` will reuse this as its constructor-identity test when
-    matching a rule schema against a formula, so keep it name-insensitive.
+        "(p -> q)"  ->  ('string', '(\x00 -> \x00)')
+        "(p -> p)"  ->  ('string', '(\x00 -> \x00)')   # same constructor
+        "(a ∧ b)"   ->  ('string', '(\x00 ∧ \x00)')    # differs: different literals
     """
     if isinstance(pattern, StringPattern):
         template = pattern.pattern
-        label_index = {}
         out = []
         i = 0
         while i < len(template):
@@ -317,10 +316,8 @@ def _signature(pattern: Pattern) -> tuple[str, str]:
                 out.append(part)
                 i += len(part)
             elif i in pattern.variable_locations:
-                label = pattern.variable_locations[i]["label"]
-                index = label_index.setdefault(label, len(label_index))
-                out.append(f"\x00{index}")
-                i += len(label)
+                out.append("\x00")
+                i += len(pattern.variable_locations[i]["label"])
             else:
                 i += 1
         return ("string", "".join(out))
@@ -331,21 +328,21 @@ def _signature(pattern: Pattern) -> tuple[str, str]:
     return ("named", pattern.name)
 
 
-def _ordered_slots(pattern: Pattern) -> list[str]:
-    """The distinct variable-slot labels of a production, in the order they
-    first appear in its template. Used to align two constructors' children by
-    position (not by label) once their signatures match.
+def _locations(pattern: Pattern) -> list[str]:
+    r"""Variable-slot labels in template order, **with repetition** - one entry
+    per occurrence. Two constructors with the same signature have the same
+    number of occurrences, so their location lists align position by position.
 
-    For example the production ``(p -> q)`` yields ``["p", "q"]`` and the
-    alpha-renamed ``(lhs -> rhs)`` yields ``["lhs", "rhs"]``; zipping the two
-    lists pairs ``p`` with ``lhs`` and ``q`` with ``rhs``.
+    A repeated schema label forces the aligned subterms to be equal: "(p -> p)"
+    yields ``["p", "p"]``, so matching it against a production "(lhs -> rhs)"
+    (``["lhs", "rhs"]``) looks up ``children["p"]`` for both positions, and the
+    shared binding then requires ``lhs`` and ``rhs`` to agree. Distinct labels
+    like ``["p", "q"]`` simply pair up with the other side's labels in order.
     """
-    slots = []
-    for offset in sorted(getattr(pattern, "variable_locations", {})):
-        label = pattern.variable_locations[offset]["label"]
-        if label not in slots:
-            slots.append(label)
-    return slots
+    return [
+        pattern.variable_locations[offset]["label"]
+        for offset in sorted(getattr(pattern, "variable_locations", {}))
+    ]
 
 
 def from_match(match: Match, context: Context) -> Term:
