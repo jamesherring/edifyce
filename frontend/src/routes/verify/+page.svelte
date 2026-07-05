@@ -185,7 +185,7 @@
 										class="font-mono text-sm break-words"
 										style={`padding-left: ${line.indent * 1.25}rem`}
 									>
-										{line.display || ' '}
+										{line.display || ' '}
 									</div>
 
 									<div class="mt-1.5 flex flex-wrap items-center gap-1.5">
