@@ -1,10 +1,131 @@
 """The :class:`Proof` and its :class:`ProofLine` members."""
 
+from __future__ import annotations
+
 import itertools
 from copy import copy
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from ..matching import Match, MatchSet, get_by_path, parse_arguments, parse_path
+
+if TYPE_CHECKING:
+    from ..matching.context import Context
+    from .rules import InferenceRule
+
+
+class Subproof:
+    """A scoped block of a proof, opened by a scope line and closed by dedent.
+
+    Subproofs are the unit of natural-deduction discharge. A subproof opened by
+    an assumption line (``kind == "assumption"``) is what conditional proof and
+    reductio discharge; one opened by a fresh-variable line
+    (``kind == "variable"``) is what universal generalisation discharges.
+
+    Only ``scope``-declaring line types create these, so systems that use none
+    keep a single root subproof and are wholly unaffected. The root has no
+    opener (``assumption is None``) and ``open_indent == -1`` so it is never
+    closed.
+    """
+
+    def __init__(
+        self,
+        parent: Subproof | None = None,
+        opener: ProofLine | None = None,
+        kind: str | None = None,
+        open_indent: int = -1,
+    ) -> None:
+
+        # The enclosing subproof (None for the proof root).
+        self.parent = parent
+
+        # The line that opened this subproof - a hypothesis for an "assumption"
+        # scope, a fresh-variable declaration for a "variable" scope.
+        self.assumption = opener
+
+        # "assumption", "variable", or None for the root.
+        self.kind = kind
+
+        # The indentation of the opener; lines indented further belong here.
+        self.open_indent = open_indent
+
+        # The lines directly in this subproof (opener first), and nested subproofs.
+        self.lines: list[ProofLine] = []
+        self.children: list[Subproof] = []
+
+    @property
+    def conclusion(self) -> ProofLine | None:
+        # The subproof's result: its last formula-bearing logical line.
+        for line in reversed(self.lines):
+            if line.line_type is not None and line.line_type.behaviour == "logical" \
+                    and line.formula is not None:
+                return line
+        return None
+
+    @property
+    def eigenvariable(self) -> Match | None:
+        # The fresh variable a "variable" subproof introduces (its opener's
+        # formula match), or None for other kinds.
+        if self.kind != "variable" or self.assumption is None:
+            return None
+        return self.assumption.formula
+
+    def is_ancestor_of(self, other: Subproof | None) -> bool:
+        # Whether this subproof encloses `other` (reflexively).
+        scope = other
+        while scope is not None:
+            if scope is self:
+                return True
+            scope = scope.parent
+        return False
+
+    def enclosing_assumptions(self) -> list[ProofLine]:
+        # Every hypothesis still in force around this subproof: the opening
+        # assumptions of this scope and all its ancestors. These are what an
+        # eigenvariable must stay clear of.
+        assumptions: list[ProofLine] = []
+        scope: Subproof | None = self
+        while scope is not None:
+            if scope.kind == "assumption" and scope.assumption is not None:
+                assumptions.append(scope.assumption)
+            scope = scope.parent
+        return assumptions
+
+    def eigenvariable_is_fresh(self, context: Context) -> bool:
+        # Freshness for universal generalisation: the eigenvariable must not
+        # occur in any hypothesis still in force around this subproof. Checked
+        # structurally on kernel terms (see kernel.sidecond), not on strings.
+        from ..kernel.sidecond import is_fresh
+        from ..kernel.terms import from_match
+
+        eigenvariable = self.eigenvariable
+        if eigenvariable is None:
+            return False
+
+        name = eigenvariable.formatted_string()
+
+        assumption_terms = [
+            from_match(assumption.formula, context)
+            for assumption in self.enclosing_assumptions()
+            if assumption.formula is not None
+        ]
+
+        return is_fresh(name, assumption_terms)
+
+
+def line_is_accessible(citing_line: ProofLine, cited_line: ProofLine) -> bool:
+    # A line may cite another only if the cited line lives in the citing line's
+    # own subproof or an enclosing one - never inside a closed sibling subproof.
+    # This is the natural-deduction reiteration restriction, and it is what
+    # makes discharge sound. With no subproofs every line is in the root scope,
+    # so this is always True and legacy systems are unaffected.
+    cited_scope = getattr(cited_line, "scope", None)
+    citing_scope = getattr(citing_line, "scope", None)
+
+    if cited_scope is None or citing_scope is None:
+        return True
+
+    return cited_scope.is_ancestor_of(citing_scope)
 
 
 @dataclass(eq=False)
@@ -61,6 +182,45 @@ class Proof:
 
         # The proof model id
         self.model_id = None
+
+        # The root subproof and the live scope stack, built during parsing.
+        # `root_scope` stays None until the first line is assigned, so a proof
+        # that never uses scopes carries no subproof machinery.
+        self.root_scope = None
+        self._scope_stack = None
+
+    def assign_scope(self, proof_line: ProofLine) -> None:
+        # Place a line in its subproof, opening a new one if the line is a scope
+        # opener. Called in source order, so by the time a discharge line is
+        # reached the subproofs it cites are already built and closed.
+
+        if self.root_scope is None:
+            self.root_scope = Subproof(kind=None, open_indent=-1)
+            self._scope_stack = [self.root_scope]
+
+        stack = self._scope_stack
+
+        # Dedenting past a subproof's opener closes it.
+        while len(stack) > 1 and proof_line.indent <= stack[-1].open_indent:
+            stack.pop()
+
+        line_type = proof_line.line_type
+
+        if line_type is not None and line_type.scope in ("assumption", "variable"):
+            sub = Subproof(
+                parent=stack[-1],
+                opener=proof_line,
+                kind=line_type.scope,
+                open_indent=proof_line.indent,
+            )
+            stack[-1].children.append(sub)
+            proof_line.opened_scope = sub
+            proof_line.scope = sub
+            sub.lines.append(proof_line)
+            stack.append(sub)
+        else:
+            proof_line.scope = stack[-1]
+            stack[-1].lines.append(proof_line)
 
     def get_proof_line(self, line_number):
         # Get a proof line by line number
@@ -239,6 +399,23 @@ class Proof:
         # Get the antecedent lines
         antecedents = reference.antecedents
 
+        # A discharge rule consumes a whole subproof (cited by its opening
+        # line) rather than individual antecedent lines.
+        if inference_rule.is_discharge:
+            return self.check_discharge_line(proof_line, reference, inference_rule, key, context)
+
+        # An ordinary rule may only cite lines that are in scope: its own
+        # subproof or an enclosing one, never inside a closed sibling. This is
+        # the reiteration restriction that makes discharge sound.
+        for ant in antecedents:
+            if isinstance(ant, ProofLine) and not line_is_accessible(proof_line, ant):
+                proof_line.valid = False
+                proof_line.invalid_message = (
+                    f"Line {ant.index() + 1} is out of scope "
+                    "(it is inside a closed subproof)."
+                )
+                return False
+
         if len(antecedents) == 0 and len(inference_rule.antecedents) == 0:
             # No antecedents for this inference rule
             if inference_rule.check(
@@ -298,6 +475,50 @@ class Proof:
                     return True
 
         # No valid permutation found, not a valid line
+        proof_line.valid = False
+        proof_line.invalid_message = f"{key} does not apply."
+        return False
+
+    def check_discharge_line(
+        self,
+        proof_line: ProofLine,
+        reference: InferenceReference,
+        inference_rule: InferenceRule,
+        key: str,
+        context: Context,
+    ) -> bool:
+        # Check a discharge rule: it cites exactly one subproof by its opener.
+
+        openers = [a for a in reference.antecedents if isinstance(a, ProofLine)]
+
+        if len(openers) != 1:
+            proof_line.valid = False
+            proof_line.invalid_message = f"{key} requires exactly one subproof reference."
+            return False
+
+        opener = openers[0]
+        subproof = opener.opened_scope
+
+        if subproof is None:
+            proof_line.valid = False
+            proof_line.invalid_message = f"Line {opener.index() + 1} does not open a subproof."
+            return False
+
+        # The subproof must be a *completed* one, in scope to discharge from
+        # here: enclosed by an ancestor of this line, and not still open around
+        # it. Cross-scope discharge is exactly the unsoundness we are closing.
+        if subproof.parent is None or not subproof.parent.is_ancestor_of(proof_line.scope) \
+                or subproof.is_ancestor_of(proof_line.scope):
+            proof_line.valid = False
+            proof_line.invalid_message = (
+                f"Subproof at line {opener.index() + 1} is out of scope to discharge here."
+            )
+            return False
+
+        if inference_rule.check_discharge(subproof, proof_line, context):
+            proof_line.inference_rule = inference_rule
+            return True
+
         proof_line.valid = False
         proof_line.invalid_message = f"{key} does not apply."
         return False
@@ -460,6 +681,7 @@ class Proof:
             logical_lines = [
                 line for line in self.proof_lines[:deduction.index()]
                 if line.line_type is not None and line.line_type.behaviour in ("logical", "definition")
+                and line_is_accessible(deduction, line)
             ][-len(inference_rule.antecedents):]
 
             if not len(logical_lines) == len(inference_rule.antecedents):
@@ -534,6 +756,13 @@ class ProofLine:
         # The indentation of this line
         self.indent = len(self.text) - len(self.text.lstrip())
 
+        # The subproof this line belongs to (set during parsing). Defaults to
+        # None, meaning "root scope" until the parser assigns one.
+        self.scope = None
+
+        # If this line opens a subproof, the Subproof it opens (else None).
+        self.opened_scope = None
+
         # This line may be an axiom
         self.is_axiom = False
         self.axiom_pattern = None
@@ -569,8 +798,15 @@ class ProofLine:
             self.proof.reference_context[self.label] = self
 
         if line_type.behaviour == "logical":
-            # Logical lines for parsing
-            self.proof.check_logical_line(self, context)
+            if line_type.scope in ("assumption", "variable"):
+                # A scope opener is valid by fiat: a hypothesis is granted for
+                # the duration of its subproof, a fresh variable is simply
+                # introduced. Neither asserts anything until a discharge rule
+                # consumes the subproof, so there is nothing to justify here.
+                self.valid = True
+            else:
+                # Logical lines for parsing
+                self.proof.check_logical_line(self, context)
 
         elif line_type.behaviour == "axiom":
             # Introduce an axiom to the system

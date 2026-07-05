@@ -12,8 +12,8 @@ The class graph is acyclic, so submodules import each other directly.
 """
 
 from .line_type import LineType
-from .proof import Proof, ProofLine
-from .rules import Inference, InferenceRule
+from .proof import Proof, ProofLine, Subproof
+from .rules import Inference, InferenceRule, SubproofSchema
 from .system import FormalSystem
 
 __all__ = [
@@ -23,4 +23,6 @@ __all__ = [
     "LineType",
     "Proof",
     "ProofLine",
+    "Subproof",
+    "SubproofSchema",
 ]

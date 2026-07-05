@@ -1,17 +1,53 @@
 """Inference rules and their applications: :class:`InferenceRule`, :class:`Inference`."""
 
+from __future__ import annotations
+
 from copy import copy
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from ..matching import Match, get_by_path, parse_path
-from .proof import ProofLine
+from .proof import ProofLine, Subproof
+
+if TYPE_CHECKING:
+    from ..matching.context import Context
+    from ..matching.patterns import Pattern
+
+
+@dataclass(eq=False)
+class SubproofSchema:
+    """The subproof an inference rule discharges.
+
+    A discharge rule (conditional proof, RAA, universal generalisation) does
+    not cite individual lines - it consumes a whole subproof as a unit. This
+    records what that subproof must look like:
+
+    ``assumption`` - pattern the subproof's opening hypothesis must match, or
+                     ``None`` when the subproof is opened by a fresh variable
+                     rather than a hypothesis.
+    ``conclusion`` - pattern the subproof's final line must match.
+    ``fresh``      - the eigenvariable pattern for a variable-opened subproof
+                     (universal generalisation), or ``None``. Its presence is
+                     what makes the rule require a ``variable`` subproof rather
+                     than an ``assumption`` one; the freshness side-condition is
+                     enforced in :meth:`InferenceRule.check_discharge`.
+    """
+
+    conclusion: Pattern
+    assumption: Pattern | None = None
+    fresh: Pattern | None = None
+
+    @property
+    def kind(self) -> str:
+        # Which kind of scope opener this schema discharges.
+        return "variable" if self.fresh is not None else "assumption"
 
 
 class InferenceRule:
     """Inference rules for deduction."""
 
     def __init__(self, name, label=None, antecedents=None, deduction=None, condition=None,
-                 allow_extra_antecedents=False, variables=None):
+                 allow_extra_antecedents=False, variables=None, subproof_schema=None):
 
         # The inference rule name
         self.name = name.replace("_", " ")
@@ -33,6 +69,15 @@ class InferenceRule:
 
         # Keep a set of variables handy
         self.variables = variables
+
+        # The subproof this rule discharges (SubproofSchema), if it is a
+        # discharge rule. None for an ordinary line-antecedent rule.
+        self.subproof_schema = subproof_schema
+
+    @property
+    def is_discharge(self) -> bool:
+        # Whether this rule discharges a subproof rather than citing lines.
+        return self.subproof_schema is not None
 
     def check(self, antecedents, extra_antecedents, deduction, context):
         # Check to see if the proposed proof lines are valid under this inference rule
@@ -115,6 +160,63 @@ class InferenceRule:
         for ant in antecedents:
             ant.dependent_lines.add(deduction)
 
+        return True
+
+    def check_discharge(self, subproof: Subproof, deduction: ProofLine, context: Context) -> bool:
+        # Check that `deduction` follows by discharging `subproof` under this rule.
+
+        schema = self.subproof_schema
+
+        if schema is None or deduction.formula is None:
+            return False
+
+        # The subproof must be opened the way the schema expects (a hypothesis
+        # for conditional-proof-style rules, a fresh variable for generalisation).
+        if subproof.kind != schema.kind:
+            return False
+
+        conclusion = subproof.conclusion
+        if conclusion is None or conclusion.formula is None:
+            # An empty subproof discharges nothing.
+            return False
+
+        # Bind variables consistently across the deduction and the subproof's
+        # assumption/conclusion, exactly as an ordinary rule binds them across
+        # its antecedents and deduction.
+        deduction_match = self.deduction.match(deduction.formula.formatted_string(), context)
+        if deduction_match is None:
+            return False
+
+        variables: dict = copy(deduction_match.sub_matches)
+
+        pairs: list[tuple[Pattern, ProofLine]] = [(schema.conclusion, conclusion)]
+        if schema.assumption is not None:
+            pairs.append((schema.assumption, subproof.assumption))
+
+        for pattern, line in pairs:
+            if line is None or line.formula is None:
+                return False
+
+            match = pattern.match(line.formula.formatted_string(), context)
+            if match is None:
+                return False
+
+            for name, sub_match in match.sub_matches.items():
+                if name in variables:
+                    if not sub_match.equivalent(variables[name], context):
+                        return False
+                else:
+                    variables[name] = sub_match
+
+        # Freshness side-condition for universal generalisation: the
+        # eigenvariable must be genuinely arbitrary - it may not occur in any
+        # hypothesis still in force around the subproof (checked structurally on
+        # kernel terms by Subproof.eigenvariable_is_fresh).
+        if schema.fresh is not None and not subproof.eigenvariable_is_fresh(context):
+            return False
+
+        deduction.inference_rule = self
+        deduction.valid = True
         return True
 
     def equivalent(self, other, context, memo=None):

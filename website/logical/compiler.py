@@ -1,6 +1,6 @@
 from website.logical.matching import *
 from website.logical.matching import Pattern, constant
-from website.logical.formal_system import FormalSystem, LineType, InferenceRule, ProofLine
+from website.logical.formal_system import FormalSystem, LineType, InferenceRule, ProofLine, SubproofSchema
 from copy import copy, deepcopy
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -746,6 +746,10 @@ class AbstractSyntaxTree:
                     # Update the behaviour
                     current_object.behaviour = value_string
 
+                elif key == "scope":
+                    # Update the scope this line opens (orthogonal to behaviour)
+                    current_object.scope = value_string
+
                 elif key[:7] == "context":
                     # Create an 'add to context' dictionary
 
@@ -833,6 +837,55 @@ class AbstractSyntaxTree:
                                 # Add variables
                                 current_object.deduction.add_variables(context.string_variables)
 
+                    return
+
+                elif stripped == "subproof:":
+                    # A discharge rule consumes a subproof rather than citing
+                    # lines: an assumption (or a fresh variable) plus a derived
+                    # conclusion. Each sub-key holds a single pattern line.
+
+                    def build_subproof_pattern(text):
+                        if text in context.variables:
+                            return context.variables[text]
+                        new_pattern = StringPattern(name="subproof", pattern=text, pre_format=context.pre_format)
+                        new_pattern.add_variables(context.string_variables)
+                        return new_pattern
+
+                    assumption_pattern = None
+                    conclusion_pattern = None
+                    fresh_pattern = None
+
+                    for part in self.sub_trees:
+                        header = part.line.strip()
+                        if len(header) == 0 or header[0] == "#":
+                            continue
+
+                        value = None
+                        for sub in part.sub_trees:
+                            sub_stripped = sub.line.strip()
+                            if len(sub_stripped) > 0 and not sub_stripped[0] == "#":
+                                value = sub_stripped
+
+                        if value is None:
+                            raise Exception(f"Subproof key '{header}' needs a pattern.")
+
+                        if header == "assume:":
+                            assumption_pattern = build_subproof_pattern(value)
+                        elif header == "derive:":
+                            conclusion_pattern = build_subproof_pattern(value)
+                        elif header == "fresh:":
+                            fresh_pattern = build_subproof_pattern(value)
+                        else:
+                            raise Exception(f"Unrecognised subproof key '{header}'.")
+
+                    if conclusion_pattern is None:
+                        raise Exception("A subproof rule requires a 'derive:' conclusion.")
+
+                    current_object.subproof_schema = SubproofSchema(
+                        conclusion=conclusion_pattern,
+                        assumption=assumption_pattern,
+                        fresh=fresh_pattern,
+                    )
                     return
 
                 elif stripped == "condition:":
