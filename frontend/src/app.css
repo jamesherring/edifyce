@@ -3,57 +3,65 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Palette: "Penrose" — a warm parchment ground with an oxblood accent, evoking a
+ * classical mathematics text. The dark theme is a warm-dark complement (not a
+ * neutral grey) so the identity carries across both.
+ */
 :root {
 	--radius: 0.625rem;
-	--background: oklch(1 0 0);
-	--foreground: oklch(0.145 0 0);
-	--card: oklch(1 0 0);
-	--card-foreground: oklch(0.145 0 0);
-	--popover: oklch(1 0 0);
-	--popover-foreground: oklch(0.145 0 0);
-	--primary: oklch(0.205 0 0);
-	--primary-foreground: oklch(0.985 0 0);
-	--secondary: oklch(0.97 0 0);
-	--secondary-foreground: oklch(0.205 0 0);
-	--muted: oklch(0.97 0 0);
-	--muted-foreground: oklch(0.556 0 0);
-	--accent: oklch(0.97 0 0);
-	--accent-foreground: oklch(0.205 0 0);
-	--destructive: oklch(0.577 0.245 27.325);
-	--destructive-foreground: oklch(0.985 0 0);
-	--success: oklch(0.6 0.13 160);
-	--success-foreground: oklch(0.985 0 0);
-	--warning: oklch(0.75 0.16 75);
-	--warning-foreground: oklch(0.205 0 0);
-	--border: oklch(0.922 0 0);
-	--input: oklch(0.922 0 0);
-	--ring: oklch(0.708 0 0);
+	--background: #faf7f0;
+	--foreground: #1c1b18;
+	--card: #fffdf8;
+	--card-foreground: #1c1b18;
+	--popover: #fffdf8;
+	--popover-foreground: #1c1b18;
+	--primary: #7c2d2d;
+	--primary-foreground: #faf7f0;
+	--secondary: #efe9dc;
+	--secondary-foreground: #1c1b18;
+	--muted: #efe9dc;
+	--muted-foreground: #6e655a;
+	--accent: #ece4d3;
+	--accent-foreground: #1c1b18;
+	--destructive: #b4432f;
+	--destructive-foreground: #faf7f0;
+	--success: #4b7b52;
+	--success-foreground: #faf7f0;
+	--warning: #b8862f;
+	--warning-foreground: #1c1b18;
+	--border: #e0d6c4;
+	--input: #e0d6c4;
+	--ring: #7c2d2d;
+	/* Stroke colour for the Penrose background tiling. */
+	--penrose-line: rgba(43, 38, 32, 0.09);
 }
 
 .dark {
-	--background: oklch(0.145 0 0);
-	--foreground: oklch(0.985 0 0);
-	--card: oklch(0.205 0 0);
-	--card-foreground: oklch(0.985 0 0);
-	--popover: oklch(0.205 0 0);
-	--popover-foreground: oklch(0.985 0 0);
-	--primary: oklch(0.922 0 0);
-	--primary-foreground: oklch(0.205 0 0);
-	--secondary: oklch(0.269 0 0);
-	--secondary-foreground: oklch(0.985 0 0);
-	--muted: oklch(0.269 0 0);
-	--muted-foreground: oklch(0.708 0 0);
-	--accent: oklch(0.269 0 0);
-	--accent-foreground: oklch(0.985 0 0);
-	--destructive: oklch(0.704 0.191 22.216);
-	--destructive-foreground: oklch(0.985 0 0);
-	--success: oklch(0.696 0.13 162);
-	--success-foreground: oklch(0.205 0 0);
-	--warning: oklch(0.828 0.16 84);
-	--warning-foreground: oklch(0.205 0 0);
-	--border: oklch(1 0 0 / 10%);
-	--input: oklch(1 0 0 / 15%);
-	--ring: oklch(0.556 0 0);
+	--background: #1c1a16;
+	--foreground: #ece7db;
+	--card: #24211b;
+	--card-foreground: #ece7db;
+	--popover: #24211b;
+	--popover-foreground: #ece7db;
+	--primary: #cf7b5e;
+	--primary-foreground: #1c1a16;
+	--secondary: #2c2820;
+	--secondary-foreground: #ece7db;
+	--muted: #2c2820;
+	--muted-foreground: #a89e8c;
+	--accent: #322d24;
+	--accent-foreground: #ece7db;
+	--destructive: #e08a7a;
+	--destructive-foreground: #1c1a16;
+	--success: #8fb283;
+	--success-foreground: #1c1a16;
+	--warning: #d6a95a;
+	--warning-foreground: #1c1a16;
+	--border: #37322a;
+	--input: #37322a;
+	--ring: #cf7b5e;
+	--penrose-line: rgba(232, 226, 213, 0.1);
 }
 
 @theme inline {
@@ -89,6 +97,12 @@
 	--font-mono:
 		ui-monospace, 'SF Mono', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas,
 		monospace;
+
+	/* LaTeX-lineage serif for a mathematical feel; falls back to Cambria/Georgia
+	   where Latin Modern / Computer Modern isn't installed. */
+	--font-sans:
+		'Latin Modern Roman', 'CMU Serif', 'Computer Modern', 'STIX Two Text', Cambria, Georgia,
+		'Times New Roman', serif;
 }
 
 @layer base {
@@ -99,6 +113,7 @@
 	body {
 		background-color: var(--color-background);
 		color: var(--color-foreground);
+		font-family: var(--font-sans);
 		font-feature-settings:
 			'rlig' 1,
 			'calt' 1;
