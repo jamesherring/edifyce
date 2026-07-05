@@ -26,11 +26,6 @@
 </script>
 
 <section class="flex flex-col items-center gap-6 py-12 text-center">
-	<span
-		class="bg-muted text-muted-foreground rounded-full px-3 py-1 text-xs font-medium tracking-wide"
-	>
-		Formal proof assistant
-	</span>
 	<h1 class="max-w-3xl text-4xl font-bold tracking-tight sm:text-5xl">
 		Human-Readable,<br />Computer-Verifiable Mathematics
 	</h1>
@@ -64,7 +59,7 @@
 </section>
 
 <section class="py-8">
-	<Card.Root class="bg-muted/40">
+	<Card.Root class="bg-muted">
 		<Card.Header>
 			<Card.Title>How it works</Card.Title>
 			<Card.Description>Two stateless endpoints, one workflow.</Card.Description>
