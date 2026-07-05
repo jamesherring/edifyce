@@ -70,3 +70,22 @@ def test_theorem_search_columns_and_indexes():
 
 def test_embedding_dimension_is_positive():
     assert EMBEDDING_DIMENSIONS > 0
+
+
+def test_owner_slug_uniqueness_is_partial_on_owned_rows():
+    # owner_id is nullable; the unique index must be scoped to owned rows so that
+    # public (ownerless) systems aren't accidentally left unconstrained-by-design
+    # yet advertised as unique. See models.FormalSystem.__table_args__.
+    fs = Base.metadata.tables["formal_systems"]
+    idx = next(i for i in fs.indexes if i.name == "uq_formal_systems_owner_slug")
+    assert idx.unique
+    where = idx.dialect_options["postgresql"].get("where")
+    assert where is not None and "owner_id IS NOT NULL" in str(where)
+
+
+def test_user_flags_have_db_side_defaults():
+    # fastapi-users' base declares these NOT NULL with only a Python-side default;
+    # we add server defaults so non-ORM inserts and column-adds stay safe.
+    users = Base.metadata.tables["users"]
+    for col in ("is_active", "is_superuser", "is_verified"):
+        assert users.c[col].server_default is not None, col

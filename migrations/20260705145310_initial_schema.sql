@@ -1,9 +1,9 @@
--- Enable pgvector (required by the "theorems".embedding column and its HNSW index).
--- Kept as the first statement by hand: Atlas does not emit CREATE EXTENSION in the
--- community build, so re-hash (atlas migrate hash) after editing this file.
+-- Enable pgvector (required by "theorems".embedding and its HNSW index).
+-- Hand-added: the community Atlas build omits CREATE EXTENSION from diffs, so
+-- re-add this and run `atlas migrate hash` if the initial migration is regenerated.
 CREATE EXTENSION IF NOT EXISTS "vector";
 -- Create "users" table
-CREATE TABLE "public"."users" ("email" character varying(320) NOT NULL, "display_name" character varying(256) NULL, "hashed_password" character varying(256) NULL, "is_active" boolean NOT NULL DEFAULT true, "id" uuid NOT NULL DEFAULT gen_random_uuid(), "created_at" timestamptz NOT NULL DEFAULT now(), "updated_at" timestamptz NOT NULL DEFAULT now(), PRIMARY KEY ("id"));
+CREATE TABLE "public"."users" ("id" uuid NOT NULL DEFAULT gen_random_uuid(), "is_active" boolean NOT NULL DEFAULT true, "is_superuser" boolean NOT NULL DEFAULT false, "is_verified" boolean NOT NULL DEFAULT false, "display_name" character varying(256) NULL, "email" character varying(320) NOT NULL, "hashed_password" character varying(1024) NOT NULL, "created_at" timestamptz NOT NULL DEFAULT now(), "updated_at" timestamptz NOT NULL DEFAULT now(), PRIMARY KEY ("id"));
 -- Create index "ix_users_email" to table: "users"
 CREATE UNIQUE INDEX "ix_users_email" ON "public"."users" ("email");
 -- Create "formal_systems" table
@@ -15,7 +15,15 @@ CREATE INDEX "ix_formal_systems_owner_id" ON "public"."formal_systems" ("owner_i
 -- Create index "ix_formal_systems_slug" to table: "formal_systems"
 CREATE INDEX "ix_formal_systems_slug" ON "public"."formal_systems" ("slug");
 -- Create index "uq_formal_systems_owner_slug" to table: "formal_systems"
-CREATE UNIQUE INDEX "uq_formal_systems_owner_slug" ON "public"."formal_systems" ("owner_id", "slug");
+CREATE UNIQUE INDEX "uq_formal_systems_owner_slug" ON "public"."formal_systems" ("owner_id", "slug") WHERE (owner_id IS NOT NULL);
+-- Create "oauth_accounts" table
+CREATE TABLE "public"."oauth_accounts" ("id" uuid NOT NULL DEFAULT gen_random_uuid(), "user_id" uuid NOT NULL, "oauth_name" character varying(100) NOT NULL, "access_token" character varying(1024) NOT NULL, "expires_at" integer NULL, "refresh_token" character varying(1024) NULL, "account_id" character varying(320) NOT NULL, "account_email" character varying(320) NOT NULL, "created_at" timestamptz NOT NULL DEFAULT now(), "updated_at" timestamptz NOT NULL DEFAULT now(), PRIMARY KEY ("id"), CONSTRAINT "fk_oauth_accounts_user_id_users" FOREIGN KEY ("user_id") REFERENCES "public"."users" ("id") ON UPDATE NO ACTION ON DELETE CASCADE);
+-- Create index "ix_oauth_accounts_account_id" to table: "oauth_accounts"
+CREATE INDEX "ix_oauth_accounts_account_id" ON "public"."oauth_accounts" ("account_id");
+-- Create index "ix_oauth_accounts_oauth_name" to table: "oauth_accounts"
+CREATE INDEX "ix_oauth_accounts_oauth_name" ON "public"."oauth_accounts" ("oauth_name");
+-- Create index "ix_oauth_accounts_user_id" to table: "oauth_accounts"
+CREATE INDEX "ix_oauth_accounts_user_id" ON "public"."oauth_accounts" ("user_id");
 -- Create "proof_folders" table
 CREATE TABLE "public"."proof_folders" ("owner_id" uuid NULL, "formal_system_id" uuid NOT NULL, "parent_id" uuid NULL, "name" character varying(256) NOT NULL, "slug" character varying(256) NOT NULL, "position" integer NOT NULL DEFAULT 0, "published_at" timestamptz NULL, "id" uuid NOT NULL DEFAULT gen_random_uuid(), "created_at" timestamptz NOT NULL DEFAULT now(), "updated_at" timestamptz NOT NULL DEFAULT now(), PRIMARY KEY ("id"), CONSTRAINT "fk_proof_folders_formal_system_id_formal_systems" FOREIGN KEY ("formal_system_id") REFERENCES "public"."formal_systems" ("id") ON UPDATE NO ACTION ON DELETE CASCADE, CONSTRAINT "fk_proof_folders_owner_id_users" FOREIGN KEY ("owner_id") REFERENCES "public"."users" ("id") ON UPDATE NO ACTION ON DELETE SET NULL, CONSTRAINT "fk_proof_folders_parent_id_proof_folders" FOREIGN KEY ("parent_id") REFERENCES "public"."proof_folders" ("id") ON UPDATE NO ACTION ON DELETE CASCADE);
 -- Create index "ix_proof_folders_formal_system_id" to table: "proof_folders"

@@ -24,8 +24,9 @@ data "external_schema" "sqlalchemy" {
 env "local" {
   src = data.external_schema.sqlalchemy.url
 
-  // pgvector/pgvector image so the dev DB has the extension; override for CI/Neon.
-  dev = getenv("ATLAS_DEV_URL") != "" ? getenv("ATLAS_DEV_URL") : "docker://pgvector/pgvector/pg16/dev"
+  // Atlas's built-in pgvector image so the dev DB has the extension (the
+  // "pgvector" driver resolves to pgvector/pgvector:pg16); override for CI/Neon.
+  dev = getenv("ATLAS_DEV_URL") != "" ? getenv("ATLAS_DEV_URL") : "docker://pgvector/pg16/dev"
 
   migration {
     dir = "file://migrations"

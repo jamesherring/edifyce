@@ -9,6 +9,8 @@ import os
 from collections.abc import AsyncIterator
 from functools import lru_cache
 
+from sqlalchemy import NullPool, make_url
+from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -17,29 +19,30 @@ from sqlalchemy.ext.asyncio import (
 )
 
 
-def _database_url() -> str:
+def _database_url() -> URL:
     url = os.environ.get("DATABASE_URL")
     if not url:
         raise RuntimeError(
             "DATABASE_URL is not set. Point it at the Neon *pooled* connection "
             "string (the '-pooler' host) for serverless deployments."
         )
-    # Accept the common `postgresql://` / `postgres://` forms and route them to
-    # the asyncpg driver the app actually uses.
-    if url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql+asyncpg://", 1)
-    elif url.startswith("postgresql://"):
-        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    return url
+    # Route whatever scheme the platform hands us (postgres://, postgresql://,
+    # even postgresql+psycopg://) onto the asyncpg driver the app uses.
+    return make_url(url).set(drivername="postgresql+asyncpg")
 
 
 @lru_cache(maxsize=1)
 def get_engine() -> AsyncEngine:
-    # NullPool: on serverless (Vercel functions) an external pooler (Neon's
-    # PgBouncer endpoint) owns pooling; the app should not hold its own idle pool.
-    from sqlalchemy import NullPool
-
-    return create_async_engine(_database_url(), poolclass=NullPool)
+    return create_async_engine(
+        _database_url(),
+        # NullPool: on serverless (Vercel functions) an external pooler (Neon's
+        # PgBouncer endpoint) owns pooling; the app holds no idle pool of its own.
+        poolclass=NullPool,
+        # Neon's pooled endpoint is PgBouncer in transaction mode, which
+        # multiplexes clients onto shared server connections; asyncpg's named
+        # server-side prepared statements collide there, so disable its cache.
+        connect_args={"statement_cache_size": 0},
+    )
 
 
 @lru_cache(maxsize=1)

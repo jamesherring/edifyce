@@ -27,12 +27,18 @@ class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
-class UUIDPrimaryKeyMixin:
-    """UUID primary key generated database-side (Postgres 13+ builtin)."""
+def uuid_pk_column() -> Mapped[uuid.UUID]:
+    """A UUID primary key generated database-side (Postgres 13+ builtin).
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        primary_key=True, server_default=func.gen_random_uuid()
-    )
+    A factory rather than a plain mixin so the fastapi-users-based models, which
+    can't take the mixin (their base already defines `id`), can still share the
+    exact same id strategy by overriding `id` with this.
+    """
+    return mapped_column(primary_key=True, server_default=func.gen_random_uuid())
+
+
+class UUIDPrimaryKeyMixin:
+    id: Mapped[uuid.UUID] = uuid_pk_column()
 
 
 class TimestampMixin:

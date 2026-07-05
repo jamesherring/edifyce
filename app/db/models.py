@@ -40,24 +40,25 @@ from sqlalchemy import (
     Table,
     Text,
     event,
-    func,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, uuid_pk_column
 
 # Match this to the embedding model you deploy (e.g. Voyage voyage-3 = 1024,
 # OpenAI text-embedding-3-small = 1536). Changing it is a schema migration.
 EMBEDDING_DIMENSIONS = 1536
 
-# pgvector lives in an extension. Emit its creation as part of the schema so the
-# `vector` type and HNSW index resolve; `IF NOT EXISTS` keeps re-runs safe.
+# pgvector lives in an extension. Emitting its creation on `before_create` puts
+# it into the schema the Atlas provider dumps (which runs metadata.create_all on
+# a mock engine), so the `vector` type and HNSW index resolve. Guarded to
+# Postgres so a non-PG create_all (e.g. a future SQLite test) doesn't choke on it.
 event.listen(
     Base.metadata,
     "before_create",
-    DDL("CREATE EXTENSION IF NOT EXISTS vector"),
+    DDL("CREATE EXTENSION IF NOT EXISTS vector").execute_if(dialect="postgresql"),
 )
 
 
@@ -66,9 +67,19 @@ class User(SQLAlchemyBaseUserTableUUID, TimestampMixin, Base):
 
     # The base contributes id, email, hashed_password, is_active, is_superuser,
     # is_verified. We override id to a DB-side default so every table generates
-    # ids the same way (the base defaults to a client-side uuid4).
-    id: Mapped[uuid.UUID] = mapped_column(
-        primary_key=True, server_default=func.gen_random_uuid()
+    # ids the same way (the base defaults to a client-side uuid4), and give the
+    # boolean flags DB-side defaults too — the base declares them NOT NULL with
+    # only a Python-side default, which leaves the column with no server default
+    # (unsafe for non-ORM inserts and for adding the column to a populated table).
+    id: Mapped[uuid.UUID] = uuid_pk_column()
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, server_default=text("true"), nullable=False
+    )
+    is_superuser: Mapped[bool] = mapped_column(
+        Boolean, server_default=text("false"), nullable=False
+    )
+    is_verified: Mapped[bool] = mapped_column(
+        Boolean, server_default=text("false"), nullable=False
     )
     display_name: Mapped[str | None] = mapped_column(String(256))
 
@@ -88,9 +99,7 @@ class OAuthAccount(SQLAlchemyBaseOAuthAccountTableUUID, TimestampMixin, Base):
     # The base contributes oauth_name, access_token, expires_at, refresh_token,
     # account_id, account_email. It hardcodes the user FK to "user.id"; repoint it
     # at our "users" table and index it for the join fastapi-users does on login.
-    id: Mapped[uuid.UUID] = mapped_column(
-        primary_key=True, server_default=func.gen_random_uuid()
-    )
+    id: Mapped[uuid.UUID] = uuid_pk_column()
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
@@ -99,8 +108,17 @@ class OAuthAccount(SQLAlchemyBaseOAuthAccountTableUUID, TimestampMixin, Base):
 class FormalSystem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "formal_systems"
     __table_args__ = (
-        # A user's own systems are addressable by a unique slug.
-        Index("uq_formal_systems_owner_slug", "owner_id", "slug", unique=True),
+        # A user's own systems are addressable by a unique slug. Scoped to owned
+        # rows: owner_id is nullable and Postgres treats NULLs as distinct, so an
+        # unqualified unique index would not constrain public (ownerless) systems
+        # anyway — the partial predicate makes that explicit rather than accidental.
+        Index(
+            "uq_formal_systems_owner_slug",
+            "owner_id",
+            "slug",
+            unique=True,
+            postgresql_where=text("owner_id IS NOT NULL"),
+        ),
     )
 
     owner_id: Mapped[uuid.UUID | None] = mapped_column(
