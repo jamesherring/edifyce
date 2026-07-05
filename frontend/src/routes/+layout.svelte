@@ -1,7 +1,6 @@
 <script lang="ts">
 	import '../app.css';
 	import { onMount } from 'svelte';
-	import favicon from '$lib/assets/favicon.svg';
 	import SiteHeader from '$lib/components/site-header.svelte';
 	import { theme } from '$lib/theme.svelte';
 
@@ -11,7 +10,6 @@
 </script>
 
 <svelte:head>
-	<link rel="icon" href={favicon} />
 	<title>Edifyce — Human-Readable, Computer-Verifiable Mathematics</title>
 </svelte:head>
 
