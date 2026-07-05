@@ -39,13 +39,26 @@ only ever sees "some production applied to some children". Keeping this module
 logic-agnostic is what preserves the goal of supporting arbitrary formal
 systems; please keep it that way.
 
-Scope
------
+Scope and roadmap
+-----------------
 This is step 1 of the kernel extraction: the *representation* plus the
 operations that are unambiguously part of it (``free_vars``, ``substitute``,
-structural ``equal``, ``to_string``). Deriving a substitution by unifying two
-terms - and doing so modulo definitions - is step 2 and deliberately lives
-elsewhere; this module does not depend on it.
+structural ``equal``, ``to_string``). It is deliberately the foundation the
+later steps build on, not a dependency of them:
+
+* Step 2 - a single ``unify`` that *derives* a substitution matching two
+  terms (and, modulo definitions, relates a term's higher and lower forms).
+  It will reuse ``_signature`` for constructor identity and ``substitute`` /
+  ``equal`` here as its ground cases.
+* Step 3 - a small fixed vocabulary of side-conditions (freshness,
+  distinctness) checked structurally over these terms, replacing the general
+  condition interpreter.
+* Step 4 - definitions as ordinary axioms. The ``definition`` metadata that
+  :func:`from_match` records on a node is carried for exactly this; it is not
+  interpreted yet.
+
+Nothing here should grow to depend on those steps; keep the representation
+self-contained so the trusted core stays small and auditable.
 """
 
 from __future__ import annotations
@@ -77,6 +90,10 @@ class Term:
 
         The terms for ``"(a -> b)"`` and ``"(a -> b)"`` are equal; the terms for
         ``"(a -> b)"`` and ``"(a -> c)"`` are not.
+
+        This is the *syntactic* base relation. Step 2 will add ``unify`` (equal
+        up to a variable binding) and equality modulo definitions on top of it;
+        this method stays purely structural.
         """
         raise NotImplementedError
 
@@ -263,6 +280,9 @@ def _signature(pattern):
 
     So ``(p -> q)`` and ``(x -> y)`` share a signature (alpha-equivalent) while
     ``(p -> p)`` differs from ``(p -> q)``.
+
+    Step 2's ``unify`` will reuse this as its constructor-identity test when
+    matching a rule schema against a formula, so keep it name-insensitive.
     """
     if isinstance(pattern, StringPattern):
         template = pattern.pattern
@@ -346,8 +366,9 @@ def from_match(match, context):
     # represent the node through it and keep the definition as metadata. For a
     # definition "x is a subset of y" of `formula`, "a is a subset of b" becomes
     # Node(<higher "x is a subset of y">, {"x": .., "y": ..}, definition=<defn>).
-    # Definitional *equality* (relating the higher and lower forms) is a later
-    # kernel step; here we only preserve the structure faithfully.
+    # Here we only preserve the structure faithfully; relating the higher and
+    # lower forms is step 4 (definitions as axioms), which will consume this
+    # `definition` field - so record it, do not act on it.
     if match.definition is not None:
         higher = match.definition.higher
         if match.sub_matches:
@@ -391,6 +412,11 @@ def from_pattern(pattern, context, schematic=None):
 
     so ``antecedent2.substitute({"p": a, "q": b})`` yields the term for
     ``"(a -> b)"`` - the same term ``from_match`` produces for that string.
+
+    Today a caller applies a rule by supplying the binding and checking the
+    result with :meth:`Term.equal`. Step 2 will instead *derive* that binding
+    by unifying this schema against the proof line, closing the loop into a
+    term-based proof checker.
     """
 
     def is_schematic(label):
