@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.routing import APIRoute
 
 from app.schemas import (
     CompileRequest,
@@ -113,8 +114,22 @@ if (FRONTEND_BUILD / "index.html").is_file():
     # The SPA shell is immutable after the build; read it once.
     _index_html = (FRONTEND_BUILD / "index.html").read_bytes()
 
+    # Paths owned by the JSON API. The catch-all below fully matches every GET,
+    # which would otherwise shadow FastAPI's native 405 for a wrong-method hit
+    # on an existing (e.g. POST-only) endpoint. Derived from the routes defined
+    # above so it stays in sync automatically.
+    _api_paths = {
+        route.path.strip("/") for route in app.routes if isinstance(route, APIRoute)
+    }
+
     @app.get("/{path:path}", include_in_schema=False)
     def serve_spa(path: str, request: Request) -> Response:
+        # A GET that reaches here for a known API path is a wrong-method
+        # request to an existing endpoint; preserve the API's 405 rather than
+        # masking it with the SPA shell.
+        if path.strip("/") in _api_paths:
+            raise HTTPException(status_code=405, detail="Method Not Allowed")
+
         # Serve a real build asset when the path maps to one. resolve() both
         # sides so the containment check holds even under symlinked deploy paths.
         candidate = (FRONTEND_BUILD / path).resolve()
@@ -125,7 +140,7 @@ if (FRONTEND_BUILD / "index.html").is_file():
         # client-side routing can handle the URL. For non-navigation requests
         # (API clients, missing assets) return a real 404 instead of masking it
         # as a 200 HTML response — this preserves the API's error contract for
-        # mistyped or wrong-method endpoints.
+        # mistyped endpoints.
         if "text/html" in request.headers.get("accept", ""):
             return HTMLResponse(_index_html)
         raise HTTPException(status_code=404, detail="Not Found")
