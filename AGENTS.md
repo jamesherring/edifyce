@@ -75,6 +75,12 @@ API and the UI (see the static-frontend block at the bottom of `app/main.py`).
 - **Prefer dataclasses and explicit `raise`s** over dict-records and bare
   `assert`s. Recent history has been steadily moving the codebase that way; match
   the direction it's already going.
+- **Type new code fully.** The engine's older internals are largely untyped, but
+  all new code — and any function you meaningfully rewrite — must carry parameter
+  and return-type annotations (including `-> None`). Use `from __future__ import
+  annotations` and a `TYPE_CHECKING` block for engine types to keep annotations
+  runtime-free and avoid import cycles. See `website/logical/kernel/terms.py` for
+  the pattern to follow.
 
 ## On comments
 

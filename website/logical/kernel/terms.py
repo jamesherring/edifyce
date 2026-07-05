@@ -63,13 +63,26 @@ self-contained so the trusted core stays small and auditable.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from ..matching.patterns import RegexPattern, StringPattern, UnionPattern
+
+if TYPE_CHECKING:
+    from ..matching.context import Context
+    from ..matching.definitions import Definition
+    from ..matching.matches import Match
+    from ..matching.patterns import Pattern
+
+    # A substitution: schematic variable name -> the Term it maps to.
+    Binding = dict[str, "Term"]
+    # Free-variable inventory: variable name -> its sort (an arbitrary Pattern).
+    FreeVars = dict[str, "Pattern"]
 
 
 class Term:
     """Base class for terms. Concrete kinds are :class:`Var` and :class:`Node`."""
 
-    def free_vars(self, acc=None):
+    def free_vars(self, acc: "FreeVars | None" = None) -> "FreeVars":
         """Return ``{name: sort}`` for every variable leaf in this term.
 
         A ground formula has none; a rule schema such as ``(p -> q)`` returns
@@ -77,7 +90,7 @@ class Term:
         """
         raise NotImplementedError
 
-    def substitute(self, binding, context):
+    def substitute(self, binding: "Binding", context: "Context") -> "Term":
         """Return a copy with each ``Var`` replaced by ``binding[name]`` (if present).
 
         With ``binding = {"p": <term a>, "q": <term b>}`` the schema ``(p -> q)``
@@ -85,7 +98,7 @@ class Term:
         """
         raise NotImplementedError
 
-    def equal(self, other, context):
+    def equal(self, other: "Term", context: "Context") -> bool:
         """Structural equality: same constructor and equal children, no re-parsing.
 
         The terms for ``"(a -> b)"`` and ``"(a -> b)"`` are equal; the terms for
@@ -97,7 +110,7 @@ class Term:
         """
         raise NotImplementedError
 
-    def to_string(self):
+    def to_string(self) -> str:
         """Render the surface string from the tree, without re-invoking the matcher.
 
         The term for ``"(a -> (b -> a))"`` renders back to exactly that string.
@@ -113,22 +126,22 @@ class Var(Term):
     example the ``p`` in a modus-ponens schema is ``Var("p", <formula sort>)``.
     """
 
-    def __init__(self, name, sort):
-        self.name = name
-        self.sort = sort
+    def __init__(self, name: str, sort: "Pattern") -> None:
+        self.name: str = name
+        self.sort: "Pattern" = sort
 
-    def free_vars(self, acc=None):
+    def free_vars(self, acc: "FreeVars | None" = None) -> "FreeVars":
         if acc is None:
             acc = {}
         acc.setdefault(self.name, self.sort)
         return acc
 
-    def substitute(self, binding, context):
+    def substitute(self, binding: "Binding", context: "Context") -> "Term":
         # e.g. Var("p", formula).substitute({"p": term_for_a}) -> term_for_a;
         # a variable not named in the binding is returned unchanged.
         return binding.get(self.name, self)
 
-    def equal(self, other, context):
+    def equal(self, other: "Term", context: "Context") -> bool:
         # Two variables are equal when they share a name and an equivalent sort,
         # e.g. Var("p", formula) == Var("p", formula), but != Var("q", formula).
         return (
@@ -137,10 +150,10 @@ class Var(Term):
             and self.sort.equivalent(other.sort, context)
         )
 
-    def to_string(self):
+    def to_string(self) -> str:
         return self.name
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"Var({self.name!r}:{self.sort.name})"
 
 
@@ -159,20 +172,26 @@ class Node(Term):
                      interpreted here.
     """
 
-    def __init__(self, pattern, children=None, literal=None, definition=None):
-        self.pattern = pattern
-        self.children = children if children is not None else {}
-        self.literal = literal
-        self.definition = definition
+    def __init__(
+        self,
+        pattern: "Pattern",
+        children: "dict[str, Term] | None" = None,
+        literal: str | None = None,
+        definition: "Definition | None" = None,
+    ) -> None:
+        self.pattern: "Pattern" = pattern
+        self.children: "dict[str, Term]" = children if children is not None else {}
+        self.literal: str | None = literal
+        self.definition: "Definition | None" = definition
 
-    def free_vars(self, acc=None):
+    def free_vars(self, acc: "FreeVars | None" = None) -> "FreeVars":
         if acc is None:
             acc = {}
         for child in self.children.values():
             child.free_vars(acc)
         return acc
 
-    def substitute(self, binding, context):
+    def substitute(self, binding: "Binding", context: "Context") -> "Term":
         # A ground leaf (no children) is unaffected by any binding.
         if not self.children:
             return self
@@ -188,7 +207,7 @@ class Node(Term):
             definition=self.definition,
         )
 
-    def equal(self, other, context):
+    def equal(self, other: "Term", context: "Context") -> bool:
         if not isinstance(other, Node):
             return False
 
@@ -220,7 +239,7 @@ class Node(Term):
 
         return True
 
-    def to_string(self):
+    def to_string(self) -> str:
         # Rebuild the surface string from the production template and children.
         # This is the parse-once payoff: reconstruction never calls match().
         # e.g. implication{p: a, q: (b -> a)} with template "(p -> q)" walks the
@@ -259,13 +278,13 @@ class Node(Term):
 
         return "".join(out)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         if self.literal is not None:
             return f"Node({self.pattern.name}={self.literal!r})"
         return f"Node({self.pattern.name}, {list(self.children)})"
 
 
-def _signature(pattern):
+def _signature(pattern: "Pattern") -> tuple[str, str]:
     r"""A constructor identity that ignores the pattern's *name* and its
     variable spellings, so structurally identical productions - a rule's
     synthesised "(p -> q)" schema and a system's named `implication` - compare
@@ -309,7 +328,7 @@ def _signature(pattern):
     return ("named", pattern.name)
 
 
-def _ordered_slots(pattern):
+def _ordered_slots(pattern: "Pattern") -> list[str]:
     """The distinct variable-slot labels of a production, in the order they
     first appear in its template. Used to align two constructors' children by
     position (not by label) once their signatures match.
@@ -326,7 +345,7 @@ def _ordered_slots(pattern):
     return slots
 
 
-def from_match(match, context):
+def from_match(match: "Match", context: "Context") -> "Term":
     r"""Project a :class:`Match` tree into a :class:`Term` (the parse-once bridge).
 
     The engine's ``Match`` tree carries scaffolding the term layer does not
@@ -346,7 +365,7 @@ def from_match(match, context):
     """
     pattern = match.pattern
 
-    def child_terms(m):
+    def child_terms(m: "Match") -> "dict[str, Term]":
         children = {}
         for label, sub in m.sub_matches.items():
             if isinstance(sub, list):
@@ -394,7 +413,9 @@ def from_match(match, context):
     return Node(pattern=pattern, children=child_terms(match))
 
 
-def from_pattern(pattern, context, schematic=None):
+def from_pattern(
+    pattern: "Pattern", context: "Context", schematic: "set[str] | None" = None
+) -> "Term":
     """Project a rule-schema ``Pattern`` into a :class:`Term` whose variable
     slots become :class:`Var` leaves.
 
@@ -419,7 +440,7 @@ def from_pattern(pattern, context, schematic=None):
     term-based proof checker.
     """
 
-    def is_schematic(label):
+    def is_schematic(label: str) -> bool:
         return schematic is None or label in schematic
 
     if isinstance(pattern, StringPattern):
