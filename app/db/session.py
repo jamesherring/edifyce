@@ -40,6 +40,13 @@ def _database_url() -> URL:
     sslmode = query.pop("sslmode", None)
     if sslmode is not None and "ssl" not in query:
         query["ssl"] = sslmode
+
+    # Neon/Vercel pooled URLs also carry `channel_binding=require`, another
+    # libpq-only param SQLAlchemy would forward to asyncpg.connect (raising
+    # "unexpected keyword argument 'channel_binding'"). asyncpg has no such
+    # kwarg — it negotiates SCRAM channel binding automatically over SSL — so
+    # the param is redundant here; drop it rather than translate it.
+    query.pop("channel_binding", None)
     return url.set(query=query)
 
 

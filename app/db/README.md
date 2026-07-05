@@ -59,8 +59,8 @@ migrations on a throwaway **dev database** and writes new migration SQL.
 # Plan a new migration after changing the models:
 atlas migrate diff <name> --env local
 
-# Apply migrations to a real database:
-atlas migrate apply --env local --url "$DATABASE_URL"
+# Apply migrations to a real database (see the Neon note below for the URL):
+atlas migrate apply --dir "file://migrations" --url "$MIGRATE_URL"
 
 # CI safety check (destructive-change linting):
 atlas migrate lint --env local
@@ -79,6 +79,19 @@ Requirements / gotchas:
 - **The `CREATE EXTENSION "vector"` line** at the top of the initial migration was
   added by hand — Atlas doesn't always emit extension creation. If you regenerate
   the first migration, re-add it and run `atlas migrate hash`.
+- **Applying to Neon (verified against a real Vercel-provisioned DB).** Two
+  Neon-specific adjustments to the apply URL (`$MIGRATE_URL` above), neither of
+  which the pooled runtime `DATABASE_URL` satisfies:
+  - **Use the direct (non-pooled) endpoint** — the `DATABASE_URL_UNPOOLED` /
+    `POSTGRES_URL_NON_POOLING` var, *not* the `-pooler` host. Atlas takes a
+    session advisory lock and runs DDL in a transaction; PgBouncer's transaction
+    pooling breaks both.
+  - **Scope to the `public` schema** by appending `&search_path=public`. Vercel's
+    Neon integration provisions a `neon_auth` schema; pointed at the whole
+    database, Atlas reads that (and its own revision schema) as drift and refuses
+    with "connected database is not clean". The migration only touches `public`.
+
+  So in practice: `MIGRATE_URL="$DATABASE_URL_UNPOOLED&search_path=public"`.
 
 ## Runtime
 
