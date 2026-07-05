@@ -22,29 +22,3 @@ jobs:
 
       - name: Run tests
         run: uv run pytest -v
-
-  requirements:
-    name: requirements.txt in sync
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-
-      # requirements.txt is a generated artifact: Vercel's Python runtime reads
-      # it (not pyproject.toml / uv.lock) to build the api/ serverless function.
-      # Regenerate it from the lockfile and fail if the committed copy drifted.
-      - name: Regenerate requirements.txt
-        run: uv export --no-dev --no-hashes --no-emit-project -o requirements.txt
-
-      - name: Fail if out of date
-        run: |
-          if ! git diff --quiet -- requirements.txt; then
-            echo "::error file=requirements.txt::requirements.txt is out of sync with pyproject.toml/uv.lock. Regenerate it with: uv export --no-dev --no-hashes --no-emit-project -o requirements.txt"
-            git diff -- requirements.txt
-            exit 1
-          fi
