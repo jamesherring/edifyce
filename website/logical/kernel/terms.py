@@ -133,20 +133,28 @@ class Node(Term):
 
         # Compare constructors by shape, not by pattern name: a rule schema's
         # inline "(p -> q)" and a system's named `implication` production are
-        # the same constructor. Child sorts are checked by the recursion below.
+        # the same constructor.
         if _signature(self.pattern) != _signature(other.pattern):
             return False
 
         if self.literal is not None or other.literal is not None:
             return self.literal == other.literal
 
-        if set(self.children) != set(other.children):
+        # Align children by template position, not by slot label - the two
+        # constructors may spell their variables differently (e.g. `p`/`q`
+        # versus `lhs`/`rhs`). Matching signatures guarantee equal arity.
+        self_slots = _ordered_slots(self.pattern)
+        other_slots = _ordered_slots(other.pattern)
+        if len(self_slots) != len(other_slots):
             return False
 
-        return all(
-            self.children[label].equal(other.children[label], context)
-            for label in self.children
-        )
+        for self_label, other_label in zip(self_slots, other_slots):
+            if self_label not in self.children or other_label not in other.children:
+                return False
+            if not self.children[self_label].equal(other.children[other_label], context):
+                return False
+
+        return True
 
     def to_string(self):
         # Rebuild the surface string from the production template and children.
@@ -193,13 +201,16 @@ def _signature(pattern):
     """A constructor identity that ignores the pattern's *name* and its
     variable spellings, so structurally identical productions - a rule's
     synthesised "(p -> q)" schema and a system's named `implication` - compare
-    as the same constructor. Variable slots normalise to a single placeholder;
-    which slots hold equal subterms is decided by the caller's child recursion.
+    as the same constructor. Each distinct variable is normalised to a
+    positional placeholder, so arity and repetition (``(p -> p)`` versus
+    ``(p -> q)``) are encoded; which slots hold equal subterms is decided by
+    the caller's child recursion.
     """
     from ..matching.patterns import RegexPattern, StringPattern
 
     if isinstance(pattern, StringPattern):
         template = pattern.pattern
+        label_index = {}
         out = []
         i = 0
         while i < len(template):
@@ -208,8 +219,10 @@ def _signature(pattern):
                 out.append(part)
                 i += len(part)
             elif i in pattern.variable_locations:
-                out.append("\x00")
-                i += len(pattern.variable_locations[i]["label"])
+                label = pattern.variable_locations[i]["label"]
+                index = label_index.setdefault(label, len(label_index))
+                out.append(f"\x00{index}")
+                i += len(label)
             else:
                 i += 1
         return ("string", "".join(out))
@@ -218,6 +231,19 @@ def _signature(pattern):
         return ("regex", pattern.pattern)
 
     return ("named", pattern.name)
+
+
+def _ordered_slots(pattern):
+    """The distinct variable-slot labels of a production, in the order they
+    first appear in its template. Used to align two constructors' children by
+    position (not by label) once their signatures match.
+    """
+    slots = []
+    for offset in sorted(getattr(pattern, "variable_locations", {})):
+        label = pattern.variable_locations[offset]["label"]
+        if label not in slots:
+            slots.append(label)
+    return slots
 
 
 def from_match(match, context):
@@ -231,9 +257,30 @@ def from_match(match, context):
 
     pattern = match.pattern
 
+    def child_terms(m):
+        children = {}
+        for label, sub in m.sub_matches.items():
+            if isinstance(sub, list):
+                # Rare shape seen in a few matcher paths; take the representative.
+                sub = sub[0]
+            children[label] = from_match(sub, context)
+        return children
+
     # A variable leaf: the string is itself a declared schematic variable.
     if match.is_variable:
         return Var(name=match.formatted_string(), sort=pattern)
+
+    # A definition-backed match: the matched sort (often a UnionPattern) is not
+    # itself a template, and its sub-matches are the definition's variables. Its
+    # `higher` form carries both the surface template and those variables, so
+    # represent the node through it and keep the definition as metadata.
+    # Definitional *equality* (relating the higher and lower forms) is a later
+    # kernel step; here we only preserve the structure faithfully.
+    if match.definition is not None:
+        higher = match.definition.higher
+        if match.sub_matches:
+            return Node(pattern=higher, children=child_terms(match), definition=match.definition)
+        return Node(pattern=higher, literal=match.formatted_string(), definition=match.definition)
 
     # A union match is a coercion wrapper around a single chosen branch.
     if isinstance(pattern, UnionPattern):
@@ -245,21 +292,10 @@ def from_match(match, context):
 
     # A ground leaf: regex/atomic token or a literal pattern with no slots.
     if not match.sub_matches:
-        return Node(
-            pattern=pattern,
-            literal=match.formatted_string(),
-            definition=match.definition,
-        )
+        return Node(pattern=pattern, literal=match.formatted_string())
 
     # A compound: recurse into the named sub-matches.
-    children = {}
-    for label, sub in match.sub_matches.items():
-        if isinstance(sub, list):
-            # Rare shape seen in a few matcher paths; take the representative.
-            sub = sub[0]
-        children[label] = from_match(sub, context)
-
-    return Node(pattern=pattern, children=children, definition=match.definition)
+    return Node(pattern=pattern, children=child_terms(match))
 
 
 def from_pattern(pattern, context, schematic=None):

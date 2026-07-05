@@ -20,6 +20,7 @@ pytest.importorskip("regex")
 import website.logical.matching.patterns as patterns
 from website.logical.compiler import compile as compile_formal_system
 from website.logical.kernel import Node, Var, from_match, from_pattern
+from website.logical.matching import Context, RegexPattern, StringPattern, UnionPattern
 
 
 def build(code):
@@ -240,6 +241,83 @@ def test_definition_slot_is_carried_through_substitution(fopl):
         {"p": from_match(formula.match("a", context), context)}, context
     )
     assert substituted.definition is sentinel
+
+
+# A system whose `implication` production names its variables lhs/rhs, while
+# the modus ponens rule names them p/q - so schema and production are the same
+# constructor under alpha-renaming but spell their slots differently.
+ALPHA_RENAMED = """FormalSystem AlphaRenamed:
+
+    Regex atom:
+        ^[a-z][a-z0-9]*$
+
+    UnionPattern formula:
+        atom
+
+    Pattern implication:
+        with lhs as formula, rhs as formula:
+            (lhs -> rhs)
+
+    formula:
+        implication
+
+    with p as formula, q as formula:
+        InferenceRule modus_ponens:
+            label:
+                MP
+            antecedents:
+                p
+                (p -> q)
+            deduction:
+                q
+"""
+
+
+def test_equality_aligns_slots_by_position_not_label():
+    # Codex P2: a rule schema (p -> q) must equal a production instance built
+    # from (lhs -> rhs) once substituted, even though the slot labels differ.
+    system, context = build(ALPHA_RENAMED)
+    formula = system.build_context.variables["formula"]
+    (mp,) = [r for r in system.inference_rules if r.label == "MP"]
+
+    schema = from_pattern(mp.antecedents[1], context)  # children keyed p, q
+    ground = from_match(formula.match("(a -> b)", context), context)  # keyed lhs, rhs
+    assert set(schema.free_vars()) == {"p", "q"}
+
+    binding = {
+        "p": from_match(formula.match("a", context), context),
+        "q": from_match(formula.match("b", context), context),
+    }
+    assert schema.substitute(binding, context).equal(ground, context)
+
+    # And a genuinely different instance still compares unequal.
+    other = from_match(formula.match("(a -> c)", context), context)
+    assert not schema.substitute(binding, context).equal(other, context)
+
+
+def test_definition_backed_union_match_keeps_structure():
+    # Codex P2: a formula parsed only through a definition attached to a union
+    # sort must stay structured (children + definition), not collapse to an
+    # opaque literal.
+    context = Context()
+    setvar = RegexPattern("setvar", "^[a-z]$")
+    membership = StringPattern("membership", "x in y", variables={"x": setvar, "y": setvar})
+    formula = UnionPattern("formula", [membership])
+
+    context.string_variables = {"x": setvar, "y": setvar}
+    definition = formula.add_definition(
+        "x in y", "x is a member of y", context, require_lower_match=False
+    )
+
+    match = formula.match("a is a member of b", context)
+    assert match.definition is not None  # matched via the definition
+
+    term = from_match(match, context)
+    # Structure preserved, definition carried, and it still round-trips.
+    assert isinstance(term, Node)
+    assert term.definition is definition
+    assert term.to_string() == match.formatted_string() == "a is a member of b"
+    assert {v.to_string() for v in term.children.values()} == {"a", "b"}
 
 
 # ---------------------------------------------------------------------------
