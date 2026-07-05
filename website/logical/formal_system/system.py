@@ -103,8 +103,13 @@ class FormalSystem:
               previous_proof=None, previous_proof_lines_mapped=None):
         # Parse the text into a proof.
 
-        # Optionally specify a previous version of the same proof (via ``previous_proof``) to save
-        # reprocessing unchanged lines.
+        # The ``previous_proof`` argument is intended to let callers reuse the results of a prior
+        # parse of the same proof to save reprocessing unchanged lines. That incremental path
+        # (copy_from_previous_proof) is currently incomplete - notably it copies diagnostics from
+        # the old line but re-executes the line without clearing them, so a line that flips from
+        # invalid to valid would report a stale invalid_message. It has no callers, so it is kept
+        # disabled here until it has a correct, tested implementation.
+        previous_proof = None
 
         # Maintain a dictionary of previous proof lines: new proof lines
         previous_proof_lines_mapped = previous_proof_lines_mapped if previous_proof_lines_mapped is not None else {}
