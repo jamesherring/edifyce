@@ -46,10 +46,11 @@ operations that are unambiguously part of it (``free_vars``, ``substitute``,
 structural ``equal``, ``to_string``). It is deliberately the foundation the
 later steps build on, not a dependency of them:
 
-* Step 2 - a single ``unify`` that *derives* a substitution matching two
-  terms (and, modulo definitions, relates a term's higher and lower forms).
-  It will reuse ``_signature`` for constructor identity and ``substitute`` /
-  ``equal`` here as its ground cases.
+* Step 2 (:mod:`unify`) - first-order matching that *derives* a substitution
+  making a schema equal a term, reusing ``_signature`` for constructor
+  identity and ``substitute`` / ``equal`` here as its ground cases. Relating a
+  term's higher and lower forms *modulo definitions* rides with step 4, when
+  the definition contract is settled.
 * Step 3 - a small fixed vocabulary of side-conditions (freshness,
   distinctness) checked structurally over these terms, replacing the general
   condition interpreter.
