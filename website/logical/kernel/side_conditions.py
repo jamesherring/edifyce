@@ -147,22 +147,34 @@ class Not(SideCondition):
 
 @dataclass(frozen=True)
 class And(SideCondition):
-    """Conjunction - true when every part holds (vacuously true if empty)."""
+    """Conjunction - true when every part holds (vacuously true if empty).
+
+    Every part is evaluated even once the result is decided, so a *malformed*
+    part (naming an unbound metavariable) always raises, regardless of order or
+    composition - a typo in a rule's proviso can't be hidden by short-circuiting.
+    """
 
     parts: tuple[SideCondition, ...]
 
     def check(self, binding: Binding, context: Context) -> bool:
-        return all(part.check(binding, context) for part in self.parts)
+        results = [part.check(binding, context) for part in self.parts]
+        return all(results)
 
 
 @dataclass(frozen=True)
 class Or(SideCondition):
-    """Disjunction - true when any part holds (vacuously false if empty)."""
+    """Disjunction - true when any part holds (vacuously false if empty).
+
+    Like :class:`And`, every part is evaluated (no short-circuit) so a malformed
+    part always raises rather than being skipped when an earlier part decides
+    the result.
+    """
 
     parts: tuple[SideCondition, ...]
 
     def check(self, binding: Binding, context: Context) -> bool:
-        return any(part.check(binding, context) for part in self.parts)
+        results = [part.check(binding, context) for part in self.parts]
+        return any(results)
 
 
 def _bound(binding: Binding, name: str) -> Term:

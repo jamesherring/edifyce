@@ -223,6 +223,26 @@ def test_malformed_condition_raises(fol):
         Occurs("x", "missing").check(binding, context)
 
 
+def test_malformed_branch_raises_even_when_short_circuited(fol):
+    # A malformed proviso must raise regardless of composition/order - a typo in
+    # a later branch cannot be hidden by an earlier branch deciding the result.
+    _system, context = fol
+    binding = {"x": setvar_term(fol, "x")}  # 'phi' intentionally unbound
+    malformed = Occurs("x", "phi")
+
+    # Or: first branch true would short-circuit a generator; must still raise.
+    with pytest.raises(ValueError, match="did not bind"):
+        Or((IsVariable("x"), malformed)).check(binding, context)
+
+    # And: first branch false would short-circuit a generator; must still raise.
+    with pytest.raises(ValueError, match="did not bind"):
+        And((Not(IsVariable("x")), malformed)).check(binding, context)
+
+    # Nested/negated composition is no escape hatch either.
+    with pytest.raises(ValueError, match="did not bind"):
+        Not(Or((IsVariable("x"), malformed))).check(binding, context)
+
+
 # ---------------------------------------------------------------------------
 # End-to-end: side-conditions gating a rule over terms
 # ---------------------------------------------------------------------------
