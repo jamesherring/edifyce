@@ -16,12 +16,34 @@ from app.db import Base, EMBEDDING_DIMENSIONS
 def test_expected_tables_present():
     assert set(Base.metadata.tables) == {
         "users",
+        "oauth_accounts",
         "formal_systems",
         "proof_folders",
         "proofs",
         "proof_references",
         "theorems",
     }
+
+
+def test_users_table_is_fastapi_users_shaped():
+    users = Base.metadata.tables["users"]
+    # Columns fastapi-users' base contributes, plus our custom display_name.
+    assert {
+        "id",
+        "email",
+        "hashed_password",
+        "is_active",
+        "is_superuser",
+        "is_verified",
+        "display_name",
+    } <= set(users.c.keys())
+
+
+def test_oauth_accounts_links_to_users():
+    oauth = Base.metadata.tables["oauth_accounts"]
+    assert {"oauth_name", "account_id", "access_token", "user_id"} <= set(oauth.c.keys())
+    targets = {fk.column.table.name for fk in oauth.foreign_keys}
+    assert targets == {"users"}  # not the library default "user"
 
 
 def test_formal_system_self_inheritance_fk():

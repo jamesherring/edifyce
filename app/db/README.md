@@ -21,8 +21,13 @@ routes yet — this is the schema and the tooling to evolve it.
 
 Modernised from the original Django app (`website/models.py` on `main`):
 
-- **`users`** — collapses Django's `auth.User` + `Profile`. Nullable
-  `hashed_password` (null = external/OAuth auth). Auth itself isn't built yet.
+- **`users`** — collapses Django's `auth.User` + `Profile`, built on
+  fastapi-users' `SQLAlchemyBaseUserTableUUID` (contributes `email`,
+  `hashed_password`, `is_active`, `is_superuser`, `is_verified`). Auth routes
+  aren't wired yet — this is only the schema the library expects.
+- **`oauth_accounts`** — linked social logins (fastapi-users'
+  `SQLAlchemyBaseOAuthAccountTableUUID`); one user, many providers. The library
+  hardcodes the FK to a `user` table, so we repoint it at our `users` table.
 - **`formal_systems`** — Edifyce `source`, optional `owner`, self-referential
   `inherits_from_id` (system inheritance), a cached `compiled` JSONB snapshot,
   and `published_at`.

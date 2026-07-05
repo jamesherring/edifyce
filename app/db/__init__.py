@@ -8,6 +8,7 @@ from app.db.base import Base
 from app.db.models import (
     EMBEDDING_DIMENSIONS,
     FormalSystem,
+    OAuthAccount,
     Proof,
     ProofFolder,
     Theorem,
@@ -20,6 +21,7 @@ __all__ = [
     "Base",
     "EMBEDDING_DIMENSIONS",
     "FormalSystem",
+    "OAuthAccount",
     "Proof",
     "ProofFolder",
     "Theorem",

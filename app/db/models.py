@@ -11,7 +11,9 @@ system; proofs reference other proofs — with three deliberate departures:
   JSON snapshot (`compiled` / `result`) instead. Pickles are fragile across code
   changes and not portable; JSON is neither.
 * **Auth-ready users.** Django's `auth.User` + `Profile` split is collapsed into
-  a single `users` table with a nullable password hash (null = external auth).
+  a single `users` table built on fastapi-users' SQLAlchemy base, with social
+  logins modelled as a linked `oauth_accounts` table (one user, many providers).
+  No auth routes are wired yet — this is only the schema fastapi-users expects.
 * **Search-ready theorems.** A `theorems` table carries a JSONB `pattern` (for
   structural, pattern-based search via a GIN index) and a pgvector `embedding`
   (for semantic / AI search via an HNSW index). Nothing writes to it yet; the
@@ -21,6 +23,10 @@ system; proofs reference other proofs — with three deliberate departures:
 import uuid
 from datetime import datetime
 
+from fastapi_users_db_sqlalchemy import (
+    SQLAlchemyBaseOAuthAccountTableUUID,
+    SQLAlchemyBaseUserTableUUID,
+)
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     DDL,
@@ -34,6 +40,7 @@ from sqlalchemy import (
     Table,
     Text,
     event,
+    func,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -54,19 +61,38 @@ event.listen(
 )
 
 
-class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+class User(SQLAlchemyBaseUserTableUUID, TimestampMixin, Base):
     __tablename__ = "users"
 
-    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
-    display_name: Mapped[str | None] = mapped_column(String(256))
-    # Null for accounts authenticated externally (OAuth/SSO) rather than a password.
-    hashed_password: Mapped[str | None] = mapped_column(String(256))
-    is_active: Mapped[bool] = mapped_column(
-        Boolean, server_default=text("true"), nullable=False
+    # The base contributes id, email, hashed_password, is_active, is_superuser,
+    # is_verified. We override id to a DB-side default so every table generates
+    # ids the same way (the base defaults to a client-side uuid4).
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, server_default=func.gen_random_uuid()
     )
+    display_name: Mapped[str | None] = mapped_column(String(256))
 
+    oauth_accounts: Mapped[list["OAuthAccount"]] = relationship(
+        # Eager-loaded: fastapi-users reads linked accounts alongside the user.
+        lazy="joined",
+        cascade="all, delete-orphan",
+    )
     formal_systems: Mapped[list["FormalSystem"]] = relationship(
         back_populates="owner"
+    )
+
+
+class OAuthAccount(SQLAlchemyBaseOAuthAccountTableUUID, TimestampMixin, Base):
+    __tablename__ = "oauth_accounts"
+
+    # The base contributes oauth_name, access_token, expires_at, refresh_token,
+    # account_id, account_email. It hardcodes the user FK to "user.id"; repoint it
+    # at our "users" table and index it for the join fastapi-users does on login.
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, server_default=func.gen_random_uuid()
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
 
 

@@ -14,6 +14,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0",
     "asyncpg>=0.30",
     "pgvector>=0.3",
+    "fastapi-users[oauth,sqlalchemy]>=15.0.5",
 ]
 
 [dependency-groups]
