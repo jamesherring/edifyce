@@ -51,9 +51,9 @@ later steps build on, not a dependency of them:
   identity and ``substitute`` / ``equal`` here as its ground cases. Relating a
   term's higher and lower forms *modulo definitions* rides with step 4, when
   the definition contract is settled.
-* Step 3 - a small fixed vocabulary of side-conditions (freshness,
-  distinctness) checked structurally over these terms, replacing the general
-  condition interpreter.
+* Step 3 (:mod:`side_conditions`) - a small, closed vocabulary of provisos
+  (occurrence, distinctness) checked structurally over these terms against a
+  match's binding, replacing the general condition interpreter.
 * Step 4 - definitions as ordinary axioms. The ``definition`` metadata that
   :func:`from_match` records on a node is carried for exactly this; it is not
   interpreted yet.

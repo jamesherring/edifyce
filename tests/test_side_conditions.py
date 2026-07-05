@@ -1,0 +1,257 @@
+"""Tests for the fixed side-condition vocabulary (kernel step 3).
+
+These cover each proviso in the closed algebra - occurrence, distinctness,
+is-variable, and the boolean combinators - as structural checks over terms,
+plus two end-to-end rule checks (vacuous quantification gated by freshness, and
+a distinct-variables proviso) built on ``unify.match_all``.
+"""
+
+from copy import copy
+
+import pytest
+
+pytest.importorskip("regex")
+
+from website.logical.compiler import compile as compile_formal_system
+from website.logical.kernel import (
+    And,
+    Distinct,
+    IsVariable,
+    Not,
+    Occurs,
+    Or,
+    from_match,
+    from_pattern,
+    match_all,
+)
+
+
+def build(code):
+    result = compile_formal_system(code)
+    assert "errors" not in result, result.get("errors")
+    system = result["system"]
+    context = copy(system.context)
+    context.variables.update(system.build_context.variables)
+    return system, context
+
+
+def rule(system, label):
+    (found,) = [r for r in system.inference_rules if r.label == label]
+    return found
+
+
+# First-order logic: unary predicates, a binary relation, and a quantifier,
+# with a vacuous-quantification rule and an identity rule over a relation.
+FOL = """FormalSystem FOL:
+
+    Regex setvar:
+        ^[a-z]$
+
+    Regex predicate:
+        ^[A-Z]$
+
+    UnionPattern formula:
+        predicate
+
+    Pattern application:
+        with P as predicate, x as setvar:
+            P(x)
+
+    formula:
+        application
+
+    Pattern relation:
+        with R as predicate, x as setvar, y as setvar:
+            R(x, y)
+
+    formula:
+        relation
+
+    Pattern forall:
+        with x as setvar, phi as formula:
+            ∀x.phi
+
+    formula:
+        forall
+
+    with x as setvar, y as setvar, R as predicate, phi as formula:
+        InferenceRule vacuous:
+            label:
+                VAC
+            antecedents:
+                phi
+            deduction:
+                ∀x.phi
+
+        InferenceRule distinct_pair:
+            label:
+                DIST
+            antecedents:
+                R(x, y)
+            deduction:
+                R(x, y)
+"""
+
+
+@pytest.fixture(scope="module")
+def fol():
+    system, context = build(FOL)
+    return system, context
+
+
+def formula_term(fol, string):
+    system, context = fol
+    formula = system.build_context.variables["formula"]
+    matched = formula.match(string, context)
+    assert matched is not None, string
+    return from_match(matched, context)
+
+
+def setvar_term(fol, string):
+    system, context = fol
+    setvar = system.build_context.variables["setvar"]
+    return from_match(setvar.match(string, context), context)
+
+
+# ---------------------------------------------------------------------------
+# Occurrence / freshness
+# ---------------------------------------------------------------------------
+
+
+def test_occurs_finds_a_subterm(fol):
+    _system, context = fol
+    binding = {"x": setvar_term(fol, "x"), "phi": formula_term(fol, "P(x)")}
+    assert Occurs("x", "phi").check(binding, context)
+
+
+def test_occurs_is_false_when_absent(fol):
+    _system, context = fol
+    binding = {"x": setvar_term(fol, "x"), "phi": formula_term(fol, "P(y)")}
+    assert not Occurs("x", "phi").check(binding, context)
+
+
+def test_occurs_is_deep(fol):
+    _system, context = fol
+    binding = {"x": setvar_term(fol, "z"), "phi": formula_term(fol, "∀y.R(z, y)")}
+    assert Occurs("x", "phi").check(binding, context)
+
+
+def test_freshness_is_negated_occurrence(fol):
+    _system, context = fol
+    absent = {"x": setvar_term(fol, "x"), "phi": formula_term(fol, "P(y)")}
+    present = {"x": setvar_term(fol, "x"), "phi": formula_term(fol, "P(x)")}
+    assert Not(Occurs("x", "phi")).check(absent, context)
+    assert not Not(Occurs("x", "phi")).check(present, context)
+
+
+# ---------------------------------------------------------------------------
+# Distinctness ($d)
+# ---------------------------------------------------------------------------
+
+
+def test_distinct_variables(fol):
+    _system, context = fol
+    different = {"x": setvar_term(fol, "a"), "y": setvar_term(fol, "b")}
+    same = {"x": setvar_term(fol, "a"), "y": setvar_term(fol, "a")}
+    assert Distinct("x", "y").check(different, context)
+    assert not Distinct("x", "y").check(same, context)
+
+
+def test_distinct_is_symmetric(fol):
+    _system, context = fol
+    binding = {"x": setvar_term(fol, "a"), "y": setvar_term(fol, "b")}
+    assert Distinct("x", "y").check(binding, context) == Distinct("y", "x").check(binding, context)
+
+
+def test_distinct_variable_sort_ignores_non_variable_symbols(fol):
+    # P(x) and P(z) share the predicate symbol "P" but no *variable*. Restricting
+    # to `setvar` makes Distinct a variable-occurrence check, so they count as
+    # distinct; unrestricted, the shared "P" leaf makes them non-distinct.
+    system, context = fol
+    setvar = system.build_context.variables["setvar"]
+    binding = {"a": formula_term(fol, "P(x)"), "b": formula_term(fol, "P(z)")}
+
+    assert Distinct("a", "b", variable_sort=setvar).check(binding, context)
+    assert not Distinct("a", "b").check(binding, context)
+
+
+def test_distinct_variable_and_formula_is_freshness(fol):
+    # For a variable and a formula, Distinct(setvar) is the $d-style "x not in φ".
+    system, context = fol
+    setvar = system.build_context.variables["setvar"]
+    fresh = {"x": setvar_term(fol, "x"), "phi": formula_term(fol, "P(y)")}
+    captured = {"x": setvar_term(fol, "x"), "phi": formula_term(fol, "P(x)")}
+
+    assert Distinct("x", "phi", variable_sort=setvar).check(fresh, context)
+    assert not Distinct("x", "phi", variable_sort=setvar).check(captured, context)
+
+
+# ---------------------------------------------------------------------------
+# IsVariable and combinators
+# ---------------------------------------------------------------------------
+
+
+def test_is_variable(fol):
+    system, context = fol
+    setvar = system.build_context.variables["setvar"]
+    binding = {"x": setvar_term(fol, "x"), "phi": formula_term(fol, "P(y)")}
+
+    assert IsVariable("x").check(binding, context)
+    assert IsVariable("x", variable_sort=setvar).check(binding, context)
+    assert not IsVariable("phi").check(binding, context)  # P(y) is compound
+
+
+def test_boolean_combinators(fol):
+    _system, context = fol
+    binding = {"x": setvar_term(fol, "x"), "phi": formula_term(fol, "P(y)")}
+    fresh = Not(Occurs("x", "phi"))
+
+    assert And((fresh, IsVariable("x"))).check(binding, context)
+    assert not And((fresh, IsVariable("phi"))).check(binding, context)
+    assert Or((Occurs("x", "phi"), fresh)).check(binding, context)
+    assert not Or((Occurs("x", "phi"),)).check(binding, context)
+
+    # Empty conjunction is vacuously true; empty disjunction vacuously false.
+    assert And(()).check(binding, context)
+    assert not Or(()).check(binding, context)
+
+
+def test_malformed_condition_raises(fol):
+    _system, context = fol
+    binding = {"x": setvar_term(fol, "x")}
+    with pytest.raises(ValueError, match="did not bind"):
+        Occurs("x", "missing").check(binding, context)
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: side-conditions gating a rule over terms
+# ---------------------------------------------------------------------------
+
+
+def check_step(fol, label, premises_conclusion, condition):
+    """Match a whole step, then apply the proviso - the shape a checker uses."""
+    system, context = fol
+    r = rule(system, label)
+    schemas = [from_pattern(a, context) for a in r.antecedents] + [
+        from_pattern(r.deduction, context)
+    ]
+    subjects = [formula_term(fol, s) for s in premises_conclusion]
+    binding = match_all(list(zip(schemas, subjects)), context)
+    return binding is not None and condition.check(binding, context)
+
+
+def test_vacuous_quantification_gated_by_freshness(fol):
+    fresh = Not(Occurs("x", "phi"))
+    # φ = P(y): x not in φ, so ∀x.P(y) is a valid vacuous quantification.
+    assert check_step(fol, "VAC", ["P(y)", "∀x.P(y)"], fresh)
+    # φ = P(x): x occurs in φ, so the vacuous rule must not fire.
+    assert not check_step(fol, "VAC", ["P(x)", "∀x.P(x)"], fresh)
+
+
+def test_distinct_pair_proviso(fol):
+    system, _context = fol
+    setvar = system.build_context.variables["setvar"]
+    distinct = Distinct("x", "y", variable_sort=setvar)
+
+    assert check_step(fol, "DIST", ["R(a, b)", "R(a, b)"], distinct)
+    assert not check_step(fol, "DIST", ["R(a, a)", "R(a, a)"], distinct)
