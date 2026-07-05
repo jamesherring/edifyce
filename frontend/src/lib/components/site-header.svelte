@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { Button } from '$lib/components/ui/button';
-	import BackendStatus from './backend-status.svelte';
 	import { theme } from '$lib/theme.svelte';
 	import Sun from '@lucide/svelte/icons/sun';
 	import Moon from '@lucide/svelte/icons/moon';
@@ -46,9 +45,6 @@
 		</nav>
 
 		<div class="ml-auto flex items-center gap-2">
-			<div class="hidden sm:block">
-				<BackendStatus />
-			</div>
 			<Button variant="ghost" size="icon" onclick={() => theme.toggle()} title="Toggle theme">
 				{#if theme.value === 'dark'}
 					<Sun class="size-4" />
