@@ -21,9 +21,6 @@
 		{@render children()}
 	</main>
 	<footer class="text-muted-foreground border-t py-6 text-center text-sm">
-		Edifyce · a formal proof assistant · <a
-			class="hover:text-foreground underline underline-offset-4"
-			href="https://github.com/jamesherring/edifyce">source</a
-		>
+		Edifyce · a formal proof assistant
 	</footer>
 </div>
