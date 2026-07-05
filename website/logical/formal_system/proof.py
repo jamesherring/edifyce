@@ -2,8 +2,32 @@
 
 import itertools
 from copy import copy
+from dataclasses import dataclass, field
 
 from ..matching import Match, MatchSet, get_by_path, parse_arguments, parse_path
+
+
+@dataclass(eq=False)
+class InferenceReference:
+    """A reference that resolves to an inference rule application.
+
+    Returned by :meth:`Proof.get_reference` when a reference string names an
+    inference rule (optionally with antecedent lines and a variable mapping).
+    """
+
+    inference_rule: object
+    key: str
+    antecedents: list = field(default_factory=list)
+    mapping: dict = field(default_factory=dict)
+
+
+@dataclass(eq=False)
+class ImportResult:
+    """The outcome of :meth:`Proof.import_path`."""
+
+    success: bool
+    error_message: str | None = None
+    target: object = None
 
 
 class Proof:
@@ -85,12 +109,7 @@ class Proof:
         for ir in self.formal_system.inference_rules:
             # Compare against the ir label and formatted label
             if ref == ir.label or ref == self.formal_system.format_string(ir.label):
-                return {
-                    "inference_rule": ir,
-                    "antecedents": [],
-                    "key": ref,
-                    "mapping": {}
-                }
+                return InferenceReference(inference_rule=ir, key=ref)
 
         if ", " in ref:
             # Split the ref into parts
@@ -128,12 +147,9 @@ class Proof:
                         # Otherwise this is not a proof line
                         raise Exception(f"{r} is not a proof line.")
 
-                    return {
-                        "inference_rule": ir,
-                        "antecedents": antecedents,
-                        "key": key,
-                        "mapping": mapping
-                    }
+                    return InferenceReference(
+                        inference_rule=ir, key=key, antecedents=antecedents, mapping=mapping
+                    )
 
             raise Exception(f"'{key}' is not a valid inference rule key.")
 
@@ -209,19 +225,19 @@ class Proof:
             proof_line.valid = False
             return False
 
-        if not (type(reference) is dict and "inference_rule" in reference):
+        if not isinstance(reference, InferenceReference):
             proof_line.invalid_message = f"Invalid reference '{proof_line.reference_string}'."
             proof_line.valid = False
             return False
 
         # Otherwise, it's an inference rule
 
-        inference_rule = reference["inference_rule"]
-        key = reference["key"]
-        proof_line.reference_mapping = reference["mapping"]
+        inference_rule = reference.inference_rule
+        key = reference.key
+        proof_line.reference_mapping = reference.mapping
 
         # Get the antecedent lines
-        antecedents = reference["antecedents"]
+        antecedents = reference.antecedents
 
         if len(antecedents) == 0 and len(inference_rule.antecedents) == 0:
             # No antecedents for this inference rule
@@ -308,11 +324,7 @@ class Proof:
             item = self.reference_proofs[path]
             if "errorMessage" in item:
                 add_reference(item["target"])
-                return {
-                    "success": False,
-                    "errorMessage": item["errorMessage"],
-                    "target": item["target"]
-                }
+                return ImportResult(success=False, error_message=item["errorMessage"], target=item["target"])
 
             ref_item = item["target"]
 
@@ -342,10 +354,7 @@ class Proof:
                         ref_item = ref_item.proof
 
                 except Exception as e:
-                    return {
-                        "success": False,
-                        "errorMessage": str(e)
-                    }
+                    return ImportResult(success=False, error_message=str(e))
 
             elif initial in self.reference_proofs:
                 # Found it
@@ -354,11 +363,7 @@ class Proof:
                 if "errorMessage" in ref_dict:
                     # This is an error string
                     add_reference(ref_dict["target"])
-                    return {
-                        "success": False,
-                        "errorMessage": ref_dict["errorMessage"],
-                        "target": ref_dict["target"]
-                    }
+                    return ImportResult(success=False, error_message=ref_dict["errorMessage"], target=ref_dict["target"])
 
                 ref_target = ref_dict["target"]
                 ref_item = ref_target.get_reference(remainder, context)
@@ -366,27 +371,24 @@ class Proof:
                 if ref_item is None:
                     # No such label in the ref proof
                     add_reference(ref_target)
-                    return {
-                        "success": False,
-                        "errorMessage": f"{initial} does not have a line with label {remainder}.",
-                        "target": ref_target
-                    }
+                    return ImportResult(
+                        success=False,
+                        error_message=f"{initial} does not have a line with label {remainder}.",
+                        target=ref_target,
+                    )
 
                 if isinstance(ref_target, Proof) and (ref_target.has_warnings or not ref_target.valid):
                     # Referenced proof has errors
                     add_reference(ref_target)
-                    return {
-                        "success": False,
-                        "errorMessage": f"{path} has unresolved errors.",
-                        "target": ref_target
-                    }
+                    return ImportResult(
+                        success=False,
+                        error_message=f"{path} has unresolved errors.",
+                        target=ref_target,
+                    )
 
             else:
                 # Don't recognise the path
-                return {
-                    "success": False,
-                    "errorMessage": f"Could not find '{path}'."
-                }
+                return ImportResult(success=False, error_message=f"Could not find '{path}'.")
 
         # Add the reference
         self.reference_context[label] = ref_item
@@ -403,10 +405,7 @@ class Proof:
                     context.definitions.add(line.definition)
                     self.import_definition(line.definition, context)
 
-        return {
-            "success": True,
-            "target": ref_item
-        }
+        return ImportResult(success=True, target=ref_item)
 
     def import_definition(self, definition, context):
         # Import the given definition from one proof to another. Requires careful handling with inherited patterns
@@ -626,10 +625,10 @@ class ProofLine:
                 path = self.match.get_by_path("path()", context)
                 result = self.proof.import_path(path, self.label, context)
 
-                if not result["success"]:
+                if not result.success:
                     # Error
                     self.valid = False
-                    self.invalid_message = result["errorMessage"]
+                    self.invalid_message = result.error_message
 
             except Exception as e:
                 # No valid path or label
@@ -982,7 +981,11 @@ class ProofLine:
         if previous_line.inference is not None:
             # Check the reference is still valid
             try:
-                ants = self.proof.get_reference(previous_line.reference_string, self.context)["antecedents"]
+                reference = self.proof.get_reference(previous_line.reference_string, self.context)
+                if not isinstance(reference, InferenceReference):
+                    # Reference no longer resolves to an inference application
+                    return False
+                ants = reference.antecedents
 
             except Exception:
                 # Failed to get reference
