@@ -2,4 +2,4 @@
 	import HomeContent from '$lib/mockups/home-content.svelte';
 </script>
 
-<HomeContent />
+<HomeContent base="/1" />
