@@ -1,6 +1,7 @@
 from website.logical.matching import *
 from website.logical.matching import Pattern, constant
 from website.logical.formal_system import FormalSystem, LineType, InferenceRule, ProofLine
+from website.logical.formal_system.side_condition_syntax import parse_side_condition
 from copy import copy, deepcopy
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -835,12 +836,17 @@ class AbstractSyntaxTree:
 
                     return
 
-                elif stripped == "condition:":
-                    # Create a condition for the rule
-
-                    # Start with an empty condition
-                    new_object = Condition(string="")
-                    current_object.condition = new_object
+                elif stripped == "side_conditions:":
+                    # Kernel side-conditions: a closed, structural vocabulary
+                    # checked against the rule's term binding. Replaces the
+                    # legacy condition mini-language for rule provisos.
+                    for line in self.sub_trees:
+                        stripped_line = line.line.strip()
+                        if len(stripped_line) > 0 and not stripped_line[0] == "#":
+                            current_object.side_conditions.append(
+                                parse_side_condition(stripped_line, context)
+                            )
+                    return
 
                 elif stripped == "allow_extra_antecedents:":
                     # Maybe allow extra antecedents (should be True or False)
@@ -868,6 +874,16 @@ class AbstractSyntaxTree:
 
                     for ant in current_object.antecedents:
                         ant.pre_format = new_object
+
+                elif stripped == "condition:":
+                    # The legacy condition mini-language was removed from rules.
+                    # Error the line rather than silently dropping the proviso
+                    # (which would be a soundness hazard), and point at the
+                    # replacement vocabulary.
+                    raise Exception(
+                        f"Inference rule '{current_object.name}' uses a 'condition:' block, "
+                        "which is no longer supported; use 'side_conditions:' instead."
+                    )
 
             elif type(current_object) in (dict, OrderedDict):
                 # Add a key value pair to the dictionary
@@ -970,6 +986,7 @@ class AbstractSyntaxTree:
             return
 
         # Run any sub trees in a copy of context
+        error_log_len = len(context.error_log)
         sub_context = copy(context)
 
         # Add the new object if it exists
@@ -984,6 +1001,13 @@ class AbstractSyntaxTree:
 
             if tree.error is not None:
                 context.error_log.append(f"{tree.line_number!s}: {tree.error}")
+
+        # Errors from deeper subtrees accumulate in the copied sub_context; surface
+        # them so a malformed nested line (e.g. a bad side-condition) reaches the
+        # returned error_log instead of being silently dropped - which would leave
+        # a constrained rule unconstrained. Only the entries added below the
+        # snapshot are new, so extend rather than reassign.
+        context.error_log.extend(sub_context.error_log[error_log_len:])
 
         # Add inference rules to formal systems
         if isinstance(new_object, InferenceRule) and isinstance(current_object, FormalSystem):

@@ -1,0 +1,50 @@
+# ZFC set theory in Edifyce's declarative front-end.
+#
+# Read top-to-bottom: a term/formula grammar, the shape of a proof line, a
+# handful of axioms and rules, and then LAYERS OF DEFINITIONS that build
+# familiar notation (⊆, ∅, singletons, ...) on top of the raw ∈/= base.
+#
+# Compile with website.logical.declarative.build().
+
+system ZFC
+
+notation
+  brackets ( )
+
+grammar
+  # sort    | name          | body                    | bindings
+  term      | variable      | matches [a-z][a-z0-9]*
+  formula   | membership    | s ∈ t                   | s, t : term
+  formula   | equality      | s = t                   | s, t : term
+  formula   | negation      | ¬p                      | p : formula
+  formula   | conjunction   | (p ∧ q)                 | p, q : formula
+  formula   | disjunction   | (p ∨ q)                 | p, q : formula
+  formula   | implication   | (p → q)                 | p, q : formula
+  formula   | biconditional | (p ↔ q)                 | p, q : formula
+  formula   | universal     | ∀x p                    | x : variable, p : formula
+  formula   | existential   | ∃x p                    | x : variable, p : formula
+
+line statement
+  shape <formula> [<reference>]
+  reference | matches [A-Za-z0-9 ,]+
+  logical formula
+
+axioms
+  # An axiom is asserted: a line matching this formula is self-justifying
+  # (write the bare formula, no citation needed).
+  # label | name           | formula
+  EXT     | extensionality | ∀x ∀y (∀z (z ∈ x ↔ z ∈ y) → x = y)
+
+rules
+  # label | name                    | premises           | conclusion | bindings
+  HYP     | hypothesis              | from               | infer p    | p : formula
+  MP      | modus ponens            | from p ; (p → q)   | infer q    | p, q : formula
+
+definitions
+  # Layer familiar notation on the raw ∈/= base. Each abbreviation is a
+  # first-class formula the checker recognises wherever a formula is expected.
+  # sort  | name       | notation | means <expansion>                     | bindings
+  formula | subset     | x ⊆ y    | means ∀z (z ∈ x → z ∈ y)              | x, y, z : variable
+  formula | superset   | x ⊇ y    | means y ⊆ x                           | x, y : variable
+  formula | equal-sets | x ≡ y    | means (x ⊆ y ∧ y ⊆ x)                 | x, y : variable
+  formula | disjoint   | x ∦ y    | means ¬∃w (w ∈ x ∧ w ∈ y)             | x, y, w : variable

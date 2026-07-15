@@ -1,7 +1,6 @@
 <script lang="ts">
 	import '../app.css';
 	import { onMount } from 'svelte';
-	import favicon from '$lib/assets/favicon.svg';
 	import SiteHeader from '$lib/components/site-header.svelte';
 	import PenroseBg from '$lib/components/penrose-bg.svelte';
 	import { theme } from '$lib/theme.svelte';
@@ -12,7 +11,6 @@
 </script>
 
 <svelte:head>
-	<link rel="icon" href={favicon} />
 	<link
 		rel="preload"
 		href="/fonts/cmu-serif-roman.woff2"

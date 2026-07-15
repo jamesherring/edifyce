@@ -4,7 +4,7 @@
 	import { theme } from '$lib/theme.svelte';
 	import Sun from '@lucide/svelte/icons/sun';
 	import Moon from '@lucide/svelte/icons/moon';
-	import Sigma from '@lucide/svelte/icons/sigma';
+	import Turnstile from '$lib/components/icons/turnstile.svelte';
 
 	const nav = [
 		{ href: '/', label: 'Home' },
@@ -23,7 +23,7 @@
 	<div class="mx-auto flex h-14 max-w-5xl items-center gap-4 px-4">
 		<a href="/" class="flex items-center gap-2 font-semibold">
 			<span class="bg-primary text-primary-foreground grid size-7 place-items-center rounded-md">
-				<Sigma class="size-4" />
+				<Turnstile class="size-4" />
 			</span>
 			<span class="tracking-tight">Edifyce</span>
 		</a>

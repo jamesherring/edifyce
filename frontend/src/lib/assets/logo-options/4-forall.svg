@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Edifyce — for all (universal quantifier)">
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="#1c1c1c"/>
+  <rect x="2.75" y="2.75" width="58.5" height="58.5" rx="15.25" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="1.5"/>
+  <g fill="none" stroke="#fafafa" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M32 47 L22 17"/>
+    <path d="M32 47 L42 17"/>
+    <path d="M26 31 H38"/>
+  </g>
+</svg>
