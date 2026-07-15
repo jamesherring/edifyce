@@ -645,3 +645,46 @@ def test_selects_one_of_disjoint_bicon_redexes(prop, prop_formula):
     assert check_definitional_step(
         term(prop, prop_formula, both), term(prop, prop_formula, right_only), d, context
     )
+
+
+# ---------------------------------------------------------------------------
+# A step must be *only* an unfold: recovering the binder from the target must
+# not also instantiate the definition's parameters. Checking against a schema
+# source (whose parameters are still variables) must keep them pinned.
+# ---------------------------------------------------------------------------
+
+
+def test_binder_recovery_does_not_instantiate_parameters(theory, formula, setvar):
+    _system, context = theory
+    d = df_subset(theory, setvar, fresh={"z": setvar})
+
+    # `d.higher` is the schema `(x ⊆ y)`, with x/y still variables. A genuine
+    # unfold keeps them variables (only the binder is named), so expanding to a
+    # form where the parameters became concrete `a`/`b` is NOT a definitional
+    # step - it also instantiated x:=a, y:=b.
+    assert not check_definitional_step(
+        d.higher,
+        term(theory, formula, "∀w.((w ∈ a) → (w ∈ b))"),  # parameters instantiated
+        d,
+        context,
+    )
+
+
+# ---------------------------------------------------------------------------
+# A caller-supplied binder name must denote a leaf of its sort; a name that does
+# not parse as the sort is rejected rather than producing a bogus formula.
+# ---------------------------------------------------------------------------
+
+
+def test_rejects_a_chosen_name_that_is_not_a_leaf_of_its_sort(theory, formula, setvar):
+    _system, context = theory
+    d = df_subset(theory, setvar, fresh={"z": setvar})
+    redex = term(theory, formula, "(a ⊆ b)")
+
+    # `setvar` is `^[a-z]$`: neither a multi-letter name nor a compound formula
+    # parses as a single variable, so the unfold is refused (no bogus `∀aa...`).
+    assert unfold(d, redex, context, names={"z": "aa"}) is None
+    assert unfold(d, redex, context, names={"z": "(a ∈ b)"}) is None
+    # A genuine single-letter name is still accepted, confirming only the
+    # ill-typed choices are refused.
+    assert unfold(d, redex, context, names={"z": "w"}) is not None

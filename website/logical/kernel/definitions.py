@@ -180,7 +180,10 @@ def unfold(
         return None
     if definition.condition is not None and not definition.condition.check(binding, context):
         return None
-    bound_binding = _resolve_bound_names(definition, names)
+    bound_binding = _resolve_bound_names(definition, names, context)
+    if bound_binding is None:
+        # A chosen name does not parse as its binder's sort.
+        return None
     if not _bounds_are_fresh(definition, binding, bound_binding, context):
         return None
     # Parameters and binders substitute in one pass: their keys are disjoint
@@ -188,14 +191,24 @@ def unfold(
     return definition.lower.substitute({**binding, **bound_binding}, context)
 
 
-def _resolve_bound_names(definition: Definition, names: dict[str, str] | None) -> Binding:
+def _resolve_bound_names(
+    definition: Definition, names: dict[str, str] | None, context: Context
+) -> Binding | None:
     """The binding that instantiates each abstract binder to its chosen concrete
-    leaf: ``{bound-key: Node(sort, literal=chosen)}``, chosen from ``names`` and
-    falling back to the declared ``fresh`` name."""
+    leaf, chosen from ``names`` and falling back to the declared ``fresh`` name.
+
+    Each chosen name is parsed against the binder's sort, so a caller cannot
+    smuggle in a string that does not denote a leaf of that sort (e.g. ``"aa"``
+    or ``"(a ∈ b)"`` for a single-letter ``setvar``): an unparsable name yields
+    ``None``, rejecting the unfold rather than building a bogus leaf.
+    """
     resolved: Binding = {}
     for index, (name, sort) in enumerate(definition.fresh):
         chosen = names.get(name, name) if names else name
-        resolved[_bound_label(index)] = Node(pattern=sort, literal=chosen)
+        matched = sort.match(chosen, context)
+        if matched is None:
+            return None
+        resolved[_bound_label(index)] = from_match(matched, context)
     return resolved
 
 
@@ -264,15 +277,25 @@ def _unfolds_to(definition: Definition, source: Term, target: Term, context: Con
     if definition.condition is not None and not definition.condition.check(binding, context):
         return False
 
-    # Substitute the parameters, leaving binders abstract; then recover each
-    # binder's concrete name by matching the result against the claimed target.
-    reified = definition.lower.substitute(binding, context)
-    bound_binding = match(reified, target, context)
-    if bound_binding is None:
+    # Recover each binder's concrete name by matching the defining form against
+    # the claimed target, *seeded with the parameter binding* so the parameters
+    # stay pinned. Without the seed, a schema source (whose parameters are still
+    # `Var` leaves in ``lower``) would let the match rebind them to whatever the
+    # target holds - turning "one unfold" into "unfold *and* instantiate the
+    # parameters", which is not a definitional step.
+    recovered = match(definition.lower, target, context, binding=dict(binding))
+    if recovered is None:
         return False
+    # Only the declared binders may be newly determined by the target; anything
+    # else newly bound means the match reached past the binders (e.g. an
+    # ill-formed defining form with a free parameter), so reject the step.
+    bound_keys = {_bound_label(index) for index in range(len(definition.fresh))}
+    if set(recovered) - set(binding) - bound_keys:
+        return False
+    bound_binding = {key: recovered[key] for key in bound_keys if key in recovered}
     if not _bounds_are_fresh(definition, binding, bound_binding, context):
         return False
-    return reified.substitute(bound_binding, context).equal(target, context)
+    return definition.lower.substitute(recovered, context).equal(target, context)
 
 
 def _rewrites_once(source: Term, target: Term, definition: Definition, context: Context) -> bool:
