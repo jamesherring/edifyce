@@ -334,3 +334,101 @@ def test_without_fresh_the_unfold_would_capture(theory, formula, setvar):
     captured = unfold(unguarded, term(theory, formula, "(z ⊆ b)"), context)
     assert captured is not None
     assert captured.to_string() == "∀z.((z ∈ z) → (z ∈ b))"  # z was captured
+
+
+# ---------------------------------------------------------------------------
+# Abstract bound variables: a would-be capturing application unfolds cleanly
+# once the consumer renames the binder to a fresh name (instead of being
+# rejected outright).
+# ---------------------------------------------------------------------------
+
+
+def test_unfold_renames_the_binder_to_a_chosen_fresh_name(theory, formula, setvar):
+    # `(z ⊆ b)` collides with the bound `z`. Declaring `z` fresh makes the binder
+    # abstract, so the consumer can pick a fresh name `w`: the unfold renames the
+    # binder rather than capturing the argument.
+    _system, context = theory
+    d = df_subset(theory, setvar, fresh={"z": setvar})
+
+    renamed = unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": "w"})
+    assert renamed is not None
+    assert renamed.to_string() == "∀w.((w ∈ z) → (w ∈ b))"  # binder renamed, no capture
+
+    # The other slot behaves symmetrically: `(a ⊆ z)` -> ∀w.(w ∈ a → w ∈ z).
+    other = unfold(d, term(theory, formula, "(a ⊆ z)"), context, names={"z": "w"})
+    assert other is not None
+    assert other.to_string() == "∀w.((w ∈ a) → (w ∈ z))"
+
+
+def test_a_chosen_name_that_still_collides_is_rejected(theory, formula, setvar):
+    # Renaming does not license *any* name - the chosen name must itself be fresh.
+    # Picking `z` (the argument) or `b` (the other argument) would recapture.
+    _system, context = theory
+    d = df_subset(theory, setvar, fresh={"z": setvar})
+
+    assert unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": "z"}) is None
+    assert unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": "b"}) is None
+    # A clear name still works, confirming only the colliding choices are refused.
+    assert unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": "w"}) is not None
+
+
+def test_check_step_recovers_the_renamed_binder_from_the_target(theory, formula, setvar):
+    # In a proof the chosen name is not supplied separately: it is read off the
+    # target line. `check_definitional_step` therefore accepts the renamed unfold
+    # (in both directions) and still rejects a target that recaptures.
+    _system, context = theory
+    d = df_subset(theory, setvar, fresh={"z": setvar})
+
+    subset = "(z ⊆ b)"
+    renamed = "∀w.((w ∈ z) → (w ∈ b))"
+
+    # Unfold and fold, with the fresh name recovered from `renamed`.
+    assert check_definitional_step(
+        term(theory, formula, subset), term(theory, formula, renamed), d, context
+    )
+    assert check_definitional_step(
+        term(theory, formula, renamed), term(theory, formula, subset), d, context
+    )
+
+    # A target that reuses a colliding name is still rejected: `∀z.(z ∈ z → z ∈ b)`
+    # recaptures the argument `z`, and `∀b.(b ∈ z → b ∈ b)` recaptures `b`.
+    assert not check_definitional_step(
+        term(theory, formula, subset),
+        term(theory, formula, "∀z.((z ∈ z) → (z ∈ b))"),
+        d,
+        context,
+    )
+    assert not check_definitional_step(
+        term(theory, formula, subset),
+        term(theory, formula, "∀b.((b ∈ z) → (b ∈ b))"),
+        d,
+        context,
+    )
+
+
+def test_check_step_requires_the_binder_used_consistently(theory, formula, setvar):
+    # The binder is one abstract node shared across its occurrences, so a target
+    # that spells it differently in different positions is not a valid unfold.
+    _system, context = theory
+    d = df_subset(theory, setvar, fresh={"z": setvar})
+
+    assert not check_definitional_step(
+        term(theory, formula, "(a ⊆ b)"),
+        term(theory, formula, "∀w.((w ∈ a) → (v ∈ b))"),  # w vs v: inconsistent
+        d,
+        context,
+    )
+
+
+def test_renamed_unfold_applies_inside_a_larger_formula(theory, formula, setvar):
+    # Binder renaming composes with the subterm descent: the left conjunct is
+    # unfolded (with a fresh `w`) while the right subset is left untouched.
+    _system, context = theory
+    d = df_subset(theory, setvar, fresh={"z": setvar})
+
+    assert check_definitional_step(
+        term(theory, formula, "((z ⊆ b) → (c ⊆ d))"),
+        term(theory, formula, "(∀w.((w ∈ z) → (w ∈ b)) → (c ⊆ d))"),
+        d,
+        context,
+    )
