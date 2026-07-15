@@ -6,8 +6,8 @@ from copy import copy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from ..kernel import from_match, from_pattern, match_all
-from ..matching import Match, get_by_path, parse_path
+from ..kernel import Var, from_match, from_pattern, match_all
+from ..matching import Match, StringPattern, get_by_path, parse_path
 from .proof import ProofLine
 
 if TYPE_CHECKING:
@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
     from ..kernel import Term
     from ..matching.context import Context
+    from ..matching.patterns import Pattern
 
     # A rule match's substitution: schematic variable name -> the Term it binds to.
     Binding = dict[str, Term]
@@ -118,10 +119,10 @@ class InferenceRule:
             return None
 
         pairs = [
-            (from_pattern(self.deduction, context), from_match(deduction.formula, context))
+            (self._schema_term(self.deduction, 0, context), from_match(deduction.formula, context))
         ]
 
-        for pattern, ant in zip(self.antecedents, antecedents):
+        for occurrence, (pattern, ant) in enumerate(zip(self.antecedents, antecedents), start=1):
             if ant.line_type is None:
                 return None
 
@@ -135,9 +136,33 @@ class InferenceRule:
             if ant.formula is None:
                 return None
 
-            pairs.append((from_pattern(pattern, context), from_match(ant.formula, context)))
+            pairs.append(
+                (self._schema_term(pattern, occurrence, context), from_match(ant.formula, context))
+            )
 
         return match_all(pairs, context)
+
+    def _schema_term(self, pattern: Pattern, occurrence: int, context: Context) -> Term:
+        """Project a schema pattern into a term, keeping named metavariables
+        shared but making each bare-sort position independent.
+
+        A named metavariable (``p``, ``q``, ... - a ``StringPattern`` slot) is
+        meant to denote the same formula everywhere it appears, so its name is
+        left intact and the shared binding pins it. A bare sort used directly
+        (``formula`` meaning "any formula") has no name to share by; two such
+        positions are independent premises, so each occurrence's anonymous
+        variable is renamed apart rather than collapsed into one binding.
+        """
+        term = from_pattern(pattern, context)
+
+        if isinstance(pattern, StringPattern):
+            return term
+
+        renames = {
+            name: Var(f"{name}\x00{occurrence}", sort)
+            for name, sort in term.free_vars().items()
+        }
+        return term.substitute(renames, context) if renames else term
 
     def _legacy_condition_holds(
         self,
