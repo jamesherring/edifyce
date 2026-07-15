@@ -1,10 +1,23 @@
 """Inference rules and their applications: :class:`InferenceRule`, :class:`Inference`."""
 
+from __future__ import annotations
+
 from copy import copy
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
+from ..kernel import from_match, from_pattern, match_all
 from ..matching import Match, get_by_path, parse_path
 from .proof import ProofLine
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from ..kernel import Term
+    from ..matching.context import Context
+
+    # A rule match's substitution: schematic variable name -> the Term it binds to.
+    Binding = dict[str, Term]
 
 
 class InferenceRule:
@@ -58,53 +71,25 @@ class InferenceRule:
         # Create an inference instance
         inference = Inference(self, antecedents, extra_antecedents, deduction)
 
-        # First check if the deduction matches
-        inference.deduction_inference_match = self.deduction.match(deduction.formula.formatted_string(), context)
-
-        if inference.deduction_inference_match is None:
-            # No match
+        # Structural check over terms (the graph representation): the deduction
+        # and every logical antecedent must match their schemas under one shared
+        # binding, derived by unification. This replaces re-parsing each line's
+        # string against the schema and reconciling the sub-matches by hand
+        # (`check_variables`) - the formulae are already parsed, so we project
+        # them straight to terms and never re-run the matcher.
+        binding = self._term_binding(antecedents, deduction, context)
+        if binding is None:
+            # No consistent match
             return False
 
-        # Check if the antecedents match
-        for pattern, ant in zip(self.antecedents, antecedents):
-            if ant.line_type is None:
-                return False
-
-            if (not ant.line_type.behaviour == "logical") and pattern.equivalent(ant.line_type.pattern, context):
-                # This is an instance of a non-logical line
-                continue
-
-            if ant.formula is None:
-                return False
-
-            # Set the inference match - can be used in the Condition
-            match = pattern.match(ant.formula.formatted_string(), ant.context)
-
-            if match is None:
-                # No match
-                return False
-
-            inference.antecedent_inference_matches.append(match)
-
-        # Check variables are consistent
-        if not inference.check_variables(context):
-            # Variables not consistent
+        # The rule's condition is still evaluated by the legacy interpreter,
+        # which reads its variables as Match objects. Build those (the old
+        # string-matching path) only when a condition is present; they move to
+        # the kernel's SideCondition algebra in a later step.
+        if self.condition is not None and not self._legacy_condition_holds(
+            inference, antecedents, deduction, context
+        ):
             return False
-
-        # Check the rule condition
-        if self.condition is not None:
-            # Add contextual variables for the condition
-            context_copy = copy(context)
-            context_copy.mapping = copy(inference.variables)
-
-            try:
-                if not self.condition.check_condition(inference, context_copy):
-                    # Doesn't meet the condition
-                    return False
-
-            except Exception:
-                # Error trying to apply the condition
-                return False
 
         # Otherwise ok
         deduction.inference_rule = self
@@ -116,6 +101,95 @@ class InferenceRule:
             ant.dependent_lines.add(deduction)
 
         return True
+
+    def _term_binding(
+        self, antecedents: Sequence[ProofLine], deduction: ProofLine, context: Context
+    ) -> Binding | None:
+        """Derive the substitution under which the deduction and every logical
+        antecedent match their schemas, or ``None`` if none is consistent.
+
+        Each ``(schema, subject)`` pair is projected into the term space -
+        schemas via :func:`from_pattern` (variable slots become ``Var`` leaves),
+        already-parsed formulae via :func:`from_match` - and unified together, so
+        a metavariable shared across antecedents and the conclusion is forced to
+        one value by a single binding rather than reconciled after the fact.
+        """
+        if deduction.formula is None:
+            return None
+
+        pairs = [
+            (from_pattern(self.deduction, context), from_match(deduction.formula, context))
+        ]
+
+        for pattern, ant in zip(self.antecedents, antecedents):
+            if ant.line_type is None:
+                return None
+
+            if ant.line_type.behaviour != "logical" and pattern.equivalent(
+                ant.line_type.pattern, context
+            ):
+                # An instance of a non-logical line: matched structurally by its
+                # type, it carries no formula variables, so it binds nothing.
+                continue
+
+            if ant.formula is None:
+                return None
+
+            pairs.append((from_pattern(pattern, context), from_match(ant.formula, context)))
+
+        return match_all(pairs, context)
+
+    def _legacy_condition_holds(
+        self,
+        inference: "Inference",
+        antecedents: Sequence[ProofLine],
+        deduction: ProofLine,
+        context: Context,
+    ) -> bool:
+        """Evaluate the rule's condition on the legacy Match interpreter.
+
+        The condition mini-language reads its variables as ``Match`` objects, so
+        rebuild the deduction/antecedent matches and the consolidated
+        ``inference.variables`` the old way, then check the condition against
+        them. Retained verbatim until conditions move to the SideCondition
+        algebra; ``_term_binding`` has already decided the structural match.
+        """
+        inference.deduction_inference_match = self.deduction.match(
+            deduction.formula.formatted_string(), context
+        )
+        if inference.deduction_inference_match is None:
+            return False
+
+        for pattern, ant in zip(self.antecedents, antecedents):
+            if ant.line_type is None:
+                return False
+
+            if ant.line_type.behaviour != "logical" and pattern.equivalent(
+                ant.line_type.pattern, context
+            ):
+                continue
+
+            if ant.formula is None:
+                return False
+
+            match = pattern.match(ant.formula.formatted_string(), ant.context)
+            if match is None:
+                return False
+
+            inference.antecedent_inference_matches.append(match)
+
+        if not inference.check_variables(context):
+            return False
+
+        # Add contextual variables for the condition
+        context_copy = copy(context)
+        context_copy.mapping = copy(inference.variables)
+
+        try:
+            return bool(self.condition.check_condition(inference, context_copy))
+        except Exception:
+            # Error trying to apply the condition
+            return False
 
     def equivalent(self, other, context, memo=None):
         # Check equivalent
