@@ -11,6 +11,7 @@ dependencies = [
     "pydantic>=2.9",
     "python-dotenv>=1.0",
     "regex>=2024.9",
+    "sqlalchemy>=2.0",
 ]
 
 [dependency-groups]

@@ -584,6 +584,17 @@ def build(source: str, system_dict: dict | None = None) -> dict:
     except DeclarativeError as exc:
         return {"errors": [str(exc)]}
 
+    return build_spec(spec, system_dict=system_dict)
+
+
+def build_spec(spec: SystemSpec, system_dict: dict | None = None) -> dict:
+    """Build a ``FormalSystem`` from an already-parsed :class:`SystemSpec`.
+
+    The entry point for callers that hold a ``SystemSpec`` directly rather than
+    source text -- e.g. a persistence layer that reconstructs one from database
+    rows. Same return shape as :func:`build`.
+    """
+
     edi = lower(spec)
     result = compile_edi(edi, system_dict=system_dict)
 
