@@ -14,7 +14,9 @@ import pytest
 pytest.importorskip("regex")
 
 from website.logical.compiler import compile as compile_formal_system
-from website.logical.kernel import Node, Var, from_match, from_pattern, intern
+from website.logical.kernel import Node, Var, from_match, from_pattern, intern, match
+from website.logical.kernel.terms import _node
+from website.logical.matching import StringPattern
 
 
 def build(code):
@@ -152,3 +154,28 @@ def test_nodes_differing_only_in_sort_are_not_merged(fopl):
     assert plain is not with_sort
     # ...even though `equal` ignores sort and calls them equal.
     assert plain.equal(with_sort, context)
+
+
+def test_different_constructors_are_not_merged(fopl):
+    # A substituted rule schema `(p -> q)` (an inline `antecedent` pattern) and a
+    # parsed production `(a -> b)` (`implication`) share a signature and children,
+    # but must not be interned to one object: they carry different sorts, and a
+    # parsed formula must keep its production so sort admission still works -
+    # regardless of which was built first.
+    system, context, formula = fopl
+    implication = system.build_context.variables["implication"]
+    a, b = term(fopl, "a"), term(fopl, "b")
+
+    schema_pattern = StringPattern(
+        "antecedent", "(p -> q)", variables={"p": formula, "q": formula}
+    )
+    # Build the schema-substituted node FIRST, then the parsed production node.
+    node_schema = _node(pattern=schema_pattern, children={"p": a, "q": b})
+    node_production = _node(pattern=implication, children={"p": a, "q": b})
+
+    assert node_schema is not node_production
+    assert node_production.pattern is implication  # kept its production
+    # ...and equal ignores the constructor identity, still calling them equal.
+    assert node_schema.equal(node_production, context)
+    # A formula variable therefore still binds to the parsed production node.
+    assert match(Var("phi", formula), node_production, context) is not None

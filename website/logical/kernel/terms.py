@@ -391,10 +391,18 @@ _INTERN: WeakValueDictionary = WeakValueDictionary()
 
 
 def _term_key(term: Term) -> tuple:
-    """A canonical, hashable key mirroring what ``equal`` distinguishes: a Var by
-    (name, sort); a Node by its constructor *signature*, literal, inhabited sort,
-    and the identities of its children in template-position order (with
-    repetition). Children are already interned, so identity captures structure.
+    """A canonical, hashable key for interning: a Var by (name, sort); a Node by
+    its constructor, literal, inhabited sort, and the identities of its children
+    in template-position order (with repetition). Children are already interned,
+    so identity captures structure.
+
+    The constructor is keyed by pattern *identity*, not by ``_signature`` - two
+    productions with the same shape but different identity (a rule schema's
+    inline ``(p -> q)`` and a system's ``implication``) must not be merged: they
+    are still ``equal``, but they carry different sorts, and ``_term_sort``/
+    sort admission depend on a node keeping its own constructor. Interning is
+    therefore finer than equality (which is sound - ``equal`` remains the
+    authority); it only forgoes sharing between alpha-equivalent constructors.
     """
     if isinstance(term, Var):
         return ("var", term.name, id(term.sort))
@@ -403,7 +411,7 @@ def _term_key(term: Term) -> tuple:
         for label in _locations(term.pattern)
         if label in term.children
     )
-    return ("node", _signature(term.pattern), term.literal, id(term.sort), child_ids)
+    return ("node", id(term.pattern), term.literal, id(term.sort), child_ids)
 
 
 def _canonical(term: Term) -> Term:
