@@ -1,6 +1,7 @@
 from website.logical.matching import *
 from website.logical.matching import Pattern, constant
 from website.logical.formal_system import FormalSystem, LineType, InferenceRule, ProofLine
+from website.logical.formal_system.side_condition_syntax import parse_side_condition
 from copy import copy, deepcopy
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -835,12 +836,17 @@ class AbstractSyntaxTree:
 
                     return
 
-                elif stripped == "condition:":
-                    # Create a condition for the rule
-
-                    # Start with an empty condition
-                    new_object = Condition(string="")
-                    current_object.condition = new_object
+                elif stripped == "side_conditions:":
+                    # Kernel side-conditions: a closed, structural vocabulary
+                    # checked against the rule's term binding. Replaces the
+                    # legacy condition mini-language for rule provisos.
+                    for line in self.sub_trees:
+                        stripped_line = line.line.strip()
+                        if len(stripped_line) > 0 and not stripped_line[0] == "#":
+                            current_object.side_conditions.append(
+                                parse_side_condition(stripped_line, context)
+                            )
+                    return
 
                 elif stripped == "allow_extra_antecedents:":
                     # Maybe allow extra antecedents (should be True or False)
@@ -868,6 +874,16 @@ class AbstractSyntaxTree:
 
                     for ant in current_object.antecedents:
                         ant.pre_format = new_object
+
+                elif stripped == "condition:":
+                    # The legacy condition mini-language was removed from rules.
+                    # Error the line rather than silently dropping the proviso
+                    # (which would be a soundness hazard), and point at the
+                    # replacement vocabulary.
+                    raise Exception(
+                        f"Inference rule '{current_object.name}' uses a 'condition:' block, "
+                        "which is no longer supported; use 'side_conditions:' instead."
+                    )
 
             elif type(current_object) in (dict, OrderedDict):
                 # Add a key value pair to the dictionary

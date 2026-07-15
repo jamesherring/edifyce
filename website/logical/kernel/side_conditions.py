@@ -21,6 +21,9 @@ reading is one instantiation, not something the kernel hard-codes.
       ``φ``".
 * :class:`IsAtom` - a term is a single childless leaf.
       FOL: "this metavariable stands for a variable, not a compound term".
+* :class:`Equal` - two terms are structurally equal.
+      FOL: ``Equal("p", "q")`` is "these two schemas coincide"; its negation,
+      ``Not(Equal(...))``, is the "must be distinct" proviso.
 * :class:`Not`, :class:`And`, :class:`Or` - total boolean combinators.
 
 Nothing here names a connective, a quantifier, or a specific notion of
@@ -162,6 +165,26 @@ class IsAtom(SideCondition):
         if not _is_atom(term):
             return False
         return self.sort is None or _sort_admits(self.sort, term, context)
+
+
+@dataclass(frozen=True)
+class Equal(SideCondition):
+    """The terms bound to ``left`` and ``right`` are structurally equal.
+
+    Generic: a total, purely syntactic test over the term algebra - two
+    metavariables coincide iff their bound terms are equal (no re-parsing, no
+    definitional unfolding). It reuses the same :meth:`Term.equal` the matcher's
+    ground case is built on, so "equal" means one thing across the kernel.
+
+    FOL: ``Equal("p", "q")`` asserts two schematic formulas are the same; the
+    "these must differ" proviso is its negation, ``Not(Equal("p", "q"))``.
+    """
+
+    left: str
+    right: str
+
+    def check(self, binding: Binding, context: Context) -> bool:
+        return _bound(binding, self.left).equal(_bound(binding, self.right), context)
 
 
 @dataclass(frozen=True)

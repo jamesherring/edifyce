@@ -132,6 +132,22 @@ PROP_LOGIC_SYSTEM = """FormalSystem PropLogic:
             deduction:
                 q
 
+        InferenceRule reflexive:
+            label:
+                RImp
+            deduction:
+                (p -> q)
+            side_conditions:
+                equal(p, q)
+
+        InferenceRule non_occurring:
+            label:
+                NOcc
+            deduction:
+                (p -> q)
+            side_conditions:
+                not occurs(p, q)
+
     InferenceRule pair:
         label:
             PAIR
@@ -313,6 +329,26 @@ def test_bare_sort_antecedents_are_independent(prop_logic_system):
     proof = prop_logic_system.parse("a [HYP]\n(a -> b) [HYP]\nb [PAIR, 1, 2]")
     assert proof.valid is True
     assert all(l["valid"] for l in proof.data()["lines"])
+
+
+# ---------------------------------------------------------------------------
+# Kernel side-conditions gating a rule (the side_conditions: block)
+# ---------------------------------------------------------------------------
+
+
+def test_equal_side_condition_gates_rule(prop_logic_system):
+    # RImp requires equal(p, q): only a reflexive implication qualifies.
+    assert prop_logic_system.parse("(a -> a) [RImp]").valid is True
+    invalid = prop_logic_system.parse("(a -> b) [RImp]")
+    assert invalid.valid is False
+    assert invalid.data()["lines"][0]["invalid_message"] == "RImp does not apply."
+
+
+def test_freshness_side_condition_gates_rule(prop_logic_system):
+    # NOcc requires not occurs(p, q): p must not appear inside q.
+    assert prop_logic_system.parse("(a -> (c -> b)) [NOcc]").valid is True
+    assert prop_logic_system.parse("(a -> (a -> b)) [NOcc]").valid is False
+    assert prop_logic_system.parse("(a -> a) [NOcc]").valid is False
 
 
 # ---------------------------------------------------------------------------
