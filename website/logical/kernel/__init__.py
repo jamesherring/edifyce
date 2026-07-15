@@ -24,7 +24,7 @@ about any of them.
 """
 
 from .definitions import Definition, check_definitional_step, unfold
-from .side_conditions import And, DisjointLeaves, IsAtom, Not, Occurs, Or, SideCondition
+from .side_conditions import And, DisjointLeaves, Equal, IsAtom, Not, Occurs, Or, SideCondition
 from .terms import Bound, Node, Term, Var, abstract, bind, from_match, from_pattern, intern
 from .unify import match, match_all
 
@@ -33,6 +33,7 @@ __all__ = [
     "Bound",
     "Definition",
     "DisjointLeaves",
+    "Equal",
     "IsAtom",
     "Node",
     "Not",
