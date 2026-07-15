@@ -127,6 +127,15 @@ def line_is_accessible(citing_line: ProofLine, cited_line: ProofLine) -> bool:
     # This is the natural-deduction reiteration restriction, and it is what
     # makes discharge sound. With no subproofs every line is in the root scope,
     # so this is always True and legacy systems are unaffected.
+
+    # A cited line from a *different* proof is an imported result: its
+    # admissibility is settled by import validation, not by this proof's scope
+    # tree (the two proofs have unrelated scope roots). Ordinary cross-proof
+    # citation is already guarded by the antecedent-ordering check in
+    # InferenceRule.check, so scope restriction simply does not apply here.
+    if getattr(cited_line, "proof", None) is not getattr(citing_line, "proof", None):
+        return True
+
     cited_scope = getattr(cited_line, "scope", None)
     citing_scope = getattr(citing_line, "scope", None)
 

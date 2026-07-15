@@ -177,6 +177,56 @@ def test_universal_generalisation_freshness_violation_rejected(scoped):
     assert proof.proof_lines[3].valid is False
 
 
+def test_ug_rejects_generalising_a_variable_from_an_undischarged_assumption(scoped):
+    # PR #19 review (P1): opening the subproof with a *different* fresh variable
+    # (`let y`) than the one generalised (`∀x`) must not sneak past freshness.
+    # Here x occurs in the still-open assumption `x ∈ c`, so ∀x x∈c is unsound;
+    # the eigenvariable must be tied to the quantified variable.
+    proof = scoped.parse(
+        "assume x ∈ c\n"
+        "    let y\n"
+        "        x ∈ c [R, 1]\n"
+        "    ∀x x ∈ c [UG, 2]"
+    )
+    assert proof.proof_lines[3].valid is False
+
+
+def test_ug_requires_the_opener_to_be_the_generalised_variable(scoped):
+    # Introducing `let x` but concluding `∀y …` generalises a variable that was
+    # never the arbitrary one; the opener/quantifier mismatch is rejected.
+    proof = scoped.parse(
+        "let x\n"
+        "    assume x ∈ c\n"
+        "        x ∈ c [R, 2]\n"
+        "    (x ∈ c → x ∈ c) [CP, 2]\n"
+        "∀y (x ∈ c → x ∈ c) [UG, 1]"
+    )
+    assert proof.proof_lines[4].valid is False
+
+
+def test_imported_line_from_another_proof_is_accessible():
+    # PR #19 review (P2): scope-checking is intra-proof. A line cited from a
+    # different proof (an imported result) has an unrelated scope root and must
+    # not be rejected as "out of scope" - cross-proof citation is governed by
+    # import validation instead.
+    from website.logical.formal_system.proof import Proof, ProofLine, line_is_accessible
+    from website.logical.matching import Context
+
+    context = Context()
+    proof_a = Proof(formal_system=None)
+    proof_b = Proof(formal_system=None)
+
+    line_a = ProofLine(proof_a, "a", context)
+    line_b = ProofLine(proof_b, "b", context)
+    proof_a.assign_scope(line_a)
+    proof_b.assign_scope(line_b)
+
+    # Different proofs, different (non-None) scope roots - still accessible.
+    assert line_a.scope is not line_b.scope
+    assert line_is_accessible(line_b, line_a) is True
+    assert line_is_accessible(line_a, line_b) is True
+
+
 def test_universal_generalisation_over_genuinely_fresh_var_ok(scoped):
     # Here the eigenvariable x does not occur in the enclosing hypothesis
     # (which is about y), so ∀x y∈c is a sound - if vacuous - generalisation.

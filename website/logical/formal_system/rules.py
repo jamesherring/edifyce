@@ -199,6 +199,15 @@ class InferenceRule:
         if schema.assumption is not None:
             schema_pairs.append((schema.assumption, subproof.assumption))
 
+        if schema.fresh is not None:
+            # Tie the eigenvariable to the quantified variable. The fresh schema
+            # variable (e.g. the `x` in `fresh: x`) is the same metavariable as
+            # the bound `x` in the deduction `∀x p`, so matching it against the
+            # subproof's opener forces the *introduced* variable to be the one
+            # actually generalised. Without this, opening `let y` and concluding
+            # `∀x …` would generalise x while only y was checked for freshness.
+            schema_pairs.append((schema.fresh, subproof.assumption))
+
         term_pairs: list[tuple[Term, Term]] = []
         for pattern, line in schema_pairs:
             if line is None or line.formula is None:
