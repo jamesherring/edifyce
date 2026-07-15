@@ -97,7 +97,7 @@ def term(theory, formula, string):
     return from_match(matched, context)
 
 
-def df_subset(theory, setvar, condition=None):
+def df_subset(theory, setvar, condition=None, fresh=None):
     # (x ⊆ y)  :=  ∀z.((z ∈ x) → (z ∈ y))
     _system, context = theory
     formula = _system.build_context.variables["formula"]
@@ -108,6 +108,7 @@ def df_subset(theory, setvar, condition=None):
         {"x": setvar, "y": setvar},
         context,
         condition=condition,
+        fresh=fresh,
     )
 
 
@@ -206,10 +207,9 @@ def test_rejects_two_unfolds_at_once(theory, formula, setvar):
 
 
 def test_side_condition_gates_the_unfold(theory, formula, setvar):
-    # A definition may carry a step-3 proviso; here (illustrating the mechanism)
-    # the two arguments must be distinct variables. The unfold only fires when
-    # the proviso holds. (Genuine capture-avoidance over a bound variable needs
-    # the binder-aware extension noted in side_conditions; this shows gating.)
+    # A definition may carry an *additional* step-3 proviso (beyond the
+    # capture-avoidance generated from `fresh`); here it requires the two
+    # arguments to be distinct variables. The unfold only fires when it holds.
     _system, context = theory
     d = df_subset(theory, setvar, condition=DisjointLeaves("x", "y", sort=setvar))
 
@@ -288,3 +288,49 @@ def test_definition_used_in_both_directions(theory, formula, setvar):
         assert not b.equal(a, context)
         # ...and the same definition `d` justifies the step either way.
         assert check_definitional_step(b, a, d, context), f"{before} -> {after}"
+
+
+# ---------------------------------------------------------------------------
+# Capture-avoidance: an application that would replace a bound variable is
+# rejected, even though it is a structurally valid instance of the defined form
+# ---------------------------------------------------------------------------
+
+
+def test_rejects_capturing_unfold(theory, formula, setvar):
+    # df-subset binds z in its defining form. Declaring z `fresh` makes the
+    # kernel reject any application whose argument is z (or contains it), because
+    # unfolding would place a free z under ∀z and capture it.
+    _system, context = theory
+    d = df_subset(theory, setvar, fresh={"z": setvar})
+
+    # `(z ⊆ b)` matches the defined form (x := z), but unfolding it would yield
+    # ∀z.((z ∈ z) → (z ∈ b)) - the argument z captured by the binder. Rejected.
+    assert unfold(d, term(theory, formula, "(z ⊆ b)"), context) is None
+    assert unfold(d, term(theory, formula, "(a ⊆ z)"), context) is None  # other slot too
+    assert not check_definitional_step(
+        term(theory, formula, "(z ⊆ b)"),
+        term(theory, formula, "∀z.((z ∈ z) → (z ∈ b))"),  # the (wrong) captured form
+        d,
+        context,
+    )
+
+    # Arguments clear of the bound variable are unaffected - the unfold applies.
+    assert unfold(d, term(theory, formula, "(a ⊆ b)"), context) is not None
+    assert check_definitional_step(
+        term(theory, formula, "(a ⊆ b)"),
+        term(theory, formula, "∀z.((z ∈ a) → (z ∈ b))"),
+        d,
+        context,
+    )
+
+
+def test_without_fresh_the_unfold_would_capture(theory, formula, setvar):
+    # Contrast: a definition that does NOT declare its bound variable has no
+    # capture-avoidance proviso, so the same application unfolds unsoundly. This
+    # documents why `fresh` is required for a binder-carrying definition.
+    _system, context = theory
+    unguarded = df_subset(theory, setvar)  # no fresh
+
+    captured = unfold(unguarded, term(theory, formula, "(z ⊆ b)"), context)
+    assert captured is not None
+    assert captured.to_string() == "∀z.((z ∈ z) → (z ∈ b))"  # z was captured

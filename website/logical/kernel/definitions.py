@@ -9,10 +9,20 @@ definitions on its own. In particular ``equal`` and ``unify`` stay purely
 structural - there is no "equal modulo definitions" mode hidden in the matcher.
 
 A :class:`Definition` is a pair of term-schemas ``(higher, lower)`` sharing
-variables, plus an optional **side-condition** drawn from :mod:`side_conditions`
-(so a definition's proviso - e.g. the disjoint-variable condition that keeps an
-unfold capture-free - is expressed with the step-3 vocabulary, not a bespoke
-one).
+variables, plus an optional **side-condition** drawn from :mod:`side_conditions`.
+
+Capture-avoidance
+-----------------
+A defining form may bind variables (the ``z`` in ``∀z.(z ∈ x → z ∈ y)``). A
+naive unfold of ``z ⊆ b`` would substitute ``x := z`` and produce
+``∀z.(z ∈ z → z ∈ b)`` - the free ``z`` *captured* by ``∀z``, silently changing
+the meaning. A definition therefore declares its bound variables as ``fresh``,
+and :func:`unfold` refuses any application whose parameter substitutions would
+place a bound variable inside its own binder - the disjoint-variable proviso
+(Metamath's ``$d``), auto-generated from ``fresh`` and expressed with the step-3
+``DisjointLeaves`` vocabulary. So ``z ⊆ b`` is *rejected*: it is a structurally
+valid instance of the defined form, invalid only because unfolding it would
+replace the bound ``z``.
 
 Two operations, both built entirely from steps 1-3:
 
@@ -48,6 +58,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from .side_conditions import And, DisjointLeaves
 from .terms import Node, abstract, from_match, _locations, _signature
 from .unify import match
 
@@ -55,7 +66,7 @@ if TYPE_CHECKING:
     from ..matching.context import Context
     from ..matching.patterns import Pattern
     from .side_conditions import SideCondition
-    from .terms import FreeVars, Term
+    from .terms import Binding, FreeVars, Term
 
 
 @dataclass(frozen=True)
@@ -70,14 +81,17 @@ class Definition:
     is the term for ``x ⊆ y`` and ``lower`` the term for ``∀z.(z ∈ x → z ∈ y)``,
     sharing the variables ``x`` and ``y``.
 
-    ``condition`` is checked against the binding produced when the definition is
-    applied - e.g. a ``DisjointLeaves`` proviso keeping the substituted terms
-    clear of the definition's bound variables (capture-avoidance).
+    ``fresh`` names the defining form's bound variables (each with its sort),
+    e.g. ``(("z", setvar),)`` for ``df-subset``. From it the kernel generates the
+    disjoint-variable proviso that keeps an unfold capture-free (see the module
+    docstring). ``condition`` is any *additional* proviso, checked against the
+    binding an application produces.
     """
 
     higher: Term
     lower: Term
     condition: SideCondition | None = None
+    fresh: tuple[tuple[str, Pattern], ...] = ()
 
     @classmethod
     def parse(
@@ -88,6 +102,7 @@ class Definition:
         variables: FreeVars,
         context: Context,
         condition: SideCondition | None = None,
+        fresh: FreeVars | None = None,
     ) -> Definition:
         """Build a definition by parsing its two surface forms.
 
@@ -99,8 +114,10 @@ class Definition:
         defining form keeps its structure - which is why this uses parse +
         abstract rather than ``from_pattern`` (see that helper's note).
 
-        The engine's legacy condition DSL is not translated: pass a step-3
-        ``condition`` explicitly if the definition carries a proviso.
+        ``fresh`` maps each bound variable of the defining form to its sort (for
+        ``df-subset``, ``{"z": setvar}``); the capture-avoidance proviso is
+        generated from it. The engine's legacy condition DSL is not translated:
+        pass a step-3 ``condition`` explicitly for any *additional* proviso.
         """
 
         def schema(text: str) -> Term:
@@ -109,23 +126,52 @@ class Definition:
                 raise ValueError(f"Definition form {text!r} does not parse as '{sort.name}'.")
             return abstract(from_match(matched, context), variables)
 
-        return cls(higher=schema(higher), lower=schema(lower), condition=condition)
+        return cls(
+            higher=schema(higher),
+            lower=schema(lower),
+            condition=condition,
+            fresh=tuple((fresh or {}).items()),
+        )
 
 
 def unfold(definition: Definition, redex: Term, context: Context) -> Term | None:
     """Apply ``definition`` to ``redex`` once (defined form -> defining form).
 
     Returns the unfolded term, or ``None`` if ``redex`` is not an instance of
-    the definition's ``higher`` form or the side-condition fails. Reuses only
+    the definition's ``higher`` form, the application would capture a bound
+    variable, or the side-condition fails. Reuses only
     :func:`~website.logical.kernel.unify.match`, the side-condition check, and
     :meth:`Term.substitute`.
     """
     binding = match(definition.higher, redex, context)
     if binding is None:
         return None
+    if not _capture_free(definition, binding, context):
+        return None
     if definition.condition is not None and not definition.condition.check(binding, context):
         return None
     return definition.lower.substitute(binding, context)
+
+
+def _capture_free(definition: Definition, binding: Binding, context: Context) -> bool:
+    """Whether applying ``definition`` under ``binding`` avoids variable capture.
+
+    Each declared bound variable must be disjoint from every parameter's
+    substitution - the ``$d`` proviso. We make each bound variable available in
+    the binding (as its own leaf) so ``DisjointLeaves`` can reference it, then
+    require it distinct from each higher-form parameter.
+    """
+    if not definition.fresh:
+        return True
+
+    parameters = tuple(binding)  # the higher form's variables (before extending)
+    extended = dict(binding)
+    provisos = []
+    for name, sort in definition.fresh:
+        extended[name] = Node(pattern=sort, literal=name)
+        provisos.extend(DisjointLeaves(name, parameter, sort=sort) for parameter in parameters)
+
+    return And(tuple(provisos)).check(extended, context)
 
 
 def check_definitional_step(
