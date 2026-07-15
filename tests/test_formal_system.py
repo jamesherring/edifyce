@@ -78,6 +78,71 @@ LOGICAL_SYSTEM = """FormalSystem Logic:
 """
 
 
+# A propositional system with a compound production (p -> q). MP has a named
+# metavariable shared across its antecedents and conclusion; PAIR uses the bare
+# sort `formula` twice, so its two premises are independent "any formula" slots.
+PROP_LOGIC_SYSTEM = """FormalSystem PropLogic:
+
+    Regex atom:
+        ^[a-z]$
+
+    Regex reference:
+        ^[A-Za-z 0-9,]+$
+
+    ProofContext:
+        given: MatchSet()
+
+    UnionPattern formula:
+        atom
+
+    Pattern implication:
+        with p as formula, q as formula:
+            (p -> q)
+
+    formula:
+        implication
+
+    Pattern statement_pattern:
+        with f as formula, r as reference:
+            f [r]
+
+    statement_pattern.formula():
+        return self.f
+
+    statement_pattern.reference():
+        return self.r
+
+    LineType statement:
+        pattern: statement_pattern
+        behaviour: logical
+
+    with p as formula, q as formula:
+        InferenceRule hypothesis:
+            label:
+                HYP
+            deduction:
+                p
+
+        InferenceRule modus_ponens:
+            label:
+                MP
+            antecedents:
+                p
+                (p -> q)
+            deduction:
+                q
+
+    InferenceRule pair:
+        label:
+            PAIR
+        antecedents:
+            formula
+            formula
+        deduction:
+            formula
+"""
+
+
 @pytest.fixture(scope="module")
 def simple_system():
     return compiled(SIMPLE_SYSTEM)
@@ -86,6 +151,11 @@ def simple_system():
 @pytest.fixture(scope="module")
 def logical_system():
     return compiled(LOGICAL_SYSTEM)
+
+
+@pytest.fixture(scope="module")
+def prop_logic_system():
+    return compiled(PROP_LOGIC_SYSTEM)
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +282,37 @@ def test_logical_line_without_formula_is_invalid():
     assert proof.valid is False
     line = proof.data()["lines"][0]
     assert line["invalid_message"] == "No formula defined for logical line."
+
+
+# ---------------------------------------------------------------------------
+# Inference over compound terms (the kernel term path)
+# ---------------------------------------------------------------------------
+
+
+def test_modus_ponens_over_compound_terms(prop_logic_system):
+    # p is shared: q binds to whatever the implication's consequent is, here a
+    # nested (b -> c).
+    proof = prop_logic_system.parse(
+        "a [HYP]\n(a -> (b -> c)) [HYP]\n(b -> c) [MP, 1, 2]"
+    )
+    assert proof.valid is True
+    assert all(l["valid"] for l in proof.data()["lines"])
+
+
+def test_modus_ponens_rejects_inconsistent_binding(prop_logic_system):
+    # The shared metavariable p cannot be both a (antecedent) and c (conclusion).
+    proof = prop_logic_system.parse("a [HYP]\n(a -> b) [HYP]\nc [MP, 1, 2]")
+    assert proof.valid is False
+    assert proof.data()["lines"][2]["invalid_message"] == "MP does not apply."
+
+
+def test_bare_sort_antecedents_are_independent(prop_logic_system):
+    # PAIR's two antecedents are the bare sort `formula`; they must accept two
+    # different formulas (an atom and an implication) rather than being forced
+    # to be structurally identical.
+    proof = prop_logic_system.parse("a [HYP]\n(a -> b) [HYP]\nb [PAIR, 1, 2]")
+    assert proof.valid is True
+    assert all(l["valid"] for l in proof.data()["lines"])
 
 
 # ---------------------------------------------------------------------------
