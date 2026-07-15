@@ -180,9 +180,16 @@ class InferenceRule:
             # An empty subproof discharges nothing.
             return False
 
-        # Bind variables consistently across the deduction and the subproof's
-        # assumption/conclusion, exactly as an ordinary rule binds them across
-        # its antecedents and deduction.
+        # Derive one consistent binding across the deduction and the subproof's
+        # assumption/conclusion, forcing shared metavariables (the `p` in both a
+        # subproof's assumption and the deduction) to agree. This uses the same
+        # string matcher as InferenceRule.check: the term-based checker
+        # (kernel.unify) is not yet the live matcher - migrating discharge to it
+        # alone would reject ground-literal conclusions such as a falsum `⊥`,
+        # whose rule schema is a StringPattern literal but whose proof-line match
+        # is a RegexPattern (different term constructors). That is the "close the
+        # loop into a term-based proof checker" work the kernel roadmap defers to
+        # step 4, to be done for the whole checker at once, not piecemeal here.
         deduction_match = self.deduction.match(deduction.formula.formatted_string(), context)
         if deduction_match is None:
             return False

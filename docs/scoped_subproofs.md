@@ -141,7 +141,7 @@ InferenceRule universal_generalisation:  # ∀I / UG
 `UG` needs the eigenvariable to be genuinely arbitrary. This is
 [kernel step 3](../website/logical/kernel/terms.py) — a structural side‑condition
 over terms — implemented in
-[`kernel/sidecond.py`](../website/logical/kernel/sidecond.py): the eigenvariable
+[`kernel/side_conditions.py`](../website/logical/kernel/side_conditions.py): the eigenvariable
 must not `occur` in any hypothesis still in force around the subproof, checked on
 the parse‑once `Term` tree rather than by string search.
 
@@ -204,6 +204,42 @@ assume y ∈ c
 | Bogus `(b∈c → a∈b)` | **accepted** | rejected |
 | `∀I` eigenvariable freshness | not checked | checked structurally (kernel) |
 | Adding `¬I`/RAA, `∃E`, … | new bespoke plumbing each time | another discharge rule |
+
+## Alignment with the internal graph (term) representation
+
+The kernel is migrating the engine off string back‑tracking onto a parse‑once
+**graph of terms** (`kernel/terms.py`), with matching (`kernel/unify.py`) and a
+closed side‑condition algebra (`kernel/side_conditions.py`) built on it. Where do
+these changes sit relative to that?
+
+- **Freshness — on the graph.** The `∀I` eigenvariable check is expressed as
+  `Not(Occurs("eigenvariable", "hypothesis"))` from the kernel's closed algebra,
+  evaluated over `Term` trees projected with `from_match`. It is the algebra's
+  own worked example.
+- **Scope structure — correctly *not* in the kernel.** Subproofs, accessibility,
+  and "which hypotheses are in force" are *proof‑state*, not formula structure.
+  `kernel/side_conditions.py` says so explicitly: "membership in a proof‑context
+  set (`x ∈ Γ` over the assumptions) … depend on proof state and are
+  intentionally not expressible here; they belong in the elaboration layer." So
+  the eigenvariable check is split the right way — the elaboration layer
+  (`Subproof`) decides *which* terms are in force; the kernel decides *occurrence*
+  structurally.
+- **Discharge matching — string matcher, for now, on purpose.** Binding a
+  discharge rule's schema to proof‑line formulae still uses the string matcher,
+  exactly like `InferenceRule.check`. Moving discharge *alone* onto
+  `unify.match_all` is viable for variable/compound conclusions but rejects
+  ground‑literal conclusions (a falsum `⊥`): the schema is a `StringPattern`
+  literal while the proof line matches a `RegexPattern`, and those are different
+  term constructors under `terms._signature`. That is the "close the loop into a
+  term‑based checker" work the kernel roadmap defers to step 4 — to be done for
+  the whole checker at once, not piecemeal. When it lands, `check_discharge`
+  drops onto `unify.match_all` with no change to any system's source.
+
+Net: the pieces that *can* live on the graph representation today (the freshness
+side‑condition) do; the piece that must wait for the checker‑wide migration is
+marked and isolated to one method.
+
+---
 
 The general move is to stop fusing three separate concerns — *scope structure*,
 *context inheritance*, and *discharge* — into one `behaviour` slot plus a

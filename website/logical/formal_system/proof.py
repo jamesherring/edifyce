@@ -94,23 +94,31 @@ class Subproof:
     def eigenvariable_is_fresh(self, context: Context) -> bool:
         # Freshness for universal generalisation: the eigenvariable must not
         # occur in any hypothesis still in force around this subproof. Checked
-        # structurally on kernel terms (see kernel.sidecond), not on strings.
-        from ..kernel.sidecond import is_fresh
+        # structurally on kernel terms via the closed side-condition algebra
+        # (kernel.side_conditions) - the graph representation, not strings. This
+        # is the algebra's own worked example: Not(Occurs("x", "phi")).
+        from ..kernel.side_conditions import Not, Occurs
         from ..kernel.terms import from_match
 
         eigenvariable = self.eigenvariable
         if eigenvariable is None:
             return False
 
-        name = eigenvariable.formatted_string()
+        eigenvariable_term = from_match(eigenvariable, context)
+        fresh = Not(Occurs("eigenvariable", "hypothesis"))
 
-        assumption_terms = [
-            from_match(assumption.formula, context)
-            for assumption in self.enclosing_assumptions()
-            if assumption.formula is not None
-        ]
+        for assumption in self.enclosing_assumptions():
+            if assumption.formula is None:
+                continue
 
-        return is_fresh(name, assumption_terms)
+            binding = {
+                "eigenvariable": eigenvariable_term,
+                "hypothesis": from_match(assumption.formula, context),
+            }
+            if not fresh.check(binding, context):
+                return False
+
+        return True
 
 
 def line_is_accessible(citing_line: ProofLine, cited_line: ProofLine) -> bool:
