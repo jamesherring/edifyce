@@ -31,13 +31,14 @@ Design invariant - *the kernel hard-codes no logic*
 ---------------------------------------------------
 A :class:`Node` is a production (an arbitrary per-system ``Pattern``) applied
 to named child terms. A :class:`Var` ranges over a *sort*, which is likewise
-an arbitrary ``Pattern``. Definitions are recorded on the node that used them
-and never interpreted here. Nothing in this module enumerates connectives,
-quantifiers or set-builder syntax, so first-order logic, ZF(C) and
-near-English definitional statements are all representable - the term layer
-only ever sees "some production applied to some children". Keeping this module
-logic-agnostic is what preserves the goal of supporting arbitrary formal
-systems; please keep it that way.
+an arbitrary ``Pattern``. The term type knows nothing about definitions:
+relating a defined and defining form is an explicit, cited step verified in
+:mod:`definitions`, never something ``equal`` or ``unify`` does implicitly.
+Nothing in this module enumerates connectives, quantifiers or set-builder
+syntax, so first-order logic, ZF(C) and near-English definitional statements
+are all representable - the term layer only ever sees "some production applied
+to some children". Keeping this module logic-agnostic is what preserves the
+goal of supporting arbitrary formal systems; please keep it that way.
 
 Scope and roadmap
 -----------------
@@ -48,15 +49,13 @@ later steps build on, not a dependency of them:
 
 * Step 2 (:mod:`unify`) - first-order matching that *derives* a substitution
   making a schema equal a term, reusing ``_signature`` for constructor
-  identity and ``substitute`` / ``equal`` here as its ground cases. Relating a
-  term's higher and lower forms *modulo definitions* rides with step 4, when
-  the definition contract is settled.
+  identity and ``substitute`` / ``equal`` here as its ground cases.
 * Step 3 (:mod:`side_conditions`) - a small, closed vocabulary of provisos
   (occurrence, leaf-disjointness, atomicity) checked structurally over these
   terms against a match's binding, replacing the general condition interpreter.
-* Step 4 - definitions as ordinary axioms. The ``definition`` metadata that
-  :func:`from_match` records on a node is carried for exactly this; it is not
-  interpreted yet.
+* Step 4 (:mod:`definitions`) - definitions as cited axioms. A proof step names
+  a definition and the kernel verifies one unfold; ``equal`` / ``unify`` stay
+  purely structural, so the term type carries no definition metadata.
 
 Nothing here should grow to depend on those steps; keep the representation
 self-contained so the trusted core stays small and auditable.
@@ -70,7 +69,6 @@ from ..matching.patterns import RegexPattern, StringPattern, UnionPattern
 
 if TYPE_CHECKING:
     from ..matching.context import Context
-    from ..matching.definitions import Definition
     from ..matching.matches import Match
     from ..matching.patterns import Pattern
 
@@ -170,9 +168,10 @@ class Node(Term):
     ``literal``    - surface string for a ground leaf with no slots (a constant,
                      atom or regex token), e.g. ``Node(atom, literal="a")``.
                      Mutually exclusive with ``children``.
-    ``definition`` - the ``Definition`` this node was built through, if any.
-                     Recorded for the future definitions-as-axioms work; never
-                     interpreted here.
+
+    A node carries no definition provenance: relating a defined form to its
+    defining form is an explicit step (see :mod:`definitions`), not a property
+    of the term. Provenance, if ever needed, is an elaboration-layer concern.
     """
 
     def __init__(
@@ -180,12 +179,10 @@ class Node(Term):
         pattern: Pattern,
         children: dict[str, Term] | None = None,
         literal: str | None = None,
-        definition: Definition | None = None,
     ) -> None:
         self.pattern: Pattern = pattern
         self.children: dict[str, Term] = children if children is not None else {}
         self.literal: str | None = literal
-        self.definition: Definition | None = definition
 
     def free_vars(self, acc: FreeVars | None = None) -> FreeVars:
         if acc is None:
@@ -207,7 +204,6 @@ class Node(Term):
                 for label, child in self.children.items()
             },
             literal=self.literal,
-            definition=self.definition,
         )
 
     def equal(self, other: Term, context: Context) -> bool:
@@ -358,7 +354,7 @@ def from_match(match: Match, context: Context) -> Term:
     ``atom`` and ``implication``)::
 
         match of "a"           (a declared variable)  -> Var("a", formula)
-        match of "a" via defn  (definition attached)  -> Node(<defn.higher>, ..., definition=...)
+        match of "a is a … of" (definition-backed)    -> Node(<defn.higher>, {...})
         match of "(a -> b)"    (union coercion)       -> collapse to the implication Node
         match of "a"           (a ground atom)        -> Node(atom, literal="a")
         match of "(a -> b)"    (compound)             -> Node(implication, {"p": .., "q": ..})
@@ -380,19 +376,18 @@ def from_match(match: Match, context: Context) -> Term:
         return Var(name=match.formatted_string(), sort=pattern)
 
     # A definition-backed match: the matched sort (often a UnionPattern) is not
-    # itself a template, and its sub-matches are the definition's variables. Its
-    # `higher` form carries both the surface template and those variables, so
-    # represent the node through it and keep the definition as metadata. For a
+    # itself a template, and its sub-matches are the definition's variables. The
+    # definition's `higher` form carries both the surface template and those
+    # variables, so we use it to build a faithfully-structured node - e.g. for a
     # definition "x is a subset of y" of `formula`, "a is a subset of b" becomes
-    # Node(<higher "x is a subset of y">, {"x": .., "y": ..}, definition=<defn>).
-    # Here we only preserve the structure faithfully; relating the higher and
-    # lower forms is step 4 (definitions as axioms), which will consume this
-    # `definition` field - so record it, do not act on it.
+    # Node(<higher "x is a subset of y">, {"x": .., "y": ..}). The definition
+    # itself is used only transiently to pick the constructor; the term keeps no
+    # reference to it (relating higher and lower forms is a cited step 4).
     if match.definition is not None:
         higher = match.definition.higher
         if match.sub_matches:
-            return Node(pattern=higher, children=child_terms(match), definition=match.definition)
-        return Node(pattern=higher, literal=match.formatted_string(), definition=match.definition)
+            return Node(pattern=higher, children=child_terms(match))
+        return Node(pattern=higher, literal=match.formatted_string())
 
     # A union match is a coercion wrapper around a single chosen branch: e.g.
     # `formula` wrapping the `implication` that matched "(a -> b)". Collapse it.
@@ -476,3 +471,38 @@ def from_pattern(
     # fresh variable ranging over that sort, e.g. an antecedent written
     # `formula` meaning "any formula".
     return Var(name=pattern.name, sort=pattern)
+
+
+def abstract(term: Term, variables: FreeVars) -> Term:
+    """Turn a parsed ground term into a *schema* by replacing each ground leaf
+    whose surface string is a parameter name in ``variables`` with a
+    :class:`Var` of that sort.
+
+    This is the structure-preserving way to build a *multi-level* schema, such
+    as a definition's defining form ``∀z.((z ∈ x) → (z ∈ y))``: parse the
+    surface form through the grammar (giving a properly nested term), then
+    abstract the parameters ``x``/``y`` into variables. It complements
+    :func:`from_pattern`, which reads a single production's slots and so is only
+    right for one-level schemas (a rule's ``(p -> q)``); parsing then
+    abstracting keeps a nested tree intact, which ``from_pattern`` would flatten.
+
+    Every leaf whose string equals a parameter name becomes that parameter, so
+    parameter names must not also occur as *distinct* ground constants in the
+    form - true for well-formed schemas, whose parameters are chosen fresh. A
+    bound variable of a different name (``z`` above) is left as a ground leaf.
+    """
+    if isinstance(term, Var):
+        return term
+
+    if isinstance(term, Node):
+        if not term.children:
+            # A ground leaf: abstract it iff its surface string is a parameter.
+            if term.literal is not None and term.literal in variables:
+                return Var(name=term.literal, sort=variables[term.literal])
+            return term
+        return Node(
+            pattern=term.pattern,
+            children={label: abstract(child, variables) for label, child in term.children.items()},
+        )
+
+    return term

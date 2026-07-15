@@ -9,10 +9,10 @@ grown incrementally out of the larger pattern-matching engine:
 * :mod:`side_conditions` (step 3) - a small, closed vocabulary of structural
   provisos (occurrence, leaf-disjointness, atomicity) checked against a match's
   binding.
+* :mod:`definitions` (step 4) - definitions as cited axioms; the kernel verifies
+  a single definitional unfold rather than unfolding implicitly.
 
-The remaining step builds on these without enlarging the trusted surface:
-definitions treated as ordinary axioms (step 4). See :mod:`terms` for the
-roadmap those steps follow.
+See :mod:`terms` for the roadmap these steps follow.
 
 Nothing here hard-codes a logic. Constructors, sorts and definitions are all
 carried as ordinary per-system objects, so first-order logic, ZF(C) and
@@ -20,12 +20,14 @@ near-English surface syntax are all representable without the kernel knowing
 about any of them.
 """
 
+from .definitions import Definition, check_definitional_step, unfold
 from .side_conditions import And, DisjointLeaves, IsAtom, Not, Occurs, Or, SideCondition
-from .terms import Node, Term, Var, from_match, from_pattern
+from .terms import Node, Term, Var, abstract, from_match, from_pattern
 from .unify import match, match_all
 
 __all__ = [
     "And",
+    "Definition",
     "DisjointLeaves",
     "IsAtom",
     "Node",
@@ -35,8 +37,11 @@ __all__ = [
     "SideCondition",
     "Term",
     "Var",
+    "abstract",
+    "check_definitional_step",
     "from_match",
     "from_pattern",
     "match",
     "match_all",
+    "unfold",
 ]
