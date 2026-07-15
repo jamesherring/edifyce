@@ -412,6 +412,29 @@ class AbstractSyntaxTree:
                     # Add to context
                     context.variables[name] = AbstractPattern(name=name)
 
+            elif stripped.startswith("Atom ") and ": " in stripped:
+                # Inline atom declaration (no regex):
+                #   `Atom falsum: ⊥`      -> a constant
+                #   `Atom var: p_#`       -> the infinite family p, p_0, p_1, ...
+                self.type = "Atom"
+
+                rest = stripped[5:]
+                index = rest.index(": ")
+                name = rest[:index]
+                spec = rest[index + 2:]
+
+                if not self.valid_variable_name(name):
+                    self.error = f"Invalid variable name: '{name}'."
+                    return
+
+                if spec.endswith("_#"):
+                    atom = AtomPattern(name=name, base=spec[:-2], pre_format=context.pre_format)
+                else:
+                    atom = AtomPattern(name=name, value=spec, pre_format=context.pre_format)
+
+                context.variables[name] = atom
+                return
+
             elif stripped.startswith("Regex ") and stripped[-1] == ":":
                 # Create a regex pattern variable
 
@@ -574,7 +597,7 @@ class AbstractSyntaxTree:
 
                 obj = context.variables[stripped]
 
-                if type(obj) not in (StringPattern, UnionPattern, RegexPattern, AbstractPattern):
+                if type(obj) not in (StringPattern, UnionPattern, RegexPattern, AbstractPattern, AtomPattern):
                     self.error = f"Can't add object of type '{type(obj)!s}' to UnionPattern."
                     return
 
@@ -847,6 +870,13 @@ class AbstractSyntaxTree:
                     def build_subproof_pattern(text):
                         if text in context.variables:
                             return context.variables[text]
+                        # Resolve a bare atom literal (e.g. `derive: ⊥`) to its
+                        # declared AtomPattern, so the rule's literal and the
+                        # proof line's atom are the *same* constructor - which is
+                        # what lets discharge match on the term representation.
+                        for candidate in context.variables.values():
+                            if isinstance(candidate, AtomPattern) and candidate.is_member(text):
+                                return candidate
                         new_pattern = StringPattern(name="subproof", pattern=text, pre_format=context.pre_format)
                         new_pattern.add_variables(context.string_variables)
                         return new_pattern

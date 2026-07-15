@@ -6,10 +6,13 @@ from copy import copy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from ..kernel.terms import from_match, from_pattern
+from ..kernel.unify import match_all
 from ..matching import Match, get_by_path, parse_path
 from .proof import ProofLine, Subproof
 
 if TYPE_CHECKING:
+    from ..kernel.terms import Term
     from ..matching.context import Context
     from ..matching.patterns import Pattern
 
@@ -181,39 +184,29 @@ class InferenceRule:
             return False
 
         # Derive one consistent binding across the deduction and the subproof's
-        # assumption/conclusion, forcing shared metavariables (the `p` in both a
-        # subproof's assumption and the deduction) to agree. This uses the same
-        # string matcher as InferenceRule.check: the term-based checker
-        # (kernel.unify) is not yet the live matcher - migrating discharge to it
-        # alone would reject ground-literal conclusions such as a falsum `⊥`,
-        # whose rule schema is a StringPattern literal but whose proof-line match
-        # is a RegexPattern (different term constructors). That is the "close the
-        # loop into a term-based proof checker" work the kernel roadmap defers to
-        # step 4, to be done for the whole checker at once, not piecemeal here.
-        deduction_match = self.deduction.match(deduction.formula.formatted_string(), context)
-        if deduction_match is None:
-            return False
-
-        variables: dict = copy(deduction_match.sub_matches)
-
-        pairs: list[tuple[Pattern, ProofLine]] = [(schema.conclusion, conclusion)]
+        # conclusion (and assumption, for hypothesis discharge) on the kernel's
+        # graph representation: project each schema pattern to a Term with Var
+        # slots (from_pattern), each proof-line formula to a ground Term
+        # (from_match), and first-order-match them under a single substitution
+        # (unify.match_all). Shared metavariables - the `p` in both a subproof's
+        # assumption and the deduction - are forced to agree by that one binding.
+        # Atoms unify by what they denote (see terms._signature), so a literal
+        # conclusion such as a falsum `⊥` matches its declared atom.
+        schema_pairs: list[tuple[object, ProofLine]] = [
+            (self.deduction, deduction),
+            (schema.conclusion, conclusion),
+        ]
         if schema.assumption is not None:
-            pairs.append((schema.assumption, subproof.assumption))
+            schema_pairs.append((schema.assumption, subproof.assumption))
 
-        for pattern, line in pairs:
+        term_pairs: list[tuple[Term, Term]] = []
+        for pattern, line in schema_pairs:
             if line is None or line.formula is None:
                 return False
+            term_pairs.append((from_pattern(pattern, context), from_match(line.formula, context)))
 
-            match = pattern.match(line.formula.formatted_string(), context)
-            if match is None:
-                return False
-
-            for name, sub_match in match.sub_matches.items():
-                if name in variables:
-                    if not sub_match.equivalent(variables[name], context):
-                        return False
-                else:
-                    variables[name] = sub_match
+        if match_all(term_pairs, context) is None:
+            return False
 
         # Freshness side-condition for universal generalisation: the
         # eigenvariable must be genuinely arbitrary - it may not occur in any

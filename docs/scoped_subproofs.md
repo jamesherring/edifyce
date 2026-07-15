@@ -224,20 +224,27 @@ these changes sit relative to that?
   the eigenvariable check is split the right way — the elaboration layer
   (`Subproof`) decides *which* terms are in force; the kernel decides *occurrence*
   structurally.
-- **Discharge matching — string matcher, for now, on purpose.** Binding a
-  discharge rule's schema to proof‑line formulae still uses the string matcher,
-  exactly like `InferenceRule.check`. Moving discharge *alone* onto
-  `unify.match_all` is viable for variable/compound conclusions but rejects
-  ground‑literal conclusions (a falsum `⊥`): the schema is a `StringPattern`
-  literal while the proof line matches a `RegexPattern`, and those are different
-  term constructors under `terms._signature`. That is the "close the loop into a
-  term‑based checker" work the kernel roadmap defers to step 4 — to be done for
-  the whole checker at once, not piecemeal. When it lands, `check_discharge`
-  drops onto `unify.match_all` with no change to any system's source.
+- **Discharge matching — now on the graph.** Binding a discharge rule's schema
+  to proof‑line formulae runs on `unify.match_all` over `Term`s: `from_pattern`
+  projects the schema (`(p → q)`, `∀x p`, `¬p`, `⊥`), `from_match` projects the
+  proof‑line formulae, and one substitution is derived across deduction,
+  conclusion and assumption. This is the first live consumer of the term‑based
+  checker (`InferenceRule.check` for ordinary rules is still string‑based; that
+  is the rest of step 4).
+- **What unblocked it — `AtomPattern`.** Moving discharge onto `unify` used to
+  fail on a ground‑literal conclusion (a falsum `⊥`): the schema was a
+  `StringPattern` literal while the proof line matched a `RegexPattern`, two
+  different constructors under `terms._signature`. The fix was to give atoms a
+  first‑class primitive — `AtomPattern`, a constant or an infinite base+index
+  family (`p_i`) declared with no regex — whose term‑signature is *what the atom
+  denotes* (`('atom', 'const', '⊥')`), not the pattern object. A rule's literal
+  and the system's declared atom are then one constructor by construction. See
+  `tests/test_atom_pattern.py` for a propositional system whose entire term
+  algebra is regex‑free, discharge‑checked via `unify`.
 
-Net: the pieces that *can* live on the graph representation today (the freshness
-side‑condition) do; the piece that must wait for the checker‑wide migration is
-marked and isolated to one method.
+Net: freshness and discharge both live on the graph representation now; the
+remaining string‑based matcher is `InferenceRule.check`, the rest of the
+checker‑wide step 4.
 
 ---
 

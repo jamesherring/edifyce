@@ -24,6 +24,7 @@ from .context import Context
 from .matches import Match, MatchSet
 from .patterns import (
     AbstractPattern,
+    AtomPattern,
     Pattern,
     PatternFunction,
     RegexPattern,
@@ -35,6 +36,7 @@ from .definitions import Definition
 
 __all__ = [
     "AbstractPattern",
+    "AtomPattern",
     "Condition",
     "Context",
     "Definition",

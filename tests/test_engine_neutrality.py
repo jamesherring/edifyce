@@ -121,8 +121,7 @@ NEG = r"""FormalSystem Neg:
     Regex atom:
         ^[a-z][a-z0-9]*$
 
-    Regex falsum:
-        ^⊥$
+    Atom falsum: ⊥
 
     UnionPattern formula:
         atom
