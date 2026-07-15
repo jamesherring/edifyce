@@ -126,16 +126,12 @@ class FormalSystem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     name: Mapped[str] = mapped_column(String(256))
     slug: Mapped[str] = mapped_column(String(256), index=True)
-    # The Edifyce source; the engine recompiles from this on demand.
-    source: Mapped[str] = mapped_column(Text, server_default="")
     description: Mapped[str | None] = mapped_column(Text)
     # System inheritance (the old `inherits_from` self-FK). SET NULL so deleting a
     # base system orphans rather than cascades away its descendants.
     inherits_from_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("formal_systems.id", ondelete="SET NULL"), index=True
     )
-    # Cached compile metadata (line-type/rule summary) to avoid recompiling on read.
-    compiled: Mapped[dict | None] = mapped_column(JSONB)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     owner: Mapped["User | None"] = relationship(back_populates="formal_systems")
@@ -153,6 +149,31 @@ class FormalSystem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     theorems: Mapped[list["Theorem"]] = relationship(
         back_populates="formal_system", cascade="all, delete-orphan"
+    )
+
+    # The system's grammar/rules/definitions, decomposed into indexable rows (the
+    # canonical form — there is no `source`/`compiled` blob). Defined in
+    # app/db/systems.py; the engine is rebuilt from these via systems_mapping.
+    brackets: Mapped[list["BracketRow"]] = relationship(
+        back_populates="system", cascade="all, delete-orphan", order_by="BracketRow.position"
+    )
+    sorts: Mapped[list["SortRow"]] = relationship(
+        back_populates="system", cascade="all, delete-orphan", order_by="SortRow.position"
+    )
+    productions: Mapped[list["ProductionRow"]] = relationship(
+        back_populates="system", cascade="all, delete-orphan", order_by="ProductionRow.position"
+    )
+    lines: Mapped[list["LineRow"]] = relationship(
+        back_populates="system", cascade="all, delete-orphan", order_by="LineRow.position"
+    )
+    definitions: Mapped[list["DefinitionRow"]] = relationship(
+        back_populates="system", cascade="all, delete-orphan", order_by="DefinitionRow.position"
+    )
+    axioms: Mapped[list["AxiomRow"]] = relationship(
+        back_populates="system", cascade="all, delete-orphan", order_by="AxiomRow.position"
+    )
+    rules: Mapped[list["RuleRow"]] = relationship(
+        back_populates="system", cascade="all, delete-orphan", order_by="RuleRow.position"
     )
 
 

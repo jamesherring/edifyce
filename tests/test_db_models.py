@@ -15,6 +15,7 @@ from app.db import Base, EMBEDDING_DIMENSIONS
 
 def test_expected_tables_present():
     assert set(Base.metadata.tables) == {
+        # App/account + proof surface.
         "users",
         "oauth_accounts",
         "formal_systems",
@@ -22,7 +23,29 @@ def test_expected_tables_present():
         "proofs",
         "proof_references",
         "theorems",
+        # Normalised system decomposition (canonical grammar/rules/definitions).
+        "notation_brackets",
+        "sorts",
+        "productions",
+        "production_bindings",
+        "line_types",
+        "line_parts",
+        "definitions",
+        "definition_bindings",
+        "axioms",
+        "axiom_bindings",
+        "rules",
+        "rule_antecedents",
+        "rule_bindings",
     }
+
+
+def test_formal_systems_has_no_source_or_compiled_blob():
+    # PR #23 follow-up: the normalised rows are canonical; the opaque source text
+    # and compiled JSONB blob are gone.
+    cols = set(Base.metadata.tables["formal_systems"].c.keys())
+    assert "source" not in cols
+    assert "compiled" not in cols
 
 
 def test_users_table_is_fastapi_users_shaped():

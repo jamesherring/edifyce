@@ -16,6 +16,22 @@ from app.db.models import (
     proof_references,
 )
 from app.db.session import get_session
+from app.db.systems import (
+    AxiomBindingRow,
+    AxiomRow,
+    BracketRow,
+    DefinitionBindingRow,
+    DefinitionRow,
+    LinePartRow,
+    LineRow,
+    ProductionBindingRow,
+    ProductionRow,
+    RuleAntecedentRow,
+    RuleBindingRow,
+    RuleRow,
+    SortRow,
+)
+from app.db.systems_mapping import spec_to_system, system_to_spec
 
 __all__ = [
     "Base",
@@ -28,4 +44,20 @@ __all__ = [
     "User",
     "proof_references",
     "get_session",
+    # Normalised system decomposition (app/db/systems.py) + spec round trip.
+    "AxiomBindingRow",
+    "AxiomRow",
+    "BracketRow",
+    "DefinitionBindingRow",
+    "DefinitionRow",
+    "LinePartRow",
+    "LineRow",
+    "ProductionBindingRow",
+    "ProductionRow",
+    "RuleAntecedentRow",
+    "RuleBindingRow",
+    "RuleRow",
+    "SortRow",
+    "spec_to_system",
+    "system_to_spec",
 ]

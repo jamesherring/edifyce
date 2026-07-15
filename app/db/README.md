@@ -11,7 +11,9 @@ routes yet — this is the schema and the tooling to evolve it.
 | Path | What |
 |---|---|
 | `app/db/base.py` | Declarative `Base`, naming convention, id/timestamp mixins |
-| `app/db/models.py` | The ORM models (the schema) |
+| `app/db/models.py` | Account + proof-surface ORM models |
+| `app/db/systems.py` | Normalised formal-system decomposition (grammar/rules/definitions as flat rows) |
+| `app/db/systems_mapping.py` | `spec_to_system` / `system_to_spec` round trip between the declarative `SystemSpec` and the rows |
 | `app/db/session.py` | Lazy async engine + `get_session` FastAPI dependency |
 | `tools/atlas/schema.py` | Single-file schema entrypoint Atlas loads the models through |
 | `atlas.hcl` | Atlas config (env `local`) |
@@ -28,9 +30,19 @@ Modernised from the original Django app (`website/models.py` on `main`):
 - **`oauth_accounts`** — linked social logins (fastapi-users'
   `SQLAlchemyBaseOAuthAccountTableUUID`); one user, many providers. The library
   hardcodes the FK to a `user` table, so we repoint it at our `users` table.
-- **`formal_systems`** — Edifyce `source`, optional `owner`, self-referential
-  `inherits_from_id` (system inheritance), a cached `compiled` JSONB snapshot,
-  and `published_at`.
+- **`formal_systems`** — a system's identity + surrounding concerns: `name`,
+  `slug`, optional `owner`, self-referential `inherits_from_id` (system
+  inheritance), and `published_at`. Its grammar/rules/definitions are **not** a
+  blob here — they live in the decomposition tables below.
+- **`sorts`, `productions`, `production_bindings`, `line_types`, `line_parts`,
+  `definitions`, `definition_bindings`, `axioms`, `axiom_bindings`, `rules`,
+  `rule_antecedents`, `rule_bindings`, `notation_brackets`** — the **normalised
+  system decomposition** (`systems.py`): one row per declaration, with real FKs
+  and explicit `position` ordering. This makes every part of a system a
+  first-class, indexable, searchable entity — "which systems define `⊆`", "which
+  rules take two premises" — answerable in plain SQL with no recompile. The
+  bridge to the engine is `systems_mapping`: rows → `SystemSpec` → lower to
+  `.edi` → compile.
 - **`proof_folders`** / **`proofs`** — the folder/proof tree, scoped to a system.
   Ordering is a plain `position`; publishing is a `published_at` timestamp. (The
   old app modelled both through a separate `FolderEntry`/`OrderedModel`; this
@@ -41,10 +53,12 @@ Modernised from the original Django app (`website/models.py` on `main`):
   `embedding` (semantic / **AI** search via an HNSW index). Both live in the same
   store and join back to the proof that establishes them.
 
-Deliberate departure from the Django schema: the old app pickled compiled
-`FormalSystem`/`Proof` objects into the DB. The rebuilt engine recompiles from
-source, so we store the **source text** plus optional cached **JSON** snapshots
-(`compiled` / `result`) instead — portable and not fragile across code changes.
+Deliberate departure from the Django schema (and from #13's first draft): a
+formal system is stored as **normalised rows**, not an opaque `source` text +
+`compiled` JSONB blob — so it is queryable without recompiling. The engine, which
+still treats a system as source it recompiles, is fed by rebuilding the source
+from the rows on demand (`systems_mapping`). Proofs keep their `source`/`result`
+(the latter a cached JSON snapshot of the checker output).
 
 The embedding dimension is `EMBEDDING_DIMENSIONS` in `models.py` (default 1536).
 Match it to the embedding model you deploy (e.g. Voyage voyage-3 = 1024, OpenAI
