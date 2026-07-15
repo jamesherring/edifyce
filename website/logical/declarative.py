@@ -48,6 +48,9 @@ The input format (see ``examples/zfc.system`` for a full worked example)::
       <label> | <name> | from <a> ; <b> | infer <c> | <bindings>
 
 ``<bindings>`` is a ``;``-separated list of groups ``n1, n2 : sort``.
+
+``|`` separates columns; a literal pipe inside a field (a regex alternation or
+pipe notation such as set-builder ``{ x \\| y }``) is written ``\\|``.
 """
 
 from __future__ import annotations
@@ -130,7 +133,28 @@ _SECTIONS = {"system", "notation", "grammar", "line", "definitions", "axioms", "
 
 
 def _split_columns(row: str) -> list[str]:
-    return [c.strip() for c in row.split("|")]
+    # Split a row on its ``|`` column separators. A literal pipe inside a field
+    # -- a regex alternation ``[a-z]+\|[A-Z]+`` or pipe notation like
+    # set-builder ``{ x \| φ }`` -- is written ``\|`` and does not split.
+    # Only ``\|`` is special; other backslashes (``\d``, ``\.``) pass through.
+    columns: list[str] = []
+    current: list[str] = []
+    i = 0
+    while i < len(row):
+        ch = row[i]
+        if ch == "\\" and i + 1 < len(row) and row[i + 1] == "|":
+            current.append("|")
+            i += 2
+            continue
+        if ch == "|":
+            columns.append("".join(current).strip())
+            current = []
+            i += 1
+            continue
+        current.append(ch)
+        i += 1
+    columns.append("".join(current).strip())
+    return columns
 
 
 def _parse_bindings(text: str) -> list[tuple[str, str]]:
@@ -595,7 +619,14 @@ def build_spec(spec: SystemSpec, system_dict: dict | None = None) -> dict:
     rows. Same return shape as :func:`build`.
     """
 
-    edi = lower(spec)
+    # Lowering can still reject a parsed-but-invalid spec (e.g. a line shape
+    # with no grammar-sort placeholder); surface that as errors, not an
+    # exception, to keep the build contract.
+    try:
+        edi = lower(spec)
+    except DeclarativeError as exc:
+        return {"errors": [str(exc)]}
+
     result = compile_edi(edi, system_dict=system_dict)
 
     if "system" in result:

@@ -190,3 +190,48 @@ def test_lowering_forward_declares_before_use():
     spec = parse(ZFC)
     edi = lower(spec)
     assert edi.index("UnionPattern formula:") < edi.index("with p as formula")
+
+
+# ---------------------------------------------------------------------------
+# Escaped pipes in fields (regex alternation, pipe notation)
+# ---------------------------------------------------------------------------
+
+
+def test_escaped_pipe_in_regex_is_not_a_column_separator():
+    # A regex alternation must survive: '\|' is a literal pipe, not a column.
+    system = build(
+        "system S\n\ngrammar\n  token | ident | matches [a-z]+\\|[A-Z]+\n"
+    )["system"]
+    ident = system.context.variables["ident"]
+    assert ident.match("abc", system.context) is not None
+    assert ident.match("XYZ", system.context) is not None
+    # A regex backslash class like \d is untouched by the escape handling.
+    assert parse("system S\n\ngrammar\n  t | n | matches \\d+\n").productions[0].regex == "\\d+"
+
+
+def test_escaped_pipe_in_template_is_preserved():
+    spec = parse(
+        "system S\n\ngrammar\n  set | builder | { x \\| p } | x : term, p : formula\n"
+    )
+    prod = spec.productions[0]
+    assert prod.template == "{ x | p }"
+    assert prod.bindings == [("x", "term"), ("p", "formula")]
+
+
+# ---------------------------------------------------------------------------
+# build_spec surfaces lowering failures as errors, not exceptions
+# ---------------------------------------------------------------------------
+
+
+def test_build_spec_returns_errors_for_invalid_shape():
+    # A line shape with no grammar-sort placeholder fails during lowering; the
+    # build contract requires errors, not a raised exception.
+    from website.logical.declarative import build_spec
+
+    spec = parse(
+        "system S\n\ngrammar\n  formula | atom | a\n\n"
+        "line statement\n  shape <reference>\n  reference | matches [A-Z]+\n"
+    )
+    result = build_spec(spec)
+    assert "errors" in result
+    assert result["errors"]
