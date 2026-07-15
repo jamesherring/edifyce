@@ -11,18 +11,27 @@ structural - there is no "equal modulo definitions" mode hidden in the matcher.
 A :class:`Definition` is a pair of term-schemas ``(higher, lower)`` sharing
 variables, plus an optional **side-condition** drawn from :mod:`side_conditions`.
 
-Capture-avoidance
------------------
+Capture-avoidance - abstract bound variables
+--------------------------------------------
 A defining form may bind variables (the ``z`` in ``∀z.(z ∈ x → z ∈ y)``). A
 naive unfold of ``z ⊆ b`` would substitute ``x := z`` and produce
 ``∀z.(z ∈ z → z ∈ b)`` - the free ``z`` *captured* by ``∀z``, silently changing
-the meaning. A definition therefore declares its bound variables as ``fresh``,
-and :func:`unfold` refuses any application whose parameter substitutions would
-place a bound variable inside its own binder - the disjoint-variable proviso
-(Metamath's ``$d``), auto-generated from ``fresh`` and expressed with the step-3
-``DisjointLeaves`` vocabulary. So ``z ⊆ b`` is *rejected*: it is a structurally
-valid instance of the defined form, invalid only because unfolding it would
-replace the bound ``z``.
+the meaning.
+
+A definition therefore declares its bound variables as ``fresh``, and its
+defining form stores them *abstractly*, by index (see
+:class:`~website.logical.kernel.terms.Bound`): ``∀[0].([0] ∈ x → [0] ∈ y)``. The
+*consumer* of an unfold then chooses the concrete name each binder takes,
+subject to a disjoint-variable proviso (Metamath's ``$d``, auto-generated from
+``fresh`` and expressed with the step-3 ``DisjointLeaves`` vocabulary): the
+chosen name must be disjoint from every parameter's substitution and from the
+other chosen names. So unfolding ``z ⊆ b`` with the fresh name ``w`` yields
+``∀w.(w ∈ z → w ∈ b)`` - the capture is avoided by *renaming the binder*, not by
+rejecting the application. Reusing ``z`` itself is what the proviso forbids
+(``z`` is not disjoint from the argument ``z``), so a naming that *would*
+capture is still rejected; only a genuinely fresh choice is admitted. In
+:func:`check_definitional_step` the chosen name is not supplied separately - it
+is *recovered* from the target term the step is checked against.
 
 Two operations, both built entirely from steps 1-3:
 
@@ -59,7 +68,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .side_conditions import And, DisjointLeaves
-from .terms import Node, abstract, from_match, _locations, _signature
+from .terms import Node, abstract, bind, from_match, _bound, _bound_label, _locations, _signature
 from .unify import match
 
 if TYPE_CHECKING:
@@ -82,10 +91,12 @@ class Definition:
     sharing the variables ``x`` and ``y``.
 
     ``fresh`` names the defining form's bound variables (each with its sort),
-    e.g. ``(("z", setvar),)`` for ``df-subset``. From it the kernel generates the
-    disjoint-variable proviso that keeps an unfold capture-free (see the module
-    docstring). ``condition`` is any *additional* proviso, checked against the
-    binding an application produces.
+    e.g. ``(("z", setvar),)`` for ``df-subset``. In ``lower`` each is stored as
+    an abstract, indexed :class:`~website.logical.kernel.terms.Bound` node (in
+    ``fresh`` order), so an unfold's consumer chooses each binder's concrete name;
+    from ``fresh`` the kernel generates the disjoint-variable proviso that keeps
+    that choice capture-free (see the module docstring). ``condition`` is any
+    *additional* proviso, checked against the binding an application produces.
     """
 
     higher: Term
@@ -115,63 +126,121 @@ class Definition:
         abstract rather than ``from_pattern`` (see that helper's note).
 
         ``fresh`` maps each bound variable of the defining form to its sort (for
-        ``df-subset``, ``{"z": setvar}``); the capture-avoidance proviso is
-        generated from it. The engine's legacy condition DSL is not translated:
-        pass a step-3 ``condition`` explicitly for any *additional* proviso.
+        ``df-subset``, ``{"z": setvar}``); in the parsed defining form each such
+        variable is replaced by an abstract, indexed
+        :class:`~website.logical.kernel.terms.Bound` node (in ``fresh`` order),
+        and the capture-avoidance proviso is generated from it. The engine's
+        legacy condition DSL is not translated: pass a step-3 ``condition``
+        explicitly for any *additional* proviso.
         """
+        fresh_items = tuple((fresh or {}).items())
+        # Each declared bound variable becomes an abstract, indexed node; the
+        # defining form (only) is rewritten to reference binders by index.
+        bound_nodes = {name: _bound(index, sort) for index, (name, sort) in enumerate(fresh_items)}
 
-        def schema(text: str) -> Term:
+        def schema(text: str, abstract_binders: bool) -> Term:
             matched = sort.match(text, context)
             if matched is None:
                 raise ValueError(f"Definition form {text!r} does not parse as '{sort.name}'.")
-            return abstract(from_match(matched, context), variables)
+            term = abstract(from_match(matched, context), variables)
+            if abstract_binders and bound_nodes:
+                term = bind(term, bound_nodes)
+            return term
 
         return cls(
-            higher=schema(higher),
-            lower=schema(lower),
+            higher=schema(higher, abstract_binders=False),
+            lower=schema(lower, abstract_binders=True),
             condition=condition,
-            fresh=tuple((fresh or {}).items()),
+            fresh=fresh_items,
         )
 
 
-def unfold(definition: Definition, redex: Term, context: Context) -> Term | None:
+def unfold(
+    definition: Definition,
+    redex: Term,
+    context: Context,
+    names: dict[str, str] | None = None,
+) -> Term | None:
     """Apply ``definition`` to ``redex`` once (defined form -> defining form).
 
-    Returns the unfolded term, or ``None`` if ``redex`` is not an instance of
-    the definition's ``higher`` form, the application would capture a bound
-    variable, or the side-condition fails. Reuses only
+    ``names`` maps each declared bound variable (by its ``fresh`` name) to the
+    concrete name its binder should take in the result, e.g. ``{"z": "w"}`` to
+    unfold ``z ⊆ b`` as ``∀w.(w ∈ z → w ∈ b)``. An unnamed binder keeps its
+    declared name; that is the reject-collision fallback (unfolding ``z ⊆ b``
+    without renaming ``z`` fails the freshness proviso).
+
+    Returns the unfolded term, or ``None`` if ``redex`` is not an instance of the
+    definition's ``higher`` form, a chosen bound name would capture (violating the
+    disjoint-variable proviso), or the side-condition fails. Reuses only
     :func:`~website.logical.kernel.unify.match`, the side-condition check, and
     :meth:`Term.substitute`.
     """
     binding = match(definition.higher, redex, context)
     if binding is None:
         return None
-    if not _capture_free(definition, binding, context):
-        return None
     if definition.condition is not None and not definition.condition.check(binding, context):
         return None
-    return definition.lower.substitute(binding, context)
+    bound_binding = _resolve_bound_names(definition, names, context)
+    if bound_binding is None:
+        # A chosen name does not parse as its binder's sort.
+        return None
+    if not _bounds_are_fresh(definition, binding, bound_binding, context):
+        return None
+    # Parameters and binders substitute in one pass: their keys are disjoint
+    # (a binder's key is the reserved, index-derived name a `Bound` carries).
+    return definition.lower.substitute({**binding, **bound_binding}, context)
 
 
-def _capture_free(definition: Definition, binding: Binding, context: Context) -> bool:
-    """Whether applying ``definition`` under ``binding`` avoids variable capture.
+def _resolve_bound_names(
+    definition: Definition, names: dict[str, str] | None, context: Context
+) -> Binding | None:
+    """The binding that instantiates each abstract binder to its chosen concrete
+    leaf, chosen from ``names`` and falling back to the declared ``fresh`` name.
 
-    Each declared bound variable must be disjoint from every parameter's
-    substitution - the ``$d`` proviso. We make each bound variable available in
-    the binding (as its own leaf) so ``DisjointLeaves`` can reference it, then
-    require it distinct from each higher-form parameter.
+    Each chosen name is parsed against the binder's sort, so a caller cannot
+    smuggle in a string that does not denote a leaf of that sort (e.g. ``"aa"``
+    or ``"(a ∈ b)"`` for a single-letter ``setvar``): an unparsable name yields
+    ``None``, rejecting the unfold rather than building a bogus leaf.
+    """
+    resolved: Binding = {}
+    for index, (name, sort) in enumerate(definition.fresh):
+        chosen = names.get(name, name) if names else name
+        matched = sort.match(chosen, context)
+        if matched is None:
+            return None
+        resolved[_bound_label(index)] = from_match(matched, context)
+    return resolved
+
+
+def _bounds_are_fresh(
+    definition: Definition, binding: Binding, bound_binding: Binding, context: Context
+) -> bool:
+    """Whether the chosen bound names avoid capture - the ``$d`` proviso.
+
+    Each declared bound variable's chosen name (looked up in ``bound_binding``)
+    must be disjoint from every ``higher``-form parameter's substitution and from
+    every other chosen name. We expose the chosen names in the binding (as their
+    own leaves, under their reserved keys) so ``DisjointLeaves`` can reference
+    them alongside the parameters.
     """
     if not definition.fresh:
         return True
 
-    parameters = tuple(binding)  # the higher form's variables (before extending)
-    extended = dict(binding)
-    provisos = []
-    for name, sort in definition.fresh:
-        extended[name] = Node(pattern=sort, literal=name)
-        provisos.extend(DisjointLeaves(name, parameter, sort=sort) for parameter in parameters)
+    parameters = tuple(binding)  # the higher form's variables
+    combined = {**binding, **bound_binding}
+    provisos: list[DisjointLeaves] = []
+    prior_keys: list[str] = []
+    for index, (_name, sort) in enumerate(definition.fresh):
+        key = _bound_label(index)
+        if key not in bound_binding:
+            # The step never pinned this binder's concrete name (e.g. a target
+            # whose structure did not determine it): nothing to admit.
+            return False
+        provisos.extend(DisjointLeaves(key, parameter, sort=sort) for parameter in parameters)
+        provisos.extend(DisjointLeaves(key, prior, sort=sort) for prior in prior_keys)
+        prior_keys.append(key)
 
-    return And(tuple(provisos)).check(extended, context)
+    return And(tuple(provisos)).check(combined, context)
 
 
 def check_definitional_step(
@@ -190,12 +259,51 @@ def check_definitional_step(
     )
 
 
+def _unfolds_to(definition: Definition, source: Term, target: Term, context: Context) -> bool:
+    """Whether unfolding ``source`` at the root yields ``target``, with any bound
+    names *recovered from* ``target`` rather than supplied.
+
+    Because the defining form carries its binders abstractly, matching the
+    parameter-substituted ``lower`` against ``target`` recovers each binder's
+    concrete name in ``target`` (a :class:`~website.logical.kernel.terms.Bound`
+    behaves as a schematic variable during the match) - and, threading one
+    binding, forces a binder to be spelled *consistently* everywhere it occurs.
+    The recovered names are then held to the same freshness proviso an explicit
+    unfold applies.
+    """
+    binding = match(definition.higher, source, context)
+    if binding is None:
+        return False
+    if definition.condition is not None and not definition.condition.check(binding, context):
+        return False
+
+    # Recover each binder's concrete name by matching the defining form against
+    # the claimed target, *seeded with the parameter binding* so the parameters
+    # stay pinned. Without the seed, a schema source (whose parameters are still
+    # `Var` leaves in ``lower``) would let the match rebind them to whatever the
+    # target holds - turning "one unfold" into "unfold *and* instantiate the
+    # parameters", which is not a definitional step.
+    recovered = match(definition.lower, target, context, binding=dict(binding))
+    if recovered is None:
+        return False
+    # Only the declared binders may be newly determined by the target; anything
+    # else newly bound means the match reached past the binders (e.g. an
+    # ill-formed defining form with a free parameter), so reject the step.
+    bound_keys = {_bound_label(index) for index in range(len(definition.fresh))}
+    if set(recovered) - set(binding) - bound_keys:
+        return False
+    bound_binding = {key: recovered[key] for key in bound_keys if key in recovered}
+    if not _bounds_are_fresh(definition, binding, bound_binding, context):
+        return False
+    return definition.lower.substitute(recovered, context).equal(target, context)
+
+
 def _rewrites_once(source: Term, target: Term, definition: Definition, context: Context) -> bool:
     """Whether ``source`` unfolds (higher -> lower) to ``target`` at exactly one
     position."""
-    # (1) The rewrite happens at the root: source is the redex.
-    unfolded = unfold(definition, source, context)
-    if unfolded is not None and unfolded.equal(target, context):
+    # (1) The rewrite happens at the root: source is the redex (its binders named
+    # to match the target).
+    if _unfolds_to(definition, source, target, context):
         return True
 
     # (2) The rewrite happens strictly inside: source and target must share a

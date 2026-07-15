@@ -172,6 +172,54 @@ class Var(Term):
         return f"Var({self.name!r}:{self.sort.name})"
 
 
+# Reserved binding key for an abstract bound variable, keyed by index. The NUL
+# prefix cannot collide with a grammar-legal parameter name, so a `Bound` reuses
+# all of `Var`'s name-keyed machinery (matching, substitution, interning) without
+# risk of being confused with a real metavariable.
+_BOUND_PREFIX = "\x00bound:"
+
+
+def _bound_label(index: int) -> str:
+    return f"{_BOUND_PREFIX}{index}"
+
+
+class Bound(Var):
+    """An abstract, indexed bound variable inside a definition's defining form.
+
+    A binder-carrying definition stores its bound variable *abstractly* - by
+    index - rather than as a fixed concrete name. ``df-subset``'s defining form
+    ``∀z.((z ∈ x) → (z ∈ y))`` is represented as ``∀[0].(([0] ∈ x) → ([0] ∈ y))``
+    where ``[0]`` is ``Bound(0, setvar)``. The *consumer* of an unfold then
+    chooses the concrete name each index takes (subject to the freshness
+    proviso), so ``(z ⊆ b)`` can unfold to ``∀w.((w ∈ z) → (w ∈ b))`` with a
+    caller-supplied fresh ``w`` instead of being rejected for capturing ``z``.
+    Distinct indices let one definition bind several variables independently.
+
+    A ``Bound`` is a :class:`Var` whose name is a reserved, index-derived key, so
+    it matches (recovering the chosen name), substitutes (instantiating it) and
+    interns through the ordinary variable machinery. It differs only in that it
+    is *bound*, not free: it never appears in :meth:`free_vars`, and it is only
+    ever produced by :func:`bind` from a definition's ``fresh`` declaration.
+    """
+
+    def __init__(self, index: int, sort: Pattern) -> None:
+        super().__init__(_bound_label(index), sort)
+        self.index: int = index
+
+    def free_vars(self, acc: FreeVars | None = None) -> FreeVars:
+        # A bound variable is not a free parameter, so it contributes nothing.
+        return {} if acc is None else acc
+
+    def to_string(self) -> str:
+        # Never user-facing: an unfold instantiates every bound variable to a
+        # concrete leaf before the term is rendered. A readable placeholder is
+        # kept only for debugging an un-instantiated schema.
+        return f"⟨{self.index}⟩"
+
+    def __repr__(self) -> str:
+        return f"Bound({self.index}:{self.sort.name})"
+
+
 class Node(Term):
     """A compound term: a production applied to named child terms.
 
@@ -404,6 +452,10 @@ def _term_key(term: Term) -> tuple:
     therefore finer than equality (which is sound - ``equal`` remains the
     authority); it only forgoes sharing between alpha-equivalent constructors.
     """
+    if isinstance(term, Bound):
+        # Keyed by index (its identity), kept distinct from a plain Var so the
+        # two never share an interned instance.
+        return ("bound", term.index, id(term.sort))
     if isinstance(term, Var):
         return ("var", term.name, id(term.sort))
     child_ids = tuple(
@@ -427,6 +479,10 @@ def _canonical(term: Term) -> Term:
 
 def _var(name: str, sort: Pattern) -> Var:
     return _canonical(Var(name, sort))  # type: ignore[return-value]
+
+
+def _bound(index: int, sort: Pattern) -> Bound:
+    return _canonical(Bound(index, sort))  # type: ignore[return-value]
 
 
 def _node(
@@ -622,6 +678,36 @@ def abstract(term: Term, variables: FreeVars) -> Term:
         return _node(
             pattern=term.pattern,
             children={label: abstract(child, variables) for label, child in term.children.items()},
+            sort=term.sort,
+        )
+
+    return term
+
+
+def bind(term: Term, bound: dict[str, Bound]) -> Term:
+    """Replace each ground leaf whose surface string names a bound variable with
+    that variable's abstract :class:`Bound` node.
+
+    This is how a definition's defining form stores its binders by index instead
+    of by a fixed concrete name: after :func:`abstract` lifts the definition's
+    *parameters* into :class:`Var` leaves, ``bind`` lifts its declared bound
+    variables into :class:`Bound` leaves. For ``df-subset`` the parsed
+    ``∀z.((z ∈ x) → (z ∈ y))`` (with ``x``/``y`` already abstracted) becomes
+    ``∀[0].(([0] ∈ x) → ([0] ∈ y))`` under ``{"z": Bound(0, setvar)}``. Every
+    ``z`` leaf - the binder and its uses - maps to the *same* ``Bound``, so the
+    binder stays a single shared node.
+    """
+    if isinstance(term, Var):
+        return term
+
+    if isinstance(term, Node):
+        if not term.children:
+            if term.literal is not None and term.literal in bound:
+                return bound[term.literal]
+            return term
+        return _node(
+            pattern=term.pattern,
+            children={label: bind(child, bound) for label, child in term.children.items()},
             sort=term.sort,
         )
 

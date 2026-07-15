@@ -19,7 +19,7 @@ pytest.importorskip("regex")
 
 import website.logical.matching.patterns as patterns
 from website.logical.compiler import compile as compile_formal_system
-from website.logical.kernel import Node, Var, abstract, from_match, from_pattern
+from website.logical.kernel import Bound, Node, Var, abstract, bind, from_match, from_pattern
 from website.logical.matching import Context, RegexPattern, StringPattern, UnionPattern
 
 
@@ -616,3 +616,38 @@ def test_abstract_preserves_nested_structure(fopl):
         context,
     )
     assert reified.to_string() == "(x -> (y -> x))"
+
+
+def test_bind_lifts_named_leaves_to_abstract_bound_nodes(fopl):
+    # `bind` turns each ground leaf naming a bound variable into a shared,
+    # indexed Bound node - and a Bound is bound, not free.
+    _system, context, formula = fopl
+    atom = formula.patterns[0]
+    b0 = Bound(0, atom)
+
+    schema = bind(from_match(formula.match("(a -> a)", context), context), {"a": b0})
+
+    # Both occurrences of `a` collapse to the *same* abstract node.
+    children = list(schema.children.values())
+    assert all(isinstance(child, Bound) for child in children)
+    assert children[0] is children[1] is b0
+    # A bound variable is not reported as a free parameter.
+    assert schema.free_vars() == {}
+
+
+def test_bound_instantiates_via_substitution(fopl):
+    # A Bound behaves as a schematic leaf: matching recovers the concrete name
+    # it takes, and substituting that binding instantiates it - the mechanics
+    # the definition unfolder relies on.
+    from website.logical.kernel import match
+
+    _system, context, formula = fopl
+    atom = formula.patterns[0]
+    b0 = Bound(0, atom)
+    schema = bind(from_match(formula.match("(a -> a)", context), context), {"a": b0})
+
+    # Recover the binder's concrete name by matching against a ground formula...
+    binding = match(schema, from_match(formula.match("(c -> c)", context), context), context)
+    assert binding is not None
+    # ...then substituting that binding instantiates every occurrence uniformly.
+    assert schema.substitute(binding, context).to_string() == "(c -> c)"
