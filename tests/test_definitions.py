@@ -17,10 +17,13 @@ from website.logical.compiler import compile as compile_formal_system
 from website.logical.kernel import (
     Definition,
     DisjointLeaves,
+    Var,
     check_definitional_step,
     from_match,
+    match,
     unfold,
 )
+from website.logical.matching import Context, RegexPattern, StringPattern, UnionPattern
 
 
 def build(code):
@@ -225,3 +228,31 @@ def test_side_condition_gates_the_unfold(theory, formula, setvar):
         d,
         context,
     )
+
+
+# ---------------------------------------------------------------------------
+# A definition-only surface form still matches a variable of its sort
+# ---------------------------------------------------------------------------
+
+
+def test_definition_backed_subject_admits_its_sort():
+    # A form reachable only through a definition on a union sort has an ad-hoc
+    # `higher` constructor, but it still *inhabits* the union (e.g. `formula`).
+    # A schematic variable of that sort must therefore bind to it.
+    context = Context()
+    setvar = RegexPattern("setvar", "^[a-z]$")
+    membership = StringPattern("membership", "x in y", variables={"x": setvar, "y": setvar})
+    formula = UnionPattern("formula", [membership])
+
+    context.string_variables = {"x": setvar, "y": setvar}
+    formula.add_definition(
+        "x in y", "x is a member of y", context, require_lower_match=False
+    )
+
+    subject = from_match(formula.match("a is a member of b", context), context)
+    # Its recorded sort is the union it belongs to, not its higher constructor.
+    assert subject.sort is formula
+
+    binding = match(Var("phi", formula), subject, context)
+    assert binding is not None
+    assert binding["phi"].to_string() == "a is a member of b"

@@ -168,10 +168,18 @@ class Node(Term):
     ``literal``    - surface string for a ground leaf with no slots (a constant,
                      atom or regex token), e.g. ``Node(atom, literal="a")``.
                      Mutually exclusive with ``children``.
+    ``sort``       - the ``Pattern`` this term *inhabits* (its type), used only
+                     by sort checks in matching. Normally ``None``: a term's sort
+                     is then its own constructor, which is already a member of
+                     whatever union it belongs to. It is set only when the
+                     surface constructor is *not* itself a member of the sort -
+                     a definition shorthand, whose constructor is the ad-hoc
+                     higher form but which still inhabits e.g. ``formula``.
 
-    A node carries no definition provenance: relating a defined form to its
+    A node carries no definition *provenance*: relating a defined form to its
     defining form is an explicit step (see :mod:`definitions`), not a property
-    of the term. Provenance, if ever needed, is an elaboration-layer concern.
+    of the term. ``sort`` is a typing attribute, not that link - ``equal`` never
+    consults it; only ``unify``'s sort check does.
     """
 
     def __init__(
@@ -179,10 +187,12 @@ class Node(Term):
         pattern: Pattern,
         children: dict[str, Term] | None = None,
         literal: str | None = None,
+        sort: Pattern | None = None,
     ) -> None:
         self.pattern: Pattern = pattern
         self.children: dict[str, Term] = children if children is not None else {}
         self.literal: str | None = literal
+        self.sort: Pattern | None = sort
 
     def free_vars(self, acc: FreeVars | None = None) -> FreeVars:
         if acc is None:
@@ -204,6 +214,7 @@ class Node(Term):
                 for label, child in self.children.items()
             },
             literal=self.literal,
+            sort=self.sort,
         )
 
     def equal(self, other: Term, context: Context) -> bool:
@@ -382,12 +393,15 @@ def from_match(match: Match, context: Context) -> Term:
     # definition "x is a subset of y" of `formula`, "a is a subset of b" becomes
     # Node(<higher "x is a subset of y">, {"x": .., "y": ..}). The definition
     # itself is used only transiently to pick the constructor; the term keeps no
-    # reference to it (relating higher and lower forms is a cited step 4).
+    # reference to it (relating higher and lower forms is a cited step 4). Its
+    # ad-hoc higher constructor is not a member of the matched sort, so record
+    # that sort (e.g. `formula`) explicitly so sort checks still admit it.
     if match.definition is not None:
         higher = match.definition.higher
+        sort = match.definition.pattern
         if match.sub_matches:
-            return Node(pattern=higher, children=child_terms(match))
-        return Node(pattern=higher, literal=match.formatted_string())
+            return Node(pattern=higher, children=child_terms(match), sort=sort)
+        return Node(pattern=higher, literal=match.formatted_string(), sort=sort)
 
     # A union match is a coercion wrapper around a single chosen branch: e.g.
     # `formula` wrapping the `implication` that matched "(a -> b)". Collapse it.
