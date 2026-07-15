@@ -97,6 +97,67 @@ def term(theory, formula, string):
     return from_match(matched, context)
 
 
+# Propositional logic with a biconditional whose arguments are *formulas*. Unlike
+# df-subset (whose arguments are atoms and so cannot nest), df-bicon's redex can
+# contain another biconditional, which is what lets a definition apply at
+# overlapping (nested) positions.
+PROP = """FormalSystem Prop:
+
+    Regex atom:
+        ^[a-z]$
+
+    UnionPattern formula:
+        atom
+
+    Pattern implication:
+        with p as formula, q as formula:
+            (p → q)
+
+    formula:
+        implication
+
+    Pattern conjunction:
+        with p as formula, q as formula:
+            (p ∧ q)
+
+    formula:
+        conjunction
+
+    Pattern biconditional:
+        with p as formula, q as formula:
+            (p ↔ q)
+
+    formula:
+        biconditional
+"""
+
+
+@pytest.fixture(scope="module")
+def prop():
+    system, context = build(PROP)
+    return system, context
+
+
+@pytest.fixture(scope="module")
+def prop_formula(prop):
+    system, _context = prop
+    return system.build_context.variables["formula"]
+
+
+def df_bicon(prop):
+    # (p ↔ q)  :=  ((p → q) ∧ (q → p)) - a purely structural definition over
+    # formula arguments (no binders, so no `fresh`).
+    _system, context = prop
+    formula = _system.build_context.variables["formula"]
+    return Definition.parse(
+        formula,
+        "(p ↔ q)",
+        "((p → q) ∧ (q → p))",
+        {"p": formula, "q": formula},
+        context,
+    )
+
+
 def df_subset(theory, setvar, condition=None, fresh=None):
     # (x ⊆ y)  :=  ∀z.((z ∈ x) → (z ∈ y))
     _system, context = theory
@@ -334,3 +395,296 @@ def test_without_fresh_the_unfold_would_capture(theory, formula, setvar):
     captured = unfold(unguarded, term(theory, formula, "(z ⊆ b)"), context)
     assert captured is not None
     assert captured.to_string() == "∀z.((z ∈ z) → (z ∈ b))"  # z was captured
+
+
+# ---------------------------------------------------------------------------
+# Abstract bound variables: a would-be capturing application unfolds cleanly
+# once the consumer renames the binder to a fresh name (instead of being
+# rejected outright).
+# ---------------------------------------------------------------------------
+
+
+def test_unfold_renames_the_binder_to_a_chosen_fresh_name(theory, formula, setvar):
+    # `(z ⊆ b)` collides with the bound `z`. Declaring `z` fresh makes the binder
+    # abstract, so the consumer can pick a fresh name `w`: the unfold renames the
+    # binder rather than capturing the argument.
+    _system, context = theory
+    d = df_subset(theory, setvar, fresh={"z": setvar})
+
+    renamed = unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": "w"})
+    assert renamed is not None
+    assert renamed.to_string() == "∀w.((w ∈ z) → (w ∈ b))"  # binder renamed, no capture
+
+    # The other slot behaves symmetrically: `(a ⊆ z)` -> ∀w.(w ∈ a → w ∈ z).
+    other = unfold(d, term(theory, formula, "(a ⊆ z)"), context, names={"z": "w"})
+    assert other is not None
+    assert other.to_string() == "∀w.((w ∈ a) → (w ∈ z))"
+
+
+def test_a_chosen_name_that_still_collides_is_rejected(theory, formula, setvar):
+    # Renaming does not license *any* name - the chosen name must itself be fresh.
+    # Picking `z` (the argument) or `b` (the other argument) would recapture.
+    _system, context = theory
+    d = df_subset(theory, setvar, fresh={"z": setvar})
+
+    assert unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": "z"}) is None
+    assert unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": "b"}) is None
+    # A clear name still works, confirming only the colliding choices are refused.
+    assert unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": "w"}) is not None
+
+
+def test_check_step_recovers_the_renamed_binder_from_the_target(theory, formula, setvar):
+    # In a proof the chosen name is not supplied separately: it is read off the
+    # target line. `check_definitional_step` therefore accepts the renamed unfold
+    # (in both directions) and still rejects a target that recaptures.
+    _system, context = theory
+    d = df_subset(theory, setvar, fresh={"z": setvar})
+
+    subset = "(z ⊆ b)"
+    renamed = "∀w.((w ∈ z) → (w ∈ b))"
+
+    # Unfold and fold, with the fresh name recovered from `renamed`.
+    assert check_definitional_step(
+        term(theory, formula, subset), term(theory, formula, renamed), d, context
+    )
+    assert check_definitional_step(
+        term(theory, formula, renamed), term(theory, formula, subset), d, context
+    )
+
+    # A target that reuses a colliding name is still rejected: `∀z.(z ∈ z → z ∈ b)`
+    # recaptures the argument `z`, and `∀b.(b ∈ z → b ∈ b)` recaptures `b`.
+    assert not check_definitional_step(
+        term(theory, formula, subset),
+        term(theory, formula, "∀z.((z ∈ z) → (z ∈ b))"),
+        d,
+        context,
+    )
+    assert not check_definitional_step(
+        term(theory, formula, subset),
+        term(theory, formula, "∀b.((b ∈ z) → (b ∈ b))"),
+        d,
+        context,
+    )
+
+
+def test_check_step_requires_the_binder_used_consistently(theory, formula, setvar):
+    # The binder is one abstract node shared across its occurrences, so a target
+    # that spells it differently in different positions is not a valid unfold.
+    _system, context = theory
+    d = df_subset(theory, setvar, fresh={"z": setvar})
+
+    assert not check_definitional_step(
+        term(theory, formula, "(a ⊆ b)"),
+        term(theory, formula, "∀w.((w ∈ a) → (v ∈ b))"),  # w vs v: inconsistent
+        d,
+        context,
+    )
+
+
+def test_renamed_unfold_applies_inside_a_larger_formula(theory, formula, setvar):
+    # Binder renaming composes with the subterm descent: the left conjunct is
+    # unfolded (with a fresh `w`) while the right subset is left untouched.
+    _system, context = theory
+    d = df_subset(theory, setvar, fresh={"z": setvar})
+
+    assert check_definitional_step(
+        term(theory, formula, "((z ⊆ b) → (c ⊆ d))"),
+        term(theory, formula, "(∀w.((w ∈ z) → (w ∈ b)) → (c ⊆ d))"),
+        d,
+        context,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Depth: a step is *one position*, reachable arbitrarily deep. The rewrite is
+# not root-only - `check_definitional_step` descends to the single changed
+# subterm and carries everything enclosing it through unchanged.
+# ---------------------------------------------------------------------------
+
+
+def test_unfolds_a_deeply_nested_subterm(theory, formula, setvar):
+    # The subset redex sits three constructors down: ∀ over → over the subset.
+    # Only it is rewritten; the quantifier, the implication and the sibling
+    # membership are all preserved.
+    _system, context = theory
+    d = df_subset(theory, setvar)
+
+    before = "∀e.((a ⊆ b) → (c ∈ d))"
+    after = "∀e.(∀z.((z ∈ a) → (z ∈ b)) → (c ∈ d))"
+    assert check_definitional_step(
+        term(theory, formula, before), term(theory, formula, after), d, context
+    )
+    # ...and the fold direction reaches just as deep.
+    assert check_definitional_step(
+        term(theory, formula, after), term(theory, formula, before), d, context
+    )
+
+
+# ---------------------------------------------------------------------------
+# Several candidate sites, one applied: the step selects exactly one occurrence
+# even when the definition could fire at multiple (disjoint) positions.
+# ---------------------------------------------------------------------------
+
+
+def test_selects_one_of_several_sibling_redexes(theory, formula, setvar):
+    # Both conjuncts are subset redexes; unfolding *either* is a valid step, and
+    # the two are independent (unfolding one leaves the other intact).
+    _system, context = theory
+    d = df_subset(theory, setvar)
+
+    both = "((a ⊆ b) → (c ⊆ d))"
+    left_only = "(∀z.((z ∈ a) → (z ∈ b)) → (c ⊆ d))"
+    right_only = "((a ⊆ b) → ∀z.((z ∈ c) → (z ∈ d)))"
+
+    assert check_definitional_step(
+        term(theory, formula, both), term(theory, formula, left_only), d, context
+    )
+    assert check_definitional_step(
+        term(theory, formula, both), term(theory, formula, right_only), d, context
+    )
+
+
+def test_selects_one_of_two_identical_sibling_redexes(theory, formula, setvar):
+    # The two candidate sites are *identical* (`(a ⊆ b)` twice). Unfolding one is
+    # still a single-position step - stressing that "exactly one child differs"
+    # holds even when the children started out equal - while unfolding both is not.
+    _system, context = theory
+    d = df_subset(theory, setvar)
+
+    both_same = "((a ⊆ b) → (a ⊆ b))"
+    one_expanded = "(∀z.((z ∈ a) → (z ∈ b)) → (a ⊆ b))"
+    both_expanded = "(∀z.((z ∈ a) → (z ∈ b)) → ∀z.((z ∈ a) → (z ∈ b)))"
+
+    assert check_definitional_step(
+        term(theory, formula, both_same), term(theory, formula, one_expanded), d, context
+    )
+    assert not check_definitional_step(
+        term(theory, formula, both_same), term(theory, formula, both_expanded), d, context
+    )
+
+
+# ---------------------------------------------------------------------------
+# Overlapping (nested) candidate sites: with df-bicon a redex can *contain*
+# another redex of the same definition. Applying the outer, the inner, or a
+# deeply-nested occurrence are each valid single steps; applying two at once is
+# not - regardless of how the definition's RHS duplicates its arguments.
+# ---------------------------------------------------------------------------
+
+
+def test_unfolds_the_outer_of_two_overlapping_redexes(prop, prop_formula):
+    # `((a ↔ b) ↔ c)`: expand the outer ↔. Its RHS mentions each argument twice,
+    # so the inner `(a ↔ b)` is *duplicated* into the result - but it is carried
+    # through unexpanded, so this is still one unfold at one position.
+    _system, context = prop
+    d = df_bicon(prop)
+
+    assert check_definitional_step(
+        term(prop, prop_formula, "((a ↔ b) ↔ c)"),
+        term(prop, prop_formula, "(((a ↔ b) → c) ∧ (c → (a ↔ b)))"),
+        d,
+        context,
+    )
+
+
+def test_unfolds_the_inner_of_two_overlapping_redexes(prop, prop_formula):
+    # Same term, but expand the *inner* ↔ instead, leaving the outer intact.
+    _system, context = prop
+    d = df_bicon(prop)
+
+    assert check_definitional_step(
+        term(prop, prop_formula, "((a ↔ b) ↔ c)"),
+        term(prop, prop_formula, "(((a → b) ∧ (b → a)) ↔ c)"),
+        d,
+        context,
+    )
+
+
+def test_unfolds_the_deepest_of_nested_overlapping_redexes(prop, prop_formula):
+    # `(((a ↔ b) ↔ c) ↔ d)`: expand only the innermost ↔, two constructors down.
+    _system, context = prop
+    d = df_bicon(prop)
+
+    assert check_definitional_step(
+        term(prop, prop_formula, "(((a ↔ b) ↔ c) ↔ d)"),
+        term(prop, prop_formula, "((((a → b) ∧ (b → a)) ↔ c) ↔ d)"),
+        d,
+        context,
+    )
+
+
+def test_rejects_expanding_both_overlapping_redexes_at_once(prop, prop_formula):
+    # Outer *and* inner expanded in a single claimed step: more than one position
+    # changed, so it is not a single definitional unfold - in either direction.
+    _system, context = prop
+    d = df_bicon(prop)
+
+    assert not check_definitional_step(
+        term(prop, prop_formula, "((a ↔ b) ↔ c)"),
+        term(
+            prop,
+            prop_formula,
+            "((((a → b) ∧ (b → a)) → c) ∧ (c → ((a → b) ∧ (b → a))))",
+        ),
+        d,
+        context,
+    )
+
+
+def test_selects_one_of_disjoint_bicon_redexes(prop, prop_formula):
+    # Non-overlapping siblings under a conjunction: unfolding either ↔ is valid.
+    _system, context = prop
+    d = df_bicon(prop)
+
+    both = "((a ↔ b) ∧ (c ↔ d))"
+    left_only = "(((a → b) ∧ (b → a)) ∧ (c ↔ d))"
+    right_only = "((a ↔ b) ∧ ((c → d) ∧ (d → c)))"
+
+    assert check_definitional_step(
+        term(prop, prop_formula, both), term(prop, prop_formula, left_only), d, context
+    )
+    assert check_definitional_step(
+        term(prop, prop_formula, both), term(prop, prop_formula, right_only), d, context
+    )
+
+
+# ---------------------------------------------------------------------------
+# A step must be *only* an unfold: recovering the binder from the target must
+# not also instantiate the definition's parameters. Checking against a schema
+# source (whose parameters are still variables) must keep them pinned.
+# ---------------------------------------------------------------------------
+
+
+def test_binder_recovery_does_not_instantiate_parameters(theory, formula, setvar):
+    _system, context = theory
+    d = df_subset(theory, setvar, fresh={"z": setvar})
+
+    # `d.higher` is the schema `(x ⊆ y)`, with x/y still variables. A genuine
+    # unfold keeps them variables (only the binder is named), so expanding to a
+    # form where the parameters became concrete `a`/`b` is NOT a definitional
+    # step - it also instantiated x:=a, y:=b.
+    assert not check_definitional_step(
+        d.higher,
+        term(theory, formula, "∀w.((w ∈ a) → (w ∈ b))"),  # parameters instantiated
+        d,
+        context,
+    )
+
+
+# ---------------------------------------------------------------------------
+# A caller-supplied binder name must denote a leaf of its sort; a name that does
+# not parse as the sort is rejected rather than producing a bogus formula.
+# ---------------------------------------------------------------------------
+
+
+def test_rejects_a_chosen_name_that_is_not_a_leaf_of_its_sort(theory, formula, setvar):
+    _system, context = theory
+    d = df_subset(theory, setvar, fresh={"z": setvar})
+    redex = term(theory, formula, "(a ⊆ b)")
+
+    # `setvar` is `^[a-z]$`: neither a multi-letter name nor a compound formula
+    # parses as a single variable, so the unfold is refused (no bogus `∀aa...`).
+    assert unfold(d, redex, context, names={"z": "aa"}) is None
+    assert unfold(d, redex, context, names={"z": "(a ∈ b)"}) is None
+    # A genuine single-letter name is still accepted, confirming only the
+    # ill-typed choices are refused.
+    assert unfold(d, redex, context, names={"z": "w"}) is not None

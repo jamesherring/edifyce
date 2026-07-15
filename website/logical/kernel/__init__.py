@@ -10,7 +10,10 @@ grown incrementally out of the larger pattern-matching engine:
   provisos (occurrence, leaf-disjointness, atomicity) checked against a match's
   binding.
 * :mod:`definitions` (step 4) - definitions as cited axioms; the kernel verifies
-  a single definitional unfold rather than unfolding implicitly.
+  a single definitional unfold rather than unfolding implicitly. A defining
+  form's bound variables are stored abstractly, by index (:class:`Bound`), so an
+  unfold's consumer renames the binder to a fresh name instead of being blocked
+  when the argument would collide with it.
 
 See :mod:`terms` for the roadmap these steps follow.
 
@@ -22,11 +25,12 @@ about any of them.
 
 from .definitions import Definition, check_definitional_step, unfold
 from .side_conditions import And, DisjointLeaves, Equal, IsAtom, Not, Occurs, Or, SideCondition
-from .terms import Node, Term, Var, abstract, from_match, from_pattern, intern
+from .terms import Bound, Node, Term, Var, abstract, bind, from_match, from_pattern, intern
 from .unify import match, match_all
 
 __all__ = [
     "And",
+    "Bound",
     "Definition",
     "DisjointLeaves",
     "Equal",
@@ -39,6 +43,7 @@ __all__ = [
     "Term",
     "Var",
     "abstract",
+    "bind",
     "check_definitional_step",
     "from_match",
     "from_pattern",
