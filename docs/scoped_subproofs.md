@@ -6,10 +6,15 @@ out of the observation that line types are one of the more awkward parts of the
 engine, and that indentation‑as‑assumptions is welded to first‑order/ZFC‑style
 systems rather than being a general facility.
 
-Two systems over the **same** first‑order language (`∈`, `→`, `¬`, `∀`) make the
-before/after concrete. Both live in [`tests/zfc_systems.py`](../tests/zfc_systems.py);
-the proofs below are exercised in [`tests/test_zfc_legacy.py`](../tests/test_zfc_legacy.py)
-and [`tests/test_zfc_scoped.py`](../tests/test_zfc_scoped.py).
+The scoped system that replaces it lives in [`tests/zfc_systems.py`](../tests/zfc_systems.py)
+and is exercised by [`tests/test_zfc_scoped.py`](../tests/test_zfc_scoped.py).
+
+> **Historical note.** The "legacy" mechanism described in the next section — the
+> `given` `MatchSet` plus a rule `condition:` proviso — has since been **removed
+> from `develop`**: the string-based rule-condition interpreter was replaced by
+> the kernel's closed side-condition algebra, and `condition:` blocks now raise
+> at compile time. The before/after below is kept as motivation; the "before"
+> is no longer expressible, which only reinforces the point.
 
 ---
 
@@ -63,8 +68,9 @@ assume b ∈ c:
 (b ∈ c → a ∈ b) [CP, 3, 4]  ← "proves" a non‑theorem
 ```
 
-`(b ∈ c → a ∈ b)` is not a theorem for arbitrary `a, b, c`. The checker says it
-is. (`test_zfc_legacy.py::test_bogus_theorem_is_wrongly_accepted` pins this.)
+`(b ∈ c → a ∈ b)` is not a theorem for arbitrary `a, b, c`. The old checker said
+it was. The scoped system rejects it — see
+`test_zfc_scoped.py::test_bogus_theorem_is_rejected`.
 
 ---
 

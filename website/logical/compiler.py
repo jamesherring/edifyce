@@ -1,6 +1,7 @@
 from website.logical.matching import *
 from website.logical.matching import Pattern, constant
 from website.logical.formal_system import FormalSystem, LineType, InferenceRule, ProofLine, SubproofSchema
+from website.logical.formal_system.side_condition_syntax import parse_side_condition
 from copy import copy, deepcopy
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -128,6 +129,26 @@ def parse_arguments(s: str) -> list[tuple[str, str]] | None:
             args.append((var, pattern))
 
     return args
+
+
+def build_schema_pattern(text: str, context, name: str):
+    # Build a rule-schema pattern from a source token. A bare constant atom
+    # (e.g. a falsum `⊥`) resolves to its *declared* AtomPattern, so the rule's
+    # literal and the proof line's atom are the same constructor on the term
+    # representation - otherwise a StringPattern literal and the atom would be
+    # different constructors and the (now term-based) checker would reject the
+    # step. A referenced pattern name is used directly; anything else becomes a
+    # StringPattern template with the ambient string variables applied.
+    if text in context.variables:
+        return context.variables[text]
+
+    for candidate in context.variables.values():
+        if isinstance(candidate, AtomPattern) and candidate.is_constant and candidate.is_member(text):
+            return candidate
+
+    pattern = StringPattern(name=name, pattern=text, pre_format=context.pre_format)
+    pattern.add_variables(context.string_variables)
+    return pattern
 
 
 @dataclass(eq=False)
@@ -819,20 +840,10 @@ class AbstractSyntaxTree:
                         stripped_line = line.line.strip()
 
                         if len(stripped_line) > 0 and not stripped_line[0] == "#":
-                            # Get the antecedents as patterns
-
-                            if stripped_line in context.variables:
-                                # Variable pointing to a pattern
-                                current_object.antecedents.append(context.variables[stripped_line])
-
-                            else:
-                                # New pattern
-                                new_pattern = StringPattern(name="antecedent", pattern=stripped_line, pre_format=context.pre_format)
-
-                                # Add variables
-                                new_pattern.add_variables(context.string_variables)
-
-                                current_object.antecedents.append(new_pattern)
+                            # Get the antecedent as a pattern
+                            current_object.antecedents.append(
+                                build_schema_pattern(stripped_line, context, "antecedent")
+                            )
 
                     return
 
@@ -844,21 +855,9 @@ class AbstractSyntaxTree:
 
                         if len(stripped_line) > 0 and not stripped_line[0] == "#":
                             # Get the deduction as a pattern
-
-                            if stripped_line in context.variables:
-                                # Variable pointing to a pattern
-                                current_object.deduction = context.variables[stripped_line]
-
-                            else:
-                                # New pattern
-                                current_object.deduction = StringPattern(
-                                    name="deduction",
-                                    pattern=stripped_line,
-                                    pre_format=context.pre_format
-                                )
-
-                                # Add variables
-                                current_object.deduction.add_variables(context.string_variables)
+                            current_object.deduction = build_schema_pattern(
+                                stripped_line, context, "deduction"
+                            )
 
                     return
 
@@ -868,18 +867,7 @@ class AbstractSyntaxTree:
                     # conclusion. Each sub-key holds a single pattern line.
 
                     def build_subproof_pattern(text):
-                        if text in context.variables:
-                            return context.variables[text]
-                        # Resolve a bare atom literal (e.g. `derive: ⊥`) to its
-                        # declared AtomPattern, so the rule's literal and the
-                        # proof line's atom are the *same* constructor - which is
-                        # what lets discharge match on the term representation.
-                        for candidate in context.variables.values():
-                            if isinstance(candidate, AtomPattern) and candidate.is_member(text):
-                                return candidate
-                        new_pattern = StringPattern(name="subproof", pattern=text, pre_format=context.pre_format)
-                        new_pattern.add_variables(context.string_variables)
-                        return new_pattern
+                        return build_schema_pattern(text, context, "subproof")
 
                     assumption_pattern = None
                     conclusion_pattern = None
@@ -918,12 +906,17 @@ class AbstractSyntaxTree:
                     )
                     return
 
-                elif stripped == "condition:":
-                    # Create a condition for the rule
-
-                    # Start with an empty condition
-                    new_object = Condition(string="")
-                    current_object.condition = new_object
+                elif stripped == "side_conditions:":
+                    # Kernel side-conditions: a closed, structural vocabulary
+                    # checked against the rule's term binding. Replaces the
+                    # legacy condition mini-language for rule provisos.
+                    for line in self.sub_trees:
+                        stripped_line = line.line.strip()
+                        if len(stripped_line) > 0 and not stripped_line[0] == "#":
+                            current_object.side_conditions.append(
+                                parse_side_condition(stripped_line, context)
+                            )
+                    return
 
                 elif stripped == "allow_extra_antecedents:":
                     # Maybe allow extra antecedents (should be True or False)
@@ -951,6 +944,16 @@ class AbstractSyntaxTree:
 
                     for ant in current_object.antecedents:
                         ant.pre_format = new_object
+
+                elif stripped == "condition:":
+                    # The legacy condition mini-language was removed from rules.
+                    # Error the line rather than silently dropping the proviso
+                    # (which would be a soundness hazard), and point at the
+                    # replacement vocabulary.
+                    raise Exception(
+                        f"Inference rule '{current_object.name}' uses a 'condition:' block, "
+                        "which is no longer supported; use 'side_conditions:' instead."
+                    )
 
             elif type(current_object) in (dict, OrderedDict):
                 # Add a key value pair to the dictionary
@@ -1053,6 +1056,7 @@ class AbstractSyntaxTree:
             return
 
         # Run any sub trees in a copy of context
+        error_log_len = len(context.error_log)
         sub_context = copy(context)
 
         # Add the new object if it exists
@@ -1067,6 +1071,13 @@ class AbstractSyntaxTree:
 
             if tree.error is not None:
                 context.error_log.append(f"{tree.line_number!s}: {tree.error}")
+
+        # Errors from deeper subtrees accumulate in the copied sub_context; surface
+        # them so a malformed nested line (e.g. a bad side-condition) reaches the
+        # returned error_log instead of being silently dropped - which would leave
+        # a constrained rule unconstrained. Only the entries added below the
+        # snapshot are new, so extend rather than reassign.
+        context.error_log.extend(sub_context.error_log[error_log_len:])
 
         # Add inference rules to formal systems
         if isinstance(new_object, InferenceRule) and isinstance(current_object, FormalSystem):

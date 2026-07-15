@@ -2,19 +2,34 @@
 
 from __future__ import annotations
 
-from copy import copy
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ..kernel.terms import from_match, from_pattern
-from ..kernel.unify import match_all
-from ..matching import Match, get_by_path, parse_path
+from ..kernel import (
+    And,
+    DisjointLeaves,
+    Equal,
+    IsAtom,
+    Not,
+    Occurs,
+    Or,
+    Var,
+    from_match,
+    from_pattern,
+    match_all,
+)
+from ..matching import StringPattern
 from .proof import ProofLine, Subproof
 
 if TYPE_CHECKING:
-    from ..kernel.terms import Term
+    from collections.abc import Sequence
+
+    from ..kernel import SideCondition, Term
     from ..matching.context import Context
     from ..matching.patterns import Pattern
+
+    # A rule match's substitution: schematic variable name -> the Term it binds to.
+    Binding = dict[str, Term]
 
 
 @dataclass(eq=False)
@@ -46,10 +61,37 @@ class SubproofSchema:
         return "variable" if self.fresh is not None else "assumption"
 
 
+def _normalise_side_condition(condition: SideCondition) -> tuple:
+    """A structural normal form for comparing side-conditions across rules.
+
+    Sorts compare by name (not object identity) so two systems that re-parse the
+    same proviso agree, and boolean combinators fold to their parts. Used only
+    by :meth:`InferenceRule.equivalent`.
+    """
+    if isinstance(condition, (And, Or)):
+        return (
+            type(condition).__name__,
+            tuple(sorted(_normalise_side_condition(part) for part in condition.parts)),
+        )
+    if isinstance(condition, Not):
+        return ("Not", _normalise_side_condition(condition.inner))
+    if isinstance(condition, Occurs):
+        return ("Occurs", condition.needle, condition.haystack)
+    if isinstance(condition, Equal):
+        return ("Equal", condition.left, condition.right)
+    if isinstance(condition, DisjointLeaves):
+        sort = None if condition.sort is None else condition.sort.name
+        return ("DisjointLeaves", condition.left, condition.right, sort)
+    if isinstance(condition, IsAtom):
+        sort = None if condition.sort is None else condition.sort.name
+        return ("IsAtom", condition.name, sort)
+    return (type(condition).__name__,)
+
+
 class InferenceRule:
     """Inference rules for deduction."""
 
-    def __init__(self, name, label=None, antecedents=None, deduction=None, condition=None,
+    def __init__(self, name, label=None, antecedents=None, deduction=None, side_conditions=None,
                  allow_extra_antecedents=False, variables=None, subproof_schema=None):
 
         # The inference rule name
@@ -64,8 +106,9 @@ class InferenceRule:
         # Deduction pattern
         self.deduction = deduction
 
-        # Condition for the rule to apply
-        self.condition = condition
+        # Kernel side-conditions (provisos) that must hold for the rule to apply,
+        # checked structurally against the term binding. See side_condition_syntax.
+        self.side_conditions = side_conditions if side_conditions is not None else []
 
         # Optionally allow extra antecedents
         self.allow_extra_antecedents = allow_extra_antecedents
@@ -106,53 +149,19 @@ class InferenceRule:
         # Create an inference instance
         inference = Inference(self, antecedents, extra_antecedents, deduction)
 
-        # First check if the deduction matches
-        inference.deduction_inference_match = self.deduction.match(deduction.formula.formatted_string(), context)
-
-        if inference.deduction_inference_match is None:
-            # No match
+        # Structural check over terms (the graph representation): the deduction
+        # and every logical antecedent must match their schemas under one shared
+        # binding, derived by unification. The formulae are already parsed, so we
+        # project them straight to terms and never re-run the string matcher.
+        binding = self._term_binding(antecedents, deduction, context)
+        if binding is None:
+            # No consistent match
             return False
 
-        # Check if the antecedents match
-        for pattern, ant in zip(self.antecedents, antecedents):
-            if ant.line_type is None:
-                return False
-
-            if (not ant.line_type.behaviour == "logical") and pattern.equivalent(ant.line_type.pattern, context):
-                # This is an instance of a non-logical line
-                continue
-
-            if ant.formula is None:
-                return False
-
-            # Set the inference match - can be used in the Condition
-            match = pattern.match(ant.formula.formatted_string(), ant.context)
-
-            if match is None:
-                # No match
-                return False
-
-            inference.antecedent_inference_matches.append(match)
-
-        # Check variables are consistent
-        if not inference.check_variables(context):
-            # Variables not consistent
+        # Kernel side-conditions: soundness-critical provisos (freshness, $d,
+        # atomicity, equality) checked structurally against that same binding.
+        if not self._side_conditions_hold(binding, context):
             return False
-
-        # Check the rule condition
-        if self.condition is not None:
-            # Add contextual variables for the condition
-            context_copy = copy(context)
-            context_copy.mapping = copy(inference.variables)
-
-            try:
-                if not self.condition.check_condition(inference, context_copy):
-                    # Doesn't meet the condition
-                    return False
-
-            except Exception:
-                # Error trying to apply the condition
-                return False
 
         # Otherwise ok
         deduction.inference_rule = self
@@ -166,7 +175,9 @@ class InferenceRule:
         return True
 
     def check_discharge(self, subproof: Subproof, deduction: ProofLine, context: Context) -> bool:
-        # Check that `deduction` follows by discharging `subproof` under this rule.
+        # Check that `deduction` follows by discharging `subproof` under this
+        # rule. Discharge rules consume a whole subproof as a unit (conditional
+        # proof, reductio, universal generalisation) rather than citing lines.
 
         schema = self.subproof_schema
 
@@ -184,15 +195,14 @@ class InferenceRule:
             return False
 
         # Derive one consistent binding across the deduction and the subproof's
-        # conclusion (and assumption, for hypothesis discharge) on the kernel's
-        # graph representation: project each schema pattern to a Term with Var
-        # slots (from_pattern), each proof-line formula to a ground Term
-        # (from_match), and first-order-match them under a single substitution
-        # (unify.match_all). Shared metavariables - the `p` in both a subproof's
-        # assumption and the deduction - are forced to agree by that one binding.
-        # Atoms unify by what they denote (see terms._signature), so a literal
-        # conclusion such as a falsum `⊥` matches its declared atom.
-        schema_pairs: list[tuple[object, ProofLine]] = [
+        # conclusion (and assumption, for hypothesis discharge) on the term
+        # representation, the same way an ordinary rule binds its antecedents
+        # (see _term_binding): schemas via _schema_term, proof-line formulae via
+        # from_match, unified under one substitution. Shared metavariables - the
+        # `p` in both a subproof's assumption and the deduction - are forced to
+        # agree by that one binding; atoms unify by what they denote, so a
+        # literal conclusion such as a falsum `⊥` matches its declared atom.
+        schema_pairs: list[tuple[Pattern, ProofLine]] = [
             (self.deduction, deduction),
             (schema.conclusion, conclusion),
         ]
@@ -209,10 +219,12 @@ class InferenceRule:
             schema_pairs.append((schema.fresh, subproof.assumption))
 
         term_pairs: list[tuple[Term, Term]] = []
-        for pattern, line in schema_pairs:
+        for occurrence, (pattern, line) in enumerate(schema_pairs):
             if line is None or line.formula is None:
                 return False
-            term_pairs.append((from_pattern(pattern, context), from_match(line.formula, context)))
+            term_pairs.append(
+                (self._schema_term(pattern, occurrence, context), from_match(line.formula, context))
+            )
 
         if match_all(term_pairs, context) is None:
             return False
@@ -227,6 +239,85 @@ class InferenceRule:
         deduction.inference_rule = self
         deduction.valid = True
         return True
+
+    def _term_binding(
+        self, antecedents: Sequence[ProofLine], deduction: ProofLine, context: Context
+    ) -> Binding | None:
+        """Derive the substitution under which the deduction and every logical
+        antecedent match their schemas, or ``None`` if none is consistent.
+
+        Each ``(schema, subject)`` pair is projected into the term space -
+        schemas via :func:`from_pattern` (variable slots become ``Var`` leaves),
+        already-parsed formulae via :func:`from_match` - and unified together, so
+        a metavariable shared across antecedents and the conclusion is forced to
+        one value by a single binding rather than reconciled after the fact.
+        """
+        if deduction.formula is None:
+            return None
+
+        pairs = [
+            (self._schema_term(self.deduction, 0, context), from_match(deduction.formula, context))
+        ]
+
+        for occurrence, (pattern, ant) in enumerate(zip(self.antecedents, antecedents), start=1):
+            if ant.line_type is None:
+                return None
+
+            if ant.line_type.behaviour != "logical" and pattern.equivalent(
+                ant.line_type.pattern, context
+            ):
+                # An instance of a non-logical line: matched structurally by its
+                # type, it carries no formula variables, so it binds nothing.
+                continue
+
+            if ant.formula is None:
+                return None
+
+            pairs.append(
+                (self._schema_term(pattern, occurrence, context), from_match(ant.formula, context))
+            )
+
+        return match_all(pairs, context)
+
+    def _schema_term(self, pattern: Pattern, occurrence: int, context: Context) -> Term:
+        """Project a schema pattern into a term, keeping named metavariables
+        shared but making each bare-sort position independent.
+
+        A named metavariable (``p``, ``q``, ... - a ``StringPattern`` slot) is
+        meant to denote the same formula everywhere it appears, so its name is
+        left intact and the shared binding pins it. A bare sort used directly
+        (``formula`` meaning "any formula") has no name to share by; two such
+        positions are independent premises, so each occurrence's anonymous
+        variable is renamed apart rather than collapsed into one binding.
+        """
+        term = from_pattern(pattern, context)
+
+        if isinstance(pattern, StringPattern):
+            return term
+
+        renames = {
+            name: Var(f"{name}\x00{occurrence}", sort)
+            for name, sort in term.free_vars().items()
+        }
+        return term.substitute(renames, context) if renames else term
+
+    def _side_conditions_hold(self, binding: Binding, context: Context) -> bool:
+        """Whether every side-condition holds against the rule's term binding.
+
+        Each proviso is a closed, structural predicate over the matched terms
+        (see :mod:`~website.logical.kernel.side_conditions`). A *malformed*
+        proviso - one naming a metavariable the rule never binds - raises inside
+        the kernel; we fail closed (the rule does not apply) rather than let it
+        escape and abort the whole proof parse. Rejecting is sound: a bad
+        proviso can only make a rule too strict, never accept an invalid step.
+        """
+        try:
+            return all(
+                side_condition.check(binding, context)
+                for side_condition in self.side_conditions
+            )
+        except Exception:
+            return False
 
     def equivalent(self, other, context, memo=None):
         # Check equivalent
@@ -267,7 +358,9 @@ class InferenceRule:
             memo[(self, other)] = False
             return False
 
-        if not self.condition.equivalent(other.condition, context, memo):
+        if [_normalise_side_condition(c) for c in self.side_conditions] != [
+            _normalise_side_condition(c) for c in other.side_conditions
+        ]:
             memo[(self, other)] = False
             return False
 
@@ -277,76 +370,17 @@ class InferenceRule:
 
 @dataclass(eq=False)
 class Inference:
-    """An application of an inference rule."""
+    """A successful application of an inference rule, recorded on the deduction.
+
+    Holds the rule and the proof lines it related. The structural match is now a
+    term binding derived in :meth:`InferenceRule.check` (via unification) and is
+    not retained here - the old Match-tree fields and variable-reconciliation
+    walk went away with the string-based condition path.
+    """
 
     inference_rule: "InferenceRule"
 
-    # Antecedents should be a list of proof lines, deduction should be a proof line
+    # Antecedents and extra antecedents are proof lines; deduction is a proof line.
     antecedents: list
     extra_antecedents: list
     deduction: "ProofLine"
-
-    # Inference matches, populated as the rule is checked
-    antecedent_inference_matches: list = field(default_factory=list)
-    deduction_inference_match: "Match | None" = None
-
-    # Variables used in this inference
-    variables: dict = field(default_factory=dict)
-
-    def get_by_path(self, path, context, recurse=True):
-        # Get information from the given path
-
-        if context.reference_object is None:
-            context = copy(context)
-            context.reference_object = self
-
-        initial, remainder = parse_path(path)
-
-        if remainder:
-            # Use generic get by path
-            return get_by_path(self, path, context)
-
-        # Otherwise, only one part
-        if path == "deduction":
-            # Get the deduction
-            return self.deduction
-
-        if path == "antecedents":
-            return self.antecedents
-
-        if path == "extra_antecedents":
-            return self.extra_antecedents
-
-        if path == "antecedent":
-            return self.antecedents[0]
-
-        if path in self.variables:
-            # Get this variable
-            return self.variables[path]
-
-        if recurse:
-            # Try generic get_by_path
-            return get_by_path(self, path, context, recurse=False)
-
-        raise Exception(f"Could not find value from path '{path}'.")
-
-    def check_variables(self, context):
-        # Check the variables for antecedent and deduction matches are consistent
-
-        # Start with a copy of deduction inference match variables
-        self.variables = copy(self.deduction_inference_match.sub_matches)
-
-        # Check consistent with antecedents
-        for ant_match in self.antecedent_inference_matches:
-            for name, sub_match in ant_match.sub_matches.items():
-                if name in self.variables:
-                    if not sub_match.equivalent(self.variables[name], context):
-                        # Same variable with different value
-                        return False
-
-                else:
-                    # Add to variables
-                    self.variables[name] = sub_match
-
-        # All consistent
-        return True

@@ -1,23 +1,10 @@
-"""Edifyce source for the ZFC-style systems used by the proof tests.
+"""Edifyce source for the ZFC-style system used by the proof tests.
 
-Two systems over the *same* first-order language (membership ``∈``,
-implication ``→``, negation ``¬``, universal ``∀``):
-
-``LEGACY_ZFC``
-    Natural deduction built with the pre-existing engine: assumptions live in
-    a ``given`` :class:`MatchSet`, opened by a ``behaviour: indent`` line, and
-    discharge rules (``→I``) cite the assumption line and the conclusion line
-    *individually*. References are not scope-checked, so this system is
-    unsound - see ``tests/test_zfc_legacy.py``.
-
-``SCOPED_ZFC``
-    The same language and theorems, rebuilt on the scoped-subproof engine:
-    a single ``scope: assumption`` line type, first-class subproofs, discharge
-    rules that consume a subproof as a unit, and a freshness side-condition for
-    ``∀I``. Sound - see ``tests/test_zfc_scoped.py``.
-
-Keeping both here lets the two test modules share one source of truth and lets
-the write-up diff them directly.
+``SCOPED_ZFC`` is a first-order natural-deduction system (membership ``∈``,
+implication ``→``, negation ``¬``, universal ``∀``) built on the scoped-subproof
+engine: a single ``scope: assumption`` line type, first-class subproofs,
+discharge rules that consume a subproof as a unit, and a freshness side-condition
+for ``∀I``. See ``tests/test_zfc_scoped.py``.
 """
 
 # ---------------------------------------------------------------------------
@@ -67,76 +54,6 @@ _LANGUAGE = r"""
 """
 
 
-# ---------------------------------------------------------------------------
-# Legacy system: assumptions via `indent` + `given`, discharge by line refs.
-# ---------------------------------------------------------------------------
-LEGACY_ZFC = (
-    "FormalSystem LegacyZFC:\n"
-    + _LANGUAGE
-    + r"""
-    ProofContext:
-        given: MatchSet()
-
-    Pattern assume_pattern:
-        with phi as formula:
-            assume phi:
-
-    assume_pattern.formula():
-        return self.phi
-
-    LineType claim:
-        pattern: statement
-        behaviour: logical
-
-    LineType assume:
-        pattern: assume_pattern
-        behaviour: indent
-        context.given:
-            add: formula()
-
-    with p as formula, q as formula:
-
-        InferenceRule hypothesis:
-            label:
-                HYP
-            deduction:
-                p
-            condition:
-                deduction.formula() in given
-
-        InferenceRule reiteration:
-            label:
-                R
-            antecedents:
-                p
-            deduction:
-                p
-
-        InferenceRule modus_ponens:
-            label:
-                MP
-            antecedents:
-                p
-                (p → q)
-            deduction:
-                q
-
-        InferenceRule conditional_proof:
-            label:
-                CP
-            antecedents:
-                assume_pattern
-                q
-            deduction:
-                (p → q)
-"""
-)
-
-
-# ---------------------------------------------------------------------------
-# Scoped system: one `scope: assumption` line type, first-class subproofs,
-# discharge rules that consume a whole subproof, freshness for ∀I.
-# ---------------------------------------------------------------------------
 SCOPED_ZFC = (
     "FormalSystem ScopedZFC:\n"
     + _LANGUAGE

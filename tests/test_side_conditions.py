@@ -16,6 +16,7 @@ from website.logical.compiler import compile as compile_formal_system
 from website.logical.kernel import (
     And,
     DisjointLeaves,
+    Equal,
     IsAtom,
     Not,
     Occurs,
@@ -215,6 +216,24 @@ def test_boolean_combinators(fol):
     # Empty conjunction is vacuously true; empty disjunction vacuously false.
     assert And(()).check(binding, context)
     assert not Or(()).check(binding, context)
+
+
+def test_equal_compares_terms_structurally(fol):
+    _system, context = fol
+    same = {"p": formula_term(fol, "P(x)"), "q": formula_term(fol, "P(x)")}
+    different = {"p": formula_term(fol, "P(x)"), "q": formula_term(fol, "P(y)")}
+
+    assert Equal("p", "q").check(same, context)
+    assert not Equal("p", "q").check(different, context)
+    # Distinctness is its negation.
+    assert not Not(Equal("p", "q")).check(same, context)
+    assert Not(Equal("p", "q")).check(different, context)
+
+
+def test_equal_missing_binding_raises(fol):
+    _system, context = fol
+    with pytest.raises(ValueError, match="did not bind"):
+        Equal("p", "missing").check({"p": setvar_term(fol, "x")}, context)
 
 
 def test_malformed_condition_raises(fol):

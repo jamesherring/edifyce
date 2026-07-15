@@ -57,7 +57,7 @@ def test_reference_within_scope_is_accessible(scoped):
 
 
 def test_reference_into_closed_sibling_scope_is_rejected(scoped):
-    # The mirror of test_zfc_legacy's cross-scope defect: line 4 cites line 2,
+    # The cross-scope defect the legacy engine had: line 4 cites line 2,
     # which lives inside the already-closed subproof opened at line 1.
     proof = scoped.parse(
         "assume a ∈ b\n"
