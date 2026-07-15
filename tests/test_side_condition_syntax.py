@@ -90,3 +90,48 @@ def test_unknown_sort_raises(context):
     # `nope` is not a pattern in context.
     with pytest.raises(ValueError, match="not a pattern"):
         parse_side_condition("disjoint(x, y, nope)", context)
+
+
+# A rule system whose single side-condition line is substituted per test, to
+# check that a malformed proviso fails compilation rather than silently building
+# an unconstrained rule.
+RULE_SYSTEM = """FormalSystem R:
+
+    Regex atom:
+        ^[a-z]$
+
+    ProofContext:
+        given: MatchSet()
+
+    LineType statement:
+        pattern: atom
+        behaviour: logical
+
+    with p as atom, q as atom:
+        InferenceRule r:
+            label:
+                R
+            deduction:
+                p
+            side_conditions:
+                {LINE}
+"""
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["equal(p)", "equal(p, q, r)", "disjoint(p, q, nope)", "bogus(p, q)"],
+)
+def test_malformed_side_condition_fails_compilation(line):
+    # A soundness guard: a bad proviso must surface as a compile error (which
+    # yields no system), never quietly leave the rule with empty side_conditions.
+    result = compile_formal_system(RULE_SYSTEM.replace("{LINE}", line))
+    assert "errors" in result, result
+    assert "system" not in result
+
+
+def test_valid_side_condition_compiles():
+    result = compile_formal_system(RULE_SYSTEM.replace("{LINE}", "equal(p, q)"))
+    assert "errors" not in result, result.get("errors")
+    (rule,) = [r for r in result["system"].inference_rules if r.label == "R"]
+    assert rule.side_conditions == [Equal("p", "q")]

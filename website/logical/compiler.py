@@ -986,6 +986,7 @@ class AbstractSyntaxTree:
             return
 
         # Run any sub trees in a copy of context
+        error_log_len = len(context.error_log)
         sub_context = copy(context)
 
         # Add the new object if it exists
@@ -1000,6 +1001,13 @@ class AbstractSyntaxTree:
 
             if tree.error is not None:
                 context.error_log.append(f"{tree.line_number!s}: {tree.error}")
+
+        # Errors from deeper subtrees accumulate in the copied sub_context; surface
+        # them so a malformed nested line (e.g. a bad side-condition) reaches the
+        # returned error_log instead of being silently dropped - which would leave
+        # a constrained rule unconstrained. Only the entries added below the
+        # snapshot are new, so extend rather than reassign.
+        context.error_log.extend(sub_context.error_log[error_log_len:])
 
         # Add inference rules to formal systems
         if isinstance(new_object, InferenceRule) and isinstance(current_object, FormalSystem):
