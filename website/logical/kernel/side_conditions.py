@@ -1,7 +1,7 @@
 """Side-conditions: a small, fixed vocabulary of structural provisos.
 
-Many inference rules carry a proviso - "``x`` is not free in ``φ``", "``x``
-and ``y`` are distinct" - that must hold for the rule to apply. Today those are
+Many inference rules carry a proviso - "``x`` is not free in ``φ``", "``x`` and
+``y`` are distinct" - that must hold for the rule to apply. Today those are
 written in a Turing-complete condition mini-language (``matching/conditions.py``
 plus the ``get_by_path`` interpreter) that the checker *executes* per proof
 line. Step 3 replaces that, for the common cases, with a **closed algebra** of
@@ -9,30 +9,45 @@ side-conditions evaluated by total, terminating structural checks over terms.
 
 The whole vocabulary
 --------------------
-* :class:`Occurs` - one term appears as a subterm of another (syntactic
-  occurrence). ``Not(Occurs(x, phi))`` is the freshness proviso "``x`` does not
-  occur in ``φ``".
-* :class:`Distinct` - two terms share no variable leaf. This is Metamath's sole
-  side-condition, the disjoint-variable proviso ``$d``; for a variable ``x`` and
-  a formula ``φ`` it is the ``$d``-style "``x`` not free in ``φ``".
-* :class:`IsVariable` - a term is a single atomic variable.
+Each item is a *generic* structural predicate over terms; the first-order-logic
+reading is one instantiation, not something the kernel hard-codes.
+
+* :class:`Occurs` - one term occurs as a subterm of another.
+      FOL: the freshness proviso is ``Not(Occurs("x", "phi"))`` - "``x`` does
+      not occur in ``φ``".
+* :class:`DisjointLeaves` - two terms share no leaf (of a given sort).
+      FOL, with the ``setvar`` sort, this is Metamath's disjoint-variable
+      proviso ``$d`` - "the variable ``x`` does not occur among the variables of
+      ``φ``".
+* :class:`IsAtom` - a term is a single childless leaf.
+      FOL: "this metavariable stands for a variable, not a compound term".
 * :class:`Not`, :class:`And`, :class:`Or` - total boolean combinators.
 
-That is the entire language: no loops, no reflection, no user code. A condition
-is checked against the *binding* a rule match produces
+Nothing here names a connective, a quantifier, or a specific notion of
+"variable": *which* sort counts as a variable is a per-system parameter (a
+``Pattern`` the system supplies), so the vocabulary stays logic-agnostic while
+still covering FOPC and ZF(C) - Metamath verifies all of ZFC on ``$d`` alone.
+A condition is checked against the *binding* a rule match produces
 (:func:`~website.logical.kernel.unify.match_all`), so it references the rule's
 metavariables by name.
+
+Why these live in the *kernel*
+------------------------------
+These provisos are soundness-critical: universal generalisation without its
+freshness check derives falsehoods. So the trusted core must verify them itself
+(as Metamath's verifier checks ``$d``) rather than trusting an elaborator.
+Keeping the vocabulary closed and minimal is what lets the core stay small while
+remaining sound.
 
 Deliberate limits (kept out of the trusted core)
 ------------------------------------------------
 :class:`Occurs` is *syntactic* - it does not know binders, so it cannot express
-capture-sensitive "free modulo ``∀``/``∃``/``λ``". :class:`Distinct` is the
-``$d`` over-approximation that Metamath uses precisely to stay binder-agnostic
-and sound. Conditions that need binder scoping, or membership in a proof-context
-set (``x ∈ Γ`` over the assumptions), depend on the object logic or on proof
-state and are intentionally *not* expressible here; they belong in the
-elaboration layer, not the kernel. Keeping this vocabulary closed and
-logic-agnostic is what lets it stay small and total.
+capture-sensitive "free modulo ``∀``/``∃``/``λ``". :class:`DisjointLeaves` is
+the sound over-approximation Metamath uses (``$d``) precisely to stay
+binder-agnostic. Conditions that need binder scoping, or membership in a
+proof-context set (``x ∈ Γ`` over the assumptions), depend on the object logic
+or on proof state and are intentionally *not* expressible here; they belong in
+the elaboration layer, not the kernel.
 
 Worked example - vacuous quantification
 ---------------------------------------
@@ -53,8 +68,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .terms import Node, Var
-# Reuse the unifier's sort test, so "is this leaf a variable of sort S" means
-# exactly what it means when a variable of sort S binds during matching.
+# Reuse the unifier's sort test, so "is this leaf of sort S" means exactly what
+# it means when a variable of sort S binds during matching.
 from .unify import _sort_admits
 
 if TYPE_CHECKING:
@@ -80,11 +95,14 @@ class SideCondition:
 
 @dataclass(frozen=True)
 class Occurs(SideCondition):
-    """``needle`` appears as a subterm of ``haystack`` (both metavariables).
+    """``needle`` occurs as a subterm of ``haystack`` (both metavariables).
 
-    Syntactic occurrence - ``Occurs("x", "phi")`` is true when the term bound to
-    ``x`` is structurally present anywhere inside the term bound to ``phi``. The
-    freshness proviso is its negation, ``Not(Occurs("x", "phi"))``.
+    Generic: pure subterm containment over any term algebra - true when the term
+    bound to ``needle`` is structurally present anywhere inside the term bound to
+    ``haystack``. No notion of variable or binder is involved.
+
+    FOL: freshness is the negation, ``Not(Occurs("x", "phi"))`` - "``x`` does not
+    occur in ``φ``" (e.g. the side-condition on vacuous/∀-introduction).
     """
 
     needle: str
@@ -97,42 +115,53 @@ class Occurs(SideCondition):
 
 
 @dataclass(frozen=True)
-class Distinct(SideCondition):
-    """The terms bound to ``left`` and ``right`` share no variable leaf.
+class DisjointLeaves(SideCondition):
+    """The terms bound to ``left`` and ``right`` share no leaf of sort ``sort``.
 
-    This is Metamath's ``$d``. ``variable_sort`` restricts which leaves count as
-    variables (e.g. ``setvar``); left unset, every atomic leaf counts. For a
-    variable ``x`` and a formula ``φ``, ``Distinct("x", "phi", setvar)`` is the
-    ``$d``-style "``x`` does not occur (free) in ``φ``".
+    Generic: a structural check that two subterms have no atom in common. ``sort``
+    restricts which leaves count; unset, every atomic leaf does. Restricting to a
+    sort is what makes ``P(x)`` and ``P(z)`` count as sharing nothing despite
+    both containing the predicate symbol ``P`` - only the ``setvar`` leaves
+    ``x``/``z`` are compared.
+
+    FOL: with ``sort`` = the ``setvar`` pattern this is Metamath's
+    disjoint-variable proviso ``$d``. For a variable ``x`` and a formula ``φ``,
+    ``DisjointLeaves("x", "phi", setvar)`` is the ``$d``-style "``x`` does not
+    occur (free) in ``φ``".
     """
 
     left: str
     right: str
-    variable_sort: Pattern | None = None
+    sort: Pattern | None = None
 
     def check(self, binding: Binding, context: Context) -> bool:
-        left = _variable_leaves(_bound(binding, self.left), context, self.variable_sort)
-        right = _variable_leaves(_bound(binding, self.right), context, self.variable_sort)
+        left = _leaves(_bound(binding, self.left), context, self.sort)
+        right = _leaves(_bound(binding, self.right), context, self.sort)
         return left.isdisjoint(right)
 
 
 @dataclass(frozen=True)
-class IsVariable(SideCondition):
-    """The term bound to ``name`` is a single atomic variable.
+class IsAtom(SideCondition):
+    """The term bound to ``name`` is a single childless leaf, optionally of
+    sort ``sort``.
 
-    Sorts already constrain what a metavariable may bind to during matching, so
-    this is mainly for rules that must additionally insist a slot is atomic (not
-    a compound term). ``variable_sort`` optionally pins the expected sort.
+    Generic: "has no internal structure". This is largely redundant with the
+    sort discipline already enforced when a metavariable binds during matching,
+    so it is only needed when a rule must insist a slot is atomic *beyond* what
+    its (possibly broad) sort guarantees.
+
+    FOL: ``IsAtom("x", setvar)`` asserts the metavariable ``x`` stands for a
+    variable rather than a compound formula/term.
     """
 
     name: str
-    variable_sort: Pattern | None = None
+    sort: Pattern | None = None
 
     def check(self, binding: Binding, context: Context) -> bool:
         term = _bound(binding, self.name)
-        if not _is_atomic(term):
+        if not _is_atom(term):
             return False
-        return self.variable_sort is None or _sort_admits(self.variable_sort, term, context)
+        return self.sort is None or _sort_admits(self.sort, term, context)
 
 
 @dataclass(frozen=True)
@@ -187,7 +216,7 @@ def _bound(binding: Binding, name: str) -> Term:
     return binding[name]
 
 
-def _is_atomic(term: Term) -> bool:
+def _is_atom(term: Term) -> bool:
     """A term with no internal structure: a variable, or a childless leaf."""
     return isinstance(term, Var) or (isinstance(term, Node) and not term.children)
 
@@ -201,28 +230,28 @@ def _occurs(needle: Term, haystack: Term, context: Context) -> bool:
     return False
 
 
-def _variable_leaves(term: Term, context: Context, variable_sort: Pattern | None) -> set[str]:
+def _leaves(term: Term, context: Context, sort: Pattern | None) -> set[str]:
     """The surface strings of ``term``'s atomic leaves, optionally restricted to
-    those of ``variable_sort``.
+    those of ``sort``.
 
     For a formula like ``P(x)`` this is ``{"P", "x"}`` unrestricted, or ``{"x"}``
-    with ``variable_sort=setvar`` - which is what makes :class:`Distinct` behave
-    as a variable-occurrence check rather than a whole-symbol check.
+    with ``sort=setvar`` - which is what makes :class:`DisjointLeaves` behave as
+    a variable-occurrence check rather than a whole-symbol check.
     """
-    leaves: set[str] = set()
+    found: set[str] = set()
 
     def walk(node: Term) -> None:
         if isinstance(node, Var):
-            if variable_sort is None or _sort_admits(variable_sort, node, context):
-                leaves.add(node.name)
+            if sort is None or _sort_admits(sort, node, context):
+                found.add(node.name)
             return
         if isinstance(node, Node) and not node.children:
-            if variable_sort is None or _sort_admits(variable_sort, node, context):
-                leaves.add(node.literal if node.literal is not None else node.to_string())
+            if sort is None or _sort_admits(sort, node, context):
+                found.add(node.literal if node.literal is not None else node.to_string())
             return
         if isinstance(node, Node):
             for child in node.children.values():
                 walk(child)
 
     walk(term)
-    return leaves
+    return found

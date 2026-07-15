@@ -1,9 +1,9 @@
 """Tests for the fixed side-condition vocabulary (kernel step 3).
 
-These cover each proviso in the closed algebra - occurrence, distinctness,
-is-variable, and the boolean combinators - as structural checks over terms,
-plus two end-to-end rule checks (vacuous quantification gated by freshness, and
-a distinct-variables proviso) built on ``unify.match_all``.
+These cover each proviso in the closed algebra - occurrence, leaf-disjointness,
+atomicity, and the boolean combinators - as structural checks over terms, plus
+two end-to-end rule checks (vacuous quantification gated by freshness, and a
+disjoint-variables proviso) built on ``unify.match_all``.
 """
 
 from copy import copy
@@ -15,8 +15,8 @@ pytest.importorskip("regex")
 from website.logical.compiler import compile as compile_formal_system
 from website.logical.kernel import (
     And,
-    Distinct,
-    IsVariable,
+    DisjointLeaves,
+    IsAtom,
     Not,
     Occurs,
     Or,
@@ -153,52 +153,53 @@ def test_distinct_variables(fol):
     _system, context = fol
     different = {"x": setvar_term(fol, "a"), "y": setvar_term(fol, "b")}
     same = {"x": setvar_term(fol, "a"), "y": setvar_term(fol, "a")}
-    assert Distinct("x", "y").check(different, context)
-    assert not Distinct("x", "y").check(same, context)
+    assert DisjointLeaves("x", "y").check(different, context)
+    assert not DisjointLeaves("x", "y").check(same, context)
 
 
 def test_distinct_is_symmetric(fol):
     _system, context = fol
     binding = {"x": setvar_term(fol, "a"), "y": setvar_term(fol, "b")}
-    assert Distinct("x", "y").check(binding, context) == Distinct("y", "x").check(binding, context)
+    assert DisjointLeaves("x", "y").check(binding, context) == DisjointLeaves("y", "x").check(binding, context)
 
 
 def test_distinct_variable_sort_ignores_non_variable_symbols(fol):
     # P(x) and P(z) share the predicate symbol "P" but no *variable*. Restricting
-    # to `setvar` makes Distinct a variable-occurrence check, so they count as
+    # to `setvar` makes DisjointLeaves a variable-occurrence check, so they count as
     # distinct; unrestricted, the shared "P" leaf makes them non-distinct.
     system, context = fol
     setvar = system.build_context.variables["setvar"]
     binding = {"a": formula_term(fol, "P(x)"), "b": formula_term(fol, "P(z)")}
 
-    assert Distinct("a", "b", variable_sort=setvar).check(binding, context)
-    assert not Distinct("a", "b").check(binding, context)
+    assert DisjointLeaves("a", "b", sort=setvar).check(binding, context)
+    assert not DisjointLeaves("a", "b").check(binding, context)
 
 
 def test_distinct_variable_and_formula_is_freshness(fol):
-    # For a variable and a formula, Distinct(setvar) is the $d-style "x not in φ".
+    # For a variable and a formula, DisjointLeaves(setvar) is the $d-style "x not in φ".
     system, context = fol
     setvar = system.build_context.variables["setvar"]
     fresh = {"x": setvar_term(fol, "x"), "phi": formula_term(fol, "P(y)")}
     captured = {"x": setvar_term(fol, "x"), "phi": formula_term(fol, "P(x)")}
 
-    assert Distinct("x", "phi", variable_sort=setvar).check(fresh, context)
-    assert not Distinct("x", "phi", variable_sort=setvar).check(captured, context)
+    assert DisjointLeaves("x", "phi", sort=setvar).check(fresh, context)
+    assert not DisjointLeaves("x", "phi", sort=setvar).check(captured, context)
 
 
 # ---------------------------------------------------------------------------
-# IsVariable and combinators
+# IsAtom and combinators
 # ---------------------------------------------------------------------------
 
 
-def test_is_variable(fol):
+def test_is_atom(fol):
+    # In FOL, IsAtom(x, setvar) asserts x stands for a variable, not a compound.
     system, context = fol
     setvar = system.build_context.variables["setvar"]
     binding = {"x": setvar_term(fol, "x"), "phi": formula_term(fol, "P(y)")}
 
-    assert IsVariable("x").check(binding, context)
-    assert IsVariable("x", variable_sort=setvar).check(binding, context)
-    assert not IsVariable("phi").check(binding, context)  # P(y) is compound
+    assert IsAtom("x").check(binding, context)
+    assert IsAtom("x", sort=setvar).check(binding, context)
+    assert not IsAtom("phi").check(binding, context)  # P(y) is compound
 
 
 def test_boolean_combinators(fol):
@@ -206,8 +207,8 @@ def test_boolean_combinators(fol):
     binding = {"x": setvar_term(fol, "x"), "phi": formula_term(fol, "P(y)")}
     fresh = Not(Occurs("x", "phi"))
 
-    assert And((fresh, IsVariable("x"))).check(binding, context)
-    assert not And((fresh, IsVariable("phi"))).check(binding, context)
+    assert And((fresh, IsAtom("x"))).check(binding, context)
+    assert not And((fresh, IsAtom("phi"))).check(binding, context)
     assert Or((Occurs("x", "phi"), fresh)).check(binding, context)
     assert not Or((Occurs("x", "phi"),)).check(binding, context)
 
@@ -232,15 +233,15 @@ def test_malformed_branch_raises_even_when_short_circuited(fol):
 
     # Or: first branch true would short-circuit a generator; must still raise.
     with pytest.raises(ValueError, match="did not bind"):
-        Or((IsVariable("x"), malformed)).check(binding, context)
+        Or((IsAtom("x"), malformed)).check(binding, context)
 
     # And: first branch false would short-circuit a generator; must still raise.
     with pytest.raises(ValueError, match="did not bind"):
-        And((Not(IsVariable("x")), malformed)).check(binding, context)
+        And((Not(IsAtom("x")), malformed)).check(binding, context)
 
     # Nested/negated composition is no escape hatch either.
     with pytest.raises(ValueError, match="did not bind"):
-        Not(Or((IsVariable("x"), malformed))).check(binding, context)
+        Not(Or((IsAtom("x"), malformed))).check(binding, context)
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +272,7 @@ def test_vacuous_quantification_gated_by_freshness(fol):
 def test_distinct_pair_proviso(fol):
     system, _context = fol
     setvar = system.build_context.variables["setvar"]
-    distinct = Distinct("x", "y", variable_sort=setvar)
+    distinct = DisjointLeaves("x", "y", sort=setvar)
 
     assert check_step(fol, "DIST", ["R(a, b)", "R(a, b)"], distinct)
     assert not check_step(fol, "DIST", ["R(a, a)", "R(a, a)"], distinct)
