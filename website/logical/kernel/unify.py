@@ -172,11 +172,10 @@ def _sort_admits(sort: Pattern, term: Term, context: Context) -> bool:
 
 
 def _term_sort(term: Term) -> Pattern:
-    """The sort (a ``Pattern``) that ``term`` inhabits."""
+    """The sort (a ``Pattern``) that ``term`` inhabits - a variable's declared
+    sort, a node's recorded ``sort`` when it has one (a definition shorthand,
+    whose constructor is not itself a member of its sort), or otherwise the
+    node's own constructor (already a member of whatever union it belongs to)."""
     if isinstance(term, Var):
         return term.sort
-    # A definition-backed node is represented by its higher form, but its true
-    # sort is the pattern the definition is *for*.
-    if term.definition is not None:
-        return term.definition.pattern
-    return term.pattern
+    return term.sort if term.sort is not None else term.pattern

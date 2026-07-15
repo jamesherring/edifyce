@@ -19,7 +19,7 @@ pytest.importorskip("regex")
 
 import website.logical.matching.patterns as patterns
 from website.logical.compiler import compile as compile_formal_system
-from website.logical.kernel import Node, Var, from_match, from_pattern
+from website.logical.kernel import Node, Var, abstract, from_match, from_pattern
 from website.logical.matching import Context, RegexPattern, StringPattern, UnionPattern
 
 
@@ -222,27 +222,6 @@ def test_modus_ponens_checks_over_terms(fopl):
     assert not deduction.substitute(binding, context).equal(wrong, context)
 
 
-def test_definition_slot_is_carried_through_substitution(fopl):
-    # A node's `definition` is metadata for the future definitions-as-axioms
-    # work; substitution must preserve it untouched.
-    _system, context, formula = fopl
-
-    sentinel = object()
-    node = Node(
-        pattern=formula.patterns[-1],  # the `implication` production
-        children={
-            "p": Var("p", formula),
-            "q": Var("q", formula),
-        },
-        definition=sentinel,
-    )
-
-    substituted = node.substitute(
-        {"p": from_match(formula.match("a", context), context)}, context
-    )
-    assert substituted.definition is sentinel
-
-
 # A system whose `implication` production names its variables lhs/rhs, while
 # the modus ponens rule names them p/q - so schema and production are the same
 # constructor under alpha-renaming but spell their slots differently.
@@ -296,16 +275,17 @@ def test_equality_aligns_slots_by_position_not_label():
 
 
 def test_definition_backed_union_match_keeps_structure():
-    # Codex P2: a formula parsed only through a definition attached to a union
-    # sort must stay structured (children + definition), not collapse to an
-    # opaque literal.
+    # A formula parsed only through a definition attached to a union sort must
+    # stay structured (built via the definition's higher form), not collapse to
+    # an opaque literal. The term keeps no reference to the definition itself -
+    # relating higher and lower forms is a cited step (see kernel.definitions).
     context = Context()
     setvar = RegexPattern("setvar", "^[a-z]$")
     membership = StringPattern("membership", "x in y", variables={"x": setvar, "y": setvar})
     formula = UnionPattern("formula", [membership])
 
     context.string_variables = {"x": setvar, "y": setvar}
-    definition = formula.add_definition(
+    formula.add_definition(
         "x in y", "x is a member of y", context, require_lower_match=False
     )
 
@@ -313,9 +293,9 @@ def test_definition_backed_union_match_keeps_structure():
     assert match.definition is not None  # matched via the definition
 
     term = from_match(match, context)
-    # Structure preserved, definition carried, and it still round-trips.
+    # Structure preserved and it still round-trips, with no stored definition.
     assert isinstance(term, Node)
-    assert term.definition is definition
+    assert not hasattr(term, "definition")
     assert term.to_string() == match.formatted_string() == "a is a member of b"
     assert {v.to_string() for v in term.children.values()} == {"a", "b"}
 
@@ -592,3 +572,47 @@ def test_term_operations_never_reinvoke_the_matcher(set_theory, monkeypatch):
         term.free_vars()
 
     assert calls["n"] == 0
+
+
+# ---------------------------------------------------------------------------
+# abstract: parse a ground term, then lift parameter leaves into variables
+# ---------------------------------------------------------------------------
+
+
+def test_abstract_lifts_parameter_leaves_to_vars(fopl):
+    # `(a -> b)` parsed ground, then abstract `a` into a variable p (leaving b).
+    _system, context, formula = fopl
+    ground = from_match(formula.match("(a -> b)", context), context)
+    assert ground.free_vars() == {}
+
+    atom = formula.patterns[0]  # the `atom` regex sort
+    schema = abstract(ground, {"a": atom})
+
+    assert set(schema.free_vars()) == {"a"}
+    # Structure and rendering are preserved; only the leaf changed kind.
+    assert schema.to_string() == "(a -> b)"
+    # And it now behaves as a schema: matching binds the lifted variable.
+    from website.logical.kernel import match
+
+    binding = match(schema, from_match(formula.match("(c -> b)", context), context), context)
+    assert binding is not None and binding["a"].to_string() == "c"
+
+
+def test_abstract_preserves_nested_structure(fopl):
+    # Unlike from_pattern (one production level), abstract keeps a nested tree.
+    _system, context, formula = fopl
+    atom = formula.patterns[0]
+    schema = abstract(
+        from_match(formula.match("(a -> (b -> a))", context), context),
+        {"a": atom, "b": atom},
+    )
+    assert set(schema.free_vars()) == {"a", "b"}
+    # Substituting the variables back reproduces a concrete nested formula.
+    reified = schema.substitute(
+        {
+            "a": from_match(formula.match("x", context), context),
+            "b": from_match(formula.match("y", context), context),
+        },
+        context,
+    )
+    assert reified.to_string() == "(x -> (y -> x))"
