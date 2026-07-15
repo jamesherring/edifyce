@@ -30,8 +30,10 @@ line statement
   logical formula
 
 axioms
+  # An axiom is asserted: a line matching this formula is self-justifying
+  # (write the bare formula, no citation needed).
   # label | name           | formula
-  EXT     | extensionality | ∀x ∀y (∀z (z ∈ x ↔ z ∈ y) → x = y)         | x, y, z : variable
+  EXT     | extensionality | ∀x ∀y (∀z (z ∈ x ↔ z ∈ y) → x = y)
 
 rules
   # label | name                    | premises           | conclusion | bindings

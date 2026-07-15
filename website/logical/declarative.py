@@ -382,8 +382,16 @@ def lower(spec: SystemSpec) -> str:
             emit(2, f"Define {defn.higher} as {defn.lower}{tail}")
         emit()
 
-    # 7. Axioms and rules -> inference rules.
-    for rule in spec.axioms + spec.rules:
+    # 7a. Axioms -> axiom line types. An axiom is *asserted*, not derived by a
+    # rule: the engine's `behaviour: axiom` marks a line matching the axiom
+    # formula valid on its own. (This also sidesteps the kernel's schema->term
+    # projection, which cannot represent a whole concrete formula in rule
+    # deduction position.)
+    for axiom in spec.axioms:
+        _emit_axiom(axiom, emit)
+
+    # 7b. Rules -> inference rules.
+    for rule in spec.rules:
         _emit_rule(rule, emit)
 
     return "\n".join(out) + "\n"
@@ -485,6 +493,31 @@ def _fresh_var(placeholder: str, used: set[str]) -> str:
     while f"{base}{n}" in used:
         n += 1
     return f"{base}{n}"
+
+
+def _emit_axiom(axiom: Rule, emit) -> None:
+    # An axiom lowers to a Pattern for its formula plus an axiom-behaviour line
+    # type; a line matching the formula is self-justifying.
+    pattern_name = f"{_identifier(axiom.name)}_axiom"
+
+    emit(1, f"Pattern {pattern_name}:")
+    if axiom.bindings:
+        emit(2, f"with {_with_clause(axiom.bindings)}:")
+        emit(3, axiom.deduction)
+    else:
+        emit(2, axiom.deduction)
+    emit()
+
+    # The engine reads a logical line's content via formula(); for a bare axiom
+    # assertion the whole match is the formula.
+    emit(1, f"{pattern_name}.formula():")
+    emit(2, "return self")
+    emit()
+
+    emit(1, f"LineType {_identifier(axiom.name)}:")
+    emit(2, f"pattern: {pattern_name}")
+    emit(2, "behaviour: axiom")
+    emit()
 
 
 def _emit_rule(rule: Rule, emit) -> None:

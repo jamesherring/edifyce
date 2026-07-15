@@ -38,7 +38,7 @@ line statement
   logical formula
 
 axioms
-  EXT | extensionality | ∀x ∀y (∀z (z ∈ x ↔ z ∈ y) → x = y) | x, y, z : variable
+  EXT | extensionality | ∀x ∀y (∀z (z ∈ x ↔ z ∈ y) → x = y)
 
 rules
   HYP | hypothesis   | from             | infer p | p : formula
@@ -64,8 +64,9 @@ def zfc():
 
 def test_builds_without_errors(zfc):
     assert zfc.name == "ZFC"
-    assert [ir.label for ir in zfc.inference_rules] == ["EXT", "HYP", "MP"]
-    assert [lt.name for lt in zfc.line_types] == ["statement"]
+    # EXT is an asserted axiom (a line type), HYP/MP are inference rules.
+    assert [ir.label for ir in zfc.inference_rules] == ["HYP", "MP"]
+    assert [lt.name for lt in zfc.line_types] == ["statement", "extensionality"]
 
 
 # ---------------------------------------------------------------------------
@@ -140,15 +141,16 @@ def test_defined_notation_is_backed_by_a_definition(zfc):
 # ---------------------------------------------------------------------------
 
 
-def test_axiom_validates_for_its_own_formula(zfc):
-    proof = zfc.parse("∀x ∀y (∀z (z ∈ x ↔ z ∈ y) → x = y) [EXT]")
+def test_axiom_validates_as_a_bare_assertion(zfc):
+    # The extensionality axiom is self-justifying: asserting it is valid.
+    proof = zfc.parse("∀x ∀y (∀z (z ∈ x ↔ z ∈ y) → x = y)")
     assert proof.valid is True
 
 
-def test_axiom_rejected_for_other_formula(zfc):
-    proof = zfc.parse("x = y [EXT]")
+def test_non_axiom_bare_formula_is_unjustified(zfc):
+    # A different formula is not the axiom, so a bare assertion is not valid.
+    proof = zfc.parse("x = y")
     assert proof.valid is False
-    assert proof.data()["lines"][0]["invalid_message"] == "EXT does not apply."
 
 
 def test_modus_ponens_over_raw_base(zfc):
