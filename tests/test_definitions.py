@@ -256,3 +256,35 @@ def test_definition_backed_subject_admits_its_sort():
     binding = match(Var("phi", formula), subject, context)
     assert binding is not None
     assert binding["phi"].to_string() == "a is a member of b"
+
+
+# ---------------------------------------------------------------------------
+# A definition is usable in both directions within a proof
+# ---------------------------------------------------------------------------
+
+
+def test_definition_used_in_both_directions(theory, formula, setvar):
+    # A single definition supports both unfolding (defined -> defining) and
+    # folding (defining -> defined), at the root and inside a larger formula -
+    # the two directions a proof may cite df-subset.
+    _system, context = theory
+    d = df_subset(theory, setvar)
+
+    subset = "(a ⊆ b)"
+    expanded = "∀z.((z ∈ a) → (z ∈ b))"
+    subset_in_context = "((a ⊆ b) → (c ⊆ d))"
+    expanded_in_context = "(∀z.((z ∈ a) → (z ∈ b)) → (c ⊆ d))"
+
+    steps = [
+        (subset, expanded),                        # unfold, at the root
+        (expanded, subset),                        # fold, at the root
+        (subset_in_context, expanded_in_context),  # unfold, inside a larger formula
+        (expanded_in_context, subset_in_context),  # fold, inside a larger formula
+    ]
+
+    for before, after in steps:
+        b, a = term(theory, formula, before), term(theory, formula, after)
+        # The two forms genuinely differ (so a direction was really applied)...
+        assert not b.equal(a, context)
+        # ...and the same definition `d` justifies the step either way.
+        assert check_definitional_step(b, a, d, context), f"{before} -> {after}"
