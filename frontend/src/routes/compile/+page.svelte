@@ -2,7 +2,6 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
 	import * as Alert from '$lib/components/ui/alert';
-	import { Badge } from '$lib/components/ui/badge';
 	import { Label } from '$lib/components/ui/label';
 	import CodeEditor from '$lib/components/code-editor.svelte';
 	import { api, ApiError, type CompileResponse } from '$lib/api';

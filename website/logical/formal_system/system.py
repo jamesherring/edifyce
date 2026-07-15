@@ -99,20 +99,8 @@ class FormalSystem:
 
         return references
 
-    def parse(self, text, proof=None, proof_model_id=None, reference_proofs=None, context=None, line_number_offset=0,
-              previous_proof=None, previous_proof_lines_mapped=None):
+    def parse(self, text, proof=None, proof_model_id=None, reference_proofs=None, context=None, line_number_offset=0):
         # Parse the text into a proof.
-
-        # The ``previous_proof`` argument is intended to let callers reuse the results of a prior
-        # parse of the same proof to save reprocessing unchanged lines. That incremental path
-        # (copy_from_previous_proof) is currently incomplete - notably it copies diagnostics from
-        # the old line but re-executes the line without clearing them, so a line that flips from
-        # invalid to valid would report a stale invalid_message. It has no callers, so it is kept
-        # disabled here until it has a correct, tested implementation.
-        previous_proof = None
-
-        # Maintain a dictionary of previous proof lines: new proof lines
-        previous_proof_lines_mapped = previous_proof_lines_mapped if previous_proof_lines_mapped is not None else {}
 
         lines = text.split("\n")
 
@@ -144,103 +132,76 @@ class FormalSystem:
                 # Ignore blank lines
                 continue
 
-            # Check if this line was in the previous proof
-            found_previous_line = False
-
-            if previous_proof is not None:
-                line_matches = [pl for pl in previous_proof.proof_lines if
-                                pl.text == line and pl not in previous_proof_lines_mapped]
-
-                if len(line_matches) > 0:
-                    previous_line = line_matches[0]
-
-                    # Add this line to the proof line dictionary
-                    previous_proof_lines_mapped[previous_line] = proof_line
-
-                    # Populate the new line (returns boolean for success) - if False the proof line is unchanged.
-                    result = proof_line.copy_from_previous_proof(previous_line, previous_proof_lines_mapped)
-
-                    # Still need to follow indent/non-indent line rules
-
-                    if result:
-                        # Successfully copied the previous line
-                        found_previous_line = True
-
-                    else:
-                        # Remove the line from the dictionary
-                        del previous_proof_lines_mapped[previous_line]
-
             found = False
-            if not found_previous_line:
-                # Check the line is of a given line type
-                for line_type in self.line_types:
+            # Check the line is of a given line type
+            for line_type in self.line_types:
 
-                    line = line.lstrip()
-                    result = line_type.parse_line(line, context)
+                line = line.lstrip()
+                result = line_type.parse_line(line, context)
 
-                    if result is None:
-                        continue
+                if result is None:
+                    continue
 
-                    # Otherwise meets this line type
-                    found = True
+                # Otherwise meets this line type
+                found = True
 
-                    # Record the line_type of this line
-                    proof_line.line_type = line_type
-                    proof_line.match = result
+                # Record the line_type of this line
+                proof_line.line_type = line_type
+                proof_line.match = result
 
-                    # Check for main line type attributes
-                    # Try to get the formula, reference, label, display, is_axiom
-                    try:
-                        # Add formula to the proof line
-                        proof_line.formula = result.get_by_path("formula()", context)
+                # Check for main line type attributes
+                # Try to get the formula, reference, label, display, is_axiom
+                try:
+                    # Add formula to the proof line
+                    proof_line.formula = result.get_by_path("formula()", context)
 
-                        # It has to be a match
-                        if type(proof_line.formula) is not Match:
-                            proof_line.formula = None
+                    # It has to be a match
+                    if type(proof_line.formula) is not Match:
+                        proof_line.formula = None
 
-                    except Exception:
-                        pass
+                except Exception:
+                    pass
 
-                    try:
-                        reference_match = result.get_by_path("reference()", context)
+                try:
+                    reference_match = result.get_by_path("reference()", context)
 
-                        proof_line.reference_string = reference_match.formatted_string()
-                        proof_line.reference_string_display = reference_match.string
+                    proof_line.reference_string = reference_match.formatted_string()
+                    proof_line.reference_string_display = reference_match.string
 
-                    except Exception:
-                        pass
+                except Exception:
+                    pass
 
-                    try:
-                        label = result.get_by_path("label()", context)
-                        proof_line.label = label
+                try:
+                    label = result.get_by_path("label()", context)
+                    proof_line.label = label
 
-                    except Exception:
-                        pass
+                except Exception:
+                    pass
 
-                    # Check if the line type has a 'display' value
-                    try:
-                        proof_line.display = result.get_by_path("display()", context)
-                    except Exception:
-                        # No valid display path
-                        pass
+                # Check if the line type has a 'display' value
+                try:
+                    proof_line.display = result.get_by_path("display()", context)
+                except Exception:
+                    # No valid display path
+                    pass
 
-                    try:
-                        # Check if there is a valid axiom
-                        result.get_by_path("axiom()", context)
-                        proof_line.is_axiom = True
-                    except Exception:
-                        # Not an axiom
-                        pass
+                try:
+                    # Check if there is a valid axiom
+                    result.get_by_path("axiom()", context)
+                    proof_line.is_axiom = True
+                except Exception:
+                    # Not an axiom
+                    pass
 
-                    # No need to check other line types
-                    break
+                # No need to check other line types
+                break
 
-                if not found:
-                    # The line doesn't match any of the line types. Invalid proof
-                    proof_line.invalid_message = "Could not parse line."
-                    proof_line.valid = False
+            if not found:
+                # The line doesn't match any of the line types. Invalid proof
+                proof_line.invalid_message = "Could not parse line."
+                proof_line.valid = False
 
-            if found_previous_line or found:
+            if found:
                 # Follow indent/non-indent line rules
 
                 if not proof_line.line_type.behaviour == "indent":
@@ -281,9 +242,7 @@ class FormalSystem:
                         text=block,
                         proof=proof,
                         context=new_context,
-                        line_number_offset=i + 1,
-                        previous_proof=previous_proof,
-                        previous_proof_lines_mapped=previous_proof_lines_mapped
+                        line_number_offset=i + 1
                     )
 
                     # Update context with definitions created in the block
