@@ -2,6 +2,11 @@
 
 **Status:** proposal (no code yet) · **Branch:** `claude/formal-system-object-crud`
 
+> **Sequencing:** this branch is **downstream of PR #13**. Per the decisions
+> below it builds on #13's **async** SQLAlchemy session and its **users** table
+> (owner-scoping), so #13 must merge first. Design and schemas can be written
+> now; the endpoints land once #13 is in `develop`.
+
 ## Goal
 
 Today a user authors a formal system as one `.edi` (or declarative) text blob
@@ -60,19 +65,15 @@ These are noted as future extensions, not silently dropped.
 
 `app/systems/models.py` exists, but develop has **no engine/session layer** —
 that infrastructure is in the un-merged PR #13 (`app/db/session.py`, async
-SQLAlchemy + asyncpg on Neon). CRUD cannot land without a session. Options:
+SQLAlchemy + asyncpg on Neon).
 
-1. **Add a small session module in this branch** (sync SQLAlchemy + SQLite for
-   dev/tests, Postgres via `DATABASE_URL`), and let the #13 rework reconcile it.
-2. **Depend on PR #13 merging first** and build on its async session.
-
-**Recommendation: option 1**, a minimal `app/systems/session.py` that boots on
-SQLite with no config (so tests and local dev need nothing) and honours
-`DATABASE_URL` when set. It keeps this branch self-contained and independently
-mergeable; the #13 follow-up already has to reconcile `app/systems/` with
-`app/db/`, and folding one session module in is trivial. This does mean choosing
-**sync** SQLAlchemy for now (simpler; the CRUD endpoints are light) — flagged as
-an open decision since #13 chose async.
+**Decided: build on PR #13's async session** (`#13 merges first`). The CRUD
+routes are `async def`, take an `AsyncSession` dependency from #13's
+`session.py`, and use async SQLAlchemy (`await session.execute(...)`,
+`selectinload` for the child collections). This keeps one persistence stack
+across the app rather than introducing a second (sync) one. Consequence: this
+branch is sequenced after #13 and its tests run against #13's session wired to
+in-memory SQLite (async).
 
 ### API resource model
 
@@ -80,10 +81,15 @@ Resource-oriented, nested under the system, mirroring the route style already in
 `app/main.py` (`/formal-systems/...`). A **hybrid** of full-document read and
 per-object writes:
 
+All routes are **owner-scoped** (decided): the authenticated user from #13's
+`fastapi-users` is required, and every query filters on `owner_id` so a user
+sees and edits only their own systems. `owner_id` is the FK to #13's `users`
+table.
+
 ```
-GET    /formal-systems                      list (summaries)
-POST   /formal-systems                      create (name, description, inherit)
-GET    /formal-systems/{id}                 full structured system (all children)
+GET    /formal-systems                      list current user's systems (summaries)
+POST   /formal-systems                      create (name, description, inherit); owner = caller
+GET    /formal-systems/{id}                 full structured system (all children), if owned
 PATCH  /formal-systems/{id}                 update system-level fields
 DELETE /formal-systems/{id}                 delete (cascades to children)
 POST   /formal-systems/{id}/validate        assemble + compile; return errors/summary
@@ -195,28 +201,34 @@ that has bindings.
 - *Optional later:* an **import** path (paste declarative/`.edi` → parse →
   objects) so existing systems can be brought into the object editor.
 
-## Open decisions (need your call before code)
+## Decisions (resolved)
 
-1. **Session layer** — add a minimal sync session here (recommended) vs wait for
-   PR #13's async session. Affects mergeability and whether we go sync or async.
-2. **Write granularity** — per-object endpoints (recommended, matches "edit
-   component parts") vs a single whole-system `PUT`. Hybrid as described splits
-   the difference.
-3. **Validity policy** — allow invalid drafts + `validate` (recommended) vs
-   reject non-compiling writes.
-4. **Ownership/auth** — single-user/unauthenticated for now vs scope to an owner
-   (needs the users table from #13). Suggest unauthenticated for this branch,
-   with `owner_id` left nullable for later.
+1. **Session layer** — build on **PR #13's async session** (#13 merges first).
+   Routes are async; no second persistence stack.
+2. **Write granularity** — **hybrid**: full-system `GET /{id}` + per-object
+   `POST/PATCH/DELETE` + reorder. Matches "edit the component parts".
+3. **Validity policy** — **allow drafts + on-demand `validate`**. Writes persist
+   structurally-valid rows; compilability is surfaced, not enforced per write.
+4. **Ownership** — **owner-scoped** to #13's `users`; all routes require the
+   authenticated user and filter on `owner_id`.
 
-## Phased delivery (once decisions are settled)
+## Phased delivery
 
-1. Session module + `FormalSystem` create/list/get/delete + `validate`.
-2. Pydantic schemas + child CRUD (sorts, productions, definitions, axioms,
-   rules, line, brackets) + reorder.
+Phase 0 (prerequisite): **PR #13 merged** into develop, providing the async
+session and the `users` table. Then:
+
+1. Pydantic schemas (rows ⇄ spec) + `FormalSystem` create/list/get/delete +
+   `validate`, all owner-scoped and async.
+2. Child CRUD (sorts, productions, definitions, axioms, rules, line, brackets) +
+   reorder.
 3. `api.ts` client + TS types.
 4. Svelte `/systems` list and `/systems/[id]` editor shell.
 5. Section editors (one per part) + `bindings-editor`.
 6. Live validation badge + read-only source panel.
+
+Phases 1–2 can be **written now** against the expected #13 session interface and
+merged once #13 lands; phases 3–6 (frontend) have no #13 dependency beyond the
+endpoints existing.
 
 Each phase is independently testable: backend with pytest (round-trip a system
 through the endpoints and assert it still compiles and checks a proof), frontend
