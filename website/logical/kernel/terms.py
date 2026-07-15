@@ -27,6 +27,16 @@ structurally. The same machinery handles near-English syntax: a production
 ``membership`` = ``x is an element of y`` turns ``"a is an element of b"`` into
 ``Node(membership, {"x": Node(setvar, literal="a"), "y": Node(setvar, literal="b")})``.
 
+Representation - a shared DAG
+-----------------------------
+Terms are *interned* (hash-consed): identical subterms are stored once, so a
+term is a directed acyclic graph with maximal sharing rather than a tree. Two
+structurally equal terms built through the kernel's producers are then the same
+object, which is what makes ``equal``'s ``self is other`` fast path fire. This
+is a pure optimisation layered under the same value-semantic interface -
+``equal`` stays the authoritative structural comparison - so terms must be
+treated as immutable once built. See the interning section below.
+
 Design invariant - *the kernel hard-codes no logic*
 ---------------------------------------------------
 A :class:`Node` is a production (an arbitrary per-system ``Pattern``) applied
@@ -64,6 +74,7 @@ self-contained so the trusted core stays small and auditable.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from weakref import WeakValueDictionary
 
 from ..matching.patterns import RegexPattern, StringPattern, UnionPattern
 
@@ -143,6 +154,9 @@ class Var(Term):
         return binding.get(self.name, self)
 
     def equal(self, other: Term, context: Context) -> bool:
+        # Interned terms are shared, so identity is the common fast path (O(1)).
+        if self is other:
+            return True
         # Two variables are equal when they share a name and an equivalent sort,
         # e.g. Var("p", formula) == Var("p", formula), but != Var("q", formula).
         return (
@@ -207,7 +221,7 @@ class Node(Term):
             return self
         # Otherwise rebuild the same constructor over substituted children, e.g.
         # implication{p, q}.substitute({p: a, q: b}) -> implication{a, b}.
-        return Node(
+        return _node(
             pattern=self.pattern,
             children={
                 label: child.substitute(binding, context)
@@ -218,6 +232,11 @@ class Node(Term):
         )
 
     def equal(self, other: Term, context: Context) -> bool:
+        # Interned terms are shared, so identity is the common fast path (O(1)):
+        # two structurally equal terms are usually the *same* object.
+        if self is other:
+            return True
+
         if not isinstance(other, Node):
             return False
 
@@ -352,6 +371,92 @@ def _locations(pattern: Pattern) -> list[str]:
     ]
 
 
+# ---------------------------------------------------------------------------
+# Interning: terms are a shared DAG, not a tree
+# ---------------------------------------------------------------------------
+#
+# Identical subterms are stored once (hash-consing), so a term is a directed
+# acyclic graph with maximal sharing. Two structurally equal terms built through
+# the kernel's constructors are then the *same* object, which makes ``equal``'s
+# ``self is other`` fast path fire in the common case. This is a pure
+# optimisation: ``equal`` remains the authoritative structural comparison (with
+# ``is`` only as a sufficient short-cut), so correctness never depends on
+# interning being perfect - it just shares memory and speeds equality up.
+#
+# The table holds terms weakly, so entries vanish when a term is no longer
+# referenced. Keys use child/sort *identity*: while a key's term is alive it
+# keeps its children and sort alive, so those ids stay valid; when it dies the
+# entry is removed, so a reused id can never collide with a live entry.
+_INTERN: WeakValueDictionary = WeakValueDictionary()
+
+
+def _term_key(term: Term) -> tuple:
+    """A canonical, hashable key for interning: a Var by (name, sort); a Node by
+    its constructor, literal, inhabited sort, and the identities of its children
+    in template-position order (with repetition). Children are already interned,
+    so identity captures structure.
+
+    The constructor is keyed by pattern *identity*, not by ``_signature`` - two
+    productions with the same shape but different identity (a rule schema's
+    inline ``(p -> q)`` and a system's ``implication``) must not be merged: they
+    are still ``equal``, but they carry different sorts, and ``_term_sort``/
+    sort admission depend on a node keeping its own constructor. Interning is
+    therefore finer than equality (which is sound - ``equal`` remains the
+    authority); it only forgoes sharing between alpha-equivalent constructors.
+    """
+    if isinstance(term, Var):
+        return ("var", term.name, id(term.sort))
+    child_ids = tuple(
+        id(term.children[label])
+        for label in _locations(term.pattern)
+        if label in term.children
+    )
+    return ("node", id(term.pattern), term.literal, id(term.sort), child_ids)
+
+
+def _canonical(term: Term) -> Term:
+    """Return the shared instance for ``term`` (assuming its children are already
+    interned), registering it on first sight."""
+    key = _term_key(term)
+    existing = _INTERN.get(key)
+    if existing is not None:
+        return existing
+    _INTERN[key] = term
+    return term
+
+
+def _var(name: str, sort: Pattern) -> Var:
+    return _canonical(Var(name, sort))  # type: ignore[return-value]
+
+
+def _node(
+    pattern: Pattern,
+    children: dict[str, Term] | None = None,
+    literal: str | None = None,
+    sort: Pattern | None = None,
+) -> Node:
+    return _canonical(Node(pattern, children, literal, sort))  # type: ignore[return-value]
+
+
+def intern(term: Term) -> Term:
+    """Return the shared-DAG form of an externally built ``term``, interning it
+    and all its subterms bottom-up.
+
+    Kernel producers (:func:`from_match`, :func:`from_pattern`, :func:`abstract`,
+    :meth:`Term.substitute`) already return interned terms; use this for a term
+    assembled by hand (e.g. ``Node(...)``/``Var(...)`` directly) so it, too,
+    shares structure and benefits from the identity fast path.
+    """
+    if isinstance(term, Node) and term.children:
+        term = Node(
+            pattern=term.pattern,
+            children={label: intern(child) for label, child in term.children.items()},
+            literal=term.literal,
+            sort=term.sort,
+        )
+    return _canonical(term)
+
+
 def from_match(match: Match, context: Context) -> Term:
     r"""Project a :class:`Match` tree into a :class:`Term` (the parse-once bridge).
 
@@ -384,7 +489,7 @@ def from_match(match: Match, context: Context) -> Term:
     # A variable leaf: the string is itself a declared schematic variable, e.g.
     # a formula written "phi" where phi was declared `with phi as formula`.
     if match.is_variable:
-        return Var(name=match.formatted_string(), sort=pattern)
+        return _var(name=match.formatted_string(), sort=pattern)
 
     # A definition-backed match: the matched sort (often a UnionPattern) is not
     # itself a template, and its sub-matches are the definition's variables. The
@@ -400,8 +505,8 @@ def from_match(match: Match, context: Context) -> Term:
         higher = match.definition.higher
         sort = match.definition.pattern
         if match.sub_matches:
-            return Node(pattern=higher, children=child_terms(match), sort=sort)
-        return Node(pattern=higher, literal=match.formatted_string(), sort=sort)
+            return _node(pattern=higher, children=child_terms(match), sort=sort)
+        return _node(pattern=higher, literal=match.formatted_string(), sort=sort)
 
     # A union match is a coercion wrapper around a single chosen branch: e.g.
     # `formula` wrapping the `implication` that matched "(a -> b)". Collapse it.
@@ -410,16 +515,16 @@ def from_match(match: Match, context: Context) -> Term:
         if len(subs) == 1:
             return from_match(subs[0], context)
         # No single branch (nothing to collapse to): treat as a ground leaf.
-        return Node(pattern=pattern, literal=match.formatted_string())
+        return _node(pattern=pattern, literal=match.formatted_string())
 
     # A ground leaf: regex/atomic token or a literal pattern with no slots, e.g.
     # the atom "a" -> Node(atom, literal="a").
     if not match.sub_matches:
-        return Node(pattern=pattern, literal=match.formatted_string())
+        return _node(pattern=pattern, literal=match.formatted_string())
 
     # A compound: recurse into the named sub-matches, e.g. "(a -> b)" ->
     # Node(implication, {"p": <term a>, "q": <term b>}).
-    return Node(pattern=pattern, children=child_terms(match))
+    return _node(pattern=pattern, children=child_terms(match))
 
 
 def from_pattern(
@@ -462,7 +567,7 @@ def from_pattern(
         ):
             info = pattern.variable_locations[0]
             if is_schematic(info["label"]):
-                return Var(name=info["label"], sort=info["pattern"])
+                return _var(name=info["label"], sort=info["pattern"])
 
         if pattern.variables:
             # Compound, e.g. "(p -> q)": each variable slot is a Var of its
@@ -472,19 +577,19 @@ def from_pattern(
             for info in pattern.variable_locations.values():
                 label = info["label"]
                 if is_schematic(label):
-                    children[label] = Var(name=label, sort=info["pattern"])
+                    children[label] = _var(name=label, sort=info["pattern"])
                 else:
                     children[label] = from_pattern(info["pattern"], context, schematic)
-            return Node(pattern=pattern, children=children)
+            return _node(pattern=pattern, children=children)
 
         # No variables: a ground literal production, e.g. a rule that fixes a
         # specific constant like the axiom schema "true".
-        return Node(pattern=pattern, literal=pattern.pattern)
+        return _node(pattern=pattern, literal=pattern.pattern)
 
     # A sort used directly in schema position (union/regex/abstract) is a
     # fresh variable ranging over that sort, e.g. an antecedent written
     # `formula` meaning "any formula".
-    return Var(name=pattern.name, sort=pattern)
+    return _var(name=pattern.name, sort=pattern)
 
 
 def abstract(term: Term, variables: FreeVars) -> Term:
@@ -512,11 +617,12 @@ def abstract(term: Term, variables: FreeVars) -> Term:
         if not term.children:
             # A ground leaf: abstract it iff its surface string is a parameter.
             if term.literal is not None and term.literal in variables:
-                return Var(name=term.literal, sort=variables[term.literal])
+                return _var(name=term.literal, sort=variables[term.literal])
             return term
-        return Node(
+        return _node(
             pattern=term.pattern,
             children={label: abstract(child, variables) for label, child in term.children.items()},
+            sort=term.sort,
         )
 
     return term

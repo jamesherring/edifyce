@@ -22,7 +22,7 @@ about any of them.
 
 from .definitions import Definition, check_definitional_step, unfold
 from .side_conditions import And, DisjointLeaves, IsAtom, Not, Occurs, Or, SideCondition
-from .terms import Node, Term, Var, abstract, from_match, from_pattern
+from .terms import Node, Term, Var, abstract, from_match, from_pattern, intern
 from .unify import match, match_all
 
 __all__ = [
@@ -41,6 +41,7 @@ __all__ = [
     "check_definitional_step",
     "from_match",
     "from_pattern",
+    "intern",
     "match",
     "match_all",
     "unfold",
