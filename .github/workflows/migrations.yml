@@ -73,9 +73,12 @@ jobs:
         # a new file. In CI that must be a no-op — a dirty migrations/ means
         # someone changed the models without generating the migration.
         run: |
-          atlas migrate diff --env local
-          if ! git diff --quiet -- migrations/; then
-            echo "::error::Models in app/db/ drifted from migrations/. Run 'atlas migrate diff <name> --env local' locally and commit the result."
+          atlas migrate diff drift_check --env local
+          # `migrate diff` writes a new file only when the models and migrations
+          # disagree; a clean run leaves migrations/ untouched.
+          if [ -n "$(git status --porcelain -- migrations/)" ]; then
+            echo "::error::Models in app/db/ drifted from migrations/. Run 'atlas migrate diff <name> --env local' locally and commit the result. Generated delta:"
+            cat migrations/*drift_check*.sql 2>/dev/null || true
             git --no-pager diff -- migrations/
             exit 1
           fi
