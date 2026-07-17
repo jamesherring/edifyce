@@ -4,7 +4,11 @@
 persist; ``system_to_spec`` rebuilds an equal ``SystemSpec`` from a loaded row.
 Because ``SystemSpec`` lowers to ``.edi`` and compiles, this closes the loop
     rows -> SystemSpec -> (lower) -> FormalSystem
-so the relational tables, not a text blob, become the source of truth.
+so the relational tables, not a text blob, are the source of truth.
+
+Relocated from the standalone ``app/systems/`` draft (PR #23) onto this package's
+models; the object graph is linked by relationship, so nothing depends on the
+key type (UUID here vs the draft's integers).
 """
 
 from __future__ import annotations
@@ -20,13 +24,13 @@ from website.logical.declarative import (
     SystemSpec,
 )
 
-from .models import (
+from app.db.models import FormalSystem
+from app.db.systems import (
     AxiomBindingRow,
     AxiomRow,
     BracketRow,
     DefinitionBindingRow,
     DefinitionRow,
-    FormalSystemRow,
     LinePartRow,
     LineRow,
     ProductionBindingRow,
@@ -42,10 +46,10 @@ def _slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "system"
 
 
-def spec_to_system(spec: SystemSpec) -> FormalSystemRow:
+def spec_to_system(spec: SystemSpec) -> FormalSystem:
     """Build the ORM graph for ``spec`` (unsaved; add it to a session to persist)."""
 
-    system = FormalSystemRow(name=spec.name, slug=_slug(spec.name))
+    system = FormalSystem(name=spec.name, slug=_slug(spec.name))
 
     for i, (opening, closing) in enumerate(spec.brackets):
         system.brackets.append(BracketRow(position=i, opening=opening, closing=closing))
@@ -101,8 +105,8 @@ def spec_to_system(spec: SystemSpec) -> FormalSystemRow:
     return system
 
 
-def system_to_spec(system: FormalSystemRow) -> SystemSpec:
-    """Rebuild a :class:`SystemSpec` from a loaded :class:`FormalSystemRow`."""
+def system_to_spec(system: FormalSystem) -> SystemSpec:
+    """Rebuild a :class:`SystemSpec` from a loaded :class:`FormalSystem`."""
 
     spec = SystemSpec(name=system.name)
     spec.brackets = [(b.opening, b.closing) for b in system.brackets]
