@@ -47,12 +47,15 @@ _cors_origins = (
 )
 
 # Auth uses an httponly cookie, so the browser must be allowed to send it on
-# cross-origin API calls (allow_credentials). This requires an explicit origin
-# list rather than the "*" wildcard, which _cors_origins already is.
+# cross-origin API calls (allow_credentials). Credentials with a "*" origin is a
+# footgun — Starlette then echoes *any* Origin back with
+# Access-Control-Allow-Credentials, granting every site credentialed access — so
+# only enable credentials when the origins are an explicit list (the default).
+_allow_credentials = "*" not in _cors_origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_credentials=True,
+    allow_credentials=_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

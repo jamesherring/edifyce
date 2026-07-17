@@ -17,8 +17,10 @@
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 
+	// Sole navigation authority once signed in — avoids racing submit()'s goto
+	// (the effect flush runs last and would override it).
 	$effect(() => {
-		if (auth.ready && auth.user) goto('/account');
+		if (auth.ready && auth.user) goto('/');
 	});
 
 	const mismatch = $derived(confirm.length > 0 && password !== confirm);
@@ -33,7 +35,7 @@
 		error = null;
 		try {
 			await auth.register(email, password, displayName);
-			await goto('/');
+			// The effect above navigates once auth.user is set.
 		} catch (err) {
 			if (err instanceof ApiError && err.status === 400) {
 				// fastapi-users returns REGISTER_USER_ALREADY_EXISTS as the detail

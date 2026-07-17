@@ -16,9 +16,15 @@
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 
-	// Bounce to the account page if already signed in.
+	// Once signed in — whether on arrival or right after logging in — leave for
+	// the requested `next` target (or home). Keeping this the sole navigation
+	// avoids a race with a second goto in submit(): the effect flush runs last
+	// and would otherwise override the intended destination.
 	$effect(() => {
-		if (auth.ready && auth.user) goto('/account');
+		if (auth.ready && auth.user) {
+			const next = page.url.searchParams.get('next');
+			goto(next && next.startsWith('/') ? next : '/');
+		}
 	});
 
 	async function submit(event: SubmitEvent) {
@@ -27,8 +33,7 @@
 		error = null;
 		try {
 			await auth.login(email, password);
-			const next = page.url.searchParams.get('next');
-			await goto(next && next.startsWith('/') ? next : '/');
+			// The effect above navigates once auth.user is set.
 		} catch (err) {
 			if (err instanceof ApiError && err.status === 400) {
 				error = 'Incorrect email or password.';

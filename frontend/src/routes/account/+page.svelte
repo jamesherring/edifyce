@@ -81,8 +81,10 @@
 	}
 
 	async function logout() {
+		// The redirect effect above sends the now-signed-out user to /login
+		// (with next=/account, so re-login returns here). Doing the navigation
+		// there rather than with a second goto avoids a race between the two.
 		await auth.logout();
-		await goto('/');
 	}
 </script>
 

@@ -12,11 +12,11 @@ pytest.importorskip("fastapi")
 pytest.importorskip("fastapi_users")
 pytest.importorskip("aiosqlite")
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
 from fastapi.testclient import TestClient
 from sqlalchemy import NullPool, create_engine
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import app.auth.backend as backend
 from app.db.models import OAuthAccount, User
@@ -25,7 +25,7 @@ from app.main import app
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch) -> AsyncIterator[TestClient]:
+def client(tmp_path, monkeypatch) -> Iterator[TestClient]:
     db_path = tmp_path / "auth.db"
 
     # DDL via a plain sync engine — trivial and free of async event-loop affinity.
@@ -40,7 +40,7 @@ def client(tmp_path, monkeypatch) -> AsyncIterator[TestClient]:
     )
     sessionmaker = async_sessionmaker(async_engine, expire_on_commit=False)
 
-    async def override_get_session():
+    async def override_get_session() -> AsyncIterator[AsyncSession]:
         async with sessionmaker() as session:
             yield session
 
