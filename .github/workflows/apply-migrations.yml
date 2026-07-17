@@ -1,0 +1,50 @@
+name: Migrations — apply
+
+# Post-merge apply of Atlas migrations to the Neon database (see app/db/README.md).
+# Split out from the PR validate/lint workflow (migrations.yml) so it only runs on
+# push events, rather than surfacing as a permanently-skipped check on every PR.
+#
+#   push develop -> apply migrations to the Neon `develop` branch (Vercel Preview)
+#   push main    -> apply migrations to the Neon `main` branch (Vercel Production)
+#
+# This runs after the merge decision is made; the PR-side drift/lint checks in
+# migrations.yml are what actually gate merges.
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "migrations/**"
+      - "atlas.hcl"
+      - ".github/workflows/apply-migrations.yml"
+
+jobs:
+  apply:
+    name: Apply to Neon
+    runs-on: ubuntu-latest
+    # Never let two applies race on the same branch's database.
+    concurrency:
+      group: migrate-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Atlas
+        uses: ariga/setup-atlas@v0
+
+      # apply needs only the migration SQL + a target URL — no model loading, so
+      # no uv/dev-db here. The URL is the Neon *unpooled* endpoint scoped to the
+      # public schema (Atlas takes an advisory lock + runs DDL in a transaction,
+      # both of which PgBouncer's transaction pooling breaks; the unrelated
+      # neon_auth schema is excluded via search_path). See app/db/README.md.
+      - name: Apply to Production (Neon main)
+        if: github.ref_name == 'main'
+        env:
+          MIGRATE_URL: ${{ secrets.NEON_MAIN_MIGRATE_URL }}
+        run: atlas migrate apply --dir "file://migrations" --url "$MIGRATE_URL"
+
+      - name: Apply to Preview (Neon develop)
+        if: github.ref_name == 'develop'
+        env:
+          MIGRATE_URL: ${{ secrets.NEON_DEVELOP_MIGRATE_URL }}
+        run: atlas migrate apply --dir "file://migrations" --url "$MIGRATE_URL"

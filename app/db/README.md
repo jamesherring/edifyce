@@ -114,21 +114,24 @@ Requirements / gotchas:
 
   So in practice: `MIGRATE_URL="$DATABASE_URL_UNPOOLED&search_path=public"`.
 
-## CI/CD (`.github/workflows/migrations.yml`)
+## CI/CD
 
-Migrations are not applied by hand in normal operation — the workflow owns it:
+Migrations are not applied by hand in normal operation — two workflows own it,
+split by event so the apply never surfaces as a skipped check on PRs:
 
-- **On a pull request** (touching the models, `migrations/`, or the Atlas config):
-  `atlas migrate validate` (checksum integrity), a **drift check** that fails if
-  the models have changed without a matching migration (`atlas migrate diff` must
-  be a no-op), and `atlas migrate lint` for unsafe changes. This runs against a
-  throwaway `pgvector/pgvector` service container, so no Neon branch is touched.
-  Needs the `ATLAS_TOKEN` secret (logged-in Atlas — see the pgvector note above).
-- **On push to `develop`** → `atlas migrate apply` to the Neon **develop** branch
-  (Vercel Preview). **On push to `main`** → apply to the Neon **main** branch
-  (Vercel Production). The target URLs live in the `NEON_DEVELOP_MIGRATE_URL` /
-  `NEON_MAIN_MIGRATE_URL` GitHub secrets, each already the unpooled endpoint with
-  `&search_path=public`.
+- **`.github/workflows/migrations.yml` — on a pull request** (touching the models,
+  `migrations/`, the Atlas config, or `uv.lock`): `atlas migrate validate`
+  (checksum integrity), a **drift check** that fails if the models have changed
+  without a matching migration (`atlas migrate diff` must be a no-op), and `atlas
+  migrate lint --git-base` for unsafe changes across every migration the PR adds.
+  This runs against a throwaway `pgvector/pgvector` service container, so no Neon
+  branch is touched. Needs the `ATLAS_TOKEN` secret (logged-in Atlas — see the
+  pgvector note above).
+- **`.github/workflows/apply-migrations.yml` — on push to `develop`** → `atlas
+  migrate apply` to the Neon **develop** branch (Vercel Preview). **On push to
+  `main`** → apply to the Neon **main** branch (Vercel Production). The target
+  URLs live in the `NEON_DEVELOP_MIGRATE_URL` / `NEON_MAIN_MIGRATE_URL` GitHub
+  secrets, each already the unpooled endpoint with `&search_path=public`.
 
 So the day-to-day loop is: change the models → `atlas migrate diff <name> --env
 local` → commit the generated SQL → open a PR. CI proves it's in sync and safe;
