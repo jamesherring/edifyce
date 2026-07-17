@@ -17,6 +17,10 @@ on:
       - "atlas.hcl"
       - "tools/atlas/**"
       - "pyproject.toml"
+      # The check job loads the models via `uv sync --locked`, so a lockfile-only
+      # dependency bump (SQLAlchemy, pgvector, atlas-provider-sqlalchemy, …) can
+      # shift the generated DDL and must re-run the drift/lint checks.
+      - "uv.lock"
       - ".github/workflows/migrations.yml"
   push:
     branches: [main, develop]
@@ -49,6 +53,10 @@ jobs:
       ATLAS_DEV_URL: postgres://postgres:postgres@localhost:5432/dev?sslmode=disable
     steps:
       - uses: actions/checkout@v4
+        # Full history so `migrate lint --git-base` can resolve the base branch
+        # and diff every migration this PR adds/edits against it.
+        with:
+          fetch-depth: 0
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
@@ -83,8 +91,11 @@ jobs:
             exit 1
           fi
 
-      - name: Lint latest migration for unsafe changes
-        run: atlas migrate lint --env local --latest 1
+      - name: Lint migrations added by this PR for unsafe changes
+        # `--latest 1` only inspects one file, so destructive SQL in an earlier
+        # migration added by the same PR would merge (and later apply) unchecked.
+        # `--git-base` lints every migration that differs from the target branch.
+        run: atlas migrate lint --env local --git-base "origin/${{ github.base_ref }}"
 
   apply:
     name: Apply to Neon
