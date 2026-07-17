@@ -13,7 +13,8 @@ system; proofs reference other proofs — with three deliberate departures:
 * **Auth-ready users.** Django's `auth.User` + `Profile` split is collapsed into
   a single `users` table built on fastapi-users' SQLAlchemy base, with social
   logins modelled as a linked `oauth_accounts` table (one user, many providers).
-  No auth routes are wired yet — this is only the schema fastapi-users expects.
+  The email/password auth routes are wired in `app/auth/`; the OAuth routers are
+  not mounted yet (they need per-provider client secrets).
 * **Search-ready theorems.** A `theorems` table carries a JSONB `pattern` (for
   structural, pattern-based search via a GIN index) and a pgvector `embedding`
   (for semantic / AI search via an HNSW index). Nothing writes to it yet; the

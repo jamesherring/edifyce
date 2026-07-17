@@ -11,7 +11,7 @@ export default defineConfig(({ mode }) => {
 	// to the running FastAPI process — no CORS or absolute URL needed in dev.
 	const proxyTarget = env.VITE_API_PROXY_TARGET || 'http://localhost:8000';
 	const proxy = Object.fromEntries(
-		['/health', '/formal-systems', '/proofs'].map((path) => [
+		['/health', '/formal-systems', '/proofs', '/auth', '/users'].map((path) => [
 			path,
 			{ target: proxyTarget, changeOrigin: true }
 		])

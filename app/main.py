@@ -6,6 +6,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.routing import APIRoute
 
+from app.auth import (
+    auth_backend,
+    fastapi_users,
+    UserCreate,
+    UserRead,
+    UserUpdate,
+)
 from app.schemas import (
     CompileRequest,
     CompileResponse,
@@ -39,10 +46,13 @@ _cors_origins = (
     else _default_origins
 )
 
-# No credentials: the API is stateless and uses no cookies or auth.
+# Auth uses an httponly cookie, so the browser must be allowed to send it on
+# cross-origin API calls (allow_credentials). This requires an explicit origin
+# list rather than the "*" wildcard, which _cors_origins already is.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -90,6 +100,33 @@ def verify_proof(payload: VerifyProofRequest) -> VerifyProofResponse:
         return VerifyProofResponse(success=False, errors=[str(e)])
 
     return VerifyProofResponse(success=proof.valid, proof=proof.data())
+
+
+# ---------------------------------------------------------------------------
+# Authentication
+# ---------------------------------------------------------------------------
+#
+# Email/password auth backed by the `users` table, via fastapi-users. Mounts:
+#   POST /auth/login, POST /auth/logout   (cookie session)
+#   POST /auth/register                   (create account)
+#   GET/PATCH /users/me, .../{id}         (current user + admin management)
+# These need a database (DATABASE_URL); the routes above do not. Social-login
+# (OAuth) routers are intentionally not mounted yet — they need per-provider
+# client secrets — but the `oauth_accounts` schema is ready for them.
+
+app.include_router(
+    fastapi_users.get_auth_router(auth_backend), prefix="/auth", tags=["auth"]
+)
+app.include_router(
+    fastapi_users.get_register_router(UserRead, UserCreate),
+    prefix="/auth",
+    tags=["auth"],
+)
+app.include_router(
+    fastapi_users.get_users_router(UserRead, UserUpdate),
+    prefix="/users",
+    tags=["users"],
+)
 
 
 # ---------------------------------------------------------------------------
