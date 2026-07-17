@@ -162,6 +162,52 @@ def test_full_self_implication_derivation(hilbert):
 # ---------------------------------------------------------------------------
 
 
+def test_schema_using_defined_notation_compiles():
+    # Regression (PR #27 review): composing a schema term must not consult the
+    # system's *staged* definitions. During compilation `context.definitions`
+    # holds unresolved PendingDefinition records, so a schema recognisable only
+    # via a definition (`x is a member of y`, defined from `x in y`) used to
+    # crash the compositional parse with
+    # "'PendingDefinition' object has no attribute 'match'". It must compile.
+    code = r"""FormalSystem Defined:
+
+    Regex setvar:
+        ^[a-z]$
+
+    Pattern member:
+        with x as setvar, y as setvar:
+            x in y
+        Define x is a member of y as x in y
+
+    UnionPattern formula:
+        member
+
+    Regex reference:
+        ^[A-Za-z0-9, ]+$
+
+    Pattern statement:
+        with f as formula, r as reference:
+            f [r]
+    statement.formula():
+        return self.f
+    statement.reference():
+        return self.r
+
+    LineType claim:
+        pattern: statement
+        behaviour: logical
+
+    with x as setvar, y as setvar:
+        InferenceRule r1:
+            label:
+                R
+            deduction:
+                x is a member of y
+"""
+    result = compile_formal_system(code)
+    assert "errors" not in result, result.get("errors")
+
+
 def test_non_instance_of_axiom_is_rejected(hilbert):
     # (a → (b → c)) is NOT an instance of K = (p → (q → p)): the third slot
     # must repeat the first. The shared binding across the nested term must

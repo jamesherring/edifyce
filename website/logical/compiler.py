@@ -176,11 +176,20 @@ def compose_schema_term(pattern: Pattern, context) -> "Term | None":
         # parse - from_pattern projects it correctly already.
         return None
 
+    # Match against the system's productions only, never its staged definitions.
+    # During compilation `context.definitions` holds unresolved PendingDefinition
+    # records (finalised at the end of the formal-system block), so letting the
+    # parse fall through to a definition-unfold would call `.match` on one and
+    # crash. Composition is about productions; a schema recognisable only via a
+    # definition simply falls back to the flat projection.
+    parse_context = copy(context)
+    parse_context.definitions = []
+
     for candidate in context.variables.values():
         if isinstance(candidate, UnionPattern):
-            match = candidate.match(pattern.pattern, context)
+            match = candidate.match(pattern.pattern, parse_context)
             if match is not None:
-                return _revariabilise(from_match(match, context), context.string_variables)
+                return _revariabilise(from_match(match, parse_context), context.string_variables)
 
     return None
 
