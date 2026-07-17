@@ -90,6 +90,11 @@ Requirements / gotchas:
   the `ATLAS_DEV_URL` database must have pgvector available. `atlas.hcl` defaults
   to the `pgvector/pgvector` Docker image; override `ATLAS_DEV_URL` for a local
   Postgres or a Neon dev branch.
+- **Logged-in Atlas for `diff`/`lint`.** Extension management (the `vector` type,
+  `CREATE EXTENSION`) is a logged-in Atlas feature — run `atlas login` locally,
+  and in CI the `ATLAS_TOKEN` secret authenticates the CLI. Without it Atlas
+  errors with "extensions are available to logged-in users only". `atlas migrate
+  apply` does not need it (it just runs the migration SQL).
 - **The `CREATE EXTENSION "vector"` line** at the top of the initial migration was
   added by hand — Atlas doesn't always emit extension creation. If you regenerate
   the first migration, re-add it and run `atlas migrate hash`.
@@ -116,6 +121,7 @@ Migrations are not applied by hand in normal operation — the workflow owns it:
   the models have changed without a matching migration (`atlas migrate diff` must
   be a no-op), and `atlas migrate lint` for unsafe changes. This runs against a
   throwaway `pgvector/pgvector` service container, so no Neon branch is touched.
+  Needs the `ATLAS_TOKEN` secret (logged-in Atlas — see the pgvector note above).
 - **On push to `develop`** → `atlas migrate apply` to the Neon **develop** branch
   (Vercel Preview). **On push to `main`** → apply to the Neon **main** branch
   (Vercel Production). The target URLs live in the `NEON_DEVELOP_MIGRATE_URL` /

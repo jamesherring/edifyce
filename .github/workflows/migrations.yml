@@ -60,6 +60,10 @@ jobs:
 
       - name: Set up Atlas
         uses: ariga/setup-atlas@v0
+        with:
+          # pgvector extension management (the `vector` type + CREATE EXTENSION)
+          # is a logged-in Atlas feature; the token authenticates the CLI.
+          cloud-token: ${{ secrets.ATLAS_TOKEN }}
 
       - name: Validate migration directory (atlas.sum integrity)
         run: atlas migrate validate --env local
