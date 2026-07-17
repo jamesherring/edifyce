@@ -117,19 +117,36 @@ def verify_proof(payload: VerifyProofRequest) -> VerifyProofResponse:
 # (OAuth) routers are intentionally not mounted yet — they need per-provider
 # client secrets — but the `oauth_accounts` schema is ready for them.
 
-app.include_router(
-    fastapi_users.get_auth_router(auth_backend), prefix="/auth", tags=["auth"]
+_auth_router = fastapi_users.get_auth_router(auth_backend)
+_register_router = fastapi_users.get_register_router(UserRead, UserCreate)
+_users_router = fastapi_users.get_users_router(UserRead, UserUpdate)
+
+app.include_router(_auth_router, prefix="/auth", tags=["auth"])
+app.include_router(_register_router, prefix="/auth", tags=["auth"])
+app.include_router(_users_router, prefix="/users", tags=["users"])
+
+# fastapi-users' routers mount as nested routers, so their concrete paths are
+# not APIRoute entries on `app` — the SPA fallback's API-path guard can't find
+# them by iterating app.routes. Record their non-parameterized paths here so a
+# wrong-method browser GET to e.g. /auth/login still gets the API's 405 instead
+# of being masked by the SPA shell.
+_MOUNTED_API_ROUTERS = (
+    ("/auth", _auth_router),
+    ("/auth", _register_router),
+    ("/users", _users_router),
 )
-app.include_router(
-    fastapi_users.get_register_router(UserRead, UserCreate),
-    prefix="/auth",
-    tags=["auth"],
-)
-app.include_router(
-    fastapi_users.get_users_router(UserRead, UserUpdate),
-    prefix="/users",
-    tags=["users"],
-)
+
+
+def _mounted_api_paths() -> set[str]:
+    paths: set[str] = set()
+    for prefix, router in _MOUNTED_API_ROUTERS:
+        for route in router.routes:
+            # Skip parameterized paths (e.g. /users/{id}): the router serves them
+            # for every method that reaches them, so they never fall through to
+            # the SPA catch-all where this guard matters.
+            if isinstance(route, APIRoute) and "{" not in route.path:
+                paths.add(f"{prefix}{route.path}".strip("/"))
+    return paths
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +177,7 @@ if (FRONTEND_BUILD / "index.html").is_file():
     # above so it stays in sync automatically.
     _api_paths = {
         route.path.strip("/") for route in app.routes if isinstance(route, APIRoute)
-    }
+    } | _mounted_api_paths()
 
     @app.get("/{path:path}", include_in_schema=False)
     def serve_spa(path: str, request: Request) -> Response:

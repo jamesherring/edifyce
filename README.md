@@ -65,14 +65,20 @@ httponly cookie; the SvelteKit UI exposes `/login`, `/register`, and `/account`.
 
 The auth routes require a database — point `DATABASE_URL` at your Postgres (see
 [`app/db/README.md`](app/db/README.md)); the compile/verify routes work without
-one. Configuration (all optional, with dev-safe defaults):
+one. Configuration:
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `EDIFYCE_AUTH_SECRET` | Signs JWTs and reset/verify tokens. **Set in production.** | insecure dev value |
+| `EDIFYCE_AUTH_SECRET` | Signs JWTs and reset/verify tokens. **Set a stable value in production.** | ephemeral per-process random (see below) |
 | `EDIFYCE_AUTH_LIFETIME_SECONDS` | Session lifetime | `604800` (7 days) |
 | `EDIFYCE_AUTH_COOKIE_SECURE` | `Secure` flag on the cookie. Set `false` for local HTTP. | `true` |
 | `EDIFYCE_AUTH_COOKIE_NAME` | Cookie name | `edifyce_auth` |
+
+If `EDIFYCE_AUTH_SECRET` is unset, the app signs tokens with a **fresh random
+secret generated per process** rather than a checked-in value — so a forgotten
+secret can never accept forged cookies. The trade-off is that sessions don't
+survive a restart and aren't valid across multiple worker processes, which makes
+the missing configuration obvious. Always set it in a real deployment.
 
 Social (OAuth) login is schema-ready via `oauth_accounts` but not yet mounted —
 it needs per-provider client secrets.

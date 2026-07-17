@@ -74,6 +74,30 @@ def test_register_rejects_malformed_email(client):
     assert response.status_code == 422
 
 
+def test_spa_guard_covers_mounted_auth_routes():
+    # The auth/users routers mount as nested routers, so their concrete paths
+    # must be fed into the SPA fallback's API-path guard explicitly — otherwise a
+    # wrong-method GET to /auth/login would be masked by the SPA shell (200 HTML)
+    # instead of the API's 405.
+    from app.main import _mounted_api_paths
+
+    paths = _mounted_api_paths()
+    assert {"auth/login", "auth/logout", "auth/register", "users/me"} <= paths
+    # Parameterized paths can't be matched by the exact-set guard and are excluded.
+    assert not any("{" in p for p in paths)
+
+
+def test_auth_secret_is_not_a_checked_in_literal():
+    # The test suite runs without EDIFYCE_AUTH_SECRET set, so this exercises the
+    # fallback: it must be a fresh random secret, never a shipped constant.
+    from app.auth.config import AUTH_SECRET
+
+    assert AUTH_SECRET
+    assert "insecure" not in AUTH_SECRET.lower()
+    assert "change-me" not in AUTH_SECRET.lower()
+    assert len(AUTH_SECRET) >= 32
+
+
 # ---------------------------------------------------------------------------
 # Full flow
 # ---------------------------------------------------------------------------
