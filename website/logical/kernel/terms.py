@@ -76,7 +76,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from weakref import WeakValueDictionary
 
-from ..matching.patterns import RegexPattern, StringPattern, UnionPattern
+from ..matching.patterns import AtomPattern, RegexPattern, StringPattern, UnionPattern
 
 if TYPE_CHECKING:
     from ..matching.context import Context
@@ -360,12 +360,20 @@ class Node(Term):
         return f"Node({self.pattern.name}, {list(self.children)})"
 
 
-def _signature(pattern: Pattern) -> tuple[str, str]:
+def _signature(pattern: Pattern) -> tuple[str, ...]:
     r"""A constructor identity: the template's literal skeleton with every
     variable *occurrence* replaced by an anonymous hole. It ignores the
     pattern's name and its variable spellings, so structurally identical
     productions - a rule's synthesised "(p -> q)" schema and a system's named
     `implication` - are the same constructor.
+
+    For an :class:`~website.logical.matching.patterns.AtomPattern` the identity
+    is what the atom *denotes*, not which object declared it: a constant is
+    keyed by its value, a family by its base. So a rule's inline literal ``⊥``
+    and the system's declared ``falsum`` atom are one constructor even though
+    they are different pattern objects - which is what lets discharge match a
+    literal conclusion on the term representation. Family members share a
+    constructor and are told apart by their leaf literal.
 
     Repetition is deliberately *not* encoded: both "(p -> q)" and "(p -> p)"
     give ``'(\x00 -> \x00)'``. That lets a repeated-variable schema like
@@ -395,6 +403,11 @@ def _signature(pattern: Pattern) -> tuple[str, str]:
             else:
                 i += 1
         return ("string", "".join(out))
+
+    if isinstance(pattern, AtomPattern):
+        if pattern.is_constant:
+            return ("atom", "const", pattern.value)
+        return ("atom", "family", pattern.base)
 
     if isinstance(pattern, RegexPattern):
         return ("regex", pattern.pattern)
@@ -612,6 +625,14 @@ def from_pattern(
 
     def is_schematic(label: str) -> bool:
         return schematic is None or label in schematic
+
+    if isinstance(pattern, AtomPattern):
+        # A constant in schema position is a ground leaf (e.g. `derive: ⊥`); a
+        # family (e.g. a propositional-variable sort `p_#`) used directly is a
+        # fresh variable ranging over it, like any other sort.
+        if pattern.is_constant:
+            return Node(pattern=pattern, literal=pattern.value)
+        return Var(name=pattern.name, sort=pattern)
 
     if isinstance(pattern, StringPattern):
         # Whole template is a single variable, e.g. an antecedent written "s"

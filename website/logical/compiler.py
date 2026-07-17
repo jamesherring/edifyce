@@ -1,6 +1,6 @@
 from website.logical.matching import *
 from website.logical.matching import Pattern, constant
-from website.logical.formal_system import FormalSystem, LineType, InferenceRule, ProofLine
+from website.logical.formal_system import FormalSystem, LineType, InferenceRule, ProofLine, SubproofSchema
 from website.logical.formal_system.side_condition_syntax import parse_side_condition
 from copy import copy, deepcopy
 from collections import OrderedDict
@@ -129,6 +129,26 @@ def parse_arguments(s: str) -> list[tuple[str, str]] | None:
             args.append((var, pattern))
 
     return args
+
+
+def build_schema_pattern(text: str, context, name: str):
+    # Build a rule-schema pattern from a source token. A bare constant atom
+    # (e.g. a falsum `⊥`) resolves to its *declared* AtomPattern, so the rule's
+    # literal and the proof line's atom are the same constructor on the term
+    # representation - otherwise a StringPattern literal and the atom would be
+    # different constructors and the (now term-based) checker would reject the
+    # step. A referenced pattern name is used directly; anything else becomes a
+    # StringPattern template with the ambient string variables applied.
+    if text in context.variables:
+        return context.variables[text]
+
+    for candidate in context.variables.values():
+        if isinstance(candidate, AtomPattern) and candidate.is_constant and candidate.is_member(text):
+            return candidate
+
+    pattern = StringPattern(name=name, pattern=text, pre_format=context.pre_format)
+    pattern.add_variables(context.string_variables)
+    return pattern
 
 
 @dataclass(eq=False)
@@ -413,6 +433,29 @@ class AbstractSyntaxTree:
                     # Add to context
                     context.variables[name] = AbstractPattern(name=name)
 
+            elif stripped.startswith("Atom ") and ": " in stripped:
+                # Inline atom declaration (no regex):
+                #   `Atom falsum: ⊥`      -> a constant
+                #   `Atom var: p_#`       -> the infinite family p, p_0, p_1, ...
+                self.type = "Atom"
+
+                rest = stripped[5:]
+                index = rest.index(": ")
+                name = rest[:index]
+                spec = rest[index + 2:]
+
+                if not self.valid_variable_name(name):
+                    self.error = f"Invalid variable name: '{name}'."
+                    return
+
+                if spec.endswith("_#"):
+                    atom = AtomPattern(name=name, base=spec[:-2], pre_format=context.pre_format)
+                else:
+                    atom = AtomPattern(name=name, value=spec, pre_format=context.pre_format)
+
+                context.variables[name] = atom
+                return
+
             elif stripped.startswith("Regex ") and stripped[-1] == ":":
                 # Create a regex pattern variable
 
@@ -575,7 +618,7 @@ class AbstractSyntaxTree:
 
                 obj = context.variables[stripped]
 
-                if type(obj) not in (StringPattern, UnionPattern, RegexPattern, AbstractPattern):
+                if type(obj) not in (StringPattern, UnionPattern, RegexPattern, AbstractPattern, AtomPattern):
                     self.error = f"Can't add object of type '{type(obj)!s}' to UnionPattern."
                     return
 
@@ -747,6 +790,10 @@ class AbstractSyntaxTree:
                     # Update the behaviour
                     current_object.behaviour = value_string
 
+                elif key == "scope":
+                    # Update the scope this line opens (orthogonal to behaviour)
+                    current_object.scope = value_string
+
                 elif key[:7] == "context":
                     # Create an 'add to context' dictionary
 
@@ -793,20 +840,10 @@ class AbstractSyntaxTree:
                         stripped_line = line.line.strip()
 
                         if len(stripped_line) > 0 and not stripped_line[0] == "#":
-                            # Get the antecedents as patterns
-
-                            if stripped_line in context.variables:
-                                # Variable pointing to a pattern
-                                current_object.antecedents.append(context.variables[stripped_line])
-
-                            else:
-                                # New pattern
-                                new_pattern = StringPattern(name="antecedent", pattern=stripped_line, pre_format=context.pre_format)
-
-                                # Add variables
-                                new_pattern.add_variables(context.string_variables)
-
-                                current_object.antecedents.append(new_pattern)
+                            # Get the antecedent as a pattern
+                            current_object.antecedents.append(
+                                build_schema_pattern(stripped_line, context, "antecedent")
+                            )
 
                     return
 
@@ -818,22 +855,55 @@ class AbstractSyntaxTree:
 
                         if len(stripped_line) > 0 and not stripped_line[0] == "#":
                             # Get the deduction as a pattern
+                            current_object.deduction = build_schema_pattern(
+                                stripped_line, context, "deduction"
+                            )
 
-                            if stripped_line in context.variables:
-                                # Variable pointing to a pattern
-                                current_object.deduction = context.variables[stripped_line]
+                    return
 
-                            else:
-                                # New pattern
-                                current_object.deduction = StringPattern(
-                                    name="deduction",
-                                    pattern=stripped_line,
-                                    pre_format=context.pre_format
-                                )
+                elif stripped == "subproof:":
+                    # A discharge rule consumes a subproof rather than citing
+                    # lines: an assumption (or a fresh variable) plus a derived
+                    # conclusion. Each sub-key holds a single pattern line.
 
-                                # Add variables
-                                current_object.deduction.add_variables(context.string_variables)
+                    def build_subproof_pattern(text):
+                        return build_schema_pattern(text, context, "subproof")
 
+                    assumption_pattern = None
+                    conclusion_pattern = None
+                    fresh_pattern = None
+
+                    for part in self.sub_trees:
+                        header = part.line.strip()
+                        if len(header) == 0 or header[0] == "#":
+                            continue
+
+                        value = None
+                        for sub in part.sub_trees:
+                            sub_stripped = sub.line.strip()
+                            if len(sub_stripped) > 0 and not sub_stripped[0] == "#":
+                                value = sub_stripped
+
+                        if value is None:
+                            raise Exception(f"Subproof key '{header}' needs a pattern.")
+
+                        if header == "assume:":
+                            assumption_pattern = build_subproof_pattern(value)
+                        elif header == "derive:":
+                            conclusion_pattern = build_subproof_pattern(value)
+                        elif header == "fresh:":
+                            fresh_pattern = build_subproof_pattern(value)
+                        else:
+                            raise Exception(f"Unrecognised subproof key '{header}'.")
+
+                    if conclusion_pattern is None:
+                        raise Exception("A subproof rule requires a 'derive:' conclusion.")
+
+                    current_object.subproof_schema = SubproofSchema(
+                        conclusion=conclusion_pattern,
+                        assumption=assumption_pattern,
+                        fresh=fresh_pattern,
+                    )
                     return
 
                 elif stripped == "side_conditions:":

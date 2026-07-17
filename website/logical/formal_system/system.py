@@ -201,6 +201,10 @@ class FormalSystem:
                 proof_line.invalid_message = "Could not parse line."
                 proof_line.valid = False
 
+            # Place the line in its subproof (a no-op for systems that declare
+            # no scope openers - every line then lands in the root scope).
+            proof.assign_scope(proof_line)
+
             if found:
                 # Follow indent/non-indent line rules
 

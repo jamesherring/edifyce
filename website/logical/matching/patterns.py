@@ -279,6 +279,92 @@ class RegexPattern(Pattern):
         return f"RegexPattern: {self.name}"
 
 
+class AtomPattern(Pattern):
+    """An atomic-leaf sort: a constant, or an infinite base+index family.
+
+    This is the going-forward replacement for using :class:`RegexPattern` to
+    declare atoms. Two modes:
+
+    * **constant** - matches exactly one literal token (e.g. the falsum ``⊥``,
+      the empty set ``∅``, the numeral ``0``).
+    * **indexed family** - a base token with an optional natural-number index,
+      giving a *countably infinite* supply of atoms without a regex engine:
+      base ``p`` matches ``p``, ``p_0``, ``p_1``, ``p_2``, …. Because the family
+      is generated rather than merely recognised, a *fresh* atom can be
+      constructed (``fresh``), not just tested - which is exactly what
+      eigenvariable selection wants.
+
+    An atom always matches to a childless leaf, so it is a genuine atomic term
+    for the kernel's structural side-conditions (occurrence, disjoint-leaves).
+    """
+
+    def __init__(self, name, value: str | None = None, base: str | None = None, pre_format=None) -> None:
+
+        Pattern.__init__(self, name, pre_format=pre_format)
+
+        # Exactly one of `value` (constant) or `base` (indexed family) is set.
+        if (value is None) == (base is None):
+            raise ValueError("AtomPattern needs exactly one of `value` or `base`.")
+
+        self.value = value
+        self.base = base
+
+        self.pattern_type = "AtomPattern"
+
+    @property
+    def is_constant(self) -> bool:
+        return self.value is not None
+
+    def is_member(self, token: str) -> bool:
+        # Whether `token` is an atom of this pattern.
+        if self.is_constant:
+            return token == self.value
+
+        # Indexed family: the bare base, or base + "_" + a natural number.
+        if token == self.base:
+            return True
+        prefix = f"{self.base}_"
+        if not token.startswith(prefix):
+            return False
+        index = token[len(prefix):]
+        # A canonical non-negative integer (no sign, no leading zeros beyond "0").
+        return index.isdigit() and (index == "0" or index[0] != "0")
+
+    def match(self, s, context, debug=None) -> "matches.Match | None":
+        # Match a whole token against this atom. Leaf match, no sub-matches.
+        token = self.pre_format_apply(s)
+
+        if not self.is_member(token):
+            return None
+
+        return matches.Match(pattern=self, string=s)
+
+    def fresh(self, used) -> str:
+        # Construct an atom of this family not present in `used` (an iterable of
+        # tokens). Only meaningful for an indexed family. This is the
+        # constructive advantage over a recogniser: there is always a next one.
+        if self.is_constant:
+            raise ValueError("A constant atom has no fresh instances.")
+
+        used = set(used)
+        index = 0
+        while f"{self.base}_{index}" in used:
+            index += 1
+        return f"{self.base}_{index}"
+
+    def equivalent(self, other, context, memo=None, allow_mapping_to=False) -> bool:
+        # Two atoms are equivalent when they are the same constant or the same
+        # family. Name is deliberately not compared: identity is what the atom
+        # denotes, so a rule's inline literal and the system's declared atom of
+        # the same value/base agree.
+        if not isinstance(other, AtomPattern):
+            return False
+        return self.value == other.value and self.base == other.base
+
+    def __str__(self):
+        return f"AtomPattern: {self.name}"
+
+
 class StringPattern(Pattern):
     """A string pattern created in compiling lattice"""
 
