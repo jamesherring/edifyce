@@ -10,14 +10,21 @@
 //   atlas migrate apply --env local --url "$DATABASE_URL"   # apply to a real DB
 //   atlas migrate lint --env local          # CI: check migrations for safety
 //
-// The dev database MUST have the pgvector extension available (the schema issues
-// CREATE EXTENSION vector). Override the default with ATLAS_DEV_URL — e.g. a Neon
-// dev branch, or a local Postgres that has pgvector installed.
+// The dev database MUST have the pgvector extension available (the migrations
+// issue CREATE EXTENSION vector). Override the default with ATLAS_DEV_URL — e.g.
+// a Neon dev branch, or a local Postgres that has pgvector installed.
+//
+// The provider emits `CREATE EXTENSION vector` for the pgvector column, but
+// unauthenticated Atlas refuses to diff extensions ("available to logged-in
+// users only"). The extension is deliberately hand-managed in the initial
+// migration instead (see app/db/README.md), so we strip that line from the
+// desired schema to keep it out of Atlas's schema management. pipefail ensures a
+// provider failure isn't masked by the pipe.
 
 data "external_schema" "sqlalchemy" {
   program = [
-    "sh", "-c",
-    "PYTHONPATH=. uv run atlas-provider-sqlalchemy --path ./tools/atlas --dialect postgresql",
+    "bash", "-c",
+    "set -o pipefail; PYTHONPATH=. uv run atlas-provider-sqlalchemy --path ./tools/atlas --dialect postgresql | sed '/^CREATE EXTENSION/d'",
   ]
 }
 
