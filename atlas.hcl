@@ -13,6 +13,10 @@
 // The dev database MUST have the pgvector extension available (the schema issues
 // CREATE EXTENSION vector). Override the default with ATLAS_DEV_URL — e.g. a Neon
 // dev branch, or a local Postgres that has pgvector installed.
+//
+// Extension management (pgvector's CREATE EXTENSION / the `vector` type) requires
+// a logged-in Atlas — `atlas login`, or ATLAS_TOKEN in CI. Without it Atlas
+// refuses ("extensions are available to logged-in users only").
 
 data "external_schema" "sqlalchemy" {
   program = [
