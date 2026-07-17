@@ -1,0 +1,111 @@
+name: Migrations
+
+# Schema-as-code CI/CD for the Neon database (see app/db/README.md).
+#
+#   PR  -> validate + lint + prove the models are in sync with migrations/
+#   push develop -> apply migrations to the Neon `develop` branch (Vercel Preview)
+#   push main    -> apply migrations to the Neon `main` branch (Vercel Production)
+#
+# The models (app/db/) are the source of truth; migrations/ is generated from
+# them with `atlas migrate diff` and is what actually runs against the database.
+
+on:
+  pull_request:
+    paths:
+      - "app/db/**"
+      - "migrations/**"
+      - "atlas.hcl"
+      - "tools/atlas/**"
+      - "pyproject.toml"
+      - ".github/workflows/migrations.yml"
+  push:
+    branches: [main, develop]
+    paths:
+      - "migrations/**"
+      - "atlas.hcl"
+      - ".github/workflows/migrations.yml"
+
+jobs:
+  check:
+    name: Validate & lint (PR)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    # A throwaway Postgres with pgvector for Atlas to plan/replay against. The
+    # schema issues CREATE EXTENSION vector, so a plain postgres image won't do.
+    services:
+      dev-db:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dev
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Overrides atlas.hcl's default docker:// dev-db with the service above.
+      ATLAS_DEV_URL: postgres://postgres:postgres@localhost:5432/dev?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Set up Atlas
+        uses: ariga/setup-atlas@v0
+
+      - name: Validate migration directory (atlas.sum integrity)
+        run: atlas migrate validate --env local
+
+      - name: Check models are in sync with migrations/
+        # If the models drift from the recorded migrations, `migrate diff` writes
+        # a new file. In CI that must be a no-op — a dirty migrations/ means
+        # someone changed the models without generating the migration.
+        run: |
+          atlas migrate diff --env local
+          if ! git diff --quiet -- migrations/; then
+            echo "::error::Models in app/db/ drifted from migrations/. Run 'atlas migrate diff <name> --env local' locally and commit the result."
+            git --no-pager diff -- migrations/
+            exit 1
+          fi
+
+      - name: Lint latest migration for unsafe changes
+        run: atlas migrate lint --env local --latest 1
+
+  apply:
+    name: Apply to Neon
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # Never let two applies race on the same branch's database.
+    concurrency:
+      group: migrate-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Atlas
+        uses: ariga/setup-atlas@v0
+
+      # apply needs only the migration SQL + a target URL — no model loading, so
+      # no uv/dev-db here. The URL is the Neon *unpooled* endpoint scoped to the
+      # public schema (Atlas takes an advisory lock + runs DDL in a transaction,
+      # both of which PgBouncer's transaction pooling breaks; the unrelated
+      # neon_auth schema is excluded via search_path). See app/db/README.md.
+      - name: Apply to Production (Neon main)
+        if: github.ref_name == 'main'
+        env:
+          MIGRATE_URL: ${{ secrets.NEON_MAIN_MIGRATE_URL }}
+        run: atlas migrate apply --dir "file://migrations" --url "$MIGRATE_URL"
+
+      - name: Apply to Preview (Neon develop)
+        if: github.ref_name == 'develop'
+        env:
+          MIGRATE_URL: ${{ secrets.NEON_DEVELOP_MIGRATE_URL }}
+        run: atlas migrate apply --dir "file://migrations" --url "$MIGRATE_URL"

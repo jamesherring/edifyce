@@ -107,6 +107,34 @@ Requirements / gotchas:
 
   So in practice: `MIGRATE_URL="$DATABASE_URL_UNPOOLED&search_path=public"`.
 
+## CI/CD (`.github/workflows/migrations.yml`)
+
+Migrations are not applied by hand in normal operation — the workflow owns it:
+
+- **On a pull request** (touching the models, `migrations/`, or the Atlas config):
+  `atlas migrate validate` (checksum integrity), a **drift check** that fails if
+  the models have changed without a matching migration (`atlas migrate diff` must
+  be a no-op), and `atlas migrate lint` for unsafe changes. This runs against a
+  throwaway `pgvector/pgvector` service container, so no Neon branch is touched.
+- **On push to `develop`** → `atlas migrate apply` to the Neon **develop** branch
+  (Vercel Preview). **On push to `main`** → apply to the Neon **main** branch
+  (Vercel Production). The target URLs live in the `NEON_DEVELOP_MIGRATE_URL` /
+  `NEON_MAIN_MIGRATE_URL` GitHub secrets, each already the unpooled endpoint with
+  `&search_path=public`.
+
+So the day-to-day loop is: change the models → `atlas migrate diff <name> --env
+local` → commit the generated SQL → open a PR. CI proves it's in sync and safe;
+merging applies it. The manual `atlas migrate apply` above is only for local
+databases and one-off recovery.
+
+**Deploy ordering (know this before wiring the DB into routes).** GitHub Actions
+applies the migration while Vercel independently builds the new code off the same
+push — they race. That's harmless today because nothing at runtime touches the
+DB and every migration so far is purely additive. Once routes depend on the
+schema, keep migrations **backward-compatible with the currently-deployed code**
+(expand/contract: add columns/tables before the code needs them; drop only after
+the code that used them is gone) so either order is safe.
+
 ## Runtime
 
 `session.py` is lazy: importing it never opens a connection, and the app boots
