@@ -19,7 +19,7 @@ from ..kernel import (
     match_all,
 )
 from ..matching import StringPattern
-from .proof import ProofLine
+from .proof import ProofLine, Subproof
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -30,6 +30,35 @@ if TYPE_CHECKING:
 
     # A rule match's substitution: schematic variable name -> the Term it binds to.
     Binding = dict[str, Term]
+
+
+@dataclass(eq=False)
+class SubproofSchema:
+    """The subproof an inference rule discharges.
+
+    A discharge rule (conditional proof, RAA, universal generalisation) does
+    not cite individual lines - it consumes a whole subproof as a unit. This
+    records what that subproof must look like:
+
+    ``assumption`` - pattern the subproof's opening hypothesis must match, or
+                     ``None`` when the subproof is opened by a fresh variable
+                     rather than a hypothesis.
+    ``conclusion`` - pattern the subproof's final line must match.
+    ``fresh``      - the eigenvariable pattern for a variable-opened subproof
+                     (universal generalisation), or ``None``. Its presence is
+                     what makes the rule require a ``variable`` subproof rather
+                     than an ``assumption`` one; the freshness side-condition is
+                     enforced in :meth:`InferenceRule.check_discharge`.
+    """
+
+    conclusion: Pattern
+    assumption: Pattern | None = None
+    fresh: Pattern | None = None
+
+    @property
+    def kind(self) -> str:
+        # Which kind of scope opener this schema discharges.
+        return "variable" if self.fresh is not None else "assumption"
 
 
 def _normalise_side_condition(condition: SideCondition) -> tuple:
@@ -63,7 +92,7 @@ class InferenceRule:
     """Inference rules for deduction."""
 
     def __init__(self, name, label=None, antecedents=None, deduction=None, side_conditions=None,
-                 allow_extra_antecedents=False, variables=None):
+                 allow_extra_antecedents=False, variables=None, subproof_schema=None):
 
         # The inference rule name
         self.name = name.replace("_", " ")
@@ -86,6 +115,15 @@ class InferenceRule:
 
         # Keep a set of variables handy
         self.variables = variables
+
+        # The subproof this rule discharges (SubproofSchema), if it is a
+        # discharge rule. None for an ordinary line-antecedent rule.
+        self.subproof_schema = subproof_schema
+
+    @property
+    def is_discharge(self) -> bool:
+        # Whether this rule discharges a subproof rather than citing lines.
+        return self.subproof_schema is not None
 
     def check(self, antecedents, extra_antecedents, deduction, context):
         # Check to see if the proposed proof lines are valid under this inference rule
@@ -134,6 +172,72 @@ class InferenceRule:
         for ant in antecedents:
             ant.dependent_lines.add(deduction)
 
+        return True
+
+    def check_discharge(self, subproof: Subproof, deduction: ProofLine, context: Context) -> bool:
+        # Check that `deduction` follows by discharging `subproof` under this
+        # rule. Discharge rules consume a whole subproof as a unit (conditional
+        # proof, reductio, universal generalisation) rather than citing lines.
+
+        schema = self.subproof_schema
+
+        if schema is None or deduction.formula is None:
+            return False
+
+        # The subproof must be opened the way the schema expects (a hypothesis
+        # for conditional-proof-style rules, a fresh variable for generalisation).
+        if subproof.kind != schema.kind:
+            return False
+
+        conclusion = subproof.conclusion
+        if conclusion is None or conclusion.formula is None:
+            # An empty subproof discharges nothing.
+            return False
+
+        # Derive one consistent binding across the deduction and the subproof's
+        # conclusion (and assumption, for hypothesis discharge) on the term
+        # representation, the same way an ordinary rule binds its antecedents
+        # (see _term_binding): schemas via _schema_term, proof-line formulae via
+        # from_match, unified under one substitution. Shared metavariables - the
+        # `p` in both a subproof's assumption and the deduction - are forced to
+        # agree by that one binding; atoms unify by what they denote, so a
+        # literal conclusion such as a falsum `⊥` matches its declared atom.
+        schema_pairs: list[tuple[Pattern, ProofLine]] = [
+            (self.deduction, deduction),
+            (schema.conclusion, conclusion),
+        ]
+        if schema.assumption is not None:
+            schema_pairs.append((schema.assumption, subproof.assumption))
+
+        if schema.fresh is not None:
+            # Tie the eigenvariable to the quantified variable. The fresh schema
+            # variable (e.g. the `x` in `fresh: x`) is the same metavariable as
+            # the bound `x` in the deduction `∀x p`, so matching it against the
+            # subproof's opener forces the *introduced* variable to be the one
+            # actually generalised. Without this, opening `let y` and concluding
+            # `∀x …` would generalise x while only y was checked for freshness.
+            schema_pairs.append((schema.fresh, subproof.assumption))
+
+        term_pairs: list[tuple[Term, Term]] = []
+        for occurrence, (pattern, line) in enumerate(schema_pairs):
+            if line is None or line.formula is None:
+                return False
+            term_pairs.append(
+                (self._schema_term(pattern, occurrence, context), from_match(line.formula, context))
+            )
+
+        if match_all(term_pairs, context) is None:
+            return False
+
+        # Freshness side-condition for universal generalisation: the
+        # eigenvariable must be genuinely arbitrary - it may not occur in any
+        # hypothesis still in force around the subproof (checked structurally on
+        # kernel terms by Subproof.eigenvariable_is_fresh).
+        if schema.fresh is not None and not subproof.eigenvariable_is_fresh(context):
+            return False
+
+        deduction.inference_rule = self
+        deduction.valid = True
         return True
 
     def _term_binding(

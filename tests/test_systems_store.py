@@ -13,17 +13,36 @@ pytest.importorskip("sqlalchemy")
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
-from app.systems import spec_to_system, system_to_spec
-from app.systems.models import (
-    Base,
+from app.db import Base, spec_to_system, system_to_spec
+from app.db.models import FormalSystem
+from app.db.systems import (
+    AxiomBindingRow,
+    AxiomRow,
+    BracketRow,
+    DefinitionBindingRow,
     DefinitionRow,
-    FormalSystemRow,
+    LinePartRow,
+    LineRow,
+    ProductionBindingRow,
     ProductionRow,
     RuleAntecedentRow,
+    RuleBindingRow,
     RuleRow,
     SortRow,
 )
 from website.logical.declarative import build_spec, lower, parse
+
+# The system decomposition now lives among the full app schema. The pgvector
+# `theorems` table (and other Postgres-only bits) aren't SQLite-creatable, so
+# create just the system-decomposition tables for this round-trip test.
+_SYSTEM_TABLES = [
+    m.__table__
+    for m in (
+        FormalSystem, BracketRow, SortRow, ProductionRow, ProductionBindingRow,
+        LineRow, LinePartRow, DefinitionRow, DefinitionBindingRow,
+        AxiomRow, AxiomBindingRow, RuleRow, RuleAntecedentRow, RuleBindingRow,
+    )
+]
 
 
 ZFC_SOURCE = """system ZFC
@@ -62,7 +81,7 @@ definitions
 @pytest.fixture
 def session():
     engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(engine, tables=_SYSTEM_TABLES)
     with Session(engine) as session:
         yield session
 
@@ -74,7 +93,7 @@ def stored_system(session):
     session.add(spec_to_system(spec))
     session.commit()
     session.expire_all()
-    return session.scalar(select(FormalSystemRow).where(FormalSystemRow.name == "ZFC"))
+    return session.scalar(select(FormalSystem).where(FormalSystem.name == "ZFC"))
 
 
 # ---------------------------------------------------------------------------
@@ -95,10 +114,10 @@ def test_rebuilt_spec_lowers_identically(stored_system):
 
 def test_decomposition_has_no_source_or_json_blob():
     # The system row stores structure, not a dumped source string or JSON.
-    columns = {c.name for c in FormalSystemRow.__table__.columns}
+    columns = {c.name for c in FormalSystem.__table__.columns}
     assert "source" not in columns
     assert "compiled" not in columns
-    assert not any(str(c.type).upper().startswith("JSON") for c in FormalSystemRow.__table__.columns)
+    assert not any(str(c.type).upper().startswith("JSON") for c in FormalSystem.__table__.columns)
 
 
 # ---------------------------------------------------------------------------
@@ -130,8 +149,8 @@ def test_rebuilt_system_compiles_and_checks_proofs(stored_system):
 def test_search_systems_that_define_a_name(session, stored_system):
     # "Which systems define subset?" - a join, not a compile-and-scan.
     rows = session.scalars(
-        select(FormalSystemRow.name)
-        .join(DefinitionRow, DefinitionRow.system_id == FormalSystemRow.id)
+        select(FormalSystem.name)
+        .join(DefinitionRow, DefinitionRow.system_id == FormalSystem.id)
         .where(DefinitionRow.name == "subset")
     ).all()
     assert rows == ["ZFC"]
