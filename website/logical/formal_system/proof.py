@@ -1012,6 +1012,14 @@ class ProofLine:
             if kernel_result is not None:
                 return kernel_result
 
+        # The kernel path is unavailable. A definition carrying a kernel `where`
+        # proviso can only be enforced by that path - the string-based
+        # check_application evaluates the legacy `if` condition and never the
+        # `where` guard - so falling back would silently drop the proviso and
+        # accept steps it should block. Refuse instead (the step is not verified).
+        if definition.kernel_condition is not None:
+            return False
+
         # Check if the definition applies - in either direction
         return definition.check_application(
             lower=other.formula,

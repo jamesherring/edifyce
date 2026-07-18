@@ -414,3 +414,54 @@ def test_where_proviso_gates_the_unfold(guarded_system):
         guarded_system, "(a ⊆ a)", "∀z.((z ∈ a) → (z ∈ a))"
     )
     assert follows_by_definition(bad_subset, bad_unfold, definition, context) is False
+
+
+# ---------------------------------------------------------------------------
+# `where` + `if` rejection and malformed-clause compile errors (PR #31 review)
+# ---------------------------------------------------------------------------
+
+
+def test_where_and_if_combination_is_a_compile_error():
+    # A legacy `if` forces the string path, which never enforces the kernel
+    # `where` guard; combining them would silently drop `where`, so it is
+    # rejected at compile time rather than accepted unsoundly.
+    result = compile_formal_system(
+        FRESH_SYSTEM % {"WHERE": " where disjoint(x, y, setvar) if x == x"}
+    )
+    assert "errors" in result
+    assert any("where" in e and "if" in e for e in result["errors"])
+
+
+def test_malformed_where_sort_is_a_compile_error_not_a_crash():
+    # An unknown sort in a `where` proviso is resolved outside run()'s
+    # try/except; it must surface as a structured compile error, not a 500.
+    result = compile_formal_system(
+        FRESH_SYSTEM % {"WHERE": " where disjoint(x, y, no_such_sort)"}
+    )
+    assert "errors" in result
+
+
+def test_malformed_fresh_sort_is_a_compile_error_not_a_crash():
+    result = compile_formal_system(
+        FRESH_SYSTEM.replace("fresh z as setvar", "fresh z as no_such_sort")
+        % {"WHERE": ""}
+    )
+    assert "errors" in result
+
+
+def test_where_definition_refuses_when_the_kernel_path_is_unavailable(binder_system):
+    # A definition that carries a kernel `where` proviso but cannot build a
+    # kernel definition (here: an undeclared binder) must be refused, not routed
+    # to the string fallback that ignores the proviso.
+    from website.logical.kernel import Equal
+
+    definition = binder_definition(binder_system)
+    definition.kernel_condition = Equal("x", "y")  # any kernel proviso
+    context = context_of(binder_system)
+    proof, _ = formulae(binder_system, "(a ⊆ b)", "∀z.((z ∈ a) → (z ∈ b))")
+    subset_line, unfolded_line = proof.proof_lines
+
+    # No kernel counterpart is buildable, and the proviso cannot be enforced on
+    # the string path, so the step is refused rather than silently accepted.
+    assert kernel_definition_for(definition, context) is None
+    assert subset_line.follows_from_definition(unfolded_line, definition, {}, context) is False

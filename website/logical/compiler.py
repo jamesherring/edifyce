@@ -650,6 +650,17 @@ class AbstractSyntaxTree:
                     lower, _, fresh_text = lower.partition(" fresh ")
                     fresh = _parse_fresh_bindings(fresh_text)
 
+                if where_strings and condition_string is not None:
+                    # A legacy `if` proviso forces the string-based checker, which
+                    # only enforces that `if` and never the kernel `where` guard -
+                    # so combining them would silently drop the `where`. Reject it
+                    # rather than accept steps the `where` should have blocked.
+                    self.error = (
+                        "A definition cannot combine a `where` proviso with a legacy `if` "
+                        "proviso; use one or the other."
+                    )
+                    return
+
                 if not isinstance(current_object, Pattern):
                     self.error = "Definitions must be created inside a pattern block."
                     return
@@ -1233,12 +1244,21 @@ class AbstractSyntaxTree:
                 context_copy.string_variables.update(defn.variables)
 
                 # Resolve the defining form's bound-variable sorts and any
-                # kernel-vocabulary provisos now that the context is complete.
-                fresh = {
-                    defn.pattern.pre_format_apply(name): _resolve_sort(sort, context_copy)
-                    for name, sort in defn.fresh
-                }
-                kernel_condition = _combine_side_conditions(defn.where_strings, context_copy)
+                # kernel-vocabulary provisos now that the context is complete. A
+                # malformed `fresh` sort or `where` proviso is a source error, not
+                # a server fault - but this loop runs *outside* run()'s
+                # try/except, so catch it here and record a compile error (as the
+                # rule side_conditions path does) rather than letting it escape
+                # compile() as a 500.
+                try:
+                    fresh = {
+                        defn.pattern.pre_format_apply(name): _resolve_sort(sort, context_copy)
+                        for name, sort in defn.fresh
+                    }
+                    kernel_condition = _combine_side_conditions(defn.where_strings, context_copy)
+                except Exception as e:
+                    context.error_log.append(f"Definition '{defn.higher}': {e}")
+                    continue
 
                 # Get the definition
                 result = defn.pattern.add_definition(
