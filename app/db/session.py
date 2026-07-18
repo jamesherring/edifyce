@@ -21,11 +21,15 @@ from sqlalchemy.ext.asyncio import (
 
 
 def _database_url() -> URL:
-    raw = os.environ.get("DATABASE_URL")
+    # Prefer DATABASE_URL, but fall back to POSTGRES_URL: the Neon/Vercel
+    # Marketplace integration provisions the latter (pooled) automatically, so
+    # accepting it lets those deployments work without a manual alias.
+    raw = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
     if not raw:
         raise RuntimeError(
-            "DATABASE_URL is not set. Point it at the Neon *pooled* connection "
-            "string (the '-pooler' host) for serverless deployments."
+            "Neither DATABASE_URL nor POSTGRES_URL is set. Point one at the Neon "
+            "*pooled* connection string (the '-pooler' host) for serverless "
+            "deployments."
         )
     # Route whatever scheme the platform hands us (postgres://, postgresql://,
     # even postgresql+psycopg://) onto the asyncpg driver the app uses.
