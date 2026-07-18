@@ -238,9 +238,13 @@ def normal_form(condition: SideCondition) -> tuple:
     than by their (formatting-sensitive) source text.
     """
     if isinstance(condition, (And, Or)):
+        # Sort by repr, not the tuples themselves: a normal form may contain
+        # None (an absent sort), and ordering tuples that tie until a
+        # None-vs-str position raises TypeError. repr gives a total order and
+        # still canonicalises commutative parts.
         return (
             type(condition).__name__,
-            tuple(sorted(normal_form(part) for part in condition.parts)),
+            tuple(sorted((normal_form(part) for part in condition.parts), key=repr)),
         )
     if isinstance(condition, Not):
         return ("Not", normal_form(condition.inner))
@@ -255,6 +259,30 @@ def normal_form(condition: SideCondition) -> tuple:
         sort = None if condition.sort is None else condition.sort.name
         return ("IsAtom", condition.name, sort)
     return (type(condition).__name__,)
+
+
+def metavariables(condition: SideCondition) -> set[str]:
+    """The metavariable names a side-condition references - exactly the names its
+    :meth:`~SideCondition.check` looks up in the binding.
+
+    Lets a caller project only the terms a condition actually needs, rather than
+    the whole match, so an unrelated (unreferenced) binding can't make the check
+    fail for want of a projection.
+    """
+    if isinstance(condition, (And, Or)):
+        names: set[str] = set()
+        for part in condition.parts:
+            names |= metavariables(part)
+        return names
+    if isinstance(condition, Not):
+        return metavariables(condition.inner)
+    if isinstance(condition, Occurs):
+        return {condition.needle, condition.haystack}
+    if isinstance(condition, (DisjointLeaves, Equal)):
+        return {condition.left, condition.right}
+    if isinstance(condition, IsAtom):
+        return {condition.name}
+    return set()
 
 
 def _bound(binding: Binding, name: str) -> Term:

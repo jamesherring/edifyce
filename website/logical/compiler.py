@@ -1113,7 +1113,9 @@ class AbstractSyntaxTree:
                         side_condition = parse_side_condition(
                             defn.pattern.pre_format_apply(defn.condition_string), context_copy
                         )
-                except Exception as e:
+                except ValueError as e:
+                    # parse_side_condition raises ValueError for a malformed
+                    # guard; let anything else surface as the real error.
                     context.error_log.append(
                         f"Invalid definition guard '{defn.condition_string}': {e!s}"
                     )

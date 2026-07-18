@@ -145,12 +145,19 @@ class Definition:
 
     def _condition_holds(self, mapping: dict[str, matches.Match], context: Context) -> bool:
         # Evaluate the side-condition against the definition's variable binding,
-        # projecting each matched variable into a kernel term. Fails closed if a
-        # match cannot be projected or a referenced name is unbound.
+        # projecting only the variables the guard references into kernel terms
+        # (so an unrelated submatch that won't project can't sink the check).
+        # Fails closed if a referenced match won't project or isn't bound.
+        # Imported lazily: kernel.terms imports matching.patterns at load time.
         from ..kernel.terms import from_match
+        from ..kernel.side_conditions import metavariables
 
         try:
-            binding = {label: from_match(match, context) for label, match in mapping.items()}
+            binding = {
+                name: from_match(mapping[name], context)
+                for name in metavariables(self.side_condition)
+                if name in mapping
+            }
             return self.side_condition.check(binding, context)
         except Exception:
             return False
@@ -187,7 +194,8 @@ class Definition:
 
         raise Exception(f"Could not find value from path '{path}'.")
 
-    def equivalent(self, other, context, memo=None, allow_mapping_to=False):
+    def equivalent(self, other: object, context: Context, memo: dict | None = None,
+                   allow_mapping_to: bool = False) -> bool:
         # Check if two definitions are the same.
 
         if memo is None:

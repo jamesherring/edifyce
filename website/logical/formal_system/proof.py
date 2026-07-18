@@ -686,9 +686,15 @@ class Proof:
                 context_copy.string_variables[key] = build_context.variables[name]
 
         # Re-parse the imported definition's guard (if any) in this context so
-        # its sorts re-resolve here.
+        # its sorts re-resolve here. Fail loudly rather than drop the guard: a
+        # dropped proviso would silently widen the definition.
         condition_string = definition.condition_string
-        side_condition = _parse_definition_guard(condition_string, pattern, context_copy)
+        try:
+            side_condition = _parse_definition_guard(condition_string, pattern, context_copy)
+        except Exception as e:
+            raise Exception(
+                f"Failed to import definition guard for {definition.higher.pattern}: {e!s}"
+            ) from e
 
         result = pattern.add_definition(definition.lower.pattern, definition.higher.pattern, context_copy,
                                         side_condition=side_condition, condition_string=condition_string,
@@ -875,16 +881,22 @@ class ProofLine:
                 return
 
             # Also try to get a guard from the line's conditions() accessor.
+            # Distinguish "no guard" (fine) from "a guard that won't parse"
+            # (invalidate the line rather than silently dropping the proviso).
             condition_string = None
             side_condition = None
             try:
                 conditions = self.get_by_path("conditions()", context)
-                if len(conditions) > 0:
-                    condition_string = "\n".join([c.string for c in conditions])
-                    side_condition = _parse_definition_guard(condition_string, pattern, context)
             except Exception:
-                condition_string = None
-                side_condition = None
+                conditions = []
+            if conditions:
+                condition_string = "\n".join([c.string for c in conditions])
+                try:
+                    side_condition = _parse_definition_guard(condition_string, pattern, context)
+                except Exception as e:
+                    self.valid = False
+                    self.invalid_message = f"Invalid definition guard: {e!s}"
+                    return
 
             # Add the definition
             self.definition = pattern.add_definition(lower.formatted_string(), higher.formatted_string(), context,

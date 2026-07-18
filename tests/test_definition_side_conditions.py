@@ -101,6 +101,57 @@ def test_missing_binding_fails_closed(env):
     assert defn._condition_holds({}, context=env[1]) is False
 
 
+def test_guard_evaluates_against_a_real_match_binding(env):
+    # The names in the parsed guard must line up with the keys of a real
+    # higher-form match's sub_matches - the exact mapping check_application feeds
+    # to _condition_holds. This is the end-to-end alignment the other tests
+    # (which hand-build the binding) do not cover.
+    system, context = env
+    defn = _make_definition(env, "disjoint(x, y, setvar)")
+
+    distinct = defn.higher.match("a is a subset of b", context)
+    clash = defn.higher.match("a is a subset of a", context)
+    assert distinct is not None and clash is not None
+
+    assert defn._condition_holds(distinct.sub_matches, context) is True
+    assert defn._condition_holds(clash.sub_matches, context) is False
+
+
+def test_guard_ignores_unreferenced_bindings(env):
+    # A binding entry the guard does not reference must not sink the check, even
+    # if it could not be projected into a term.
+    system, context = env
+    setvar = system.build_context.variables["setvar"]
+    defn = _make_definition(env, "disjoint(x, y, setvar)")
+    mapping = {
+        "x": setvar.match("a", context),
+        "y": setvar.match("b", context),
+        "junk": object(),  # unreferenced and unprojectable
+    }
+    assert defn._condition_holds(mapping, context) is True
+
+
+def test_equivalent_with_multipart_and_guard_does_not_crash(env):
+    # A conjunction whose parts' normal forms tie until the sort position (None
+    # vs a sort name) must compare without raising - regression for the sorted()
+    # TypeError in normal_form.
+    from website.logical.kernel import And, DisjointLeaves
+
+    system, context = env
+    setvar = system.build_context.variables["setvar"]
+    subset = system.build_context.variables["subset"]
+    guard = And((DisjointLeaves("x", "y"), DisjointLeaves("x", "y", setvar)))
+
+    def make():
+        return subset.add_definition(
+            "x is an element of y", "x is a subset of y", context,
+            side_condition=guard, condition_string="disjoint(x, y)\ndisjoint(x, y, setvar)",
+            require_lower_match=False,
+        )
+
+    assert make().equivalent(make(), context)
+
+
 def test_equivalent_distinguishes_definitions_by_guard(env):
     _system, context = env
     guarded = _make_definition(env, "disjoint(x, y, setvar)")
