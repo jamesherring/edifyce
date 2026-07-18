@@ -375,6 +375,14 @@ class StringPattern(Pattern):
         # The pattern string
         self.pattern = self.pre_format_apply(pattern)
 
+        # An optional precomputed nested kernel Term for a rule-schema template,
+        # set by the compiler (compose_schema_term) and consumed by the checker;
+        # opaque to the matching layer, which never reads it (matching must not
+        # depend on the kernel). None for any pattern that is not a compound
+        # rule schema. Declared here so consumers use `pattern.schema_term`
+        # directly rather than a defaulting getattr.
+        self.schema_term = None
+
         # The display pattern. May be different to pattern depending on format
         self.display_pattern = pattern
 

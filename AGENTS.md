@@ -83,6 +83,22 @@ API and the UI (see the static-frontend block at the bottom of `app/main.py`).
   annotations` and a `TYPE_CHECKING` block for engine types to keep annotations
   runtime-free and avoid import cycles. See `website/logical/kernel/terms.py` for
   the pattern to follow.
+- **Lean on types; fail loudly.** When an object's type is known, access its
+  attributes directly (`obj.attr`) rather than `getattr(obj, "attr", default)`.
+  A defaulting `getattr` hides both the type and a genuine bug — a missing
+  attribute should raise, not silently fall back. If some instances of a type may
+  or may not carry a field, that field belongs in the class as a declared
+  attribute with a default (so every instance has it and callers stay typed), not
+  as something attached ad hoc and probed with `getattr`. Reserve `getattr`/
+  `setattr` for genuinely dynamic keys not known until runtime (e.g. the
+  `add_context` edits in `ProofLine.edit_context`).
+- **Import at module top.** Put imports at the top of the module, not inside
+  functions. A function-local import is only justified to break a real import
+  cycle or to defer a heavy/optional dependency — and when you use one, say why in
+  a comment (see `matching/paths.py`, which imports its siblings function-locally
+  on purpose). The kernel depends on `matching`, and `formal_system`/`compiler`
+  depend on the kernel, so those directions import freely at the top; `matching`
+  must never import the kernel or `formal_system`.
 
 ## On comments
 

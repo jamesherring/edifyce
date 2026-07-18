@@ -2,7 +2,7 @@ from website.logical.matching import *
 from website.logical.matching import Pattern, constant
 from website.logical.formal_system import FormalSystem, LineType, InferenceRule, ProofLine, SubproofSchema
 from website.logical.formal_system.side_condition_syntax import parse_side_condition
-from website.logical.kernel import from_match
+from website.logical.kernel import Node, Var, from_match, intern
 from copy import copy, deepcopy
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -202,8 +202,6 @@ def _revariabilise(term: "Term", metavariables: dict) -> "Term":
     # declared metavariable into the corresponding Var, so a schema like the ∀I
     # deduction `∀x p` keeps `x` schematic (able to bind, and to be tied to the
     # subproof's eigenvariable) instead of fixing it to the literal token "x".
-    from website.logical.kernel.terms import Node, Var, intern
-
     def walk(node):
         if isinstance(node, Node):
             if node.literal is not None and node.literal in metavariables:
