@@ -2,11 +2,11 @@
 
 **Status:** proposal (no code yet) · **Branch:** `claude/formal-system-object-crud`
 
-> **Prerequisites (PR #13 now merged):** the normalised store, the **async**
-> SQLAlchemy session (`app.db.get_session`), and the **users** table
-> (`app.db.User`) are all in `develop`. One gap remains for owner-scoping:
-> fastapi-users **authentication is not wired yet** (no `current_active_user`
-> dependency) — see [Prerequisites](#prerequisite-persistence-is-in-auth-is-not).
+> **Prerequisites — all met.** The normalised store, the **async** session
+> (`app.db.get_session`), the **users** table, and now **authentication**
+> (`app.auth.current_active_user`, cookie+JWT, with login/register/account UI)
+> are all in `develop`. Nothing blocks implementation — see
+> [Prerequisites](#prerequisites-everything-is-in).
 
 ## Goal
 
@@ -63,40 +63,35 @@ These are noted as future extensions, not silently dropped.
 
 ## Backend design
 
-### Prerequisite: persistence is in, auth is not
+### Prerequisites: everything is in
 
-PR #13 is merged, so the persistence pieces this design assumed now exist in
-`develop`:
+Every dependency this design assumed now exists in `develop`:
 
 - **Async session** — `app.db.get_session` is a FastAPI dependency yielding an
   `AsyncSession` (asyncpg, `NullPool`, PgBouncer-safe). Lazy: importing it opens
-  no connection, and the app boots with no `DATABASE_URL`.
+  no connection, and the app boots with no database URL.
 - **Row models + mapping** — `app.db.systems` (the `*Row` classes),
   `app.db.models.FormalSystem` (aggregate root, **no `source`/`compiled`
   blob**), and `spec_to_system` / `system_to_spec`.
-- **Users** — `app.db.User` (fastapi-users SQLAlchemy base) for `owner_id`.
+- **Users + authentication** — `app.auth.current_active_user` is the
+  fastapi-users dependency that yields the signed-in `User` (httponly-cookie +
+  JWT backend; `/auth/login`, `/auth/register`, `/users/me` mounted in
+  `app/main.py`), with login / register / account UI already in the frontend.
 
-CRUD routes are therefore `async def`, take `session: AsyncSession =
-Depends(get_session)`, and use async SQLAlchemy. Reads of the aggregate must
-`selectinload` the child collections (async has no lazy load). Building a
-`FormalSystem` graph with `spec_to_system` and `session.add()` + `await
-session.commit()` works unchanged (it is plain in-memory ORM construction).
+CRUD routes are therefore `async def` and take **two dependencies**:
 
-**Remaining gap — authentication.** #13 landed the `users` *table* but "no auth
-routes are wired yet": there is no fastapi-users authentication backend and so
-no `current_active_user` dependency to identify the owner. Owner-scoping
-(decision 4) needs one. Two ways forward, to confirm:
+```python
+async def create_production(
+    payload: ProductionIn,
+    user: User = Depends(current_active_user),      # owner-scoping
+    session: AsyncSession = Depends(get_session),   # persistence
+): ...
+```
 
-1. **Wire minimal fastapi-users auth first** (JWT backend + user manager +
-   `current_active_user`) — a small, self-contained addition this branch can
-   include, or a sibling branch it depends on.
-2. **Stub the current-user dependency** (a single dev user / `X-User-Id` header)
-   behind one `get_current_user` function, and swap in real auth later.
-
-Recommendation: **option 1**, scoped to just the authentication backend (not
-registration/OAuth flows), so `owner_id` is real from day one. Either way the
-owner is resolved through **one** dependency, so the CRUD routes don't change
-when real auth arrives.
+Reads of the aggregate must `selectinload` the child collections (async has no
+lazy load). Building a `FormalSystem` graph with `spec_to_system` and
+`session.add()` + `await session.commit()` works unchanged (plain in-memory ORM
+construction). Owner-scoping is now a direct filter — no stub, no gap.
 
 ### API resource model
 
@@ -104,10 +99,10 @@ Resource-oriented, nested under the system, mirroring the route style already in
 `app/main.py` (`/formal-systems/...`). A **hybrid** of full-document read and
 per-object writes:
 
-All routes are **owner-scoped** (decided): they depend on a single
-`get_current_user` (see the auth gap above), and every query filters on
-`owner_id` so a user sees and edits only their own systems. `owner_id` is the FK
-to `app.db.User`.
+All routes are **owner-scoped** (decided): they depend on
+`current_active_user`, and every query filters on `owner_id == user.id` so a user
+sees and edits only their own systems (404, not 403, for another owner's id, so
+ids don't leak). `owner_id` is the FK to `app.db.User`.
 
 ```
 GET    /formal-systems                      list current user's systems (summaries)
@@ -180,8 +175,12 @@ into `app/db/systems_mapping.py` (rows ⇄ spec) and `website.logical.declarativ
   `Binding`, `Definition`, `Axiom`, `Rule`, `LineType`, `ValidateResult` — and a
   resource-grouped client: `api.systems.list/get/create/update/remove`, plus
   `api.productions.create/update/remove(...)` etc., built on the existing
-  `request<T>` / `ApiError` helpers. Convention preserved: interfaces "mirror
-  app/schemas.py".
+  `request<T>` / `ApiError` helpers. The client already sends the auth cookie
+  (`credentials: 'include'`), so no per-call auth wiring is needed.
+- **Auth is already wired**: `frontend/src/lib/auth.svelte.ts` exposes the
+  reactive `auth.user` / `auth.ready`. The systems routes gate on it — redirect
+  to `/login` when signed out (mirroring `account/+page.svelte`) — and the
+  `401 → signed-out` handling in `api.ts` already exists.
 
 ### Routes
 
@@ -233,29 +232,25 @@ that has bindings.
    `POST/PATCH/DELETE` + reorder. Matches "edit the component parts".
 3. **Validity policy** — **allow drafts + on-demand `validate`**. Writes persist
    structurally-valid rows; compilability is surfaced, not enforced per write.
-4. **Ownership** — **owner-scoped** to `app.db.User`; all routes require the
-   current user and filter on `owner_id`. (Needs the auth backend wired — see
-   the prerequisites gap.)
+4. **Ownership** — **owner-scoped** to `app.db.User` via
+   `app.auth.current_active_user`; all routes filter on `owner_id`.
 
 ## Phased delivery
 
-Phase 0 (prerequisites): PR #13 is **merged** — async session, row models, and
-`users` table are in `develop`. The one outstanding piece is the fastapi-users
-**authentication backend** feeding a `get_current_user` dependency (see
-Prerequisites). Then:
+Phase 0 (prerequisites): **complete** — async session, row models, `users`
+table, and authentication (`current_active_user` + auth UI) are all in
+`develop`. No blockers remain. Then:
 
-1. Wire minimal authentication → `get_current_user` (or the agreed stub).
-2. Pydantic schemas (rows ⇄ spec) + `FormalSystem` create/list/get/delete +
+1. Pydantic schemas (rows ⇄ spec) + `FormalSystem` create/list/get/delete +
    `validate`, all owner-scoped and async.
-3. Child CRUD (sorts, productions, definitions, axioms, rules, line, brackets) +
+2. Child CRUD (sorts, productions, definitions, axioms, rules, line, brackets) +
    reorder.
-4. `api.ts` client + TS types.
-5. Svelte `/systems` list and `/systems/[id]` editor shell.
-6. Section editors (one per part) + `bindings-editor`; live validation badge +
+3. `api.ts` client + TS types.
+4. Svelte `/systems` list and `/systems/[id]` editor shell (gated on `auth.user`).
+5. Section editors (one per part) + `bindings-editor`; live validation badge +
    read-only source panel.
 
-Everything the endpoints depend on now exists in `develop`; the frontend phases
-depend only on the endpoints, not on the DB directly.
+The frontend phases depend only on the endpoints, not on the DB directly.
 
 Each phase is independently testable: backend with pytest (round-trip a system
 through the endpoints and assert it still compiles and checks a proof), frontend
@@ -264,15 +259,17 @@ with `svelte-check` and the run/verify skill against the live app.
 ## Testing
 
 - **Backend:** the round-trip test (`tests/test_systems_store.py`) already
-  exercises `spec_to_system` / `system_to_spec` against SQLite via a **sync**
-  session. Endpoint tests hit `async def` routes, so they need an async driver
-  — either add **`aiosqlite`** as a dev dependency and point a test
-  `get_session` override at `sqlite+aiosqlite://`, or override `get_session`
-  with a sync-backed session in the test app. Create a system via the API, add
-  parts, `validate`, and assert the assembled system compiles and checks a known
-  proof; assert draft-invalid systems persist and report errors. Note only the
-  system-decomposition tables are SQLite-creatable (the `theorems` pgvector
-  table is Postgres-only), so tests create just those tables — the existing
-  round-trip test already does this via a `_SYSTEM_TABLES` list.
+  exercises `spec_to_system` / `system_to_spec` against SQLite via a sync
+  session. Endpoint tests hit `async def` routes; **`aiosqlite` is now a dev
+  dependency** (added with the auth work), so a test `get_session` override
+  points at `sqlite+aiosqlite://`, and `current_active_user` is overridden via
+  `app.dependency_overrides` to inject a fixed test user (see
+  `tests/test_auth.py` for the pattern). Create a system via the API, add parts,
+  `validate`, and assert the assembled system compiles and checks a known proof;
+  assert draft-invalid systems persist and report errors; assert another user's
+  system is not reachable. Only the system-decomposition tables are
+  SQLite-creatable (the `theorems` pgvector table is Postgres-only), so tests
+  create just those tables — the round-trip test already does this via a
+  `_SYSTEM_TABLES` list.
 - **Frontend:** `npm run check`; drive `/systems/[id]` with the run skill to
   confirm an edited system validates end-to-end.

@@ -37,6 +37,9 @@ def test_non_asyncpg_scheme_is_normalised(monkeypatch):
 
 
 def test_missing_database_url_raises(monkeypatch):
+    # _database_url falls back to POSTGRES_URL, so both must be unset for the
+    # "no database configured" path to raise.
     monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("POSTGRES_URL", raising=False)
     with pytest.raises(RuntimeError):
         _database_url()
