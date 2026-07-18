@@ -234,3 +234,60 @@ def test_circular_dependency_is_detected(mp_system):
     assert cycle is not None
     assert set(cycle) <= {a, b}
     assert cycle[0] == cycle[-1]
+
+
+# ---------------------------------------------------------------------------
+# import_path enforces the dependency check (FU4)
+# ---------------------------------------------------------------------------
+
+
+def importable_proof(system, reference):
+    # A proof set up to import `reference` under the label "R".
+    proof = Proof(system, reference_proofs={})
+    proof.reference_context["R"] = reference
+    return proof
+
+
+def test_import_of_an_independent_result_succeeds(mp_system):
+    dependency = make_proof(mp_system)
+    proof = importable_proof(mp_system, dependency)
+
+    result = proof.import_path("R", "imported", mp_system.context)
+    assert result.success is True
+    assert dependency in proof.proofs_used
+
+
+def test_import_that_closes_a_cycle_is_rejected(mp_system):
+    # The imported proof already (transitively) depends on the importer, so
+    # importing it would make the proof justify itself.
+    dependency = make_proof(mp_system)
+    proof = importable_proof(mp_system, dependency)
+    dependency.proofs_used = {proof}
+
+    result = proof.import_path("R", "imported", mp_system.context)
+    assert result.success is False
+    assert "circular" in result.error_message.lower()
+    # The dependency edge and label binding are backed out on rejection.
+    assert dependency not in proof.proofs_used
+    assert "imported" not in proof.reference_context
+
+
+# ---------------------------------------------------------------------------
+# Relaxed antecedent cap (FU5): graceful invalid, not a server error
+# ---------------------------------------------------------------------------
+
+
+def test_oversized_citation_is_a_graceful_invalid_line(extra_system):
+    # An extra-antecedent rule cited with more antecedents than the sanity bound
+    # is marked invalid with a clear message, rather than raising a server error.
+    from website.logical.formal_system.proof import MAX_CITED_ANTECEDENTS
+
+    count = MAX_CITED_ANTECEDENTS + 1
+    atoms = [chr(ord("a") + i) for i in range(count)]
+    citation = ", ".join(str(i + 1) for i in range(count))
+    lines = [f"{atom} [HYP]" for atom in atoms] + [f"b [MPX, {citation}]"]
+
+    proof = extra_system.parse("\n".join(lines))
+    line = last_line(proof)
+    assert line.valid is False
+    assert "too many antecedents" in line.invalid_message

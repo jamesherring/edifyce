@@ -16,6 +16,13 @@ if TYPE_CHECKING:
     from .rules import InferenceRule
 
 
+# Generous upper bound on how many antecedents a single line may cite. The
+# assignment search is pruned and fast-rejected (see Proof._first_valid_assignment),
+# so this is only a guard against a pathological citation, not the old factorial
+# permutation limit; no real proof approaches it.
+MAX_CITED_ANTECEDENTS = 16
+
+
 class Subproof:
     """A scoped block of a proof, opened by a scope line and closed by dedent.
 
@@ -464,10 +471,18 @@ class Proof:
             proof_line.invalid_message = f"{key} requires exactly {len(inference_rule.antecedents)!s} antecedent(s)."
             return False
 
-        if len(antecedents) > 6:
-            # A sanity bound on citation size (the assignment search below is
-            # pruned, not factorial, but a citation this large is a user error).
-            raise Exception("Server error: too many antecedents to consider!")
+        if len(antecedents) > MAX_CITED_ANTECEDENTS:
+            # The assignment search below is bipartite-fast-rejected and pruned,
+            # not factorial, so this is no longer the tight "> 6" permutation
+            # guard - just a generous sanity bound that keeps a pathological
+            # citation (many mutually-admissible lines under an extra-antecedent
+            # rule) from driving a large search. A real citation never approaches
+            # it, and exceeding it is a graceful invalid line, not a server error.
+            proof_line.valid = False
+            proof_line.invalid_message = (
+                f"{key} cites too many antecedents ({len(antecedents)}; max {MAX_CITED_ANTECEDENTS})."
+            )
+            return False
 
         # Assign the cited lines to the rule's antecedent slots (see
         # _first_valid_assignment): bipartite matching rejects a citation that
@@ -678,8 +693,22 @@ class Proof:
                 return ImportResult(success=False, error_message=f"Could not find '{path}'.")
 
         # Add the reference
+        previous_proofs_used = set(self.proofs_used)
         self.reference_context[label] = ref_item
         add_reference(ref_item)
+
+        # Reject a circular import: a theorem that (transitively) depends on this
+        # proof cannot soundly justify it. add_reference has just recorded the new
+        # dependency edge, so a cycle now reachable through proofs_used means this
+        # import closes a loop. Back the edge out and fail rather than admit it.
+        if self.circular_dependency() is not None:
+            self.proofs_used = previous_proofs_used
+            self.reference_context.pop(label, None)
+            return ImportResult(
+                success=False,
+                error_message=f"Importing '{path}' would create a circular dependency.",
+                target=ref_item,
+            )
 
         # Add any definitions we have imported
         if isinstance(ref_item, ProofLine) and ref_item.line_type is not None and ref_item.line_type.behaviour == "definition":
