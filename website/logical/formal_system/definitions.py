@@ -14,23 +14,24 @@ Why a *bridge* and not a straight swap
 The two definition models are not the same shape:
 
 * A legacy ``Define higher as lower`` is an *alias*: ``higher`` is alternative
-  surface syntax for an instance ``lower`` of one pattern. It carries no
-  declaration of the defining form's *bound* variables and its optional proviso
-  is written in the engine's string condition DSL.
+  surface syntax for an instance ``lower`` of one pattern.
 * A kernel :class:`~website.logical.kernel.definitions.Definition` is a
   definitional *axiom* whose defining form stores its binders abstractly (so an
   unfold is capture-avoiding) and whose proviso is drawn from the kernel's
   closed, structural side-condition vocabulary.
 
-So a legacy definition is soundly expressible as a kernel one **only when it has
-no binder and no legacy condition**. :func:`kernel_definition_for` builds the
-kernel counterpart in exactly that case and returns ``None`` otherwise;
-:func:`follows_by_definition` then uses the kernel checker when a counterpart
-exists and signals a fall-back to the string path when it does not. Closing the
-gap for binder-carrying definitions needs the ``Define`` DSL to grow a way to
-declare bound variables (and to express provisos in the kernel vocabulary); that
-is deliberately left as follow-up rather than guessed at here, because guessing a
-binder wrong would make an unfold silently capturing - an unsoundness.
+The ``Define`` DSL can now carry the extra information the kernel needs: a
+``fresh`` clause declaring the defining form's bound variables (threaded here as
+``legacy.fresh``) and a ``where`` clause of kernel-vocabulary provisos
+(``legacy.kernel_condition``). A legacy definition is therefore soundly
+expressible as a kernel one **unless it introduces an *undeclared* binder or
+carries a legacy string proviso** (the ``if`` clause, which is not translated).
+:func:`kernel_definition_for` builds the kernel counterpart when it can and
+returns ``None`` otherwise; :func:`follows_by_definition` uses the kernel checker
+when a counterpart exists and signals a fall-back to the string path when it does
+not. The binder guard below stays as a safety net: an undeclared binder would
+otherwise unfold capturingly, so it forces the fallback rather than risk
+unsoundness.
 """
 
 from __future__ import annotations
@@ -108,6 +109,8 @@ def _build(legacy: MatchingDefinition, context: Context) -> Definition | None:
             lower=legacy.lower.pattern,
             variables=dict(legacy.variables),
             context=context,
+            condition=legacy.kernel_condition,
+            fresh=dict(legacy.fresh) or None,
         )
     except Exception:
         # Any build failure - a surface form that does not parse as its sort (an

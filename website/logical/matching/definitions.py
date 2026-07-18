@@ -10,10 +10,26 @@ from .paths import get_by_path, parse_path
 class Definition:
     """A definition class - linking higher level string patterns with lower level ones."""
 
-    def __init__(self, lower, higher, pattern, context, condition_string=None):
+    def __init__(self, lower, higher, pattern, context, condition_string=None,
+                 fresh=None, kernel_condition=None):
 
         # The pattern this definition applies to
         self.pattern = pattern
+
+        # Bound variables of the defining form: {name: sort Pattern}. These are
+        # the variables the lower form binds (e.g. the `z` in ∀z.(…)); declaring
+        # them lets the term-based checker unfold capture-avoidingly. The sorts
+        # are matching Patterns, so this stays within the matching layer. Empty
+        # for an ordinary alias definition.
+        self.fresh = fresh or {}
+
+        # An optional *additional* proviso in the kernel's structural
+        # side-condition vocabulary (beyond the capture-avoidance one the kernel
+        # derives from `fresh`). Held opaquely so the matching layer keeps its
+        # no-kernel-import rule; the formal_system bridge passes it to the kernel
+        # definition. Distinct from `self.condition` below, which is the legacy
+        # string proviso that forces the string-based path.
+        self.kernel_condition = kernel_condition
 
         self.lower = None
         self.lower_match_template = None
