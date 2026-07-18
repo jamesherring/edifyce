@@ -12,6 +12,14 @@ verify proofs.
 | `/`        | Landing page                                                        |
 | `/compile` | Compile a formal system → `POST /formal-systems/compile`            |
 | `/verify`  | Verify a proof against a system, line by line → `POST /proofs/verify` |
+| `/login`   | Log in → `POST /auth/login`                                          |
+| `/register`| Create an account → `POST /auth/register`                           |
+| `/account` | Manage the signed-in user → `GET`/`PATCH /users/me`                 |
+
+Auth state is held in `src/lib/auth.svelte.ts` (a reactive store fed by
+`GET /users/me`); the session itself lives in an httponly cookie the browser
+sends automatically. Requests go through `src/lib/api.ts` with
+`credentials: 'include'`.
 
 ## Development
 
