@@ -108,6 +108,24 @@ async def _get_owned_or_404(
     return system
 
 
+async def owned_system_id_or_404(
+    session: AsyncSession, system_id: uuid.UUID, owner_id: uuid.UUID
+) -> uuid.UUID:
+    """Assert the system exists and is owned, without loading it. 404 otherwise.
+
+    Shared with the child-CRUD router so a child write can scope to an owned
+    parent with a single cheap query.
+    """
+    owned = await session.scalar(
+        select(FormalSystem.id).where(
+            FormalSystem.id == system_id, FormalSystem.owner_id == owner_id
+        )
+    )
+    if owned is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Formal system not found.")
+    return owned
+
+
 async def _require_owned_reference(
     session: AsyncSession, system_id: uuid.UUID, owner_id: uuid.UUID
 ) -> None:
@@ -136,66 +154,81 @@ def _summary(system: FormalSystem) -> FormalSystemSummary:
     )
 
 
+# Per-child serializers (row -> read schema). Shared with the child-CRUD router
+# (app/routers/system_parts.py), which returns individual objects.
+
+
+def _bindings_out(rows) -> list[Binding]:
+    return [Binding(var=b.var, sort=b.sort) for b in rows]
+
+
+def bracket_out(b) -> BracketPair:
+    return BracketPair(id=b.id, opening=b.opening, closing=b.closing)
+
+
+def sort_out(s) -> Sort:
+    return Sort(id=s.id, name=s.name)
+
+
+def production_out(p) -> Production:
+    return Production(
+        id=p.id,
+        name=p.name,
+        sort=p.sort.name,
+        kind=p.kind,
+        template=p.template,
+        regex=p.regex,
+        bindings=_bindings_out(p.bindings),
+    )
+
+
+def line_out(line) -> LineType:
+    return LineType(
+        id=line.id,
+        name=line.name,
+        shape=line.shape,
+        logical_sort=line.logical_sort,
+        parts=[LinePart(id=pt.id, name=pt.name, regex=pt.regex) for pt in line.parts],
+    )
+
+
+def definition_out(d) -> Definition:
+    return Definition(
+        id=d.id,
+        sort=d.sort,
+        name=d.name,
+        higher=d.higher,
+        lower=d.lower,
+        condition=d.condition,
+        bindings=_bindings_out(d.bindings),
+    )
+
+
+def axiom_out(a) -> Axiom:
+    return Axiom(id=a.id, label=a.label, name=a.name, formula=a.formula, bindings=_bindings_out(a.bindings))
+
+
+def rule_out(r) -> Rule:
+    return Rule(
+        id=r.id,
+        label=r.label,
+        name=r.name,
+        deduction=r.deduction,
+        antecedents=[ant.pattern for ant in r.antecedents],
+        bindings=_bindings_out(r.bindings),
+    )
+
+
 def _detail(system: FormalSystem) -> FormalSystemDetail:
     return FormalSystemDetail(
         **_summary(system).model_dump(),
-        brackets=[BracketPair(opening=b.opening, closing=b.closing) for b in system.brackets],
-        sorts=[Sort(id=s.id, name=s.name) for s in system.sorts],
-        productions=[
-            Production(
-                id=p.id,
-                name=p.name,
-                sort=p.sort.name,
-                kind=p.kind,
-                template=p.template,
-                regex=p.regex,
-                bindings=[Binding(var=b.var, sort=b.sort) for b in p.bindings],
-            )
-            for p in system.productions
-        ],
-        lines=[
-            LineType(
-                id=line.id,
-                name=line.name,
-                shape=line.shape,
-                logical_sort=line.logical_sort,
-                parts=[LinePart(id=pt.id, name=pt.name, regex=pt.regex) for pt in line.parts],
-            )
-            for line in system.lines
-        ],
-        definitions=[
-            Definition(
-                id=d.id,
-                sort=d.sort,
-                name=d.name,
-                higher=d.higher,
-                lower=d.lower,
-                condition=d.condition,
-                bindings=[Binding(var=b.var, sort=b.sort) for b in d.bindings],
-            )
-            for d in system.definitions
-        ],
-        axioms=[
-            Axiom(
-                id=a.id,
-                label=a.label,
-                name=a.name,
-                formula=a.formula,
-                bindings=[Binding(var=b.var, sort=b.sort) for b in a.bindings],
-            )
-            for a in system.axioms
-        ],
-        rules=[
-            Rule(
-                id=r.id,
-                label=r.label,
-                name=r.name,
-                deduction=r.deduction,
-                antecedents=[ant.pattern for ant in r.antecedents],
-                bindings=[Binding(var=b.var, sort=b.sort) for b in r.bindings],
-            )
-            for r in system.rules
-        ],
+        brackets=[bracket_out(b) for b in system.brackets],
+        sorts=[sort_out(s) for s in system.sorts],
+        productions=[production_out(p) for p in system.productions],
+        lines=[line_out(line) for line in system.lines],
+        definitions=[definition_out(d) for d in system.definitions],
+        axioms=[axiom_out(a) for a in system.axioms],
+        rules=[rule_out(r) for r in system.rules],
     )
 
 

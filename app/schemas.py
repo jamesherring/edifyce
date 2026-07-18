@@ -49,6 +49,7 @@ class Binding(BaseModel):
 
 
 class BracketPair(BaseModel):
+    id: uuid.UUID
     opening: str
     closing: str
 
@@ -158,3 +159,120 @@ class SystemSource(BaseModel):
     """The lowered `.edi` for the stored system (read-only transparency/export)."""
 
     source: str
+
+
+# ---------------------------------------------------------------------------
+# Child-object writes (create / update). Nested value lists (bindings,
+# antecedents, line parts) are replaced wholesale on the parent write rather
+# than addressed individually. On an update, an omitted field is left unchanged;
+# a nested list is left unchanged when omitted and replaced when present.
+# ---------------------------------------------------------------------------
+
+
+class BracketCreate(BaseModel):
+    opening: str = Field(..., min_length=1, max_length=16)
+    closing: str = Field(..., min_length=1, max_length=16)
+
+
+class BracketUpdate(BaseModel):
+    opening: str | None = Field(None, min_length=1, max_length=16)
+    closing: str | None = Field(None, min_length=1, max_length=16)
+
+
+class SortCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+
+
+class SortUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=128)
+
+
+class ProductionCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    # The name of an existing sort in this system that the production belongs to.
+    sort: str = Field(..., min_length=1)
+    # Exactly one of template / regex (a composite production vs a leaf).
+    template: str | None = None
+    regex: str | None = None
+    bindings: list[Binding] = Field(default_factory=list)
+
+
+class ProductionUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=128)
+    sort: str | None = None
+    template: str | None = None
+    regex: str | None = None
+    bindings: list[Binding] | None = None
+
+
+class LinePartInput(BaseModel):
+    name: str
+    regex: str
+
+
+class LineTypeCreate(BaseModel):
+    name: str
+    shape: str
+    logical_sort: str | None = None
+    parts: list[LinePartInput] = Field(default_factory=list)
+
+
+class LineTypeUpdate(BaseModel):
+    name: str | None = None
+    shape: str | None = None
+    logical_sort: str | None = None
+    parts: list[LinePartInput] | None = None
+
+
+class DefinitionCreate(BaseModel):
+    sort: str = Field(..., min_length=1)
+    name: str = Field(..., min_length=1, max_length=128)
+    higher: str
+    lower: str
+    condition: str | None = None
+    bindings: list[Binding] = Field(default_factory=list)
+
+
+class DefinitionUpdate(BaseModel):
+    sort: str | None = None
+    name: str | None = Field(None, min_length=1, max_length=128)
+    higher: str | None = None
+    lower: str | None = None
+    condition: str | None = None
+    bindings: list[Binding] | None = None
+
+
+class AxiomCreate(BaseModel):
+    label: str = Field(..., min_length=1)
+    name: str = Field(..., min_length=1, max_length=128)
+    formula: str
+    bindings: list[Binding] = Field(default_factory=list)
+
+
+class AxiomUpdate(BaseModel):
+    label: str | None = None
+    name: str | None = Field(None, min_length=1, max_length=128)
+    formula: str | None = None
+    bindings: list[Binding] | None = None
+
+
+class RuleCreate(BaseModel):
+    label: str = Field(..., min_length=1)
+    name: str = Field(..., min_length=1, max_length=128)
+    deduction: str
+    antecedents: list[str] = Field(default_factory=list)
+    bindings: list[Binding] = Field(default_factory=list)
+
+
+class RuleUpdate(BaseModel):
+    label: str | None = None
+    name: str | None = Field(None, min_length=1, max_length=128)
+    deduction: str | None = None
+    antecedents: list[str] | None = None
+    bindings: list[Binding] | None = None
+
+
+class ReorderRequest(BaseModel):
+    """A full permutation of a collection's ids, in the desired order."""
+
+    ids: list[uuid.UUID] = Field(..., min_length=1)
