@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import itertools
 from copy import copy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from ..graphs import find_cycle, saturating_matching, topological_order
 from ..kernel.side_conditions import Not, Occurs
 from ..kernel.terms import from_match
 from ..matching import Match, MatchSet, get_by_path, parse_arguments, parse_path
@@ -465,35 +465,77 @@ class Proof:
             return False
 
         if len(antecedents) > 6:
-            # Too many permutations to handle
-            raise Exception("Server error: too many permutations to consider!")
+            # A sanity bound on citation size (the assignment search below is
+            # pruned, not factorial, but a citation this large is a user error).
+            raise Exception("Server error: too many antecedents to consider!")
 
-        extra_antecedents = []
-        if inference_rule.allow_extra_antecedents:
-            # Split the extra antecedents into a different list
-            extra_antecedents = antecedents[len(inference_rule.antecedents):]
-            antecedents = antecedents[:len(inference_rule.antecedents)]
+        # Assign the cited lines to the rule's antecedent slots (see
+        # _first_valid_assignment): bipartite matching rejects a citation that
+        # cannot fill every slot and prunes the search to admissible orderings,
+        # replacing the old permutation-of-all-antecedents sweep. Any line left
+        # over is an extra antecedent, allowed only when the rule permits them.
+        assignment = self._first_valid_assignment(
+            inference_rule, list(antecedents), proof_line, context
+        )
+        if assignment is not None:
+            proof_line.antecedents, proof_line.extra_antecedents = assignment
+            proof_line.inference_rule = inference_rule
+            return True
 
-        # Try any permutation of the given antecedents
-        for permutation in list(itertools.permutations(antecedents)):
-            for extra_permutation in list(itertools.permutations(extra_antecedents)):
-                if inference_rule.check(
-                    antecedents=permutation,
-                    extra_antecedents=extra_permutation,
-                    deduction=proof_line,
-                    context=context
-                ):
-                    # It's a valid permutation
-                    proof_line.antecedents = permutation
-                    proof_line.extra_antecedents = extra_permutation
-                    proof_line.inference_rule = inference_rule
-
-                    return True
-
-        # No valid permutation found, not a valid line
+        # No admissible, consistent assignment: not a valid line.
         proof_line.valid = False
         proof_line.invalid_message = f"{key} does not apply."
         return False
+
+    def _first_valid_assignment(self, inference_rule, lines, deduction, context):
+        # Find an assignment of cited `lines` to `inference_rule`'s antecedent
+        # slots for which the rule holds, or None. Returns (antecedents, extras)
+        # as tuples aligned to the rule's slots.
+        #
+        # A slot/line bipartite graph (edge = the line is individually admissible
+        # for the slot, InferenceRule.slot_admits) drives two things: if no
+        # matching saturates every slot the citation cannot apply at all, so we
+        # reject up front; otherwise the backtracking search only ever tries
+        # admissible (slot -> line) pairs, so it explores the handful of viable
+        # assignments instead of every permutation. Each complete candidate is
+        # confirmed by the authoritative, binding-consistent InferenceRule.check.
+        required = len(inference_rule.antecedents)
+        adjacency = {
+            slot: [j for j, line in enumerate(lines) if inference_rule.slot_admits(slot, line, context)]
+            for slot in range(required)
+        }
+
+        if saturating_matching(range(required), adjacency) is None:
+            # Some slot has no admissible line, or no system of distinct
+            # representatives exists: the rule cannot apply to this citation.
+            return None
+
+        allow_extra = inference_rule.allow_extra_antecedents
+
+        def search(slot, chosen):
+            if slot == required:
+                extras = tuple(line for k, line in enumerate(lines) if k not in chosen)
+                if extras and not allow_extra:
+                    return None
+                antecedents = tuple(lines[j] for j in chosen)
+                if inference_rule.check(
+                    antecedents=antecedents,
+                    extra_antecedents=extras,
+                    deduction=deduction,
+                    context=context,
+                ):
+                    return antecedents, extras
+                return None
+
+            for j in adjacency[slot]:
+                if j in chosen:
+                    continue
+                result = search(slot + 1, [*chosen, j])
+                if result is not None:
+                    return result
+            return None
+
+        return search(0, [])
 
     def check_discharge_line(
         self,
@@ -689,6 +731,37 @@ class Proof:
             # Add the definition to context
             context.definitions.add(result)
 
+    def _dependency_graph(self) -> dict[Proof, set[Proof]]:
+        # The import/theorem dependency graph reachable from this proof: each
+        # proof mapped to the proofs it uses (proofs_used, populated as imports
+        # are resolved). Only Proof vertices are followed - proofs_used holds
+        # Proof objects - so the walk terminates at proofs with no dependencies.
+        graph: dict[Proof, set[Proof]] = {}
+        stack: list[Proof] = [self]
+        while stack:
+            proof = stack.pop()
+            if proof in graph:
+                continue
+            dependencies = {dep for dep in proof.proofs_used if isinstance(dep, Proof)}
+            graph[proof] = dependencies
+            stack.extend(dep for dep in dependencies if dep not in graph)
+        return graph
+
+    def dependency_order(self) -> list[Proof]:
+        # The proofs this one transitively depends on (and itself), ordered so
+        # every proof comes after the proofs it uses - the order in which they
+        # could be checked from the ground up. Raises graphlib.CycleError if the
+        # imports are circular; call circular_dependency to report the cycle
+        # instead of raising.
+        return topological_order(self._dependency_graph())
+
+    def circular_dependency(self) -> list[Proof] | None:
+        # A circular import/theorem dependency reachable from this proof, as a
+        # list of proofs whose last entry repeats the first, or None if the
+        # dependency graph is acyclic. A theorem that (transitively) cites itself
+        # is not a sound justification, which this makes detectable.
+        return find_cycle(self._dependency_graph())
+
     def justify(self, deduction, context, inference_rule=None):
         # Artificially try to find a justification for the given reference. Optionally specify a inference rule.
 
@@ -706,19 +779,16 @@ class Proof:
                 deduction.invalid_message = "Antecedent lines couldn't be inferred."
                 return False
 
-            for permutation in list(itertools.permutations(logical_lines)):
-
-                if inference_rule.check(
-                        antecedents=permutation,
-                        extra_antecedents=(),
-                        deduction=deduction,
-                        context=context
-                ):
-                    # Found the valid permutation
-                    deduction.antecedents = permutation
-                    deduction.inference_rule = inference_rule
-
-                    return True
+            # Same admissible-assignment search as an explicit citation: the
+            # inferred lines exactly fill the slots (no extras), so this just
+            # finds the ordering, if any, under which the rule holds.
+            assignment = self._first_valid_assignment(
+                inference_rule, logical_lines, deduction, context
+            )
+            if assignment is not None:
+                deduction.antecedents, _ = assignment
+                deduction.inference_rule = inference_rule
+                return True
 
             # Otherwise, no justification found
             deduction.valid = False
