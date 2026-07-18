@@ -31,6 +31,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -104,6 +105,20 @@ AssignFn = Callable[[AsyncSession, uuid.UUID, Base, Payload, set[str], bool], Aw
 
 async def _owned(session: AsyncSession, system_id: uuid.UUID, user: User) -> None:
     await owned_system_id_or_404(session, system_id, user.id)
+
+
+async def _commit(session: AsyncSession) -> None:
+    # The pre-checks (e.g. sort-name uniqueness) give a friendly 409 in the
+    # common case, but they're check-then-insert: a concurrent write can still
+    # race a DB constraint. Translate that violation into a 409 rather than
+    # letting it surface as a 500.
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "That change conflicts with an existing item."
+        )
 
 
 async def _next_position(session: AsyncSession, row_cls: type[Base], system_id: uuid.UUID) -> int:
@@ -348,7 +363,7 @@ async def _create_child(
     )
     await resource.assign(session, system_id, row, payload, set(type(payload).model_fields), True)
     session.add(row)
-    await session.commit()
+    await _commit(session)
     reloaded = await _get_child_or_404(session, resource.row_cls, system_id, row.id, *resource.loads)
     return resource.serialize(reloaded)
 
@@ -360,7 +375,7 @@ async def _update_child(
     await _owned(session, system_id, user)
     row = await _get_child_or_404(session, resource.row_cls, system_id, child_id, *resource.loads)
     await resource.assign(session, system_id, row, payload, payload.model_fields_set, False)
-    await session.commit()
+    await _commit(session)
     reloaded = await _get_child_or_404(session, resource.row_cls, system_id, child_id, *resource.loads)
     return resource.serialize(reloaded)
 

@@ -248,6 +248,24 @@ def test_duplicate_sort_name_is_conflict(client):
     assert dup.status_code == 409
 
 
+def test_duplicate_sort_race_falls_back_to_409(client, monkeypatch):
+    # Simulate the check-then-insert race by disabling the pre-check, so the
+    # duplicate reaches the DB unique constraint; that IntegrityError must be
+    # translated to a 409, not surface as a 500.
+    import app.routers.system_parts as parts
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(parts, "_require_sort_name_free", _noop)
+
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "term"})
+    dup = client.post(f"/formal-systems/{sid}/sorts", json={"name": "term"})
+    assert dup.status_code == 409
+
+
 def test_deleting_a_sort_cascades_to_its_productions(client):
     _login(client, "ada@example.com")
     sid = _new_system(client)
