@@ -34,18 +34,17 @@ from app.db.systems import (
     LinePartRow,
     LineRow,
     ProductionBindingRow,
-    ProductionRow,
     RuleAntecedentRow,
     RuleBindingRow,
     RuleRow,
-    SortRow,
+    SymbolRow,
 )
 from app.main import app
 
 _TABLES = [
     m.__table__
     for m in (
-        User, OAuthAccount, FormalSystem, BracketRow, SortRow, ProductionRow,
+        User, OAuthAccount, FormalSystem, BracketRow, SymbolRow,
         ProductionBindingRow, LineRow, LinePartRow, DefinitionRow,
         DefinitionBindingRow, AxiomRow, AxiomBindingRow, RuleRow,
         RuleAntecedentRow, RuleBindingRow,
@@ -269,7 +268,7 @@ def test_duplicate_sort_race_falls_back_to_409(client, monkeypatch):
     async def _noop(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(parts, "_require_sort_name_free", _noop)
+    monkeypatch.setattr(parts, "_require_symbol_name_free", _noop)
 
     _login(client, "ada@example.com")
     sid = _new_system(client)
@@ -278,18 +277,56 @@ def test_duplicate_sort_race_falls_back_to_409(client, monkeypatch):
     assert dup.status_code == 409
 
 
-def test_deleting_a_sort_cascades_to_its_productions(client):
+def test_deleting_a_sort_with_productions_is_blocked(client):
+    # Explicit over silent: a non-empty sort can't be deleted out from under its
+    # productions. Remove the production first, then the sort deletes.
     _login(client, "ada@example.com")
     sid = _new_system(client)
     sort = _post(client, f"/formal-systems/{sid}/sorts", {"name": "term"})
-    _post(client, f"/formal-systems/{sid}/productions", {
+    prod = _post(client, f"/formal-systems/{sid}/productions", {
         "name": "variable", "sort": "term", "regex": "[a-z]+",
     })
+    assert client.delete(f"/formal-systems/{sid}/sorts/{sort['id']}").status_code == 409
+
+    assert client.delete(f"/formal-systems/{sid}/productions/{prod['id']}").status_code == 204
     assert client.delete(f"/formal-systems/{sid}/sorts/{sort['id']}").status_code == 204
+    assert client.get(f"/formal-systems/{sid}").json()["sorts"] == []
+
+
+def test_renaming_a_sort_keeps_references_intact(client):
+    # The point of the symbol model: rename a sort and its bindings follow, so
+    # the system still compiles (no dangling name references).
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    sort = _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+    _post(client, f"/formal-systems/{sid}/rules", {
+        "label": "HYP", "name": "hypothesis", "deduction": "p", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "formula"}],
+    })
+    # Rename the sort; the rule's binding referenced it by FK.
+    assert client.patch(
+        f"/formal-systems/{sid}/sorts/{sort['id']}", json={"name": "prop"}
+    ).status_code == 200
 
     detail = client.get(f"/formal-systems/{sid}").json()
-    assert detail["sorts"] == []
-    assert detail["productions"] == []
+    assert detail["sorts"][0]["name"] == "prop"
+    # The binding now reads the new name — no dangling "formula".
+    assert detail["rules"][0]["bindings"] == [{"var": "p", "sort": "prop"}]
+
+
+def test_deleting_a_referenced_production_is_blocked(client):
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "term"})
+    prod = _post(client, f"/formal-systems/{sid}/productions", {
+        "name": "variable", "sort": "term", "regex": "[a-z]+",
+    })
+    # A binding references the `variable` production directly.
+    _post(client, f"/formal-systems/{sid}/rules", {
+        "label": "R", "name": "r", "deduction": "x", "antecedents": [],
+        "bindings": [{"var": "x", "sort": "variable"}],
+    })
+    assert client.delete(f"/formal-systems/{sid}/productions/{prod['id']}").status_code == 409
 
 
 # ---------------------------------------------------------------------------

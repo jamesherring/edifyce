@@ -34,11 +34,10 @@ from app.db.systems import (
     LinePartRow,
     LineRow,
     ProductionBindingRow,
-    ProductionRow,
     RuleAntecedentRow,
     RuleBindingRow,
     RuleRow,
-    SortRow,
+    SymbolRow,
 )
 from app.main import app
 from website.logical.declarative import parse
@@ -47,7 +46,7 @@ from website.logical.declarative import parse
 _TABLES = [
     m.__table__
     for m in (
-        User, OAuthAccount, FormalSystem, BracketRow, SortRow, ProductionRow,
+        User, OAuthAccount, FormalSystem, BracketRow, SymbolRow,
         ProductionBindingRow, LineRow, LinePartRow, DefinitionRow,
         DefinitionBindingRow, AxiomRow, AxiomBindingRow, RuleRow,
         RuleAntecedentRow, RuleBindingRow,

@@ -158,11 +158,8 @@ class FormalSystem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     brackets: Mapped[list["BracketRow"]] = relationship(
         back_populates="system", cascade="all, delete-orphan", order_by="BracketRow.position"
     )
-    sorts: Mapped[list["SortRow"]] = relationship(
-        back_populates="system", cascade="all, delete-orphan", order_by="SortRow.position"
-    )
-    productions: Mapped[list["ProductionRow"]] = relationship(
-        back_populates="system", cascade="all, delete-orphan", order_by="ProductionRow.position"
+    symbols: Mapped[list["SymbolRow"]] = relationship(
+        back_populates="system", cascade="all, delete-orphan", order_by="SymbolRow.position"
     )
     lines: Mapped[list["LineRow"]] = relationship(
         back_populates="system", cascade="all, delete-orphan", order_by="LineRow.position"
