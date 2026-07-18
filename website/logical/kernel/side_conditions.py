@@ -229,6 +229,34 @@ class Or(SideCondition):
         return any(results)
 
 
+def normal_form(condition: SideCondition) -> tuple:
+    """A structural normal form for comparing side-conditions by value.
+
+    Sorts compare by name (not object identity) so two parses of the same
+    proviso - even in different contexts - agree, and boolean combinators fold
+    to their parts. Used to compare rules and definitions structurally rather
+    than by their (formatting-sensitive) source text.
+    """
+    if isinstance(condition, (And, Or)):
+        return (
+            type(condition).__name__,
+            tuple(sorted(normal_form(part) for part in condition.parts)),
+        )
+    if isinstance(condition, Not):
+        return ("Not", normal_form(condition.inner))
+    if isinstance(condition, Occurs):
+        return ("Occurs", condition.needle, condition.haystack)
+    if isinstance(condition, Equal):
+        return ("Equal", condition.left, condition.right)
+    if isinstance(condition, DisjointLeaves):
+        sort = None if condition.sort is None else condition.sort.name
+        return ("DisjointLeaves", condition.left, condition.right, sort)
+    if isinstance(condition, IsAtom):
+        sort = None if condition.sort is None else condition.sort.name
+        return ("IsAtom", condition.name, sort)
+    return (type(condition).__name__,)
+
+
 def _bound(binding: Binding, name: str) -> Term:
     """Look up a metavariable's bound term, or fail loudly on a malformed
     condition (one naming a metavariable the rule never binds)."""

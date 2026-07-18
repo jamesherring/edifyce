@@ -16,8 +16,8 @@ if TYPE_CHECKING:
 class Definition:
     """A definition class - linking higher level string patterns with lower level ones."""
 
-    def __init__(self, lower, higher, pattern, context,
-                 side_condition: SideCondition | None = None, condition_string: str | None = None):
+    def __init__(self, lower: str | None, higher: str, pattern: patterns.Pattern, context: Context,
+                 side_condition: SideCondition | None = None, condition_string: str | None = None) -> None:
 
         # The pattern this definition applies to
         self.pattern = pattern
@@ -143,7 +143,7 @@ class Definition:
         # Otherwise ok
         return True
 
-    def _condition_holds(self, mapping: dict, context: Context) -> bool:
+    def _condition_holds(self, mapping: dict[str, matches.Match], context: Context) -> bool:
         # Evaluate the side-condition against the definition's variable binding,
         # projecting each matched variable into a kernel term. Fails closed if a
         # match cannot be projected or a referenced name is unbound.
@@ -221,9 +221,15 @@ class Definition:
             memo[(self, other)] = False
             return False
 
-        # Distinguish definitions by their guard so two that differ only in the
-        # `if ...` clause are not collapsed as duplicates.
-        if self.condition_string != other.condition_string:
+        # Distinguish definitions by their guard, compared structurally (so
+        # formatting differences don't matter), rather than by source text: two
+        # that differ only in the `if ...` clause are not collapsed as duplicates.
+        # Imported lazily: kernel.terms imports matching.patterns at load time.
+        from ..kernel.side_conditions import normal_form
+
+        self_guard = None if self.side_condition is None else normal_form(self.side_condition)
+        other_guard = None if other.side_condition is None else normal_form(other.side_condition)
+        if self_guard != other_guard:
             memo[(self, other)] = False
             return False
 

@@ -1,12 +1,19 @@
 """Pattern classes: the base :class:`Pattern` and its concrete subclasses."""
 
+from __future__ import annotations
+
 import random
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import regex as re
 
 from . import definitions, matches
 from .conditions import Condition
+
+if TYPE_CHECKING:
+    from .context import Context
+    from ..kernel.side_conditions import SideCondition
 
 
 @dataclass(eq=False)
@@ -161,7 +168,9 @@ class Pattern:
 
         return False
 
-    def add_definition(self, lower, higher, context, side_condition=None, condition_string=None, require_lower_match=True):
+    def add_definition(self, lower: str, higher: str, context: Context,
+                       side_condition: SideCondition | None = None, condition_string: str | None = None,
+                       require_lower_match: bool = True) -> definitions.Definition | None:
         # Add a definition to this pattern
 
         # If require_lower_match is False, the lower string will not be checked against the pattern. This helps avoid

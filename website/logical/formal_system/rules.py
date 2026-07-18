@@ -6,17 +6,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ..kernel import (
-    And,
-    DisjointLeaves,
-    Equal,
-    IsAtom,
-    Not,
-    Occurs,
-    Or,
     Var,
     from_match,
     from_pattern,
     match_all,
+    normal_form,
 )
 from ..matching import StringPattern
 from .proof import ProofLine, Subproof
@@ -59,33 +53,6 @@ class SubproofSchema:
     def kind(self) -> str:
         # Which kind of scope opener this schema discharges.
         return "variable" if self.fresh is not None else "assumption"
-
-
-def _normalise_side_condition(condition: SideCondition) -> tuple:
-    """A structural normal form for comparing side-conditions across rules.
-
-    Sorts compare by name (not object identity) so two systems that re-parse the
-    same proviso agree, and boolean combinators fold to their parts. Used only
-    by :meth:`InferenceRule.equivalent`.
-    """
-    if isinstance(condition, (And, Or)):
-        return (
-            type(condition).__name__,
-            tuple(sorted(_normalise_side_condition(part) for part in condition.parts)),
-        )
-    if isinstance(condition, Not):
-        return ("Not", _normalise_side_condition(condition.inner))
-    if isinstance(condition, Occurs):
-        return ("Occurs", condition.needle, condition.haystack)
-    if isinstance(condition, Equal):
-        return ("Equal", condition.left, condition.right)
-    if isinstance(condition, DisjointLeaves):
-        sort = None if condition.sort is None else condition.sort.name
-        return ("DisjointLeaves", condition.left, condition.right, sort)
-    if isinstance(condition, IsAtom):
-        sort = None if condition.sort is None else condition.sort.name
-        return ("IsAtom", condition.name, sort)
-    return (type(condition).__name__,)
 
 
 class InferenceRule:
@@ -358,8 +325,8 @@ class InferenceRule:
             memo[(self, other)] = False
             return False
 
-        if [_normalise_side_condition(c) for c in self.side_conditions] != [
-            _normalise_side_condition(c) for c in other.side_conditions
+        if [normal_form(c) for c in self.side_conditions] != [
+            normal_form(c) for c in other.side_conditions
         ]:
             memo[(self, other)] = False
             return False

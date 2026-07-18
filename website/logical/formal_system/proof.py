@@ -11,10 +11,12 @@ from ..matching import Match, MatchSet, get_by_path, parse_arguments, parse_path
 
 if TYPE_CHECKING:
     from ..matching.context import Context
+    from ..matching.patterns import Pattern
+    from ..kernel.side_conditions import SideCondition
     from .rules import InferenceRule
 
 
-def _parse_definition_guard(text, pattern, context):
+def _parse_definition_guard(text: str | None, pattern: Pattern, context: Context) -> SideCondition | None:
     """Parse a definition's guard text (one side-condition per line, conjoined)
     into a single :class:`SideCondition`, or ``None`` if there is none.
 
