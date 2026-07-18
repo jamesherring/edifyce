@@ -143,10 +143,12 @@ _MOUNTED_API_ROUTERS: list[tuple[str, object]] = [
     ("/users", _users_router),
 ]
 
-# Social login: one router per configured provider. `associate_by_email` links a
-# social login to an existing account with the same address, and
-# `is_verified_by_default` trusts the provider's email — both safe here because
-# Google and GitHub only expose a verified primary email through the scopes used.
+# Social login: one router per configured provider. `is_verified_by_default`
+# trusts the provider's verified email for accounts it creates. `associate_by_email`
+# is requested, but UserManager.oauth_callback only actually links to a
+# pre-existing local account when that account is itself verified — otherwise an
+# unverified pre-registration of the victim's email could hijack their OAuth
+# identity (account pre-hijacking).
 for _provider, _client in enabled_oauth_clients:
     _oauth_router = fastapi_users.get_oauth_router(
         _client,

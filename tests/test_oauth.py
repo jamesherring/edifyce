@@ -6,6 +6,7 @@ that the new routes are covered by the SPA fallback guard. The app is reloaded
 with the credential env vars set, since the routers are wired at import time.
 """
 
+import asyncio
 import importlib
 
 import pytest
@@ -13,11 +14,18 @@ import pytest
 pytest.importorskip("fastapi")
 pytest.importorskip("fastapi_users")
 pytest.importorskip("httpx_oauth")
+pytest.importorskip("aiosqlite")
 
 from fastapi.testclient import TestClient
+from fastapi_users import exceptions
+from fastapi_users_db_sqlalchemy import SQLAlchemyUserDatabase
+from sqlalchemy import NullPool, create_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.auth.oauth
 import app.main
+from app.auth.users import UserManager
+from app.db.models import OAuthAccount, User
 
 _CREDS = {
     "GOOGLE_OAUTH_CLIENT_ID": "gid",
@@ -92,6 +100,104 @@ def test_only_configured_providers_mount(monkeypatch, restore_modules):
 
     assert client.get("/auth/providers").json()["providers"] == ["github"]
     assert "/auth/google/authorize" not in client.get("/openapi.json").json()["paths"]
+
+
+# ---------------------------------------------------------------------------
+# Account-linking safety (pre-hijacking guard)
+# ---------------------------------------------------------------------------
+
+
+def _sessionmaker(tmp_path):
+    db_path = tmp_path / "oauth.db"
+    sync_engine = create_engine(f"sqlite:///{db_path}")
+    User.metadata.create_all(
+        sync_engine, tables=[User.__table__, OAuthAccount.__table__]
+    )
+    sync_engine.dispose()
+    async_engine = create_async_engine(
+        f"sqlite+aiosqlite:///{db_path}", poolclass=NullPool
+    )
+    return async_sessionmaker(async_engine, expire_on_commit=False)
+
+
+def _base_user(email, *, verified):
+    return {
+        "email": email,
+        "hashed_password": "x",
+        "is_active": True,
+        "is_superuser": False,
+        "is_verified": verified,
+    }
+
+
+def test_oauth_refuses_to_link_unverified_local_account(tmp_path):
+    # An attacker pre-registers the victim's email as an unverified password
+    # account; the victim's later OAuth sign-in must NOT attach to it.
+    sessionmaker = _sessionmaker(tmp_path)
+
+    async def run():
+        async with sessionmaker() as session:
+            user_db = SQLAlchemyUserDatabase(session, User, OAuthAccount)
+            manager = UserManager(user_db)
+            await user_db.create(_base_user("victim@example.com", verified=False))
+            with pytest.raises(exceptions.UserAlreadyExists):
+                await manager.oauth_callback(
+                    "google",
+                    "tok",
+                    "acct-1",
+                    "victim@example.com",
+                    associate_by_email=True,
+                    is_verified_by_default=True,
+                )
+
+    asyncio.run(run())
+
+
+def test_oauth_links_verified_local_account(tmp_path):
+    # A verified local account is safe to associate with the same-email login.
+    sessionmaker = _sessionmaker(tmp_path)
+
+    async def run():
+        async with sessionmaker() as session:
+            user_db = SQLAlchemyUserDatabase(session, User, OAuthAccount)
+            manager = UserManager(user_db)
+            verified = await user_db.create(
+                _base_user("ok@example.com", verified=True)
+            )
+            user = await manager.oauth_callback(
+                "google",
+                "tok",
+                "acct-2",
+                "ok@example.com",
+                associate_by_email=True,
+                is_verified_by_default=True,
+            )
+            assert user.id == verified.id
+            assert any(a.oauth_name == "google" for a in user.oauth_accounts)
+
+    asyncio.run(run())
+
+
+def test_oauth_creates_new_user_for_unknown_email(tmp_path):
+    sessionmaker = _sessionmaker(tmp_path)
+
+    async def run():
+        async with sessionmaker() as session:
+            user_db = SQLAlchemyUserDatabase(session, User, OAuthAccount)
+            manager = UserManager(user_db)
+            user = await manager.oauth_callback(
+                "github",
+                "tok",
+                "acct-3",
+                "fresh@example.com",
+                associate_by_email=True,
+                is_verified_by_default=True,
+            )
+            assert user.email == "fresh@example.com"
+            # Created from a verified provider identity → marked verified.
+            assert user.is_verified is True
+
+    asyncio.run(run())
 
 
 def test_redirect_url_for_uses_env_base(monkeypatch):

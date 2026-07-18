@@ -98,7 +98,10 @@ with the callback URL `https://<your-host>/auth/<provider>/callback`:
 The flow mounts `GET /auth/<provider>/authorize` (returns the provider's
 authorization URL) and `GET /auth/<provider>/callback` (creates or links the
 user, sets the session cookie, and redirects back into the app). A social login
-with the same **verified** email as an existing account is linked to it.
+is linked to an existing account with the same email **only when that account is
+already verified** — this refuses to attach to an unverified password
+pre-registration of the victim's email (account pre-hijacking); such an attempt
+is rejected rather than linked.
 
 ## Frontend
 
