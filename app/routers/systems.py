@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -24,9 +25,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.auth import current_active_user
-from app.db import FormalSystem, get_session, system_to_spec
+from app.db import Base, FormalSystem, get_session, system_to_spec
 from app.db.models import User
-from app.db.systems import AxiomRow, DefinitionRow, LineRow, ProductionRow, RuleRow
+from app.db.systems import (
+    AxiomRow,
+    BracketRow,
+    DefinitionRow,
+    LineRow,
+    ProductionRow,
+    RuleRow,
+    SortRow,
+)
 from app.schemas import (
     Axiom,
     Binding,
@@ -158,19 +167,19 @@ def _summary(system: FormalSystem) -> FormalSystemSummary:
 # (app/routers/system_parts.py), which returns individual objects.
 
 
-def _bindings_out(rows) -> list[Binding]:
+def _bindings_out(rows: Sequence[Base]) -> list[Binding]:
     return [Binding(var=b.var, sort=b.sort) for b in rows]
 
 
-def bracket_out(b) -> BracketPair:
+def bracket_out(b: BracketRow) -> BracketPair:
     return BracketPair(id=b.id, opening=b.opening, closing=b.closing)
 
 
-def sort_out(s) -> Sort:
+def sort_out(s: SortRow) -> Sort:
     return Sort(id=s.id, name=s.name)
 
 
-def production_out(p) -> Production:
+def production_out(p: ProductionRow) -> Production:
     return Production(
         id=p.id,
         name=p.name,
@@ -182,7 +191,7 @@ def production_out(p) -> Production:
     )
 
 
-def line_out(line) -> LineType:
+def line_out(line: LineRow) -> LineType:
     return LineType(
         id=line.id,
         name=line.name,
@@ -192,7 +201,7 @@ def line_out(line) -> LineType:
     )
 
 
-def definition_out(d) -> Definition:
+def definition_out(d: DefinitionRow) -> Definition:
     return Definition(
         id=d.id,
         sort=d.sort,
@@ -204,11 +213,11 @@ def definition_out(d) -> Definition:
     )
 
 
-def axiom_out(a) -> Axiom:
+def axiom_out(a: AxiomRow) -> Axiom:
     return Axiom(id=a.id, label=a.label, name=a.name, formula=a.formula, bindings=_bindings_out(a.bindings))
 
 
-def rule_out(r) -> Rule:
+def rule_out(r: RuleRow) -> Rule:
     return Rule(
         id=r.id,
         label=r.label,

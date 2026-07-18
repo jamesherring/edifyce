@@ -6,6 +6,11 @@ axioms, rules, line types, brackets — so a system can be built up object by
 object. Nested value lists (a production's bindings, a rule's antecedents, a line
 type's parts) are supplied on the parent write and replaced wholesale.
 
+The seven child types share one CRUD shape (create / update / delete / reorder),
+so they're described once by a :class:`ChildResource` and their routes are
+generated in a loop. Only the type-specific bit — mapping a payload onto a row —
+lives per type, in an ``assign`` function.
+
 Every route is owner-scoped: it first asserts the parent system is owned
 (`owned_system_id_or_404`), then operates on children scoped by `system_id`, so
 another owner's ids are never reachable.
@@ -18,15 +23,19 @@ whether the assembled system compiles.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.auth import current_active_user
-from app.db import FormalSystem, get_session
+from app.db import Base, FormalSystem, get_session
 from app.db.models import User
 from app.db.systems import (
     AxiomBindingRow,
@@ -57,12 +66,14 @@ from app.schemas import (
     Axiom,
     AxiomCreate,
     AxiomUpdate,
+    Binding,
     BracketCreate,
     BracketPair,
     BracketUpdate,
     Definition,
     DefinitionCreate,
     DefinitionUpdate,
+    LinePartInput,
     LineType,
     LineTypeCreate,
     LineTypeUpdate,
@@ -80,6 +91,11 @@ from app.schemas import (
 
 router = APIRouter(prefix="/formal-systems/{system_id}", tags=["formal-systems"])
 
+# A payload is one of a resource's create/update models; `assign` reads whichever
+# it is given, applying only the fields named in `fields`.
+Payload = BaseModel
+AssignFn = Callable[[AsyncSession, uuid.UUID, Base, Payload, set[str], bool], Awaitable[None]]
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -90,14 +106,20 @@ async def _owned(session: AsyncSession, system_id: uuid.UUID, user: User) -> Non
     await owned_system_id_or_404(session, system_id, user.id)
 
 
-async def _next_position(session: AsyncSession, row_cls, system_id: uuid.UUID) -> int:
+async def _next_position(session: AsyncSession, row_cls: type[Base], system_id: uuid.UUID) -> int:
     current = await session.scalar(
         select(func.max(row_cls.position)).where(row_cls.system_id == system_id)
     )
     return 0 if current is None else current + 1
 
 
-async def _get_child_or_404(session, row_cls, system_id, child_id, *options):
+async def _get_child_or_404(
+    session: AsyncSession,
+    row_cls: type[Base],
+    system_id: uuid.UUID,
+    child_id: uuid.UUID,
+    *options: Any,
+) -> Base:
     stmt = select(row_cls).where(row_cls.id == child_id, row_cls.system_id == system_id)
     if options:
         stmt = stmt.options(*options)
@@ -107,7 +129,9 @@ async def _get_child_or_404(session, row_cls, system_id, child_id, *options):
     return child
 
 
-async def _delete_child(session, row_cls, system_id, child_id) -> None:
+async def _delete_child(
+    session: AsyncSession, row_cls: type[Base], system_id: uuid.UUID, child_id: uuid.UUID
+) -> None:
     result = await session.execute(
         sa_delete(row_cls).where(row_cls.id == child_id, row_cls.system_id == system_id)
     )
@@ -116,7 +140,13 @@ async def _delete_child(session, row_cls, system_id, child_id) -> None:
     await session.commit()
 
 
-async def _reorder(session, row_cls, system_id, ids: list[uuid.UUID]) -> list:
+async def _reorder_rows(
+    session: AsyncSession,
+    row_cls: type[Base],
+    system_id: uuid.UUID,
+    ids: list[uuid.UUID],
+    loads: tuple[Any, ...],
+) -> list[Base]:
     rows = (
         await session.scalars(select(row_cls).where(row_cls.system_id == system_id))
     ).all()
@@ -129,14 +159,30 @@ async def _reorder(session, row_cls, system_id, ids: list[uuid.UUID]) -> list:
     for position, child_id in enumerate(ids):
         by_id[child_id].position = position
     await session.commit()
-    return [by_id[child_id] for child_id in ids]
+
+    if not loads:
+        return [by_id[child_id] for child_id in ids]
+
+    # Reload the relationship-bearing rows in a single query (not one per row),
+    # then return them in the requested order.
+    reloaded = (
+        await session.scalars(
+            select(row_cls).where(row_cls.id.in_(ids)).options(*loads)
+        )
+    ).all()
+    reloaded_by_id = {row.id: row for row in reloaded}
+    return [reloaded_by_id[child_id] for child_id in ids]
 
 
-def _binding_rows(row_cls, bindings):
+def _binding_rows(row_cls: type[Base], bindings: Sequence[Binding]) -> list[Base]:
     return [row_cls(position=i, var=b.var, sort=b.sort) for i, b in enumerate(bindings)]
 
 
-async def _resolve_sort(session, system_id, sort_name: str) -> SortRow:
+def _part_rows(parts: Sequence[LinePartInput]) -> list[LinePartRow]:
+    return [LinePartRow(position=i, name=p.name, regex=p.regex) for i, p in enumerate(parts)]
+
+
+async def _resolve_sort(session: AsyncSession, system_id: uuid.UUID, sort_name: str) -> SortRow:
     sort = await session.scalar(
         select(SortRow).where(SortRow.system_id == system_id, SortRow.name == sort_name)
     )
@@ -154,7 +200,9 @@ def _production_kind(template: str | None, regex: str | None) -> str:
     return "regex" if regex is not None else "composite"
 
 
-async def _require_sort_name_free(session, system_id, name, exclude_id=None) -> None:
+async def _require_sort_name_free(
+    session: AsyncSession, system_id: uuid.UUID, name: str, exclude_id: uuid.UUID | None = None
+) -> None:
     stmt = select(SortRow.id).where(SortRow.system_id == system_id, SortRow.name == name)
     if exclude_id is not None:
         stmt = stmt.where(SortRow.id != exclude_id)
@@ -163,177 +211,37 @@ async def _require_sort_name_free(session, system_id, name, exclude_id=None) -> 
 
 
 # ---------------------------------------------------------------------------
-# Brackets
+# Per-type payload -> row mapping. Shared by create (all fields) and update
+# (only the fields the client sent). `creating` distinguishes the two where it
+# matters (uniqueness excludes the row itself only on update).
 # ---------------------------------------------------------------------------
 
 
-@router.post("/brackets", response_model=BracketPair, status_code=status.HTTP_201_CREATED)
-async def create_bracket(
-    system_id: uuid.UUID,
-    payload: BracketCreate,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
-) -> BracketPair:
-    await _owned(session, system_id, user)
-    row = BracketRow(
-        system_id=system_id,
-        position=await _next_position(session, BracketRow, system_id),
-        opening=payload.opening,
-        closing=payload.closing,
-    )
-    session.add(row)
-    await session.commit()
-    return bracket_out(row)
-
-
-@router.patch("/brackets/{bracket_id}", response_model=BracketPair)
-async def update_bracket(
-    system_id: uuid.UUID,
-    bracket_id: uuid.UUID,
-    payload: BracketUpdate,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
-) -> BracketPair:
-    await _owned(session, system_id, user)
-    row = await _get_child_or_404(session, BracketRow, system_id, bracket_id)
-    fields = payload.model_fields_set
+async def _assign_bracket(
+    session: AsyncSession, system_id: uuid.UUID, row: BracketRow, payload: Payload,
+    fields: set[str], creating: bool,
+) -> None:
     if "opening" in fields and payload.opening is not None:
         row.opening = payload.opening
     if "closing" in fields and payload.closing is not None:
         row.closing = payload.closing
-    await session.commit()
-    return bracket_out(row)
 
 
-@router.delete("/brackets/{bracket_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_bracket(
-    system_id: uuid.UUID,
-    bracket_id: uuid.UUID,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
+async def _assign_sort(
+    session: AsyncSession, system_id: uuid.UUID, row: SortRow, payload: Payload,
+    fields: set[str], creating: bool,
 ) -> None:
-    await _owned(session, system_id, user)
-    await _delete_child(session, BracketRow, system_id, bracket_id)
-
-
-@router.put("/brackets/order", response_model=list[BracketPair])
-async def reorder_brackets(
-    system_id: uuid.UUID,
-    payload: ReorderRequest,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
-) -> list[BracketPair]:
-    await _owned(session, system_id, user)
-    return [bracket_out(r) for r in await _reorder(session, BracketRow, system_id, payload.ids)]
-
-
-# ---------------------------------------------------------------------------
-# Sorts
-# ---------------------------------------------------------------------------
-
-
-@router.post("/sorts", response_model=Sort, status_code=status.HTTP_201_CREATED)
-async def create_sort(
-    system_id: uuid.UUID,
-    payload: SortCreate,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
-) -> Sort:
-    await _owned(session, system_id, user)
-    await _require_sort_name_free(session, system_id, payload.name)
-    row = SortRow(
-        system_id=system_id,
-        position=await _next_position(session, SortRow, system_id),
-        name=payload.name,
-    )
-    session.add(row)
-    await session.commit()
-    return sort_out(row)
-
-
-@router.patch("/sorts/{sort_id}", response_model=Sort)
-async def update_sort(
-    system_id: uuid.UUID,
-    sort_id: uuid.UUID,
-    payload: SortUpdate,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
-) -> Sort:
-    await _owned(session, system_id, user)
-    row = await _get_child_or_404(session, SortRow, system_id, sort_id)
-    if "name" in payload.model_fields_set and payload.name is not None:
-        await _require_sort_name_free(session, system_id, payload.name, exclude_id=sort_id)
+    if "name" in fields and payload.name is not None:
+        await _require_sort_name_free(
+            session, system_id, payload.name, exclude_id=None if creating else row.id
+        )
         row.name = payload.name
-    await session.commit()
-    return sort_out(row)
 
 
-@router.delete("/sorts/{sort_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_sort(
-    system_id: uuid.UUID,
-    sort_id: uuid.UUID,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
+async def _assign_production(
+    session: AsyncSession, system_id: uuid.UUID, row: ProductionRow, payload: Payload,
+    fields: set[str], creating: bool,
 ) -> None:
-    # Productions reference a sort by FK ON DELETE CASCADE, so removing a sort
-    # also removes productions of that sort.
-    await _owned(session, system_id, user)
-    await _delete_child(session, SortRow, system_id, sort_id)
-
-
-@router.put("/sorts/order", response_model=list[Sort])
-async def reorder_sorts(
-    system_id: uuid.UUID,
-    payload: ReorderRequest,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
-) -> list[Sort]:
-    await _owned(session, system_id, user)
-    return [sort_out(r) for r in await _reorder(session, SortRow, system_id, payload.ids)]
-
-
-# ---------------------------------------------------------------------------
-# Productions
-# ---------------------------------------------------------------------------
-
-_PRODUCTION_LOADS = (selectinload(ProductionRow.sort), selectinload(ProductionRow.bindings))
-
-
-@router.post("/productions", response_model=Production, status_code=status.HTTP_201_CREATED)
-async def create_production(
-    system_id: uuid.UUID,
-    payload: ProductionCreate,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
-) -> Production:
-    await _owned(session, system_id, user)
-    sort = await _resolve_sort(session, system_id, payload.sort)
-    row = ProductionRow(
-        system_id=system_id,
-        sort=sort,
-        position=await _next_position(session, ProductionRow, system_id),
-        name=payload.name,
-        kind=_production_kind(payload.template, payload.regex),
-        template=payload.template,
-        regex=payload.regex,
-    )
-    row.bindings = _binding_rows(ProductionBindingRow, payload.bindings)
-    session.add(row)
-    await session.commit()
-    return production_out(row)
-
-
-@router.patch("/productions/{production_id}", response_model=Production)
-async def update_production(
-    system_id: uuid.UUID,
-    production_id: uuid.UUID,
-    payload: ProductionUpdate,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
-) -> Production:
-    await _owned(session, system_id, user)
-    row = await _get_child_or_404(session, ProductionRow, system_id, production_id, *_PRODUCTION_LOADS)
-    fields = payload.model_fields_set
     if "name" in fields and payload.name is not None:
         row.name = payload.name
     if "sort" in fields and payload.sort is not None:
@@ -346,75 +254,12 @@ async def update_production(
         row.kind = _production_kind(row.template, row.regex)
     if "bindings" in fields and payload.bindings is not None:
         row.bindings = _binding_rows(ProductionBindingRow, payload.bindings)
-    await session.commit()
-    return production_out(row)
 
 
-@router.delete("/productions/{production_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_production(
-    system_id: uuid.UUID,
-    production_id: uuid.UUID,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
+async def _assign_line(
+    session: AsyncSession, system_id: uuid.UUID, row: LineRow, payload: Payload,
+    fields: set[str], creating: bool,
 ) -> None:
-    await _owned(session, system_id, user)
-    await _delete_child(session, ProductionRow, system_id, production_id)
-
-
-@router.put("/productions/order", response_model=list[Production])
-async def reorder_productions(
-    system_id: uuid.UUID,
-    payload: ReorderRequest,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
-) -> list[Production]:
-    await _owned(session, system_id, user)
-    rows = await _reorder(session, ProductionRow, system_id, payload.ids)
-    # Reorder loads bare rows; production_out needs sort + bindings.
-    ordered = [
-        await _get_child_or_404(session, ProductionRow, system_id, r.id, *_PRODUCTION_LOADS)
-        for r in rows
-    ]
-    return [production_out(r) for r in ordered]
-
-
-# ---------------------------------------------------------------------------
-# Line types
-# ---------------------------------------------------------------------------
-
-
-@router.post("/line-types", response_model=LineType, status_code=status.HTTP_201_CREATED)
-async def create_line_type(
-    system_id: uuid.UUID,
-    payload: LineTypeCreate,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
-) -> LineType:
-    await _owned(session, system_id, user)
-    row = LineRow(
-        system_id=system_id,
-        position=await _next_position(session, LineRow, system_id),
-        name=payload.name,
-        shape=payload.shape,
-        logical_sort=payload.logical_sort,
-    )
-    row.parts = [LinePartRow(position=i, name=p.name, regex=p.regex) for i, p in enumerate(payload.parts)]
-    session.add(row)
-    await session.commit()
-    return line_out(row)
-
-
-@router.patch("/line-types/{line_id}", response_model=LineType)
-async def update_line_type(
-    system_id: uuid.UUID,
-    line_id: uuid.UUID,
-    payload: LineTypeUpdate,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
-) -> LineType:
-    await _owned(session, system_id, user)
-    row = await _get_child_or_404(session, LineRow, system_id, line_id, selectinload(LineRow.parts))
-    fields = payload.model_fields_set
     if "name" in fields and payload.name is not None:
         row.name = payload.name
     if "shape" in fields and payload.shape is not None:
@@ -422,77 +267,13 @@ async def update_line_type(
     if "logical_sort" in fields:
         row.logical_sort = payload.logical_sort
     if "parts" in fields and payload.parts is not None:
-        row.parts = [LinePartRow(position=i, name=p.name, regex=p.regex) for i, p in enumerate(payload.parts)]
-    await session.commit()
-    return line_out(row)
+        row.parts = _part_rows(payload.parts)
 
 
-@router.delete("/line-types/{line_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_line_type(
-    system_id: uuid.UUID,
-    line_id: uuid.UUID,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
+async def _assign_definition(
+    session: AsyncSession, system_id: uuid.UUID, row: DefinitionRow, payload: Payload,
+    fields: set[str], creating: bool,
 ) -> None:
-    await _owned(session, system_id, user)
-    await _delete_child(session, LineRow, system_id, line_id)
-
-
-@router.put("/line-types/order", response_model=list[LineType])
-async def reorder_line_types(
-    system_id: uuid.UUID,
-    payload: ReorderRequest,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
-) -> list[LineType]:
-    await _owned(session, system_id, user)
-    rows = await _reorder(session, LineRow, system_id, payload.ids)
-    ordered = [
-        await _get_child_or_404(session, LineRow, system_id, r.id, selectinload(LineRow.parts))
-        for r in rows
-    ]
-    return [line_out(r) for r in ordered]
-
-
-# ---------------------------------------------------------------------------
-# Definitions
-# ---------------------------------------------------------------------------
-
-
-@router.post("/definitions", response_model=Definition, status_code=status.HTTP_201_CREATED)
-async def create_definition(
-    system_id: uuid.UUID,
-    payload: DefinitionCreate,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
-) -> Definition:
-    await _owned(session, system_id, user)
-    row = DefinitionRow(
-        system_id=system_id,
-        position=await _next_position(session, DefinitionRow, system_id),
-        sort=payload.sort,
-        name=payload.name,
-        higher=payload.higher,
-        lower=payload.lower,
-        condition=payload.condition,
-    )
-    row.bindings = _binding_rows(DefinitionBindingRow, payload.bindings)
-    session.add(row)
-    await session.commit()
-    return definition_out(row)
-
-
-@router.patch("/definitions/{definition_id}", response_model=Definition)
-async def update_definition(
-    system_id: uuid.UUID,
-    definition_id: uuid.UUID,
-    payload: DefinitionUpdate,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
-) -> Definition:
-    await _owned(session, system_id, user)
-    row = await _get_child_or_404(session, DefinitionRow, system_id, definition_id, selectinload(DefinitionRow.bindings))
-    fields = payload.model_fields_set
     if "sort" in fields and payload.sort is not None:
         row.sort = payload.sort
     if "name" in fields and payload.name is not None:
@@ -505,74 +286,12 @@ async def update_definition(
         row.condition = payload.condition
     if "bindings" in fields and payload.bindings is not None:
         row.bindings = _binding_rows(DefinitionBindingRow, payload.bindings)
-    await session.commit()
-    return definition_out(row)
 
 
-@router.delete("/definitions/{definition_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_definition(
-    system_id: uuid.UUID,
-    definition_id: uuid.UUID,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
+async def _assign_axiom(
+    session: AsyncSession, system_id: uuid.UUID, row: AxiomRow, payload: Payload,
+    fields: set[str], creating: bool,
 ) -> None:
-    await _owned(session, system_id, user)
-    await _delete_child(session, DefinitionRow, system_id, definition_id)
-
-
-@router.put("/definitions/order", response_model=list[Definition])
-async def reorder_definitions(
-    system_id: uuid.UUID,
-    payload: ReorderRequest,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
-) -> list[Definition]:
-    await _owned(session, system_id, user)
-    rows = await _reorder(session, DefinitionRow, system_id, payload.ids)
-    ordered = [
-        await _get_child_or_404(session, DefinitionRow, system_id, r.id, selectinload(DefinitionRow.bindings))
-        for r in rows
-    ]
-    return [definition_out(r) for r in ordered]
-
-
-# ---------------------------------------------------------------------------
-# Axioms
-# ---------------------------------------------------------------------------
-
-
-@router.post("/axioms", response_model=Axiom, status_code=status.HTTP_201_CREATED)
-async def create_axiom(
-    system_id: uuid.UUID,
-    payload: AxiomCreate,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
-) -> Axiom:
-    await _owned(session, system_id, user)
-    row = AxiomRow(
-        system_id=system_id,
-        position=await _next_position(session, AxiomRow, system_id),
-        label=payload.label,
-        name=payload.name,
-        formula=payload.formula,
-    )
-    row.bindings = _binding_rows(AxiomBindingRow, payload.bindings)
-    session.add(row)
-    await session.commit()
-    return axiom_out(row)
-
-
-@router.patch("/axioms/{axiom_id}", response_model=Axiom)
-async def update_axiom(
-    system_id: uuid.UUID,
-    axiom_id: uuid.UUID,
-    payload: AxiomUpdate,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
-) -> Axiom:
-    await _owned(session, system_id, user)
-    row = await _get_child_or_404(session, AxiomRow, system_id, axiom_id, selectinload(AxiomRow.bindings))
-    fields = payload.model_fields_set
     if "label" in fields and payload.label is not None:
         row.label = payload.label
     if "name" in fields and payload.name is not None:
@@ -581,79 +300,12 @@ async def update_axiom(
         row.formula = payload.formula
     if "bindings" in fields and payload.bindings is not None:
         row.bindings = _binding_rows(AxiomBindingRow, payload.bindings)
-    await session.commit()
-    return axiom_out(row)
 
 
-@router.delete("/axioms/{axiom_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_axiom(
-    system_id: uuid.UUID,
-    axiom_id: uuid.UUID,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
+async def _assign_rule(
+    session: AsyncSession, system_id: uuid.UUID, row: RuleRow, payload: Payload,
+    fields: set[str], creating: bool,
 ) -> None:
-    await _owned(session, system_id, user)
-    await _delete_child(session, AxiomRow, system_id, axiom_id)
-
-
-@router.put("/axioms/order", response_model=list[Axiom])
-async def reorder_axioms(
-    system_id: uuid.UUID,
-    payload: ReorderRequest,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
-) -> list[Axiom]:
-    await _owned(session, system_id, user)
-    rows = await _reorder(session, AxiomRow, system_id, payload.ids)
-    ordered = [
-        await _get_child_or_404(session, AxiomRow, system_id, r.id, selectinload(AxiomRow.bindings))
-        for r in rows
-    ]
-    return [axiom_out(r) for r in ordered]
-
-
-# ---------------------------------------------------------------------------
-# Rules
-# ---------------------------------------------------------------------------
-
-_RULE_LOADS = (selectinload(RuleRow.antecedents), selectinload(RuleRow.bindings))
-
-
-@router.post("/rules", response_model=Rule, status_code=status.HTTP_201_CREATED)
-async def create_rule(
-    system_id: uuid.UUID,
-    payload: RuleCreate,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
-) -> Rule:
-    await _owned(session, system_id, user)
-    row = RuleRow(
-        system_id=system_id,
-        position=await _next_position(session, RuleRow, system_id),
-        label=payload.label,
-        name=payload.name,
-        deduction=payload.deduction,
-    )
-    row.antecedents = [
-        RuleAntecedentRow(position=i, pattern=pattern) for i, pattern in enumerate(payload.antecedents)
-    ]
-    row.bindings = _binding_rows(RuleBindingRow, payload.bindings)
-    session.add(row)
-    await session.commit()
-    return rule_out(row)
-
-
-@router.patch("/rules/{rule_id}", response_model=Rule)
-async def update_rule(
-    system_id: uuid.UUID,
-    rule_id: uuid.UUID,
-    payload: RuleUpdate,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
-) -> Rule:
-    await _owned(session, system_id, user)
-    row = await _get_child_or_404(session, RuleRow, system_id, rule_id, *_RULE_LOADS)
-    fields = payload.model_fields_set
     if "label" in fields and payload.label is not None:
         row.label = payload.label
     if "name" in fields and payload.name is not None:
@@ -667,31 +319,146 @@ async def update_rule(
         ]
     if "bindings" in fields and payload.bindings is not None:
         row.bindings = _binding_rows(RuleBindingRow, payload.bindings)
+
+
+# ---------------------------------------------------------------------------
+# Resource descriptors + generic CRUD
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ChildResource:
+    segment: str
+    row_cls: type[Base]
+    create_model: type[BaseModel]
+    update_model: type[BaseModel]
+    out_model: type[BaseModel]
+    serialize: Callable[[Base], BaseModel]
+    loads: tuple[Any, ...]
+    assign: AssignFn
+
+
+async def _create_child(
+    resource: ChildResource, system_id: uuid.UUID, payload: Payload, user: User, session: AsyncSession
+) -> BaseModel:
+    await _owned(session, system_id, user)
+    row = resource.row_cls(
+        system_id=system_id,
+        position=await _next_position(session, resource.row_cls, system_id),
+    )
+    await resource.assign(session, system_id, row, payload, set(type(payload).model_fields), True)
+    session.add(row)
     await session.commit()
-    return rule_out(row)
+    reloaded = await _get_child_or_404(session, resource.row_cls, system_id, row.id, *resource.loads)
+    return resource.serialize(reloaded)
 
 
-@router.delete("/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_rule(
-    system_id: uuid.UUID,
-    rule_id: uuid.UUID,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
+async def _update_child(
+    resource: ChildResource, system_id: uuid.UUID, child_id: uuid.UUID, payload: Payload,
+    user: User, session: AsyncSession,
+) -> BaseModel:
+    await _owned(session, system_id, user)
+    row = await _get_child_or_404(session, resource.row_cls, system_id, child_id, *resource.loads)
+    await resource.assign(session, system_id, row, payload, payload.model_fields_set, False)
+    await session.commit()
+    reloaded = await _get_child_or_404(session, resource.row_cls, system_id, child_id, *resource.loads)
+    return resource.serialize(reloaded)
+
+
+async def _delete_child_route(
+    resource: ChildResource, system_id: uuid.UUID, child_id: uuid.UUID, user: User, session: AsyncSession
 ) -> None:
     await _owned(session, system_id, user)
-    await _delete_child(session, RuleRow, system_id, rule_id)
+    await _delete_child(session, resource.row_cls, system_id, child_id)
 
 
-@router.put("/rules/order", response_model=list[Rule])
-async def reorder_rules(
-    system_id: uuid.UUID,
-    payload: ReorderRequest,
-    user: User = Depends(current_active_user),
-    session: AsyncSession = Depends(get_session),
-) -> list[Rule]:
+async def _reorder_route(
+    resource: ChildResource, system_id: uuid.UUID, ids: list[uuid.UUID], user: User, session: AsyncSession
+) -> list[BaseModel]:
     await _owned(session, system_id, user)
-    rows = await _reorder(session, RuleRow, system_id, payload.ids)
-    ordered = [
-        await _get_child_or_404(session, RuleRow, system_id, r.id, *_RULE_LOADS) for r in rows
-    ]
-    return [rule_out(r) for r in ordered]
+    rows = await _reorder_rows(session, resource.row_cls, system_id, ids, resource.loads)
+    return [resource.serialize(row) for row in rows]
+
+
+def _register(resource: ChildResource) -> None:
+    """Generate the four CRUD routes for one child resource.
+
+    The endpoint closures carry no annotations of their own; FastAPI reads the
+    per-resource request/response types from the ``__annotations__`` set below,
+    which is how one generic body serves every typed child model.
+    """
+    seg = resource.segment
+    tag = seg.replace("-", "_")
+
+    async def create(system_id, payload, user=Depends(current_active_user), session=Depends(get_session)):
+        return await _create_child(resource, system_id, payload, user, session)
+
+    create.__name__ = f"create_{tag}"
+    create.__annotations__ = {
+        "system_id": uuid.UUID, "payload": resource.create_model, "return": resource.out_model,
+    }
+    router.add_api_route(
+        f"/{seg}", create, methods=["POST"],
+        response_model=resource.out_model, status_code=status.HTTP_201_CREATED,
+    )
+
+    async def update(system_id, child_id, payload, user=Depends(current_active_user), session=Depends(get_session)):
+        return await _update_child(resource, system_id, child_id, payload, user, session)
+
+    update.__name__ = f"update_{tag}"
+    update.__annotations__ = {
+        "system_id": uuid.UUID, "child_id": uuid.UUID,
+        "payload": resource.update_model, "return": resource.out_model,
+    }
+    router.add_api_route(
+        f"/{seg}/{{child_id}}", update, methods=["PATCH"], response_model=resource.out_model
+    )
+
+    async def remove(system_id, child_id, user=Depends(current_active_user), session=Depends(get_session)):
+        await _delete_child_route(resource, system_id, child_id, user, session)
+
+    remove.__name__ = f"delete_{tag}"
+    remove.__annotations__ = {"system_id": uuid.UUID, "child_id": uuid.UUID, "return": None}
+    router.add_api_route(
+        f"/{seg}/{{child_id}}", remove, methods=["DELETE"], status_code=status.HTTP_204_NO_CONTENT
+    )
+
+    async def reorder(system_id, payload, user=Depends(current_active_user), session=Depends(get_session)):
+        return await _reorder_route(resource, system_id, payload.ids, user, session)
+
+    reorder.__name__ = f"reorder_{tag}"
+    reorder.__annotations__ = {
+        "system_id": uuid.UUID, "payload": ReorderRequest, "return": list[resource.out_model],
+    }
+    router.add_api_route(
+        f"/{seg}/order", reorder, methods=["PUT"], response_model=list[resource.out_model]
+    )
+
+
+RESOURCES: tuple[ChildResource, ...] = (
+    ChildResource("brackets", BracketRow, BracketCreate, BracketUpdate, BracketPair, bracket_out, (), _assign_bracket),
+    ChildResource("sorts", SortRow, SortCreate, SortUpdate, Sort, sort_out, (), _assign_sort),
+    ChildResource(
+        "productions", ProductionRow, ProductionCreate, ProductionUpdate, Production, production_out,
+        (selectinload(ProductionRow.sort), selectinload(ProductionRow.bindings)), _assign_production,
+    ),
+    ChildResource(
+        "line-types", LineRow, LineTypeCreate, LineTypeUpdate, LineType, line_out,
+        (selectinload(LineRow.parts),), _assign_line,
+    ),
+    ChildResource(
+        "definitions", DefinitionRow, DefinitionCreate, DefinitionUpdate, Definition, definition_out,
+        (selectinload(DefinitionRow.bindings),), _assign_definition,
+    ),
+    ChildResource(
+        "axioms", AxiomRow, AxiomCreate, AxiomUpdate, Axiom, axiom_out,
+        (selectinload(AxiomRow.bindings),), _assign_axiom,
+    ),
+    ChildResource(
+        "rules", RuleRow, RuleCreate, RuleUpdate, Rule, rule_out,
+        (selectinload(RuleRow.antecedents), selectinload(RuleRow.bindings)), _assign_rule,
+    ),
+)
+
+for _resource in RESOURCES:
+    _register(_resource)

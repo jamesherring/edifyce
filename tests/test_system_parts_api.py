@@ -204,6 +204,21 @@ def test_production_needs_exactly_one_of_template_or_regex(client):
     assert neither.status_code == 400
 
 
+def test_oversized_fields_are_rejected_as_422(client):
+    # Free-text fields are capped to their DB column width, so an oversized value
+    # is a validation error, not a Postgres truncation 500.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+
+    too_long = "a" * 600  # DefinitionRow.higher is String(512)
+    response = client.post(
+        f"/formal-systems/{sid}/definitions",
+        json={"sort": "formula", "name": "d", "higher": too_long, "lower": "b"},
+    )
+    assert response.status_code == 422
+
+
 def test_production_update_replaces_bindings(client):
     _login(client, "ada@example.com")
     sid = _new_system(client)
