@@ -109,9 +109,13 @@ def _build(legacy: MatchingDefinition, context: Context) -> Definition | None:
             variables=dict(legacy.variables),
             context=context,
         )
-    except (ValueError, KeyError, AttributeError):
-        # Either surface form does not parse as its sort (e.g. an alias notation
-        # the grammar cannot recognise on its own): fall back to the string path.
+    except Exception:
+        # Any build failure - a surface form that does not parse as its sort (an
+        # alias notation the grammar cannot recognise on its own), or a deeper
+        # matcher error - must fall back to the string path, never abort the
+        # proof check. This is the same fail-closed stance as
+        # InferenceRule._side_conditions_hold: declining the kernel path can only
+        # keep the legacy behaviour, never accept an invalid step.
         return None
 
     # Binder guard: with no `fresh` declared, any bound variable of the defining
