@@ -275,6 +275,15 @@ async def _assign_line(
     session: AsyncSession, system_id: uuid.UUID, row: LineRow, payload: Payload,
     fields: set[str], creating: bool,
 ) -> None:
+    # The declarative pipeline lowers only one line type per system
+    # (SystemSpec.line is singular), so reject a second rather than silently
+    # dropping it from validate/source. Supporting several is future work.
+    if creating and await session.scalar(
+        select(LineRow.id).where(LineRow.system_id == system_id)
+    ) is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "A system has at most one line type."
+        )
     if "name" in fields and payload.name is not None:
         row.name = payload.name
     if "shape" in fields and payload.shape is not None:

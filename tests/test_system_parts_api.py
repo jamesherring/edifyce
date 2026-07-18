@@ -204,6 +204,18 @@ def test_production_needs_exactly_one_of_template_or_regex(client):
     assert neither.status_code == 400
 
 
+def test_only_one_line_type_is_allowed(client):
+    # The declarative layer lowers a single line type, so a second is rejected
+    # rather than silently ignored by validate/source.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/line-types", {"name": "statement", "shape": "<x>"})
+    second = client.post(
+        f"/formal-systems/{sid}/line-types", json={"name": "other", "shape": "<y>"}
+    )
+    assert second.status_code == 409
+
+
 def test_oversized_fields_are_rejected_as_422(client):
     # Free-text fields are capped to their DB column width, so an oversized value
     # is a validation error, not a Postgres truncation 500.
