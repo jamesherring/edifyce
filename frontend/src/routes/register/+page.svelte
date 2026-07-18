@@ -5,6 +5,7 @@
 	import { Label } from '$lib/components/ui/label';
 	import * as Card from '$lib/components/ui/card';
 	import * as Alert from '$lib/components/ui/alert';
+	import OauthButtons from '$lib/components/oauth-buttons.svelte';
 	import { auth } from '$lib/auth.svelte';
 	import { ApiError } from '$lib/api';
 	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
@@ -63,7 +64,7 @@
 			<Card.Title class="text-xl">Create an account</Card.Title>
 			<Card.Description>Save the systems and proofs you build on Edifyce.</Card.Description>
 		</Card.Header>
-		<Card.Content>
+		<Card.Content class="flex flex-col gap-4">
 			<form class="flex flex-col gap-4" onsubmit={submit}>
 				{#if error}
 					<Alert.Root variant="destructive">
@@ -130,6 +131,8 @@
 					{/if}
 				</Button>
 			</form>
+
+			<OauthButtons verb="Sign up with" />
 		</Card.Content>
 		<Card.Footer class="text-muted-foreground justify-center text-sm">
 			<span>

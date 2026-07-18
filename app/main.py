@@ -13,10 +13,17 @@ from app.auth import (
     UserRead,
     UserUpdate,
 )
+from app.auth.config import AUTH_COOKIE_SECURE, AUTH_SECRET
+from app.auth.oauth import (
+    enabled_oauth_clients,
+    oauth_backend,
+    redirect_url_for,
+)
 from app.schemas import (
     CompileRequest,
     CompileResponse,
     HealthResponse,
+    OAuthProvidersResponse,
     VerifyProofRequest,
     VerifyProofResponse,
 )
@@ -113,9 +120,9 @@ def verify_proof(payload: VerifyProofRequest) -> VerifyProofResponse:
 #   POST /auth/login, POST /auth/logout   (cookie session)
 #   POST /auth/register                   (create account)
 #   GET/PATCH /users/me, .../{id}         (current user + admin management)
-# These need a database (DATABASE_URL); the routes above do not. Social-login
-# (OAuth) routers are intentionally not mounted yet — they need per-provider
-# client secrets — but the `oauth_accounts` schema is ready for them.
+# Social login (OAuth) mounts /auth/<provider>/authorize + /callback for each
+# configured provider (see app/auth/oauth.py); GET /auth/providers lists them.
+# These need a database (DATABASE_URL); the compile/verify routes do not.
 
 _auth_router = fastapi_users.get_auth_router(auth_backend)
 _register_router = fastapi_users.get_register_router(UserRead, UserCreate)
@@ -130,11 +137,37 @@ app.include_router(_users_router, prefix="/users", tags=["users"])
 # them by iterating app.routes. Record their non-parameterized paths here so a
 # wrong-method browser GET to e.g. /auth/login still gets the API's 405 instead
 # of being masked by the SPA shell.
-_MOUNTED_API_ROUTERS = (
+_MOUNTED_API_ROUTERS: list[tuple[str, object]] = [
     ("/auth", _auth_router),
     ("/auth", _register_router),
     ("/users", _users_router),
-)
+]
+
+# Social login: one router per configured provider. `associate_by_email` links a
+# social login to an existing account with the same address, and
+# `is_verified_by_default` trusts the provider's email — both safe here because
+# Google and GitHub only expose a verified primary email through the scopes used.
+for _provider, _client in enabled_oauth_clients:
+    _oauth_router = fastapi_users.get_oauth_router(
+        _client,
+        oauth_backend,
+        AUTH_SECRET,
+        redirect_url=redirect_url_for(_provider),
+        associate_by_email=True,
+        is_verified_by_default=True,
+        # The OAuth CSRF cookie must be storable in the same contexts as the
+        # session cookie (e.g. local HTTP), so mirror its Secure flag.
+        csrf_token_cookie_secure=AUTH_COOKIE_SECURE,
+    )
+    app.include_router(_oauth_router, prefix=f"/auth/{_provider}", tags=["auth"])
+    _MOUNTED_API_ROUTERS.append((f"/auth/{_provider}", _oauth_router))
+
+
+@app.get("/auth/providers", response_model=OAuthProvidersResponse, tags=["auth"])
+def oauth_providers() -> OAuthProvidersResponse:
+    return OAuthProvidersResponse(
+        providers=[name for name, _ in enabled_oauth_clients]
+    )
 
 
 def _mounted_api_paths() -> set[str]:

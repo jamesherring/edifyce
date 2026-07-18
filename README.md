@@ -80,8 +80,25 @@ secret can never accept forged cookies. The trade-off is that sessions don't
 survive a restart and aren't valid across multiple worker processes, which makes
 the missing configuration obvious. Always set it in a real deployment.
 
-Social (OAuth) login is schema-ready via `oauth_accounts` but not yet mounted —
-it needs per-provider client secrets.
+### Social login (OAuth)
+
+GitHub and Google sign-in are supported via [httpx-oauth](https://frankie567.github.io/httpx-oauth/),
+linking accounts into the `oauth_accounts` table. Each provider is enabled only
+when its client id/secret are set, so `GET /auth/providers` (and the UI) shows
+just the configured ones. Set the credentials from an OAuth app on each provider,
+with the callback URL `https://<your-host>/auth/<provider>/callback`:
+
+| Variable | Purpose |
+|---|---|
+| `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | Enable Google sign-in |
+| `GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET` | Enable GitHub sign-in |
+| `EDIFYCE_OAUTH_REDIRECT_URL_BASE` | Pin the callback origin (e.g. `https://edifyce.example.com`) when behind a TLS-terminating proxy that would otherwise derive an `http://` redirect_uri. Optional. |
+| `EDIFYCE_OAUTH_SUCCESS_REDIRECT` | Where the browser lands after a successful sign-in (default `/`). Optional. |
+
+The flow mounts `GET /auth/<provider>/authorize` (returns the provider's
+authorization URL) and `GET /auth/<provider>/callback` (creates or links the
+user, sets the session cookie, and redirects back into the app). A social login
+with the same **verified** email as an existing account is linked to it.
 
 ## Frontend
 
