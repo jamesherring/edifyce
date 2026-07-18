@@ -7,6 +7,8 @@ from copy import copy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from ..kernel.side_conditions import Not, Occurs
+from ..kernel.terms import from_match
 from ..matching import Match, MatchSet, get_by_path, parse_arguments, parse_path
 
 if TYPE_CHECKING:
@@ -97,9 +99,6 @@ class Subproof:
         # structurally on kernel terms via the closed side-condition algebra
         # (kernel.side_conditions) - the graph representation, not strings. This
         # is the algebra's own worked example: Not(Occurs("x", "phi")).
-        from ..kernel.side_conditions import Not, Occurs
-        from ..kernel.terms import from_match
-
         eigenvariable = self.eigenvariable
         if eigenvariable is None:
             return False
@@ -133,11 +132,11 @@ def line_is_accessible(citing_line: ProofLine, cited_line: ProofLine) -> bool:
     # tree (the two proofs have unrelated scope roots). Ordinary cross-proof
     # citation is already guarded by the antecedent-ordering check in
     # InferenceRule.check, so scope restriction simply does not apply here.
-    if getattr(cited_line, "proof", None) is not getattr(citing_line, "proof", None):
+    if cited_line.proof is not citing_line.proof:
         return True
 
-    cited_scope = getattr(cited_line, "scope", None)
-    citing_scope = getattr(citing_line, "scope", None)
+    cited_scope = cited_line.scope
+    citing_scope = citing_line.scope
 
     if cited_scope is None or citing_scope is None:
         return True

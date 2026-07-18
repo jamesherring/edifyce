@@ -2,9 +2,14 @@ from website.logical.matching import *
 from website.logical.matching import Pattern, constant
 from website.logical.formal_system import FormalSystem, LineType, InferenceRule, ProofLine, SubproofSchema
 from website.logical.formal_system.side_condition_syntax import parse_side_condition
+from website.logical.kernel import Node, Var, from_match, intern
 from copy import copy, deepcopy
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from website.logical.kernel.terms import Term
 
 
 @dataclass(eq=False)
@@ -148,7 +153,69 @@ def build_schema_pattern(text: str, context, name: str):
 
     pattern = StringPattern(name=name, pattern=text, pre_format=context.pre_format)
     pattern.add_variables(context.string_variables)
+
+    # Precompute the schema's nested kernel term. A template like a Hilbert axiom
+    # `(p → (q → p))` denotes an implication whose right side is itself an
+    # implication, but the StringPattern is a single flat production. The
+    # term-based checker matches a schema against a proof formula by comparing
+    # term trees, and a proof formula is built compositionally from the system's
+    # productions, so the schema must project to the *same* nested tree. Parse
+    # the template against the productions (with the rule's variables treated as
+    # metavariables) once, here, and stash the resulting term; _schema_term uses
+    # it. None when the template is a bare variable (from_pattern already nests
+    # trivially) or nothing parses it (fall back to the flat projection).
+    pattern.schema_term = compose_schema_term(pattern, context)
     return pattern
+
+
+def compose_schema_term(pattern: Pattern, context) -> "Term | None":
+    # Project a compound rule-schema template into its nested kernel term by
+    # parsing it against the system's productions. See build_schema_pattern.
+    if not pattern.variable_locations or not pattern.non_variable_locations:
+        # A bare variable/sort (no literal structure) needs no compositional
+        # parse - from_pattern projects it correctly already.
+        return None
+
+    # Match against the system's productions only, never its staged definitions.
+    # During compilation `context.definitions` holds unresolved PendingDefinition
+    # records (finalised at the end of the formal-system block), so letting the
+    # parse fall through to a definition-unfold would call `.match` on one and
+    # crash. Composition is about productions; a schema recognisable only via a
+    # definition simply falls back to the flat projection.
+    parse_context = copy(context)
+    parse_context.definitions = []
+
+    for candidate in context.variables.values():
+        if isinstance(candidate, UnionPattern):
+            match = candidate.match(pattern.pattern, parse_context)
+            if match is not None:
+                return _revariabilise(from_match(match, parse_context), context.string_variables)
+
+    return None
+
+
+def _revariabilise(term: "Term", metavariables: dict) -> "Term":
+    # Re-mark the rule's metavariables in a compositionally-parsed schema term.
+    # Some slots - notably a setvar matched by a RegexPattern, which (unlike a
+    # UnionPattern) does not consult string_variables - come back from the parse
+    # as ground leaves rather than variables. Turn any leaf whose literal is a
+    # declared metavariable into the corresponding Var, so a schema like the ∀I
+    # deduction `∀x p` keeps `x` schematic (able to bind, and to be tied to the
+    # subproof's eigenvariable) instead of fixing it to the literal token "x".
+    def walk(node):
+        if isinstance(node, Node):
+            if node.literal is not None and node.literal in metavariables:
+                return Var(node.literal, metavariables[node.literal])
+            if node.children:
+                return Node(
+                    pattern=node.pattern,
+                    children={label: walk(child) for label, child in node.children.items()},
+                    literal=node.literal,
+                    sort=node.sort,
+                )
+        return node
+
+    return intern(walk(term))
 
 
 @dataclass(eq=False)

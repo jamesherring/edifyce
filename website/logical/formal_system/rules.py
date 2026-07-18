@@ -289,12 +289,23 @@ class InferenceRule:
         (``formula`` meaning "any formula") has no name to share by; two such
         positions are independent premises, so each occurrence's anonymous
         variable is renamed apart rather than collapsed into one binding.
+
+        A compound template (e.g. a Hilbert axiom ``(p -> (q -> p))``) carries a
+        precomputed *nested* term from the compiler (``schema_term``), because a
+        flat ``from_pattern`` projection would be one production while the proof
+        formula it must match is a nested tree of the system's productions. Its
+        named metavariables are shared, so it needs no per-occurrence renaming.
         """
-        term = from_pattern(pattern, context)
-
         if isinstance(pattern, StringPattern):
-            return term
+            # A compound template carries a precomputed *nested* term from the
+            # compiler; a flat from_pattern projection would be one production
+            # while the proof formula it must match is a nested tree. Either way
+            # its named metavariables are shared, so no per-occurrence renaming.
+            if pattern.schema_term is not None:
+                return pattern.schema_term
+            return from_pattern(pattern, context)
 
+        term = from_pattern(pattern, context)
         renames = {
             name: Var(f"{name}\x00{occurrence}", sort)
             for name, sort in term.free_vars().items()
