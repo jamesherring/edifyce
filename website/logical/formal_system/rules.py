@@ -308,6 +308,22 @@ class InferenceRule:
         pair = (self._schema_term(pattern, slot + 1, context), from_match(line.formula, context))
         return match_all([pair], context) is not None
 
+    def prefix_binding_exists(
+        self, antecedents: Sequence[ProofLine], deduction: ProofLine, context: Context
+    ) -> bool:
+        """Whether the deduction and the first ``len(antecedents)`` antecedent
+        slots can unify under one binding.
+
+        ``antecedents`` is a *prefix* of an assignment (aligned to the rule's
+        slots in order). The assignment search calls this to prune a partial
+        assignment as soon as it is inconsistent - unification is monotone, so a
+        prefix that cannot bind can never be completed - instead of exploring
+        every ordering down to a full :meth:`check`. Reuses :meth:`_term_binding`,
+        which already includes the deduction pair (so a shared metavariable is
+        forced to agree from the first slot on).
+        """
+        return self._term_binding(antecedents, deduction, context) is not None
+
     def _schema_term(self, pattern: Pattern, occurrence: int, context: Context) -> Term:
         """Project a schema pattern into a term, keeping named metavariables
         shared but making each bare-sort position independent.

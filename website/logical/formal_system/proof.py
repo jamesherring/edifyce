@@ -553,7 +553,20 @@ class Proof:
             for j in adjacency[slot]:
                 if j in chosen:
                     continue
-                result = search(slot + 1, [*chosen, j])
+                candidate = [*chosen, j]
+                # Prune early: the deduction and the slots chosen so far must
+                # already unify. Slots are filled in order, so `candidate` is a
+                # prefix aligned to the rule's first len(candidate) slots; if it
+                # cannot bind, no completion can (unification is monotone), so
+                # skip the whole subtree instead of descending to a leaf check().
+                # This is what keeps an all-individually-admissible but globally
+                # inconsistent citation (e.g. a shared metavariable over distinct
+                # formulae) from costing an ordering-factorial number of checks.
+                if not inference_rule.prefix_binding_exists(
+                    [lines[k] for k in candidate], deduction, context
+                ):
+                    continue
+                result = search(slot + 1, candidate)
                 if result is not None:
                     return result
             return None
@@ -692,18 +705,27 @@ class Proof:
                 # Don't recognise the path
                 return ImportResult(success=False, error_message=f"Could not find '{path}'.")
 
-        # Add the reference
+        # Add the reference, snapshotting enough state to back the import out
+        # cleanly if it turns out to close a cycle. `had_label` distinguishes "the
+        # label had no prior binding" from "it was bound to something" so the
+        # rejection path restores the shadowed binding instead of erasing it.
         previous_proofs_used = set(self.proofs_used)
+        had_label = label in self.reference_context
+        previous_binding = self.reference_context.get(label)
         self.reference_context[label] = ref_item
         add_reference(ref_item)
 
         # Reject a circular import: a theorem that (transitively) depends on this
         # proof cannot soundly justify it. add_reference has just recorded the new
         # dependency edge, so a cycle now reachable through proofs_used means this
-        # import closes a loop. Back the edge out and fail rather than admit it.
+        # import closes a loop. Restore the prior state (including any label this
+        # import shadowed) and fail rather than admit it.
         if self.circular_dependency() is not None:
             self.proofs_used = previous_proofs_used
-            self.reference_context.pop(label, None)
+            if had_label:
+                self.reference_context[label] = previous_binding
+            else:
+                self.reference_context.pop(label, None)
             return ImportResult(
                 success=False,
                 error_message=f"Importing '{path}' would create a circular dependency.",

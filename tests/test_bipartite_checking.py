@@ -74,6 +74,16 @@ MP_SYSTEM = """FormalSystem PropLogic:
                 (p -> q)
             deduction:
                 q
+
+        InferenceRule triple:
+            label:
+                TRIP
+            antecedents:
+                p
+                p
+                p
+            deduction:
+                p
 """
 
 
@@ -190,6 +200,21 @@ def test_extra_antecedent_is_accepted(extra_system):
     assert len(line.extra_antecedents) == 1
 
 
+def test_shared_metavariable_over_several_slots_accepts_consistent(mp_system):
+    # TRIP has three slots all bound to p; three lines with the same formula are
+    # a consistent assignment. The incremental prune must not reject it.
+    proof = mp_system.parse("a [HYP]\na [HYP]\na [HYP]\na [TRIP, 1, 2, 3]")
+    assert last_line(proof).valid is True
+
+
+def test_shared_metavariable_over_several_slots_rejects_inconsistent(mp_system):
+    # Three distinct formulae cannot all bind the shared p. Each is individually
+    # admissible, so this is exactly the case the incremental prune must reject
+    # cheaply (rather than exploring every ordering to a leaf check).
+    proof = mp_system.parse("a [HYP]\nb [HYP]\nc [HYP]\na [TRIP, 1, 2, 3]")
+    assert last_line(proof).valid is False
+
+
 def test_auto_justification_finds_antecedents_without_citation(mp_system):
     # With no cited lines, justify() reuses the same assignment search over the
     # accessible prior lines to discover a valid application.
@@ -270,6 +295,22 @@ def test_import_that_closes_a_cycle_is_rejected(mp_system):
     # The dependency edge and label binding are backed out on rejection.
     assert dependency not in proof.proofs_used
     assert "imported" not in proof.reference_context
+
+
+def test_cycle_rejection_restores_a_shadowed_label(mp_system):
+    # A failed circular import that reuses an existing label must restore the
+    # prior binding, not erase it (else earlier valid references would break).
+    dependency = make_proof(mp_system)
+    proof = importable_proof(mp_system, dependency)
+    dependency.proofs_used = {proof}
+
+    existing = make_proof(mp_system)
+    proof.reference_context["dup"] = existing
+
+    result = proof.import_path("R", "dup", mp_system.context)
+    assert result.success is False
+    # The pre-existing binding under "dup" survives the rejected import.
+    assert proof.reference_context["dup"] is existing
 
 
 # ---------------------------------------------------------------------------
