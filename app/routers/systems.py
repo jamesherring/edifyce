@@ -299,6 +299,14 @@ async def validate_system(
     session: AsyncSession = Depends(get_session),
 ) -> SystemValidation:
     system = await _get_owned_or_404(session, system_id, user.id)
+
+    # NOTE: inheritance is not resolved yet. `inherits_from_id` is stored (and
+    # its reference validated on write), but the declarative pipeline has no
+    # `inherit` concept — `system_to_spec`/`lower` describe this system alone and
+    # no parent `system_dict` is supplied — so a child that relies on a parent's
+    # grammar/rules would validate in isolation. Wiring the parent chain through
+    # here (and `/source`) is deferred to the inheritance phase; see
+    # docs/object-crud-design.md.
     result = build_spec(system_to_spec(system))
 
     if "errors" in result:
@@ -320,4 +328,6 @@ async def system_source(
     session: AsyncSession = Depends(get_session),
 ) -> SystemSource:
     system = await _get_owned_or_404(session, system_id, user.id)
+    # Describes this system alone; inheritance is not lowered yet (see the note
+    # on validate_system).
     return SystemSource(source=lower(system_to_spec(system)))

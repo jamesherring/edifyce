@@ -160,6 +160,16 @@ fields); *semantic* validity (does it compile?) is surfaced by `validate` and
 shown as a live indicator in the UI, not enforced on every keystroke. Publishing
 (a later concern) can gate on validity.
 
+**Known limitation (deferred): inheritance is not resolved in `validate` /
+`source`.** `inherits_from_id` is stored and its reference validated on write,
+but phase-1 `validate` and `source` compile each system in isolation
+(`system_to_spec` describes one system; the declarative pipeline has no
+`inherit` directive and no parent `system_dict` is supplied). Resolving a
+system against its ancestors — emitting `inherit <slug>` and compiling the
+parent chain into a `system_dict` — is its own phase spanning the declarative
+front-end and the engine wiring, not just this router. Until then, a system that
+relies on a parent's grammar/rules will report errors from `validate`.
+
 ### Keeping it thin (per AGENTS.md)
 
 `app/` stays a translation layer: it owns HTTP, Pydantic, persistence, and calls
