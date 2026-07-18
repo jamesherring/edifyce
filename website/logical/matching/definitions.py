@@ -50,6 +50,19 @@ class Definition:
         self.condition = Condition(pattern.pre_format_apply(condition_string), context=context) \
             if condition_string is not None else None
 
+        # Cached term-based (kernel) counterpart, built lazily by the
+        # formal_system layer for definitional-step checking over the shared-DAG
+        # term representation (see formal_system/definitions.py). Held opaquely so
+        # the matching layer keeps its no-kernel-import rule; `ready` records that
+        # a build was attempted, and `kernel_definition is None` after that means
+        # the definition is not soundly expressible as a kernel definition (it has
+        # a legacy condition or a binder the `Define` DSL cannot declare), so the
+        # caller falls back to the string-based check_application path. A shallow
+        # copy carries both across the context copies the engine makes, so the
+        # build happens at most once per definition.
+        self.kernel_definition = None
+        self.kernel_definition_ready = False
+
     def match(self, s, context):
         # Check if the definition applies to a string s, of the higher level match.
         # We assume if there's a match, any condition has been met.
