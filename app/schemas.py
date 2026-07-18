@@ -1,7 +1,13 @@
 import uuid
 from datetime import datetime
+from typing import Annotated
 
 from pydantic import BaseModel, Field
+
+# Free-text fields map to length-bounded DB columns (see app/db/systems.py). The
+# caps below mirror those `String(N)` widths so oversized input is rejected as a
+# 422 rather than reaching the INSERT and erroring on Postgres.
+_Text512 = Annotated[str, Field(max_length=512)]
 
 
 class HealthResponse(BaseModel):
@@ -44,11 +50,12 @@ class VerifyProofResponse(BaseModel):
 class Binding(BaseModel):
     """A typed variable slot, e.g. ``s : term``."""
 
-    var: str
-    sort: str
+    var: str = Field(..., max_length=64)
+    sort: str = Field(..., max_length=128)
 
 
 class BracketPair(BaseModel):
+    id: uuid.UUID
     opening: str
     closing: str
 
@@ -158,3 +165,120 @@ class SystemSource(BaseModel):
     """The lowered `.edi` for the stored system (read-only transparency/export)."""
 
     source: str
+
+
+# ---------------------------------------------------------------------------
+# Child-object writes (create / update). Nested value lists (bindings,
+# antecedents, line parts) are replaced wholesale on the parent write rather
+# than addressed individually. On an update, an omitted field is left unchanged;
+# a nested list is left unchanged when omitted and replaced when present.
+# ---------------------------------------------------------------------------
+
+
+class BracketCreate(BaseModel):
+    opening: str = Field(..., min_length=1, max_length=16)
+    closing: str = Field(..., min_length=1, max_length=16)
+
+
+class BracketUpdate(BaseModel):
+    opening: str | None = Field(None, min_length=1, max_length=16)
+    closing: str | None = Field(None, min_length=1, max_length=16)
+
+
+class SortCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+
+
+class SortUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=128)
+
+
+class ProductionCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    # The name of an existing sort in this system that the production belongs to.
+    sort: str = Field(..., min_length=1, max_length=128)
+    # Exactly one of template / regex (a composite production vs a leaf).
+    template: str | None = Field(None, max_length=512)
+    regex: str | None = Field(None, max_length=512)
+    bindings: list[Binding] = Field(default_factory=list)
+
+
+class ProductionUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=128)
+    sort: str | None = Field(None, max_length=128)
+    template: str | None = Field(None, max_length=512)
+    regex: str | None = Field(None, max_length=512)
+    bindings: list[Binding] | None = None
+
+
+class LinePartInput(BaseModel):
+    name: str = Field(..., max_length=128)
+    regex: str = Field(..., max_length=512)
+
+
+class LineTypeCreate(BaseModel):
+    name: str = Field(..., max_length=128)
+    shape: str = Field(..., max_length=256)
+    logical_sort: str | None = Field(None, max_length=128)
+    parts: list[LinePartInput] = Field(default_factory=list)
+
+
+class LineTypeUpdate(BaseModel):
+    name: str | None = Field(None, max_length=128)
+    shape: str | None = Field(None, max_length=256)
+    logical_sort: str | None = Field(None, max_length=128)
+    parts: list[LinePartInput] | None = None
+
+
+class DefinitionCreate(BaseModel):
+    sort: str = Field(..., min_length=1, max_length=128)
+    name: str = Field(..., min_length=1, max_length=128)
+    higher: _Text512
+    lower: _Text512
+    condition: str | None = Field(None, max_length=512)
+    bindings: list[Binding] = Field(default_factory=list)
+
+
+class DefinitionUpdate(BaseModel):
+    sort: str | None = Field(None, max_length=128)
+    name: str | None = Field(None, min_length=1, max_length=128)
+    higher: str | None = Field(None, max_length=512)
+    lower: str | None = Field(None, max_length=512)
+    condition: str | None = Field(None, max_length=512)
+    bindings: list[Binding] | None = None
+
+
+class AxiomCreate(BaseModel):
+    label: str = Field(..., min_length=1, max_length=64)
+    name: str = Field(..., min_length=1, max_length=128)
+    formula: _Text512
+    bindings: list[Binding] = Field(default_factory=list)
+
+
+class AxiomUpdate(BaseModel):
+    label: str | None = Field(None, min_length=1, max_length=64)
+    name: str | None = Field(None, min_length=1, max_length=128)
+    formula: str | None = Field(None, max_length=512)
+    bindings: list[Binding] | None = None
+
+
+class RuleCreate(BaseModel):
+    label: str = Field(..., min_length=1, max_length=64)
+    name: str = Field(..., min_length=1, max_length=128)
+    deduction: _Text512
+    antecedents: list[_Text512] = Field(default_factory=list)
+    bindings: list[Binding] = Field(default_factory=list)
+
+
+class RuleUpdate(BaseModel):
+    label: str | None = Field(None, min_length=1, max_length=64)
+    name: str | None = Field(None, min_length=1, max_length=128)
+    deduction: str | None = Field(None, max_length=512)
+    antecedents: list[_Text512] | None = None
+    bindings: list[Binding] | None = None
+
+
+class ReorderRequest(BaseModel):
+    """A full permutation of a collection's ids, in the desired order."""
+
+    ids: list[uuid.UUID] = Field(..., min_length=1)
