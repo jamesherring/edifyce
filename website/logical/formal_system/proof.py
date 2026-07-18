@@ -487,7 +487,13 @@ class Proof:
         proof_line.invalid_message = f"{key} does not apply."
         return False
 
-    def _first_valid_assignment(self, inference_rule, lines, deduction, context):
+    def _first_valid_assignment(
+        self,
+        inference_rule: InferenceRule,
+        lines: list[ProofLine],
+        deduction: ProofLine,
+        context: Context,
+    ) -> tuple[tuple[ProofLine, ...], tuple[ProofLine, ...]] | None:
         # Find an assignment of cited `lines` to `inference_rule`'s antecedent
         # slots for which the rule holds, or None. Returns (antecedents, extras)
         # as tuples aligned to the rule's slots.
@@ -512,7 +518,9 @@ class Proof:
 
         allow_extra = inference_rule.allow_extra_antecedents
 
-        def search(slot, chosen):
+        def search(
+            slot: int, chosen: list[int]
+        ) -> tuple[tuple[ProofLine, ...], tuple[ProofLine, ...]] | None:
             if slot == required:
                 extras = tuple(line for k, line in enumerate(lines) if k not in chosen)
                 if extras and not allow_extra:
