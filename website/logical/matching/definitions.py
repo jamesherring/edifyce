@@ -1,16 +1,23 @@
 """The :class:`Definition` linking higher- and lower-level patterns."""
 
+from __future__ import annotations
+
 from copy import copy
+from typing import TYPE_CHECKING
 
 from . import matches, patterns
-from .conditions import Condition
 from .paths import get_by_path, parse_path
+
+if TYPE_CHECKING:
+    from .context import Context
+    from ..kernel.side_conditions import SideCondition
 
 
 class Definition:
     """A definition class - linking higher level string patterns with lower level ones."""
 
-    def __init__(self, lower, higher, pattern, context, condition_string=None):
+    def __init__(self, lower, higher, pattern, context,
+                 side_condition: SideCondition | None = None, condition_string: str | None = None):
 
         # The pattern this definition applies to
         self.pattern = pattern
@@ -46,9 +53,10 @@ class Definition:
             self.variables = self.lower.variables
             self.variables.update(self.higher.variables)
 
-        # Optional condition string
-        self.condition = Condition(pattern.pre_format_apply(condition_string), context=context) \
-            if condition_string is not None else None
+        # Optional structural guard: a kernel SideCondition parsed by the caller
+        # from the surface `if ...` clause, plus its source text for round-tripping.
+        self.side_condition = side_condition
+        self.condition_string = condition_string
 
     def match(self, s, context):
         # Check if the definition applies to a string s, of the higher level match.
@@ -127,17 +135,25 @@ class Definition:
         if not result:
             return False
 
-        # Check condition
-        if self.condition is not None:
-
-            # Update context with condition variables
-            context_copy = copy(context)
-            context_copy.mapping.update(mapping)
-
-            return self.condition.check_condition(None, context_copy)
+        # Structural guard: the definition applies only if its side-condition
+        # holds on the bound variables (fail-closed on a malformed binding).
+        if self.side_condition is not None and not self._condition_holds(mapping, context):
+            return False
 
         # Otherwise ok
         return True
+
+    def _condition_holds(self, mapping: dict, context: Context) -> bool:
+        # Evaluate the side-condition against the definition's variable binding,
+        # projecting each matched variable into a kernel term. Fails closed if a
+        # match cannot be projected or a referenced name is unbound.
+        from ..kernel.terms import from_match
+
+        try:
+            binding = {label: from_match(match, context) for label, match in mapping.items()}
+            return self.side_condition.check(binding, context)
+        except Exception:
+            return False
 
     def get_by_path(self, path, context, recurse=True):
         # Get the value by a path
@@ -202,6 +218,12 @@ class Definition:
             return False
 
         if not self.pattern.equivalent(other.pattern, context, memo, allow_mapping_to):
+            memo[(self, other)] = False
+            return False
+
+        # Distinguish definitions by their guard so two that differ only in the
+        # `if ...` clause are not collapsed as duplicates.
+        if self.condition_string != other.condition_string:
             memo[(self, other)] = False
             return False
 

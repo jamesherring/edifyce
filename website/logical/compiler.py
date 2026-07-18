@@ -1103,8 +1103,27 @@ class AbstractSyntaxTree:
                 # Add variables
                 context_copy.string_variables.update(defn.variables)
 
+                # Parse the surface `if ...` guard into a kernel side-condition,
+                # pre-formatted so its variable names match the definition's. A
+                # malformed guard becomes a compile error, not an uncaught
+                # exception, and that definition is skipped.
+                try:
+                    side_condition = None
+                    if defn.condition_string is not None:
+                        side_condition = parse_side_condition(
+                            defn.pattern.pre_format_apply(defn.condition_string), context_copy
+                        )
+                except Exception as e:
+                    context.error_log.append(
+                        f"Invalid definition guard '{defn.condition_string}': {e!s}"
+                    )
+                    continue
+
                 # Get the definition
-                result = defn.pattern.add_definition(defn.lower, defn.higher, context_copy, defn.condition_string)
+                result = defn.pattern.add_definition(
+                    defn.lower, defn.higher, context_copy,
+                    side_condition=side_condition, condition_string=defn.condition_string,
+                )
 
                 if result is not None:
                     new_object.context.definitions.add(result)

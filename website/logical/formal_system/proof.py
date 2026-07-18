@@ -14,6 +14,23 @@ if TYPE_CHECKING:
     from .rules import InferenceRule
 
 
+def _parse_definition_guard(text, pattern, context):
+    """Parse a definition's guard text (one side-condition per line, conjoined)
+    into a single :class:`SideCondition`, or ``None`` if there is none.
+
+    Variable names are pre-formatted to match the definition's namespace, the
+    same way the compiler parses a rule's ``side_conditions:`` block.
+    """
+    from .side_condition_syntax import parse_side_condition
+    from ..kernel import And
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()] if text else []
+    if not lines:
+        return None
+    parts = [parse_side_condition(pattern.pre_format_apply(line), context) for line in lines]
+    return parts[0] if len(parts) == 1 else And(tuple(parts))
+
+
 class Subproof:
     """A scoped block of a proof, opened by a scope line and closed by dedent.
 
@@ -666,11 +683,14 @@ class Proof:
             if name in build_context.variables:
                 context_copy.string_variables[key] = build_context.variables[name]
 
-        # Get the condition string if it exists
-        condition_string = None if definition.condition is None else definition.condition.string
+        # Re-parse the imported definition's guard (if any) in this context so
+        # its sorts re-resolve here.
+        condition_string = definition.condition_string
+        side_condition = _parse_definition_guard(condition_string, pattern, context_copy)
 
         result = pattern.add_definition(definition.lower.pattern, definition.higher.pattern, context_copy,
-                                        condition_string, require_lower_match=False)
+                                        side_condition=side_condition, condition_string=condition_string,
+                                        require_lower_match=False)
 
         if result is None:
             raise Exception(f"Failed to import definition: {definition.higher.pattern}")
@@ -852,18 +872,21 @@ class ProofLine:
                 self.invalid_message = f"{lower.string} is not an instance of {pattern.name}."
                 return
 
-            # Also try to get conditions
+            # Also try to get a guard from the line's conditions() accessor.
             condition_string = None
+            side_condition = None
             try:
                 conditions = self.get_by_path("conditions()", context)
                 if len(conditions) > 0:
-                    condition_string = " and ".join([c.string for c in conditions])
+                    condition_string = "\n".join([c.string for c in conditions])
+                    side_condition = _parse_definition_guard(condition_string, pattern, context)
             except Exception:
-                pass
+                condition_string = None
+                side_condition = None
 
             # Add the definition
             self.definition = pattern.add_definition(lower.formatted_string(), higher.formatted_string(), context,
-                                                     condition_string)
+                                                     side_condition=side_condition, condition_string=condition_string)
 
         elif line_type.behaviour == "import":
             # Import a file or result

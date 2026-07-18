@@ -161,22 +161,26 @@ class Pattern:
 
         return False
 
-    def add_definition(self, lower, higher, context, condition_string=None, require_lower_match=True):
+    def add_definition(self, lower, higher, context, side_condition=None, condition_string=None, require_lower_match=True):
         # Add a definition to this pattern
 
         # If require_lower_match is False, the lower string will not be checked against the pattern. This helps avoid
         # needing to keep chains of nested definitions in context
+
+        # `side_condition` is a pre-parsed kernel SideCondition (the caller owns
+        # parsing so `matching` need not depend on the side-condition syntax);
+        # `condition_string` is its source text, kept for round-tripping.
 
         if require_lower_match and self.match(lower, context) is None:
             # No match with lower
             return None
 
         try:
-            defn = definitions.Definition(lower, higher, self, context, condition_string)
+            defn = definitions.Definition(lower, higher, self, context, side_condition, condition_string)
         except Exception:
             if not require_lower_match:
                 # Try without the lower match
-                defn = definitions.Definition(None, higher, self, context, condition_string)
+                defn = definitions.Definition(None, higher, self, context, side_condition, condition_string)
             else:
                 return None
 
