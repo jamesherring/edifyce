@@ -6,6 +6,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.routing import APIRoute
 
+from app.auth import (
+    auth_backend,
+    fastapi_users,
+    UserCreate,
+    UserRead,
+    UserUpdate,
+)
 from app.schemas import (
     CompileRequest,
     CompileResponse,
@@ -39,10 +46,16 @@ _cors_origins = (
     else _default_origins
 )
 
-# No credentials: the API is stateless and uses no cookies or auth.
+# Auth uses an httponly cookie, so the browser must be allowed to send it on
+# cross-origin API calls (allow_credentials). Credentials with a "*" origin is a
+# footgun — Starlette then echoes *any* Origin back with
+# Access-Control-Allow-Credentials, granting every site credentialed access — so
+# only enable credentials when the origins are an explicit list (the default).
+_allow_credentials = "*" not in _cors_origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
+    allow_credentials=_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -93,6 +106,50 @@ def verify_proof(payload: VerifyProofRequest) -> VerifyProofResponse:
 
 
 # ---------------------------------------------------------------------------
+# Authentication
+# ---------------------------------------------------------------------------
+#
+# Email/password auth backed by the `users` table, via fastapi-users. Mounts:
+#   POST /auth/login, POST /auth/logout   (cookie session)
+#   POST /auth/register                   (create account)
+#   GET/PATCH /users/me, .../{id}         (current user + admin management)
+# These need a database (DATABASE_URL); the routes above do not. Social-login
+# (OAuth) routers are intentionally not mounted yet — they need per-provider
+# client secrets — but the `oauth_accounts` schema is ready for them.
+
+_auth_router = fastapi_users.get_auth_router(auth_backend)
+_register_router = fastapi_users.get_register_router(UserRead, UserCreate)
+_users_router = fastapi_users.get_users_router(UserRead, UserUpdate)
+
+app.include_router(_auth_router, prefix="/auth", tags=["auth"])
+app.include_router(_register_router, prefix="/auth", tags=["auth"])
+app.include_router(_users_router, prefix="/users", tags=["users"])
+
+# fastapi-users' routers mount as nested routers, so their concrete paths are
+# not APIRoute entries on `app` — the SPA fallback's API-path guard can't find
+# them by iterating app.routes. Record their non-parameterized paths here so a
+# wrong-method browser GET to e.g. /auth/login still gets the API's 405 instead
+# of being masked by the SPA shell.
+_MOUNTED_API_ROUTERS = (
+    ("/auth", _auth_router),
+    ("/auth", _register_router),
+    ("/users", _users_router),
+)
+
+
+def _mounted_api_paths() -> set[str]:
+    paths: set[str] = set()
+    for prefix, router in _MOUNTED_API_ROUTERS:
+        for route in router.routes:
+            # Skip parameterized paths (e.g. /users/{id}): the router serves them
+            # for every method that reaches them, so they never fall through to
+            # the SPA catch-all where this guard matters.
+            if isinstance(route, APIRoute) and "{" not in route.path:
+                paths.add(f"{prefix}{route.path}".strip("/"))
+    return paths
+
+
+# ---------------------------------------------------------------------------
 # Static frontend
 # ---------------------------------------------------------------------------
 #
@@ -120,7 +177,7 @@ if (FRONTEND_BUILD / "index.html").is_file():
     # above so it stays in sync automatically.
     _api_paths = {
         route.path.strip("/") for route in app.routes if isinstance(route, APIRoute)
-    }
+    } | _mounted_api_paths()
 
     @app.get("/{path:path}", include_in_schema=False)
     def serve_spa(path: str, request: Request) -> Response:

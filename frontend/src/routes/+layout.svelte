@@ -4,10 +4,14 @@
 	import SiteHeader from '$lib/components/site-header.svelte';
 	import PenroseBg from '$lib/components/penrose-bg.svelte';
 	import { theme } from '$lib/theme.svelte';
+	import { auth } from '$lib/auth.svelte';
 
 	let { children } = $props();
 
-	onMount(() => theme.init());
+	onMount(() => {
+		theme.init();
+		auth.init();
+	});
 </script>
 
 <svelte:head>

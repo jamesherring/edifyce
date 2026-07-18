@@ -23,7 +23,8 @@ adapter over it, and the frontend is a thin client over the API.
 | Path | What lives here |
 |---|---|
 | `app/` | FastAPI application. `main.py` = routes (and static-SPA serving); `schemas.py` = Pydantic request/response models. Thin — it delegates to the engine. |
-| `app/db/` | Persistence layer: SQLAlchemy 2.0 (async) models + session wiring. Beside the engine, not inside it. Not yet wired into routes. See `app/db/README.md`. |
+| `app/auth/` | Email/password authentication (fastapi-users): httponly-cookie + JWT backend, user manager, and the register/login/logout/`users` routers mounted in `main.py`. Needs `DATABASE_URL`. |
+| `app/db/` | Persistence layer: SQLAlchemy 2.0 (async) models + session wiring. Beside the engine, not inside it. The `users` table is wired into `app/auth/`; the rest is not yet used by routes. See `app/db/README.md`. |
 | `migrations/` | Atlas versioned SQL migrations (`atlas.sum`). Config in `atlas.hcl`; models loaded via `tools/atlas/schema.py`. |
 | `website/logical/` | The proof engine. This is where the real logic is. |
 | `website/logical/compiler.py` | Parses Edifyce source into a `FormalSystem` (AST → system). |

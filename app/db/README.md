@@ -3,8 +3,9 @@
 SQLAlchemy 2.0 (async / asyncpg) models plus the schema-as-code migration setup.
 This layer lives *beside* the engine: `website/logical/` stays a pure function of
 its input, and these models are how the application tier remembers systems,
-proofs, and (in future) searchable theorems. Nothing here is wired into the API
-routes yet — this is the schema and the tooling to evolve it.
+proofs, and (in future) searchable theorems. The `users` table is wired into the
+auth routes (`app/auth/`); the system/proof/theorem tables are not yet used by
+any route — they are the schema and the tooling to evolve it.
 
 ## Layout
 
@@ -25,11 +26,13 @@ Modernised from the original Django app (`website/models.py` on `main`):
 
 - **`users`** — collapses Django's `auth.User` + `Profile`, built on
   fastapi-users' `SQLAlchemyBaseUserTableUUID` (contributes `email`,
-  `hashed_password`, `is_active`, `is_superuser`, `is_verified`). Auth routes
-  aren't wired yet — this is only the schema the library expects.
+  `hashed_password`, `is_active`, `is_superuser`, `is_verified`). Wired into the
+  auth routes in `app/auth/` (register / login / logout / `users/me`).
 - **`oauth_accounts`** — linked social logins (fastapi-users'
   `SQLAlchemyBaseOAuthAccountTableUUID`); one user, many providers. The library
-  hardcodes the FK to a `user` table, so we repoint it at our `users` table.
+  hardcodes the FK to a `user` table, so we repoint it at our `users` table. The
+  schema is ready; the OAuth routers aren't mounted yet (they need per-provider
+  client secrets).
 - **`formal_systems`** — a system's identity + surrounding concerns: `name`,
   `slug`, optional `owner`, self-referential `inherits_from_id` (system
   inheritance), and `published_at`. Its grammar/rules/definitions are **not** a

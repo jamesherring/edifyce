@@ -39,6 +39,16 @@ export interface VerifyResponse {
 	proof: ProofData | null;
 }
 
+/** The authenticated user — mirrors `UserRead` in app/auth/schemas.py. */
+export interface User {
+	id: string;
+	email: string;
+	is_active: boolean;
+	is_superuser: boolean;
+	is_verified: boolean;
+	display_name: string | null;
+}
+
 /** Raised when the backend answers with a non-2xx status or is unreachable. */
 export class ApiError extends Error {
 	status: number;
@@ -56,8 +66,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	let response: Response;
 	try {
 		response = await fetch(`${API_BASE_URL}${path}`, {
-			headers: { 'Content-Type': 'application/json' },
-			...init
+			// `credentials: 'include'` sends the httponly auth cookie on same- and
+			// cross-origin API calls (the backend sets allow_credentials to match).
+			credentials: 'include',
+			...init,
+			headers: { 'Content-Type': 'application/json', ...init?.headers }
 		});
 	} catch (cause) {
 		throw new ApiError(
@@ -120,6 +133,10 @@ function formatDetail(detail: unknown): string | undefined {
 			})
 			.join('\n');
 	}
+	// fastapi-users password-policy failures come back as { code, reason }.
+	if (detail && typeof detail === 'object' && 'reason' in detail) {
+		return String((detail as { reason: unknown }).reason);
+	}
 	return undefined;
 }
 
@@ -136,5 +153,39 @@ export const api = {
 		request<VerifyResponse>('/proofs/verify', {
 			method: 'POST',
 			body: JSON.stringify({ system_code: systemCode, proof_text: proofText })
+		}),
+
+	// --- Authentication ------------------------------------------------------
+
+	register: (email: string, password: string, displayName?: string) =>
+		request<User>('/auth/register', {
+			method: 'POST',
+			body: JSON.stringify({
+				email,
+				password,
+				display_name: displayName?.trim() ? displayName.trim() : null
+			})
+		}),
+
+	/**
+	 * Log in and receive the session cookie. fastapi-users' login endpoint reads
+	 * OAuth2 form fields (`username`/`password`), not JSON, so this posts
+	 * url-encoded data and returns nothing (a 204 that sets the cookie).
+	 */
+	login: (email: string, password: string) =>
+		request<null>('/auth/login', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+			body: new URLSearchParams({ username: email, password }).toString()
+		}),
+
+	logout: () => request<null>('/auth/logout', { method: 'POST' }),
+
+	me: () => request<User>('/users/me'),
+
+	updateProfile: (changes: { display_name?: string | null; password?: string }) =>
+		request<User>('/users/me', {
+			method: 'PATCH',
+			body: JSON.stringify(changes)
 		})
 };
