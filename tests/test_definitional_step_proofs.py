@@ -251,6 +251,20 @@ def test_named_binder_definition_unfold_is_valid(subset_system):
     assert proof.proof_lines[1].valid is True
 
 
+def test_equivalent_definitions_keep_their_distinct_labels():
+    # The same forms declared under two labels must stay separately citable -
+    # equivalence-based dedup must not collapse them and drop a label.
+    code = ALIAS_SYSTEM.replace(
+        "Define x sub y as (x ∈ y) label sub",
+        "Define x sub y as (x ∈ y) label sub\n"
+        "            Define x sub y as (x ∈ y) label subseteq",
+    )
+    system = compiled(code)
+    for label in ("sub", "subseteq"):
+        proof = system.parse(f"a sub b [HYP]\n(a ∈ b) [{label}, 1]")
+        assert proof.proof_lines[1].valid is True, label
+
+
 def test_duplicate_definition_labels_are_a_compile_error():
     # A cited name must resolve to one definition, so two definitions sharing a
     # label is rejected at compile time.

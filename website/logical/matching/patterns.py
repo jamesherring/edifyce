@@ -190,8 +190,11 @@ class Pattern:
                 return None
 
         for d in context.definitions:
-            if d.equivalent(defn, context):
-                # This definition has already been created
+            if d.equivalent(defn, context) and d.label == defn.label:
+                # This definition has already been created under the same name.
+                # Definitions that are structurally equal but carry *different*
+                # labels are kept apart, so each name stays citable (equivalence
+                # does not consider the label).
                 return d
 
         context.definitions.add(defn)
