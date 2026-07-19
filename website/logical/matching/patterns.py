@@ -1,19 +1,12 @@
 """Pattern classes: the base :class:`Pattern` and its concrete subclasses."""
 
-from __future__ import annotations
-
 import random
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 import regex as re
 
 from . import definitions, matches
 from .conditions import Condition
-
-if TYPE_CHECKING:
-    from .context import Context
-    from ..kernel.side_conditions import SideCondition
 
 
 @dataclass(eq=False)
@@ -168,28 +161,30 @@ class Pattern:
 
         return False
 
-    def add_definition(self, lower: str, higher: str, context: Context,
-                       side_condition: SideCondition | None = None, condition_string: str | None = None,
-                       require_lower_match: bool = True) -> definitions.Definition | None:
+    def add_definition(self, lower, higher, context, condition_string=None, require_lower_match=True,
+                       fresh=None, kernel_condition=None):
         # Add a definition to this pattern
 
         # If require_lower_match is False, the lower string will not be checked against the pattern. This helps avoid
         # needing to keep chains of nested definitions in context
 
-        # `side_condition` is a pre-parsed kernel SideCondition (the caller owns
-        # parsing so `matching` need not depend on the side-condition syntax);
-        # `condition_string` is its source text, kept for round-tripping.
+        # fresh: {name: sort Pattern} for the defining form's bound variables;
+        # kernel_condition: an optional kernel-vocabulary proviso. Both are for
+        # the term-based checker (see formal_system/definitions.py) and default
+        # to none, so alias definitions are unaffected.
 
         if require_lower_match and self.match(lower, context) is None:
             # No match with lower
             return None
 
         try:
-            defn = definitions.Definition(lower, higher, self, context, side_condition, condition_string)
+            defn = definitions.Definition(lower, higher, self, context, condition_string,
+                                          fresh=fresh, kernel_condition=kernel_condition)
         except Exception:
             if not require_lower_match:
                 # Try without the lower match
-                defn = definitions.Definition(None, higher, self, context, side_condition, condition_string)
+                defn = definitions.Definition(None, higher, self, context, condition_string,
+                                              fresh=fresh, kernel_condition=kernel_condition)
             else:
                 return None
 
@@ -387,6 +382,14 @@ class StringPattern(Pattern):
 
         # The pattern string
         self.pattern = self.pre_format_apply(pattern)
+
+        # An optional precomputed nested kernel Term for a rule-schema template,
+        # set by the compiler (compose_schema_term) and consumed by the checker;
+        # opaque to the matching layer, which never reads it (matching must not
+        # depend on the kernel). None for any pattern that is not a compound
+        # rule schema. Declared here so consumers use `pattern.schema_term`
+        # directly rather than a defaulting getattr.
+        self.schema_term = None
 
         # The display pattern. May be different to pattern depending on format
         self.display_pattern = pattern

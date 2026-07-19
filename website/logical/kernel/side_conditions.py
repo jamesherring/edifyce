@@ -229,62 +229,6 @@ class Or(SideCondition):
         return any(results)
 
 
-def normal_form(condition: SideCondition) -> tuple:
-    """A structural normal form for comparing side-conditions by value.
-
-    Sorts compare by name (not object identity) so two parses of the same
-    proviso - even in different contexts - agree, and boolean combinators fold
-    to their parts. Used to compare rules and definitions structurally rather
-    than by their (formatting-sensitive) source text.
-    """
-    if isinstance(condition, (And, Or)):
-        # Sort by repr, not the tuples themselves: a normal form may contain
-        # None (an absent sort), and ordering tuples that tie until a
-        # None-vs-str position raises TypeError. repr gives a total order and
-        # still canonicalises commutative parts.
-        return (
-            type(condition).__name__,
-            tuple(sorted((normal_form(part) for part in condition.parts), key=repr)),
-        )
-    if isinstance(condition, Not):
-        return ("Not", normal_form(condition.inner))
-    if isinstance(condition, Occurs):
-        return ("Occurs", condition.needle, condition.haystack)
-    if isinstance(condition, Equal):
-        return ("Equal", condition.left, condition.right)
-    if isinstance(condition, DisjointLeaves):
-        sort = None if condition.sort is None else condition.sort.name
-        return ("DisjointLeaves", condition.left, condition.right, sort)
-    if isinstance(condition, IsAtom):
-        sort = None if condition.sort is None else condition.sort.name
-        return ("IsAtom", condition.name, sort)
-    return (type(condition).__name__,)
-
-
-def metavariables(condition: SideCondition) -> set[str]:
-    """The metavariable names a side-condition references - exactly the names its
-    :meth:`~SideCondition.check` looks up in the binding.
-
-    Lets a caller project only the terms a condition actually needs, rather than
-    the whole match, so an unrelated (unreferenced) binding can't make the check
-    fail for want of a projection.
-    """
-    if isinstance(condition, (And, Or)):
-        names: set[str] = set()
-        for part in condition.parts:
-            names |= metavariables(part)
-        return names
-    if isinstance(condition, Not):
-        return metavariables(condition.inner)
-    if isinstance(condition, Occurs):
-        return {condition.needle, condition.haystack}
-    if isinstance(condition, (DisjointLeaves, Equal)):
-        return {condition.left, condition.right}
-    if isinstance(condition, IsAtom):
-        return {condition.name}
-    return set()
-
-
 def _bound(binding: Binding, name: str) -> Term:
     """Look up a metavariable's bound term, or fail loudly on a malformed
     condition (one naming a metavariable the rule never binds)."""

@@ -1,26 +1,35 @@
 """The :class:`Definition` linking higher- and lower-level patterns."""
 
-from __future__ import annotations
-
 from copy import copy
-from typing import TYPE_CHECKING
 
 from . import matches, patterns
+from .conditions import Condition
 from .paths import get_by_path, parse_path
-
-if TYPE_CHECKING:
-    from .context import Context
-    from ..kernel.side_conditions import SideCondition
 
 
 class Definition:
     """A definition class - linking higher level string patterns with lower level ones."""
 
-    def __init__(self, lower: str | None, higher: str, pattern: patterns.Pattern, context: Context,
-                 side_condition: SideCondition | None = None, condition_string: str | None = None) -> None:
+    def __init__(self, lower, higher, pattern, context, condition_string=None,
+                 fresh=None, kernel_condition=None):
 
         # The pattern this definition applies to
         self.pattern = pattern
+
+        # Bound variables of the defining form: {name: sort Pattern}. These are
+        # the variables the lower form binds (e.g. the `z` in ∀z.(…)); declaring
+        # them lets the term-based checker unfold capture-avoidingly. The sorts
+        # are matching Patterns, so this stays within the matching layer. Empty
+        # for an ordinary alias definition.
+        self.fresh = fresh or {}
+
+        # An optional *additional* proviso in the kernel's structural
+        # side-condition vocabulary (beyond the capture-avoidance one the kernel
+        # derives from `fresh`). Held opaquely so the matching layer keeps its
+        # no-kernel-import rule; the formal_system bridge passes it to the kernel
+        # definition. Distinct from `self.condition` below, which is the legacy
+        # string proviso that forces the string-based path.
+        self.kernel_condition = kernel_condition
 
         self.lower = None
         self.lower_match_template = None
@@ -53,10 +62,22 @@ class Definition:
             self.variables = self.lower.variables
             self.variables.update(self.higher.variables)
 
-        # Optional structural guard: a kernel SideCondition parsed by the caller
-        # from the surface `if ...` clause, plus its source text for round-tripping.
-        self.side_condition = side_condition
-        self.condition_string = condition_string
+        # Optional condition string
+        self.condition = Condition(pattern.pre_format_apply(condition_string), context=context) \
+            if condition_string is not None else None
+
+        # Cached term-based (kernel) counterpart, built lazily by the
+        # formal_system layer for definitional-step checking over the shared-DAG
+        # term representation (see formal_system/definitions.py). Held opaquely so
+        # the matching layer keeps its no-kernel-import rule; `ready` records that
+        # a build was attempted, and `kernel_definition is None` after that means
+        # the definition is not soundly expressible as a kernel definition (it has
+        # a legacy condition or a binder the `Define` DSL cannot declare), so the
+        # caller falls back to the string-based check_application path. A shallow
+        # copy carries both across the context copies the engine makes, so the
+        # build happens at most once per definition.
+        self.kernel_definition = None
+        self.kernel_definition_ready = False
 
     def match(self, s, context):
         # Check if the definition applies to a string s, of the higher level match.
@@ -135,32 +156,17 @@ class Definition:
         if not result:
             return False
 
-        # Structural guard: the definition applies only if its side-condition
-        # holds on the bound variables (fail-closed on a malformed binding).
-        if self.side_condition is not None and not self._condition_holds(mapping, context):
-            return False
+        # Check condition
+        if self.condition is not None:
+
+            # Update context with condition variables
+            context_copy = copy(context)
+            context_copy.mapping.update(mapping)
+
+            return self.condition.check_condition(None, context_copy)
 
         # Otherwise ok
         return True
-
-    def _condition_holds(self, mapping: dict[str, matches.Match], context: Context) -> bool:
-        # Evaluate the side-condition against the definition's variable binding,
-        # projecting only the variables the guard references into kernel terms
-        # (so an unrelated submatch that won't project can't sink the check).
-        # Fails closed if a referenced match won't project or isn't bound.
-        # Imported lazily: kernel.terms imports matching.patterns at load time.
-        from ..kernel.terms import from_match
-        from ..kernel.side_conditions import metavariables
-
-        try:
-            binding = {
-                name: from_match(mapping[name], context)
-                for name in metavariables(self.side_condition)
-                if name in mapping
-            }
-            return self.side_condition.check(binding, context)
-        except Exception:
-            return False
 
     def get_by_path(self, path, context, recurse=True):
         # Get the value by a path
@@ -194,8 +200,7 @@ class Definition:
 
         raise Exception(f"Could not find value from path '{path}'.")
 
-    def equivalent(self, other: object, context: Context, memo: dict | None = None,
-                   allow_mapping_to: bool = False) -> bool:
+    def equivalent(self, other, context, memo=None, allow_mapping_to=False):
         # Check if two definitions are the same.
 
         if memo is None:
@@ -226,18 +231,6 @@ class Definition:
             return False
 
         if not self.pattern.equivalent(other.pattern, context, memo, allow_mapping_to):
-            memo[(self, other)] = False
-            return False
-
-        # Distinguish definitions by their guard, compared structurally (so
-        # formatting differences don't matter), rather than by source text: two
-        # that differ only in the `if ...` clause are not collapsed as duplicates.
-        # Imported lazily: kernel.terms imports matching.patterns at load time.
-        from ..kernel.side_conditions import normal_form
-
-        self_guard = None if self.side_condition is None else normal_form(self.side_condition)
-        other_guard = None if other.side_condition is None else normal_form(other.side_condition)
-        if self_guard != other_guard:
             memo[(self, other)] = False
             return False
 

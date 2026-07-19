@@ -2,35 +2,26 @@
 
 from __future__ import annotations
 
-import itertools
 from copy import copy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from ..graphs import find_cycle, saturating_matching, topological_order
+from ..kernel.side_conditions import Not, Occurs
+from ..kernel.terms import from_match
 from ..matching import Match, MatchSet, get_by_path, parse_arguments, parse_path
+from .definitions import follows_by_definition
 
 if TYPE_CHECKING:
     from ..matching.context import Context
-    from ..matching.patterns import Pattern
-    from ..kernel.side_conditions import SideCondition
     from .rules import InferenceRule
 
 
-def _parse_definition_guard(text: str | None, pattern: Pattern, context: Context) -> SideCondition | None:
-    """Parse a definition's guard text (one side-condition per line, conjoined)
-    into a single :class:`SideCondition`, or ``None`` if there is none.
-
-    Variable names are pre-formatted to match the definition's namespace, the
-    same way the compiler parses a rule's ``side_conditions:`` block.
-    """
-    from .side_condition_syntax import parse_side_condition
-    from ..kernel import And
-
-    lines = [line.strip() for line in text.splitlines() if line.strip()] if text else []
-    if not lines:
-        return None
-    parts = [parse_side_condition(pattern.pre_format_apply(line), context) for line in lines]
-    return parts[0] if len(parts) == 1 else And(tuple(parts))
+# Generous upper bound on how many antecedents a single line may cite. The
+# assignment search is pruned and fast-rejected (see Proof._first_valid_assignment),
+# so this is only a guard against a pathological citation, not the old factorial
+# permutation limit; no real proof approaches it.
+MAX_CITED_ANTECEDENTS = 16
 
 
 class Subproof:
@@ -116,9 +107,6 @@ class Subproof:
         # structurally on kernel terms via the closed side-condition algebra
         # (kernel.side_conditions) - the graph representation, not strings. This
         # is the algebra's own worked example: Not(Occurs("x", "phi")).
-        from ..kernel.side_conditions import Not, Occurs
-        from ..kernel.terms import from_match
-
         eigenvariable = self.eigenvariable
         if eigenvariable is None:
             return False
@@ -152,11 +140,11 @@ def line_is_accessible(citing_line: ProofLine, cited_line: ProofLine) -> bool:
     # tree (the two proofs have unrelated scope roots). Ordinary cross-proof
     # citation is already guarded by the antecedent-ordering check in
     # InferenceRule.check, so scope restriction simply does not apply here.
-    if getattr(cited_line, "proof", None) is not getattr(citing_line, "proof", None):
+    if cited_line.proof is not citing_line.proof:
         return True
 
-    cited_scope = getattr(cited_line, "scope", None)
-    citing_scope = getattr(citing_line, "scope", None)
+    cited_scope = cited_line.scope
+    citing_scope = citing_line.scope
 
     if cited_scope is None or citing_scope is None:
         return True
@@ -484,36 +472,107 @@ class Proof:
             proof_line.invalid_message = f"{key} requires exactly {len(inference_rule.antecedents)!s} antecedent(s)."
             return False
 
-        if len(antecedents) > 6:
-            # Too many permutations to handle
-            raise Exception("Server error: too many permutations to consider!")
+        if len(antecedents) > MAX_CITED_ANTECEDENTS:
+            # The assignment search below is bipartite-fast-rejected and pruned,
+            # not factorial, so this is no longer the tight "> 6" permutation
+            # guard - just a generous sanity bound that keeps a pathological
+            # citation (many mutually-admissible lines under an extra-antecedent
+            # rule) from driving a large search. A real citation never approaches
+            # it, and exceeding it is a graceful invalid line, not a server error.
+            proof_line.valid = False
+            proof_line.invalid_message = (
+                f"{key} cites too many antecedents ({len(antecedents)}; max {MAX_CITED_ANTECEDENTS})."
+            )
+            return False
 
-        extra_antecedents = []
-        if inference_rule.allow_extra_antecedents:
-            # Split the extra antecedents into a different list
-            extra_antecedents = antecedents[len(inference_rule.antecedents):]
-            antecedents = antecedents[:len(inference_rule.antecedents)]
+        # Assign the cited lines to the rule's antecedent slots (see
+        # _first_valid_assignment): bipartite matching rejects a citation that
+        # cannot fill every slot and prunes the search to admissible orderings,
+        # replacing the old permutation-of-all-antecedents sweep. Any line left
+        # over is an extra antecedent, allowed only when the rule permits them.
+        assignment = self._first_valid_assignment(
+            inference_rule, list(antecedents), proof_line, context
+        )
+        if assignment is not None:
+            proof_line.antecedents, proof_line.extra_antecedents = assignment
+            proof_line.inference_rule = inference_rule
+            return True
 
-        # Try any permutation of the given antecedents
-        for permutation in list(itertools.permutations(antecedents)):
-            for extra_permutation in list(itertools.permutations(extra_antecedents)):
-                if inference_rule.check(
-                    antecedents=permutation,
-                    extra_antecedents=extra_permutation,
-                    deduction=proof_line,
-                    context=context
-                ):
-                    # It's a valid permutation
-                    proof_line.antecedents = permutation
-                    proof_line.extra_antecedents = extra_permutation
-                    proof_line.inference_rule = inference_rule
-
-                    return True
-
-        # No valid permutation found, not a valid line
+        # No admissible, consistent assignment: not a valid line.
         proof_line.valid = False
         proof_line.invalid_message = f"{key} does not apply."
         return False
+
+    def _first_valid_assignment(
+        self,
+        inference_rule: InferenceRule,
+        lines: list[ProofLine],
+        deduction: ProofLine,
+        context: Context,
+    ) -> tuple[tuple[ProofLine, ...], tuple[ProofLine, ...]] | None:
+        # Find an assignment of cited `lines` to `inference_rule`'s antecedent
+        # slots for which the rule holds, or None. Returns (antecedents, extras)
+        # as tuples aligned to the rule's slots.
+        #
+        # A slot/line bipartite graph (edge = the line is individually admissible
+        # for the slot, InferenceRule.slot_admits) drives two things: if no
+        # matching saturates every slot the citation cannot apply at all, so we
+        # reject up front; otherwise the backtracking search only ever tries
+        # admissible (slot -> line) pairs, so it explores the handful of viable
+        # assignments instead of every permutation. Each complete candidate is
+        # confirmed by the authoritative, binding-consistent InferenceRule.check.
+        required = len(inference_rule.antecedents)
+        adjacency = {
+            slot: [j for j, line in enumerate(lines) if inference_rule.slot_admits(slot, line, context)]
+            for slot in range(required)
+        }
+
+        if saturating_matching(range(required), adjacency) is None:
+            # Some slot has no admissible line, or no system of distinct
+            # representatives exists: the rule cannot apply to this citation.
+            return None
+
+        allow_extra = inference_rule.allow_extra_antecedents
+
+        def search(
+            slot: int, chosen: list[int]
+        ) -> tuple[tuple[ProofLine, ...], tuple[ProofLine, ...]] | None:
+            if slot == required:
+                extras = tuple(line for k, line in enumerate(lines) if k not in chosen)
+                if extras and not allow_extra:
+                    return None
+                antecedents = tuple(lines[j] for j in chosen)
+                if inference_rule.check(
+                    antecedents=antecedents,
+                    extra_antecedents=extras,
+                    deduction=deduction,
+                    context=context,
+                ):
+                    return antecedents, extras
+                return None
+
+            for j in adjacency[slot]:
+                if j in chosen:
+                    continue
+                candidate = [*chosen, j]
+                # Prune early: the deduction and the slots chosen so far must
+                # already unify. Slots are filled in order, so `candidate` is a
+                # prefix aligned to the rule's first len(candidate) slots; if it
+                # cannot bind, no completion can (unification is monotone), so
+                # skip the whole subtree instead of descending to a leaf check().
+                # This is what keeps an all-individually-admissible but globally
+                # inconsistent citation (e.g. a shared metavariable over distinct
+                # formulae) from costing an ordering-factorial number of checks.
+                if not inference_rule.prefix_binding_exists(
+                    [lines[k] for k in candidate], deduction, context
+                ):
+                    continue
+                result = search(slot + 1, candidate)
+                if result is not None:
+                    return result
+            return None
+
+        return search(0, [])
 
     def check_discharge_line(
         self,
@@ -647,9 +706,32 @@ class Proof:
                 # Don't recognise the path
                 return ImportResult(success=False, error_message=f"Could not find '{path}'.")
 
-        # Add the reference
+        # Add the reference, snapshotting enough state to back the import out
+        # cleanly if it turns out to close a cycle. `had_label` distinguishes "the
+        # label had no prior binding" from "it was bound to something" so the
+        # rejection path restores the shadowed binding instead of erasing it.
+        previous_proofs_used = set(self.proofs_used)
+        had_label = label in self.reference_context
+        previous_binding = self.reference_context.get(label)
         self.reference_context[label] = ref_item
         add_reference(ref_item)
+
+        # Reject a circular import: a theorem that (transitively) depends on this
+        # proof cannot soundly justify it. add_reference has just recorded the new
+        # dependency edge, so a cycle now reachable through proofs_used means this
+        # import closes a loop. Restore the prior state (including any label this
+        # import shadowed) and fail rather than admit it.
+        if self.circular_dependency() is not None:
+            self.proofs_used = previous_proofs_used
+            if had_label:
+                self.reference_context[label] = previous_binding
+            else:
+                self.reference_context.pop(label, None)
+            return ImportResult(
+                success=False,
+                error_message=f"Importing '{path}' would create a circular dependency.",
+                target=ref_item,
+            )
 
         # Add any definitions we have imported
         if isinstance(ref_item, ProofLine) and ref_item.line_type is not None and ref_item.line_type.behaviour == "definition":
@@ -685,20 +767,11 @@ class Proof:
             if name in build_context.variables:
                 context_copy.string_variables[key] = build_context.variables[name]
 
-        # Re-parse the imported definition's guard (if any) in this context so
-        # its sorts re-resolve here. Fail loudly rather than drop the guard: a
-        # dropped proviso would silently widen the definition.
-        condition_string = definition.condition_string
-        try:
-            side_condition = _parse_definition_guard(condition_string, pattern, context_copy)
-        except Exception as e:
-            raise Exception(
-                f"Failed to import definition guard for {definition.higher.pattern}: {e!s}"
-            ) from e
+        # Get the condition string if it exists
+        condition_string = None if definition.condition is None else definition.condition.string
 
         result = pattern.add_definition(definition.lower.pattern, definition.higher.pattern, context_copy,
-                                        side_condition=side_condition, condition_string=condition_string,
-                                        require_lower_match=False)
+                                        condition_string, require_lower_match=False)
 
         if result is None:
             raise Exception(f"Failed to import definition: {definition.higher.pattern}")
@@ -718,6 +791,37 @@ class Proof:
             # Add the definition to context
             context.definitions.add(result)
 
+    def _dependency_graph(self) -> dict[Proof, set[Proof]]:
+        # The import/theorem dependency graph reachable from this proof: each
+        # proof mapped to the proofs it uses (proofs_used, populated as imports
+        # are resolved). Only Proof vertices are followed - proofs_used holds
+        # Proof objects - so the walk terminates at proofs with no dependencies.
+        graph: dict[Proof, set[Proof]] = {}
+        stack: list[Proof] = [self]
+        while stack:
+            proof = stack.pop()
+            if proof in graph:
+                continue
+            dependencies = {dep for dep in proof.proofs_used if isinstance(dep, Proof)}
+            graph[proof] = dependencies
+            stack.extend(dep for dep in dependencies if dep not in graph)
+        return graph
+
+    def dependency_order(self) -> list[Proof]:
+        # The proofs this one transitively depends on (and itself), ordered so
+        # every proof comes after the proofs it uses - the order in which they
+        # could be checked from the ground up. Raises graphlib.CycleError if the
+        # imports are circular; call circular_dependency to report the cycle
+        # instead of raising.
+        return topological_order(self._dependency_graph())
+
+    def circular_dependency(self) -> list[Proof] | None:
+        # A circular import/theorem dependency reachable from this proof, as a
+        # list of proofs whose last entry repeats the first, or None if the
+        # dependency graph is acyclic. A theorem that (transitively) cites itself
+        # is not a sound justification, which this makes detectable.
+        return find_cycle(self._dependency_graph())
+
     def justify(self, deduction, context, inference_rule=None):
         # Artificially try to find a justification for the given reference. Optionally specify a inference rule.
 
@@ -735,19 +839,16 @@ class Proof:
                 deduction.invalid_message = "Antecedent lines couldn't be inferred."
                 return False
 
-            for permutation in list(itertools.permutations(logical_lines)):
-
-                if inference_rule.check(
-                        antecedents=permutation,
-                        extra_antecedents=(),
-                        deduction=deduction,
-                        context=context
-                ):
-                    # Found the valid permutation
-                    deduction.antecedents = permutation
-                    deduction.inference_rule = inference_rule
-
-                    return True
+            # Same admissible-assignment search as an explicit citation: the
+            # inferred lines exactly fill the slots (no extras), so this just
+            # finds the ordering, if any, under which the rule holds.
+            assignment = self._first_valid_assignment(
+                inference_rule, logical_lines, deduction, context
+            )
+            if assignment is not None:
+                deduction.antecedents, _ = assignment
+                deduction.inference_rule = inference_rule
+                return True
 
             # Otherwise, no justification found
             deduction.valid = False
@@ -880,27 +981,18 @@ class ProofLine:
                 self.invalid_message = f"{lower.string} is not an instance of {pattern.name}."
                 return
 
-            # Also try to get a guard from the line's conditions() accessor.
-            # Distinguish "no guard" (fine) from "a guard that won't parse"
-            # (invalidate the line rather than silently dropping the proviso).
+            # Also try to get conditions
             condition_string = None
-            side_condition = None
             try:
                 conditions = self.get_by_path("conditions()", context)
+                if len(conditions) > 0:
+                    condition_string = " and ".join([c.string for c in conditions])
             except Exception:
-                conditions = []
-            if conditions:
-                condition_string = "\n".join([c.string for c in conditions])
-                try:
-                    side_condition = _parse_definition_guard(condition_string, pattern, context)
-                except Exception as e:
-                    self.valid = False
-                    self.invalid_message = f"Invalid definition guard: {e!s}"
-                    return
+                pass
 
             # Add the definition
             self.definition = pattern.add_definition(lower.formatted_string(), higher.formatted_string(), context,
-                                                     side_condition=side_condition, condition_string=condition_string)
+                                                     condition_string)
 
         elif line_type.behaviour == "import":
             # Import a file or result
@@ -1034,6 +1126,27 @@ class ProofLine:
 
         if (not self.line_type.behaviour == "logical") or (not other.line_type.behaviour == "logical"):
             # Must be logical lines
+            return False
+
+        # Prefer the term-based checker: a definitional step is one structural
+        # unfold over the shared-DAG term representation, no re-parsing (see
+        # formal_system/definitions.py). It returns None when this definition is
+        # not soundly expressible as a kernel one (a binder or legacy condition
+        # the Define DSL cannot carry) - only then do we fall back to the
+        # string-based check_application. The kernel check covers both directions,
+        # and derives variable consistency structurally, so it applies only when
+        # no caller-supplied mapping constrains the match.
+        if not mapping and self.formula is not None and other.formula is not None:
+            kernel_result = follows_by_definition(self.formula, other.formula, definition, context)
+            if kernel_result is not None:
+                return kernel_result
+
+        # The kernel path is unavailable. A definition carrying a kernel `where`
+        # proviso can only be enforced by that path - the string-based
+        # check_application evaluates the legacy `if` condition and never the
+        # `where` guard - so falling back would silently drop the proviso and
+        # accept steps it should block. Refuse instead (the step is not verified).
+        if definition.kernel_condition is not None:
             return False
 
         # Check if the definition applies - in either direction

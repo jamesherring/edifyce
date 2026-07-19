@@ -6,11 +6,17 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ..kernel import (
+    And,
+    DisjointLeaves,
+    Equal,
+    IsAtom,
+    Not,
+    Occurs,
+    Or,
     Var,
     from_match,
     from_pattern,
     match_all,
-    normal_form,
 )
 from ..matching import StringPattern
 from .proof import ProofLine, Subproof
@@ -53,6 +59,33 @@ class SubproofSchema:
     def kind(self) -> str:
         # Which kind of scope opener this schema discharges.
         return "variable" if self.fresh is not None else "assumption"
+
+
+def _normalise_side_condition(condition: SideCondition) -> tuple:
+    """A structural normal form for comparing side-conditions across rules.
+
+    Sorts compare by name (not object identity) so two systems that re-parse the
+    same proviso agree, and boolean combinators fold to their parts. Used only
+    by :meth:`InferenceRule.equivalent`.
+    """
+    if isinstance(condition, (And, Or)):
+        return (
+            type(condition).__name__,
+            tuple(sorted(_normalise_side_condition(part) for part in condition.parts)),
+        )
+    if isinstance(condition, Not):
+        return ("Not", _normalise_side_condition(condition.inner))
+    if isinstance(condition, Occurs):
+        return ("Occurs", condition.needle, condition.haystack)
+    if isinstance(condition, Equal):
+        return ("Equal", condition.left, condition.right)
+    if isinstance(condition, DisjointLeaves):
+        sort = None if condition.sort is None else condition.sort.name
+        return ("DisjointLeaves", condition.left, condition.right, sort)
+    if isinstance(condition, IsAtom):
+        sort = None if condition.sort is None else condition.sort.name
+        return ("IsAtom", condition.name, sort)
+    return (type(condition).__name__,)
 
 
 class InferenceRule:
@@ -246,6 +279,51 @@ class InferenceRule:
 
         return match_all(pairs, context)
 
+    def slot_admits(self, slot: int, line: ProofLine, context: Context) -> bool:
+        """Whether ``line`` could fill antecedent ``slot`` on its own.
+
+        This is the *individual* admissibility of one line for one schema slot -
+        the necessary condition a globally-consistent assignment must satisfy for
+        this pair. It mirrors the per-antecedent handling in :meth:`_term_binding`
+        (a non-logical line matches by its type and binds nothing; a logical one
+        must unify with the slot's schema) but ignores cross-slot sharing, so the
+        caller can use it to build a bipartite slot/line graph and skip citations
+        (and orderings) that cannot possibly apply. The authoritative,
+        binding-consistent check stays :meth:`check`.
+        """
+        if line.line_type is None:
+            return False
+
+        pattern = self.antecedents[slot]
+
+        if line.line_type.behaviour != "logical" and pattern.equivalent(
+            line.line_type.pattern, context
+        ):
+            # An instance of a non-logical line: matched by type, binds nothing.
+            return True
+
+        if line.formula is None:
+            return False
+
+        pair = (self._schema_term(pattern, slot + 1, context), from_match(line.formula, context))
+        return match_all([pair], context) is not None
+
+    def prefix_binding_exists(
+        self, antecedents: Sequence[ProofLine], deduction: ProofLine, context: Context
+    ) -> bool:
+        """Whether the deduction and the first ``len(antecedents)`` antecedent
+        slots can unify under one binding.
+
+        ``antecedents`` is a *prefix* of an assignment (aligned to the rule's
+        slots in order). The assignment search calls this to prune a partial
+        assignment as soon as it is inconsistent - unification is monotone, so a
+        prefix that cannot bind can never be completed - instead of exploring
+        every ordering down to a full :meth:`check`. Reuses :meth:`_term_binding`,
+        which already includes the deduction pair (so a shared metavariable is
+        forced to agree from the first slot on).
+        """
+        return self._term_binding(antecedents, deduction, context) is not None
+
     def _schema_term(self, pattern: Pattern, occurrence: int, context: Context) -> Term:
         """Project a schema pattern into a term, keeping named metavariables
         shared but making each bare-sort position independent.
@@ -256,12 +334,23 @@ class InferenceRule:
         (``formula`` meaning "any formula") has no name to share by; two such
         positions are independent premises, so each occurrence's anonymous
         variable is renamed apart rather than collapsed into one binding.
+
+        A compound template (e.g. a Hilbert axiom ``(p -> (q -> p))``) carries a
+        precomputed *nested* term from the compiler (``schema_term``), because a
+        flat ``from_pattern`` projection would be one production while the proof
+        formula it must match is a nested tree of the system's productions. Its
+        named metavariables are shared, so it needs no per-occurrence renaming.
         """
-        term = from_pattern(pattern, context)
-
         if isinstance(pattern, StringPattern):
-            return term
+            # A compound template carries a precomputed *nested* term from the
+            # compiler; a flat from_pattern projection would be one production
+            # while the proof formula it must match is a nested tree. Either way
+            # its named metavariables are shared, so no per-occurrence renaming.
+            if pattern.schema_term is not None:
+                return pattern.schema_term
+            return from_pattern(pattern, context)
 
+        term = from_pattern(pattern, context)
         renames = {
             name: Var(f"{name}\x00{occurrence}", sort)
             for name, sort in term.free_vars().items()
@@ -325,8 +414,8 @@ class InferenceRule:
             memo[(self, other)] = False
             return False
 
-        if [normal_form(c) for c in self.side_conditions] != [
-            normal_form(c) for c in other.side_conditions
+        if [_normalise_side_condition(c) for c in self.side_conditions] != [
+            _normalise_side_condition(c) for c in other.side_conditions
         ]:
             memo[(self, other)] = False
             return False
