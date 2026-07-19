@@ -18,7 +18,7 @@ express, ``respect_brackets``, is patched onto the compiled patterns
 afterwards.
 
 Crucially, **definitions remain first-class**: a ``definitions`` section
-lowers to the engine's ``Define <higher> as <lower> [if <condition>]``, so a
+lowers to the engine's ``Define <higher> as <lower> [where <proviso>]``, so a
 complex base system (ZFC) can be layered up with familiar notation (``⊆``,
 ``∅``, ``P(x)`` ...) exactly as the engine already supports.
 
@@ -274,14 +274,14 @@ def parse(source: str) -> SystemSpec:
         elif keyword == "definitions":
             for row in body:
                 cols = _split_columns(row)
-                # sort | name | higher | means <lower> | bindings [ | if <cond> ]
+                # sort | name | higher | means <lower> | bindings [ | where <proviso> ]
                 if len(cols) < 4 or not cols[3].startswith("means "):
                     raise DeclarativeError(f"Definition row must be 'sort | name | higher | means <lower> | bindings': {row!r}")
                 lower = cols[3][len("means "):].strip()
                 bindings = _parse_bindings(cols[4]) if len(cols) > 4 else []
                 condition = None
-                if len(cols) > 5 and cols[5].startswith("if "):
-                    condition = cols[5][len("if "):].strip()
+                if len(cols) > 5 and cols[5].startswith("where "):
+                    condition = cols[5][len("where "):].strip()
                 spec.definitions.append(Definition(
                     sort=cols[0], name=cols[1], higher=cols[2], lower=lower,
                     bindings=bindings, condition=condition,
@@ -399,10 +399,10 @@ def lower(spec: SystemSpec) -> str:
         emit(1, f"{defn.sort}:")
         if defn.bindings:
             emit(2, f"with {_with_clause(defn.bindings)}:")
-            tail = f" if {defn.condition}" if defn.condition else ""
+            tail = f" where {defn.condition}" if defn.condition else ""
             emit(3, f"Define {defn.higher} as {defn.lower}{tail}")
         else:
-            tail = f" if {defn.condition}" if defn.condition else ""
+            tail = f" where {defn.condition}" if defn.condition else ""
             emit(2, f"Define {defn.higher} as {defn.lower}{tail}")
         emit()
 

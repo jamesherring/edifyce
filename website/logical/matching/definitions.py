@@ -3,14 +3,13 @@
 from copy import copy
 
 from . import matches, patterns
-from .conditions import Condition
 from .paths import get_by_path, parse_path
 
 
 class Definition:
     """A definition class - linking higher level string patterns with lower level ones."""
 
-    def __init__(self, lower, higher, pattern, context, condition_string=None,
+    def __init__(self, lower, higher, pattern, context,
                  fresh=None, kernel_condition=None):
 
         # The pattern this definition applies to
@@ -23,12 +22,11 @@ class Definition:
         # for an ordinary alias definition.
         self.fresh = fresh or {}
 
-        # An optional *additional* proviso in the kernel's structural
-        # side-condition vocabulary (beyond the capture-avoidance one the kernel
-        # derives from `fresh`). Held opaquely so the matching layer keeps its
-        # no-kernel-import rule; the formal_system bridge passes it to the kernel
-        # definition. Distinct from `self.condition` below, which is the legacy
-        # string proviso that forces the string-based path.
+        # An optional proviso in the kernel's structural side-condition
+        # vocabulary (beyond the capture-avoidance one the kernel derives from
+        # `fresh`), from the definition's `where` clause. Held opaquely so the
+        # matching layer keeps its no-kernel-import rule; the formal_system
+        # bridge passes it to the kernel definition.
         self.kernel_condition = kernel_condition
 
         self.lower = None
@@ -62,20 +60,16 @@ class Definition:
             self.variables = self.lower.variables
             self.variables.update(self.higher.variables)
 
-        # Optional condition string
-        self.condition = Condition(pattern.pre_format_apply(condition_string), context=context) \
-            if condition_string is not None else None
-
         # Cached term-based (kernel) counterpart, built lazily by the
         # formal_system layer for definitional-step checking over the shared-DAG
         # term representation (see formal_system/definitions.py). Held opaquely so
         # the matching layer keeps its no-kernel-import rule; `ready` records that
         # a build was attempted, and `kernel_definition is None` after that means
         # the definition is not soundly expressible as a kernel definition (it has
-        # a legacy condition or a binder the `Define` DSL cannot declare), so the
-        # caller falls back to the string-based check_application path. A shallow
-        # copy carries both across the context copies the engine makes, so the
-        # build happens at most once per definition.
+        # a binder the `Define` DSL cannot declare), so the caller falls back to
+        # the string-based check_application path. A shallow copy carries both
+        # across the context copies the engine makes, so the build happens at most
+        # once per definition.
         self.kernel_definition = None
         self.kernel_definition_ready = False
 
@@ -156,16 +150,10 @@ class Definition:
         if not result:
             return False
 
-        # Check condition
-        if self.condition is not None:
-
-            # Update context with condition variables
-            context_copy = copy(context)
-            context_copy.mapping.update(mapping)
-
-            return self.condition.check_condition(None, context_copy)
-
-        # Otherwise ok
+        # The string path enforces no proviso: definitions carrying a `where`
+        # proviso are refused here (they must use the kernel path, which checks
+        # it), so a definition that reaches this path has none. See
+        # follows_from_definition and formal_system/definitions.py.
         return True
 
     def get_by_path(self, path, context, recurse=True):

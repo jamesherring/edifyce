@@ -192,6 +192,19 @@ def test_lowering_forward_declares_before_use():
     assert edi.index("UnionPattern formula:") < edi.index("with p as formula")
 
 
+def test_declarative_proviso_lowers_to_a_where_clause():
+    # A definition's proviso column lowers to a `Define ... where ...` clause -
+    # the structural kernel proviso - not the retired pseudo-python `if`.
+    lines = [
+        line + " | where disjoint(x, y, variable)" if "superset" in line else line
+        for line in ZFC.split("\n")
+    ]
+    spec = parse("\n".join(lines))
+    edi = lower(spec)
+    assert "where disjoint(x, y, variable)" in edi
+    assert " ⊆ x if " not in edi  # not lowered as the legacy `if` proviso
+
+
 # ---------------------------------------------------------------------------
 # Escaped pipes in fields (regex alternation, pipe notation)
 # ---------------------------------------------------------------------------

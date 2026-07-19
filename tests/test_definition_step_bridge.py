@@ -199,16 +199,6 @@ def test_binder_carrying_definition_is_refused(binder_system):
     assert definition.kernel_definition_ready is True
 
 
-def test_definition_with_condition_is_refused(alias_system):
-    # A legacy proviso is not translated to the kernel vocabulary, so a
-    # conditional definition must stay on the string path even when binder-free.
-    definition = only_definition(alias_system)
-    definition = copy(definition)
-    definition.kernel_definition_ready = False
-    definition.condition = object()  # stand-in for a parsed Condition
-    assert kernel_definition_for(definition, context_of(alias_system)) is None
-
-
 # ---------------------------------------------------------------------------
 # follows_by_definition - the term-based step check (kernel path)
 # ---------------------------------------------------------------------------
@@ -417,19 +407,18 @@ def test_where_proviso_gates_the_unfold(guarded_system):
 
 
 # ---------------------------------------------------------------------------
-# `where` + `if` rejection and malformed-clause compile errors (PR #31 review)
+# legacy `if` rejection and malformed-clause compile errors
 # ---------------------------------------------------------------------------
 
 
-def test_where_and_if_combination_is_a_compile_error():
-    # A legacy `if` forces the string path, which never enforces the kernel
-    # `where` guard; combining them would silently drop `where`, so it is
-    # rejected at compile time rather than accepted unsoundly.
+def test_legacy_if_proviso_is_a_compile_error():
+    # The legacy pseudo-python `if` proviso has been retired; a definition that
+    # uses it is a compile error directing the author to `where`.
     result = compile_formal_system(
-        FRESH_SYSTEM % {"WHERE": " where disjoint(x, y, setvar) if x == x"}
+        FRESH_SYSTEM % {"WHERE": " if x == x"}
     )
     assert "errors" in result
-    assert any("where" in e and "if" in e for e in result["errors"])
+    assert any("if" in e and "where" in e for e in result["errors"])
 
 
 def test_malformed_where_sort_is_a_compile_error_not_a_crash():

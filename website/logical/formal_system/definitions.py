@@ -24,8 +24,7 @@ The ``Define`` DSL can now carry the extra information the kernel needs: a
 ``fresh`` clause declaring the defining form's bound variables (threaded here as
 ``legacy.fresh``) and a ``where`` clause of kernel-vocabulary provisos
 (``legacy.kernel_condition``). A legacy definition is therefore soundly
-expressible as a kernel one **unless it introduces an *undeclared* binder or
-carries a legacy string proviso** (the ``if`` clause, which is not translated).
+expressible as a kernel one **unless it introduces an *undeclared* binder**.
 :func:`kernel_definition_for` builds the kernel counterpart when it can and
 returns ``None`` otherwise; :func:`follows_by_definition` uses the kernel checker
 when a counterpart exists and signals a fall-back to the string path when it does
@@ -95,11 +94,6 @@ def kernel_definition_for(
 def _build(legacy: MatchingDefinition, context: Context) -> Definition | None:
     if legacy.lower is None:
         # An open definition (unknown lower form) has nothing to unfold to.
-        return None
-
-    if legacy.condition is not None:
-        # The legacy proviso DSL is not translated to the kernel's structural
-        # vocabulary; keep such definitions on the string path (see module docs).
         return None
 
     try:

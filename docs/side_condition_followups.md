@@ -1,13 +1,20 @@
 # Side-condition follow-ups
 
-The rule `side_conditions:` block and, as of the definition-guard migration, the
-`Define <higher> as <lower> if <guard>` clause both parse through the closed
-kernel algebra in `website/logical/kernel/side_conditions.py`
-(`occurs` / `equal` / `disjoint` / `atom`, with `not` and implicit
-conjunction). The pseudo-python `Condition` language is no longer the surface
-for definition guards.
+Definition provisos are written with a `where` clause —
+`Define <higher> as <lower> [fresh <binds>] [where <provisos>]` — and checked
+structurally over kernel terms (see `website/logical/formal_system/definitions.py`).
+`where`, like a rule's `side_conditions:` block, parses through the closed kernel
+algebra in `website/logical/kernel/side_conditions.py`
+(`occurs` / `equal` / `disjoint` / `atom`, with `not` and implicit conjunction).
 
-These extensions were considered and **deliberately deferred**. They are
+The legacy pseudo-python `if <cond>` proviso on definitions has been **retired**:
+`Define ... if ...` is now a compile error directing the author to `where`, and
+the `matching.Definition` no longer carries a string `Condition` guard. (The
+`Condition` / `get_by_path` interpreter still backs the unrelated pattern-function
+DSL — `while` loops, `instances(...; condition)` filters, `SystemConditionPattern`
+— which is a separate, larger retirement; see the last section.)
+
+The extensions below were considered and **deliberately deferred**. They are
 tracked here so the decisions aren't relitigated from scratch.
 
 ## 1. `Member` / `InSort` predicate
@@ -57,7 +64,7 @@ mirroring the ordering decision above.
 
 ## Not in scope: retiring `get_by_path`
 
-The definition-guard migration does **not** remove the pseudo-python value
+Retiring the definition `if` proviso does **not** remove the pseudo-python value
 interpreter (`website/logical/matching/paths.py` `get_by_path`) or
 `matching/conditions.py`. Those still back the pattern-function DSL
 (`while` loops, `instances(...; condition)` filters, `SystemConditionPattern`)
