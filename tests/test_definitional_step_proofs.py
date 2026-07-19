@@ -1,12 +1,13 @@
-"""The `[Def, n]` definitional-step proof surface.
+"""The definitional-step proof surface.
 
-A proof line justified as ``[Def, <line>]`` claims to be the cited line with one
-definition (in scope) unfolded or folded at a single position. The checker
-searches the definitions in scope and verifies the step over kernel terms
-(ProofLine.follows_from_definition -> check_definitional_step). These tests cover
-both a string-path alias definition and a kernel-path binder definition, the
-scope/ordering guards, dependency recording, and that an inference rule of the
-same label still takes precedence.
+A proof line justified as ``[<name>, <line>]`` (a named definition) or the
+generic ``[Def, <line>]`` claims to be the cited line with one definition (in
+scope) unfolded or folded at a single position, verified over kernel terms
+(ProofLine.follows_from_definition -> check_definitional_step). A named citation
+pins the specific definition; the generic keyword searches those in scope. These
+tests cover named and generic citation for a string-path alias definition and a
+kernel-path binder definition, the scope/ordering guards, dependency recording,
+and that an inference rule of the same label still takes precedence.
 """
 
 import pytest
@@ -30,12 +31,12 @@ ALIAS_SYSTEM = """FormalSystem AliasSys:
         ^[a-z]$
 
     Regex reference:
-        ^[A-Za-z0-9, ]+$
+        ^[A-Za-z0-9, -]+$
 
     Pattern membership:
         with x as setvar, y as setvar:
             (x ∈ y)
-            Define x sub y as (x ∈ y)
+            Define x sub y as (x ∈ y) label sub
 
     UnionPattern formula:
         membership
@@ -71,7 +72,7 @@ SUBSET_SYSTEM = """FormalSystem SetTheory:
         ^[a-z]$
 
     Regex reference:
-        ^[A-Za-z0-9, ]+$
+        ^[A-Za-z0-9, -]+$
 
     Pattern membership:
         with x as setvar, y as setvar:
@@ -103,7 +104,7 @@ SUBSET_SYSTEM = """FormalSystem SetTheory:
 
     formula:
         with x as setvar, y as setvar:
-            Define (x ⊆ y) as ∀z.((z ∈ x) → (z ∈ y)) fresh z as setvar
+            Define (x ⊆ y) as ∀z.((z ∈ x) → (z ∈ y)) fresh z as setvar label df-subset
 
     Pattern statement_pattern:
         with f as formula, r as reference:
@@ -136,7 +137,7 @@ COLLIDING_SYSTEM = """FormalSystem Collide:
         ^[a-z]$
 
     Regex reference:
-        ^[A-Za-z0-9, ]+$
+        ^[A-Za-z0-9, -]+$
 
     UnionPattern formula:
         atom
@@ -217,7 +218,41 @@ def test_step_records_the_dependency_edge(alias_system):
 
 
 # ---------------------------------------------------------------------------
-# Kernel-path binder definition
+# Named citation
+# ---------------------------------------------------------------------------
+
+
+def test_named_definition_unfold_is_valid(alias_system):
+    # `sub` is the label from `Define x sub y as (x ∈ y) label sub`.
+    proof = alias_system.parse("a sub b [HYP]\n(a ∈ b) [sub, 1]")
+    assert proof.proof_lines[1].valid is True
+
+
+def test_named_definition_fold_is_valid(alias_system):
+    proof = alias_system.parse("(a ∈ b) [HYP]\na sub b [sub, 1]")
+    assert proof.proof_lines[1].valid is True
+
+
+def test_named_definition_wrong_step_is_rejected(alias_system):
+    proof = alias_system.parse("a sub b [HYP]\n(a ∈ c) [sub, 1]")
+    assert proof.proof_lines[1].valid is False
+
+
+def test_unknown_definition_name_is_an_invalid_reference(alias_system):
+    proof = alias_system.parse("a sub b [HYP]\n(a ∈ b) [nope, 1]")
+    line = proof.proof_lines[1]
+    assert line.valid is False
+    assert "not a valid inference rule or definition" in line.invalid_message
+
+
+def test_named_binder_definition_unfold_is_valid(subset_system):
+    # Cite df-subset by name (matching the kernel docstring's example).
+    proof = subset_system.parse("(a ⊆ b) [HYP]\n∀z.((z ∈ a) → (z ∈ b)) [df-subset, 1]")
+    assert proof.proof_lines[1].valid is True
+
+
+# ---------------------------------------------------------------------------
+# Kernel-path binder definition (generic keyword)
 # ---------------------------------------------------------------------------
 
 

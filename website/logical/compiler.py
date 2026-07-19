@@ -27,6 +27,8 @@ class PendingDefinition:
     # sort or metavariable defined later in the block still resolves.
     fresh: list = field(default_factory=list)
     where_strings: list = field(default_factory=list)
+    # Optional name a proof cites the definition by (`[<label>, <line>]`).
+    label: str | None = None
 
 
 def get_inherited_system(code: str) -> str | None:
@@ -628,14 +630,20 @@ class AbstractSyntaxTree:
                 lower = remainder[index + 4:]
 
                 # Optional trailing clauses, in source order after the lower form:
-                #   Define <higher> as <lower> [fresh <binds>] [where <provisos>] [if <cond>]
+                #   Define <higher> as <lower> [fresh <binds>] [where <provisos>] [if <cond>] [label <name>]
                 # `fresh` declares the defining form's bound variables (so the
                 # term checker unfolds capture-avoidingly); `where` carries
                 # kernel-vocabulary provisos (see side_condition_syntax); `if` is
-                # the legacy string proviso. Peel them off the tail back-to-front
-                # so an earlier clause never swallows a later keyword. As with the
-                # pre-existing `if`, a lower form must not itself contain these
-                # separator words.
+                # the legacy string proviso; `label` names the definition so a
+                # proof can cite it as `[<name>, <line>]`. Peel them off the tail
+                # back-to-front so an earlier clause never swallows a later
+                # keyword. As with the pre-existing `if`, a lower form must not
+                # itself contain these separator words.
+                label = None
+                if " label " in lower:
+                    lower, _, label_text = lower.partition(" label ")
+                    label = label_text.strip()
+
                 condition_string = None
                 if " if " in lower:
                     lower, _, condition_string = lower.partition(" if ")
@@ -674,6 +682,7 @@ class AbstractSyntaxTree:
                     condition_string=condition_string,
                     fresh=fresh,
                     where_strings=where_strings,
+                    label=label,
                 ))
 
             elif stripped.startswith("LineType ") and stripped[-1] == ":":
@@ -1263,7 +1272,7 @@ class AbstractSyntaxTree:
                 # Get the definition
                 result = defn.pattern.add_definition(
                     defn.lower, defn.higher, context_copy, defn.condition_string,
-                    fresh=fresh, kernel_condition=kernel_condition,
+                    fresh=fresh, kernel_condition=kernel_condition, label=defn.label,
                 )
 
                 if result is not None:
