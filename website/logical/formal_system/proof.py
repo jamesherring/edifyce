@@ -14,6 +14,7 @@ from .definitions import follows_by_definition
 
 if TYPE_CHECKING:
     from ..matching.context import Context
+    from ..matching.definitions import Definition
     from .rules import InferenceRule
 
 
@@ -663,7 +664,7 @@ class Proof:
         return False
 
     @staticmethod
-    def _definition_by_label(label: str, context: Context):
+    def _definition_by_label(label: str, context: Context) -> "Definition | None":
         # The definition in scope cited by this label, or None. Used to resolve a
         # `[<name>, <line>]` citation to the specific named definition.
         for definition in context.definitions:
@@ -695,6 +696,16 @@ class Proof:
         if source.proof is proof_line.proof and proof_line.index() <= source.index():
             proof_line.valid = False
             proof_line.invalid_message = f"{reference.key} must cite an earlier line."
+            return False
+
+        # The cited line must be a formula-bearing logical line: a definitional
+        # step transforms one formula into another. Guard here so an unparsed or
+        # non-logical citation is a clean invalid line, not an AttributeError
+        # inside follows_from_definition (which dereferences line_type.behaviour).
+        if source.line_type is None or source.line_type.behaviour != "logical" \
+                or source.formula is None:
+            proof_line.valid = False
+            proof_line.invalid_message = f"Line {source.index() + 1} is not a formula line."
             return False
 
         candidates = [reference.definition] if reference.definition is not None \

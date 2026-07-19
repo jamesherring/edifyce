@@ -301,6 +301,15 @@ def test_step_must_cite_an_earlier_line(alias_system):
     assert proof.proof_lines[0].valid is False
 
 
+def test_citing_an_unparsed_line_is_a_graceful_invalid(alias_system):
+    # The cited source line failed to parse (no line type); the step must be a
+    # clean invalid line, not an AttributeError inside follows_from_definition.
+    proof = alias_system.parse("!!!garbage\n(a ∈ b) [Def, 1]")
+    line = proof.proof_lines[1]
+    assert line.valid is False
+    assert "not a formula line" in line.invalid_message
+
+
 def test_inference_rule_label_takes_precedence_over_the_keyword(colliding_system):
     # `Def` names a repetition rule here, so `[Def, 1]` applies that rule (a is
     # repeated) rather than a definitional step.
