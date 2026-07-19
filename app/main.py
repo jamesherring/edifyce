@@ -13,6 +13,7 @@ from app.auth import (
     UserRead,
     UserUpdate,
 )
+from app.routers.system_parts import router as system_parts_router
 from app.routers.systems import router as systems_router
 from app.schemas import (
     CompileRequest,
@@ -131,6 +132,10 @@ app.include_router(_users_router, prefix="/users", tags=["users"])
 # router rather than flat APIRoutes on `app`, so it's registered with the SPA
 # guard below (its routes already carry the /formal-systems prefix).
 app.include_router(systems_router)
+# Per-object CRUD for a system's parts. Every route is under
+# /formal-systems/{system_id}/... (fully parameterized), so there's nothing for
+# the SPA path guard to add.
+app.include_router(system_parts_router)
 
 # fastapi-users' routers mount as nested routers, so their concrete paths are
 # not APIRoute entries on `app` — the SPA fallback's API-path guard can't find
