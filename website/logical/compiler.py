@@ -2,7 +2,7 @@ from website.logical.matching import *
 from website.logical.matching import Pattern, constant
 from website.logical.formal_system import FormalSystem, LineType, InferenceRule, ProofLine, SubproofSchema
 from website.logical.formal_system.side_condition_syntax import parse_side_condition
-from website.logical.kernel import Node, Var, from_match, intern
+from website.logical.kernel import And, Node, Var, from_match, intern
 from copy import copy, deepcopy
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -21,6 +21,12 @@ class PendingDefinition:
     pattern: Pattern
     variables: dict = field(default_factory=dict)
     condition_string: str | None = None
+    # Bound variables of the defining form as (name, sort-name) pairs, and
+    # kernel-vocabulary provisos as raw source lines. Both are resolved against
+    # the (complete) context when the definition is finalised, not here, so a
+    # sort or metavariable defined later in the block still resolves.
+    fresh: list = field(default_factory=list)
+    where_strings: list = field(default_factory=list)
 
 
 def get_inherited_system(code: str) -> str | None:
@@ -216,6 +222,44 @@ def _revariabilise(term: "Term", metavariables: dict) -> "Term":
         return node
 
     return intern(walk(term))
+
+
+def _parse_fresh_bindings(text: str) -> list[tuple[str, str]]:
+    # Parse a `fresh` clause into (name, sort-name) pairs, same shape as a `with`
+    # clause: comma-separated names, each group ending in `as <sort>` applies that
+    # sort to the names accumulated so far. E.g. "z as setvar" -> [("z","setvar")];
+    # "x, y as setvar" -> [("x","setvar"),("y","setvar")]. Sorts are resolved
+    # later, against the completed context.
+    bindings: list[tuple[str, str]] = []
+    pending: list[str] = []
+    for part in text.split(","):
+        part = part.strip()
+        if " as " in part:
+            name, sort = part.split(" as ", 1)
+            pending.append(name.strip())
+            bindings.extend((n, sort.strip()) for n in pending)
+            pending = []
+        elif part:
+            pending.append(part)
+    return bindings
+
+
+def _resolve_sort(sort_name: str, context) -> Pattern:
+    # Resolve a `fresh` binding's sort name to a pattern in the completed context.
+    pattern = context.variables.get(sort_name)
+    if not isinstance(pattern, Pattern):
+        raise Exception(f"Definition `fresh` sort '{sort_name}' is not a pattern.")
+    return pattern
+
+
+def _combine_side_conditions(where_strings: list, context):
+    # Parse a definition's `where` provisos into a single kernel side-condition
+    # (their conjunction), or None when there are none. Each line uses the same
+    # closed vocabulary as a rule's side_conditions (see side_condition_syntax).
+    if not where_strings:
+        return None
+    conditions = [parse_side_condition(text, context) for text in where_strings]
+    return conditions[0] if len(conditions) == 1 else And(tuple(conditions))
 
 
 @dataclass(eq=False)
@@ -583,12 +627,39 @@ class AbstractSyntaxTree:
                 higher = remainder[:index]
                 lower = remainder[index + 4:]
 
-                # Check for condition
+                # Optional trailing clauses, in source order after the lower form:
+                #   Define <higher> as <lower> [fresh <binds>] [where <provisos>] [if <cond>]
+                # `fresh` declares the defining form's bound variables (so the
+                # term checker unfolds capture-avoidingly); `where` carries
+                # kernel-vocabulary provisos (see side_condition_syntax); `if` is
+                # the legacy string proviso. Peel them off the tail back-to-front
+                # so an earlier clause never swallows a later keyword. As with the
+                # pre-existing `if`, a lower form must not itself contain these
+                # separator words.
                 condition_string = None
                 if " if " in lower:
-                    index = lower.index(" if ")
-                    condition_string = lower[index + 4:]
-                    lower = lower[:index]
+                    lower, _, condition_string = lower.partition(" if ")
+
+                where_strings: list[str] = []
+                if " where " in lower:
+                    lower, _, where_text = lower.partition(" where ")
+                    where_strings = [part.strip() for part in where_text.split(";") if part.strip()]
+
+                fresh: list[tuple[str, str]] = []
+                if " fresh " in lower:
+                    lower, _, fresh_text = lower.partition(" fresh ")
+                    fresh = _parse_fresh_bindings(fresh_text)
+
+                if where_strings and condition_string is not None:
+                    # A legacy `if` proviso forces the string-based checker, which
+                    # only enforces that `if` and never the kernel `where` guard -
+                    # so combining them would silently drop the `where`. Reject it
+                    # rather than accept steps the `where` should have blocked.
+                    self.error = (
+                        "A definition cannot combine a `where` proviso with a legacy `if` "
+                        "proviso; use one or the other."
+                    )
+                    return
 
                 if not isinstance(current_object, Pattern):
                     self.error = "Definitions must be created inside a pattern block."
@@ -601,6 +672,8 @@ class AbstractSyntaxTree:
                     pattern=current_object,
                     variables={current_object.pre_format_apply(key): context.string_variables[key] for key in context.string_variables},
                     condition_string=condition_string,
+                    fresh=fresh,
+                    where_strings=where_strings,
                 ))
 
             elif stripped.startswith("LineType ") and stripped[-1] == ":":
@@ -1170,8 +1243,28 @@ class AbstractSyntaxTree:
                 # Add variables
                 context_copy.string_variables.update(defn.variables)
 
+                # Resolve the defining form's bound-variable sorts and any
+                # kernel-vocabulary provisos now that the context is complete. A
+                # malformed `fresh` sort or `where` proviso is a source error, not
+                # a server fault - but this loop runs *outside* run()'s
+                # try/except, so catch it here and record a compile error (as the
+                # rule side_conditions path does) rather than letting it escape
+                # compile() as a 500.
+                try:
+                    fresh = {
+                        defn.pattern.pre_format_apply(name): _resolve_sort(sort, context_copy)
+                        for name, sort in defn.fresh
+                    }
+                    kernel_condition = _combine_side_conditions(defn.where_strings, context_copy)
+                except Exception as e:
+                    context.error_log.append(f"Definition '{defn.higher}': {e}")
+                    continue
+
                 # Get the definition
-                result = defn.pattern.add_definition(defn.lower, defn.higher, context_copy, defn.condition_string)
+                result = defn.pattern.add_definition(
+                    defn.lower, defn.higher, context_copy, defn.condition_string,
+                    fresh=fresh, kernel_condition=kernel_condition,
+                )
 
                 if result is not None:
                     new_object.context.definitions.add(result)

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from ..kernel.side_conditions import Not, Occurs
 from ..kernel.terms import from_match
 from ..matching import Match, MatchSet, get_by_path, parse_arguments, parse_path
+from .definitions import follows_by_definition
 
 if TYPE_CHECKING:
     from ..matching.context import Context
@@ -996,6 +997,27 @@ class ProofLine:
 
         if (not self.line_type.behaviour == "logical") or (not other.line_type.behaviour == "logical"):
             # Must be logical lines
+            return False
+
+        # Prefer the term-based checker: a definitional step is one structural
+        # unfold over the shared-DAG term representation, no re-parsing (see
+        # formal_system/definitions.py). It returns None when this definition is
+        # not soundly expressible as a kernel one (a binder or legacy condition
+        # the Define DSL cannot carry) - only then do we fall back to the
+        # string-based check_application. The kernel check covers both directions,
+        # and derives variable consistency structurally, so it applies only when
+        # no caller-supplied mapping constrains the match.
+        if not mapping and self.formula is not None and other.formula is not None:
+            kernel_result = follows_by_definition(self.formula, other.formula, definition, context)
+            if kernel_result is not None:
+                return kernel_result
+
+        # The kernel path is unavailable. A definition carrying a kernel `where`
+        # proviso can only be enforced by that path - the string-based
+        # check_application evaluates the legacy `if` condition and never the
+        # `where` guard - so falling back would silently drop the proviso and
+        # accept steps it should block. Refuse instead (the step is not verified).
+        if definition.kernel_condition is not None:
             return False
 
         # Check if the definition applies - in either direction
