@@ -279,6 +279,51 @@ class InferenceRule:
 
         return match_all(pairs, context)
 
+    def slot_admits(self, slot: int, line: ProofLine, context: Context) -> bool:
+        """Whether ``line`` could fill antecedent ``slot`` on its own.
+
+        This is the *individual* admissibility of one line for one schema slot -
+        the necessary condition a globally-consistent assignment must satisfy for
+        this pair. It mirrors the per-antecedent handling in :meth:`_term_binding`
+        (a non-logical line matches by its type and binds nothing; a logical one
+        must unify with the slot's schema) but ignores cross-slot sharing, so the
+        caller can use it to build a bipartite slot/line graph and skip citations
+        (and orderings) that cannot possibly apply. The authoritative,
+        binding-consistent check stays :meth:`check`.
+        """
+        if line.line_type is None:
+            return False
+
+        pattern = self.antecedents[slot]
+
+        if line.line_type.behaviour != "logical" and pattern.equivalent(
+            line.line_type.pattern, context
+        ):
+            # An instance of a non-logical line: matched by type, binds nothing.
+            return True
+
+        if line.formula is None:
+            return False
+
+        pair = (self._schema_term(pattern, slot + 1, context), from_match(line.formula, context))
+        return match_all([pair], context) is not None
+
+    def prefix_binding_exists(
+        self, antecedents: Sequence[ProofLine], deduction: ProofLine, context: Context
+    ) -> bool:
+        """Whether the deduction and the first ``len(antecedents)`` antecedent
+        slots can unify under one binding.
+
+        ``antecedents`` is a *prefix* of an assignment (aligned to the rule's
+        slots in order). The assignment search calls this to prune a partial
+        assignment as soon as it is inconsistent - unification is monotone, so a
+        prefix that cannot bind can never be completed - instead of exploring
+        every ordering down to a full :meth:`check`. Reuses :meth:`_term_binding`,
+        which already includes the deduction pair (so a shared metavariable is
+        forced to agree from the first slot on).
+        """
+        return self._term_binding(antecedents, deduction, context) is not None
+
     def _schema_term(self, pattern: Pattern, occurrence: int, context: Context) -> Term:
         """Project a schema pattern into a term, keeping named metavariables
         shared but making each bare-sort position independent.
