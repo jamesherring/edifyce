@@ -406,6 +406,21 @@ def test_where_proviso_gates_the_unfold(guarded_system):
     assert follows_by_definition(bad_subset, bad_unfold, definition, context) is False
 
 
+def test_where_definition_is_refused_by_the_string_path(guarded_system):
+    # A `where` proviso is enforced only on the kernel path; the string-layer
+    # application primitives (get_lower, check_application) must refuse a
+    # proviso-carrying definition so it cannot be applied unchecked (e.g. via
+    # Match.equivalent_under_definitions).
+    definition = only_definition(guarded_system)
+    context = context_of(guarded_system)
+    assert definition.kernel_condition is not None
+
+    higher = definition.higher.match("(a ⊆ b)", context)
+    assert higher is not None
+    assert definition.get_lower(higher, context) is False
+    assert definition.check_application(higher, higher, context) is False
+
+
 # ---------------------------------------------------------------------------
 # legacy `if` rejection and malformed-clause compile errors
 # ---------------------------------------------------------------------------

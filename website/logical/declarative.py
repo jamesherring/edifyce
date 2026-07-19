@@ -282,6 +282,10 @@ def parse(source: str) -> SystemSpec:
                 condition = None
                 if len(cols) > 5 and cols[5].startswith("where "):
                     condition = cols[5][len("where "):].strip()
+                elif len(cols) > 5 and cols[5].startswith("if "):
+                    raise DeclarativeError(
+                        f"The legacy `if` definition proviso is no longer supported; use `where`: {row!r}"
+                    )
                 spec.definitions.append(Definition(
                     sort=cols[0], name=cols[1], higher=cols[2], lower=lower,
                     bindings=bindings, condition=condition,
@@ -397,12 +401,11 @@ def lower(spec: SystemSpec) -> str:
     # 6. Definitions -- layered abbreviations, first-class.
     for defn in spec.definitions:
         emit(1, f"{defn.sort}:")
+        tail = f" where {defn.condition}" if defn.condition else ""
         if defn.bindings:
             emit(2, f"with {_with_clause(defn.bindings)}:")
-            tail = f" where {defn.condition}" if defn.condition else ""
             emit(3, f"Define {defn.higher} as {defn.lower}{tail}")
         else:
-            tail = f" where {defn.condition}" if defn.condition else ""
             emit(2, f"Define {defn.higher} as {defn.lower}{tail}")
         emit()
 

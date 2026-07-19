@@ -205,6 +205,19 @@ def test_declarative_proviso_lowers_to_a_where_clause():
     assert " ⊆ x if " not in edi  # not lowered as the legacy `if` proviso
 
 
+def test_declarative_legacy_if_column_is_rejected():
+    # The retired `if` proviso is refused at parse time (not silently dropped),
+    # mirroring the engine's compile-time rejection.
+    from website.logical.declarative import DeclarativeError
+
+    lines = [
+        line + " | if disjoint(x, y, variable)" if "superset" in line else line
+        for line in ZFC.split("\n")
+    ]
+    with pytest.raises(DeclarativeError):
+        parse("\n".join(lines))
+
+
 # ---------------------------------------------------------------------------
 # Escaped pipes in fields (regex alternation, pipe notation)
 # ---------------------------------------------------------------------------

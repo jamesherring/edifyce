@@ -767,8 +767,13 @@ class Proof:
             if name in build_context.variables:
                 context_copy.string_variables[key] = build_context.variables[name]
 
+        # Carry the binder declarations and `where` proviso across the import so
+        # the proviso is still enforced (or, if it cannot be rebuilt in this
+        # context, the kernel path refuses the step - never silently drops it).
         result = pattern.add_definition(definition.lower.pattern, definition.higher.pattern, context_copy,
-                                        require_lower_match=False)
+                                        require_lower_match=False,
+                                        fresh=definition.fresh or None,
+                                        kernel_condition=definition.kernel_condition)
 
         if result is None:
             raise Exception(f"Failed to import definition: {definition.higher.pattern}")

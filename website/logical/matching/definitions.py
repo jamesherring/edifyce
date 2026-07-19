@@ -103,6 +103,14 @@ class Definition:
             # Can't do this if we don't know the lower pattern
             return False
 
+        if self.kernel_condition is not None:
+            # A `where` proviso is enforced only on the kernel path
+            # (check_definitional_step); applying the definition through the
+            # string layer would bypass it, so the string layer refuses such
+            # definitions outright. Their steps are verified via
+            # follows_from_definition / formal_system/definitions.py instead.
+            return False
+
         if mapping is None:
             mapping = {}
 
@@ -150,10 +158,8 @@ class Definition:
         if not result:
             return False
 
-        # The string path enforces no proviso: definitions carrying a `where`
-        # proviso are refused here (they must use the kernel path, which checks
-        # it), so a definition that reaches this path has none. See
-        # follows_from_definition and formal_system/definitions.py.
+        # No proviso to check: a definition carrying a `where` proviso was
+        # refused at the top of this method, so one that reaches here has none.
         return True
 
     def get_by_path(self, path, context, recurse=True):
@@ -231,6 +237,12 @@ class Definition:
 
         if self.lower is None:
             # Can't do this if we don't know the lower pattern
+            return False
+
+        if self.kernel_condition is not None:
+            # A `where` proviso is enforced only on the kernel path; unfolding
+            # here would skip it, so refuse (callers fall through to the kernel
+            # definitional-step check). See check_application above.
             return False
 
         # Variables are from the given higher match
