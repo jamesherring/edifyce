@@ -91,41 +91,58 @@ def _normalise_side_condition(condition: SideCondition) -> tuple:
 class InferenceRule:
     """Inference rules for deduction."""
 
-    def __init__(self, name, label=None, antecedents=None, deduction=None, side_conditions=None,
-                 allow_extra_antecedents=False, variables=None, subproof_schema=None):
+    def __init__(
+        self,
+        name: str,
+        label: str | None = None,
+        antecedents: list[Pattern] | None = None,
+        deduction: Pattern | None = None,
+        side_conditions: list[SideCondition] | None = None,
+        allow_extra_antecedents: bool = False,
+        variables: dict[str, Pattern] | None = None,
+        subproof_schema: SubproofSchema | None = None,
+    ) -> None:
 
         # The inference rule name
-        self.name = name.replace("_", " ")
+        self.name: str = name.replace("_", " ")
 
         # The inference rule label
-        self.label = label if label is not None else ""
+        self.label: str = label if label is not None else ""
 
         # List of antecedent patterns
-        self.antecedents = antecedents if antecedents is not None else []
+        self.antecedents: list[Pattern] = antecedents if antecedents is not None else []
 
-        # Deduction pattern
-        self.deduction = deduction
+        # Deduction pattern (set during compilation; None until then)
+        self.deduction: Pattern | None = deduction
 
         # Kernel side-conditions (provisos) that must hold for the rule to apply,
         # checked structurally against the term binding. See side_condition_syntax.
-        self.side_conditions = side_conditions if side_conditions is not None else []
+        self.side_conditions: list[SideCondition] = (
+            side_conditions if side_conditions is not None else []
+        )
 
         # Optionally allow extra antecedents
-        self.allow_extra_antecedents = allow_extra_antecedents
+        self.allow_extra_antecedents: bool = allow_extra_antecedents
 
         # Keep a set of variables handy
-        self.variables = variables
+        self.variables: dict[str, Pattern] | None = variables
 
         # The subproof this rule discharges (SubproofSchema), if it is a
         # discharge rule. None for an ordinary line-antecedent rule.
-        self.subproof_schema = subproof_schema
+        self.subproof_schema: SubproofSchema | None = subproof_schema
 
     @property
     def is_discharge(self) -> bool:
         # Whether this rule discharges a subproof rather than citing lines.
         return self.subproof_schema is not None
 
-    def check(self, antecedents, extra_antecedents, deduction, context):
+    def check(
+        self,
+        antecedents: Sequence[ProofLine],
+        extra_antecedents: Sequence[ProofLine],
+        deduction: ProofLine,
+        context: Context,
+    ) -> bool:
         # Check to see if the proposed proof lines are valid under this inference rule
 
         # Check the number of antecedents matches
@@ -137,7 +154,7 @@ class InferenceRule:
             return False
 
         # Deduction must be after the antecedents
-        for ant in antecedents + extra_antecedents:
+        for ant in (*antecedents, *extra_antecedents):
             if type(ant) is not ProofLine:
                 # antecedent isn't a proof line
                 return False
@@ -375,8 +392,11 @@ class InferenceRule:
         except Exception:
             return False
 
-    def equivalent(self, other, context, memo=None):
-        # Check equivalent
+    def equivalent(
+        self, other: object, context: Context, memo: dict[tuple, bool] | None = None
+    ) -> bool:
+        # Check equivalent. `memo` is shared with Pattern.equivalent during the
+        # recursion, so its keys are heterogeneous (rule pairs and pattern pairs).
 
         if memo is None:
             memo = {}
@@ -434,9 +454,9 @@ class Inference:
     walk went away with the string-based condition path.
     """
 
-    inference_rule: "InferenceRule"
+    inference_rule: InferenceRule
 
     # Antecedents and extra antecedents are proof lines; deduction is a proof line.
-    antecedents: list
-    extra_antecedents: list
-    deduction: "ProofLine"
+    antecedents: Sequence[ProofLine]
+    extra_antecedents: Sequence[ProofLine]
+    deduction: ProofLine
