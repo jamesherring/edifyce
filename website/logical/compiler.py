@@ -1244,7 +1244,18 @@ class AbstractSyntaxTree:
             new_object.context.variables.update(sub_context.variables)
 
             # Add in the default definitions
+            seen_labels: set[str] = set()
             for defn in context.definitions:
+
+                # A cited definition name must be unambiguous: reject a duplicate
+                # label so `[<name>, <line>]` always resolves to one definition.
+                if defn.label is not None:
+                    if defn.label in seen_labels:
+                        context.error_log.append(
+                            f"Duplicate definition label '{defn.label}'."
+                        )
+                        continue
+                    seen_labels.add(defn.label)
 
                 # Make a copy of context
                 context_copy = copy(new_object.context)

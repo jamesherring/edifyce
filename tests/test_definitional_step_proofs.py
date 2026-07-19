@@ -251,6 +251,19 @@ def test_named_binder_definition_unfold_is_valid(subset_system):
     assert proof.proof_lines[1].valid is True
 
 
+def test_duplicate_definition_labels_are_a_compile_error():
+    # A cited name must resolve to one definition, so two definitions sharing a
+    # label is rejected at compile time.
+    code = ALIAS_SYSTEM.replace(
+        "Define x sub y as (x ∈ y) label sub",
+        "Define x sub y as (x ∈ y) label sub\n"
+        "            Define y has x as (x ∈ y) label sub",
+    )
+    result = compile_formal_system(code)
+    assert "errors" in result
+    assert any("Duplicate definition label" in e for e in result["errors"])
+
+
 # ---------------------------------------------------------------------------
 # Kernel-path binder definition (generic keyword)
 # ---------------------------------------------------------------------------
