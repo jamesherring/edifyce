@@ -337,3 +337,75 @@ def test_validate_is_owner_scoped(client, db):
 
     _register_login(client, "intruder@example.com")
     assert client.post(f"/formal-systems/{system_id}/validate").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Public visibility: the shared master list + published-or-owner reads
+# ---------------------------------------------------------------------------
+
+
+def _publish(client: TestClient, system_id: str) -> None:
+    assert (
+        client.patch(f"/formal-systems/{system_id}", json={"published": True}).status_code == 200
+    )
+
+
+def test_public_list_needs_no_auth_and_shows_only_published(client):
+    _register_login(client, "ada@example.com")
+    draft = client.post("/formal-systems", json={"name": "Draft"}).json()
+    published = client.post("/formal-systems", json={"name": "Published"}).json()
+    _publish(client, published["id"])
+    client.post("/auth/logout")
+
+    listed = client.get("/formal-systems/public")
+    assert listed.status_code == 200  # no auth required
+    ids = [s["id"] for s in listed.json()]
+    assert published["id"] in ids
+    assert draft["id"] not in ids  # drafts are excluded
+
+
+def test_public_list_names_the_owner_without_leaking_email(client):
+    user_id = _register_login(client, "ada@example.com")
+    assert client.patch("/users/me", json={"display_name": "Ada L."}).status_code == 200
+    system = client.post("/formal-systems", json={"name": "Pub"}).json()
+    _publish(client, system["id"])
+    client.post("/auth/logout")
+
+    owner = client.get("/formal-systems/public").json()[0]["owner"]
+    assert owner["id"] == user_id
+    assert owner["display_name"] == "Ada L."
+    assert "email" not in owner
+
+
+def test_published_system_is_readable_by_anyone(client, db):
+    owner_id = _register_login(client, "owner@example.com")
+    system_id = _seed_zfc(db, owner_id)
+    _publish(client, system_id)
+    client.post("/auth/logout")
+
+    # Signed out: detail, validate and source are all served.
+    assert client.get(f"/formal-systems/{system_id}").status_code == 200
+    assert client.post(f"/formal-systems/{system_id}/validate").json()["success"] is True
+    assert client.get(f"/formal-systems/{system_id}/source").status_code == 200
+
+    # A different signed-in user can read it too, but it is not one of *their*
+    # systems (the owner-scoped list stays empty for them).
+    _register_login(client, "reader@example.com")
+    assert client.get(f"/formal-systems/{system_id}").status_code == 200
+    assert client.get("/formal-systems").json() == []
+
+
+def test_unpublishing_removes_from_public_and_hides_from_others(client, db):
+    owner_id = _register_login(client, "owner@example.com")
+    system_id = _seed_zfc(db, owner_id)
+    _publish(client, system_id)
+    assert any(s["id"] == system_id for s in client.get("/formal-systems/public").json())
+
+    assert (
+        client.patch(f"/formal-systems/{system_id}", json={"published": False}).status_code == 200
+    )
+    assert client.get("/formal-systems/public").json() == []
+
+    # Back to a draft: invisible to a signed-out visitor again.
+    client.post("/auth/logout")
+    assert client.get(f"/formal-systems/{system_id}").status_code == 404

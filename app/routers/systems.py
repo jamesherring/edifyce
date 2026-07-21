@@ -24,7 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.auth import current_active_user
+from app.auth import current_active_user, current_active_user_optional
 from app.db import Base, FormalSystem, get_session, system_to_spec
 from app.db.models import User
 from app.db.systems import (
@@ -52,6 +52,7 @@ from app.schemas import (
     Production,
     Rule,
     Sort,
+    SystemOwner,
     SystemSource,
     SystemValidation,
 )
@@ -61,8 +62,10 @@ router = APIRouter(prefix="/formal-systems", tags=["formal-systems"])
 
 
 # The child collections `system_to_spec` and the detail serializer touch. Async
-# has no lazy load, so every one must be eagerly fetched.
+# has no lazy load, so every one must be eagerly fetched. `owner` is here too so
+# the summary/detail serializers can name the author without a lazy load.
 _CHILD_LOADS = (
+    selectinload(FormalSystem.owner),
     selectinload(FormalSystem.brackets),
     selectinload(FormalSystem.symbols).selectinload(SymbolRow.union),
     selectinload(FormalSystem.symbols)
@@ -128,6 +131,28 @@ async def _get_owned_or_404(
     return system
 
 
+async def _load_system(session: AsyncSession, system_id: uuid.UUID) -> FormalSystem | None:
+    stmt = select(FormalSystem).where(FormalSystem.id == system_id).options(*_CHILD_LOADS)
+    return await session.scalar(stmt)
+
+
+def _is_readable(system: FormalSystem, user: User | None) -> bool:
+    # Published systems are public; drafts are visible only to their owner.
+    if system.published_at is not None:
+        return True
+    return user is not None and system.owner_id == user.id
+
+
+async def _get_readable_or_404(
+    session: AsyncSession, system_id: uuid.UUID, user: User | None
+) -> FormalSystem:
+    system = await _load_system(session, system_id)
+    if system is None or not _is_readable(system, user):
+        # 404 (not 403) for a draft you don't own, so unpublished ids don't leak.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Formal system not found.")
+    return system
+
+
 async def owned_system_id_or_404(
     session: AsyncSession, system_id: uuid.UUID, owner_id: uuid.UUID
 ) -> uuid.UUID:
@@ -161,6 +186,12 @@ async def _require_owned_reference(
         )
 
 
+def _owner_out(system: FormalSystem) -> SystemOwner | None:
+    if system.owner is None:
+        return None
+    return SystemOwner(id=system.owner.id, display_name=system.owner.display_name)
+
+
 def _summary(system: FormalSystem) -> FormalSystemSummary:
     return FormalSystemSummary(
         id=system.id,
@@ -171,6 +202,7 @@ def _summary(system: FormalSystem) -> FormalSystemSummary:
         published_at=system.published_at,
         created_at=system.created_at,
         updated_at=system.updated_at,
+        owner=_owner_out(system),
     )
 
 
@@ -262,7 +294,27 @@ async def list_systems(
     systems = await session.scalars(
         select(FormalSystem)
         .where(FormalSystem.owner_id == user.id)
+        .options(selectinload(FormalSystem.owner))
         .order_by(FormalSystem.created_at)
+    )
+    return [_summary(system) for system in systems]
+
+
+# Declared before `/{system_id}` so "public" isn't parsed as a system id.
+@router.get("/public", response_model=list[FormalSystemSummary])
+async def list_public_systems(
+    session: AsyncSession = Depends(get_session),
+) -> list[FormalSystemSummary]:
+    """The shared master list: every published system, any owner, no auth.
+
+    Drafts (``published_at IS NULL``) are excluded; unpublishing removes a system
+    from this list. Newest publications first.
+    """
+    systems = await session.scalars(
+        select(FormalSystem)
+        .where(FormalSystem.published_at.is_not(None))
+        .options(selectinload(FormalSystem.owner))
+        .order_by(FormalSystem.published_at.desc(), FormalSystem.created_at.desc())
     )
     return [_summary(system) for system in systems]
 
@@ -294,10 +346,11 @@ async def create_system(
 @router.get("/{system_id}", response_model=FormalSystemDetail)
 async def get_system(
     system_id: uuid.UUID,
-    user: User = Depends(current_active_user),
+    user: User | None = Depends(current_active_user_optional),
     session: AsyncSession = Depends(get_session),
 ) -> FormalSystemDetail:
-    return _detail(await _get_owned_or_404(session, system_id, user.id))
+    # Published systems are readable by anyone; drafts only by their owner.
+    return _detail(await _get_readable_or_404(session, system_id, user))
 
 
 @router.patch("/{system_id}", response_model=FormalSystemDetail)
@@ -350,10 +403,10 @@ async def delete_system(
 @router.post("/{system_id}/validate", response_model=SystemValidation)
 async def validate_system(
     system_id: uuid.UUID,
-    user: User = Depends(current_active_user),
+    user: User | None = Depends(current_active_user_optional),
     session: AsyncSession = Depends(get_session),
 ) -> SystemValidation:
-    system = await _get_owned_or_404(session, system_id, user.id)
+    system = await _get_readable_or_404(session, system_id, user)
 
     # NOTE: inheritance is not resolved yet. `inherits_from_id` is stored (and
     # its reference validated on write), but the declarative pipeline has no
@@ -379,10 +432,10 @@ async def validate_system(
 @router.get("/{system_id}/source", response_model=SystemSource)
 async def system_source(
     system_id: uuid.UUID,
-    user: User = Depends(current_active_user),
+    user: User | None = Depends(current_active_user_optional),
     session: AsyncSession = Depends(get_session),
 ) -> SystemSource:
-    system = await _get_owned_or_404(session, system_id, user.id)
+    system = await _get_readable_or_404(session, system_id, user)
     # Describes this system alone; inheritance is not lowered yet (see the note
     # on validate_system).
     return SystemSource(source=lower(system_to_spec(system)))
