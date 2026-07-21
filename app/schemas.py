@@ -122,6 +122,14 @@ class Rule(BaseModel):
     bindings: list[Binding] = Field(default_factory=list)
 
 
+class SystemOwner(BaseModel):
+    """The public face of a system's owner. Deliberately omits email — only the
+    id and a chosen display name are surfaced on shared (published) systems."""
+
+    id: uuid.UUID
+    display_name: str | None = None
+
+
 class FormalSystemSummary(BaseModel):
     id: uuid.UUID
     name: str
@@ -131,6 +139,8 @@ class FormalSystemSummary(BaseModel):
     published_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    # Null for ownerless systems (owner_id is nullable).
+    owner: SystemOwner | None = None
 
 
 class FormalSystemDetail(FormalSystemSummary):

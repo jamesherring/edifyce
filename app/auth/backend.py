@@ -49,3 +49,8 @@ fastapi_users = FastAPIUsers[User, uuid.UUID](get_user_manager, [auth_backend])
 
 # Dependency for routes that require a signed-in, active user.
 current_active_user = fastapi_users.current_user(active=True)
+
+# Optional variant: the active user when signed in, else None (no 401). Read
+# routes that serve published systems to anyone but drafts only to their owner
+# use this to tell "signed out" from "signed in as someone else".
+current_active_user_optional = fastapi_users.current_user(active=True, optional=True)
