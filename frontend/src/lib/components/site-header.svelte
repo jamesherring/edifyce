@@ -12,6 +12,7 @@
 
 	const nav = [
 		{ href: '/', label: 'Home' },
+		{ href: '/systems', label: 'Systems' },
 		{ href: '/compile', label: 'Compile' },
 		{ href: '/verify', label: 'Verify' }
 	];
