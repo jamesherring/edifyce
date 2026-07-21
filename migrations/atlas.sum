@@ -1,4 +1,5 @@
-h1:pdaY4BMK22VD2bFtUfynUVv3a1Gf1N7pO4vzkMTZq9k=
+h1:VLU77kJCoi4694YAs9/yDRBVkuNyviGo6t7Q/Hz5tpE=
 20260715084842_initial_schema.sql h1:li+tGjd1xfzUC+Oet1ytZRgaeJlFFn6zwKJKRRHQR5o=
 20260717121403_normalize_constraint_names.sql h1:VfGJbOd7VWShF/0kWpgvlm+iMJLrutRP+qweQ/rJR4k=
 20260721060312_unify_symbols.sql h1:TEriOjT9h56DIRBgors2hB/rmp9gUzezuiMsaX5Fk8Q=
+20260721065728_theorem_term_graph.sql h1:79ngX+gYFBxJ97dLqKkgg/k/XQNpD+Dmf+YaFpTeJVo=
