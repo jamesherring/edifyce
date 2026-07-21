@@ -10,6 +10,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Alert from '$lib/components/ui/alert';
 	import SystemParts from './SystemParts.svelte';
+	import { auth } from '$lib/auth.svelte';
 	import {
 		api,
 		ApiError,
@@ -22,6 +23,7 @@
 	import CircleX from '@lucide/svelte/icons/circle-x';
 	import Code from '@lucide/svelte/icons/code';
 	import SquareCheck from '@lucide/svelte/icons/square-check-big';
+	import Pencil from '@lucide/svelte/icons/pencil';
 
 	let system = $state<FormalSystemDetail | null>(null);
 	let loading = $state(true);
@@ -107,6 +109,8 @@
 		}
 	}
 
+	const isOwner = $derived(!!auth.user && !!system && system.owner?.id === auth.user.id);
+
 	// Re-load whenever the route id changes.
 	$effect(() => {
 		const id = page.params.id;
@@ -134,9 +138,16 @@
 				{/if}
 			{/snippet}
 			{#snippet actions()}
-				<Button href={`/systems/${system?.id}/verify`} variant="outline" size="sm">
-					<SquareCheck class="size-4" /> Verify a proof
-				</Button>
+				<div class="flex flex-wrap gap-2">
+					{#if isOwner}
+						<Button href={`/systems/${system?.id}/edit`} variant="outline" size="sm">
+							<Pencil class="size-4" /> Edit
+						</Button>
+					{/if}
+					<Button href={`/systems/${system?.id}/verify`} variant="outline" size="sm">
+						<SquareCheck class="size-4" /> Verify a proof
+					</Button>
+				</div>
 			{/snippet}
 		</EntityHeader>
 
