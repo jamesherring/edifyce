@@ -147,17 +147,23 @@ def store_term(session: Session, system: FormalSystem, term: Term) -> TermRow:
 
     collect(term)
 
-    rows: dict[str, TermRow] = {}
-    if system.id is not None:
-        rows = {
-            row.digest: row
-            for row in session.scalars(
-                select(TermRow).where(
-                    TermRow.formal_system_id == system.id,
-                    TermRow.digest.in_(postorder),
-                )
+    # The dedup lookup needs the system's id, and needs earlier (possibly
+    # pending) rows visible: flush an unsaved system so its id exists, and let
+    # the session's autoflush push pending term rows before the SELECT. Without
+    # this, two store_term calls against an unflushed system would re-create
+    # the same digests and trip the unique index at commit.
+    session.add(system)
+    if system.id is None:
+        session.flush()
+    rows: dict[str, TermRow] = {
+        row.digest: row
+        for row in session.scalars(
+            select(TermRow).where(
+                TermRow.formal_system_id == system.id,
+                TermRow.digest.in_(postorder),
             )
-        }
+        )
+    }
 
     for digest, t in postorder.items():
         if digest in rows:
@@ -210,17 +216,22 @@ def _load(row: TermRow, context: Context, memo: dict[object, Term]) -> Term:
             literal=row.literal,
         )
     elif row.kind == TERM_KIND_DEFINED:
+        # Match on the stored sort too: two definitions may share a higher
+        # template across different sorts, and context.definitions is a set,
+        # so template alone would pick one arbitrarily.
         definition = next(
             (
                 defn
                 for defn in context.definitions
                 if defn.higher.pattern == row.constructor
+                and defn.pattern.name == row.sort
             ),
             None,
         )
         if definition is None:
             raise LookupError(
-                f"No definition with higher form {row.constructor!r} in context"
+                f"No definition of {row.sort!r} with higher form "
+                f"{row.constructor!r} in context"
             )
         term = Node(
             pattern=definition.higher,

@@ -157,6 +157,25 @@ def test_restoring_the_same_statement_reuses_the_root(
     assert second is first
 
 
+def test_storing_against_an_unflushed_system_does_not_duplicate(
+    session, engine_context
+):
+    # Import scenario: a new system and several statements in one transaction,
+    # with no flush in between. The second store must reuse the first's pending
+    # rows rather than re-create equal digests and trip the unique index.
+    system = FormalSystem(name="ZFC-unflushed", slug="zfc-unflushed")
+    store_term(session, system, term_of(engine_context, "x ∈ y"))
+    store_term(session, system, term_of(engine_context, "(x ∈ y → x ∈ z)"))
+    session.commit()  # would raise IntegrityError on duplicated digests
+
+    rows = session.scalars(
+        select(TermRow).where(TermRow.formal_system_id == system.id)
+    ).all()
+    assert len({r.digest for r in rows}) == len(rows)
+    membership_digest = digest_term(term_of(engine_context, "x ∈ y"))
+    assert len([r for r in rows if r.digest == membership_digest]) == 1
+
+
 # ---------------------------------------------------------------------------
 # The payoff: structural search in plain SQL
 # ---------------------------------------------------------------------------
@@ -240,3 +259,62 @@ def test_search_statements_using_defined_notation(
         .where(TermRow.kind == "defined", TermRow.constructor == "x ⊆ y")
     ).all()
     assert rows == ["x ⊆ y"]
+
+
+# ---------------------------------------------------------------------------
+# Defined-node resolution disambiguates by sort
+# ---------------------------------------------------------------------------
+
+AMBIGUOUS_SOURCE = """system DUP
+
+notation
+  brackets ( )
+
+grammar
+  term      | variable    | matches [a-z][a-z0-9]*
+  term      | pairing     | ⟨s, t⟩                  | s, t : term
+  formula   | membership  | s ∈ t                   | s, t : term
+  formula   | conjunction | (p ∧ q)                 | p, q : formula
+
+line statement
+  shape <formula> [<reference>]
+  reference | matches [A-Za-z0-9 ,]+
+  logical formula
+
+rules
+  HYP | hypothesis | from | infer p | p : formula
+
+definitions
+  formula | both | x ⋈ y | means (x ∈ y ∧ y ∈ x) | x, y : variable
+  term    | swap | x ⋈ y | means ⟨y, x⟩           | x, y : variable
+"""
+
+
+def test_defined_nodes_reload_with_their_stored_sort(session):
+    # One higher template ("x ⋈ y") defined on two sorts. Loading must pick the
+    # definition matching the stored sort — context.definitions is a set, so
+    # template alone would choose arbitrarily and corrupt later sort checks.
+    result = build(AMBIGUOUS_SOURCE)
+    assert "errors" not in result, result.get("errors")
+    engine_system = result["system"]
+    context = copy(engine_system.context)
+    context.variables.update(engine_system.build_context.variables)
+    formula = context.variables["formula"]
+
+    as_formula = from_match(formula.match("x ⋈ y", context), context)
+    as_term = from_match(formula.match("x ⋈ y ∈ z", context), context).children["s"]
+    assert (as_formula.sort.name, as_term.sort.name) == ("formula", "term")
+
+    system = FormalSystem(name="DUP", slug="dup")
+    ids = {}
+    for label, term in (("formula", as_formula), ("term", as_term)):
+        row = store_term(session, system, term)
+        session.flush()
+        ids[label] = row.id
+    session.commit()
+    session.expire_all()
+
+    for label, original in (("formula", as_formula), ("term", as_term)):
+        reloaded = load_term(session.get(TermRow, ids[label]), context)
+        assert reloaded.sort.name == label
+        assert reloaded.equal(original, context)
