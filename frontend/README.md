@@ -21,6 +21,11 @@ Auth state is held in `src/lib/auth.svelte.ts` (a reactive store fed by
 sends automatically. Requests go through `src/lib/api.ts` with
 `credentials: 'include'`.
 
+`/login` and `/register` also render GitHub/Google buttons
+(`components/oauth-buttons.svelte`) for whichever providers the backend reports
+from `GET /auth/providers`; clicking one sends the browser to the provider's
+authorization URL and the backend completes the flow on its callback.
+
 ## Development
 
 Requires Node 20+.

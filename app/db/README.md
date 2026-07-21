@@ -30,9 +30,9 @@ Modernised from the original Django app (`website/models.py` on `main`):
   auth routes in `app/auth/` (register / login / logout / `users/me`).
 - **`oauth_accounts`** — linked social logins (fastapi-users'
   `SQLAlchemyBaseOAuthAccountTableUUID`); one user, many providers. The library
-  hardcodes the FK to a `user` table, so we repoint it at our `users` table. The
-  schema is ready; the OAuth routers aren't mounted yet (they need per-provider
-  client secrets).
+  hardcodes the FK to a `user` table, so we repoint it at our `users` table.
+  Populated by the GitHub/Google social-login routers in `app/auth/oauth.py`
+  (enabled per provider when its client id/secret are set).
 - **`formal_systems`** — a system's identity + surrounding concerns: `name`,
   `slug`, optional `owner`, self-referential `inherits_from_id` (system
   inheritance), and `published_at`. Its grammar/rules/definitions are **not** a

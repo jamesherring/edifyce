@@ -26,6 +26,8 @@ class PendingDefinition:
     # sort or metavariable defined later in the block still resolves.
     fresh: list = field(default_factory=list)
     where_strings: list = field(default_factory=list)
+    # Optional name a proof cites the definition by (`[<label>, <line>]`).
+    label: str | None = None
 
 
 def get_inherited_system(code: str) -> str | None:
@@ -627,13 +629,19 @@ class AbstractSyntaxTree:
                 lower = remainder[index + 4:]
 
                 # Optional trailing clauses, in source order after the lower form:
-                #   Define <higher> as <lower> [fresh <binds>] [where <provisos>]
+                #   Define <higher> as <lower> [fresh <binds>] [where <provisos>] [label <name>]
                 # `fresh` declares the defining form's bound variables (so the
                 # term checker unfolds capture-avoidingly); `where` carries
-                # kernel-vocabulary provisos (see side_condition_syntax). Peel
-                # them off the tail back-to-front so an earlier clause never
+                # kernel-vocabulary provisos (see side_condition_syntax); `label`
+                # names the definition so a proof can cite it as `[<name>, <line>]`.
+                # Peel them off the tail back-to-front so an earlier clause never
                 # swallows a later keyword. A lower form must not itself contain
                 # these separator words.
+                label = None
+                if " label " in lower:
+                    lower, _, label_text = lower.partition(" label ")
+                    label = label_text.strip()
+
                 if " if " in lower:
                     # The legacy string proviso (pseudo-python `Condition`) has been
                     # retired; provisos are now written with `where` and checked
@@ -666,6 +674,7 @@ class AbstractSyntaxTree:
                     variables={current_object.pre_format_apply(key): context.string_variables[key] for key in context.string_variables},
                     fresh=fresh,
                     where_strings=where_strings,
+                    label=label,
                 ))
 
             elif stripped.startswith("LineType ") and stripped[-1] == ":":
@@ -1227,7 +1236,18 @@ class AbstractSyntaxTree:
             new_object.context.variables.update(sub_context.variables)
 
             # Add in the default definitions
+            seen_labels: set[str] = set()
             for defn in context.definitions:
+
+                # A cited definition name must be unambiguous: reject a duplicate
+                # label so `[<name>, <line>]` always resolves to one definition.
+                if defn.label is not None:
+                    if defn.label in seen_labels:
+                        context.error_log.append(
+                            f"Duplicate definition label '{defn.label}'."
+                        )
+                        continue
+                    seen_labels.add(defn.label)
 
                 # Make a copy of context
                 context_copy = copy(new_object.context)
@@ -1255,7 +1275,7 @@ class AbstractSyntaxTree:
                 # Get the definition
                 result = defn.pattern.add_definition(
                     defn.lower, defn.higher, context_copy,
-                    fresh=fresh, kernel_condition=kernel_condition,
+                    fresh=fresh, kernel_condition=kernel_condition, label=defn.label,
                 )
 
                 if result is not None:

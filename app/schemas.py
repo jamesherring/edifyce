@@ -37,6 +37,12 @@ class VerifyProofResponse(BaseModel):
     proof: dict | None = None
 
 
+class OAuthProvidersResponse(BaseModel):
+    # The social-login providers that are configured, so the UI shows only the
+    # buttons that will actually work. Values match the /auth/<provider> prefix.
+    providers: list[str] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Formal-system objects (CRUD)
 #

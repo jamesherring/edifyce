@@ -14,6 +14,7 @@ from .definitions import follows_by_definition
 
 if TYPE_CHECKING:
     from ..matching.context import Context
+    from ..matching.definitions import Definition
     from .rules import InferenceRule
 
 
@@ -22,6 +23,15 @@ if TYPE_CHECKING:
 # so this is only a guard against a pathological citation, not the old factorial
 # permutation limit; no real proof approaches it.
 MAX_CITED_ANTECEDENTS = 16
+
+# The justification keyword for a definitional step: a line cited as
+# `[Def, <line>]` claims to be the cited line with one definition unfolded (or
+# folded) at a single position. The checker searches the definitions in scope
+# for one that relates the two lines (the elaboration-layer role the kernel
+# leaves open - see kernel.definitions). An inference rule of the same label
+# still wins, since rules are resolved first, so a system is free to repurpose
+# the keyword.
+DEFINITION_KEY = "Def"
 
 
 class Subproof:
@@ -164,6 +174,23 @@ class InferenceReference:
     key: str
     antecedents: list = field(default_factory=list)
     mapping: dict = field(default_factory=dict)
+
+
+@dataclass(eq=False)
+class DefinitionReference:
+    """A reference that resolves to a definitional-step justification.
+
+    Returned by :meth:`Proof.get_reference` when a reference names a definition
+    (or the generic :data:`DEFINITION_KEY` keyword) and cites the single source
+    line the step unfolds from or folds to. ``definition`` is the specific named
+    definition to apply, or ``None`` for the generic keyword - in which case the
+    applicable definition is searched for at check time (see
+    :meth:`Proof.check_definitional_line`).
+    """
+
+    key: str
+    source: "ProofLine"
+    definition: object = None
 
 
 @dataclass(eq=False)
@@ -335,7 +362,20 @@ class Proof:
                         inference_rule=ir, key=key, antecedents=antecedents, mapping=mapping
                     )
 
-            raise Exception(f"'{key}' is not a valid inference rule key.")
+            # A definitional step: `[<name>, <line>]` cites a named definition,
+            # or `[Def, <line>]` leaves the applicable definition to be searched
+            # for. Either way it cites exactly one source line.
+            named = self._definition_by_label(key, context)
+            if named is not None or key == DEFINITION_KEY:
+                sources = [
+                    item for r in ref_parts[1:]
+                    if isinstance(item := self.get_reference(r, context), ProofLine)
+                ]
+                if len(sources) != 1:
+                    raise Exception(f"{key} requires exactly one cited line.")
+                return DefinitionReference(key=key, source=sources[0], definition=named)
+
+            raise Exception(f"'{key}' is not a valid inference rule or definition.")
 
         if "." in ref:
             index = ref.index(".")
@@ -408,6 +448,11 @@ class Proof:
             proof_line.invalid_message = str(e)
             proof_line.valid = False
             return False
+
+        # A definitional step: this line is the cited line with one definition
+        # unfolded/folded at a single position, checked over kernel terms.
+        if isinstance(reference, DefinitionReference):
+            return self.check_definitional_line(proof_line, reference, context)
 
         if not isinstance(reference, InferenceReference):
             proof_line.invalid_message = f"Invalid reference '{proof_line.reference_string}'."
@@ -616,6 +661,73 @@ class Proof:
 
         proof_line.valid = False
         proof_line.invalid_message = f"{key} does not apply."
+        return False
+
+    @staticmethod
+    def _definition_by_label(label: str, context: Context) -> "Definition | None":
+        # The definition in scope cited by this label, or None. Used to resolve a
+        # `[<name>, <line>]` citation to the specific named definition.
+        for definition in context.definitions:
+            if definition.label == label:
+                return definition
+        return None
+
+    def check_definitional_line(
+        self, proof_line: ProofLine, reference: DefinitionReference, context: Context
+    ) -> bool:
+        # Check a definitional step: `proof_line` must be the cited source line
+        # with one definition (in scope) unfolded or folded at a single position.
+        # A named citation pins the definition; the generic keyword searches those
+        # in scope - the trusted core only ever checks a step it is handed (see
+        # kernel.definitions). Each candidate is verified over kernel terms by
+        # ProofLine.follows_from_definition.
+        source = reference.source
+
+        # The cited line must be in scope, exactly as an inference-rule antecedent
+        # would be: never inside a closed sibling subproof.
+        if not line_is_accessible(proof_line, source):
+            proof_line.valid = False
+            proof_line.invalid_message = (
+                f"Line {source.index() + 1} is out of scope (it is inside a closed subproof)."
+            )
+            return False
+
+        # A step in the same proof must come after the line it transforms.
+        if source.proof is proof_line.proof and proof_line.index() <= source.index():
+            proof_line.valid = False
+            proof_line.invalid_message = f"{reference.key} must cite an earlier line."
+            return False
+
+        # The cited line must be a formula-bearing logical line: a definitional
+        # step transforms one formula into another. Guard here so an unparsed or
+        # non-logical citation is a clean invalid line, not an AttributeError
+        # inside follows_from_definition (which dereferences line_type.behaviour).
+        if source.line_type is None or source.line_type.behaviour != "logical" \
+                or source.formula is None:
+            proof_line.valid = False
+            proof_line.invalid_message = f"Line {source.index() + 1} is not a formula line."
+            return False
+
+        candidates = [reference.definition] if reference.definition is not None \
+            else list(context.definitions)
+
+        for definition in candidates:
+            if proof_line.follows_from_definition(source, definition, {}, context):
+                proof_line.valid = True
+                proof_line.antecedents = (source,)
+                source.dependent_lines.add(proof_line)
+                return True
+
+        proof_line.valid = False
+        if reference.definition is not None:
+            proof_line.invalid_message = (
+                f"{reference.key} does not apply between this line and line {source.index() + 1}."
+            )
+        else:
+            proof_line.invalid_message = (
+                f"{reference.key} does not apply: no definition in scope relates this line "
+                f"to line {source.index() + 1}."
+            )
         return False
 
     def import_path(self, path, label, context):

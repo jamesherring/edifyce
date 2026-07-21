@@ -12,7 +12,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 from fastapi import Depends
-from fastapi_users import BaseUserManager, UUIDIDMixin
+from fastapi_users import BaseUserManager, UUIDIDMixin, exceptions
 from fastapi_users_db_sqlalchemy import SQLAlchemyUserDatabase
 
 from app.auth.config import AUTH_SECRET
@@ -56,6 +56,46 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         self, user: User, token: str, request: "Request | None" = None
     ) -> None:
         logger.info("Verification requested for %s (token: %s)", user.email, token)
+
+    async def oauth_callback(  # type: ignore[override]
+        self,
+        oauth_name: str,
+        access_token: str,
+        account_id: str,
+        account_email: str,
+        expires_at: int | None = None,
+        refresh_token: str | None = None,
+        request: "Request | None" = None,
+        *,
+        associate_by_email: bool = False,
+        is_verified_by_default: bool = False,
+    ) -> User:
+        # Guard against account pre-hijacking: refuse to link a social login to an
+        # existing *unverified* local account. An attacker could otherwise
+        # pre-register the victim's email as an unverified password account and
+        # have the victim's later OAuth sign-in attach to it. The provider proves
+        # its own email; the local row's email ownership is unproven until
+        # is_verified. A verified local account (or a returning OAuth user, which
+        # is always verified) associates normally; a brand-new email is created.
+        if associate_by_email:
+            try:
+                existing = await self.get_by_email(account_email)
+            except exceptions.UserNotExists:
+                existing = None
+            if existing is not None and not existing.is_verified:
+                raise exceptions.UserAlreadyExists()
+
+        return await super().oauth_callback(
+            oauth_name,
+            access_token,
+            account_id,
+            account_email,
+            expires_at,
+            refresh_token,
+            request,
+            associate_by_email=associate_by_email,
+            is_verified_by_default=is_verified_by_default,
+        )
 
 
 async def get_user_manager(

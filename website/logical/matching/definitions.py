@@ -10,10 +10,14 @@ class Definition:
     """A definition class - linking higher level string patterns with lower level ones."""
 
     def __init__(self, lower, higher, pattern, context,
-                 fresh=None, kernel_condition=None):
+                 fresh=None, kernel_condition=None, label=None):
 
         # The pattern this definition applies to
         self.pattern = pattern
+
+        # Optional name a proof cites this definition by (`[<label>, <line>]`).
+        # None for an unnamed definition (still usable via the generic keyword).
+        self.label = label
 
         # Bound variables of the defining form: {name: sort Pattern}. These are
         # the variables the lower form binds (e.g. the `z` in ∀z.(…)); declaring
