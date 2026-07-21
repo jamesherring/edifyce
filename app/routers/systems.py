@@ -27,6 +27,8 @@ from sqlalchemy.orm import selectinload
 from app.auth import current_active_user
 from app.db import Base, FormalSystem, get_session, system_to_spec
 from app.db.models import User
+from app.db.side_conditions import SideConditionRow
+from app.db.side_conditions_mapping import definition_condition_string
 from app.db.systems import (
     AxiomBindingRow,
     AxiomRow,
@@ -74,6 +76,11 @@ _CHILD_LOADS = (
     selectinload(FormalSystem.definitions)
     .selectinload(DefinitionRow.bindings)
     .selectinload(DefinitionBindingRow.symbol),
+    # The proviso tree (flat) + each node's sort reference, for
+    # definition_condition_string on the async read path.
+    selectinload(FormalSystem.definitions)
+    .selectinload(DefinitionRow.side_conditions)
+    .selectinload(SideConditionRow.sort_symbol),
     selectinload(FormalSystem.axioms)
     .selectinload(AxiomRow.bindings)
     .selectinload(AxiomBindingRow.symbol),
@@ -221,7 +228,7 @@ def definition_out(d: DefinitionRow) -> Definition:
         name=d.name,
         higher=d.higher,
         lower=d.lower,
-        condition=d.condition,
+        condition=definition_condition_string(d),
         bindings=_bindings_out(d.bindings),
     )
 

@@ -15,6 +15,8 @@ any route — they are the schema and the tooling to evolve it.
 | `app/db/models.py` | Account + proof-surface ORM models |
 | `app/db/systems.py` | Normalised formal-system decomposition (grammar/rules/definitions as flat rows) |
 | `app/db/systems_mapping.py` | `spec_to_system` / `system_to_spec` round trip between the declarative `SystemSpec` and the rows |
+| `app/db/side_conditions.py` | Definition provisos as the kernel side-condition algebra, stored as rows |
+| `app/db/side_conditions_mapping.py` | Parse/render a `where` proviso ↔ side-condition rows |
 | `app/db/terms.py` | Term graph: kernel-term DAGs as shared `terms` / `term_children` rows |
 | `app/db/terms_mapping.py` | `store_term` / `load_term` round trip between kernel `Term`s and the rows |
 | `app/db/session.py` | Lazy async engine + `get_session` FastAPI dependency |
@@ -48,6 +50,15 @@ Modernised from the original Django app (`website/models.py` on `main`):
   rules take two premises" — answerable in plain SQL with no recompile. The
   bridge to the engine is `systems_mapping`: rows → `SystemSpec` → lower to
   `.edi` → compile.
+- **`side_conditions`** — a definition's proviso (`where` clause) stored as the
+  kernel's closed side-condition algebra (`side_conditions.py`) rather than an
+  opaque string: one row per algebra node (`occurs`/`equal`/`disjoint`/`atom`
+  leaves referencing the definition's metavariables + an optional sort FK;
+  `not`/`and`/`or` combinators), a tree via `parent_id`. So "which definitions
+  have a disjoint-variable proviso" or "which constrain the `setvar` sort" are
+  plain SQL. `side_conditions_mapping` parses the `where` surface syntax to rows
+  and renders it back (the grammar mirrors the engine's `side_condition_syntax`,
+  cross-checked by a test so the two can't drift).
 - **`proof_folders`** / **`proofs`** — the folder/proof tree, scoped to a system.
   Ordering is a plain `position`; publishing is a `published_at` timestamp. (The
   old app modelled both through a separate `FolderEntry`/`OrderedModel`; this

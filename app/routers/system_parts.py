@@ -34,6 +34,8 @@ from sqlalchemy.orm import selectinload
 from app.auth import current_active_user
 from app.db import Base, get_session
 from app.db.models import User
+from app.db.side_conditions import SideConditionRow
+from app.db.side_conditions_mapping import build_side_condition_rows
 from app.db.systems import (
     AxiomBindingRow,
     AxiomRow,
@@ -199,6 +201,14 @@ async def _resolve_sort(session: AsyncSession, system_id: uuid.UUID, name: str) 
     if symbol.kind != "union":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"'{name}' is a production, not a sort.")
     return symbol
+
+
+async def _system_symbols(session: AsyncSession, system_id: uuid.UUID) -> dict[str, SymbolRow]:
+    """The system's symbol namespace by name — for resolving a proviso's sorts."""
+    symbols = await session.scalars(
+        select(SymbolRow).where(SymbolRow.system_id == system_id)
+    )
+    return {symbol.name: symbol for symbol in symbols}
 
 
 async def _binding_rows(
@@ -464,7 +474,16 @@ async def _assign_definition(session: AsyncSession, system_id: uuid.UUID, row: D
     if "lower" in fields and payload.lower is not None:
         row.lower = payload.lower
     if "condition" in fields:
-        row.condition = payload.condition
+        # Rebuild the proviso as structured side-condition rows. `side_conditions`
+        # is eager-loaded (see the definitions resource), so clearing it here is
+        # safe on the async path; delete-orphan removes the previous tree.
+        row.side_conditions = []
+        if payload.condition:
+            symbols = await _system_symbols(session, system_id)
+            try:
+                build_side_condition_rows(row, payload.condition, symbols)
+            except ValueError as exc:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     if "bindings" in fields and payload.bindings is not None:
         row.bindings = await _binding_rows(session, system_id, DefinitionBindingRow, payload.bindings)
 
@@ -596,7 +615,8 @@ RESOURCES: tuple[ChildResource, ...] = (
     ChildResource(
         "definitions", DefinitionRow, DefinitionCreate, DefinitionUpdate, Definition, definition_out,
         (selectinload(DefinitionRow.symbol),
-         selectinload(DefinitionRow.bindings).selectinload(DefinitionBindingRow.symbol)),
+         selectinload(DefinitionRow.bindings).selectinload(DefinitionBindingRow.symbol),
+         selectinload(DefinitionRow.side_conditions).selectinload(SideConditionRow.sort_symbol)),
         _assign_definition,
     ),
     ChildResource(

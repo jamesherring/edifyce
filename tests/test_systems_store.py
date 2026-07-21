@@ -13,7 +13,7 @@ pytest.importorskip("sqlalchemy")
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, aliased
 
-from app.db import Base, spec_to_system, system_to_spec
+from app.db import Base, SideConditionRow, spec_to_system, system_to_spec
 from app.db.models import FormalSystem
 from app.db.systems import (
     AxiomBindingRow,
@@ -40,6 +40,7 @@ _SYSTEM_TABLES = [
         FormalSystem, BracketRow, SymbolRow, ProductionBindingRow,
         LineRow, LinePartRow, DefinitionRow, DefinitionBindingRow,
         AxiomRow, AxiomBindingRow, RuleRow, RuleAntecedentRow, RuleBindingRow,
+        SideConditionRow,
     )
 ]
 

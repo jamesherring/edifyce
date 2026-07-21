@@ -30,6 +30,7 @@ from app.db.systems import (
     RuleRow,
     SymbolRow,
 )
+from app.db.side_conditions import SideConditionRow
 from app.db.systems_mapping import spec_to_system, system_to_spec
 from app.db.terms import TermChildRow, TermRow
 from app.db.terms_mapping import digest_term, load_term, store_term
@@ -57,6 +58,7 @@ __all__ = [
     "RuleAntecedentRow",
     "RuleBindingRow",
     "RuleRow",
+    "SideConditionRow",
     "SymbolRow",
     "spec_to_system",
     "system_to_spec",
