@@ -28,13 +28,15 @@ from app.auth import current_active_user
 from app.db import Base, FormalSystem, get_session, system_to_spec
 from app.db.models import User
 from app.db.systems import (
+    AxiomBindingRow,
     AxiomRow,
-    BracketRow,
+    DefinitionBindingRow,
     DefinitionRow,
     LineRow,
-    ProductionRow,
+    ProductionBindingRow,
+    RuleBindingRow,
     RuleRow,
-    SortRow,
+    SymbolRow,
 )
 from app.schemas import (
     Axiom,
@@ -62,14 +64,23 @@ router = APIRouter(prefix="/formal-systems", tags=["formal-systems"])
 # has no lazy load, so every one must be eagerly fetched.
 _CHILD_LOADS = (
     selectinload(FormalSystem.brackets),
-    selectinload(FormalSystem.sorts),
-    selectinload(FormalSystem.productions).selectinload(ProductionRow.sort),
-    selectinload(FormalSystem.productions).selectinload(ProductionRow.bindings),
+    selectinload(FormalSystem.symbols).selectinload(SymbolRow.union),
+    selectinload(FormalSystem.symbols)
+    .selectinload(SymbolRow.bindings)
+    .selectinload(ProductionBindingRow.symbol),
     selectinload(FormalSystem.lines).selectinload(LineRow.parts),
-    selectinload(FormalSystem.definitions).selectinload(DefinitionRow.bindings),
-    selectinload(FormalSystem.axioms).selectinload(AxiomRow.bindings),
+    selectinload(FormalSystem.lines).selectinload(LineRow.logical_symbol),
+    selectinload(FormalSystem.definitions).selectinload(DefinitionRow.symbol),
+    selectinload(FormalSystem.definitions)
+    .selectinload(DefinitionRow.bindings)
+    .selectinload(DefinitionBindingRow.symbol),
+    selectinload(FormalSystem.axioms)
+    .selectinload(AxiomRow.bindings)
+    .selectinload(AxiomBindingRow.symbol),
     selectinload(FormalSystem.rules).selectinload(RuleRow.antecedents),
-    selectinload(FormalSystem.rules).selectinload(RuleRow.bindings),
+    selectinload(FormalSystem.rules)
+    .selectinload(RuleRow.bindings)
+    .selectinload(RuleBindingRow.symbol),
 )
 
 
@@ -168,22 +179,24 @@ def _summary(system: FormalSystem) -> FormalSystemSummary:
 
 
 def _bindings_out(rows: Sequence[Base]) -> list[Binding]:
-    return [Binding(var=b.var, sort=b.sort) for b in rows]
+    # A binding references a symbol by FK; its `sort` in the API is that symbol's
+    # name (a sort or a production).
+    return [Binding(var=b.var, sort=b.symbol.name) for b in rows]
 
 
 def bracket_out(b: BracketRow) -> BracketPair:
     return BracketPair(id=b.id, opening=b.opening, closing=b.closing)
 
 
-def sort_out(s: SortRow) -> Sort:
+def sort_out(s: SymbolRow) -> Sort:
     return Sort(id=s.id, name=s.name)
 
 
-def production_out(p: ProductionRow) -> Production:
+def production_out(p: SymbolRow) -> Production:
     return Production(
         id=p.id,
         name=p.name,
-        sort=p.sort.name,
+        sort=p.union.name,
         kind=p.kind,
         template=p.template,
         regex=p.regex,
@@ -196,7 +209,7 @@ def line_out(line: LineRow) -> LineType:
         id=line.id,
         name=line.name,
         shape=line.shape,
-        logical_sort=line.logical_sort,
+        logical_sort=line.logical_symbol.name if line.logical_symbol is not None else None,
         parts=[LinePart(id=pt.id, name=pt.name, regex=pt.regex) for pt in line.parts],
     )
 
@@ -204,7 +217,7 @@ def line_out(line: LineRow) -> LineType:
 def definition_out(d: DefinitionRow) -> Definition:
     return Definition(
         id=d.id,
-        sort=d.sort,
+        sort=d.symbol.name,
         name=d.name,
         higher=d.higher,
         lower=d.lower,
@@ -232,8 +245,8 @@ def _detail(system: FormalSystem) -> FormalSystemDetail:
     return FormalSystemDetail(
         **_summary(system).model_dump(),
         brackets=[bracket_out(b) for b in system.brackets],
-        sorts=[sort_out(s) for s in system.sorts],
-        productions=[production_out(p) for p in system.productions],
+        sorts=[sort_out(s) for s in system.symbols if s.kind == "union"],
+        productions=[production_out(s) for s in system.symbols if s.kind != "union"],
         lines=[line_out(line) for line in system.lines],
         definitions=[definition_out(d) for d in system.definitions],
         axioms=[axiom_out(a) for a in system.axioms],

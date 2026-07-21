@@ -1,19 +1,21 @@
-"""Normalised formal-system storage: a system decomposed into indexable rows.
+"""Normalised formal-system storage, built on one unified symbol table.
 
-Every declaration in a system becomes its own row with real foreign keys and no
-nested documents or serialised blobs. Short strings such as a production template
-(``s ∈ t``) or a definition's notation (``x ⊆ y``) are *atoms of the object
-language* — the searchable leaf values — not opaque structure.
+A system's grammar is a namespace of **symbols** — named patterns. A *sort*
+(``formula``, ``term``) is a symbol of kind ``union``; a *production*
+(``variable``, ``membership: s ∈ t``) is a symbol of kind ``regex`` or
+``template`` that belongs to a union via ``member_of_union_id``. This mirrors
+the engine, where sorts and productions live in one pattern namespace.
 
-These rows are the canonical form of a system's grammar/rules/definitions: they
-replace the old ``formal_systems.source`` text + ``compiled`` JSONB blob (dropped
-in this revision). The bridge back to the engine is `app.db.systems_mapping`,
-which rebuilds a `SystemSpec` from these rows; the spec lowers to ``.edi`` and
-compiles. Adapted from the standalone `app/systems/` draft (PR #23) onto this
-package's `Base`, UUID keys, and naming convention.
+Every reference to the grammar is a **foreign key into symbols**, not a name
+string: a binding's type, a definition's attach-point, a line type's logical
+sort. So renaming a symbol updates one row and all references follow — there is
+no free-text name to leave dangling (the failure the old sorts/productions split
+allowed). ``app.db.systems_mapping`` projects these rows to and from the
+declarative ``SystemSpec`` (whose sorts/bindings are still names), so the engine
+round-trip is unchanged behind the mapping.
 
-Ordering that matters (productions within a system, antecedents within a rule) is
-carried by an explicit ``position`` column and replayed via ``order_by``.
+Ordering that matters carries an explicit ``position`` column, replayed via
+``order_by``.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, Index, Integer, String, Text, text
+from sqlalchemy import ForeignKey, Index, Integer, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, uuid_pk_column
@@ -31,13 +33,80 @@ if TYPE_CHECKING:
 
 
 def _system_fk() -> Mapped[uuid.UUID]:
-    return mapped_column(
-        ForeignKey("formal_systems.id", ondelete="CASCADE"), index=True
-    )
+    return mapped_column(ForeignKey("formal_systems.id", ondelete="CASCADE"), index=True)
 
 
 def _position() -> Mapped[int]:
     return mapped_column(Integer, server_default=text("0"))
+
+
+def _symbol_fk() -> Mapped[uuid.UUID]:
+    # A reference into the symbol namespace (a binding's type, a definition's
+    # attach-point). CASCADE keeps the DB consistent on whole-system / symbol
+    # deletion; the API blocks deleting a still-referenced symbol (409) so the
+    # cascade never silently removes a live reference in normal use.
+    return mapped_column(ForeignKey("symbols.id", ondelete="CASCADE"), index=True)
+
+
+# ---------------------------------------------------------------------------
+# Symbols: sorts (unions) and productions (leaves/composites) in one namespace
+# ---------------------------------------------------------------------------
+
+
+class SymbolRow(Base):
+    __tablename__ = "symbols"
+    __table_args__ = (Index("uq_symbols_system_name", "system_id", "name", unique=True),)
+
+    id: Mapped[uuid.UUID] = uuid_pk_column()
+    system_id: Mapped[uuid.UUID] = _system_fk()
+    position: Mapped[int] = _position()
+    name: Mapped[str] = mapped_column(String(128), index=True)
+    # "union" (a sort), "regex" or "template" (a production).
+    kind: Mapped[str] = mapped_column(String(16))
+    template: Mapped[str | None] = mapped_column(String(512))
+    regex: Mapped[str | None] = mapped_column(String(512))
+    # The union (sort) this symbol belongs to — "membership is a formula". Null
+    # for a top-level sort. Self-FK within symbols.
+    member_of_union_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("symbols.id", ondelete="CASCADE"), index=True
+    )
+
+    system: Mapped[FormalSystem] = relationship(back_populates="symbols")
+    union: Mapped[SymbolRow | None] = relationship(
+        remote_side="SymbolRow.id", back_populates="members"
+    )
+    members: Mapped[list[SymbolRow]] = relationship(
+        back_populates="union", order_by="SymbolRow.position", viewonly=True
+    )
+    # A production's bindings (`with s as term`). Empty for a union.
+    bindings: Mapped[list[ProductionBindingRow]] = relationship(
+        back_populates="production",
+        cascade="all, delete-orphan",
+        order_by="ProductionBindingRow.position",
+        foreign_keys="ProductionBindingRow.production_id",
+    )
+
+
+class ProductionBindingRow(Base):
+    __tablename__ = "production_bindings"
+
+    id: Mapped[uuid.UUID] = uuid_pk_column()
+    production_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("symbols.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = _position()
+    var: Mapped[str] = mapped_column(String(64))
+    symbol_id: Mapped[uuid.UUID] = _symbol_fk()
+
+    production: Mapped[SymbolRow] = relationship(
+        foreign_keys=[production_id], back_populates="bindings"
+    )
+    symbol: Mapped[SymbolRow] = relationship(foreign_keys=[symbol_id])
+
+
+# ---------------------------------------------------------------------------
+# Notation
+# ---------------------------------------------------------------------------
 
 
 class BracketRow(Base):
@@ -52,55 +121,9 @@ class BracketRow(Base):
     system: Mapped[FormalSystem] = relationship(back_populates="brackets")
 
 
-class SortRow(Base):
-    __tablename__ = "sorts"
-    __table_args__ = (Index("uq_sorts_system_name", "system_id", "name", unique=True),)
-
-    id: Mapped[uuid.UUID] = uuid_pk_column()
-    system_id: Mapped[uuid.UUID] = _system_fk()
-    position: Mapped[int] = _position()
-    name: Mapped[str] = mapped_column(String(128), index=True)
-
-    system: Mapped[FormalSystem] = relationship(back_populates="sorts")
-    productions: Mapped[list[ProductionRow]] = relationship(back_populates="sort")
-
-
-class ProductionRow(Base):
-    __tablename__ = "productions"
-
-    id: Mapped[uuid.UUID] = uuid_pk_column()
-    system_id: Mapped[uuid.UUID] = _system_fk()
-    sort_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("sorts.id", ondelete="CASCADE"), index=True
-    )
-    position: Mapped[int] = _position()
-    name: Mapped[str] = mapped_column(String(128), index=True)
-    # "composite" (a notation template with variable slots) or "regex" (a leaf).
-    kind: Mapped[str] = mapped_column(String(16))
-    template: Mapped[str | None] = mapped_column(String(512))
-    regex: Mapped[str | None] = mapped_column(String(512))
-
-    system: Mapped[FormalSystem] = relationship(back_populates="productions")
-    sort: Mapped[SortRow] = relationship(back_populates="productions")
-    bindings: Mapped[list[ProductionBindingRow]] = relationship(
-        back_populates="production",
-        cascade="all, delete-orphan",
-        order_by="ProductionBindingRow.position",
-    )
-
-
-class ProductionBindingRow(Base):
-    __tablename__ = "production_bindings"
-
-    id: Mapped[uuid.UUID] = uuid_pk_column()
-    production_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("productions.id", ondelete="CASCADE"), index=True
-    )
-    position: Mapped[int] = _position()
-    var: Mapped[str] = mapped_column(String(64))
-    sort: Mapped[str] = mapped_column(String(128), index=True)
-
-    production: Mapped[ProductionRow] = relationship(back_populates="bindings")
+# ---------------------------------------------------------------------------
+# Line types
+# ---------------------------------------------------------------------------
 
 
 class LineRow(Base):
@@ -111,9 +134,13 @@ class LineRow(Base):
     position: Mapped[int] = _position()
     name: Mapped[str] = mapped_column(String(128))
     shape: Mapped[str] = mapped_column(String(256))
-    logical_sort: Mapped[str | None] = mapped_column(String(128))
+    # Which sort the logical placeholder ranges over (a symbol reference).
+    logical_symbol_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("symbols.id", ondelete="CASCADE"), index=True
+    )
 
     system: Mapped[FormalSystem] = relationship(back_populates="lines")
+    logical_symbol: Mapped[SymbolRow | None] = relationship()
     parts: Mapped[list[LinePartRow]] = relationship(
         back_populates="line", cascade="all, delete-orphan", order_by="LinePartRow.position"
     )
@@ -133,20 +160,26 @@ class LinePartRow(Base):
     line: Mapped[LineRow] = relationship(back_populates="parts")
 
 
+# ---------------------------------------------------------------------------
+# Definitions
+# ---------------------------------------------------------------------------
+
+
 class DefinitionRow(Base):
     __tablename__ = "definitions"
 
     id: Mapped[uuid.UUID] = uuid_pk_column()
     system_id: Mapped[uuid.UUID] = _system_fk()
     position: Mapped[int] = _position()
-    # The pattern this abbreviation attaches to (e.g. "formula").
-    sort: Mapped[str] = mapped_column(String(128), index=True)
+    # The symbol (usually a sort) this abbreviation attaches to.
+    symbol_id: Mapped[uuid.UUID] = _symbol_fk()
     name: Mapped[str] = mapped_column(String(128), index=True)
     higher: Mapped[str] = mapped_column(String(512))
     lower: Mapped[str] = mapped_column(String(512))
     condition: Mapped[str | None] = mapped_column(String(512))
 
     system: Mapped[FormalSystem] = relationship(back_populates="definitions")
+    symbol: Mapped[SymbolRow] = relationship()
     bindings: Mapped[list[DefinitionBindingRow]] = relationship(
         back_populates="definition",
         cascade="all, delete-orphan",
@@ -163,9 +196,15 @@ class DefinitionBindingRow(Base):
     )
     position: Mapped[int] = _position()
     var: Mapped[str] = mapped_column(String(64))
-    sort: Mapped[str] = mapped_column(String(128), index=True)
+    symbol_id: Mapped[uuid.UUID] = _symbol_fk()
 
     definition: Mapped[DefinitionRow] = relationship(back_populates="bindings")
+    symbol: Mapped[SymbolRow] = relationship()
+
+
+# ---------------------------------------------------------------------------
+# Axioms
+# ---------------------------------------------------------------------------
 
 
 class AxiomRow(Base):
@@ -193,9 +232,15 @@ class AxiomBindingRow(Base):
     )
     position: Mapped[int] = _position()
     var: Mapped[str] = mapped_column(String(64))
-    sort: Mapped[str] = mapped_column(String(128), index=True)
+    symbol_id: Mapped[uuid.UUID] = _symbol_fk()
 
     axiom: Mapped[AxiomRow] = relationship(back_populates="bindings")
+    symbol: Mapped[SymbolRow] = relationship()
+
+
+# ---------------------------------------------------------------------------
+# Rules
+# ---------------------------------------------------------------------------
 
 
 class RuleRow(Base):
@@ -239,6 +284,7 @@ class RuleBindingRow(Base):
     )
     position: Mapped[int] = _position()
     var: Mapped[str] = mapped_column(String(64))
-    sort: Mapped[str] = mapped_column(String(128), index=True)
+    symbol_id: Mapped[uuid.UUID] = _symbol_fk()
 
     rule: Mapped[RuleRow] = relationship(back_populates="bindings")
+    symbol: Mapped[SymbolRow] = relationship()

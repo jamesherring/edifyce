@@ -31,6 +31,10 @@ jobs:
 
       - name: Set up Atlas
         uses: ariga/setup-atlas@v0
+        with:
+          # Pre-migration checks (the txtar `checks.sql` guards) run at apply time
+          # and are a logged-in Atlas feature, so authenticate here too.
+          cloud-token: ${{ secrets.ATLAS_TOKEN }}
 
       # apply needs only the migration SQL + a target URL — no model loading, so
       # no uv/dev-db here. The URL is the Neon *unpooled* endpoint scoped to the

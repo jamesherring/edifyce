@@ -25,8 +25,7 @@ def test_expected_tables_present():
         "theorems",
         # Normalised system decomposition (canonical grammar/rules/definitions).
         "notation_brackets",
-        "sorts",
-        "productions",
+        "symbols",
         "production_bindings",
         "line_types",
         "line_parts",
