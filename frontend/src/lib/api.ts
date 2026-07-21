@@ -181,6 +181,13 @@ export const api = {
 
 	logout: () => request<null>('/auth/logout', { method: 'POST' }),
 
+	/** The configured social-login providers (e.g. ['google', 'github']). */
+	oauthProviders: () => request<{ providers: string[] }>('/auth/providers'),
+
+	/** The provider's authorization URL to send the browser to. */
+	oauthAuthorizeUrl: (provider: string) =>
+		request<{ authorization_url: string }>(`/auth/${provider}/authorize`),
+
 	me: () => request<User>('/users/me'),
 
 	updateProfile: (changes: { display_name?: string | null; password?: string }) =>

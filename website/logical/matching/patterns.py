@@ -161,28 +161,40 @@ class Pattern:
 
         return False
 
-    def add_definition(self, lower, higher, context, condition_string=None, require_lower_match=True):
+    def add_definition(self, lower, higher, context, require_lower_match=True,
+                       fresh=None, kernel_condition=None, label=None):
         # Add a definition to this pattern
 
         # If require_lower_match is False, the lower string will not be checked against the pattern. This helps avoid
         # needing to keep chains of nested definitions in context
+
+        # fresh: {name: sort Pattern} for the defining form's bound variables;
+        # kernel_condition: an optional kernel-vocabulary proviso. Both are for
+        # the term-based checker (see formal_system/definitions.py) and default
+        # to none, so alias definitions are unaffected. label: an optional name a
+        # proof cites the definition by.
 
         if require_lower_match and self.match(lower, context) is None:
             # No match with lower
             return None
 
         try:
-            defn = definitions.Definition(lower, higher, self, context, condition_string)
+            defn = definitions.Definition(lower, higher, self, context,
+                                          fresh=fresh, kernel_condition=kernel_condition, label=label)
         except Exception:
             if not require_lower_match:
                 # Try without the lower match
-                defn = definitions.Definition(None, higher, self, context, condition_string)
+                defn = definitions.Definition(None, higher, self, context,
+                                              fresh=fresh, kernel_condition=kernel_condition, label=label)
             else:
                 return None
 
         for d in context.definitions:
-            if d.equivalent(defn, context):
-                # This definition has already been created
+            if d.equivalent(defn, context) and d.label == defn.label:
+                # This definition has already been created under the same name.
+                # Definitions that are structurally equal but carry *different*
+                # labels are kept apart, so each name stays citable (equivalence
+                # does not consider the label).
                 return d
 
         context.definitions.add(defn)
@@ -374,6 +386,14 @@ class StringPattern(Pattern):
 
         # The pattern string
         self.pattern = self.pre_format_apply(pattern)
+
+        # An optional precomputed nested kernel Term for a rule-schema template,
+        # set by the compiler (compose_schema_term) and consumed by the checker;
+        # opaque to the matching layer, which never reads it (matching must not
+        # depend on the kernel). None for any pattern that is not a compound
+        # rule schema. Declared here so consumers use `pattern.schema_term`
+        # directly rather than a defaulting getattr.
+        self.schema_term = None
 
         # The display pattern. May be different to pattern depending on format
         self.display_pattern = pattern

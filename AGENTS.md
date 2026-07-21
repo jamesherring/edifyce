@@ -23,7 +23,7 @@ adapter over it, and the frontend is a thin client over the API.
 | Path | What lives here |
 |---|---|
 | `app/` | FastAPI application. `main.py` = routes (and static-SPA serving); `schemas.py` = Pydantic request/response models. Thin — it delegates to the engine. |
-| `app/auth/` | Email/password authentication (fastapi-users): httponly-cookie + JWT backend, user manager, and the register/login/logout/`users` routers mounted in `main.py`. Needs `DATABASE_URL`. |
+| `app/auth/` | Authentication (fastapi-users): httponly-cookie + JWT backend, user manager, register/login/logout/`users` routers, and GitHub/Google social login (`oauth.py`, enabled per provider by env). Mounted in `main.py`; needs `DATABASE_URL`. |
 | `app/db/` | Persistence layer: SQLAlchemy 2.0 (async) models + session wiring. Beside the engine, not inside it. The `users` table is wired into `app/auth/`; the rest is not yet used by routes. See `app/db/README.md`. |
 | `migrations/` | Atlas versioned SQL migrations (`atlas.sum`). Config in `atlas.hcl`; models loaded via `tools/atlas/schema.py`. |
 | `website/logical/` | The proof engine. This is where the real logic is. |
@@ -84,6 +84,22 @@ API and the UI (see the static-frontend block at the bottom of `app/main.py`).
   annotations` and a `TYPE_CHECKING` block for engine types to keep annotations
   runtime-free and avoid import cycles. See `website/logical/kernel/terms.py` for
   the pattern to follow.
+- **Lean on types; fail loudly.** When an object's type is known, access its
+  attributes directly (`obj.attr`) rather than `getattr(obj, "attr", default)`.
+  A defaulting `getattr` hides both the type and a genuine bug — a missing
+  attribute should raise, not silently fall back. If some instances of a type may
+  or may not carry a field, that field belongs in the class as a declared
+  attribute with a default (so every instance has it and callers stay typed), not
+  as something attached ad hoc and probed with `getattr`. Reserve `getattr`/
+  `setattr` for genuinely dynamic keys not known until runtime (e.g. the
+  `add_context` edits in `ProofLine.edit_context`).
+- **Import at module top.** Put imports at the top of the module, not inside
+  functions. A function-local import is only justified to break a real import
+  cycle or to defer a heavy/optional dependency — and when you use one, say why in
+  a comment (see `matching/paths.py`, which imports its siblings function-locally
+  on purpose). The kernel depends on `matching`, and `formal_system`/`compiler`
+  depend on the kernel, so those directions import freely at the top; `matching`
+  must never import the kernel or `formal_system`.
 
 ## On comments
 

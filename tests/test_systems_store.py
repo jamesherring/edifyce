@@ -11,7 +11,7 @@ pytest.importorskip("regex")
 pytest.importorskip("sqlalchemy")
 
 from sqlalchemy import create_engine, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.db import Base, spec_to_system, system_to_spec
 from app.db.models import FormalSystem
@@ -24,11 +24,10 @@ from app.db.systems import (
     LinePartRow,
     LineRow,
     ProductionBindingRow,
-    ProductionRow,
     RuleAntecedentRow,
     RuleBindingRow,
     RuleRow,
-    SortRow,
+    SymbolRow,
 )
 from website.logical.declarative import build_spec, lower, parse
 
@@ -38,7 +37,7 @@ from website.logical.declarative import build_spec, lower, parse
 _SYSTEM_TABLES = [
     m.__table__
     for m in (
-        FormalSystem, BracketRow, SortRow, ProductionRow, ProductionBindingRow,
+        FormalSystem, BracketRow, SymbolRow, ProductionBindingRow,
         LineRow, LinePartRow, DefinitionRow, DefinitionBindingRow,
         AxiomRow, AxiomBindingRow, RuleRow, RuleAntecedentRow, RuleBindingRow,
     )
@@ -157,12 +156,14 @@ def test_search_systems_that_define_a_name(session, stored_system):
 
 
 def test_search_composite_productions_of_a_sort(session, stored_system):
-    # "Which formula constructors does ZFC have?"
+    # "Which formula constructors does ZFC have?" - productions (template
+    # symbols) whose union (member_of) is the `formula` sort.
+    union = aliased(SymbolRow)
     names = session.scalars(
-        select(ProductionRow.name)
-        .join(SortRow, ProductionRow.sort_id == SortRow.id)
-        .where(SortRow.name == "formula", ProductionRow.kind == "composite")
-        .order_by(ProductionRow.position)
+        select(SymbolRow.name)
+        .join(union, SymbolRow.member_of_union_id == union.id)
+        .where(union.name == "formula", SymbolRow.kind == "composite")
+        .order_by(SymbolRow.position)
     ).all()
     assert names == [
         "membership", "equality", "negation", "conjunction",

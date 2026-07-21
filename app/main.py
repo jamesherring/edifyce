@@ -2,9 +2,16 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.routing import APIRoute
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.auth import (
     auth_backend,
@@ -13,10 +20,19 @@ from app.auth import (
     UserRead,
     UserUpdate,
 )
+from app.auth.config import AUTH_COOKIE_SECURE, AUTH_SECRET
+from app.auth.oauth import (
+    enabled_oauth_clients,
+    oauth_backend,
+    redirect_url_for,
+)
+from app.routers.system_parts import router as system_parts_router
+from app.routers.systems import router as systems_router
 from app.schemas import (
     CompileRequest,
     CompileResponse,
     HealthResponse,
+    OAuthProvidersResponse,
     VerifyProofRequest,
     VerifyProofResponse,
 )
@@ -113,9 +129,9 @@ def verify_proof(payload: VerifyProofRequest) -> VerifyProofResponse:
 #   POST /auth/login, POST /auth/logout   (cookie session)
 #   POST /auth/register                   (create account)
 #   GET/PATCH /users/me, .../{id}         (current user + admin management)
-# These need a database (DATABASE_URL); the routes above do not. Social-login
-# (OAuth) routers are intentionally not mounted yet — they need per-provider
-# client secrets — but the `oauth_accounts` schema is ready for them.
+# Social login (OAuth) mounts /auth/<provider>/authorize + /callback for each
+# configured provider (see app/auth/oauth.py); GET /auth/providers lists them.
+# These need a database (DATABASE_URL); the compile/verify routes do not.
 
 _auth_router = fastapi_users.get_auth_router(auth_backend)
 _register_router = fastapi_users.get_register_router(UserRead, UserCreate)
@@ -125,16 +141,75 @@ app.include_router(_auth_router, prefix="/auth", tags=["auth"])
 app.include_router(_register_router, prefix="/auth", tags=["auth"])
 app.include_router(_users_router, prefix="/users", tags=["users"])
 
+# Owner-scoped CRUD for formal systems (stored as normalised rows, not .edi
+# text). Like the fastapi-users routers, an included router mounts as a nested
+# router rather than flat APIRoutes on `app`, so it's registered with the SPA
+# guard below (its routes already carry the /formal-systems prefix).
+app.include_router(systems_router)
+# Per-object CRUD for a system's parts. Every route is under
+# /formal-systems/{system_id}/... (fully parameterized), so there's nothing for
+# the SPA path guard to add.
+app.include_router(system_parts_router)
+
 # fastapi-users' routers mount as nested routers, so their concrete paths are
 # not APIRoute entries on `app` — the SPA fallback's API-path guard can't find
 # them by iterating app.routes. Record their non-parameterized paths here so a
 # wrong-method browser GET to e.g. /auth/login still gets the API's 405 instead
 # of being masked by the SPA shell.
-_MOUNTED_API_ROUTERS = (
+_MOUNTED_API_ROUTERS: list[tuple[str, object]] = [
     ("/auth", _auth_router),
     ("/auth", _register_router),
     ("/users", _users_router),
-)
+    # systems_router already carries its /formal-systems prefix on each route.
+    ("", systems_router),
+]
+
+# Social login: one router per configured provider. `is_verified_by_default`
+# trusts the provider's verified email for accounts it creates. `associate_by_email`
+# is requested, but UserManager.oauth_callback only actually links to a
+# pre-existing local account when that account is itself verified — otherwise an
+# unverified pre-registration of the victim's email could hijack their OAuth
+# identity (account pre-hijacking).
+for _provider, _client in enabled_oauth_clients:
+    _oauth_router = fastapi_users.get_oauth_router(
+        _client,
+        oauth_backend,
+        AUTH_SECRET,
+        redirect_url=redirect_url_for(_provider),
+        associate_by_email=True,
+        is_verified_by_default=True,
+        # The OAuth CSRF cookie must be storable in the same contexts as the
+        # session cookie (e.g. local HTTP), so mirror its Secure flag.
+        csrf_token_cookie_secure=AUTH_COOKIE_SECURE,
+    )
+    app.include_router(_oauth_router, prefix=f"/auth/{_provider}", tags=["auth"])
+    _MOUNTED_API_ROUTERS.append((f"/auth/{_provider}", _oauth_router))
+
+
+@app.get("/auth/providers", response_model=OAuthProvidersResponse, tags=["auth"])
+def oauth_providers() -> OAuthProvidersResponse:
+    return OAuthProvidersResponse(
+        providers=[name for name, _ in enabled_oauth_clients]
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_handler(
+    request: Request, exc: StarletteHTTPException
+) -> Response:
+    # A failed OAuth callback is reached by a full-page browser navigation, so the
+    # default raw-JSON error would strand the user on the /auth/<provider>/callback
+    # URL. Redirect browsers back to /login with an error code the SPA can turn
+    # into a friendly message (e.g. the same-email account case, which every
+    # password user hits since there's no email-verification flow). Every other
+    # error — and non-browser clients — keep the default JSON response.
+    path = request.url.path
+    is_oauth_callback = path.startswith("/auth/") and path.endswith("/callback")
+    wants_html = "text/html" in request.headers.get("accept", "")
+    if is_oauth_callback and wants_html and 400 <= exc.status_code < 500:
+        code = exc.detail if isinstance(exc.detail, str) else "oauth_error"
+        return RedirectResponse(f"/login?error={code}", status_code=302)
+    return await http_exception_handler(request, exc)
 
 
 def _mounted_api_paths() -> set[str]:

@@ -25,11 +25,10 @@ from app.db.systems import (
     LinePartRow,
     LineRow,
     ProductionBindingRow,
-    ProductionRow,
     RuleAntecedentRow,
     RuleBindingRow,
     RuleRow,
-    SortRow,
+    SymbolRow,
 )
 from app.db.systems_mapping import spec_to_system, system_to_spec
 
@@ -53,11 +52,10 @@ __all__ = [
     "LinePartRow",
     "LineRow",
     "ProductionBindingRow",
-    "ProductionRow",
     "RuleAntecedentRow",
     "RuleBindingRow",
     "RuleRow",
-    "SortRow",
+    "SymbolRow",
     "spec_to_system",
     "system_to_spec",
 ]
