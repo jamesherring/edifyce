@@ -49,6 +49,199 @@ export interface User {
 	display_name: string | null;
 }
 
+// ---------------------------------------------------------------------------
+// Formal-system objects (CRUD) — mirror the read/write models in app/schemas.py.
+// Read models carry each part's `id` so a client can address it for edit/delete;
+// write models set only the fields the corresponding endpoint accepts.
+// ---------------------------------------------------------------------------
+
+/** A typed variable slot, e.g. `s : term`. */
+export interface Binding {
+	var: string;
+	sort: string;
+}
+
+export interface BracketPair {
+	id: string;
+	opening: string;
+	closing: string;
+}
+
+export interface Sort {
+	id: string;
+	name: string;
+}
+
+export interface Production {
+	id: string;
+	name: string;
+	sort: string;
+	kind: string;
+	template: string | null;
+	regex: string | null;
+	bindings: Binding[];
+}
+
+export interface LinePart {
+	id: string;
+	name: string;
+	regex: string;
+}
+
+export interface LineType {
+	id: string;
+	name: string;
+	shape: string;
+	logical_sort: string | null;
+	parts: LinePart[];
+}
+
+export interface Definition {
+	id: string;
+	sort: string;
+	name: string;
+	higher: string;
+	lower: string;
+	condition: string | null;
+	bindings: Binding[];
+}
+
+export interface Axiom {
+	id: string;
+	label: string;
+	name: string;
+	formula: string;
+	bindings: Binding[];
+}
+
+export interface Rule {
+	id: string;
+	label: string;
+	name: string;
+	deduction: string;
+	antecedents: string[];
+	bindings: Binding[];
+}
+
+/** The public face of a system's owner (never email) — mirrors `SystemOwner`. */
+export interface SystemOwner {
+	id: string;
+	display_name: string | null;
+}
+
+/** List-row view of a system. `published_at` non-null ⇒ public/published. */
+export interface FormalSystemSummary {
+	id: string;
+	name: string;
+	slug: string;
+	description: string | null;
+	inherits_from_id: string | null;
+	published_at: string | null;
+	created_at: string;
+	updated_at: string;
+	owner: SystemOwner | null;
+}
+
+/** Full system aggregate. Note the line-types collection is keyed `lines`. */
+export interface FormalSystemDetail extends FormalSystemSummary {
+	brackets: BracketPair[];
+	sorts: Sort[];
+	productions: Production[];
+	lines: LineType[];
+	definitions: Definition[];
+	axioms: Axiom[];
+	rules: Rule[];
+}
+
+export interface SystemValidation {
+	success: boolean;
+	errors: string[];
+	system_name: string | null;
+	line_type_count: number | null;
+	inference_rule_count: number | null;
+}
+
+export interface SystemSource {
+	source: string;
+}
+
+// --- Write payloads --------------------------------------------------------
+
+export interface FormalSystemCreate {
+	name: string;
+	description?: string | null;
+	inherits_from_id?: string | null;
+}
+
+export interface FormalSystemUpdate {
+	name?: string;
+	description?: string | null;
+	inherits_from_id?: string | null;
+	/** true → publish (public), false → unpublish (draft), omitted → unchanged. */
+	published?: boolean;
+}
+
+export interface BracketCreate {
+	opening: string;
+	closing: string;
+}
+export type BracketUpdate = Partial<BracketCreate>;
+
+export interface SortCreate {
+	name: string;
+}
+export type SortUpdate = Partial<SortCreate>;
+
+export interface ProductionCreate {
+	name: string;
+	sort: string;
+	/** Exactly one of `template` / `regex` is required by the backend. */
+	template?: string | null;
+	regex?: string | null;
+	bindings?: Binding[];
+}
+export type ProductionUpdate = Partial<ProductionCreate>;
+
+export interface LinePartInput {
+	name: string;
+	regex: string;
+}
+
+export interface LineTypeCreate {
+	name: string;
+	shape: string;
+	logical_sort?: string | null;
+	parts?: LinePartInput[];
+}
+export type LineTypeUpdate = Partial<LineTypeCreate>;
+
+export interface DefinitionCreate {
+	sort: string;
+	name: string;
+	higher: string;
+	lower: string;
+	condition?: string | null;
+	bindings?: Binding[];
+}
+export type DefinitionUpdate = Partial<DefinitionCreate>;
+
+export interface AxiomCreate {
+	label: string;
+	name: string;
+	formula: string;
+	bindings?: Binding[];
+}
+export type AxiomUpdate = Partial<AxiomCreate>;
+
+export interface RuleCreate {
+	label: string;
+	name: string;
+	deduction: string;
+	antecedents?: string[];
+	bindings?: Binding[];
+}
+export type RuleUpdate = Partial<RuleCreate>;
+
 /** Raised when the backend answers with a non-2xx status or is unreachable. */
 export class ApiError extends Error {
 	status: number;
@@ -140,6 +333,29 @@ function formatDetail(detail: unknown): string | undefined {
 	return undefined;
 }
 
+/**
+ * The four child-CRUD endpoints every system part shares. `segment` is the URL
+ * path segment (e.g. `line-types`), which is not always the same as the detail
+ * JSON key (`lines`). `Read`/`Create`/`Update` are the part's schemas.
+ */
+function partCrud<Read, Create, Update>(segment: string) {
+	const base = (systemId: string) => `/formal-systems/${systemId}/${segment}`;
+	return {
+		create: (systemId: string, payload: Create) =>
+			request<Read>(base(systemId), { method: 'POST', body: JSON.stringify(payload) }),
+		update: (systemId: string, childId: string, payload: Update) =>
+			request<Read>(`${base(systemId)}/${childId}`, {
+				method: 'PATCH',
+				body: JSON.stringify(payload)
+			}),
+		remove: (systemId: string, childId: string) =>
+			request<null>(`${base(systemId)}/${childId}`, { method: 'DELETE' }),
+		/** Persist a new order; `ids` must be an exact permutation of the collection. */
+		reorder: (systemId: string, ids: string[]) =>
+			request<Read[]>(`${base(systemId)}/order`, { method: 'PUT', body: JSON.stringify({ ids }) })
+	};
+}
+
 export const api = {
 	health: () => request<HealthResponse>('/health'),
 
@@ -194,5 +410,46 @@ export const api = {
 		request<User>('/users/me', {
 			method: 'PATCH',
 			body: JSON.stringify(changes)
-		})
+		}),
+
+	// --- Formal systems (stored CRUD) ---------------------------------------
+
+	systems: {
+		/** The signed-in user's own systems (drafts included). Requires auth. */
+		list: () => request<FormalSystemSummary[]>('/formal-systems'),
+		/** The shared master list: every published system, any owner, no auth. */
+		listPublic: () => request<FormalSystemSummary[]>('/formal-systems/public'),
+		/** A single system. Published ones are public; drafts are owner-only. */
+		get: (id: string) => request<FormalSystemDetail>(`/formal-systems/${id}`),
+		create: (payload: FormalSystemCreate) =>
+			request<FormalSystemDetail>('/formal-systems', {
+				method: 'POST',
+				body: JSON.stringify(payload)
+			}),
+		update: (id: string, payload: FormalSystemUpdate) =>
+			request<FormalSystemDetail>(`/formal-systems/${id}`, {
+				method: 'PATCH',
+				body: JSON.stringify(payload)
+			}),
+		remove: (id: string) => request<null>(`/formal-systems/${id}`, { method: 'DELETE' }),
+		/** Assemble the stored rows and compile them, reporting any errors. */
+		validate: (id: string) =>
+			request<SystemValidation>(`/formal-systems/${id}/validate`, { method: 'POST' }),
+		/** The lowered `.edi` source for this system (read-only). */
+		source: (id: string) => request<SystemSource>(`/formal-systems/${id}/source`)
+	},
+
+	/**
+	 * Per-part CRUD, grouped by collection. Each exposes create / update / remove
+	 * / reorder against `/formal-systems/{id}/{segment}`.
+	 */
+	parts: {
+		sorts: partCrud<Sort, SortCreate, SortUpdate>('sorts'),
+		productions: partCrud<Production, ProductionCreate, ProductionUpdate>('productions'),
+		brackets: partCrud<BracketPair, BracketCreate, BracketUpdate>('brackets'),
+		lineTypes: partCrud<LineType, LineTypeCreate, LineTypeUpdate>('line-types'),
+		definitions: partCrud<Definition, DefinitionCreate, DefinitionUpdate>('definitions'),
+		axioms: partCrud<Axiom, AxiomCreate, AxiomUpdate>('axioms'),
+		rules: partCrud<Rule, RuleCreate, RuleUpdate>('rules')
+	}
 };

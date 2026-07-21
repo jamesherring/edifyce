@@ -3,6 +3,7 @@
 	import { onMount } from 'svelte';
 	import SiteHeader from '$lib/components/site-header.svelte';
 	import PenroseBg from '$lib/components/penrose-bg.svelte';
+	import { Toaster } from '$lib/components/ui/sonner';
 	import { theme } from '$lib/theme.svelte';
 	import { auth } from '$lib/auth.svelte';
 
@@ -36,3 +37,5 @@
 		Edifyce · a formal proof assistant
 	</footer>
 </div>
+
+<Toaster />
