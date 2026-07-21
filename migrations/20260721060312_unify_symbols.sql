@@ -1,9 +1,27 @@
--- atlas:nolint
--- Intentional, coordinated remodel: the `sorts` and `productions` tables are
--- unified into a single `symbols` table, and every grammar reference becomes a
--- `symbol_id` foreign key. The DROP TABLE/COLUMN and NOT NULL `symbol_id` adds
--- that lint flags (DS102/DS103/MF103) are safe here — this schema is not yet
--- populated in any deployed environment, so they only ever touch empty tables.
+-- atlas:txtar
+
+-- checks.sql --
+-- This migration retires the `sorts`/`productions` tables and the textual
+-- `sort`/`logical_sort` references in favour of the unified `symbols` table and
+-- `symbol_id` foreign keys. That is only safe on an unpopulated schema, so guard
+-- it: assert every table it drops or adds a NOT NULL column to is empty, and
+-- every column it drops carries no data. On a populated database any of these
+-- fails and the apply aborts cleanly instead of erroring mid-way or losing data.
+SELECT NOT EXISTS (SELECT 1 FROM "sorts") AS "sorts is not empty";
+SELECT NOT EXISTS (SELECT 1 FROM "productions") AS "productions is not empty";
+SELECT NOT EXISTS (SELECT 1 FROM "rule_bindings") AS "rule_bindings is not empty";
+SELECT NOT EXISTS (SELECT 1 FROM "axiom_bindings") AS "axiom_bindings is not empty";
+SELECT NOT EXISTS (SELECT 1 FROM "definitions") AS "definitions is not empty";
+SELECT NOT EXISTS (SELECT 1 FROM "production_bindings") AS "production_bindings is not empty";
+SELECT NOT EXISTS (SELECT 1 FROM "definition_bindings") AS "definition_bindings is not empty";
+SELECT NOT EXISTS (SELECT 1 FROM "rule_bindings" WHERE "sort" IS NOT NULL) AS "rule_bindings.sort has data";
+SELECT NOT EXISTS (SELECT 1 FROM "axiom_bindings" WHERE "sort" IS NOT NULL) AS "axiom_bindings.sort has data";
+SELECT NOT EXISTS (SELECT 1 FROM "definitions" WHERE "sort" IS NOT NULL) AS "definitions.sort has data";
+SELECT NOT EXISTS (SELECT 1 FROM "production_bindings" WHERE "sort" IS NOT NULL) AS "production_bindings.sort has data";
+SELECT NOT EXISTS (SELECT 1 FROM "definition_bindings" WHERE "sort" IS NOT NULL) AS "definition_bindings.sort has data";
+SELECT NOT EXISTS (SELECT 1 FROM "line_types" WHERE "logical_sort" IS NOT NULL) AS "line_types.logical_sort has data";
+
+-- migration.sql --
 -- Create "symbols" table
 CREATE TABLE "public"."symbols" (
   "id" uuid NOT NULL DEFAULT gen_random_uuid(),
