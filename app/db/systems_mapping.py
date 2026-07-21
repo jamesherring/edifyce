@@ -27,6 +27,10 @@ from website.logical.declarative import (
 )
 
 from app.db.models import FormalSystem
+from app.db.side_conditions_mapping import (
+    build_side_condition_rows,
+    definition_condition_string,
+)
 from app.db.systems import (
     AxiomBindingRow,
     AxiomRow,
@@ -95,9 +99,10 @@ def spec_to_system(spec: SystemSpec) -> FormalSystem:
 
     for i, defn in enumerate(spec.definitions):
         row = DefinitionRow(position=i, symbol=symbols[defn.sort], name=defn.name,
-                            higher=defn.higher, lower=defn.lower, condition=defn.condition)
+                            higher=defn.higher, lower=defn.lower)
         for j, (var, sort) in enumerate(defn.bindings):
             row.bindings.append(DefinitionBindingRow(position=j, var=var, symbol=symbols[sort]))
+        build_side_condition_rows(row, defn.condition, symbols)
         system.definitions.append(row)
 
     for i, axiom in enumerate(spec.axioms):
@@ -153,7 +158,7 @@ def system_to_spec(system: FormalSystem) -> SystemSpec:
             higher=defn.higher,
             lower=defn.lower,
             bindings=[(b.var, b.symbol.name) for b in defn.bindings],
-            condition=defn.condition,
+            condition=definition_condition_string(defn),
         )
         for defn in system.definitions
     ]

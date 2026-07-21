@@ -22,7 +22,7 @@ from sqlalchemy import NullPool, create_engine, event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import app.auth.backend as backend
-from app.db import Base, FormalSystem
+from app.db import Base, FormalSystem, SideConditionRow
 from app.db.models import OAuthAccount, User
 from app.db.session import get_session
 from app.db.systems import (
@@ -48,6 +48,7 @@ _TABLES = [
         ProductionBindingRow, LineRow, LinePartRow, DefinitionRow,
         DefinitionBindingRow, AxiomRow, AxiomBindingRow, RuleRow,
         RuleAntecedentRow, RuleBindingRow,
+        SideConditionRow,
     )
 ]
 

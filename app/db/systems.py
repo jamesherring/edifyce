@@ -30,6 +30,7 @@ from app.db.base import Base, uuid_pk_column
 
 if TYPE_CHECKING:
     from app.db.models import FormalSystem
+    from app.db.side_conditions import SideConditionRow
 
 
 def _system_fk() -> Mapped[uuid.UUID]:
@@ -176,7 +177,6 @@ class DefinitionRow(Base):
     name: Mapped[str] = mapped_column(String(128), index=True)
     higher: Mapped[str] = mapped_column(String(512))
     lower: Mapped[str] = mapped_column(String(512))
-    condition: Mapped[str | None] = mapped_column(String(512))
 
     system: Mapped[FormalSystem] = relationship(back_populates="definitions")
     symbol: Mapped[SymbolRow] = relationship()
@@ -184,6 +184,12 @@ class DefinitionRow(Base):
         back_populates="definition",
         cascade="all, delete-orphan",
         order_by="DefinitionBindingRow.position",
+    )
+    # The proviso (`where` clause), stored as the kernel side-condition algebra
+    # tree rather than an opaque string. All nodes of the tree, flat; the root is
+    # the parent-less one. Defined in app/db/side_conditions.py.
+    side_conditions: Mapped[list["SideConditionRow"]] = relationship(
+        back_populates="definition", cascade="all, delete-orphan"
     )
 
 

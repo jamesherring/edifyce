@@ -39,6 +39,8 @@ def test_expected_tables_present():
         # Term graph (canonical statement structure for theorems).
         "terms",
         "term_children",
+        # Structured definition provisos (the kernel side-condition algebra).
+        "side_conditions",
     }
 
 
