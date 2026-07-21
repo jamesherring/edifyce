@@ -1,6 +1,7 @@
 -- Modify "definitions" table: the opaque proviso string is replaced by the
--- structured side_conditions tree below. Dropping it is safe — no code path has
--- ever written definitions.condition, so the column is NULL everywhere.
+-- structured side_conditions tree below. Dropping it outright (no backfill) is
+-- safe because the persistence layer is not yet populated — the deployed
+-- database has no `definitions` rows — so no stored `where` clause is lost.
 -- atlas:nolint destructive
 ALTER TABLE "public"."definitions" DROP COLUMN "condition";
 -- Create "side_conditions" table
