@@ -24,8 +24,9 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy import ColumnElement
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -68,7 +69,6 @@ from app.schemas import (
     Definition,
     DefinitionCreate,
     DefinitionUpdate,
-    LinePartInput,
     LineType,
     LineTypeCreate,
     LineTypeUpdate,
@@ -222,16 +222,22 @@ async def _require_symbol_name_free(
 
 
 async def _symbol_referenced(session: AsyncSession, symbol_id: uuid.UUID) -> bool:
-    for column in _SYMBOL_REFERENCES:
-        if await session.scalar(select(column).where(column == symbol_id).limit(1)) is not None:
-            return True
-    return False
+    # One round-trip instead of one SELECT per referencing column: OR together an
+    # EXISTS per column and let the database short-circuit.
+    any_reference = or_(*(exists().where(column == symbol_id) for column in _SYMBOL_REFERENCES))
+    return bool(await session.scalar(select(any_reference)))
+
+
+def _kind_predicate(union: bool) -> ColumnElement[bool]:
+    # A sort is the sole ``union`` symbol; everything else is a production.
+    return SymbolRow.kind == "union" if union else SymbolRow.kind != "union"
 
 
 async def _next_symbol_position(session: AsyncSession, system_id: uuid.UUID, union: bool) -> int:
-    predicate = SymbolRow.kind == "union" if union else SymbolRow.kind != "union"
     current = await session.scalar(
-        select(func.max(SymbolRow.position)).where(SymbolRow.system_id == system_id, predicate)
+        select(func.max(SymbolRow.position)).where(
+            SymbolRow.system_id == system_id, _kind_predicate(union)
+        )
     )
     return 0 if current is None else current + 1
 
@@ -239,9 +245,8 @@ async def _next_symbol_position(session: AsyncSession, system_id: uuid.UUID, uni
 async def _get_symbol_or_404(
     session: AsyncSession, system_id: uuid.UUID, symbol_id: uuid.UUID, union: bool, *options: Any
 ) -> SymbolRow:
-    predicate = SymbolRow.kind == "union" if union else SymbolRow.kind != "union"
     stmt = select(SymbolRow).where(
-        SymbolRow.id == symbol_id, SymbolRow.system_id == system_id, predicate
+        SymbolRow.id == symbol_id, SymbolRow.system_id == system_id, _kind_predicate(union)
     )
     if options:
         stmt = stmt.options(*options)
@@ -257,6 +262,40 @@ def _production_kind(template: str | None, regex: str | None) -> str:
             status.HTTP_400_BAD_REQUEST, "A production needs exactly one of 'template' or 'regex'."
         )
     return "regex" if regex is not None else "composite"
+
+
+async def _delete_symbol(
+    session: AsyncSession, system_id: uuid.UUID, symbol_id: uuid.UUID, *, union: bool
+) -> None:
+    # Sorts and productions delete the same way — reference-checked so a live FK
+    # is never orphaned — except that a sort must also be empty of productions.
+    await _get_symbol_or_404(session, system_id, symbol_id, union=union)
+    noun = "sort" if union else "production"
+    if await _symbol_referenced(session, symbol_id):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"This {noun} is referenced by a binding, definition, or line type; remove those first.",
+        )
+    if union and await session.scalar(
+        select(SymbolRow.id).where(SymbolRow.member_of_union_id == symbol_id).limit(1)
+    ) is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This sort still has productions; delete them first."
+        )
+    await session.execute(sa_delete(SymbolRow).where(SymbolRow.id == symbol_id))
+    await session.commit()
+
+
+async def _reorder_symbols(
+    session: AsyncSession, system_id: uuid.UUID, *, union: bool, ids: list[uuid.UUID],
+    loads: tuple[Any, ...],
+) -> list[SymbolRow]:
+    rows = (
+        await session.scalars(
+            select(SymbolRow).where(SymbolRow.system_id == system_id, _kind_predicate(union))
+        )
+    ).all()
+    return await _apply_order(session, rows, ids, SymbolRow, loads)
 
 
 # ---------------------------------------------------------------------------
@@ -301,20 +340,7 @@ async def delete_sort(
     user: User = Depends(current_active_user), session: AsyncSession = Depends(get_session),
 ) -> None:
     await _owned(session, system_id, user)
-    await _get_symbol_or_404(session, system_id, sort_id, union=True)
-    if await _symbol_referenced(session, sort_id):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "This sort is referenced by a binding, definition, or line type; remove those first.",
-        )
-    if await session.scalar(
-        select(SymbolRow.id).where(SymbolRow.member_of_union_id == sort_id).limit(1)
-    ) is not None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "This sort still has productions; delete them first."
-        )
-    await session.execute(sa_delete(SymbolRow).where(SymbolRow.id == sort_id))
-    await session.commit()
+    await _delete_symbol(session, system_id, sort_id, union=True)
 
 
 @router.put("/sorts/order", response_model=list[Sort])
@@ -323,12 +349,7 @@ async def reorder_sorts(
     user: User = Depends(current_active_user), session: AsyncSession = Depends(get_session),
 ) -> list[Sort]:
     await _owned(session, system_id, user)
-    rows = (
-        await session.scalars(
-            select(SymbolRow).where(SymbolRow.system_id == system_id, SymbolRow.kind == "union")
-        )
-    ).all()
-    ordered = await _apply_order(session, rows, payload.ids, SymbolRow, ())
+    ordered = await _reorder_symbols(session, system_id, union=True, ids=payload.ids, loads=())
     return [sort_out(r) for r in ordered]
 
 
@@ -388,14 +409,7 @@ async def delete_production(
     user: User = Depends(current_active_user), session: AsyncSession = Depends(get_session),
 ) -> None:
     await _owned(session, system_id, user)
-    await _get_symbol_or_404(session, system_id, production_id, union=False)
-    if await _symbol_referenced(session, production_id):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "This production is referenced by a binding, definition, or line type; remove those first.",
-        )
-    await session.execute(sa_delete(SymbolRow).where(SymbolRow.id == production_id))
-    await session.commit()
+    await _delete_symbol(session, system_id, production_id, union=False)
 
 
 @router.put("/productions/order", response_model=list[Production])
@@ -404,12 +418,9 @@ async def reorder_productions(
     user: User = Depends(current_active_user), session: AsyncSession = Depends(get_session),
 ) -> list[Production]:
     await _owned(session, system_id, user)
-    rows = (
-        await session.scalars(
-            select(SymbolRow).where(SymbolRow.system_id == system_id, SymbolRow.kind != "union")
-        )
-    ).all()
-    ordered = await _apply_order(session, rows, payload.ids, SymbolRow, _PRODUCTION_LOADS)
+    ordered = await _reorder_symbols(
+        session, system_id, union=False, ids=payload.ids, loads=_PRODUCTION_LOADS
+    )
     return [production_out(r) for r in ordered]
 
 
@@ -418,14 +429,14 @@ async def reorder_productions(
 # ---------------------------------------------------------------------------
 
 
-async def _assign_bracket(session, system_id, row: BracketRow, payload: Payload, fields, creating) -> None:
+async def _assign_bracket(session: AsyncSession, system_id: uuid.UUID, row: BracketRow, payload: Payload, fields: set[str], creating: bool) -> None:
     if "opening" in fields and payload.opening is not None:
         row.opening = payload.opening
     if "closing" in fields and payload.closing is not None:
         row.closing = payload.closing
 
 
-async def _assign_line(session, system_id, row: LineRow, payload: Payload, fields, creating) -> None:
+async def _assign_line(session: AsyncSession, system_id: uuid.UUID, row: LineRow, payload: Payload, fields: set[str], creating: bool) -> None:
     if creating and await session.scalar(
         select(LineRow.id).where(LineRow.system_id == system_id)
     ) is not None:
@@ -443,7 +454,7 @@ async def _assign_line(session, system_id, row: LineRow, payload: Payload, field
         row.parts = [LinePartRow(position=i, name=p.name, regex=p.regex) for i, p in enumerate(payload.parts)]
 
 
-async def _assign_definition(session, system_id, row: DefinitionRow, payload: Payload, fields, creating) -> None:
+async def _assign_definition(session: AsyncSession, system_id: uuid.UUID, row: DefinitionRow, payload: Payload, fields: set[str], creating: bool) -> None:
     if "sort" in fields and payload.sort is not None:
         row.symbol = await _resolve_symbol(session, system_id, payload.sort)
     if "name" in fields and payload.name is not None:
@@ -458,7 +469,7 @@ async def _assign_definition(session, system_id, row: DefinitionRow, payload: Pa
         row.bindings = await _binding_rows(session, system_id, DefinitionBindingRow, payload.bindings)
 
 
-async def _assign_axiom(session, system_id, row: AxiomRow, payload: Payload, fields, creating) -> None:
+async def _assign_axiom(session: AsyncSession, system_id: uuid.UUID, row: AxiomRow, payload: Payload, fields: set[str], creating: bool) -> None:
     if "label" in fields and payload.label is not None:
         row.label = payload.label
     if "name" in fields and payload.name is not None:
@@ -469,7 +480,7 @@ async def _assign_axiom(session, system_id, row: AxiomRow, payload: Payload, fie
         row.bindings = await _binding_rows(session, system_id, AxiomBindingRow, payload.bindings)
 
 
-async def _assign_rule(session, system_id, row: RuleRow, payload: Payload, fields, creating) -> None:
+async def _assign_rule(session: AsyncSession, system_id: uuid.UUID, row: RuleRow, payload: Payload, fields: set[str], creating: bool) -> None:
     if "label" in fields and payload.label is not None:
         row.label = payload.label
     if "name" in fields and payload.name is not None:
@@ -503,7 +514,10 @@ class ChildResource:
     assign: AssignFn
 
 
-async def _create_child(resource: ChildResource, system_id, payload, user, session) -> BaseModel:
+async def _create_child(
+    resource: ChildResource, system_id: uuid.UUID, payload: BaseModel, user: User,
+    session: AsyncSession,
+) -> BaseModel:
     await _owned(session, system_id, user)
     row = resource.row_cls(system_id=system_id, position=await _next_position(session, resource.row_cls, system_id))
     await resource.assign(session, system_id, row, payload, set(type(payload).model_fields), True)
@@ -512,7 +526,10 @@ async def _create_child(resource: ChildResource, system_id, payload, user, sessi
     return resource.serialize(await _get_child_or_404(session, resource.row_cls, system_id, row.id, *resource.loads))
 
 
-async def _update_child(resource: ChildResource, system_id, child_id, payload, user, session) -> BaseModel:
+async def _update_child(
+    resource: ChildResource, system_id: uuid.UUID, child_id: uuid.UUID, payload: BaseModel,
+    user: User, session: AsyncSession,
+) -> BaseModel:
     await _owned(session, system_id, user)
     row = await _get_child_or_404(session, resource.row_cls, system_id, child_id, *resource.loads)
     await resource.assign(session, system_id, row, payload, payload.model_fields_set, False)
@@ -520,12 +537,18 @@ async def _update_child(resource: ChildResource, system_id, child_id, payload, u
     return resource.serialize(await _get_child_or_404(session, resource.row_cls, system_id, child_id, *resource.loads))
 
 
-async def _delete_child_route(resource: ChildResource, system_id, child_id, user, session) -> None:
+async def _delete_child_route(
+    resource: ChildResource, system_id: uuid.UUID, child_id: uuid.UUID, user: User,
+    session: AsyncSession,
+) -> None:
     await _owned(session, system_id, user)
     await _delete_child(session, resource.row_cls, system_id, child_id)
 
 
-async def _reorder_route(resource: ChildResource, system_id, ids, user, session) -> list[BaseModel]:
+async def _reorder_route(
+    resource: ChildResource, system_id: uuid.UUID, ids: list[uuid.UUID], user: User,
+    session: AsyncSession,
+) -> list[BaseModel]:
     await _owned(session, system_id, user)
     rows = await _reorder_rows(session, resource.row_cls, system_id, ids, resource.loads)
     return [resource.serialize(row) for row in rows]

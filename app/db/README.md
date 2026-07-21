@@ -72,13 +72,6 @@ text-embedding-3-small = 1536). Changing it is a migration.
 The models are the source of truth. Atlas diffs them against the recorded
 migrations on a throwaway **dev database** and writes new migration SQL.
 
-> **Pending regeneration:** the unified-symbol model (the `symbols` table
-> replacing `sorts`/`productions`) changed the schema, but the migration for it
-> has not been generated yet (the change landed in an environment without the
-> Atlas binary). Run `atlas migrate diff unify_symbols --env local` to produce
-> it before deploying. Tests use `Base.metadata.create_all`, so they don't
-> depend on the migration and already reflect the new schema.
-
 ```bash
 # Plan a new migration after changing the models:
 atlas migrate diff <name> --env local

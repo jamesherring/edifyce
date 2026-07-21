@@ -17,7 +17,7 @@ pytest.importorskip("aiosqlite")
 pytest.importorskip("regex")
 
 from fastapi.testclient import TestClient
-from sqlalchemy import NullPool, create_engine, event
+from sqlalchemy import NullPool, create_engine, event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
@@ -223,6 +223,36 @@ def test_delete_removes_the_system(client):
     system = client.post("/formal-systems", json={"name": "Doomed"}).json()
     assert client.delete(f"/formal-systems/{system['id']}").status_code == 204
     assert client.get(f"/formal-systems/{system['id']}").status_code == 404
+
+
+def _count(db_path, model) -> int:
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with Session(engine) as session:
+            return session.scalar(select(func.count()).select_from(model)) or 0
+    finally:
+        engine.dispose()
+
+
+def test_delete_cascades_to_symbols_and_bindings(client, db):
+    # A populated system's children hang off cascading FKs — including the
+    # self-referential symbols FK (a production -> its union) and every symbol_id
+    # binding FK. Deleting the system must clear them all, not error or orphan.
+    owner_id = _register_login(client, "ada@example.com")
+    system_id = _seed_zfc(db, owner_id)
+
+    assert _count(db, SymbolRow) > 0  # sorts + productions in one table
+    assert _count(db, ProductionBindingRow) > 0
+    assert _count(db, DefinitionRow) > 0
+
+    assert client.delete(f"/formal-systems/{system_id}").status_code == 204
+
+    for model in (
+        SymbolRow, ProductionBindingRow, DefinitionRow, DefinitionBindingRow,
+        AxiomRow, AxiomBindingRow, RuleRow, RuleBindingRow, RuleAntecedentRow,
+        LineRow, LinePartRow, BracketRow,
+    ):
+        assert _count(db, model) == 0, model.__name__
 
 
 # ---------------------------------------------------------------------------
