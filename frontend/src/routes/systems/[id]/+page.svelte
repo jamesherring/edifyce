@@ -21,6 +21,7 @@
 	import CircleCheck from '@lucide/svelte/icons/circle-check-big';
 	import CircleX from '@lucide/svelte/icons/circle-x';
 	import Code from '@lucide/svelte/icons/code';
+	import SquareCheck from '@lucide/svelte/icons/square-check-big';
 
 	let system = $state<FormalSystemDetail | null>(null);
 	let loading = $state(true);
@@ -131,6 +132,11 @@
 				{#if system?.owner?.display_name}
 					<span class="text-xs text-muted-foreground">by {system.owner.display_name}</span>
 				{/if}
+			{/snippet}
+			{#snippet actions()}
+				<Button href={`/systems/${system?.id}/verify`} variant="outline" size="sm">
+					<SquareCheck class="size-4" /> Verify a proof
+				</Button>
 			{/snippet}
 		</EntityHeader>
 
