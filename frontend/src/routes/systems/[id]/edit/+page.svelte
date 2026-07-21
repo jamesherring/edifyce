@@ -55,9 +55,10 @@
 	const sortNames = $derived(system ? system.sorts.map((s) => s.name) : []);
 
 	// hydrateForm is only true on the initial load / route change, so refetching
-	// after a part edit can't clobber unsaved name/description edits.
-	async function fetchSystem(id: string, hydrateForm: boolean): Promise<boolean> {
-		const seq = ++loadSeq;
+	// after a part edit can't clobber unsaved name/description edits. All state
+	// writes are gated on `seq` so a superseded fetch (fast A→B→C navigation)
+	// never overwrites the latest system, its loading flag, or its validation.
+	async function fetchInto(id: string, seq: number, hydrateForm: boolean): Promise<boolean> {
 		try {
 			const detail = await api.systems.get(id);
 			if (seq !== loadSeq) return false;
@@ -81,11 +82,13 @@
 	}
 
 	async function load(id: string) {
+		const seq = ++loadSeq;
 		loading = true;
 		loadError = null;
-		const ok = await fetchSystem(id, true);
+		const ok = await fetchInto(id, seq, true);
+		if (seq !== loadSeq) return; // a newer load now owns the page state
 		loading = false;
-		if (ok) runValidation(id);
+		if (ok) runValidation(id, seq);
 	}
 
 	// Called by the part sections after any change: refresh the aggregate (without
@@ -93,15 +96,19 @@
 	async function refresh() {
 		if (!system) return;
 		const id = system.id;
-		await fetchSystem(id, false);
-		await runValidation(id);
+		const seq = ++loadSeq;
+		const ok = await fetchInto(id, seq, false);
+		if (ok && seq === loadSeq) runValidation(id, seq);
 	}
 
-	async function runValidation(id: string) {
+	async function runValidation(id: string, seq: number) {
 		validating = true;
 		try {
-			validation = await api.systems.validate(id);
+			const result = await api.systems.validate(id);
+			if (seq !== loadSeq) return;
+			validation = result;
 		} catch (err) {
+			if (seq !== loadSeq) return;
 			validation = {
 				success: false,
 				errors: [err instanceof ApiError ? err.message : String(err)],
@@ -110,7 +117,7 @@
 				inference_rule_count: null
 			};
 		} finally {
-			validating = false;
+			if (seq === loadSeq) validating = false;
 		}
 	}
 
