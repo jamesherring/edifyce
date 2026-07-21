@@ -200,6 +200,64 @@ def test_oauth_creates_new_user_for_unknown_email(tmp_path):
     asyncio.run(run())
 
 
+# ---------------------------------------------------------------------------
+# OAuth callback error handling (browser gets a redirect, not raw JSON)
+# ---------------------------------------------------------------------------
+
+
+def _request(path, accept):
+    from starlette.requests import Request
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": path,
+        "headers": [(b"accept", accept.encode())],
+        "query_string": b"",
+    }
+    return Request(scope)
+
+
+def test_oauth_callback_error_redirects_browser_to_login():
+    from starlette.exceptions import HTTPException as SE
+
+    from app.main import _http_exception_handler
+
+    exc = SE(status_code=400, detail="OAUTH_USER_ALREADY_EXISTS")
+    resp = asyncio.run(
+        _http_exception_handler(_request("/auth/google/callback", "text/html"), exc)
+    )
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/login?error=OAUTH_USER_ALREADY_EXISTS"
+
+
+def test_oauth_callback_error_stays_json_for_api_clients():
+    from starlette.exceptions import HTTPException as SE
+
+    from app.main import _http_exception_handler
+
+    exc = SE(status_code=400, detail="OAUTH_INVALID_STATE")
+    resp = asyncio.run(
+        _http_exception_handler(
+            _request("/auth/google/callback", "application/json"), exc
+        )
+    )
+    # No Accept: text/html → the API contract's JSON error is preserved.
+    assert resp.status_code == 400
+
+
+def test_non_oauth_http_error_keeps_default_response():
+    from starlette.exceptions import HTTPException as SE
+
+    from app.main import _http_exception_handler
+
+    exc = SE(status_code=404, detail="Not Found")
+    resp = asyncio.run(
+        _http_exception_handler(_request("/users/me", "text/html"), exc)
+    )
+    assert resp.status_code == 404
+
+
 def test_redirect_url_for_uses_env_base(monkeypatch):
     monkeypatch.setenv(
         "EDIFYCE_OAUTH_REDIRECT_URL_BASE", "https://edifyce.example.com/"

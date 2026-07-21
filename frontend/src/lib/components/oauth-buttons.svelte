@@ -11,10 +11,18 @@
 	// "Continue with" on login.
 	let { verb = 'Continue with' }: { verb?: string } = $props();
 
+	// Presentation for the providers we ship icons/labels for. Providers the
+	// backend enables but we don't have here still render (see `present`), just
+	// with a capitalized name and no icon — so enabling a new provider server-side
+	// never silently hides its button.
 	const META: Record<string, { name: string; icon: Component }> = {
 		google: { name: 'Google', icon: Google },
 		github: { name: 'GitHub', icon: Github }
 	};
+
+	function present(provider: string): { name: string; icon: Component | null } {
+		return META[provider] ?? { name: provider[0].toUpperCase() + provider.slice(1), icon: null };
+	}
 
 	let providers = $state<string[]>([]);
 	let pending = $state<string | null>(null);
@@ -23,8 +31,7 @@
 	onMount(async () => {
 		try {
 			const res = await api.oauthProviders();
-			// Only render providers we know how to present.
-			providers = res.providers.filter((p) => p in META);
+			providers = res.providers;
 		} catch {
 			// No providers endpoint / none configured — render nothing.
 			providers = [];
@@ -57,7 +64,7 @@
 		{/if}
 
 		{#each providers as provider (provider)}
-			{@const meta = META[provider]}
+			{@const meta = present(provider)}
 			{@const Icon = meta.icon}
 			<Button
 				variant="outline"
@@ -67,7 +74,7 @@
 			>
 				{#if pending === provider}
 					<LoaderCircle class="size-4 animate-spin" />
-				{:else}
+				{:else if Icon}
 					<Icon size={16} />
 				{/if}
 				{verb} {meta.name}

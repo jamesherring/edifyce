@@ -2,9 +2,16 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.routing import APIRoute
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.auth import (
     auth_backend,
@@ -170,6 +177,25 @@ def oauth_providers() -> OAuthProvidersResponse:
     return OAuthProvidersResponse(
         providers=[name for name, _ in enabled_oauth_clients]
     )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_handler(
+    request: Request, exc: StarletteHTTPException
+) -> Response:
+    # A failed OAuth callback is reached by a full-page browser navigation, so the
+    # default raw-JSON error would strand the user on the /auth/<provider>/callback
+    # URL. Redirect browsers back to /login with an error code the SPA can turn
+    # into a friendly message (e.g. the same-email account case, which every
+    # password user hits since there's no email-verification flow). Every other
+    # error — and non-browser clients — keep the default JSON response.
+    path = request.url.path
+    is_oauth_callback = path.startswith("/auth/") and path.endswith("/callback")
+    wants_html = "text/html" in request.headers.get("accept", "")
+    if is_oauth_callback and wants_html and 400 <= exc.status_code < 500:
+        code = exc.detail if isinstance(exc.detail, str) else "oauth_error"
+        return RedirectResponse(f"/login?error={code}", status_code=302)
+    return await http_exception_handler(request, exc)
 
 
 def _mounted_api_paths() -> set[str]:
