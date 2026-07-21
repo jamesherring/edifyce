@@ -879,11 +879,13 @@ class Proof:
             if name in build_context.variables:
                 context_copy.string_variables[key] = build_context.variables[name]
 
-        # Get the condition string if it exists
-        condition_string = None if definition.condition is None else definition.condition.string
-
+        # Carry the binder declarations and `where` proviso across the import so
+        # the proviso is still enforced (or, if it cannot be rebuilt in this
+        # context, the kernel path refuses the step - never silently drops it).
         result = pattern.add_definition(definition.lower.pattern, definition.higher.pattern, context_copy,
-                                        condition_string, require_lower_match=False)
+                                        require_lower_match=False,
+                                        fresh=definition.fresh or None,
+                                        kernel_condition=definition.kernel_condition)
 
         if result is None:
             raise Exception(f"Failed to import definition: {definition.higher.pattern}")
@@ -1093,18 +1095,9 @@ class ProofLine:
                 self.invalid_message = f"{lower.string} is not an instance of {pattern.name}."
                 return
 
-            # Also try to get conditions
-            condition_string = None
-            try:
-                conditions = self.get_by_path("conditions()", context)
-                if len(conditions) > 0:
-                    condition_string = " and ".join([c.string for c in conditions])
-            except Exception:
-                pass
-
-            # Add the definition
-            self.definition = pattern.add_definition(lower.formatted_string(), higher.formatted_string(), context,
-                                                     condition_string)
+            # Add the definition (an in-proof alias; provisos are expressed with
+            # `where` on a system-level `Define`, not on this line type).
+            self.definition = pattern.add_definition(lower.formatted_string(), higher.formatted_string(), context)
 
         elif line_type.behaviour == "import":
             # Import a file or result
@@ -1243,21 +1236,20 @@ class ProofLine:
         # Prefer the term-based checker: a definitional step is one structural
         # unfold over the shared-DAG term representation, no re-parsing (see
         # formal_system/definitions.py). It returns None when this definition is
-        # not soundly expressible as a kernel one (a binder or legacy condition
-        # the Define DSL cannot carry) - only then do we fall back to the
-        # string-based check_application. The kernel check covers both directions,
-        # and derives variable consistency structurally, so it applies only when
-        # no caller-supplied mapping constrains the match.
+        # not soundly expressible as a kernel one (an undeclared binder the Define
+        # DSL cannot carry) - only then do we fall back to the string-based
+        # check_application. The kernel check covers both directions, and derives
+        # variable consistency structurally, so it applies only when no
+        # caller-supplied mapping constrains the match.
         if not mapping and self.formula is not None and other.formula is not None:
             kernel_result = follows_by_definition(self.formula, other.formula, definition, context)
             if kernel_result is not None:
                 return kernel_result
 
-        # The kernel path is unavailable. A definition carrying a kernel `where`
-        # proviso can only be enforced by that path - the string-based
-        # check_application evaluates the legacy `if` condition and never the
-        # `where` guard - so falling back would silently drop the proviso and
-        # accept steps it should block. Refuse instead (the step is not verified).
+        # The kernel path is unavailable. A definition carrying a `where` proviso
+        # can only be enforced by that path - the string-based check_application
+        # enforces no proviso - so falling back would silently drop it and accept
+        # steps it should block. Refuse instead (the step is not verified).
         if definition.kernel_condition is not None:
             return False
 

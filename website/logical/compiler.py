@@ -20,7 +20,6 @@ class PendingDefinition:
     higher: str
     pattern: Pattern
     variables: dict = field(default_factory=dict)
-    condition_string: str | None = None
     # Bound variables of the defining form as (name, sort-name) pairs, and
     # kernel-vocabulary provisos as raw source lines. Both are resolved against
     # the (complete) context when the definition is finalised, not here, so a
@@ -630,23 +629,28 @@ class AbstractSyntaxTree:
                 lower = remainder[index + 4:]
 
                 # Optional trailing clauses, in source order after the lower form:
-                #   Define <higher> as <lower> [fresh <binds>] [where <provisos>] [if <cond>] [label <name>]
+                #   Define <higher> as <lower> [fresh <binds>] [where <provisos>] [label <name>]
                 # `fresh` declares the defining form's bound variables (so the
                 # term checker unfolds capture-avoidingly); `where` carries
-                # kernel-vocabulary provisos (see side_condition_syntax); `if` is
-                # the legacy string proviso; `label` names the definition so a
-                # proof can cite it as `[<name>, <line>]`. Peel them off the tail
-                # back-to-front so an earlier clause never swallows a later
-                # keyword. As with the pre-existing `if`, a lower form must not
-                # itself contain these separator words.
+                # kernel-vocabulary provisos (see side_condition_syntax); `label`
+                # names the definition so a proof can cite it as `[<name>, <line>]`.
+                # Peel them off the tail back-to-front so an earlier clause never
+                # swallows a later keyword. A lower form must not itself contain
+                # these separator words.
                 label = None
                 if " label " in lower:
                     lower, _, label_text = lower.partition(" label ")
                     label = label_text.strip()
 
-                condition_string = None
                 if " if " in lower:
-                    lower, _, condition_string = lower.partition(" if ")
+                    # The legacy string proviso (pseudo-python `Condition`) has been
+                    # retired; provisos are now written with `where` and checked
+                    # structurally by the kernel.
+                    self.error = (
+                        "The legacy `if` proviso on definitions is no longer supported; "
+                        "use a `where` proviso instead."
+                    )
+                    return
 
                 where_strings: list[str] = []
                 if " where " in lower:
@@ -658,17 +662,6 @@ class AbstractSyntaxTree:
                     lower, _, fresh_text = lower.partition(" fresh ")
                     fresh = _parse_fresh_bindings(fresh_text)
 
-                if where_strings and condition_string is not None:
-                    # A legacy `if` proviso forces the string-based checker, which
-                    # only enforces that `if` and never the kernel `where` guard -
-                    # so combining them would silently drop the `where`. Reject it
-                    # rather than accept steps the `where` should have blocked.
-                    self.error = (
-                        "A definition cannot combine a `where` proviso with a legacy `if` "
-                        "proviso; use one or the other."
-                    )
-                    return
-
                 if not isinstance(current_object, Pattern):
                     self.error = "Definitions must be created inside a pattern block."
                     return
@@ -679,7 +672,6 @@ class AbstractSyntaxTree:
                     higher=higher,
                     pattern=current_object,
                     variables={current_object.pre_format_apply(key): context.string_variables[key] for key in context.string_variables},
-                    condition_string=condition_string,
                     fresh=fresh,
                     where_strings=where_strings,
                     label=label,
@@ -1282,7 +1274,7 @@ class AbstractSyntaxTree:
 
                 # Get the definition
                 result = defn.pattern.add_definition(
-                    defn.lower, defn.higher, context_copy, defn.condition_string,
+                    defn.lower, defn.higher, context_copy,
                     fresh=fresh, kernel_condition=kernel_condition, label=defn.label,
                 )
 
