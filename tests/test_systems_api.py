@@ -17,7 +17,7 @@ pytest.importorskip("aiosqlite")
 pytest.importorskip("regex")
 
 from fastapi.testclient import TestClient
-from sqlalchemy import NullPool, create_engine, event
+from sqlalchemy import NullPool, create_engine, event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
@@ -34,11 +34,10 @@ from app.db.systems import (
     LinePartRow,
     LineRow,
     ProductionBindingRow,
-    ProductionRow,
     RuleAntecedentRow,
     RuleBindingRow,
     RuleRow,
-    SortRow,
+    SymbolRow,
 )
 from app.main import app
 from website.logical.declarative import parse
@@ -47,7 +46,7 @@ from website.logical.declarative import parse
 _TABLES = [
     m.__table__
     for m in (
-        User, OAuthAccount, FormalSystem, BracketRow, SortRow, ProductionRow,
+        User, OAuthAccount, FormalSystem, BracketRow, SymbolRow,
         ProductionBindingRow, LineRow, LinePartRow, DefinitionRow,
         DefinitionBindingRow, AxiomRow, AxiomBindingRow, RuleRow,
         RuleAntecedentRow, RuleBindingRow,
@@ -65,6 +64,11 @@ grammar
   formula   | membership  | s ∈ t   | s, t : term
   formula   | equality    | s = t   | s, t : term
   formula   | implication | (p → q) | p, q : formula
+
+line statement
+  shape <formula> [<reference>]
+  reference | matches [A-Za-z0-9 ,]+
+  logical formula
 
 axioms
   EXT | extensionality | ∀x x = x
@@ -224,6 +228,40 @@ def test_delete_removes_the_system(client):
     system = client.post("/formal-systems", json={"name": "Doomed"}).json()
     assert client.delete(f"/formal-systems/{system['id']}").status_code == 204
     assert client.get(f"/formal-systems/{system['id']}").status_code == 404
+
+
+def _count(db_path, model) -> int:
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with Session(engine) as session:
+            return session.scalar(select(func.count()).select_from(model)) or 0
+    finally:
+        engine.dispose()
+
+
+def test_delete_cascades_to_symbols_and_bindings(client, db):
+    # Deleting a populated system must clear every child row through its
+    # cascading FKs — and must not choke on the self-referential `symbols` table
+    # (a production points at its union via member_of_union_id) or the symbol_id
+    # binding FKs. So no error on delete, and no orphans left behind.
+    owner_id = _register_login(client, "ada@example.com")
+    system_id = _seed_zfc(db, owner_id)
+
+    # Sanity: the seed populates the tables whose cascade we're checking,
+    # including the line type and its parts (LineRow / LinePartRow).
+    assert _count(db, SymbolRow) > 0  # sorts + productions in one table
+    assert _count(db, ProductionBindingRow) > 0
+    assert _count(db, DefinitionRow) > 0
+    assert _count(db, LineRow) > 0 and _count(db, LinePartRow) > 0
+
+    assert client.delete(f"/formal-systems/{system_id}").status_code == 204
+
+    for model in (
+        SymbolRow, ProductionBindingRow, DefinitionRow, DefinitionBindingRow,
+        AxiomRow, AxiomBindingRow, RuleRow, RuleBindingRow, RuleAntecedentRow,
+        LineRow, LinePartRow, BracketRow,
+    ):
+        assert _count(db, model) == 0, model.__name__
 
 
 # ---------------------------------------------------------------------------
