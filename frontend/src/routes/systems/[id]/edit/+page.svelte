@@ -13,10 +13,24 @@
 	import LoadingSpinner from '$lib/components/LoadingSpinner.svelte';
 	import StatusBadge from '$lib/components/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
-	import { api, ApiError, type FormalSystemDetail } from '$lib/api';
+	import SortsSection from './SortsSection.svelte';
+	import BracketsSection from './BracketsSection.svelte';
+	import ProductionsSection from './ProductionsSection.svelte';
+	import LineTypesSection from './LineTypesSection.svelte';
+	import DefinitionsSection from './DefinitionsSection.svelte';
+	import AxiomsSection from './AxiomsSection.svelte';
+	import RulesSection from './RulesSection.svelte';
+	import {
+		api,
+		ApiError,
+		type FormalSystemDetail,
+		type SystemValidation
+	} from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
 	import { toastSuccess, toastError } from '$lib/toast';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
+	import CircleCheck from '@lucide/svelte/icons/circle-check-big';
+	import CircleX from '@lucide/svelte/icons/circle-x';
 	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 
@@ -32,22 +46,29 @@
 	let confirmOpen = $state(false);
 	let deleting = $state(false);
 
+	let validation = $state<SystemValidation | null>(null);
+	let validating = $state(false);
+
 	let loadSeq = 0;
 
 	const isOwner = $derived(!!auth.user && !!system && system.owner?.id === auth.user.id);
+	const sortNames = $derived(system ? system.sorts.map((s) => s.name) : []);
 
-	async function load(id: string) {
+	// hydrateForm is only true on the initial load / route change, so refetching
+	// after a part edit can't clobber unsaved name/description edits.
+	async function fetchSystem(id: string, hydrateForm: boolean): Promise<boolean> {
 		const seq = ++loadSeq;
-		loading = true;
-		loadError = null;
 		try {
 			const detail = await api.systems.get(id);
-			if (seq !== loadSeq) return;
+			if (seq !== loadSeq) return false;
 			system = detail;
-			name = detail.name;
-			description = detail.description ?? '';
+			if (hydrateForm) {
+				name = detail.name;
+				description = detail.description ?? '';
+			}
+			return true;
 		} catch (err) {
-			if (seq !== loadSeq) return;
+			if (seq !== loadSeq) return false;
 			loadError =
 				err instanceof ApiError
 					? err.status === 404
@@ -55,12 +76,45 @@
 						: err.message
 					: String(err);
 			system = null;
-		} finally {
-			if (seq === loadSeq) loading = false;
+			return false;
 		}
 	}
 
-	async function save(event: SubmitEvent) {
+	async function load(id: string) {
+		loading = true;
+		loadError = null;
+		const ok = await fetchSystem(id, true);
+		loading = false;
+		if (ok) runValidation(id);
+	}
+
+	// Called by the part sections after any change: refresh the aggregate (without
+	// touching the settings form) and re-check that the system still compiles.
+	async function refresh() {
+		if (!system) return;
+		const id = system.id;
+		await fetchSystem(id, false);
+		await runValidation(id);
+	}
+
+	async function runValidation(id: string) {
+		validating = true;
+		try {
+			validation = await api.systems.validate(id);
+		} catch (err) {
+			validation = {
+				success: false,
+				errors: [err instanceof ApiError ? err.message : String(err)],
+				system_name: null,
+				line_type_count: null,
+				inference_rule_count: null
+			};
+		} finally {
+			validating = false;
+		}
+	}
+
+	async function saveDetails(event: SubmitEvent) {
 		event.preventDefault();
 		if (!system || saving || !name.trim()) return;
 		saving = true;
@@ -108,7 +162,6 @@
 	$effect(() => {
 		const id = page.params.id;
 		if (!id) return;
-		// Editing needs an account; send guests to login and back.
 		if (auth.ready && !auth.user) {
 			goto(`/login?next=/systems/${id}/edit`);
 			return;
@@ -117,7 +170,7 @@
 	});
 </script>
 
-<PageContainer maxWidth="2xl" gap>
+<PageContainer maxWidth="3xl" gap>
 	<BackLink href={`/systems/${page.params.id}`} label="Back to system" />
 
 	{#if loadError}
@@ -145,7 +198,7 @@
 				<Card.Description>Name and description shown across the app.</Card.Description>
 			</Card.Header>
 			<Card.Content>
-				<form class="flex flex-col gap-4" onsubmit={save}>
+				<form class="flex flex-col gap-4" onsubmit={saveDetails}>
 					<div class="flex flex-col gap-2">
 						<Label for="name">Name</Label>
 						<Input id="name" bind:value={name} maxlength={256} required />
@@ -166,6 +219,46 @@
 				</form>
 			</Card.Content>
 		</Card.Root>
+
+		<!-- Live compile status; refreshed after every part change. -->
+		{#if validating && !validation}
+			<div class="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">Checking…</div>
+		{:else if validation}
+			{#if validation.success}
+				<Alert.Root variant="success">
+					<CircleCheck class="size-4" />
+					<Alert.Title>Compiles cleanly</Alert.Title>
+					<Alert.Description>
+						{validation.line_type_count ?? 0} line type(s), {validation.inference_rule_count ?? 0} inference rule(s).
+					</Alert.Description>
+				</Alert.Root>
+			{:else}
+				<Alert.Root variant="destructive">
+					<CircleX class="size-4" />
+					<Alert.Title>Does not compile ({validation.errors.length})</Alert.Title>
+					<Alert.Description>
+						<ul class="mt-1 space-y-1">
+							{#each validation.errors as err (err)}
+								<li class="rounded border border-destructive/30 bg-destructive/5 px-2 py-1 font-mono text-xs">
+									{err}
+								</li>
+							{/each}
+						</ul>
+					</Alert.Description>
+				</Alert.Root>
+			{/if}
+		{/if}
+
+		<!-- Contents: the notation, grammar, rules and definitions. -->
+		<div class="space-y-4">
+			<SortsSection systemId={system.id} sorts={system.sorts} onChanged={refresh} />
+			<BracketsSection systemId={system.id} brackets={system.brackets} onChanged={refresh} />
+			<ProductionsSection systemId={system.id} productions={system.productions} {sortNames} onChanged={refresh} />
+			<LineTypesSection systemId={system.id} lines={system.lines} {sortNames} onChanged={refresh} />
+			<AxiomsSection systemId={system.id} axioms={system.axioms} onChanged={refresh} />
+			<RulesSection systemId={system.id} rules={system.rules} onChanged={refresh} />
+			<DefinitionsSection systemId={system.id} definitions={system.definitions} {sortNames} onChanged={refresh} />
+		</div>
 
 		<Card.Root>
 			<Card.Header>
