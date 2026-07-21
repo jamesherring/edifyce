@@ -65,6 +65,11 @@ grammar
   formula   | equality    | s = t   | s, t : term
   formula   | implication | (p → q) | p, q : formula
 
+line statement
+  shape <formula> [<reference>]
+  reference | matches [A-Za-z0-9 ,]+
+  logical formula
+
 axioms
   EXT | extensionality | ∀x x = x
 
@@ -235,15 +240,19 @@ def _count(db_path, model) -> int:
 
 
 def test_delete_cascades_to_symbols_and_bindings(client, db):
-    # A populated system's children hang off cascading FKs — including the
-    # self-referential symbols FK (a production -> its union) and every symbol_id
-    # binding FK. Deleting the system must clear them all, not error or orphan.
+    # Deleting a populated system must clear every child row through its
+    # cascading FKs — and must not choke on the self-referential `symbols` table
+    # (a production points at its union via member_of_union_id) or the symbol_id
+    # binding FKs. So no error on delete, and no orphans left behind.
     owner_id = _register_login(client, "ada@example.com")
     system_id = _seed_zfc(db, owner_id)
 
+    # Sanity: the seed populates the tables whose cascade we're checking,
+    # including the line type and its parts (LineRow / LinePartRow).
     assert _count(db, SymbolRow) > 0  # sorts + productions in one table
     assert _count(db, ProductionBindingRow) > 0
     assert _count(db, DefinitionRow) > 0
+    assert _count(db, LineRow) > 0 and _count(db, LinePartRow) > 0
 
     assert client.delete(f"/formal-systems/{system_id}").status_code == 204
 
