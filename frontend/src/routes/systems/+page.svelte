@@ -21,16 +21,25 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 
+	// Guard against out-of-order responses: a fast toggle can leave an older
+	// request resolving last and clobbering the newer view's data.
+	let requestSeq = 0;
+
 	async function fetchSystems(current: View) {
+		const seq = ++requestSeq;
 		loading = true;
 		error = null;
 		try {
-			systems = current === 'mine' ? await api.systems.list() : await api.systems.listPublic();
+			const result =
+				current === 'mine' ? await api.systems.list() : await api.systems.listPublic();
+			if (seq !== requestSeq) return;
+			systems = result;
 		} catch (err) {
+			if (seq !== requestSeq) return;
 			error = err instanceof ApiError ? err.message : String(err);
 			systems = [];
 		} finally {
-			loading = false;
+			if (seq === requestSeq) loading = false;
 		}
 	}
 

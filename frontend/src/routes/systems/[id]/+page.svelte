@@ -34,15 +34,22 @@
 	let sourceLoading = $state(false);
 	let sourceError = $state<string | null>(null);
 
+	// Bumped on every load so late responses from a previous id (system,
+	// validation, or source) are dropped instead of overwriting the current one.
+	let requestSeq = 0;
+
 	async function load(id: string) {
+		const seq = ++requestSeq;
 		loading = true;
 		error = null;
 		validation = null;
 		source = null;
 		sourceOpen = false;
+		let detail: FormalSystemDetail;
 		try {
-			system = await api.systems.get(id);
+			detail = await api.systems.get(id);
 		} catch (err) {
+			if (seq !== requestSeq) return;
 			error =
 				err instanceof ApiError
 					? err.status === 404
@@ -53,15 +60,20 @@
 			loading = false;
 			return;
 		}
+		if (seq !== requestSeq) return;
+		system = detail;
 		loading = false;
-		runValidation(id);
+		runValidation(id, seq);
 	}
 
-	async function runValidation(id: string) {
+	async function runValidation(id: string, seq: number) {
 		validating = true;
 		try {
-			validation = await api.systems.validate(id);
+			const result = await api.systems.validate(id);
+			if (seq !== requestSeq) return;
+			validation = result;
 		} catch (err) {
+			if (seq !== requestSeq) return;
 			validation = {
 				success: false,
 				errors: [err instanceof ApiError ? err.message : String(err)],
@@ -70,21 +82,26 @@
 				inference_rule_count: null
 			};
 		} finally {
-			validating = false;
+			if (seq === requestSeq) validating = false;
 		}
 	}
 
 	async function toggleSource() {
 		sourceOpen = !sourceOpen;
 		if (sourceOpen && source === null && system) {
+			const seq = requestSeq;
+			const id = system.id;
 			sourceLoading = true;
 			sourceError = null;
 			try {
-				source = await api.systems.source(system.id);
+				const result = await api.systems.source(id);
+				if (seq !== requestSeq) return;
+				source = result;
 			} catch (err) {
+				if (seq !== requestSeq) return;
 				sourceError = err instanceof ApiError ? err.message : String(err);
 			} finally {
-				sourceLoading = false;
+				if (seq === requestSeq) sourceLoading = false;
 			}
 		}
 	}
