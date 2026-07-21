@@ -15,14 +15,16 @@ system; proofs reference other proofs — with three deliberate departures:
   logins modelled as a linked `oauth_accounts` table (one user, many providers).
   The email/password auth routes are wired in `app/auth/`; the OAuth routers are
   not mounted yet (they need per-provider client secrets).
-* **Search-ready theorems.** A `theorems` table carries a JSONB `pattern` (for
-  structural, pattern-based search via a GIN index) and a pgvector `embedding`
-  (for semantic / AI search via an HNSW index). Nothing writes to it yet; the
-  columns and indexes are in place so the search work is additive later.
+* **Search-ready theorems.** A `theorems` table points at the statement's
+  kernel-term DAG in the `terms` graph (`app/db/terms.py`) for structural,
+  pattern-based search in plain SQL, and carries a pgvector `embedding` (for
+  semantic / AI search via an HNSW index). Nothing writes to it yet; the
+  tables and indexes are in place so the search work is additive later.
 """
 
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from fastapi_users_db_sqlalchemy import (
     SQLAlchemyBaseOAuthAccountTableUUID,
@@ -47,6 +49,9 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, uuid_pk_column
+
+if TYPE_CHECKING:
+    from app.db.terms import TermRow
 
 # Match this to the embedding model you deploy (e.g. Voyage voyage-3 = 1024,
 # OpenAI text-embedding-3-small = 1536). Changing it is a schema migration.
@@ -270,15 +275,14 @@ class Theorem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """A searchable statement established by a proof.
 
     Forward-looking and currently unpopulated. Two search paths are provisioned:
-    `pattern` (a canonical/normalised statement AST) for structural, pattern-based
-    lookups via GIN, and `embedding` for semantic / AI similarity via HNSW — both
-    queryable in the same store and joinable back to the proof that proves them.
+    `statement_term_id` — the root of the statement's kernel-term DAG in the
+    `terms` graph (see `app/db/terms.py`) — for structural, pattern-based lookups
+    in plain SQL, and `embedding` for semantic / AI similarity via HNSW. Both
+    live in the same store and join back to the proof that proves them.
     """
 
     __tablename__ = "theorems"
     __table_args__ = (
-        # Structural, pattern-based search over the normalised statement AST.
-        Index("ix_theorems_pattern", "pattern", postgresql_using="gin"),
         # Semantic / AI similarity search over embeddings (cosine distance).
         Index(
             "ix_theorems_embedding",
@@ -295,8 +299,14 @@ class Theorem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ForeignKey("proofs.id", ondelete="SET NULL"), index=True
     )
     statement: Mapped[str] = mapped_column(Text)
-    pattern: Mapped[dict | None] = mapped_column(JSONB)
+    # Root of the statement's structure in the terms graph. Not CASCADE/SET NULL:
+    # a term row must not be deletable out from under a theorem (NO ACTION checks
+    # at statement end, so the whole-system cascade — which removes both — passes).
+    statement_term_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("terms.id"), index=True
+    )
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIMENSIONS))
 
     formal_system: Mapped["FormalSystem"] = relationship(back_populates="theorems")
     proof: Mapped["Proof | None"] = relationship(back_populates="theorems")
+    statement_term: Mapped["TermRow | None"] = relationship()

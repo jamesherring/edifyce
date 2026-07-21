@@ -37,6 +37,9 @@ def test_expected_tables_present():
         "rules",
         "rule_antecedents",
         "rule_bindings",
+        # Term graph (canonical statement structure for theorems).
+        "terms",
+        "term_children",
     }
 
 
@@ -79,7 +82,9 @@ def test_formal_system_self_inheritance_fk():
 
 def test_theorem_search_columns_and_indexes():
     theorems = Base.metadata.tables["theorems"]
-    assert "pattern" in theorems.c  # structural / pattern search (GIN)
+    # Structural search now goes through the term graph, not a JSONB blob.
+    assert "pattern" not in theorems.c
+    assert "statement_term_id" in theorems.c
     assert "embedding" in theorems.c  # semantic / AI search (HNSW)
 
     methods = {
@@ -87,8 +92,12 @@ def test_theorem_search_columns_and_indexes():
         for idx in theorems.indexes
         if "postgresql" in idx.dialect_options
     }
-    assert methods.get("ix_theorems_pattern") == "gin"
     assert methods.get("ix_theorems_embedding") == "hnsw"
+
+    # The graph's interning key: one row per distinct subterm per system.
+    terms = Base.metadata.tables["terms"]
+    unique = next(i for i in terms.indexes if i.name == "uq_terms_system_digest")
+    assert unique.unique
 
 
 def test_embedding_dimension_is_positive():

@@ -15,6 +15,8 @@ any route — they are the schema and the tooling to evolve it.
 | `app/db/models.py` | Account + proof-surface ORM models |
 | `app/db/systems.py` | Normalised formal-system decomposition (grammar/rules/definitions as flat rows) |
 | `app/db/systems_mapping.py` | `spec_to_system` / `system_to_spec` round trip between the declarative `SystemSpec` and the rows |
+| `app/db/terms.py` | Term graph: kernel-term DAGs as shared `terms` / `term_children` rows |
+| `app/db/terms_mapping.py` | `store_term` / `load_term` round trip between kernel `Term`s and the rows |
 | `app/db/session.py` | Lazy async engine + `get_session` FastAPI dependency |
 | `tools/atlas/schema.py` | Single-file schema entrypoint Atlas loads the models through |
 | `atlas.hcl` | Atlas config (env `local`) |
@@ -51,10 +53,20 @@ Modernised from the original Django app (`website/models.py` on `main`):
   old app modelled both through a separate `FolderEntry`/`OrderedModel`; this
   flattens that indirection.)
 - **`proof_references`** — the directed proof-to-proof dependency graph.
-- **`theorems`** — *forward-looking, currently unpopulated.* Carries a JSONB
-  `pattern` (structural, **pattern-based** search via a GIN index) and a pgvector
-  `embedding` (semantic / **AI** search via an HNSW index). Both live in the same
-  store and join back to the proof that establishes them.
+- **`terms`** / **`term_children`** — the **term graph** (`terms.py`): kernel
+  term DAGs stored as shared rows, interned per system by a structural
+  `digest` so equal subterms are stored once. This is the structural-search
+  substrate for theorems (PR #23's follow-up replacing the old JSONB
+  `pattern` blob): "top constructor is `implication`", "mentions `∈`
+  anywhere" (a recursive CTE over `term_children`), "uses defined notation
+  `x ⊆ y`" (the `defined` kind joins against `definitions.higher`) — all in
+  plain SQL. The bridge to live kernel terms is `terms_mapping`
+  (`store_term` / `load_term`).
+- **`theorems`** — *forward-looking, currently unpopulated.* Points at the
+  statement's root in the term graph (`statement_term_id`) for structural,
+  **pattern-based** search, and carries a pgvector `embedding` (semantic /
+  **AI** search via an HNSW index). Both live in the same store and join back
+  to the proof that establishes them.
 
 Deliberate departure from the Django schema (and from #13's first draft): a
 formal system is stored as **normalised rows**, not an opaque `source` text +
