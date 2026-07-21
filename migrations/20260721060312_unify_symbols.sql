@@ -14,7 +14,7 @@ CREATE TABLE "public"."symbols" (
   "template" character varying(512) NULL,
   "regex" character varying(512) NULL,
   "member_of_union_id" uuid NULL,
-  PRIMARY KEY ("id"),
+  CONSTRAINT "pk_symbols" PRIMARY KEY ("id"),
   CONSTRAINT "fk_symbols_member_of_union_id_symbols" FOREIGN KEY ("member_of_union_id") REFERENCES "public"."symbols" ("id") ON UPDATE NO ACTION ON DELETE CASCADE,
   CONSTRAINT "fk_symbols_system_id_formal_systems" FOREIGN KEY ("system_id") REFERENCES "public"."formal_systems" ("id") ON UPDATE NO ACTION ON DELETE CASCADE
 );
