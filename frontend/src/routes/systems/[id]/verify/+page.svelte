@@ -62,6 +62,10 @@
 
 	async function loadSystem(id: string) {
 		const seq = ++loadSeq;
+		// Invalidate any in-flight verify so its result can't land in the new
+		// system's workbench (the two sequences are otherwise independent).
+		verifySeq++;
+		verifying = false;
 		loadingSystem = true;
 		loadError = null;
 		result = null;
