@@ -6,8 +6,10 @@
 	import { Label } from '$lib/components/ui/label';
 	import * as Card from '$lib/components/ui/card';
 	import * as Alert from '$lib/components/ui/alert';
+	import OauthButtons from '$lib/components/oauth-buttons.svelte';
 	import { auth } from '$lib/auth.svelte';
 	import { ApiError } from '$lib/api';
+	import { onMount } from 'svelte';
 	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 
@@ -15,6 +17,22 @@
 	let password = $state('');
 	let loading = $state(false);
 	let error = $state<string | null>(null);
+
+	// Friendly messages for the error codes an OAuth callback redirects here with
+	// (see the exception handler in app/main.py).
+	const OAUTH_ERRORS: Record<string, string> = {
+		OAUTH_USER_ALREADY_EXISTS:
+			'An account with this email already exists. Log in with your password below.',
+		OAUTH_INVALID_STATE: 'Your sign-in session expired. Please try again.',
+		OAUTH_NOT_AVAILABLE_EMAIL: 'Your provider did not share an email address.'
+	};
+
+	onMount(() => {
+		const code = page.url.searchParams.get('error');
+		if (code) {
+			error = OAUTH_ERRORS[code] ?? 'Social sign-in failed. Please try again.';
+		}
+	});
 
 	// Once signed in — whether on arrival or right after logging in — leave for
 	// the requested `next` target (or home). Keeping this the sole navigation
@@ -56,7 +74,7 @@
 			<Card.Title class="text-xl">Log in</Card.Title>
 			<Card.Description>Welcome back. Enter your details to continue.</Card.Description>
 		</Card.Header>
-		<Card.Content>
+		<Card.Content class="flex flex-col gap-4">
 			<form class="flex flex-col gap-4" onsubmit={submit}>
 				{#if error}
 					<Alert.Root variant="destructive">
@@ -97,6 +115,8 @@
 					{/if}
 				</Button>
 			</form>
+
+			<OauthButtons verb="Continue with" />
 		</Card.Content>
 		<Card.Footer class="text-muted-foreground justify-center text-sm">
 			<span>
