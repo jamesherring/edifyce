@@ -28,8 +28,10 @@ from website.logical.declarative import (
 
 from app.db.models import FormalSystem
 from app.db.side_conditions_mapping import (
+    build_rule_side_conditions,
     build_side_condition_rows,
     definition_condition_string,
+    rule_side_conditions_list,
 )
 from app.db.systems import (
     AxiomBindingRow,
@@ -117,6 +119,7 @@ def spec_to_system(spec: SystemSpec) -> FormalSystem:
             row.antecedents.append(RuleAntecedentRow(position=j, pattern=antecedent))
         for j, (var, sort) in enumerate(rule.bindings):
             row.bindings.append(RuleBindingRow(position=j, var=var, symbol=symbols[sort]))
+        build_rule_side_conditions(row, rule.side_conditions, symbols)
         system.rules.append(row)
 
     return system
@@ -181,6 +184,7 @@ def system_to_spec(system: FormalSystem) -> SystemSpec:
             antecedents=[a.pattern for a in rule.antecedents],
             deduction=rule.deduction,
             bindings=[(b.var, b.symbol.name) for b in rule.bindings],
+            side_conditions=rule_side_conditions_list(rule),
         )
         for rule in system.rules
     ]

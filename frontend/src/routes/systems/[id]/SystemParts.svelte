@@ -155,7 +155,9 @@
 								</Table.Cell>
 								<Table.Cell class="font-mono">{rule.deduction}</Table.Cell>
 								<Table.Cell class="hidden font-mono text-xs text-muted-foreground sm:table-cell">
-									{bindingsText(rule.bindings)}
+									{rule.side_conditions.length > 0
+										? rule.side_conditions.join(' ; ')
+										: bindingsText(rule.bindings)}
 								</Table.Cell>
 							</Table.Row>
 						{/each}

@@ -35,7 +35,10 @@ from app.auth import current_active_user
 from app.db import Base, get_session
 from app.db.models import User
 from app.db.side_conditions import SideConditionRow
-from app.db.side_conditions_mapping import build_side_condition_rows
+from app.db.side_conditions_mapping import (
+    build_rule_side_conditions,
+    build_side_condition_rows,
+)
 from app.db.systems import (
     AxiomBindingRow,
     AxiomRow,
@@ -484,6 +487,11 @@ async def _assign_definition(session: AsyncSession, system_id: uuid.UUID, row: D
                 build_side_condition_rows(row, payload.condition, symbols)
             except ValueError as exc:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+            # Re-add the (persistent) owner so the freshly built subtree cascades
+            # into the session. Every node sits in both the owner collection and
+            # its parent's `children` (delete-orphan) collection; on an update
+            # that double membership otherwise leaves new nodes unflushed.
+            session.add(row)
     if "bindings" in fields and payload.bindings is not None:
         row.bindings = await _binding_rows(session, system_id, DefinitionBindingRow, payload.bindings)
 
@@ -512,6 +520,19 @@ async def _assign_rule(session: AsyncSession, system_id: uuid.UUID, row: RuleRow
         ]
     if "bindings" in fields and payload.bindings is not None:
         row.bindings = await _binding_rows(session, system_id, RuleBindingRow, payload.bindings)
+    if "side_conditions" in fields and payload.side_conditions is not None:
+        # Rebuild the provisos as structured side-condition rows. `side_conditions`
+        # is eager-loaded (see the rules resource), so clearing it here is safe on
+        # the async path; delete-orphan removes the previous tree.
+        row.side_conditions = []
+        if payload.side_conditions:
+            symbols = await _system_symbols(session, system_id)
+            try:
+                build_rule_side_conditions(row, payload.side_conditions, symbols)
+            except ValueError as exc:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+            # See _assign_definition: re-add so the new subtree reaches the session.
+            session.add(row)
 
 
 # ---------------------------------------------------------------------------
@@ -626,7 +647,8 @@ RESOURCES: tuple[ChildResource, ...] = (
     ChildResource(
         "rules", RuleRow, RuleCreate, RuleUpdate, Rule, rule_out,
         (selectinload(RuleRow.antecedents),
-         selectinload(RuleRow.bindings).selectinload(RuleBindingRow.symbol)),
+         selectinload(RuleRow.bindings).selectinload(RuleBindingRow.symbol),
+         selectinload(RuleRow.side_conditions).selectinload(SideConditionRow.sort_symbol)),
         _assign_rule,
     ),
 )

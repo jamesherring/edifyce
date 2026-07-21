@@ -172,6 +172,57 @@ def test_build_a_system_through_endpoints_and_validate(client):
 
 
 # ---------------------------------------------------------------------------
+# Rule side-conditions round-trip through the child endpoints
+# ---------------------------------------------------------------------------
+
+
+def test_rule_side_conditions_round_trip_through_the_api(client):
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+    rule = _post(client, f"/formal-systems/{sid}/rules", {
+        "label": "RImp", "name": "refl imp", "deduction": "(p → q)", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "formula"}, {"var": "q", "sort": "formula"}],
+        "side_conditions": ["not occurs(p, q)", "equal(p, q)"],
+    })
+    assert rule["side_conditions"] == ["not occurs(p, q)", "equal(p, q)"]
+
+    # Read back through the aggregate detail.
+    detail = client.get(f"/formal-systems/{sid}").json()
+    assert detail["rules"][0]["side_conditions"] == ["not occurs(p, q)", "equal(p, q)"]
+
+    # Update replaces the provisos wholesale, including a multi-node tree (an
+    # update that deletes the old tree and inserts a new one in one flush).
+    updated = client.patch(
+        f"/formal-systems/{sid}/rules/{rule['id']}",
+        json={"side_conditions": ["not occurs(q, p)", "equal(p, q)"]},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["side_conditions"] == ["not occurs(q, p)", "equal(p, q)"]
+    # A single-node replacement and an empty list that clears the tree.
+    single = client.patch(
+        f"/formal-systems/{sid}/rules/{rule['id']}", json={"side_conditions": ["equal(p, q)"]}
+    )
+    assert single.json()["side_conditions"] == ["equal(p, q)"]
+    cleared = client.patch(
+        f"/formal-systems/{sid}/rules/{rule['id']}", json={"side_conditions": []}
+    )
+    assert cleared.json()["side_conditions"] == []
+
+
+def test_malformed_rule_side_condition_is_422(client):
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+    response = client.post(f"/formal-systems/{sid}/rules", json={
+        "label": "R", "name": "r", "deduction": "p", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "formula"}],
+        "side_conditions": ["bogus(p, q)"],
+    })
+    assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
 # Productions: sort resolution and template/regex rules
 # ---------------------------------------------------------------------------
 
