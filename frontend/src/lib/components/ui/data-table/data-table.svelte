@@ -231,7 +231,9 @@
 	});
 
 	const showPagination = $derived(totalCount > pageSize);
-	const showSearch = $derived(totalCount > 5 || searchColumn != null || globalSearch);
+	// Only show the search box when a search mode is actually wired up — a bare
+	// row-count check would render an input that `handleSearch` can't act on.
+	const showSearch = $derived(searchColumn != null || globalSearch || !!serverSide?.onsearch);
 
 	// Debounce timer for server-side search
 	let searchTimer: ReturnType<typeof setTimeout> | undefined;
