@@ -127,19 +127,33 @@ Reads and writes both work over this endpoint; it is the only path to the DB in 
 web session. (For local dev with wire-protocol access, `psql "$POSTGRES_URL"` is
 fine — this restriction is specific to the sandboxed sessions.)
 
-**`atlas migrate diff` does NOT work in web sessions**, and allow-listing
-`api.atlasgo.cloud` (which fixes the token; see below) does not change that.
-`diff` needs a throwaway *dev database* to replay migrations against, and Atlas
-reaches it over the wire protocol — which is blocked. The default dev DB
-(`docker://pgvector/pg16/dev`) also can't start because there's no Docker daemon,
-and Neon's HTTP endpoint cannot serve as an Atlas dev DB. The same applies to any
-Atlas subcommand that touches a database: `migrate apply`, `migrate status`, and
-`migrate lint` (lint uses the dev DB too). **Plan and lint migrations locally or
-in CI**, commit the generated SQL + `atlas.sum`, and let CI apply them.
+**`atlas migrate diff` needs a dev database, which Docker can't provide here** —
+there's no Docker daemon, so the default `docker://pgvector/pg16/dev` won't start,
+and Neon's HTTP endpoint can't serve as an Atlas dev DB. But a *local* Postgres
+works: loopback traffic bypasses the egress proxy, so the :5432 block only applies
+to outbound connections, not `127.0.0.1`. Stand one up with pgvector (the Ubuntu
+archive is reachable through the proxy — only launchpad PPAs are blocked) and
+point `ATLAS_DEV_URL` at it:
 
-What *does* work in a web session (all offline, directory-only):
-`atlas migrate validate` and `atlas migrate hash`. You can also hand-edit
-migration SQL and re-run `atlas migrate hash` to update `atlas.sum`.
+```bash
+apt-get install -y postgresql-16 postgresql-16-pgvector
+su postgres -c '/usr/lib/postgresql/16/bin/initdb -D /var/lib/postgresql/pgdev -A trust -U postgres'
+su postgres -c '/usr/lib/postgresql/16/bin/pg_ctl -D /var/lib/postgresql/pgdev -o "-p 5433 -k /tmp" -l /var/lib/postgresql/pg.log start'
+export ATLAS_DEV_URL='postgres://postgres@127.0.0.1:5433/postgres?sslmode=disable&search_path=public'
+atlas migrate diff <name> --env local   # replays migrations incl. CREATE EXTENSION vector
+```
+
+With `ATLAS_DEV_URL` set this way, `migrate diff` and `migrate lint` both work —
+they only need the *dev* DB. Two prerequisites: `api.atlasgo.cloud` must be
+allow-listed (the token is validated on every invocation, and the `vector`
+extension is a logged-in-only feature — see below), and the dev Postgres must
+have pgvector, since the schema issues `CREATE EXTENSION vector`.
+
+`migrate apply` and `migrate status` still **don't** work in a web session — they
+connect to the *target* (Neon) over the wire protocol on :5432, which stays
+blocked. Run those in CI; commit the generated SQL + `atlas.sum` and let CI apply.
+`migrate validate` and `migrate hash` are offline and always work — you can also
+hand-edit migration SQL and re-run `atlas migrate hash` to update `atlas.sum`.
 
 **`ATLAS_TOKEN` gotcha:** the token is present in sessions, but Atlas validates
 it against `api.atlasgo.cloud:443` on *every* invocation. If that host is
