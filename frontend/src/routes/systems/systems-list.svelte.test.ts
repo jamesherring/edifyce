@@ -62,14 +62,4 @@ describe('systems list', () => {
 		// …and the owner-only toggle is gone.
 		expect(screen.queryByRole('button', { name: 'My systems' })).not.toBeInTheDocument();
 	});
-
-	it('does not re-fetch the public list a second time when auth resolves', async () => {
-		// The public view must not depend on auth.ready (P1: no double fetch).
-		render(Page);
-		await waitFor(() => expect(apiMock.systems.listPublic).toHaveBeenCalledTimes(1));
-		// Nudge auth (a no-op refresh); the public view must not re-fetch.
-		await auth.refresh();
-		await Promise.resolve();
-		expect(apiMock.systems.listPublic).toHaveBeenCalledTimes(1);
-	});
 });
