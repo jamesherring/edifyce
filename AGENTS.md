@@ -63,6 +63,41 @@ extra config is needed. Alternatively, after `npm run build` the FastAPI app
 serves the static bundle from `/`, so a single `uvicorn` process serves both the
 API and the UI (see the static-frontend block at the bottom of `app/main.py`).
 
+### Database migrations
+
+The database schema is **model-driven**: the SQLAlchemy models in `app/db/` are
+the source of truth, and Atlas diffs them against `migrations/` to plan new SQL.
+After changing a model, generate and commit the migration — don't hand-write it:
+
+```bash
+atlas migrate diff <name> --env local    # plan a migration from the models
+atlas migrate validate --env local       # read-only: verify atlas.sum integrity
+```
+
+`atlas migrate diff` writes a new `migrations/*.sql` **only when the models have
+drifted** from the recorded migrations; on a clean tree it prints "synced" and
+writes nothing. It is *not* a read-only probe — don't run it with a throwaway
+name to "check" for drift, because a real drift leaves a stray migration (and a
+bumped `atlas.sum`) behind. That file-writing behavior is exactly how CI detects
+drift: it runs `atlas migrate diff drift_check` and fails if `migrations/` is
+then dirty (`.github/workflows/migrations.yml`). For a genuinely read-only check
+use `atlas migrate validate`. When you do generate a migration, commit **both**
+the new `migrations/*.sql` file and the updated `migrations/atlas.sum`.
+
+Atlas needs a throwaway **dev database** (with pgvector) to diff against; how you
+supply it depends on where you're working — see `atlas.hcl` for the `ATLAS_DEV_URL`
+override (its default spins up `docker://pgvector/pg16/dev`). Two gotchas
+wherever you run it:
+
+- **`psql` rejects a `search_path` query param** in `ATLAS_DEV_URL` — it's
+  Atlas-specific. Strip it (`sed -E 's/[?&]search_path=[^&]*//'`) for raw `psql`;
+  Atlas itself consumes the full URL fine.
+- **Never hand-merge `atlas.sum`.** It's a hash chain Atlas maintains; a manual
+  edit produces a checksum Atlas rejects. If a migration conflicts with `develop`
+  (usually only `atlas.sum` collides, since migration files have distinct
+  timestamps), roll back your migration commit, merge `develop`, then re-run
+  `atlas migrate diff` to regenerate the file and sum on the new base.
+
 - **Run the tests before and after any change to the engine.** The engine is
   large, largely untyped in its internals, and interconnected — tests are the
   safety net. CI runs `uv run pytest -v` on every PR.
@@ -117,3 +152,20 @@ in Claude Code web sessions for this repo. Web sessions run in ephemeral
 containers and recurring triggers are not wanted here — do the work in the
 session and finish. If a task seems to call for polling or a delayed follow-up,
 surface it to the user instead of scheduling it.
+
+**The Atlas dev database is pre-provisioned in web sessions only.** The session
+setup script installs Atlas, logs it in via `ATLAS_TOKEN`, and starts a Postgres
++ pgvector cluster on `127.0.0.1:5433` that `ATLAS_DEV_URL` already points at — so
+`atlas migrate diff --env local` works out of the box (this is not present in
+local checkouts, which supply their own dev DB per `atlas.hcl`). The setup runs
+**once at container init**, so after a worker/container restart the server is gone
+while its data dir at `/var/lib/postgresql/pgdev` persists. If `atlas` reports
+`connect: connection refused` on `:5433`, restart it:
+
+```bash
+runuser -u postgres -- /usr/lib/postgresql/16/bin/pg_ctl \
+  -D /var/lib/postgresql/pgdev -o "-p 5433 -k /tmp" \
+  -l /var/lib/postgresql/pgdev/server.log -w start
+```
+
+(`pg_ctl -D /var/lib/postgresql/pgdev status` tells you if it's already up.)
