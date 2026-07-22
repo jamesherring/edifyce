@@ -8,14 +8,6 @@ export interface HealthResponse {
 	status: string;
 }
 
-export interface CompileResponse {
-	success: boolean;
-	errors: string[];
-	system_name: string | null;
-	line_type_count: number | null;
-	inference_rule_count: number | null;
-}
-
 export interface ProofLine {
 	valid: boolean;
 	behaviour: string | null;
@@ -121,6 +113,8 @@ export interface Rule {
 	deduction: string;
 	antecedents: string[];
 	bindings: Binding[];
+	/** Soundness provisos, one kernel-vocabulary line each (implicit conjunction). */
+	side_conditions: string[];
 }
 
 /** The public face of a system's owner (never email) — mirrors `SystemOwner`. */
@@ -239,6 +233,7 @@ export interface RuleCreate {
 	deduction: string;
 	antecedents?: string[];
 	bindings?: Binding[];
+	side_conditions?: string[];
 }
 export type RuleUpdate = Partial<RuleCreate>;
 
@@ -358,12 +353,6 @@ function partCrud<Read, Create, Update>(segment: string) {
 
 export const api = {
 	health: () => request<HealthResponse>('/health'),
-
-	compile: (code: string) =>
-		request<CompileResponse>('/formal-systems/compile', {
-			method: 'POST',
-			body: JSON.stringify({ code })
-		}),
 
 	verify: (systemCode: string, proofText: string) =>
 		request<VerifyResponse>('/proofs/verify', {

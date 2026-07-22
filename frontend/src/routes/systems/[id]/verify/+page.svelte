@@ -225,9 +225,11 @@
 							<TriangleAlert />
 							<Alert.Title>Proof could not be checked</Alert.Title>
 							<Alert.Description>
-								{#each result.errors as error, i (i)}
-									<span class="font-mono">{error}</span>
-								{/each}
+								<div class="mt-1 space-y-1">
+									{#each result.errors as error, i (i)}
+										<p class="font-mono text-xs">{error}</p>
+									{/each}
+								</div>
 							</Alert.Description>
 						</Alert.Root>
 					{:else if result.proof.lines.length === 0}

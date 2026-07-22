@@ -95,6 +95,10 @@ class Rule:
     antecedents: list[str]
     deduction: str
     bindings: list[tuple[str, str]]
+    # Soundness provisos from the `side_conditions` section, one kernel-vocabulary
+    # line each (implicit conjunction). Attached to the rule by its label; empty
+    # for axioms and unconditioned rules.
+    side_conditions: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -129,7 +133,7 @@ class SystemSpec:
         return seen
 
 
-_SECTIONS = {"system", "notation", "grammar", "line", "definitions", "axioms", "rules"}
+_SECTIONS = {"system", "notation", "grammar", "line", "definitions", "axioms", "rules", "side_conditions"}
 
 
 def _split_columns(row: str) -> list[str]:
@@ -230,6 +234,9 @@ def parse(source: str) -> SystemSpec:
     """Parse declarative source into a :class:`SystemSpec`."""
 
     spec = SystemSpec()
+    # Rule provisos are attached by label after every block is read, so the
+    # `side_conditions` section may appear before or after `rules`.
+    rule_provisos: dict[str, list[str]] = {}
 
     for keyword, header, body in _blocks(source):
 
@@ -317,6 +324,25 @@ def parse(source: str) -> SystemSpec:
                 bindings = _parse_bindings(cols[4]) if len(cols) > 4 else []
                 spec.rules.append(Rule(label=cols[0], name=cols[1], antecedents=antecedents,
                                        deduction=deduction, bindings=bindings))
+
+        elif keyword == "side_conditions":
+            for row in body:
+                cols = _split_columns(row)
+                # <rule label> | <proviso>. One proviso per row; several rows for
+                # a label conjoin, matching the engine's side_conditions: block.
+                if len(cols) != 2:
+                    raise DeclarativeError(
+                        f"Side-condition row must be '<rule label> | <proviso>': {row!r}"
+                    )
+                rule_provisos.setdefault(cols[0], []).append(cols[1])
+
+    rules_by_label = {rule.label: rule for rule in spec.rules}
+    for label, provisos in rule_provisos.items():
+        if label not in rules_by_label:
+            raise DeclarativeError(
+                f"side_conditions references '{label}', which is not a rule label."
+            )
+        rules_by_label[label].side_conditions.extend(provisos)
 
     return spec
 
@@ -563,6 +589,10 @@ def _emit_rule(rule: Rule, emit) -> None:
             emit(base_level + 2, ant)
     emit(base_level + 1, "deduction:")
     emit(base_level + 2, rule.deduction)
+    if rule.side_conditions:
+        emit(base_level + 1, "side_conditions:")
+        for proviso in rule.side_conditions:
+            emit(base_level + 2, proviso)
     emit()
 
 

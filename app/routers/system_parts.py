@@ -35,7 +35,11 @@ from app.auth import current_active_user
 from app.db import Base, get_session
 from app.db.models import User
 from app.db.side_conditions import SideConditionRow
-from app.db.side_conditions_mapping import build_side_condition_rows
+from app.db.side_conditions_mapping import (
+    build_rule_side_conditions,
+    build_side_condition_rows,
+    validate_side_condition_metavars,
+)
 from app.db.systems import (
     AxiomBindingRow,
     AxiomRow,
@@ -99,6 +103,10 @@ _SYMBOL_REFERENCES = (
     RuleBindingRow.symbol_id,
     DefinitionRow.symbol_id,
     LineRow.logical_symbol_id,
+    # A sort named by a `disjoint`/`atom` proviso (definition or rule). Its
+    # ON DELETE CASCADE would otherwise silently drop the predicate node and
+    # weaken a soundness condition, so a referenced sort must be undeletable too.
+    SideConditionRow.sort_symbol_id,
 )
 
 
@@ -284,7 +292,7 @@ async def _delete_symbol(
     if await _symbol_referenced(session, symbol_id):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            f"This {noun} is referenced by a binding, definition, or line type; remove those first.",
+            f"This {noun} is referenced by a binding, definition, line type, or proviso; remove those first.",
         )
     if union and await session.scalar(
         select(SymbolRow.id).where(SymbolRow.member_of_union_id == symbol_id).limit(1)
@@ -473,7 +481,13 @@ async def _assign_definition(session: AsyncSession, system_id: uuid.UUID, row: D
         row.higher = payload.higher
     if "lower" in fields and payload.lower is not None:
         row.lower = payload.lower
-    if "condition" in fields:
+    # Bindings first: a proviso's metavariables are validated against them, so a
+    # same-request binding change must land before the condition is rebuilt.
+    bindings_changed = "bindings" in fields and payload.bindings is not None
+    if bindings_changed:
+        row.bindings = await _binding_rows(session, system_id, DefinitionBindingRow, payload.bindings)
+    rebuilt = "condition" in fields
+    if rebuilt:
         # Rebuild the proviso as structured side-condition rows. `side_conditions`
         # is eager-loaded (see the definitions resource), so clearing it here is
         # safe on the async path; delete-orphan removes the previous tree.
@@ -481,11 +495,18 @@ async def _assign_definition(session: AsyncSession, system_id: uuid.UUID, row: D
         if payload.condition:
             symbols = await _system_symbols(session, system_id)
             try:
-                build_side_condition_rows(row, payload.condition, symbols)
+                build_side_condition_rows(
+                    row, payload.condition, symbols, {b.var for b in row.bindings}
+                )
             except ValueError as exc:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-    if "bindings" in fields and payload.bindings is not None:
-        row.bindings = await _binding_rows(session, system_id, DefinitionBindingRow, payload.bindings)
+    elif bindings_changed and row.side_conditions:
+        # Bindings changed but the proviso wasn't rewritten: re-check the stored
+        # tree so a dropped binding can't orphan a metavariable it still names.
+        try:
+            validate_side_condition_metavars(row.side_conditions, {b.var for b in row.bindings})
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
 
 async def _assign_axiom(session: AsyncSession, system_id: uuid.UUID, row: AxiomRow, payload: Payload, fields: set[str], creating: bool) -> None:
@@ -510,8 +531,30 @@ async def _assign_rule(session: AsyncSession, system_id: uuid.UUID, row: RuleRow
         row.antecedents = [
             RuleAntecedentRow(position=i, pattern=pattern) for i, pattern in enumerate(payload.antecedents)
         ]
-    if "bindings" in fields and payload.bindings is not None:
+    bindings_changed = "bindings" in fields and payload.bindings is not None
+    if bindings_changed:
         row.bindings = await _binding_rows(session, system_id, RuleBindingRow, payload.bindings)
+    rebuilt = "side_conditions" in fields and payload.side_conditions is not None
+    if rebuilt:
+        # Rebuild the provisos as structured side-condition rows. `side_conditions`
+        # is eager-loaded (see the rules resource), so clearing it here is safe on
+        # the async path; delete-orphan removes the previous tree.
+        row.side_conditions = []
+        if payload.side_conditions:
+            symbols = await _system_symbols(session, system_id)
+            try:
+                build_rule_side_conditions(
+                    row, payload.side_conditions, symbols, {b.var for b in row.bindings}
+                )
+            except ValueError as exc:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    elif bindings_changed and row.side_conditions:
+        # Bindings changed but the provisos weren't rewritten: re-check the stored
+        # tree so a dropped binding can't orphan a metavariable it still names.
+        try:
+            validate_side_condition_metavars(row.side_conditions, {b.var for b in row.bindings})
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -552,6 +595,12 @@ async def _update_child(
     await _owned(session, system_id, user)
     row = await _get_child_or_404(session, resource.row_cls, system_id, child_id, *resource.loads)
     await resource.assign(session, system_id, row, payload, payload.model_fields_set, False)
+    # Re-add the (persistent) row so any freshly built child subtree an assign
+    # created cascades into the session. A side-condition node sits in both its
+    # owner collection and its parent's `children` (delete-orphan) collection;
+    # on an update that double membership otherwise leaves new nodes unflushed.
+    # This mirrors the `session.add` the create path already does.
+    session.add(row)
     await _commit(session)
     return resource.serialize(await _get_child_or_404(session, resource.row_cls, system_id, child_id, *resource.loads))
 
@@ -626,7 +675,8 @@ RESOURCES: tuple[ChildResource, ...] = (
     ChildResource(
         "rules", RuleRow, RuleCreate, RuleUpdate, Rule, rule_out,
         (selectinload(RuleRow.antecedents),
-         selectinload(RuleRow.bindings).selectinload(RuleBindingRow.symbol)),
+         selectinload(RuleRow.bindings).selectinload(RuleBindingRow.symbol),
+         selectinload(RuleRow.side_conditions).selectinload(SideConditionRow.sort_symbol)),
         _assign_rule,
     ),
 )

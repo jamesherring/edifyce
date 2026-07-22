@@ -120,6 +120,8 @@ class Rule(BaseModel):
     deduction: str
     antecedents: list[str] = Field(default_factory=list)
     bindings: list[Binding] = Field(default_factory=list)
+    # Soundness provisos, one kernel-vocabulary line each (implicit conjunction).
+    side_conditions: list[str] = Field(default_factory=list)
 
 
 class SystemOwner(BaseModel):
@@ -284,6 +286,7 @@ class RuleCreate(BaseModel):
     deduction: _Text512
     antecedents: list[_Text512] = Field(default_factory=list)
     bindings: list[Binding] = Field(default_factory=list)
+    side_conditions: list[_Text512] = Field(default_factory=list)
 
 
 class RuleUpdate(BaseModel):
@@ -292,6 +295,7 @@ class RuleUpdate(BaseModel):
     deduction: str | None = Field(None, max_length=512)
     antecedents: list[_Text512] | None = None
     bindings: list[Binding] | None = None
+    side_conditions: list[_Text512] | None = None
 
 
 class ReorderRequest(BaseModel):
