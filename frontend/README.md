@@ -2,19 +2,22 @@
 
 A [SvelteKit](https://svelte.dev/docs/kit) single-page app (Svelte 5) styled with
 [Tailwind CSS](https://tailwindcss.com) v4 and [shadcn-svelte](https://shadcn-svelte.com)
-components. It talks to the Edifyce FastAPI backend to compile formal systems and
-verify proofs.
+components. It talks to the Edifyce FastAPI backend to browse, build and verify
+formal systems.
 
 ## Pages
 
-| Route      | Purpose                                                              |
-| ---------- | ------------------------------------------------------------------- |
-| `/`        | Landing page                                                        |
-| `/compile` | Compile a formal system → `POST /formal-systems/compile`            |
-| `/verify`  | Verify a proof against a system, line by line → `POST /proofs/verify` |
-| `/login`   | Log in → `POST /auth/login`                                          |
-| `/register`| Create an account → `POST /auth/register`                           |
-| `/account` | Manage the signed-in user → `GET`/`PATCH /users/me`                 |
+| Route                   | Purpose                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------ |
+| `/`                     | Landing page                                                                   |
+| `/systems`              | Master list of published systems (+ a "My systems" view) → `GET /formal-systems{,/public}` |
+| `/systems/new`          | Create a system → `POST /formal-systems`                                       |
+| `/systems/[id]`         | Read-only detail: contents, validation, source → `GET /formal-systems/{id}{,/validate,/source}` |
+| `/systems/[id]/edit`    | Owner editor: settings, publish, and per-part CRUD → `PATCH`/`DELETE` + `…/{sorts,productions,…}` |
+| `/systems/[id]/verify`  | Verify a proof against the system, line by line → `POST /proofs/verify`         |
+| `/login`                | Log in → `POST /auth/login`                                                     |
+| `/register`             | Create an account → `POST /auth/register`                                       |
+| `/account`              | Manage the signed-in user → `GET`/`PATCH /users/me`                             |
 
 Auth state is held in `src/lib/auth.svelte.ts` (a reactive store fed by
 `GET /users/me`); the session itself lives in an httponly cookie the browser

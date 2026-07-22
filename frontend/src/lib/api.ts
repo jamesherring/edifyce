@@ -8,14 +8,6 @@ export interface HealthResponse {
 	status: string;
 }
 
-export interface CompileResponse {
-	success: boolean;
-	errors: string[];
-	system_name: string | null;
-	line_type_count: number | null;
-	inference_rule_count: number | null;
-}
-
 export interface ProofLine {
 	valid: boolean;
 	behaviour: string | null;
@@ -358,12 +350,6 @@ function partCrud<Read, Create, Update>(segment: string) {
 
 export const api = {
 	health: () => request<HealthResponse>('/health'),
-
-	compile: (code: string) =>
-		request<CompileResponse>('/formal-systems/compile', {
-			method: 'POST',
-			body: JSON.stringify({ code })
-		}),
 
 	verify: (systemCode: string, proofText: string) =>
 		request<VerifyResponse>('/proofs/verify', {
