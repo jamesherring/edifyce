@@ -412,6 +412,31 @@ def test_public_list_names_the_owner_without_leaking_email(client):
     assert "email" not in owner
 
 
+def test_non_owner_cannot_publish_or_unpublish(client):
+    # Publish/unpublish is the one write that flips a system's *global*
+    # visibility, so owner-scoping it is the highest-value guarantee. A non-owner
+    # gets a 404 (ownership stays hidden), and neither system's visibility moves.
+    _register_login(client, "owner@example.com")
+    draft = client.post("/formal-systems", json={"name": "Draft"}).json()
+    published = client.post("/formal-systems", json={"name": "Published"}).json()
+    _publish(client, published["id"])
+    client.post("/auth/logout")
+
+    _register_login(client, "intruder@example.com")
+    assert (
+        client.patch(f"/formal-systems/{draft['id']}", json={"published": True}).status_code == 404
+    )
+    assert (
+        client.patch(f"/formal-systems/{published['id']}", json={"published": False}).status_code
+        == 404
+    )
+    client.post("/auth/logout")
+
+    public_ids = [s["id"] for s in client.get("/formal-systems/public").json()]
+    assert draft["id"] not in public_ids  # the intruder's publish did nothing
+    assert published["id"] in public_ids  # the intruder's unpublish did nothing
+
+
 def test_published_system_is_readable_by_anyone(client, db):
     owner_id = _register_login(client, "owner@example.com")
     system_id = _seed_zfc(db, owner_id)

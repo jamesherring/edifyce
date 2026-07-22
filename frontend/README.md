@@ -86,6 +86,21 @@ the bundle served by FastAPI talks to the API on the same origin. (Set
 npm run check
 ```
 
+## Testing
+
+Unit and component tests run under [Vitest](https://vitest.dev/) in a jsdom
+environment, with [@testing-library/svelte](https://testing-library.com/docs/svelte-testing-library/intro/)
+for rendering components.
+
+```bash
+npm run test          # run once (CI)
+npm run test:watch    # watch mode
+```
+
+Test files live beside the code they cover (`*.test.ts`; component tests use
+`*.svelte.test.ts`). The Vitest config is a `test` project inside
+`vite.config.ts`, so `$lib` / `$app` aliases resolve exactly as in the app.
+
 ## Adding more shadcn-svelte components
 
 The project is configured for the shadcn-svelte CLI (`components.json`). Add

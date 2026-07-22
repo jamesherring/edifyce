@@ -1,5 +1,7 @@
+/// <reference types="vitest/config" />
 import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
+import { svelteTesting } from '@testing-library/svelte/vite';
 import { defineConfig, loadEnv } from 'vite';
 import tailwindcss from '@tailwindcss/vite';
 
@@ -36,6 +38,26 @@ export default defineConfig(({ mode }) => {
 				})
 			})
 		],
-		server: { proxy }
+		server: { proxy },
+		// One jsdom project so both pure-unit and component tests share a browser
+		// -like env (format.ts/api.ts touch window.location; components render into
+		// the DOM). `extends: true` inherits the sveltekit plugin above, so `$lib`
+		// / `$app` aliases resolve; svelteTesting() is scoped here so dev and build
+		// builds stay untouched.
+		test: {
+			projects: [
+				{
+					extends: true,
+					plugins: [svelteTesting()],
+					test: {
+						name: 'client',
+						environment: 'jsdom',
+						clearMocks: true,
+						setupFiles: ['./src/vitest-setup-client.ts'],
+						include: ['src/**/*.{test,spec}.ts']
+					}
+				}
+			]
+		}
 	};
 });
