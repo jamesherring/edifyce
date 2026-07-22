@@ -258,6 +258,17 @@ async def revalidate_if_published(session: AsyncSession, system_id: uuid.UUID) -
     if it no longer builds, the transaction is rolled back and the edit rejected
     with a 422. Drafts stay draft-tolerant (``POST /validate`` reports their
     state), so this is a no-op for them. Shared with the child-CRUD router.
+
+    NOTE: this closes the common (sequential) hole, not a concurrent one. A
+    child edit that commits in the window between a publish transaction
+    compiling the draft and committing ``published_at`` reads ``published_at``
+    as still-NULL here, skips revalidation, and lands an invalid edit that the
+    publisher never rechecks — a published-but-broken end state. Closing that
+    means serializing publish against child edits (a ``FOR UPDATE`` lock on the
+    parent, with the publish path re-reading under the lock). It's deferred: the
+    window needs one owner racing a publish and an edit on the same system, and
+    the lock is Postgres-only behaviour the SQLite test suite can't exercise —
+    so it belongs with deliberate concurrency hardening, tested against Postgres.
     """
     published_at = await session.scalar(
         select(FormalSystem.published_at).where(FormalSystem.id == system_id)
