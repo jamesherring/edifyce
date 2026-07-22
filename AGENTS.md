@@ -71,11 +71,18 @@ After changing a model, generate and commit the migration — don't hand-write i
 
 ```bash
 atlas migrate diff <name> --env local    # plan a migration from the models
-atlas migrate diff verify --env local    # sanity check: prints "synced" if no drift
+atlas migrate validate --env local       # read-only: verify atlas.sum integrity
 ```
 
-Commit **both** the new `migrations/*.sql` file and the updated `migrations/atlas.sum`.
-CI's drift-check fails if the models change without a matching migration.
+`atlas migrate diff` writes a new `migrations/*.sql` **only when the models have
+drifted** from the recorded migrations; on a clean tree it prints "synced" and
+writes nothing. It is *not* a read-only probe — don't run it with a throwaway
+name to "check" for drift, because a real drift leaves a stray migration (and a
+bumped `atlas.sum`) behind. That file-writing behavior is exactly how CI detects
+drift: it runs `atlas migrate diff drift_check` and fails if `migrations/` is
+then dirty (`.github/workflows/migrations.yml`). For a genuinely read-only check
+use `atlas migrate validate`. When you do generate a migration, commit **both**
+the new `migrations/*.sql` file and the updated `migrations/atlas.sum`.
 
 Atlas needs a throwaway **dev database** (with pgvector) to diff against; how you
 supply it depends on where you're working — see `atlas.hcl` for the `ATLAS_DEV_URL`
