@@ -72,7 +72,16 @@ Modernised from the original Django app (`website/models.py` on `main`):
   anywhere" (a recursive CTE over `term_children`), "uses defined notation
   `x ⊆ y`" (the `defined` kind joins against `definitions.higher`) — all in
   plain SQL. The bridge to live kernel terms is `terms_mapping`
-  (`store_term` / `load_term`).
+  (`store_term` / `load_term`). Each row also carries an **`alpha_digest`**
+  (`terms_mapping.alpha_digest`): a second structural hash that numbers free
+  variables by first occurrence, so it is invariant under consistent renaming
+  while `digest` is not. It is the "same statement up to variable names" search
+  key — `a in b` and `y in z` share an `alpha_digest` but not a `digest`, while
+  `a in a` (a shared variable) keeps its own — non-unique (many exact rows per
+  alpha class), indexed by `(formal_system_id, alpha_digest)`. It does not cover
+  partial-pattern / goal-directed search (that is a matching problem for a
+  discrimination-tree index plus a kernel unification confirm, not a whole-term
+  hash).
 - **`theorems`** — *forward-looking, currently unpopulated.* Points at the
   statement's root in the term graph (`statement_term_id`) for structural,
   **pattern-based** search, and carries a pgvector `embedding` (semantic /

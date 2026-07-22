@@ -33,7 +33,7 @@ from app.db.systems import (
 from app.db.side_conditions import SideConditionRow
 from app.db.systems_mapping import spec_to_system, system_to_spec
 from app.db.terms import TermChildRow, TermRow
-from app.db.terms_mapping import digest_term, load_term, store_term
+from app.db.terms_mapping import alpha_digest, digest_term, load_term, store_term
 
 __all__ = [
     "Base",
@@ -65,6 +65,7 @@ __all__ = [
     # Term graph (app/db/terms.py) + kernel-term round trip.
     "TermChildRow",
     "TermRow",
+    "alpha_digest",
     "digest_term",
     "load_term",
     "store_term",
