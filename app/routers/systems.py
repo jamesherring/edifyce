@@ -55,11 +55,13 @@ from app.schemas import (
     LinePart,
     LineType,
     Production,
+    ProofVerifyRequest,
     Rule,
     Sort,
     SystemOwner,
     SystemSource,
     SystemValidation,
+    VerifyProofResponse,
 )
 from website.logical.declarative import DeclarativeError, build_spec, lower
 
@@ -535,6 +537,40 @@ async def validate_system(
         line_type_count=len(compiled.line_types),
         inference_rule_count=len(compiled.inference_rules),
     )
+
+
+@router.post("/{system_id}/verify", response_model=VerifyProofResponse)
+async def verify_proof(
+    system_id: uuid.UUID,
+    payload: ProofVerifyRequest,
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> VerifyProofResponse:
+    """Check a proof against a stored system, assembled server-side from rows.
+
+    Replaces the raw-source verify: the client sends only the proof text and the
+    system id, never the system's `.edi`. Readable systems are published ones
+    (any viewer) or the owner's own drafts. Inheritance is not resolved yet (see
+    the note on `validate_system`).
+    """
+    system = await _get_readable_or_404(session, system_id, user)
+
+    result = build_spec(system_to_spec(system))
+    if "errors" in result:
+        # The stored system no longer compiles; surface the compile errors as a
+        # 400 the client renders verbatim, as the old raw-source verify did.
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=result["errors"])
+
+    compiled = result["system"]
+    # The proof checker raises on malformed proofs against otherwise-valid
+    # systems (e.g. a line type whose context edit targets a missing key);
+    # return a structured error rather than letting it escape as a 500.
+    try:
+        proof = compiled.parse(payload.proof_text)
+    except Exception as e:
+        return VerifyProofResponse(success=False, errors=[str(e)])
+
+    return VerifyProofResponse(success=proof.valid, proof=proof.data())
 
 
 @router.get("/{system_id}/source", response_model=SystemSource)

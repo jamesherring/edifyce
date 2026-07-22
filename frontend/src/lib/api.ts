@@ -354,12 +354,6 @@ function partCrud<Read, Create, Update>(segment: string) {
 export const api = {
 	health: () => request<HealthResponse>('/health'),
 
-	verify: (systemCode: string, proofText: string) =>
-		request<VerifyResponse>('/proofs/verify', {
-			method: 'POST',
-			body: JSON.stringify({ system_code: systemCode, proof_text: proofText })
-		}),
-
 	// --- Authentication ------------------------------------------------------
 
 	register: (email: string, password: string, displayName?: string) =>
@@ -425,7 +419,14 @@ export const api = {
 		validate: (id: string) =>
 			request<SystemValidation>(`/formal-systems/${id}/validate`, { method: 'POST' }),
 		/** The lowered `.edi` source for this system (read-only). */
-		source: (id: string) => request<SystemSource>(`/formal-systems/${id}/source`)
+		source: (id: string) => request<SystemSource>(`/formal-systems/${id}/source`),
+		/** Verify a proof against this stored system, assembled server-side from
+		 * rows — only the proof text is sent, never the system source. */
+		verify: (id: string, proofText: string) =>
+			request<VerifyResponse>(`/formal-systems/${id}/verify`, {
+				method: 'POST',
+				body: JSON.stringify({ proof_text: proofText })
+			})
 	},
 
 	/**

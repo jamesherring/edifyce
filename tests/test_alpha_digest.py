@@ -26,38 +26,38 @@ from app.db.base import Base
 from app.db.models import FormalSystem
 from app.db.terms import TermChildRow, TermRow
 from app.db.terms_mapping import _free_identity
-from website.logical.declarative import build
+from tests.spec_helpers import (
+    brackets,
+    equality_prod,
+    hyp_rule,
+    implication_prod,
+    membership_prod,
+    mp_rule,
+    regex_prod,
+    statement_line,
+    subset_def,
+    universal_prod,
+    variable_prod,
+)
+from website.logical.declarative import SystemSpec, build_spec
 from website.logical.kernel import Bound, Node, Var, from_match, intern
 from website.logical.matching.patterns import AtomPattern
 
-SOURCE = """system ZFC
-
-notation
-  brackets ( )
-
-grammar
-  term      | variable      | matches [a-z][a-z0-9]*
-  formula   | membership    | s ∈ t                   | s, t : term
-  formula   | implication   | (p → q)                 | p, q : formula
-  formula   | universal     | ∀x p                    | x : variable, p : formula
-
-line statement
-  shape <formula> [<reference>]
-  reference | matches [A-Za-z0-9 ,]+
-  logical formula
-
-rules
-  HYP | hypothesis   | from             | infer p | p : formula
-  MP  | modus ponens | from p ; (p → q) | infer q | p, q : formula
-
-definitions
-  formula | subset | x ⊆ y | means ∀z (z ∈ x → z ∈ y) | x, y, z : variable
-"""
+def zfc_spec() -> SystemSpec:
+    return SystemSpec(
+        name="ZFC",
+        brackets=brackets(),
+        productions=[variable_prod(), membership_prod(), implication_prod(),
+                     universal_prod()],
+        line=statement_line(),
+        rules=[hyp_rule(), mp_rule()],
+        definitions=[subset_def()],
+    )
 
 
 @pytest.fixture(scope="module")
 def context():
-    result = build(SOURCE)
+    result = build_spec(zfc_spec())
     assert "errors" not in result, result.get("errors")
     system = result["system"]
     ctx = copy(system.context)
@@ -160,26 +160,19 @@ def test_alpha_digest_does_not_rename_constant_atoms(context):
 # is_free override: constant-denoting regex productions (finding #2)
 # ---------------------------------------------------------------------------
 
-NUMERAL_SOURCE = """system PA
-
-grammar
-  term    | numeral  | matches [0-9]+
-  term    | variable | matches [a-z][a-z0-9]*
-  formula | equality | s = t                | s, t : term
-
-line statement
-  shape <formula> [<reference>]
-  reference | matches [A-Za-z0-9 ,]+
-  logical formula
-
-rules
-  HYP | hypothesis | from | infer p | p : formula
-"""
+def numeral_spec() -> SystemSpec:
+    return SystemSpec(
+        name="PA",
+        productions=[regex_prod("term", "numeral", "[0-9]+"), variable_prod(),
+                     equality_prod()],
+        line=statement_line(),
+        rules=[hyp_rule()],
+    )
 
 
 @pytest.fixture(scope="module")
 def numeral_context():
-    result = build(NUMERAL_SOURCE)
+    result = build_spec(numeral_spec())
     assert "errors" not in result, result.get("errors")
     system = result["system"]
     ctx = copy(system.context)

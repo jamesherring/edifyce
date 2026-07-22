@@ -21,37 +21,39 @@ from sqlalchemy.orm import Session, aliased
 from app.db import Base, digest_term, load_term, store_term
 from app.db.models import FormalSystem, Theorem
 from app.db.terms import TermChildRow, TermRow
-from website.logical.declarative import build
+from tests.spec_helpers import (
+    brackets,
+    conjunction_prod,
+    defn,
+    hyp_rule,
+    implication_prod,
+    membership_prod,
+    mp_rule,
+    statement_line,
+    subset_def,
+    template_prod,
+    universal_prod,
+    variable_prod,
+)
+from website.logical.declarative import SystemSpec, build_spec
 from website.logical.kernel import from_match
 
-SOURCE = """system ZFC
 
-notation
-  brackets ( )
-
-grammar
-  term      | variable      | matches [a-z][a-z0-9]*
-  formula   | membership    | s ∈ t                   | s, t : term
-  formula   | implication   | (p → q)                 | p, q : formula
-  formula   | universal     | ∀x p                    | x : variable, p : formula
-
-line statement
-  shape <formula> [<reference>]
-  reference | matches [A-Za-z0-9 ,]+
-  logical formula
-
-rules
-  HYP | hypothesis   | from             | infer p | p : formula
-  MP  | modus ponens | from p ; (p → q) | infer q | p, q : formula
-
-definitions
-  formula | subset | x ⊆ y | means ∀z (z ∈ x → z ∈ y) | x, y, z : variable
-"""
+def zfc_spec() -> SystemSpec:
+    return SystemSpec(
+        name="ZFC",
+        brackets=brackets(),
+        productions=[variable_prod(), membership_prod(), implication_prod(),
+                     universal_prod()],
+        line=statement_line(),
+        rules=[hyp_rule(), mp_rule()],
+        definitions=[subset_def()],
+    )
 
 
 @pytest.fixture(scope="module")
 def engine_context():
-    result = build(SOURCE)
+    result = build_spec(zfc_spec())
     assert "errors" not in result, result.get("errors")
     system = result["system"]
     context = copy(system.context)
@@ -265,36 +267,33 @@ def test_search_statements_using_defined_notation(
 # Defined-node resolution disambiguates by sort
 # ---------------------------------------------------------------------------
 
-AMBIGUOUS_SOURCE = """system DUP
-
-notation
-  brackets ( )
-
-grammar
-  term      | variable    | matches [a-z][a-z0-9]*
-  term      | pairing     | ⟨s, t⟩                  | s, t : term
-  formula   | membership  | s ∈ t                   | s, t : term
-  formula   | conjunction | (p ∧ q)                 | p, q : formula
-
-line statement
-  shape <formula> [<reference>]
-  reference | matches [A-Za-z0-9 ,]+
-  logical formula
-
-rules
-  HYP | hypothesis | from | infer p | p : formula
-
-definitions
-  formula | both | x ⋈ y | means (x ∈ y ∧ y ∈ x) | x, y : variable
-  term    | swap | x ⋈ y | means ⟨y, x⟩           | x, y : variable
-"""
+def ambiguous_spec() -> SystemSpec:
+    # One higher template ("x ⋈ y") defined on two different sorts.
+    return SystemSpec(
+        name="DUP",
+        brackets=brackets(),
+        productions=[
+            variable_prod(),
+            template_prod("term", "pairing", "⟨s, t⟩", [("s", "term"), ("t", "term")]),
+            membership_prod(),
+            conjunction_prod(),
+        ],
+        line=statement_line(),
+        rules=[hyp_rule()],
+        definitions=[
+            defn("formula", "both", "x ⋈ y", "(x ∈ y ∧ y ∈ x)",
+                 [("x", "variable"), ("y", "variable")]),
+            defn("term", "swap", "x ⋈ y", "⟨y, x⟩",
+                 [("x", "variable"), ("y", "variable")]),
+        ],
+    )
 
 
 def test_defined_nodes_reload_with_their_stored_sort(session):
     # One higher template ("x ⋈ y") defined on two sorts. Loading must pick the
     # definition matching the stored sort — context.definitions is a set, so
     # template alone would choose arbitrarily and corrupt later sort checks.
-    result = build(AMBIGUOUS_SOURCE)
+    result = build_spec(ambiguous_spec())
     assert "errors" not in result, result.get("errors")
     engine_system = result["system"]
     context = copy(engine_system.context)

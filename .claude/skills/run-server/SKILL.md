@@ -14,14 +14,15 @@ description: >-
 ## Layout
 
 - **`app/`** — the **FastAPI** backend (`app.main:app`). Endpoints: `GET /health`,
-  `POST /formal-systems/compile`, `POST /proofs/verify`. It **also serves the
-  built Svelte SPA at `/`** when `frontend/build/` exists (see the SPA quirk
-  below).
+  owner-scoped `/formal-systems` CRUD, plus `POST /formal-systems/{id}/validate`
+  and `POST /formal-systems/{id}/verify` (both operate on stored systems). It
+  **also serves the built Svelte SPA at `/`** when `frontend/build/` exists (see
+  the SPA quirk below).
 - **`website/logical/`** — the core proof engine imported by the backend. Not a
   web app despite the name.
 - **`frontend/`** — the **SvelteKit** SPA (Svelte 5, Tailwind v4, shadcn-svelte;
-  static adapter). Pages: `/` (landing), `/compile`, `/verify`. It makes
-  same-origin relative API calls.
+  static adapter). Pages: `/` (landing), `/systems` (list), `/systems/[id]`
+  (detail), `/systems/[id]/verify`. It makes same-origin relative API calls.
 - **`deprecated/frontend/`** — the old Django UI, **not served**; reference only.
 
 Python is managed by **uv** (`pyproject.toml` + `uv.lock`; no `requirements.txt`).
@@ -45,7 +46,7 @@ The backend is the same either way; the difference is how the frontend is served
 ### Mode A — dev servers (recommended for iterating on the UI; hot reload)
 
 Two processes: FastAPI on `:8000`, Vite dev on `:5173`. The Vite server proxies
-the API paths (`/health`, `/formal-systems`, `/proofs`) to `:8000`, so the app
+the API paths (`/health`, `/formal-systems`, `/auth`, `/users`) to `:8000`, so the app
 works with no CORS/URL config. **Inspect the UI at `:5173`.**
 
 ```bash
@@ -53,7 +54,7 @@ works with no CORS/URL config. **Inspect the UI at `:5173`.**
 (cd frontend && npm run dev -- --host 127.0.0.1 --port 5173 > /tmp/fe.log 2>&1 &)
 sleep 8
 curl -s http://127.0.0.1:5173/health      # -> {"status":"ok"}  (proxied to backend)
-# UI: http://127.0.0.1:5173/   (also /compile, /verify)
+# UI: http://127.0.0.1:5173/   (also /systems)
 ```
 
 Stop: `pkill -f "uvicorn app.main"; pkill -f vite`. Vite needs a few seconds to
@@ -69,7 +70,7 @@ the UI at `:8000`.**
 (uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/be.log 2>&1 &)
 sleep 4
 curl -s http://127.0.0.1:8000/health      # -> {"status":"ok"}
-# UI: http://127.0.0.1:8000/   (also /compile, /verify)
+# UI: http://127.0.0.1:8000/   (also /systems)
 ```
 
 Rebuild (`npm run build`) after frontend edits — Mode B serves a static bundle,
@@ -84,7 +85,7 @@ node .claude/skills/run-server/scripts/screenshot.cjs <url> <out.png> [--full] [
 
 # Mode A (dev):            Mode B (built):
 node .claude/skills/run-server/scripts/screenshot.cjs http://127.0.0.1:5173/        home.png    --full
-node .claude/skills/run-server/scripts/screenshot.cjs http://127.0.0.1:8000/compile compile.png --full
+node .claude/skills/run-server/scripts/screenshot.cjs http://127.0.0.1:8000/systems systems.png --full
 ```
 
 The SPA renders client-side; the helper waits for network-idle, which is enough
@@ -92,8 +93,8 @@ for these pages. Pass `--wait=<selector>` if you need a specific element (e.g.
 after an interaction) before the shot. Then view the PNG with the Read tool; use
 SendUserFile to surface it to the user.
 
-To drive interactions (fill the editor, click **Compile**, screenshot the
-result) rather than just snapshot, write a one-off Playwright script following
+To drive interactions (fill the proof editor, click **Verify proof**, screenshot
+the result) rather than just snapshot, write a one-off Playwright script following
 `scripts/screenshot.cjs` — same global-Playwright resolution, then use
 `page.fill` / `page.click` / `page.waitForSelector`.
 

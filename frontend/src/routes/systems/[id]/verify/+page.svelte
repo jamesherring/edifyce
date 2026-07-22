@@ -91,13 +91,14 @@
 	}
 
 	async function verify() {
-		if (!systemCode) return;
+		const id = page.params.id;
+		if (!systemCode || !id) return;
 		const seq = ++verifySeq;
 		verifying = true;
 		result = null;
 		requestError = null;
 		try {
-			const res = await api.verify(systemCode, proofText);
+			const res = await api.systems.verify(id, proofText);
 			if (seq !== verifySeq) return;
 			result = res;
 		} catch (err) {

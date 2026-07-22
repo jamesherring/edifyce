@@ -14,7 +14,7 @@ formal systems.
 | `/systems/new`          | Create a system → `POST /formal-systems`                                       |
 | `/systems/[id]`         | Read-only detail: contents, validation, source → `GET /formal-systems/{id}{,/validate,/source}` |
 | `/systems/[id]/edit`    | Owner editor: settings, publish, and per-part CRUD → `PATCH`/`DELETE` + `…/{sorts,productions,…}` |
-| `/systems/[id]/verify`  | Verify a proof against the system, line by line → `POST /proofs/verify`         |
+| `/systems/[id]/verify`  | Verify a proof against the system, line by line → `POST /formal-systems/[id]/verify` |
 | `/login`                | Log in → `POST /auth/login`                                                     |
 | `/register`             | Create an account → `POST /auth/register`                                       |
 | `/account`              | Manage the signed-in user → `GET`/`PATCH /users/me`                             |
@@ -47,7 +47,7 @@ uv run uvicorn app.main:app --reload
 ```
 
 The app makes same-origin (relative) API requests. In development the dev
-server proxies the API paths (`/health`, `/formal-systems`, `/proofs`) to the
+server proxies the API paths (`/health`, `/formal-systems`, `/auth`, `/users`) to the
 backend at `http://localhost:8000`, so the two servers work together with no
 extra configuration. Override the proxy target with `VITE_API_PROXY_TARGET`, or
 point the app at a backend on a different origin with `VITE_API_BASE_URL` (that
