@@ -6,6 +6,15 @@ from ..matching import Context, Match, Pattern, StringPattern, UnionPattern
 from .proof import Proof
 
 
+def _line_field(match: Match, field: str, context: Context) -> Match:
+    # Project a LineType's declared formula/reference field off a line match.
+    # The reserved value "self" denotes the whole match (an axiom asserting its
+    # entire formula); any other value names a matched sub-field to read.
+    if field == "self":
+        return match
+    return match.get_by_path(field, context)
+
+
 class FormalSystem:
     """A formal system."""
 
@@ -152,8 +161,12 @@ class FormalSystem:
                 # Check for main line type attributes
                 # Try to get the formula, reference, label, display, is_axiom
                 try:
-                    # Add formula to the proof line
-                    proof_line.formula = result.get_by_path("formula()", context)
+                    # The logical formula: the LineType's declared field if it has
+                    # one, else a legacy `formula()` accessor function.
+                    if line_type.formula_field is not None:
+                        proof_line.formula = _line_field(result, line_type.formula_field, context)
+                    else:
+                        proof_line.formula = result.get_by_path("formula()", context)
 
                     # It has to be a match
                     if type(proof_line.formula) is not Match:
@@ -163,7 +176,11 @@ class FormalSystem:
                     pass
 
                 try:
-                    reference_match = result.get_by_path("reference()", context)
+                    # The citation reference: declared field, else `reference()`.
+                    if line_type.reference_field is not None:
+                        reference_match = _line_field(result, line_type.reference_field, context)
+                    else:
+                        reference_match = result.get_by_path("reference()", context)
 
                     proof_line.reference_string = reference_match.formatted_string()
                     proof_line.reference_string_display = reference_match.string

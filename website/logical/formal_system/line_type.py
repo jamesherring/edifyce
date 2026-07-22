@@ -6,13 +6,24 @@ from ..matching import PatternFunction
 class LineType:
     """Class for types of lines in formal proofs."""
 
-    def __init__(self, name, pattern=None, behaviour="none", add_context=None, scope=None):
+    def __init__(self, name, pattern=None, behaviour="none", add_context=None, scope=None,
+                 formula_field=None, reference_field=None):
 
         # The name of this line type
         self.name = name
 
         # The pattern for these lines to match (Pattern instance)
         self.pattern = pattern
+
+        # Which matched sub-field carries the logical formula, and which the
+        # citation reference. A structured alternative to interpreted
+        # `formula()`/`reference()` accessor functions: `FormalSystem.parse`
+        # projects these off the line match directly. The reserved value "self"
+        # means the whole match (an axiom asserting its entire formula). None
+        # falls back to a `formula()`/`reference()` function, for legacy
+        # hand-written systems that still define one.
+        self.formula_field = formula_field
+        self.reference_field = reference_field
 
         # The behaviour of these lines
         self.behaviour = behaviour
@@ -80,6 +91,12 @@ class LineType:
             return False
 
         if not self.scope == other.scope:
+            return False
+
+        if not self.formula_field == other.formula_field:
+            return False
+
+        if not self.reference_field == other.reference_field:
             return False
 
         if not self.add_context == other.add_context:

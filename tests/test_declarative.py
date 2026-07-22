@@ -184,6 +184,71 @@ def test_modus_ponens_over_defined_notation(zfc):
 
 
 # ---------------------------------------------------------------------------
+# Structured accessors: the formula/reference are declared fields on the line
+# type, not interpreted `formula()`/`reference()` accessor functions.
+# ---------------------------------------------------------------------------
+
+
+def test_line_types_declare_formula_and_reference_fields(zfc):
+    statement = next(lt for lt in zfc.line_types if lt.name == "statement")
+    # The logical line names its formula and citation fields directly...
+    assert statement.formula_field == "f"
+    assert statement.reference_field == "r"
+    # ...and registers no interpreted accessor function on its pattern.
+    assert statement.pattern.functions == {}
+
+    # A bare axiom asserts its whole match: `formula: self`.
+    extensionality = next(lt for lt in zfc.line_types if lt.name == "extensionality")
+    assert extensionality.formula_field == "self"
+    assert extensionality.pattern.functions == {}
+
+
+def test_lowering_emits_field_declarations_not_accessor_functions():
+    edi = lower(zfc_spec())
+    assert "formula: f" in edi
+    assert "reference: r" in edi
+    assert "formula: self" in edi
+    # The interpreted accessor bodies are gone.
+    assert ".formula()" not in edi
+    assert ".reference()" not in edi
+
+
+def test_legacy_formula_accessor_function_still_works():
+    # A hand-written system with no declared field falls back to a `formula()`
+    # accessor function — the field-less path the engine still supports.
+    from website.logical.compiler import compile as compile_edi
+
+    source = (
+        "FormalSystem Legacy:\n"
+        "\n"
+        "    Regex atom:\n"
+        "        ^[a-z]+$\n"
+        "\n"
+        "    ProofContext:\n"
+        "        given: MatchSet()\n"
+        "\n"
+        "    Pattern statement_pattern:\n"
+        "        with f as atom:\n"
+        "            f\n"
+        "\n"
+        "    statement_pattern.formula():\n"
+        "        return self.f\n"
+        "\n"
+        "    LineType statement:\n"
+        "        pattern: statement_pattern\n"
+        "        behaviour: logical\n"
+    )
+    system = compile_edi(source)["system"]
+    statement = system.line_types[0]
+    # No declared field; the accessor function carries the contract instead.
+    assert statement.formula_field is None
+    assert "formula" in statement.pattern.functions
+    # And a proof still resolves its formula (here, an unjustified logical line).
+    proof = system.parse("hello")
+    assert proof.proof_lines[0].formula is not None
+
+
+# ---------------------------------------------------------------------------
 # Lowering: forward-declaration order and definition provisos
 # ---------------------------------------------------------------------------
 
