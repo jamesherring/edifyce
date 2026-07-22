@@ -288,6 +288,34 @@ def test_malformed_rule_side_condition_is_422(client):
     assert response.status_code == 422
 
 
+def test_rule_or_proviso_round_trips_through_the_api(client):
+    # A disjunctive proviso (`A or B`) is accepted and read back verbatim.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+    rule = _post(client, f"/formal-systems/{sid}/rules", {
+        "label": "DIS", "name": "disj", "deduction": "(p → q)", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "formula"}, {"var": "q", "sort": "formula"}],
+        "side_conditions": ["equal(p, q) or not occurs(p, q)"],
+    })
+    assert rule["side_conditions"] == ["equal(p, q) or not occurs(p, q)"]
+    detail = client.get(f"/formal-systems/{sid}").json()
+    assert detail["rules"][0]["side_conditions"] == ["equal(p, q) or not occurs(p, q)"]
+
+
+def test_rule_or_disjunct_over_undeclared_metavar_is_422(client):
+    # Metavariable validation reaches into each disjunct: `z` is undeclared.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+    response = client.post(f"/formal-systems/{sid}/rules", json={
+        "label": "DIS", "name": "disj", "deduction": "(p → q)", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "formula"}, {"var": "q", "sort": "formula"}],
+        "side_conditions": ["equal(p, q) or occurs(p, z)"],
+    })
+    assert response.status_code == 422
+
+
 def test_rule_proviso_over_undeclared_metavar_is_422(client):
     # A proviso may only mention the rule's declared bindings: `q` is not one, so
     # `equal(p, q)` has no metavariable to check against and is rejected up front

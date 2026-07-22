@@ -14,6 +14,7 @@
 		items = $bindable(),
 		label,
 		hint,
+		description,
 		addLabel,
 		removeLabel,
 		blank,
@@ -22,6 +23,8 @@
 		items: T[];
 		label: string;
 		hint?: string;
+		/** Optional muted line under the label — e.g. a note on the field's grammar. */
+		description?: string;
 		addLabel: string;
 		removeLabel: string;
 		blank: () => T;
@@ -38,6 +41,9 @@
 
 <div class="space-y-2">
 	<Label>{label}{#if hint}&nbsp;<span class="text-muted-foreground">{hint}</span>{/if}</Label>
+	{#if description}
+		<p class="text-xs text-muted-foreground">{description}</p>
+	{/if}
 	<!-- Keyed by object identity so removing a middle row can't shift focus/caret
 	     onto the wrong row. -->
 	{#each items as item (item)}

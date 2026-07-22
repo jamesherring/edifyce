@@ -1,4 +1,4 @@
-"""A declarative front-end that lowers to the existing Edifyce compiler.
+"""A declarative model of a formal system that lowers to the Edifyce compiler.
 
 The proof engine is powerful but its source language forces three unrelated
 jobs -- describing the *grammar*, the *inference rules*, and *side conditions*
@@ -8,49 +8,25 @@ Recursive grammars only work if the author performs a non-obvious ordering
 dance (forward-declare an empty ``UnionPattern`` *then* fill it), and a wrong
 guess compiles cleanly yet silently matches nothing.
 
-This module offers a small, sectioned, non-code configuration format and
-*lowers it to ordinary ``.edi`` source*, which the real
-:func:`website.logical.compiler.compile` then turns into a ``FormalSystem``.
-It is deliberately a thin front-end: nothing here re-implements matching or
-proof checking -- it only rearranges declarative input into the engine's own
-language and then hands off. The one thing the ``.edi`` language cannot
-express, ``respect_brackets``, is patched onto the compiled patterns
-afterwards.
+This module offers a structured, order-independent description of a system --
+the :class:`SystemSpec` dataclasses (grammar productions, a logical line,
+definitions, axioms, rules) -- and *lowers it to ordinary ``.edi`` source*,
+which the real :func:`website.logical.compiler.compile` then turns into a
+``FormalSystem``. It is deliberately a thin front-end: nothing here
+re-implements matching or proof checking -- it only rearranges the declarative
+model into the engine's own language and hands off. The one thing the ``.edi``
+language cannot express, ``respect_brackets``, is patched onto the compiled
+patterns afterwards.
 
-Crucially, **definitions remain first-class**: a ``definitions`` section
-lowers to the engine's ``Define <higher> as <lower> [where <proviso>]``, so a
-complex base system (ZFC) can be layered up with familiar notation (``⊆``,
-``∅``, ``P(x)`` ...) exactly as the engine already supports.
+A :class:`SystemSpec` is built directly -- by the persistence layer
+(``app.db.system_to_spec`` reconstructs one from stored rows) or, in tests, by
+scripted assembly -- and handed to :func:`build_spec`. There is no text-syntax
+front-end; the relational storage, not a source blob, is the source of truth.
 
-The input format (see ``examples/zfc.system`` for a full worked example)::
-
-    system <Name>
-
-    notation
-      brackets ( )                       # optional grouping bracket pair
-
-    grammar
-      <sort> | <name> | matches <regex>              # atomic (leaf) member
-      <sort> | <name> | <template> | <bindings>      # composite production
-
-    line <name>
-      shape <text with <placeholders>>
-      <part> | matches <regex>           # inline parts (e.g. a reference)
-      logical <sort>                     # which placeholder is the formula
-
-    definitions
-      <sort> | <name> | <higher> | means <lower> | <bindings> [ | if <cond> ]
-
-    axioms
-      <label> | <name> | <formula> [ | <bindings> ]
-
-    rules
-      <label> | <name> | from <a> ; <b> | infer <c> | <bindings>
-
-``<bindings>`` is a ``;``-separated list of groups ``n1, n2 : sort``.
-
-``|`` separates columns; a literal pipe inside a field (a regex alternation or
-pipe notation such as set-builder ``{ x \\| y }``) is written ``\\|``.
+Crucially, **definitions remain first-class**: a definition lowers to the
+engine's ``Define <higher> as <lower> [where <proviso>]``, so a complex base
+system (ZFC) can be layered up with familiar notation (``⊆``, ``∅``, ``P(x)``
+...) exactly as the engine already supports.
 """
 
 from __future__ import annotations
@@ -61,11 +37,11 @@ from .compiler import compile as compile_edi
 
 
 class DeclarativeError(Exception):
-    """Raised for problems the front-end can detect before lowering."""
+    """Raised for problems detectable in a :class:`SystemSpec` before lowering."""
 
 
 # ---------------------------------------------------------------------------
-# Parsing the sectioned input into structured records
+# Structured records: the declarative model of a system
 # ---------------------------------------------------------------------------
 
 
@@ -131,220 +107,6 @@ class SystemSpec:
             if p.sort not in seen:
                 seen.append(p.sort)
         return seen
-
-
-_SECTIONS = {"system", "notation", "grammar", "line", "definitions", "axioms", "rules", "side_conditions"}
-
-
-def _split_columns(row: str) -> list[str]:
-    # Split a row on its ``|`` column separators. A literal pipe inside a field
-    # -- a regex alternation ``[a-z]+\|[A-Z]+`` or pipe notation like
-    # set-builder ``{ x \| φ }`` -- is written ``\|`` and does not split.
-    # Only ``\|`` is special; other backslashes (``\d``, ``\.``) pass through.
-    columns: list[str] = []
-    current: list[str] = []
-    i = 0
-    while i < len(row):
-        ch = row[i]
-        if ch == "\\" and i + 1 < len(row) and row[i + 1] == "|":
-            current.append("|")
-            i += 2
-            continue
-        if ch == "|":
-            columns.append("".join(current).strip())
-            current = []
-            i += 1
-            continue
-        current.append(ch)
-        i += 1
-    columns.append("".join(current).strip())
-    return columns
-
-
-def _parse_bindings(text: str) -> list[tuple[str, str]]:
-    # Parse "x, y : variable, p : formula" (or ';'-separated) into
-    # [(x, variable), (y, variable), (p, formula)]. Names sharing a sort are
-    # comma-listed before the ':'; a ':' atom closes the current group.
-    bindings: list[tuple[str, str]] = []
-    text = text.replace(";", ",").strip()
-    if not text:
-        return bindings
-
-    pending: list[str] = []
-    for atom in text.split(","):
-        atom = atom.strip()
-        if not atom:
-            continue
-        if ":" in atom:
-            name, sort = atom.split(":", 1)
-            name, sort = name.strip(), sort.strip()
-            if name:
-                pending.append(name)
-            for pending_name in pending:
-                bindings.append((pending_name, sort))
-            pending = []
-        else:
-            pending.append(atom)
-
-    if pending:
-        raise DeclarativeError(f"Binding names {pending} have no ': sort'.")
-
-    return bindings
-
-
-def _blocks(source: str) -> list[tuple[str, str, list[str]]]:
-    # Yield (section_keyword, header_remainder, body_lines) for each top-level
-    # section. A section header sits at column 0; its body is every following
-    # indented (or blank) line until the next column-0 line.
-    lines = source.splitlines()
-    blocks: list[tuple[str, str, list[str]]] = []
-
-    i = 0
-    while i < len(lines):
-        raw = lines[i]
-        stripped = raw.strip()
-
-        if not stripped or stripped.startswith("#"):
-            i += 1
-            continue
-
-        if raw[0].isspace():
-            raise DeclarativeError(f"Unexpected indented line outside any section: {raw!r}")
-
-        keyword = stripped.split()[0]
-        if keyword not in _SECTIONS:
-            raise DeclarativeError(f"Unknown section '{keyword}'.")
-
-        header_remainder = stripped[len(keyword):].strip()
-
-        body: list[str] = []
-        i += 1
-        while i < len(lines) and (not lines[i].strip() or lines[i][0].isspace()):
-            body_line = lines[i].strip()
-            if body_line and not body_line.startswith("#"):
-                body.append(body_line)
-            i += 1
-
-        blocks.append((keyword, header_remainder, body))
-
-    return blocks
-
-
-def parse(source: str) -> SystemSpec:
-    """Parse declarative source into a :class:`SystemSpec`."""
-
-    spec = SystemSpec()
-    # Rule provisos are attached by label after every block is read, so the
-    # `side_conditions` section may appear before or after `rules`.
-    rule_provisos: dict[str, list[str]] = {}
-
-    for keyword, header, body in _blocks(source):
-
-        if keyword == "system":
-            spec.name = header
-
-        elif keyword == "notation":
-            for row in body:
-                if row.startswith("brackets"):
-                    toks = row.split()[1:]
-                    if len(toks) != 2:
-                        raise DeclarativeError("'brackets' needs an opening and closing symbol.")
-                    spec.brackets.append((toks[0], toks[1]))
-
-        elif keyword == "grammar":
-            for row in body:
-                cols = _split_columns(row)
-                if len(cols) < 3:
-                    raise DeclarativeError(f"Grammar row needs at least 'sort | name | body': {row!r}")
-                sort, name, third = cols[0], cols[1], cols[2]
-                if third.startswith("matches "):
-                    spec.productions.append(Production(sort=sort, name=name, regex=third[len("matches "):].strip()))
-                else:
-                    bindings = _parse_bindings(cols[3]) if len(cols) > 3 else []
-                    spec.productions.append(Production(sort=sort, name=name, template=third, bindings=bindings))
-
-        elif keyword == "line":
-            line = LineSpec(name=header, shape="")
-            for row in body:
-                if row.startswith("shape "):
-                    line.shape = row[len("shape "):].strip()
-                elif row.startswith("logical "):
-                    line.logical_sort = row[len("logical "):].strip()
-                else:
-                    cols = _split_columns(row)
-                    if len(cols) == 2 and cols[1].startswith("matches "):
-                        line.parts.append(LinePart(name=cols[0], regex=cols[1][len("matches "):].strip()))
-                    else:
-                        raise DeclarativeError(f"Unrecognised line row: {row!r}")
-            spec.line = line
-
-        elif keyword == "definitions":
-            for row in body:
-                cols = _split_columns(row)
-                # sort | name | higher | means <lower> | bindings [ | where <proviso> ]
-                if len(cols) < 4 or not cols[3].startswith("means "):
-                    raise DeclarativeError(f"Definition row must be 'sort | name | higher | means <lower> | bindings': {row!r}")
-                lower = cols[3][len("means "):].strip()
-                bindings = _parse_bindings(cols[4]) if len(cols) > 4 else []
-                condition = None
-                if len(cols) > 5 and cols[5].startswith("where "):
-                    condition = cols[5][len("where "):].strip()
-                elif len(cols) > 5 and cols[5].startswith("if "):
-                    raise DeclarativeError(
-                        f"The legacy `if` definition proviso is no longer supported; use `where`: {row!r}"
-                    )
-                spec.definitions.append(Definition(
-                    sort=cols[0], name=cols[1], higher=cols[2], lower=lower,
-                    bindings=bindings, condition=condition,
-                ))
-
-        elif keyword == "axioms":
-            for row in body:
-                cols = _split_columns(row)
-                if len(cols) < 3:
-                    raise DeclarativeError(f"Axiom row must be 'label | name | formula': {row!r}")
-                bindings = _parse_bindings(cols[3]) if len(cols) > 3 else []
-                spec.axioms.append(Rule(label=cols[0], name=cols[1], antecedents=[],
-                                        deduction=cols[2], bindings=bindings))
-
-        elif keyword == "rules":
-            for row in body:
-                cols = _split_columns(row)
-                # label | name | from a ; b | infer c | bindings
-                if len(cols) < 4:
-                    raise DeclarativeError(f"Rule row must be 'label | name | from ... | infer ... | bindings': {row!r}")
-                from_col = cols[2]
-                infer_col = cols[3]
-                if from_col != "from" and not from_col.startswith("from "):
-                    raise DeclarativeError(f"Rule row needs a 'from ...' column: {row!r}")
-                if not infer_col.startswith("infer "):
-                    raise DeclarativeError(f"Rule row needs an 'infer ...' column: {row!r}")
-                antecedents = [a.strip() for a in from_col[len("from"):].split(";") if a.strip()]
-                deduction = infer_col[len("infer "):].strip()
-                bindings = _parse_bindings(cols[4]) if len(cols) > 4 else []
-                spec.rules.append(Rule(label=cols[0], name=cols[1], antecedents=antecedents,
-                                       deduction=deduction, bindings=bindings))
-
-        elif keyword == "side_conditions":
-            for row in body:
-                cols = _split_columns(row)
-                # <rule label> | <proviso>. One proviso per row; several rows for
-                # a label conjoin, matching the engine's side_conditions: block.
-                if len(cols) != 2:
-                    raise DeclarativeError(
-                        f"Side-condition row must be '<rule label> | <proviso>': {row!r}"
-                    )
-                rule_provisos.setdefault(cols[0], []).append(cols[1])
-
-    rules_by_label = {rule.label: rule for rule in spec.rules}
-    for label, provisos in rule_provisos.items():
-        if label not in rules_by_label:
-            raise DeclarativeError(
-                f"side_conditions references '{label}', which is not a rule label."
-            )
-        rules_by_label[label].side_conditions.extend(provisos)
-
-    return spec
 
 
 # ---------------------------------------------------------------------------
@@ -629,27 +391,13 @@ def _patch_brackets(system, bracket_pairs: list[tuple[str, str]]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def build(source: str, system_dict: dict | None = None) -> dict:
-    """Build a ``FormalSystem`` from declarative source.
-
-    Mirrors :func:`website.logical.compiler.compile`: returns
-    ``{"system": FormalSystem}`` on success or ``{"errors": [...]}`` on failure.
-    """
-
-    try:
-        spec = parse(source)
-    except DeclarativeError as exc:
-        return {"errors": [str(exc)]}
-
-    return build_spec(spec, system_dict=system_dict)
-
-
 def build_spec(spec: SystemSpec, system_dict: dict | None = None) -> dict:
-    """Build a ``FormalSystem`` from an already-parsed :class:`SystemSpec`.
+    """Build a ``FormalSystem`` from a :class:`SystemSpec`.
 
-    The entry point for callers that hold a ``SystemSpec`` directly rather than
-    source text -- e.g. a persistence layer that reconstructs one from database
-    rows. Same return shape as :func:`build`.
+    The entry point for callers that hold a ``SystemSpec`` -- e.g. a persistence
+    layer that reconstructs one from database rows, or a test that assembles one
+    directly. Returns ``{"system": FormalSystem}`` on success or
+    ``{"errors": [...]}`` when lowering or compilation fails.
     """
 
     # Lowering can still reject a parsed-but-invalid spec (e.g. a line shape
@@ -678,37 +426,3 @@ def _uses_parens(spec: SystemSpec) -> bool:
     texts += [d.lower for d in spec.definitions]
     texts += [r.deduction for r in spec.axioms + spec.rules]
     return any("(" in t for t in texts)
-
-
-def _demo(path: str) -> None:
-    # `python -m website.logical.declarative <file.system>`: show the lowered
-    # .edi and confirm the system compiles.
-    with open(path, encoding="utf-8") as handle:
-        source = handle.read()
-
-    print("=" * 70)
-    print("LOWERED .edi")
-    print("=" * 70)
-    print(lower(parse(source)))
-
-    result = build(source)
-    print("=" * 70)
-    if "errors" in result:
-        print("COMPILE ERRORS")
-        for err in result["errors"]:
-            print("  ", err)
-        return
-
-    system = result["system"]
-    print(f"COMPILED: {system.name}")
-    print("  line types:", [lt.name for lt in system.line_types])
-    print("  rules:", [ir.label for ir in system.inference_rules])
-
-
-if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) != 2:
-        print("usage: python -m website.logical.declarative <file.system>")
-        raise SystemExit(2)
-    _demo(sys.argv[1])

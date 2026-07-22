@@ -41,13 +41,20 @@ from app.db.systems import (
     SymbolRow,
 )
 from app.main import app
-
-# `website.logical.declarative.parse` is imported lazily inside `_seed_source`
-# (see its use below). Under Python 3.14's stricter import machinery a module-top
-# `from website.logical.declarative import parse` can resolve against a
-# still-initializing `declarative` during collection and fail; deferring it to
-# call time, when every module is fully loaded, sidesteps that. (3.13 tolerated
-# the eager import.)
+from tests.spec_helpers import (
+    axiom,
+    brackets,
+    defn,
+    equality_prod,
+    hyp_rule,
+    implication_prod,
+    membership_prod,
+    mp_rule,
+    regex_prod,
+    statement_line,
+    variable_prod,
+)
+from website.logical.declarative import LineSpec, SystemSpec
 
 # Auth tables + the system-decomposition tables (all SQLite-creatable).
 _TABLES = [
@@ -62,32 +69,20 @@ _TABLES = [
 ]
 
 
-ZFC_SOURCE = """system ZFC
-
-notation
-  brackets ( )
-
-grammar
-  term      | variable    | matches [a-z][a-z0-9]*
-  formula   | membership  | s ∈ t   | s, t : term
-  formula   | equality    | s = t   | s, t : term
-  formula   | implication | (p → q) | p, q : formula
-
-line statement
-  shape <formula> [<reference>]
-  reference | matches [A-Za-z0-9 ,]+
-  logical formula
-
-axioms
-  EXT | extensionality | ∀x x = x
-
-rules
-  HYP | hypothesis   | from             | infer p | p : formula
-  MP  | modus ponens | from p ; (p → q) | infer q | p, q : formula
-
-definitions
-  formula | subset | x ⊆ y | means (x = y → x = y) | x, y : variable
-"""
+def zfc_spec() -> SystemSpec:
+    # A small but genuine ZFC fragment used to give the read/validate/source
+    # paths real content, assembled directly as a SystemSpec.
+    return SystemSpec(
+        name="ZFC",
+        brackets=brackets(),
+        productions=[variable_prod(), membership_prod(), equality_prod(),
+                     implication_prod()],
+        line=statement_line(),
+        axioms=[axiom("EXT", "extensionality", "∀x x = x")],
+        rules=[hyp_rule(), mp_rule()],
+        definitions=[defn("formula", "subset", "x ⊆ y", "(x = y → x = y)",
+                          [("x", "variable"), ("y", "variable")])],
+    )
 
 
 @pytest.fixture
@@ -134,19 +129,16 @@ def _register_login(client: TestClient, email: str, password: str = "password123
     return user_id
 
 
-def _seed_source(db_path, owner_id: str, source: str, published: bool = False) -> str:
-    # Insert a system parsed from declarative source directly (child CRUD is a
-    # later phase), owned by the given user, so the read/validate/source paths
-    # have real content. `published=True` sets published_at directly, which is
-    # the only way to reach a broken-but-published state now that the publish
+def _seed_spec(db_path, owner_id: str, spec: SystemSpec, published: bool = False) -> str:
+    # Insert a system assembled as a SystemSpec directly (child CRUD is a later
+    # phase), owned by the given user, so the read/validate/source paths have
+    # real content. `published=True` sets published_at directly, which is the
+    # only way to reach a broken-but-published state now that the publish
     # endpoint gates on the system compiling.
-    # Deferred import — see the note by the top-of-module imports.
-    from website.logical.declarative import parse
-
     engine = create_engine(f"sqlite:///{db_path}")
     try:
         with Session(engine) as session:
-            system = spec_to_system(parse(source))
+            system = spec_to_system(spec)
             system.owner_id = uuid.UUID(owner_id)
             if published:
                 system.published_at = datetime.now(timezone.utc)
@@ -158,20 +150,18 @@ def _seed_source(db_path, owner_id: str, source: str, published: bool = False) -
 
 
 def _seed_zfc(db_path, owner_id: str) -> str:
-    return _seed_source(db_path, owner_id, ZFC_SOURCE)
+    return _seed_spec(db_path, owner_id, zfc_spec())
 
 
-# A system that parses and stores fine but cannot be lowered: the line shape has
-# no `<placeholder>` naming a grammar sort, so `lower()` raises DeclarativeError.
-BROKEN_SOURCE = """system Broken
-
-grammar
-  formula | atom | matches [a-z]+
-
-line statement
-  shape assertion
-  logical formula
-"""
+# A system that stores fine but cannot be lowered: the line shape has no
+# `<placeholder>` naming a grammar sort, so `lower()` raises DeclarativeError.
+def broken_spec() -> SystemSpec:
+    return SystemSpec(
+        name="Broken",
+        productions=[regex_prod("formula", "atom", "[a-z]+")],
+        line=LineSpec(name="statement", shape="assertion", parts=[],
+                      logical_sort="formula"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +360,7 @@ def test_source_on_a_broken_published_system_is_422_not_500(client, db):
     # would be an unauthenticated 500. It must be a 422 with the error text.
     # Seed it published directly — the publish endpoint now refuses a broken one.
     owner_id = _register_login(client, "owner@example.com")
-    system_id = _seed_source(db, owner_id, BROKEN_SOURCE, published=True)
+    system_id = _seed_spec(db, owner_id, broken_spec(), published=True)
     client.post("/auth/logout")
 
     response = client.get(f"/formal-systems/{system_id}/source")
@@ -386,6 +376,97 @@ def test_validate_is_owner_scoped(client, db):
 
     _register_login(client, "intruder@example.com")
     assert client.post(f"/formal-systems/{system_id}/validate").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Verify a proof against a stored system (assembled server-side from rows)
+# ---------------------------------------------------------------------------
+
+
+def test_verify_valid_proof_against_owned_system(client, db):
+    owner_id = _register_login(client, "ada@example.com")
+    system_id = _seed_zfc(db, owner_id)
+    res = client.post(
+        f"/formal-systems/{system_id}/verify", json={"proof_text": "x ∈ y [HYP]"}
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["success"] is True
+    assert body["proof"]["indicator"] == "ok"
+    assert len(body["proof"]["lines"]) == 1
+
+
+def test_verify_unparseable_line_is_reported_not_raised(client, db):
+    owner_id = _register_login(client, "ada@example.com")
+    system_id = _seed_zfc(db, owner_id)
+    res = client.post(
+        f"/formal-systems/{system_id}/verify", json={"proof_text": "HELLO 123"}
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["success"] is False
+    assert body["proof"]["lines"][0]["valid"] is False
+
+
+def test_verify_on_a_non_compiling_system_is_400(client, db):
+    # A stored system that cannot be lowered/compiled surfaces the errors as a
+    # 400 the client renders verbatim, rather than a 500.
+    owner_id = _register_login(client, "ada@example.com")
+    system_id = _seed_spec(db, owner_id, broken_spec())
+    res = client.post(
+        f"/formal-systems/{system_id}/verify", json={"proof_text": "anything"}
+    )
+    assert res.status_code == 400
+    detail = res.json()["detail"]
+    assert isinstance(detail, list) and detail
+
+
+def test_verify_published_system_needs_no_auth(client, db):
+    owner_id = _register_login(client, "ada@example.com")
+    system_id = _seed_spec(db, owner_id, zfc_spec(), published=True)
+    client.post("/auth/logout")
+    res = client.post(
+        f"/formal-systems/{system_id}/verify", json={"proof_text": "x ∈ y [HYP]"}
+    )
+    assert res.status_code == 200
+    assert res.json()["success"] is True
+
+
+def test_verify_is_owner_scoped_for_drafts(client, db):
+    owner_id = _register_login(client, "owner@example.com")
+    system_id = _seed_zfc(db, owner_id)
+    client.post("/auth/logout")
+
+    _register_login(client, "intruder@example.com")
+    assert owner_id  # sanity
+    res = client.post(
+        f"/formal-systems/{system_id}/verify", json={"proof_text": "x ∈ y [HYP]"}
+    )
+    assert res.status_code == 404
+
+
+def test_verify_checker_exception_returns_structured_error(client, db, monkeypatch):
+    # If the checker raises against an otherwise-valid stored system (e.g. a line
+    # type whose context edit targets a missing key), the endpoint returns a
+    # structured error, not a 500.
+    import app.routers.systems as systems_router
+
+    class ExplodingSystem:
+        def parse(self, text):
+            raise Exception("Can't find 'bad' in proof context.")
+
+    owner_id = _register_login(client, "ada@example.com")
+    system_id = _seed_zfc(db, owner_id)
+    monkeypatch.setattr(
+        systems_router, "build_spec", lambda spec: {"system": ExplodingSystem()}
+    )
+    res = client.post(f"/formal-systems/{system_id}/verify", json={"proof_text": "x"})
+    assert res.status_code == 200
+    assert res.json() == {
+        "success": False,
+        "errors": ["Can't find 'bad' in proof context."],
+        "proof": None,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -455,7 +536,7 @@ def test_cannot_publish_a_non_compiling_system(client, db):
     # Publishing makes a system world-readable; a broken one would then break
     # /source (and any future public consumer) for anonymous viewers. Gate it.
     owner_id = _register_login(client, "ada@example.com")
-    system_id = _seed_source(db, owner_id, BROKEN_SOURCE)
+    system_id = _seed_spec(db, owner_id, broken_spec())
 
     response = client.patch(f"/formal-systems/{system_id}", json={"published": True})
     assert response.status_code == 422, response.text

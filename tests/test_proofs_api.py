@@ -42,13 +42,19 @@ from app.db.systems import (
     SymbolRow,
 )
 from app.main import app
-
-# NOTE: `website.logical.declarative.parse` is imported lazily inside
-# `_seed_system` rather than at module top. Under Python 3.14's stricter import
-# machinery, a module-top `from website.logical.declarative import parse` here
-# resolves against a still-initializing `declarative` during collection and
-# fails (`cannot import name 'parse'`); deferring it to call time, when every
-# module is fully loaded, sidesteps that. (3.13 tolerated the eager import.)
+from tests.spec_helpers import (
+    axiom,
+    brackets,
+    defn,
+    equality_prod,
+    hyp_rule,
+    implication_prod,
+    membership_prod,
+    mp_rule,
+    statement_line,
+    variable_prod,
+)
+from website.logical.declarative import SystemSpec
 
 # Auth tables + the system-decomposition tables + the proof tables (all
 # SQLite-creatable). The pgvector `theorems` table is deliberately omitted.
@@ -64,34 +70,24 @@ _TABLES = [
 ]
 
 
-ZFC_SOURCE = """system ZFC
+def zfc_spec() -> SystemSpec:
+    # The same small ZFC fragment the systems tests use, assembled directly as a
+    # SystemSpec (the engine no longer exposes a source `parse`; systems are built
+    # from spec helpers).
+    return SystemSpec(
+        name="ZFC",
+        brackets=brackets(),
+        productions=[variable_prod(), membership_prod(), equality_prod(),
+                     implication_prod()],
+        line=statement_line(),
+        axioms=[axiom("EXT", "extensionality", "∀x x = x")],
+        rules=[hyp_rule(), mp_rule()],
+        definitions=[defn("formula", "subset", "x ⊆ y", "(x = y → x = y)",
+                          [("x", "variable"), ("y", "variable")])],
+    )
 
-notation
-  brackets ( )
 
-grammar
-  term      | variable    | matches [a-z][a-z0-9]*
-  formula   | membership  | s ∈ t   | s, t : term
-  formula   | equality    | s = t   | s, t : term
-  formula   | implication | (p → q) | p, q : formula
-
-line statement
-  shape <formula> [<reference>]
-  reference | matches [A-Za-z0-9 ,]+
-  logical formula
-
-axioms
-  EXT | extensionality | ∀x x = x
-
-rules
-  HYP | hypothesis   | from             | infer p | p : formula
-  MP  | modus ponens | from p ; (p → q) | infer q | p, q : formula
-
-definitions
-  formula | subset | x ⊆ y | means (x = y → x = y) | x, y : variable
-"""
-
-# A single hypothesis line; verifies against ZFC_SOURCE.
+# A single hypothesis line; verifies against the ZFC spec above.
 VALID_PROOF = "x = x [HYP]"
 # Matches no line type — reported as an invalid line, not raised.
 INVALID_PROOF = "this is not a formula"
@@ -146,13 +142,10 @@ def _logout(client: TestClient) -> None:
 def _seed_system(db_path, owner_id: str, published: bool = False) -> str:
     # Insert a ZFC system owned by the given user directly, so a proof has a real
     # system to attach to and verify against.
-    # Deferred import — see the note by the top-of-module imports.
-    from website.logical.declarative import parse
-
     engine = create_engine(f"sqlite:///{db_path}")
     try:
         with Session(engine) as session:
-            system = spec_to_system(parse(ZFC_SOURCE))
+            system = spec_to_system(zfc_spec())
             system.owner_id = uuid.UUID(owner_id)
             # Distinct slug per seed so a user can own several (the (owner, slug)
             # index is unique); the API isn't exercised for system creation here.

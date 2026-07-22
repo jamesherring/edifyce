@@ -5,7 +5,10 @@ Definition provisos are written with a `where` clause —
 structurally over kernel terms (see `website/logical/formal_system/definitions.py`).
 `where`, like a rule's `side_conditions:` block, parses through the closed kernel
 algebra in `website/logical/kernel/side_conditions.py`
-(`occurs` / `equal` / `disjoint` / `atom`, with `not` and implicit conjunction).
+(`occurs` / `equal` / `disjoint` / `atom`, with `not` on a predicate, `or`
+between predicates within a clause, and an implicit `and` across clauses — a
+rule's lines, or a `where`'s `;`-separated parts). There is no parenthesised
+grouping, so the boolean structure is a flat conjunction-of-disjunctions.
 
 The legacy pseudo-python `if <cond>` proviso on definitions has been **retired**:
 `Define ... if ...` is now a compile error directing the author to `where`, and

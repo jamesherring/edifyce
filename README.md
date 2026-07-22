@@ -51,8 +51,10 @@ uv run pytest
 ## API Endpoints
 
 - `GET /health` — Health check.
-- `POST /formal-systems/compile` — Compile system code and return summary metadata.
-- `POST /proofs/verify` — Compile a system and verify a proof against it.
+- `GET`/`POST /formal-systems` — List your systems / create one (stored as normalised rows, not source text).
+- `POST /formal-systems/{id}/validate` — Assemble the stored system and compile it, reporting any errors.
+- `POST /formal-systems/{id}/verify` — Verify a proof against a stored system (only the proof text is sent).
+- `GET /formal-systems/{id}/source` — The lowered `.edi` for a stored system (read-only export).
 - `POST /auth/register` — Create a user account.
 - `POST /auth/login` / `POST /auth/logout` — Start / end a session (httponly cookie).
 - `GET`/`PATCH /users/me` — Read or update the signed-in user.
@@ -64,8 +66,9 @@ backed by the `users` table. A successful login sets a stateless JWT in an
 httponly cookie; the SvelteKit UI exposes `/login`, `/register`, and `/account`.
 
 The auth routes require a database — point `DATABASE_URL` at your Postgres (see
-[`app/db/README.md`](app/db/README.md)); the compile/verify routes work without
-one. Configuration:
+[`app/db/README.md`](app/db/README.md)); so do the formal-system routes, since
+they now read stored systems (verification included). Only `/health` runs
+without a database. Configuration:
 
 | Variable | Purpose | Default |
 |---|---|---|

@@ -21,7 +21,12 @@ from sqlalchemy.orm import Session
 from app.db import Base, spec_to_system, system_to_spec
 from app.db.models import FormalSystem
 from app.db.side_conditions import SideConditionRow
-from app.db.side_conditions_mapping import _parse, _parse_lines  # grammars under test
+from app.db.side_conditions_mapping import (  # grammars under test
+    _parse,
+    _parse_lines,
+    definition_condition_string,
+    rule_side_conditions_list,
+)
 from app.db.systems import (
     AxiomBindingRow,
     AxiomRow,
@@ -36,7 +41,23 @@ from app.db.systems import (
     RuleRow,
     SymbolRow,
 )
-from website.logical.declarative import build, lower, parse
+from tests.spec_helpers import (
+    brackets,
+    defn,
+    equality_prod,
+    hyp_rule,
+    implication_prod,
+    membership_prod,
+    negation_prod,
+    regex_prod,
+    rule,
+    statement_line,
+    subset_def,
+    template_prod,
+    universal_prod,
+    variable_prod,
+)
+from website.logical.declarative import SystemSpec, build_spec, lower
 from website.logical.formal_system.side_condition_syntax import parse_side_condition
 
 _TABLES = [
@@ -50,39 +71,34 @@ _TABLES = [
 ]
 
 # ZFC-ish grammar with two provisos: a single disjoint leaf, and a conjunction
-# of a negated occurs and a sorted atom — exercising leaf/sort/not/and.
-SOURCE = """system ZFC
-
-notation
-  brackets ( )
-
-grammar
-  term      | variable    | matches [a-z][a-z0-9]*
-  formula   | membership  | s ∈ t                   | s, t : term
-  formula   | equality    | s = t                   | s, t : term
-  formula   | negation    | ¬p                      | p : formula
-  formula   | implication | (p → q)                 | p, q : formula
-  formula   | universal   | ∀x p                    | x : variable, p : formula
-
-line statement
-  shape <formula> [<reference>]
-  reference | matches [A-Za-z0-9 ,]+
-  logical formula
-
-rules
-  HYP  | hypothesis | from | infer p       | p : formula
-  RImp | refl imp   | from | infer (p → q) | p, q : formula
-  NOcc | non occur  | from | infer (p → q) | p, q : formula
-
-side_conditions
-  RImp | equal(p, q)
-  NOcc | not occurs(p, q)
-
-definitions
-  formula | subset   | x ⊆ y | means ∀z (z ∈ x → z ∈ y) | x, y, z : variable
-  formula | distinct | x ≠ y | means ¬(x = y)            | x, y : variable | where disjoint(x, y, variable)
-  formula | fresh    | x ⊘ y | means ¬(x = y)            | x, y : variable | where not occurs(y, x) ; atom(x, variable)
-"""
+# of a negated occurs and a sorted atom — exercising leaf/sort/not/and. The two
+# custom rules carry their provisos in the `side_conditions` list; the two
+# provisoed definitions carry theirs in the `condition` field (a `;` conjoins).
+def zfc_spec() -> SystemSpec:
+    return SystemSpec(
+        name="ZFC",
+        brackets=brackets(),
+        productions=[
+            variable_prod(), membership_prod(), equality_prod(), negation_prod(),
+            implication_prod(), universal_prod(),
+        ],
+        line=statement_line(),
+        rules=[
+            hyp_rule(),
+            rule("RImp", "refl imp", [], "(p → q)",
+                 [("p", "formula"), ("q", "formula")], ["equal(p, q)"]),
+            rule("NOcc", "non occur", [], "(p → q)",
+                 [("p", "formula"), ("q", "formula")], ["not occurs(p, q)"]),
+        ],
+        definitions=[
+            subset_def(),
+            defn("formula", "distinct", "x ≠ y", "¬(x = y)",
+                 [("x", "variable"), ("y", "variable")], "disjoint(x, y, variable)"),
+            defn("formula", "fresh", "x ⊘ y", "¬(x = y)",
+                 [("x", "variable"), ("y", "variable")],
+                 "not occurs(y, x) ; atom(x, variable)"),
+        ],
+    )
 
 
 @pytest.fixture
@@ -95,7 +111,7 @@ def session():
 
 @pytest.fixture
 def stored_system(session):
-    session.add(spec_to_system(parse(SOURCE)))
+    session.add(spec_to_system(zfc_spec()))
     session.commit()
     session.expire_all()
     return session.scalar(select(FormalSystem).where(FormalSystem.name == "ZFC"))
@@ -116,11 +132,11 @@ def _rule(system, label):
 
 def test_provisos_round_trip_through_the_database(stored_system):
     rebuilt = system_to_spec(stored_system)
-    assert rebuilt == parse(SOURCE)
+    assert rebuilt == zfc_spec()
 
 
 def test_rebuilt_spec_lowers_identically(stored_system):
-    assert lower(system_to_spec(stored_system)) == lower(parse(SOURCE))
+    assert lower(system_to_spec(stored_system)) == lower(zfc_spec())
 
 
 def test_provisoless_definition_has_no_side_condition_rows(stored_system):
@@ -198,7 +214,7 @@ def test_search_provisos_over_a_given_sort(session, stored_system):
 
 
 def test_rule_provisos_round_trip_through_the_database(stored_system):
-    assert system_to_spec(stored_system) == parse(SOURCE)
+    assert system_to_spec(stored_system) == zfc_spec()
 
 
 def test_single_leaf_rule_proviso_is_one_equal_row(stored_system):
@@ -238,16 +254,15 @@ def test_proviso_over_an_undeclared_metavar_is_rejected(session):
     # A proviso may only reference the owner's declared bindings. `spec_to_system`
     # rejects a rule proviso naming an undeclared metavar rather than storing a
     # tree that has no binding to check against (which would raise in the kernel).
-    source = SOURCE.replace("  NOcc | not occurs(p, q)", "  NOcc | not occurs(p, z)")
+    spec = zfc_spec()
+    next(r for r in spec.rules if r.label == "NOcc").side_conditions = ["not occurs(p, z)"]
     with pytest.raises(ValueError, match="metavariable 'z'"):
-        session.add(spec_to_system(parse(source)))
+        session.add(spec_to_system(spec))
 
 
 def test_round_tripped_rule_provisos_still_gate_proofs(stored_system):
     # The soundness payoff: a system reassembled from the DB rows enforces the
     # rule provisos exactly as the source system did.
-    from website.logical.declarative import build_spec
-
     system = build_spec(system_to_spec(stored_system))["system"]
     # RImp needs equal(p, q): the two sides of the implication must be identical.
     assert system.parse("(x ∈ y → x ∈ y) [RImp]").valid is True
@@ -258,6 +273,98 @@ def test_round_tripped_rule_provisos_still_gate_proofs(stored_system):
 
 
 # ---------------------------------------------------------------------------
+# `or` disjunctions round-trip and gate proofs
+# ---------------------------------------------------------------------------
+
+# DIS derives (p → q) when p and q coincide OR p does not occur in q.
+def or_spec() -> SystemSpec:
+    return SystemSpec(
+        name="OrSys",
+        brackets=brackets(),
+        productions=[
+            regex_prod("atom", "prop", "[a-z]"),
+            template_prod("formula", "atomic", "a", [("a", "atom")]),
+            implication_prod(),
+        ],
+        line=statement_line(),
+        rules=[
+            rule("DIS", "disj", [], "(p → q)",
+                 [("p", "formula"), ("q", "formula")],
+                 ["equal(p, q) or not occurs(p, q)"]),
+        ],
+    )
+
+
+@pytest.fixture
+def or_system(session):
+    session.add(spec_to_system(or_spec()))
+    session.commit()
+    session.expire_all()
+    return session.scalar(select(FormalSystem).where(FormalSystem.name == "OrSys"))
+
+
+def test_or_proviso_is_stored_as_an_or_tree(or_system):
+    dis = _rule(or_system, "DIS")
+    root = next(sc for sc in dis.side_conditions if sc.parent_id is None)
+    assert root.kind == "or"
+    kinds = [child.kind for child in root.children]
+    assert kinds == ["equal", "not"]
+    # The `not` wraps the occurs leaf.
+    assert [c.kind for c in root.children[1].children] == ["occurs"]
+
+
+def test_or_proviso_round_trips(or_system):
+    assert system_to_spec(or_system) == or_spec()
+    dis = _rule(or_system, "DIS")
+    assert rule_side_conditions_list(dis) == ["equal(p, q) or not occurs(p, q)"]
+
+
+def test_round_tripped_or_proviso_gates_proofs(or_system):
+    system = build_spec(system_to_spec(or_system))["system"]
+    # equal disjunct holds.
+    assert system.parse("(a → a) [DIS]").valid is True
+    # equal fails but `not occurs` holds (a not in (b → c)).
+    assert system.parse("(a → (b → c)) [DIS]").valid is True
+    # both disjuncts fail: a ≠ (a → b) and a occurs in it.
+    assert system.parse("(a → (a → b)) [DIS]").valid is False
+
+
+# The `or` disjunction also reaches the *definition* owner via the `where` clause.
+def or_def_spec() -> SystemSpec:
+    return SystemSpec(
+        name="OrDefSys",
+        brackets=brackets(),
+        productions=[
+            regex_prod("term", "variable", "[a-z]"),
+            membership_prod(),
+            equality_prod(),
+        ],
+        line=statement_line(),
+        definitions=[
+            defn("formula", "rel", "x ~ y", "x = y",
+                 [("x", "variable"), ("y", "variable")], "disjoint(x, y) or atom(x)"),
+        ],
+    )
+
+
+@pytest.fixture
+def or_def_system(session):
+    session.add(spec_to_system(or_def_spec()))
+    session.commit()
+    session.expire_all()
+    return session.scalar(select(FormalSystem).where(FormalSystem.name == "OrDefSys"))
+
+
+def test_definition_where_or_round_trips(or_def_system):
+    assert system_to_spec(or_def_system) == or_def_spec()
+    rel = _definition(or_def_system, "rel")
+    root = next(sc for sc in rel.side_conditions if sc.parent_id is None)
+    assert root.kind == "or"
+    assert [child.kind for child in root.children] == ["disjoint", "atom"]
+    assert definition_condition_string(rel) == "disjoint(x, y) or atom(x)"
+
+
+# ---------------------------------------------------------------------------
 # Drift guard: the storage grammar matches the engine's surface grammar
 # ---------------------------------------------------------------------------
 
@@ -265,7 +372,7 @@ def test_round_tripped_rule_provisos_still_gate_proofs(stored_system):
 def test_storage_grammar_matches_the_engine_parser():
     # Both accept exactly the closed vocabulary; a context lets the engine parser
     # resolve the sort names in the sample.
-    system = build(SOURCE)["system"]
+    system = build_spec(zfc_spec())["system"]
     context = copy(system.context)
     context.variables.update(system.build_context.variables)
 
@@ -277,13 +384,19 @@ def test_storage_grammar_matches_the_engine_parser():
         "disjoint(x, y, variable)",
         "atom(x)",
         "atom(x, variable)",
+        "atom(x) or equal(x, y)",
+        "not occurs(x, phi) or disjoint(x, y, variable)",
+        "atom(x) or equal(x, y) or occurs(x, phi)",
     ]
     for text in accepted:
         parse_side_condition(text, context)  # engine: must not raise
         assert _parse(text) is not None  # storage (definition `where`): must not raise
         assert _parse_lines([text]) is not None  # storage (rule block): must not raise
 
-    rejected = ["occurs(x)", "bogus(x, y)", "disjoint()", "atom(x, y, z)", "occurs(x, y, z)"]
+    rejected = [
+        "occurs(x)", "bogus(x, y)", "disjoint()", "atom(x, y, z)", "occurs(x, y, z)",
+        "atom(x) or", "or atom(x)", "atom(x) or or atom(y)",
+    ]
     for text in rejected:
         with pytest.raises(ValueError):
             parse_side_condition(text, context)
