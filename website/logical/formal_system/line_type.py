@@ -7,7 +7,7 @@ class LineType:
     """Class for types of lines in formal proofs."""
 
     def __init__(self, name, pattern=None, behaviour="none", add_context=None, scope=None,
-                 formula_field=None, reference_field=None):
+                 formula_field: str | None = None, reference_field: str | None = None):
 
         # The name of this line type
         self.name = name

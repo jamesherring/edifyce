@@ -33,6 +33,7 @@ from tests.spec_helpers import (
     universal_prod,
     variable_prod,
 )
+from website.logical.compiler import compile as compile_edi
 from website.logical.declarative import (
     DeclarativeError,
     LineSpec,
@@ -213,26 +214,31 @@ def test_lowering_emits_field_declarations_not_accessor_functions():
     assert ".reference()" not in edi
 
 
-def test_legacy_formula_accessor_function_still_works():
-    # A hand-written system with no declared field falls back to a `formula()`
-    # accessor function — the field-less path the engine still supports.
-    from website.logical.compiler import compile as compile_edi
-
+def test_legacy_accessor_functions_still_work():
+    # A hand-written system with no declared fields falls back to `formula()`
+    # and `reference()` accessor functions — the field-less path the engine
+    # still supports for both the formula and the citation.
     source = (
         "FormalSystem Legacy:\n"
         "\n"
         "    Regex atom:\n"
         "        ^[a-z]+$\n"
         "\n"
+        "    Regex ref:\n"
+        "        ^[0-9]+$\n"
+        "\n"
         "    ProofContext:\n"
         "        given: MatchSet()\n"
         "\n"
         "    Pattern statement_pattern:\n"
-        "        with f as atom:\n"
-        "            f\n"
+        "        with f as atom, r as ref:\n"
+        "            f [r]\n"
         "\n"
         "    statement_pattern.formula():\n"
         "        return self.f\n"
+        "\n"
+        "    statement_pattern.reference():\n"
+        "        return self.r\n"
         "\n"
         "    LineType statement:\n"
         "        pattern: statement_pattern\n"
@@ -240,12 +246,15 @@ def test_legacy_formula_accessor_function_still_works():
     )
     system = compile_edi(source)["system"]
     statement = system.line_types[0]
-    # No declared field; the accessor function carries the contract instead.
+    # No declared fields; the accessor functions carry the contract instead.
     assert statement.formula_field is None
+    assert statement.reference_field is None
     assert "formula" in statement.pattern.functions
-    # And a proof still resolves its formula (here, an unjustified logical line).
-    proof = system.parse("hello")
-    assert proof.proof_lines[0].formula is not None
+    assert "reference" in statement.pattern.functions
+    # Both the formula and the citation still resolve via the fallback path.
+    line = system.parse("hello [1]").proof_lines[0]
+    assert line.formula is not None
+    assert line.reference_string == "1"
 
 
 # ---------------------------------------------------------------------------
