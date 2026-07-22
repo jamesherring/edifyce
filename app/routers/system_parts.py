@@ -480,6 +480,10 @@ async def _assign_definition(session: AsyncSession, system_id: uuid.UUID, row: D
         row.higher = payload.higher
     if "lower" in fields and payload.lower is not None:
         row.lower = payload.lower
+    # Bindings first: a proviso's metavariables are validated against them, so a
+    # same-request binding change must land before the condition is rebuilt.
+    if "bindings" in fields and payload.bindings is not None:
+        row.bindings = await _binding_rows(session, system_id, DefinitionBindingRow, payload.bindings)
     if "condition" in fields:
         # Rebuild the proviso as structured side-condition rows. `side_conditions`
         # is eager-loaded (see the definitions resource), so clearing it here is
@@ -488,11 +492,11 @@ async def _assign_definition(session: AsyncSession, system_id: uuid.UUID, row: D
         if payload.condition:
             symbols = await _system_symbols(session, system_id)
             try:
-                build_side_condition_rows(row, payload.condition, symbols)
+                build_side_condition_rows(
+                    row, payload.condition, symbols, {b.var for b in row.bindings}
+                )
             except ValueError as exc:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-    if "bindings" in fields and payload.bindings is not None:
-        row.bindings = await _binding_rows(session, system_id, DefinitionBindingRow, payload.bindings)
 
 
 async def _assign_axiom(session: AsyncSession, system_id: uuid.UUID, row: AxiomRow, payload: Payload, fields: set[str], creating: bool) -> None:
@@ -527,7 +531,9 @@ async def _assign_rule(session: AsyncSession, system_id: uuid.UUID, row: RuleRow
         if payload.side_conditions:
             symbols = await _system_symbols(session, system_id)
             try:
-                build_rule_side_conditions(row, payload.side_conditions, symbols)
+                build_rule_side_conditions(
+                    row, payload.side_conditions, symbols, {b.var for b in row.bindings}
+                )
             except ValueError as exc:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 

@@ -222,6 +222,52 @@ def test_malformed_rule_side_condition_is_422(client):
     assert response.status_code == 422
 
 
+def test_rule_proviso_over_undeclared_metavar_is_422(client):
+    # A proviso may only mention the rule's declared bindings: `q` is not one, so
+    # `equal(p, q)` has no metavariable to check against and is rejected up front
+    # rather than blowing up in the kernel when the rule is later applied.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+    response = client.post(f"/formal-systems/{sid}/rules", json={
+        "label": "R", "name": "r", "deduction": "(p → q)", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "formula"}],  # only p is declared
+        "side_conditions": ["equal(p, q)"],
+    })
+    assert response.status_code == 422
+
+
+def test_definition_proviso_over_undeclared_metavar_is_422(client):
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "term"})
+    response = client.post(f"/formal-systems/{sid}/definitions", json={
+        "sort": "term", "name": "d", "higher": "x", "lower": "y",
+        "bindings": [{"var": "x", "sort": "term"}],  # only x is declared
+        "condition": "disjoint(x, y)",
+    })
+    assert response.status_code == 422
+
+
+def test_definition_binding_and_proviso_updated_together(client):
+    # A single PATCH that adds a binding AND a proviso referencing it must
+    # succeed: bindings are applied before the condition is validated, so the
+    # proviso is checked against the new binding set, not the stale one.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "term"})
+    defn = _post(client, f"/formal-systems/{sid}/definitions", {
+        "sort": "term", "name": "d", "higher": "x", "lower": "y",
+        "bindings": [{"var": "x", "sort": "term"}],
+    })
+    updated = client.patch(f"/formal-systems/{sid}/definitions/{defn['id']}", json={
+        "bindings": [{"var": "x", "sort": "term"}, {"var": "y", "sort": "term"}],
+        "condition": "disjoint(x, y)",
+    })
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["condition"] == "disjoint(x, y)"
+
+
 def test_blank_rule_side_condition_is_rejected_not_dropped(client):
     # A blank proviso line is a malformed input, not a silent no-op: reject it
     # rather than storing the rule with the blank quietly discarded.
