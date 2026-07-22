@@ -2,8 +2,8 @@
 	import PartSection from './PartSection.svelte';
 	import EditSheet from '$lib/components/EditSheet.svelte';
 	import FormField from '$lib/components/FormField.svelte';
-	import { api, ApiError, type BracketPair } from '$lib/api';
-	import { toastSuccess, toastError } from '$lib/toast';
+	import { api, type BracketPair } from '$lib/api';
+	import { runMutation } from './crud';
 
 	let {
 		systemId,
@@ -19,6 +19,8 @@
 	let saving = $state(false);
 	let busy = $state(false);
 
+	const canSave = $derived(opening.trim().length > 0 && closing.trim().length > 0);
+
 	function openNew() {
 		editing = null;
 		opening = '';
@@ -33,47 +35,42 @@
 	}
 
 	async function save() {
-		if (!opening.trim() || !closing.trim() || saving) return;
+		if (!canSave || saving) return;
 		saving = true;
+		const item = editing;
 		const payload = { opening: opening.trim(), closing: closing.trim() };
-		try {
-			if (editing) await api.parts.brackets.update(systemId, editing.id, payload);
-			else await api.parts.brackets.create(systemId, payload);
-			toastSuccess(editing ? 'Brackets updated.' : 'Brackets added.');
+		const ok = await runMutation(
+			() =>
+				item
+					? api.parts.brackets.update(systemId, item.id, payload)
+					: api.parts.brackets.create(systemId, payload),
+			item ? 'Brackets updated.' : 'Brackets added.'
+		);
+		saving = false;
+		if (ok) {
 			open = false;
 			await onChanged();
-		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
-		} finally {
-			saving = false;
 		}
 	}
 
 	async function del() {
 		if (!editing || saving) return;
 		saving = true;
-		try {
-			await api.parts.brackets.remove(systemId, editing.id);
-			toastSuccess('Brackets deleted.');
+		const ok = await runMutation(
+			() => api.parts.brackets.remove(systemId, editing!.id),
+			'Brackets deleted.'
+		);
+		saving = false;
+		if (ok) {
 			open = false;
 			await onChanged();
-		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
-		} finally {
-			saving = false;
 		}
 	}
 
 	async function reorder(ids: string[]) {
 		busy = true;
-		try {
-			await api.parts.brackets.reorder(systemId, ids);
-			await onChanged();
-		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
-		} finally {
-			busy = false;
-		}
+		if (await runMutation(() => api.parts.brackets.reorder(systemId, ids))) await onChanged();
+		busy = false;
 	}
 </script>
 
@@ -99,6 +96,7 @@
 	onSave={save}
 	onDelete={editing ? del : undefined}
 	{saving}
+	{canSave}
 >
 	<FormField label="Opening" id="bracket-open" bind:value={opening} placeholder="(" maxlength={16} />
 	<FormField label="Closing" id="bracket-close" bind:value={closing} placeholder=")" maxlength={16} />

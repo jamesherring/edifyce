@@ -5,8 +5,8 @@
 	import BindingsEditor from './BindingsEditor.svelte';
 	import { Label } from '$lib/components/ui/label';
 	import { Input } from '$lib/components/ui/input';
-	import { api, ApiError, type Definition, type Binding } from '$lib/api';
-	import { toastSuccess, toastError } from '$lib/toast';
+	import { api, type Definition, type Binding } from '$lib/api';
+	import { runMutation } from './crud';
 
 	let {
 		systemId,
@@ -31,6 +31,10 @@
 	let saving = $state(false);
 	let busy = $state(false);
 
+	const canSave = $derived(
+		!!sortName && name.trim().length > 0 && higher.trim().length > 0 && lower.trim().length > 0
+	);
+
 	function openNew() {
 		editing = null;
 		sortName = sortNames[0] ?? '';
@@ -53,8 +57,9 @@
 	}
 
 	async function save() {
-		if (!sortName || !name.trim() || !higher.trim() || !lower.trim() || saving) return;
+		if (!canSave || saving) return;
 		saving = true;
+		const item = editing;
 		const payload = {
 			sort: sortName,
 			name: name.trim(),
@@ -63,52 +68,49 @@
 			condition: condition.trim() || null,
 			bindings: bindings.filter((b) => b.var.trim() && b.sort.trim())
 		};
-		try {
-			if (editing) await api.parts.definitions.update(systemId, editing.id, payload);
-			else await api.parts.definitions.create(systemId, payload);
-			toastSuccess(editing ? 'Definition updated.' : 'Definition added.');
+		const ok = await runMutation(
+			() =>
+				item
+					? api.parts.definitions.update(systemId, item.id, payload)
+					: api.parts.definitions.create(systemId, payload),
+			item ? 'Definition updated.' : 'Definition added.'
+		);
+		saving = false;
+		if (ok) {
 			open = false;
 			await onChanged();
-		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
-		} finally {
-			saving = false;
 		}
 	}
 
 	async function del() {
 		if (!editing || saving) return;
 		saving = true;
-		try {
-			await api.parts.definitions.remove(systemId, editing.id);
-			toastSuccess('Definition deleted.');
+		const ok = await runMutation(
+			() => api.parts.definitions.remove(systemId, editing!.id),
+			'Definition deleted.'
+		);
+		saving = false;
+		if (ok) {
 			open = false;
 			await onChanged();
-		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
-		} finally {
-			saving = false;
 		}
 	}
 
 	async function reorder(ids: string[]) {
 		busy = true;
-		try {
-			await api.parts.definitions.reorder(systemId, ids);
-			await onChanged();
-		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
-		} finally {
-			busy = false;
-		}
+		if (await runMutation(() => api.parts.definitions.reorder(systemId, ids))) await onChanged();
+		busy = false;
 	}
 </script>
 
 <PartSection
 	title="Definitions"
 	addLabel="Add definition"
+	canAdd={sortNames.length > 0}
 	items={definitions}
-	emptyMessage="No definitions yet."
+	emptyMessage={sortNames.length === 0
+		? 'Add a sort first, then define abbreviations over it.'
+		: 'No definitions yet.'}
 	onAdd={openNew}
 	onEdit={openEdit}
 	onReorder={reorder}
@@ -131,6 +133,7 @@
 	onSave={save}
 	onDelete={editing ? del : undefined}
 	{saving}
+	{canSave}
 >
 	<div class="space-y-2">
 		<Label for="def-sort">Sort</Label>
@@ -139,9 +142,6 @@
 			bind:value={sortName}
 			class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
 		>
-			{#if sortNames.length === 0}
-				<option value="" disabled>Add a sort first</option>
-			{/if}
 			{#each sortNames as s (s)}
 				<option value={s}>{s}</option>
 			{/each}

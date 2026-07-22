@@ -5,8 +5,8 @@
 	import BindingsEditor from './BindingsEditor.svelte';
 	import { Label } from '$lib/components/ui/label';
 	import { Input } from '$lib/components/ui/input';
-	import { api, ApiError, type Axiom, type Binding } from '$lib/api';
-	import { toastSuccess, toastError } from '$lib/toast';
+	import { api, type Axiom, type Binding } from '$lib/api';
+	import { runMutation } from './crud';
 
 	let {
 		systemId,
@@ -22,6 +22,10 @@
 	let bindings = $state<Binding[]>([]);
 	let saving = $state(false);
 	let busy = $state(false);
+
+	const canSave = $derived(
+		label.trim().length > 0 && name.trim().length > 0 && formula.trim().length > 0
+	);
 
 	function openNew() {
 		editing = null;
@@ -41,52 +45,47 @@
 	}
 
 	async function save() {
-		if (!label.trim() || !name.trim() || !formula.trim() || saving) return;
+		if (!canSave || saving) return;
 		saving = true;
+		const item = editing;
 		const payload = {
 			label: label.trim(),
 			name: name.trim(),
 			formula: formula.trim(),
 			bindings: bindings.filter((b) => b.var.trim() && b.sort.trim())
 		};
-		try {
-			if (editing) await api.parts.axioms.update(systemId, editing.id, payload);
-			else await api.parts.axioms.create(systemId, payload);
-			toastSuccess(editing ? 'Axiom updated.' : 'Axiom added.');
+		const ok = await runMutation(
+			() =>
+				item
+					? api.parts.axioms.update(systemId, item.id, payload)
+					: api.parts.axioms.create(systemId, payload),
+			item ? 'Axiom updated.' : 'Axiom added.'
+		);
+		saving = false;
+		if (ok) {
 			open = false;
 			await onChanged();
-		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
-		} finally {
-			saving = false;
 		}
 	}
 
 	async function del() {
 		if (!editing || saving) return;
 		saving = true;
-		try {
-			await api.parts.axioms.remove(systemId, editing.id);
-			toastSuccess('Axiom deleted.');
+		const ok = await runMutation(
+			() => api.parts.axioms.remove(systemId, editing!.id),
+			'Axiom deleted.'
+		);
+		saving = false;
+		if (ok) {
 			open = false;
 			await onChanged();
-		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
-		} finally {
-			saving = false;
 		}
 	}
 
 	async function reorder(ids: string[]) {
 		busy = true;
-		try {
-			await api.parts.axioms.reorder(systemId, ids);
-			await onChanged();
-		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
-		} finally {
-			busy = false;
-		}
+		if (await runMutation(() => api.parts.axioms.reorder(systemId, ids))) await onChanged();
+		busy = false;
 	}
 </script>
 
@@ -116,6 +115,7 @@
 	onSave={save}
 	onDelete={editing ? del : undefined}
 	{saving}
+	{canSave}
 >
 	<FormField label="Label" id="axiom-label" bind:value={label} placeholder="e.g. EXT" maxlength={64} />
 	<FormField label="Name" id="axiom-name" bind:value={name} placeholder="e.g. extensionality" maxlength={128} />

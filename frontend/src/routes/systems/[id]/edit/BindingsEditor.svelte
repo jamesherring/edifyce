@@ -13,19 +13,21 @@
 		bindings = [...bindings, { var: '', sort: '' }];
 	}
 
-	function remove(i: number) {
-		bindings = bindings.filter((_, idx) => idx !== i);
+	function remove(binding: Binding) {
+		bindings = bindings.filter((b) => b !== binding);
 	}
 </script>
 
 <div class="space-y-2">
 	<Label>{label} <span class="text-muted-foreground">(optional)</span></Label>
-	{#each bindings as _binding, i (i)}
+	<!-- Keyed by object identity so removing a middle row can't shift focus/caret
+	     onto the wrong binding. -->
+	{#each bindings as binding (binding)}
 		<div class="flex items-center gap-2">
-			<Input bind:value={bindings[i].var} placeholder="var" class="font-mono" />
+			<Input bind:value={binding.var} placeholder="var" class="font-mono" />
 			<span class="text-muted-foreground">:</span>
-			<Input bind:value={bindings[i].sort} placeholder="sort" class="font-mono" />
-			<Button type="button" variant="ghost" size="icon" class="shrink-0" onclick={() => remove(i)}>
+			<Input bind:value={binding.sort} placeholder="sort" class="font-mono" />
+			<Button type="button" variant="ghost" size="icon" class="shrink-0" onclick={() => remove(binding)}>
 				<X class="size-4" />
 				<span class="sr-only">Remove binding</span>
 			</Button>

@@ -5,8 +5,8 @@
 	import BindingsEditor from './BindingsEditor.svelte';
 	import { Label } from '$lib/components/ui/label';
 	import { Input } from '$lib/components/ui/input';
-	import { api, ApiError, type Production, type Binding } from '$lib/api';
-	import { toastSuccess, toastError } from '$lib/toast';
+	import { api, type Production, type Binding } from '$lib/api';
+	import { runMutation } from './crud';
 
 	let {
 		systemId,
@@ -30,6 +30,8 @@
 	let saving = $state(false);
 	let busy = $state(false);
 
+	const canSave = $derived(name.trim().length > 0 && !!sortName && value.trim().length > 0);
+
 	function openNew() {
 		editing = null;
 		name = '';
@@ -50,8 +52,9 @@
 	}
 
 	async function save() {
-		if (!name.trim() || !sortName || !value.trim() || saving) return;
+		if (!canSave || saving) return;
 		saving = true;
+		const item = editing;
 		// Send both fields with the inactive one nulled so switching template↔regex
 		// clears the other; the backend requires exactly one to be set.
 		const payload = {
@@ -61,52 +64,49 @@
 			regex: mode === 'regex' ? value.trim() : null,
 			bindings: bindings.filter((b) => b.var.trim() && b.sort.trim())
 		};
-		try {
-			if (editing) await api.parts.productions.update(systemId, editing.id, payload);
-			else await api.parts.productions.create(systemId, payload);
-			toastSuccess(editing ? 'Production updated.' : 'Production added.');
+		const ok = await runMutation(
+			() =>
+				item
+					? api.parts.productions.update(systemId, item.id, payload)
+					: api.parts.productions.create(systemId, payload),
+			item ? 'Production updated.' : 'Production added.'
+		);
+		saving = false;
+		if (ok) {
 			open = false;
 			await onChanged();
-		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
-		} finally {
-			saving = false;
 		}
 	}
 
 	async function del() {
 		if (!editing || saving) return;
 		saving = true;
-		try {
-			await api.parts.productions.remove(systemId, editing.id);
-			toastSuccess('Production deleted.');
+		const ok = await runMutation(
+			() => api.parts.productions.remove(systemId, editing!.id),
+			'Production deleted.'
+		);
+		saving = false;
+		if (ok) {
 			open = false;
 			await onChanged();
-		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
-		} finally {
-			saving = false;
 		}
 	}
 
 	async function reorder(ids: string[]) {
 		busy = true;
-		try {
-			await api.parts.productions.reorder(systemId, ids);
-			await onChanged();
-		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
-		} finally {
-			busy = false;
-		}
+		if (await runMutation(() => api.parts.productions.reorder(systemId, ids))) await onChanged();
+		busy = false;
 	}
 </script>
 
 <PartSection
 	title="Grammar"
 	addLabel="Add production"
+	canAdd={sortNames.length > 0}
 	items={productions}
-	emptyMessage="No productions yet — these define the concrete syntax of each sort."
+	emptyMessage={sortNames.length === 0
+		? 'Add a sort first, then define its productions.'
+		: 'No productions yet — these define the concrete syntax of each sort.'}
 	onAdd={openNew}
 	onEdit={openEdit}
 	onReorder={reorder}
@@ -130,6 +130,7 @@
 	onSave={save}
 	onDelete={editing ? del : undefined}
 	{saving}
+	{canSave}
 >
 	<FormField label="Name" id="prod-name" bind:value={name} placeholder="e.g. implication" maxlength={128} />
 	<div class="space-y-2">
@@ -139,9 +140,6 @@
 			bind:value={sortName}
 			class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
 		>
-			{#if sortNames.length === 0}
-				<option value="" disabled>Add a sort first</option>
-			{/if}
 			{#each sortNames as s (s)}
 				<option value={s}>{s}</option>
 			{/each}

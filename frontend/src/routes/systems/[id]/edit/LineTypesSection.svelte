@@ -7,8 +7,8 @@
 	import { Button } from '$lib/components/ui/button';
 	import X from '@lucide/svelte/icons/x';
 	import Plus from '@lucide/svelte/icons/plus';
-	import { api, ApiError, type LineType, type LinePartInput } from '$lib/api';
-	import { toastSuccess, toastError } from '$lib/toast';
+	import { api, type LineType, type LinePartInput } from '$lib/api';
+	import { runMutation } from './crud';
 
 	let {
 		systemId,
@@ -30,6 +30,8 @@
 	let parts = $state<LinePartInput[]>([]);
 	let saving = $state(false);
 
+	const canSave = $derived(name.trim().length > 0 && shape.trim().length > 0);
+
 	function openNew() {
 		editing = null;
 		name = '';
@@ -48,8 +50,9 @@
 	}
 
 	async function save() {
-		if (!name.trim() || !shape.trim() || saving) return;
+		if (!canSave || saving) return;
 		saving = true;
+		const item = editing;
 		const payload = {
 			name: name.trim(),
 			shape: shape.trim(),
@@ -58,39 +61,39 @@
 				.filter((p) => p.name.trim() && p.regex.trim())
 				.map((p) => ({ name: p.name.trim(), regex: p.regex.trim() }))
 		};
-		try {
-			if (editing) await api.parts.lineTypes.update(systemId, editing.id, payload);
-			else await api.parts.lineTypes.create(systemId, payload);
-			toastSuccess(editing ? 'Line type updated.' : 'Line type added.');
+		const ok = await runMutation(
+			() =>
+				item
+					? api.parts.lineTypes.update(systemId, item.id, payload)
+					: api.parts.lineTypes.create(systemId, payload),
+			item ? 'Line type updated.' : 'Line type added.'
+		);
+		saving = false;
+		if (ok) {
 			open = false;
 			await onChanged();
-		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
-		} finally {
-			saving = false;
 		}
 	}
 
 	async function del() {
 		if (!editing || saving) return;
 		saving = true;
-		try {
-			await api.parts.lineTypes.remove(systemId, editing.id);
-			toastSuccess('Line type deleted.');
+		const ok = await runMutation(
+			() => api.parts.lineTypes.remove(systemId, editing!.id),
+			'Line type deleted.'
+		);
+		saving = false;
+		if (ok) {
 			open = false;
 			await onChanged();
-		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
-		} finally {
-			saving = false;
 		}
 	}
 
 	function addPart() {
 		parts = [...parts, { name: '', regex: '' }];
 	}
-	function removePart(i: number) {
-		parts = parts.filter((_, idx) => idx !== i);
+	function removePart(part: LinePartInput) {
+		parts = parts.filter((p) => p !== part);
 	}
 </script>
 
@@ -121,6 +124,7 @@
 	onSave={save}
 	onDelete={editing ? del : undefined}
 	{saving}
+	{canSave}
 >
 	<FormField label="Name" id="line-name" bind:value={name} placeholder="e.g. statement" maxlength={128} />
 	<div class="space-y-2">
@@ -142,12 +146,12 @@
 	</div>
 	<div class="space-y-2">
 		<Label>Parts <span class="text-muted-foreground">(named sub-patterns in the shape)</span></Label>
-		{#each parts as _p, i (i)}
+		{#each parts as part (part)}
 			<div class="flex items-center gap-2">
-				<Input bind:value={parts[i].name} class="font-mono" placeholder="name" maxlength={128} />
+				<Input bind:value={part.name} class="font-mono" placeholder="name" maxlength={128} />
 				<span class="text-muted-foreground">matches</span>
-				<Input bind:value={parts[i].regex} class="font-mono" placeholder="regex" maxlength={512} />
-				<Button type="button" variant="ghost" size="icon" class="shrink-0" onclick={() => removePart(i)}>
+				<Input bind:value={part.regex} class="font-mono" placeholder="regex" maxlength={512} />
+				<Button type="button" variant="ghost" size="icon" class="shrink-0" onclick={() => removePart(part)}>
 					<X class="size-4" /><span class="sr-only">Remove part</span>
 				</Button>
 			</div>

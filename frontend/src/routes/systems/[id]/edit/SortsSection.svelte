@@ -2,8 +2,8 @@
 	import PartSection from './PartSection.svelte';
 	import EditSheet from '$lib/components/EditSheet.svelte';
 	import FormField from '$lib/components/FormField.svelte';
-	import { api, ApiError, type Sort } from '$lib/api';
-	import { toastSuccess, toastError } from '$lib/toast';
+	import { api, type Sort } from '$lib/api';
+	import { runMutation } from './crud';
 
 	let {
 		systemId,
@@ -17,6 +17,8 @@
 	let saving = $state(false);
 	let busy = $state(false);
 
+	const canSave = $derived(name.trim().length > 0);
+
 	function openNew() {
 		editing = null;
 		name = '';
@@ -29,46 +31,41 @@
 	}
 
 	async function save() {
-		if (!name.trim() || saving) return;
+		if (!canSave || saving) return;
 		saving = true;
-		try {
-			if (editing) await api.parts.sorts.update(systemId, editing.id, { name: name.trim() });
-			else await api.parts.sorts.create(systemId, { name: name.trim() });
-			toastSuccess(editing ? 'Sort updated.' : 'Sort added.');
+		const item = editing;
+		const ok = await runMutation(
+			() =>
+				item
+					? api.parts.sorts.update(systemId, item.id, { name: name.trim() })
+					: api.parts.sorts.create(systemId, { name: name.trim() }),
+			item ? 'Sort updated.' : 'Sort added.'
+		);
+		saving = false;
+		if (ok) {
 			open = false;
 			await onChanged();
-		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
-		} finally {
-			saving = false;
 		}
 	}
 
 	async function del() {
 		if (!editing || saving) return;
 		saving = true;
-		try {
-			await api.parts.sorts.remove(systemId, editing.id);
-			toastSuccess('Sort deleted.');
+		const ok = await runMutation(
+			() => api.parts.sorts.remove(systemId, editing!.id),
+			'Sort deleted.'
+		);
+		saving = false;
+		if (ok) {
 			open = false;
 			await onChanged();
-		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
-		} finally {
-			saving = false;
 		}
 	}
 
 	async function reorder(ids: string[]) {
 		busy = true;
-		try {
-			await api.parts.sorts.reorder(systemId, ids);
-			await onChanged();
-		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
-		} finally {
-			busy = false;
-		}
+		if (await runMutation(() => api.parts.sorts.reorder(systemId, ids))) await onChanged();
+		busy = false;
 	}
 </script>
 
@@ -94,6 +91,7 @@
 	onSave={save}
 	onDelete={editing ? del : undefined}
 	{saving}
+	{canSave}
 >
 	<FormField label="Name" id="sort-name" bind:value={name} placeholder="e.g. term" maxlength={128} />
 </EditSheet>

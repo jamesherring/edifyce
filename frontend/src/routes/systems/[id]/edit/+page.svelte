@@ -124,42 +124,54 @@
 	async function saveDetails(event: SubmitEvent) {
 		event.preventDefault();
 		if (!system || saving || !name.trim()) return;
+		const seq = loadSeq;
+		const id = system.id;
 		saving = true;
 		try {
-			system = await api.systems.update(system.id, {
+			const updated = await api.systems.update(id, {
 				name: name.trim(),
 				description: description.trim() || null
 			});
+			if (seq !== loadSeq) return; // navigated to another system mid-flight
+			system = updated;
 			toastSuccess('Changes saved.');
 		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
+			if (seq === loadSeq) toastError(err instanceof ApiError ? err.message : String(err));
 		} finally {
-			saving = false;
+			if (seq === loadSeq) saving = false;
 		}
 	}
 
 	async function togglePublish() {
 		if (!system || publishing) return;
+		const seq = loadSeq;
+		const id = system.id;
 		const next = system.published_at === null;
 		publishing = true;
 		try {
-			system = await api.systems.update(system.id, { published: next });
+			const updated = await api.systems.update(id, { published: next });
+			if (seq !== loadSeq) return;
+			system = updated;
 			toastSuccess(next ? 'System published.' : 'System unpublished.');
 		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
+			if (seq === loadSeq) toastError(err instanceof ApiError ? err.message : String(err));
 		} finally {
-			publishing = false;
+			if (seq === loadSeq) publishing = false;
 		}
 	}
 
 	async function confirmDelete() {
 		if (!system || deleting) return;
+		const seq = loadSeq;
+		const id = system.id;
 		deleting = true;
 		try {
-			await api.systems.remove(system.id);
+			await api.systems.remove(id);
+			if (seq !== loadSeq) return; // a different system is loaded now; don't navigate
 			toastSuccess('System deleted.');
 			goto('/systems');
 		} catch (err) {
+			if (seq !== loadSeq) return;
 			toastError(err instanceof ApiError ? err.message : String(err));
 			deleting = false;
 			confirmOpen = false;

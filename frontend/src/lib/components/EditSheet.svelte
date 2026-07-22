@@ -14,6 +14,8 @@
     onSave: () => void;
     onDelete?: () => void;
     saving?: boolean;
+    /** When false, Save is disabled and submitting is a no-op (invalid form). */
+    canSave?: boolean;
   };
 
   let {
@@ -25,7 +27,8 @@
     children,
     onSave,
     onDelete,
-    saving = false
+    saving = false,
+    canSave = true
   }: Props = $props();
 </script>
 
@@ -40,7 +43,7 @@
     <form
       onsubmit={(e) => {
         e.preventDefault();
-        onSave();
+        if (canSave && !saving) onSave();
       }}
       class="flex flex-1 flex-col gap-4 overflow-y-auto px-6 py-4"
     >
@@ -54,7 +57,7 @@
       {:else}
         <div></div>
       {/if}
-      <Button size="sm" onclick={onSave} disabled={saving}>
+      <Button size="sm" onclick={onSave} disabled={saving || !canSave}>
         {saving ? 'Saving...' : 'Save Changes'}
       </Button>
     </Sheet.Footer>

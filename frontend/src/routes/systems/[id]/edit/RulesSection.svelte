@@ -8,8 +8,8 @@
 	import { Button } from '$lib/components/ui/button';
 	import X from '@lucide/svelte/icons/x';
 	import Plus from '@lucide/svelte/icons/plus';
-	import { api, ApiError, type Rule, type Binding } from '$lib/api';
-	import { toastSuccess, toastError } from '$lib/toast';
+	import { api, type Rule, type Binding } from '$lib/api';
+	import { runMutation } from './crud';
 
 	let {
 		systemId,
@@ -17,15 +17,23 @@
 		onChanged
 	}: { systemId: string; rules: Rule[]; onChanged: () => Promise<void> | void } = $props();
 
+	// Antecedents are plain strings in the API; wrap them so each row has a stable
+	// identity to key on (bare strings aren't unique and change as you type).
+	type Premise = { value: string };
+
 	let open = $state(false);
 	let editing = $state<Rule | null>(null);
 	let label = $state('');
 	let name = $state('');
 	let deduction = $state('');
-	let antecedents = $state<string[]>([]);
+	let antecedents = $state<Premise[]>([]);
 	let bindings = $state<Binding[]>([]);
 	let saving = $state(false);
 	let busy = $state(false);
+
+	const canSave = $derived(
+		label.trim().length > 0 && name.trim().length > 0 && deduction.trim().length > 0
+	);
 
 	function openNew() {
 		editing = null;
@@ -41,66 +49,61 @@
 		label = r.label;
 		name = r.name;
 		deduction = r.deduction;
-		antecedents = [...r.antecedents];
+		antecedents = r.antecedents.map((v) => ({ value: v }));
 		bindings = r.bindings.map((b) => ({ ...b }));
 		open = true;
 	}
 
 	async function save() {
-		if (!label.trim() || !name.trim() || !deduction.trim() || saving) return;
+		if (!canSave || saving) return;
 		saving = true;
+		const item = editing;
 		const payload = {
 			label: label.trim(),
 			name: name.trim(),
 			deduction: deduction.trim(),
-			antecedents: antecedents.map((a) => a.trim()).filter(Boolean),
+			antecedents: antecedents.map((a) => a.value.trim()).filter(Boolean),
 			bindings: bindings.filter((b) => b.var.trim() && b.sort.trim())
 		};
-		try {
-			if (editing) await api.parts.rules.update(systemId, editing.id, payload);
-			else await api.parts.rules.create(systemId, payload);
-			toastSuccess(editing ? 'Rule updated.' : 'Rule added.');
+		const ok = await runMutation(
+			() =>
+				item
+					? api.parts.rules.update(systemId, item.id, payload)
+					: api.parts.rules.create(systemId, payload),
+			item ? 'Rule updated.' : 'Rule added.'
+		);
+		saving = false;
+		if (ok) {
 			open = false;
 			await onChanged();
-		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
-		} finally {
-			saving = false;
 		}
 	}
 
 	async function del() {
 		if (!editing || saving) return;
 		saving = true;
-		try {
-			await api.parts.rules.remove(systemId, editing.id);
-			toastSuccess('Rule deleted.');
+		const ok = await runMutation(
+			() => api.parts.rules.remove(systemId, editing!.id),
+			'Rule deleted.'
+		);
+		saving = false;
+		if (ok) {
 			open = false;
 			await onChanged();
-		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
-		} finally {
-			saving = false;
 		}
 	}
 
 	async function reorder(ids: string[]) {
 		busy = true;
-		try {
-			await api.parts.rules.reorder(systemId, ids);
-			await onChanged();
-		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
-		} finally {
-			busy = false;
-		}
+		if (await runMutation(() => api.parts.rules.reorder(systemId, ids))) await onChanged();
+		busy = false;
 	}
 
 	function addAntecedent() {
-		antecedents = [...antecedents, ''];
+		antecedents = [...antecedents, { value: '' }];
 	}
-	function removeAntecedent(i: number) {
-		antecedents = antecedents.filter((_, idx) => idx !== i);
+	function removeAntecedent(premise: Premise) {
+		antecedents = antecedents.filter((a) => a !== premise);
 	}
 </script>
 
@@ -132,15 +135,22 @@
 	onSave={save}
 	onDelete={editing ? del : undefined}
 	{saving}
+	{canSave}
 >
 	<FormField label="Label" id="rule-label" bind:value={label} placeholder="e.g. MP" maxlength={64} />
 	<FormField label="Name" id="rule-name" bind:value={name} placeholder="e.g. modus ponens" maxlength={128} />
 	<div class="space-y-2">
 		<Label>Antecedents <span class="text-muted-foreground">(premises)</span></Label>
-		{#each antecedents as _a, i (i)}
+		{#each antecedents as antecedent (antecedent)}
 			<div class="flex items-center gap-2">
-				<Input bind:value={antecedents[i]} class="font-mono" placeholder="e.g. (p → q)" maxlength={512} />
-				<Button type="button" variant="ghost" size="icon" class="shrink-0" onclick={() => removeAntecedent(i)}>
+				<Input bind:value={antecedent.value} class="font-mono" placeholder="e.g. (p → q)" maxlength={512} />
+				<Button
+					type="button"
+					variant="ghost"
+					size="icon"
+					class="shrink-0"
+					onclick={() => removeAntecedent(antecedent)}
+				>
 					<X class="size-4" /><span class="sr-only">Remove premise</span>
 				</Button>
 			</div>
