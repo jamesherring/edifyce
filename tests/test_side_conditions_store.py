@@ -370,34 +370,26 @@ def test_definition_where_or_round_trips(or_def_system):
 
 # `term` has a compound production `f(t)`, so `member(t, term)` admits a compound
 # term where `atom(t, term)` (which also demands a leaf) rejects it.
-MEMBER_SOURCE = """system MemberSys
-
-notation
-  brackets ( )
-
-grammar
-  term    | variable | matches [a-z]
-  term    | app      | f(t)      | t : term
-  formula | pred     | P(t)      | t : term
-
-line statement
-  shape <formula> [<reference>]
-  reference | matches [A-Za-z0-9 ,]+
-  logical formula
-
-rules
-  ATOMR | atom rule   | from | infer P(t) | t : term
-  MEMBR | member rule | from | infer P(t) | t : term
-
-side_conditions
-  ATOMR | atom(t, term)
-  MEMBR | member(t, term)
-"""
+def member_spec() -> SystemSpec:
+    return SystemSpec(
+        name="MemberSys",
+        brackets=brackets(),
+        productions=[
+            regex_prod("term", "variable", "[a-z]"),
+            template_prod("term", "app", "f(t)", [("t", "term")]),
+            template_prod("formula", "pred", "P(t)", [("t", "term")]),
+        ],
+        line=statement_line(),
+        rules=[
+            rule("ATOMR", "atom rule", [], "P(t)", [("t", "term")], ["atom(t, term)"]),
+            rule("MEMBR", "member rule", [], "P(t)", [("t", "term")], ["member(t, term)"]),
+        ],
+    )
 
 
 @pytest.fixture
 def member_system(session):
-    session.add(spec_to_system(parse(MEMBER_SOURCE)))
+    session.add(spec_to_system(member_spec()))
     session.commit()
     session.expire_all()
     return session.scalar(select(FormalSystem).where(FormalSystem.name == "MemberSys"))
@@ -413,13 +405,11 @@ def test_member_proviso_stores_its_sort_and_no_right_metavar(member_system):
 
 
 def test_member_proviso_round_trips(member_system):
-    assert system_to_spec(member_system) == parse(MEMBER_SOURCE)
+    assert system_to_spec(member_system) == member_spec()
     assert rule_side_conditions_list(_rule(member_system, "MEMBR")) == ["member(t, term)"]
 
 
 def test_round_tripped_member_admits_compound_where_atom_rejects(member_system):
-    from website.logical.declarative import build_spec
-
     system = build_spec(system_to_spec(member_system))["system"]
     # A bare variable is both atomic and a member.
     assert system.parse("P(a) [ATOMR]").valid is True
