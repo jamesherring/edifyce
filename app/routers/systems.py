@@ -17,7 +17,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,7 +25,14 @@ from sqlalchemy.orm import selectinload
 
 from app.auth import current_active_user, current_active_user_optional
 from app.db import Base, FormalSystem, get_session, system_to_spec
-from app.routers._common import unique_slug
+from app.routers._common import (
+    MAX_PAGE_SIZE,
+    count_stmt_for,
+    fetch_page,
+    order_by_clause,
+    search_conditions,
+    unique_slug,
+)
 from app.db.models import User
 from app.db.side_conditions import SideConditionRow
 from app.db.side_conditions_mapping import (
@@ -54,6 +61,7 @@ from app.schemas import (
     FormalSystemUpdate,
     LinePart,
     LineType,
+    Page,
     Production,
     ProofVerifyRequest,
     Rule,
@@ -379,37 +387,76 @@ def _detail(system: FormalSystem) -> FormalSystemDetail:
     )
 
 
-@router.get("", response_model=list[FormalSystemSummary])
+@router.get("", response_model=Page[FormalSystemSummary])
 async def list_systems(
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
-) -> list[FormalSystemSummary]:
-    systems = await session.scalars(
-        select(FormalSystem)
-        .where(FormalSystem.owner_id == user.id)
-        .options(selectinload(FormalSystem.owner))
-        .order_by(FormalSystem.created_at)
+    limit: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+    search: str | None = Query(None),
+    sort: str | None = Query(None),
+    desc: bool = Query(False),
+) -> Page[FormalSystemSummary]:
+    conditions = [FormalSystem.owner_id == user.id, *search_conditions(FormalSystem, search)]
+    order_by, by_author = order_by_clause(
+        FormalSystem, User, sort, desc, default=[FormalSystem.created_at]
     )
-    return [_summary(system) for system in systems]
+    stmt = select(FormalSystem).where(*conditions).options(selectinload(FormalSystem.owner))
+    if by_author:
+        stmt = stmt.outerjoin(User, FormalSystem.owner_id == User.id)
+    stmt = stmt.order_by(*order_by)
+
+    systems, total = await fetch_page(
+        session, stmt, count_stmt_for(FormalSystem, conditions), limit=limit, offset=offset
+    )
+    return Page(
+        items=[_summary(system) for system in systems],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 # Declared before `/{system_id}` so "public" isn't parsed as a system id.
-@router.get("/public", response_model=list[FormalSystemSummary])
+@router.get("/public", response_model=Page[FormalSystemSummary])
 async def list_public_systems(
     session: AsyncSession = Depends(get_session),
-) -> list[FormalSystemSummary]:
+    limit: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+    search: str | None = Query(None),
+    sort: str | None = Query(None),
+    desc: bool = Query(False),
+) -> Page[FormalSystemSummary]:
     """The shared master list: every published system, any owner, no auth.
 
     Drafts (``published_at IS NULL``) are excluded; unpublishing removes a system
-    from this list. Newest publications first.
+    from this list. Newest publications first, unless the client asks to sort.
     """
-    systems = await session.scalars(
-        select(FormalSystem)
-        .where(FormalSystem.published_at.is_not(None))
-        .options(selectinload(FormalSystem.owner))
-        .order_by(FormalSystem.published_at.desc(), FormalSystem.created_at.desc())
+    conditions = [
+        FormalSystem.published_at.is_not(None),
+        *search_conditions(FormalSystem, search),
+    ]
+    order_by, by_author = order_by_clause(
+        FormalSystem,
+        User,
+        sort,
+        desc,
+        default=[FormalSystem.published_at.desc(), FormalSystem.created_at.desc()],
     )
-    return [_summary(system) for system in systems]
+    stmt = select(FormalSystem).where(*conditions).options(selectinload(FormalSystem.owner))
+    if by_author:
+        stmt = stmt.outerjoin(User, FormalSystem.owner_id == User.id)
+    stmt = stmt.order_by(*order_by)
+
+    systems, total = await fetch_page(
+        session, stmt, count_stmt_for(FormalSystem, conditions), limit=limit, offset=offset
+    )
+    return Page(
+        items=[_summary(system) for system in systems],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.post("", response_model=FormalSystemDetail, status_code=status.HTTP_201_CREATED)

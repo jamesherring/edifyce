@@ -1,8 +1,24 @@
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Generic, TypeVar
 
 from pydantic import BaseModel, Field
+
+T = TypeVar("T")
+
+
+class Page(BaseModel, Generic[T]):
+    """One page of a server-paginated list.
+
+    ``items`` is the current slice; ``total`` is the full count matching the
+    query (before ``limit``/``offset``), so a client can render page controls
+    without a second request. ``limit``/``offset`` echo the request back.
+    """
+
+    items: list[T]
+    total: int
+    limit: int
+    offset: int
 
 # Free-text fields map to length-bounded DB columns (see app/db/systems.py). The
 # caps below mirror those `String(N)` widths so oversized input is rejected as a

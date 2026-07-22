@@ -212,8 +212,59 @@ def test_list_returns_only_summaries_in_creation_order(client):
     client.post("/formal-systems", json={"name": "First"})
     client.post("/formal-systems", json={"name": "Second"})
     listed = client.get("/formal-systems").json()
-    assert [s["name"] for s in listed] == ["First", "Second"]
-    assert "productions" not in listed[0]  # summary, not detail
+    assert listed["total"] == 2
+    assert [s["name"] for s in listed["items"]] == ["First", "Second"]
+    assert "productions" not in listed["items"][0]  # summary, not detail
+
+
+def test_list_paginates_with_limit_and_offset(client):
+    _register_login(client, "ada@example.com")
+    for i in range(5):
+        client.post("/formal-systems", json={"name": f"S{i}"})
+
+    first = client.get("/formal-systems", params={"limit": 2, "offset": 0}).json()
+    assert first["total"] == 5  # full count, not just the page
+    assert [s["name"] for s in first["items"]] == ["S0", "S1"]
+
+    second = client.get("/formal-systems", params={"limit": 2, "offset": 2}).json()
+    assert [s["name"] for s in second["items"]] == ["S2", "S3"]
+
+    last = client.get("/formal-systems", params={"limit": 2, "offset": 4}).json()
+    assert [s["name"] for s in last["items"]] == ["S4"]
+
+
+def test_list_rejects_an_oversized_page(client):
+    _register_login(client, "ada@example.com")
+    assert client.get("/formal-systems", params={"limit": 101}).status_code == 422
+    assert client.get("/formal-systems", params={"limit": 0}).status_code == 422
+    assert client.get("/formal-systems", params={"offset": -1}).status_code == 422
+
+
+def test_list_searches_name_and_description_case_insensitively(client):
+    _register_login(client, "ada@example.com")
+    client.post("/formal-systems", json={"name": "Alpha"})
+    client.post("/formal-systems", json={"name": "Beta", "description": "an alphabet soup"})
+    client.post("/formal-systems", json={"name": "Gamma"})
+
+    hits = client.get("/formal-systems", params={"search": "alph"}).json()
+    assert hits["total"] == 2  # count reflects the filter, for the page controls
+    assert {s["name"] for s in hits["items"]} == {"Alpha", "Beta"}
+
+
+def test_list_sorts_by_a_requested_column(client):
+    _register_login(client, "ada@example.com")
+    for name in ("Banana", "Apple", "Cherry"):
+        client.post("/formal-systems", json={"name": name})
+
+    asc = client.get("/formal-systems", params={"sort": "name"}).json()
+    assert [s["name"] for s in asc["items"]] == ["Apple", "Banana", "Cherry"]
+
+    desc = client.get("/formal-systems", params={"sort": "name", "desc": True}).json()
+    assert [s["name"] for s in desc["items"]] == ["Cherry", "Banana", "Apple"]
+
+    # An unknown sort key falls back to the default (creation) order.
+    fallback = client.get("/formal-systems", params={"sort": "bogus"}).json()
+    assert [s["name"] for s in fallback["items"]] == ["Banana", "Apple", "Cherry"]
 
 
 def test_duplicate_name_gets_a_distinct_slug(client):
@@ -320,7 +371,7 @@ def test_a_user_cannot_see_another_users_system(client):
     assert owner_id  # sanity
     assert client.get(f"/formal-systems/{system['id']}").status_code == 404
     assert client.delete(f"/formal-systems/{system['id']}").status_code == 404
-    assert client.get("/formal-systems").json() == []
+    assert client.get("/formal-systems").json()["items"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -489,7 +540,7 @@ def test_public_list_needs_no_auth_and_shows_only_published(client):
 
     listed = client.get("/formal-systems/public")
     assert listed.status_code == 200  # no auth required
-    ids = [s["id"] for s in listed.json()]
+    ids = [s["id"] for s in listed.json()["items"]]
     assert published["id"] in ids
     assert draft["id"] not in ids  # drafts are excluded
 
@@ -501,7 +552,7 @@ def test_public_list_names_the_owner_without_leaking_email(client):
     _publish(client, system["id"])
     client.post("/auth/logout")
 
-    owner = client.get("/formal-systems/public").json()[0]["owner"]
+    owner = client.get("/formal-systems/public").json()["items"][0]["owner"]
     assert owner["id"] == user_id
     assert owner["display_name"] == "Ada L."
     assert "email" not in owner
@@ -527,7 +578,7 @@ def test_non_owner_cannot_publish_or_unpublish(client):
     )
     client.post("/auth/logout")
 
-    public_ids = [s["id"] for s in client.get("/formal-systems/public").json()]
+    public_ids = [s["id"] for s in client.get("/formal-systems/public").json()["items"]]
     assert draft["id"] not in public_ids  # the intruder's publish did nothing
     assert published["id"] in public_ids  # the intruder's unpublish did nothing
 
@@ -544,7 +595,9 @@ def test_cannot_publish_a_non_compiling_system(client, db):
 
     # It stayed a draft: absent from the public list.
     client.post("/auth/logout")
-    assert system_id not in [s["id"] for s in client.get("/formal-systems/public").json()]
+    assert system_id not in [
+        s["id"] for s in client.get("/formal-systems/public").json()["items"]
+    ]
 
 
 def test_cannot_publish_a_system_inheriting_from_an_unpublished_parent(client):
@@ -600,19 +653,21 @@ def test_published_system_is_readable_by_anyone(client, db):
     # systems (the owner-scoped list stays empty for them).
     _register_login(client, "reader@example.com")
     assert client.get(f"/formal-systems/{system_id}").status_code == 200
-    assert client.get("/formal-systems").json() == []
+    assert client.get("/formal-systems").json()["items"] == []
 
 
 def test_unpublishing_removes_from_public_and_hides_from_others(client, db):
     owner_id = _register_login(client, "owner@example.com")
     system_id = _seed_zfc(db, owner_id)
     _publish(client, system_id)
-    assert any(s["id"] == system_id for s in client.get("/formal-systems/public").json())
+    assert any(
+        s["id"] == system_id for s in client.get("/formal-systems/public").json()["items"]
+    )
 
     assert (
         client.patch(f"/formal-systems/{system_id}", json={"published": False}).status_code == 200
     )
-    assert client.get("/formal-systems/public").json() == []
+    assert client.get("/formal-systems/public").json()["items"] == []
 
     # Back to a draft: invisible to a signed-out visitor again.
     client.post("/auth/logout")

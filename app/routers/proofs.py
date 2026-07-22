@@ -37,7 +37,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,9 +46,17 @@ from sqlalchemy.orm import selectinload
 from app.auth import current_active_user, current_active_user_optional
 from app.db import FormalSystem, Proof, get_session, system_to_spec
 from app.db.models import User
-from app.routers._common import unique_slug
+from app.routers._common import (
+    MAX_PAGE_SIZE,
+    count_stmt_for,
+    fetch_page,
+    order_by_clause,
+    search_conditions,
+    unique_slug,
+)
 from app.routers.systems import load_system
 from app.schemas import (
+    Page,
     ProofCreate,
     ProofDetail,
     ProofSummary,
@@ -238,42 +246,65 @@ def _detail(proof: Proof) -> ProofDetail:
     )
 
 
-@router.get("", response_model=list[ProofSummary])
+@router.get("", response_model=Page[ProofSummary])
 async def list_proofs(
     formal_system_id: uuid.UUID | None = None,
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
-) -> list[ProofSummary]:
-    stmt = (
-        select(Proof)
-        .where(Proof.owner_id == user.id)
-        .options(selectinload(Proof.owner))
-        .order_by(Proof.created_at)
-    )
+    limit: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+    search: str | None = Query(None),
+    sort: str | None = Query(None),
+    desc: bool = Query(False),
+) -> Page[ProofSummary]:
+    conditions = [Proof.owner_id == user.id, *search_conditions(Proof, search)]
     # Optional scope to one system, so an editor can list just that system's proofs.
     if formal_system_id is not None:
-        stmt = stmt.where(Proof.formal_system_id == formal_system_id)
-    proofs = await session.scalars(stmt)
-    return [_summary(proof) for proof in proofs]
+        conditions.append(Proof.formal_system_id == formal_system_id)
+    order_by, by_author = order_by_clause(Proof, User, sort, desc, default=[Proof.created_at])
+    stmt = select(Proof).where(*conditions).options(selectinload(Proof.owner))
+    if by_author:
+        stmt = stmt.outerjoin(User, Proof.owner_id == User.id)
+    stmt = stmt.order_by(*order_by)
+
+    proofs, total = await fetch_page(
+        session, stmt, count_stmt_for(Proof, conditions), limit=limit, offset=offset
+    )
+    return Page(
+        items=[_summary(proof) for proof in proofs], total=total, limit=limit, offset=offset
+    )
 
 
 # Declared before `/{proof_id}` so "public" isn't parsed as a proof id.
-@router.get("/public", response_model=list[ProofSummary])
+@router.get("/public", response_model=Page[ProofSummary])
 async def list_public_proofs(
     session: AsyncSession = Depends(get_session),
-) -> list[ProofSummary]:
+    limit: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+    search: str | None = Query(None),
+    sort: str | None = Query(None),
+    desc: bool = Query(False),
+) -> Page[ProofSummary]:
     """The shared master list: every published proof, any owner, no auth.
 
     Drafts (``published_at IS NULL``) are excluded; unpublishing removes a proof
-    from this list. Newest publications first.
+    from this list. Newest publications first, unless the client asks to sort.
     """
-    proofs = await session.scalars(
-        select(Proof)
-        .where(Proof.published_at.is_not(None))
-        .options(selectinload(Proof.owner))
-        .order_by(Proof.published_at.desc(), Proof.created_at.desc())
+    conditions = [Proof.published_at.is_not(None), *search_conditions(Proof, search)]
+    order_by, by_author = order_by_clause(
+        Proof, User, sort, desc, default=[Proof.published_at.desc(), Proof.created_at.desc()]
     )
-    return [_summary(proof) for proof in proofs]
+    stmt = select(Proof).where(*conditions).options(selectinload(Proof.owner))
+    if by_author:
+        stmt = stmt.outerjoin(User, Proof.owner_id == User.id)
+    stmt = stmt.order_by(*order_by)
+
+    proofs, total = await fetch_page(
+        session, stmt, count_stmt_for(Proof, conditions), limit=limit, offset=offset
+    )
+    return Page(
+        items=[_summary(proof) for proof in proofs], total=total, limit=limit, offset=offset
+    )
 
 
 @router.post("", response_model=ProofDetail, status_code=status.HTTP_201_CREATED)

@@ -26,8 +26,9 @@ const apiMock = api as unknown as {
 };
 
 beforeEach(() => {
-	apiMock.systems.list.mockResolvedValue([]);
-	apiMock.systems.listPublic.mockResolvedValue([]);
+	const emptyPage = { items: [], total: 0, limit: 10, offset: 0 };
+	apiMock.systems.list.mockResolvedValue(emptyPage);
+	apiMock.systems.listPublic.mockResolvedValue(emptyPage);
 });
 afterEach(() => vi.clearAllMocks());
 

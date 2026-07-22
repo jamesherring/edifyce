@@ -46,7 +46,9 @@
 		loadingSystems = true;
 		loadError = null;
 		try {
-			const own = await api.systems.list();
+			// This is a picker, not a paged list — pull a generous single page so
+			// the dropdown holds every system the user could write a proof against.
+			const own = (await api.systems.list({ limit: 100 })).items;
 			ownSystems = own;
 			// Preselect: a ?system= param (e.g. linked from a system page), else the
 			// first available option.
