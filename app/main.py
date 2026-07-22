@@ -26,6 +26,7 @@ from app.auth.oauth import (
     oauth_backend,
     redirect_url_for,
 )
+from app.routers.proofs import router as proofs_router
 from app.routers.system_parts import router as system_parts_router
 from app.routers.systems import router as systems_router
 from app.schemas import (
@@ -106,6 +107,9 @@ app.include_router(systems_router)
 # /formal-systems/{system_id}/... (fully parameterized), so there's nothing for
 # the SPA path guard to add.
 app.include_router(system_parts_router)
+# Owner-scoped CRUD for proofs (stored rows verified against their system).
+# Like systems_router, its routes carry their own /proofs prefix.
+app.include_router(proofs_router)
 
 # fastapi-users' routers mount as nested routers, so their concrete paths are
 # not APIRoute entries on `app` — the SPA fallback's API-path guard can't find
@@ -118,6 +122,8 @@ _MOUNTED_API_ROUTERS: list[tuple[str, object]] = [
     ("/users", _users_router),
     # systems_router already carries its /formal-systems prefix on each route.
     ("", systems_router),
+    # proofs_router likewise carries its /proofs prefix on each route.
+    ("", proofs_router),
 ]
 
 # Social login: one router per configured provider. `is_verified_by_default`

@@ -3,46 +3,19 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
 	import * as Alert from '$lib/components/ui/alert';
-	import { Badge } from '$lib/components/ui/badge';
 	import { Label } from '$lib/components/ui/label';
 	import CodeEditor from '$lib/components/code-editor.svelte';
 	import PageContainer from '$lib/components/PageContainer.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import BackLink from '$lib/components/BackLink.svelte';
 	import LoadingSpinner from '$lib/components/LoadingSpinner.svelte';
-	import { api, ApiError, type VerifyResponse, type ProofLine } from '$lib/api';
-	import type { Component } from 'svelte';
+	import ProofResults from '$lib/components/ProofResults.svelte';
+	import { api, ApiError, type VerifyResponse } from '$lib/api';
 	import Play from '@lucide/svelte/icons/play';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
-	import CircleCheck from '@lucide/svelte/icons/circle-check-big';
-	import CircleX from '@lucide/svelte/icons/circle-x';
-	import CircleAlert from '@lucide/svelte/icons/circle-alert';
 	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
 	import Code from '@lucide/svelte/icons/code';
-
-	type Tone = 'ok' | 'warning' | 'error';
-
-	// Single source of truth for how each diagnostic level is presented, used by
-	// both the overall badge and the per-line markers.
-	const TONE: Record<
-		Tone,
-		{ icon: Component; badge: 'success' | 'warning' | 'destructive'; text: string; row: string }
-	> = {
-		ok: { icon: CircleCheck, badge: 'success', text: 'Valid', row: 'bg-muted/30' },
-		warning: {
-			icon: CircleAlert,
-			badge: 'warning',
-			text: 'Warnings',
-			row: 'border-warning/40 bg-warning/5'
-		},
-		error: {
-			icon: CircleX,
-			badge: 'destructive',
-			text: 'Invalid',
-			row: 'border-destructive/40 bg-destructive/5'
-		}
-	};
 
 	// The system is fixed; its source is fetched from the store, not editable here.
 	let systemName = $state<string | null>(null);
@@ -116,18 +89,6 @@
 		}
 	}
 
-	function lineTone(line: ProofLine): Tone {
-		if (!line.valid) return 'error';
-		if (line.warning_message) return 'warning';
-		return 'ok';
-	}
-
-	// The overall proof indicator ("ok"/"warning"/"error") maps onto the same
-	// tone vocabulary; fall back to "error" for any unexpected value.
-	function indicatorTone(indicator: string): Tone {
-		return indicator === 'ok' || indicator === 'warning' ? indicator : 'error';
-	}
-
 	$effect(() => {
 		const id = page.params.id;
 		if (id) loadSystem(id);
@@ -194,102 +155,7 @@
 				</Card.Root>
 			</div>
 
-			<Card.Root>
-				<Card.Header>
-					<div class="flex items-center justify-between gap-2">
-						<Card.Title>Verification</Card.Title>
-						{#if result?.proof}
-							{@const meta = TONE[indicatorTone(result.proof.indicator)]}
-							{@const Icon = meta.icon}
-							<Badge variant={meta.badge}><Icon /> {meta.text}</Badge>
-						{/if}
-					</div>
-					<Card.Description>Each proof line and its diagnostics.</Card.Description>
-				</Card.Header>
-				<Card.Content class="flex flex-col gap-4">
-					{#if requestError}
-						<Alert.Root variant="destructive">
-							<TriangleAlert />
-							<Alert.Title>Could not verify</Alert.Title>
-							<Alert.Description>
-								<span class="whitespace-pre-wrap">{requestError}</span>
-							</Alert.Description>
-						</Alert.Root>
-					{:else if result === null}
-						<p class="py-8 text-center text-sm text-muted-foreground">
-							Verify a proof to see line-by-line results here.
-						</p>
-					{:else if !result.proof}
-						<!-- The system compiled but the checker raised (structured error);
-						     `proof` is null only on that path. -->
-						<Alert.Root variant="destructive">
-							<TriangleAlert />
-							<Alert.Title>Proof could not be checked</Alert.Title>
-							<Alert.Description>
-								<div class="mt-1 space-y-1">
-									{#each result.errors as error, i (i)}
-										<p class="font-mono text-xs">{error}</p>
-									{/each}
-								</div>
-							</Alert.Description>
-						</Alert.Root>
-					{:else if result.proof.lines.length === 0}
-						<p class="py-6 text-center text-sm text-muted-foreground">
-							The proof is empty — add some lines.
-						</p>
-					{:else}
-						<ol class="flex flex-col gap-2">
-							{#each result.proof.lines as line, i (i)}
-								{@const tone = lineTone(line)}
-								{@const meta = TONE[tone]}
-								{@const Icon = meta.icon}
-								<li class={['rounded-md border px-3 py-2', meta.row]}>
-									<div class="flex items-start gap-3">
-										<span class="w-5 pt-0.5 text-right text-xs text-muted-foreground tabular-nums">
-											{i + 1}
-										</span>
-										<div class="min-w-0 flex-1">
-											<div
-												class="font-mono text-sm break-words"
-												style={`padding-left: ${line.indent * 1.25}rem`}
-											>
-												{line.display || ' '}
-											</div>
-
-											<div class="mt-1.5 flex flex-wrap items-center gap-1.5">
-												<Icon
-													class={[
-														'size-3.5',
-														tone === 'ok' && 'text-success',
-														tone === 'warning' && 'text-warning',
-														tone === 'error' && 'text-destructive'
-													]}
-												/>
-												{#if line.name}
-													<Badge variant="outline">{line.name}</Badge>
-												{/if}
-												{#if line.reference}
-													<span class="text-xs text-muted-foreground">by {line.reference}</span>
-												{/if}
-												{#if line.label}
-													<span class="text-xs text-muted-foreground">· {line.label}</span>
-												{/if}
-											</div>
-
-											{#if line.invalid_message}
-												<p class="mt-1 text-xs text-destructive">{line.invalid_message}</p>
-											{/if}
-											{#if line.warning_message}
-												<p class="mt-1 text-xs text-warning">{line.warning_message}</p>
-											{/if}
-										</div>
-									</div>
-								</li>
-							{/each}
-						</ol>
-					{/if}
-				</Card.Content>
-			</Card.Root>
+			<ProofResults {result} {requestError} idleMessage="Verify a proof to see line-by-line results here." />
 		</div>
 	{/if}
 </PageContainer>

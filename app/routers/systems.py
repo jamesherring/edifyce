@@ -13,7 +13,6 @@ that layer can address them.
 
 from __future__ import annotations
 
-import re
 import uuid
 from collections.abc import Sequence
 from datetime import datetime, timezone
@@ -26,6 +25,7 @@ from sqlalchemy.orm import selectinload
 
 from app.auth import current_active_user, current_active_user_optional
 from app.db import Base, FormalSystem, get_session, system_to_spec
+from app.routers._common import unique_slug
 from app.db.models import User
 from app.db.side_conditions import SideConditionRow
 from app.db.side_conditions_mapping import (
@@ -104,27 +104,19 @@ _CHILD_LOADS = (
 )
 
 
-def _slugify(name: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "system"
-
-
 async def _unique_slug(
     session: AsyncSession, owner_id: uuid.UUID, name: str, exclude_id: uuid.UUID | None = None
 ) -> str:
     # Slugs are unique per owner; disambiguate collisions with a numeric suffix.
-    base = _slugify(name)
-    slug = base
-    n = 2
-    while True:
+    async def _taken(slug: str) -> bool:
         stmt = select(FormalSystem.id).where(
             FormalSystem.owner_id == owner_id, FormalSystem.slug == slug
         )
         if exclude_id is not None:
             stmt = stmt.where(FormalSystem.id != exclude_id)
-        if await session.scalar(stmt) is None:
-            return slug
-        slug = f"{base}-{n}"
-        n += 1
+        return await session.scalar(stmt) is not None
+
+    return await unique_slug(name, _taken, fallback="system")
 
 
 async def _load_owned(
@@ -148,7 +140,7 @@ async def _get_owned_or_404(
     return system
 
 
-async def _load_system(session: AsyncSession, system_id: uuid.UUID) -> FormalSystem | None:
+async def load_system(session: AsyncSession, system_id: uuid.UUID) -> FormalSystem | None:
     stmt = select(FormalSystem).where(FormalSystem.id == system_id).options(*_CHILD_LOADS)
     return await session.scalar(stmt)
 
@@ -163,7 +155,7 @@ def _is_readable(system: FormalSystem, user: User | None) -> bool:
 async def _get_readable_or_404(
     session: AsyncSession, system_id: uuid.UUID, user: User | None
 ) -> FormalSystem:
-    system = await _load_system(session, system_id)
+    system = await load_system(session, system_id)
     if system is None or not _is_readable(system, user):
         # 404 (not 403) for a draft you don't own, so unpublished ids don't leak.
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Formal system not found.")
@@ -277,7 +269,7 @@ async def revalidate_if_published(session: AsyncSession, system_id: uuid.UUID) -
     )
     if published_at is None:
         return
-    system = await _load_system(session, system_id)
+    system = await load_system(session, system_id)
     if system is None:  # deleted mid-flight; nothing to keep valid
         return
     result = build_spec(system_to_spec(system))

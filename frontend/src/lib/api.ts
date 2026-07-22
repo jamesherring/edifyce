@@ -237,6 +237,49 @@ export interface RuleCreate {
 }
 export type RuleUpdate = Partial<RuleCreate>;
 
+// ---------------------------------------------------------------------------
+// Proofs (stored CRUD) — mirror the read/write models in app/schemas.py. A proof
+// belongs to a formal system, carries its `.edi` source, and is verified against
+// that system on demand (the verdict is cached in `valid` / `result`).
+// ---------------------------------------------------------------------------
+
+/** List-row view of a proof. `published_at` non-null ⇒ public/published. */
+export interface ProofSummary {
+	id: string;
+	name: string;
+	slug: string;
+	description: string | null;
+	formal_system_id: string;
+	folder_id: string | null;
+	/** Last-known validity; null until the proof has been verified. */
+	valid: boolean | null;
+	published_at: string | null;
+	created_at: string;
+	updated_at: string;
+	owner: SystemOwner | null;
+}
+
+export interface ProofDetail extends ProofSummary {
+	source: string;
+	/** Cached `proof.data()` from the last verification (null = never run). */
+	result: ProofData | null;
+}
+
+export interface ProofCreate {
+	name: string;
+	formal_system_id: string;
+	description?: string | null;
+	source?: string;
+}
+
+export interface ProofUpdate {
+	name?: string;
+	description?: string | null;
+	source?: string;
+	/** true → publish (public), false → unpublish (draft), omitted → unchanged. */
+	published?: boolean;
+}
+
 /** Raised when the backend answers with a non-2xx status or is unreachable. */
 export class ApiError extends Error {
 	status: number;
@@ -427,6 +470,27 @@ export const api = {
 				method: 'POST',
 				body: JSON.stringify({ proof_text: proofText })
 			})
+	},
+
+	// --- Proofs (stored CRUD) -----------------------------------------------
+
+	proofs: {
+		/** The signed-in user's own proofs; optionally scoped to one system. */
+		list: (formalSystemId?: string) =>
+			request<ProofSummary[]>(
+				`/proofs${formalSystemId ? `?formal_system_id=${formalSystemId}` : ''}`
+			),
+		/** The shared master list: every published proof, any owner, no auth. */
+		listPublic: () => request<ProofSummary[]>('/proofs/public'),
+		/** A single proof. Published ones are public; drafts are owner-only. */
+		get: (id: string) => request<ProofDetail>(`/proofs/${id}`),
+		create: (payload: ProofCreate) =>
+			request<ProofDetail>('/proofs', { method: 'POST', body: JSON.stringify(payload) }),
+		update: (id: string, payload: ProofUpdate) =>
+			request<ProofDetail>(`/proofs/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+		remove: (id: string) => request<null>(`/proofs/${id}`, { method: 'DELETE' }),
+		/** Rebuild the parent system and check this proof against it, caching the verdict. */
+		verify: (id: string) => request<VerifyResponse>(`/proofs/${id}/verify`, { method: 'POST' })
 	},
 
 	/**
