@@ -1050,13 +1050,14 @@ class AbstractSyntaxTree:
                 elif stripped == "side_conditions:":
                     # Kernel side-conditions: a closed, structural vocabulary
                     # checked against the rule's term binding. Replaces the
-                    # legacy condition mini-language for rule provisos.
+                    # legacy condition mini-language for rule provisos. Parsing is
+                    # deferred to the formal-system finalisation pass (where the
+                    # system's definitions have resolved), so a proviso argument may
+                    # use defined notation; here we only collect the raw lines.
                     for line in self.sub_trees:
                         stripped_line = line.line.strip()
                         if len(stripped_line) > 0 and not stripped_line[0] == "#":
-                            current_object.side_conditions.append(
-                                parse_side_condition(stripped_line, context)
-                            )
+                            current_object.pending_side_conditions.append(stripped_line)
                     return
 
                 elif stripped == "allow_extra_antecedents:":
@@ -1280,6 +1281,28 @@ class AbstractSyntaxTree:
 
                 if result is not None:
                     new_object.context.definitions.add(result)
+
+            # Parse each rule's deferred provisos now that every definition has
+            # resolved, so a proviso's term argument may use defined notation. Each
+            # rule brings its own metavariables (its `with ... as` binders). A
+            # malformed proviso is a source error, not a server fault, and this runs
+            # outside run()'s try/except, so record it as a compile error (as the
+            # definition `where` path above does) rather than letting it escape.
+            for rule in new_object.inference_rules:
+                if not rule.pending_side_conditions:
+                    continue
+                rule_context = copy(new_object.context)
+                rule_context.string_variables = {
+                    **rule_context.string_variables, **(rule.variables or {})
+                }
+                try:
+                    rule.side_conditions.extend(
+                        parse_side_condition(line, rule_context)
+                        for line in rule.pending_side_conditions
+                    )
+                except Exception as e:
+                    context.error_log.append(f"Inference rule '{rule.name}': {e}")
+                rule.pending_side_conditions = []
 
             # Set the formal system build context and build the pattern dictionary
             new_object.build_context = sub_context

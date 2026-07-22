@@ -136,6 +136,12 @@ class InferenceRule:
             side_conditions if side_conditions is not None else []
         )
 
+        # Raw proviso lines awaiting a parse. The compiler defers parsing to its
+        # finalisation pass — once the system's definitions have resolved, so a
+        # proviso argument may use defined notation — then fills `side_conditions`
+        # and clears this. Empty except transiently during compilation.
+        self.pending_side_conditions: list[str] = []
+
         # Optionally allow extra antecedents
         self.allow_extra_antecedents: bool = allow_extra_antecedents
 

@@ -521,21 +521,47 @@ def test_term_argument_with_an_unbound_metavariable_fails_closed():
     assert result["system"].parse("a [R]").valid is False  # but fails closed at check
 
 
-def test_defined_notation_in_a_term_argument_is_not_yet_supported():
-    # A term argument is parsed against productions, not definitions (unresolved at
-    # compile), so a defined constant `∅` doesn't parse — a clean compile error,
-    # not an internal crash. Documented as a further follow-up.
-    spec = SystemSpec(
+# A term argument may use *defined* notation: `∅` is a nullary definition, and a
+# rule pins a metavariable to it. Provisos are parsed after definitions resolve.
+def defined_notation_spec() -> SystemSpec:
+    return SystemSpec(
         name="DefArg",
         brackets=brackets(),
-        productions=[regex_prod("term", "variable", "[a-z]"), membership_prod()],
+        productions=[
+            regex_prod("term", "variable", "[a-z]"),
+            template_prod("term", "zero", "0", []),
+            template_prod("formula", "pred", "P(t)", [("t", "term")]),
+        ],
         line=statement_line(),
-        definitions=[defn("term", "emptyset", "∅", "z", [("z", "term")])],
-        rules=[rule("RE", "re", [], "(x ∈ y)",
-                    [("x", "term"), ("y", "term")], ["equal(x, ∅)"])],
+        definitions=[defn("term", "emptyset", "∅", "0", [])],
+        rules=[rule("RE", "re", [], "P(t)", [("t", "term")], ["equal(t, ∅)"])],
     )
-    result = build_spec(spec)
-    assert "errors" in result and result["errors"]
+
+
+@pytest.fixture
+def defined_notation_system(session):
+    session.add(spec_to_system(defined_notation_spec()))
+    session.commit()
+    session.expire_all()
+    return session.scalar(select(FormalSystem).where(FormalSystem.name == "DefArg"))
+
+
+def test_defined_notation_argument_stores_as_a_term_and_round_trips(defined_notation_system):
+    (root,) = _rule(defined_notation_system, "RE").side_conditions
+    assert root.kind == "equal"
+    assert (root.left_name, root.left_is_term) == ("t", False)
+    assert (root.right_name, root.right_is_term) == ("∅", True)
+    assert system_to_spec(defined_notation_system) == defined_notation_spec()
+    assert rule_side_conditions_list(_rule(defined_notation_system, "RE")) == ["equal(t, ∅)"]
+
+
+def test_round_tripped_defined_notation_argument_gates_proofs(defined_notation_system):
+    system = build_spec(system_to_spec(defined_notation_system))["system"]
+    assert system.parse("P(∅) [RE]").valid is True     # t is the empty set
+    assert system.parse("P(a) [RE]").valid is False    # a is a variable, not ∅
+    # `∅ ≝ 0`, but comparison is structural (opaque constructors, no unfolding), so
+    # the definiens `0` is *not* equal to `∅`.
+    assert system.parse("P(0) [RE]").valid is False
 
 
 # ---------------------------------------------------------------------------

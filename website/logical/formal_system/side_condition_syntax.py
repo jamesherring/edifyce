@@ -36,11 +36,11 @@ The predicates and their arities::
 
 An argument (``needle``/``haystack``/``left``/``right``/``name``) is either a
 declared metavariable of the owner — resolved against the match binding — or a
-literal term expression parsed against the grammar's productions (it may embed the
-owner's metavariables, substituted at check time; defined notation is not yet
-resolvable here — see ``_parse_term``). A ``sort`` argument is a pattern name
-resolved in the compile context. A line may combine predicates with ``or`` (each
-optionally ``not``-negated); ``and`` is the level above (across lines / ``;``).
+literal term expression parsed against the grammar (productions and resolved
+definitions; it may embed the owner's metavariables, substituted at check time).
+A ``sort`` argument is a pattern name resolved in the compile context. A line may
+combine predicates with ``or`` (each optionally ``not``-negated); ``and`` is the
+level above (across lines / ``;``).
 """
 
 from __future__ import annotations
@@ -211,15 +211,15 @@ def _parse_term(text: str, context: Context) -> Term | None:
     lifts any leaf that is a declared metavariable to a ``Var`` (via ``abstract``)
     so it stays schematic. Returns ``None`` when nothing parses.
 
-    Matches against the system's productions only, never its staged definitions:
-    during compilation ``context.definitions`` holds unresolved PendingDefinition
-    records, so letting the parse fall through to a definition-unfold would call
-    ``.match`` on one and crash (mirrors ``compiler.compose_schema_term``). A
-    consequence is that defined notation isn't yet usable in a term argument — it
-    simply doesn't parse.
+    Defined notation is allowed: the parse may unfold the system's *resolved*
+    definitions. Any still-unresolved ``PendingDefinition`` records are dropped
+    first, though — during a system's own compilation ``context.definitions`` can
+    hold pending records (they lack ``.match`` and would crash the unfold). Rule
+    and definition provisos are parsed once definitions have resolved (see the
+    compiler's finalisation pass), so a proviso there sees real definitions.
     """
     parse_context = copy(context)
-    parse_context.definitions = []
+    parse_context.definitions = [d for d in context.definitions if hasattr(d, "match")]
     for candidate in context.variables.values():
         if not isinstance(candidate, UnionPattern):
             continue
