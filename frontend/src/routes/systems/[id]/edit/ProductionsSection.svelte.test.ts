@@ -1,0 +1,58 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { render, screen } from '@testing-library/svelte';
+import userEvent from '@testing-library/user-event';
+import ProductionsSection from './ProductionsSection.svelte';
+
+vi.mock('$lib/api', () => ({
+	api: {
+		parts: { productions: { create: vi.fn(), update: vi.fn(), remove: vi.fn(), reorder: vi.fn() } }
+	},
+	ApiError: class ApiError extends Error {}
+}));
+vi.mock('$lib/toast', () => ({ toastSuccess: vi.fn(), toastError: vi.fn() }));
+
+const user = userEvent.setup({ pointerEventsCheck: 0 });
+afterEach(() => {
+	vi.clearAllMocks();
+	document.body.style.pointerEvents = '';
+});
+
+function prod(sort: string) {
+	return { id: 'p1', name: 'membership', sort, kind: 'composite', template: 's ∈ t', regex: null, bindings: [] };
+}
+
+// The P1 fix: a production's stored sort may have been deleted since, leaving the
+// <select> blank on a stale value. canSave must validate it against the live
+// sort names so an invalid value can't be submitted.
+describe('ProductionsSection sort validation', () => {
+	it('disables Save when the stored sort is no longer a known sort', async () => {
+		render(ProductionsSection, {
+			systemId: 'sys-1',
+			productions: [prod('ghost')], // 'ghost' was deleted
+			sortNames: ['term', 'formula'],
+			onChanged: vi.fn()
+		});
+		await user.click(screen.getByRole('button', { name: 'Edit' }));
+		const save = await screen.findByRole('button', { name: /Save Changes/ });
+
+		// Name + template are filled from the production, so only the stale sort
+		// keeps Save disabled.
+		expect(save).toBeDisabled();
+
+		// Picking a real sort clears it.
+		await user.selectOptions(screen.getByLabelText('Sort'), 'formula');
+		expect(save).toBeEnabled();
+	});
+
+	it('enables Save when the stored sort is still valid', async () => {
+		render(ProductionsSection, {
+			systemId: 'sys-1',
+			productions: [prod('formula')],
+			sortNames: ['term', 'formula'],
+			onChanged: vi.fn()
+		});
+		await user.click(screen.getByRole('button', { name: 'Edit' }));
+		const save = await screen.findByRole('button', { name: /Save Changes/ });
+		expect(save).toBeEnabled();
+	});
+});
