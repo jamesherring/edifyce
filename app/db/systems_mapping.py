@@ -114,7 +114,8 @@ def spec_to_system(spec: SystemSpec) -> FormalSystem:
         system.axioms.append(row)
 
     for i, rule in enumerate(spec.rules):
-        row = RuleRow(position=i, label=rule.label, name=rule.name, deduction=rule.deduction)
+        row = RuleRow(position=i, label=rule.label, name=rule.name,
+                      deduction=rule.deduction, matching=rule.matching)
         for j, antecedent in enumerate(rule.antecedents):
             row.antecedents.append(RuleAntecedentRow(position=j, pattern=antecedent))
         for j, (var, sort) in enumerate(rule.bindings):
@@ -185,6 +186,7 @@ def system_to_spec(system: FormalSystem) -> SystemSpec:
             deduction=rule.deduction,
             bindings=[(b.var, b.symbol.name) for b in rule.bindings],
             side_conditions=rule_side_conditions_list(rule),
+            matching=rule.matching,
         )
         for rule in system.rules
     ]

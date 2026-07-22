@@ -75,6 +75,10 @@ class Rule:
     # line each (implicit conjunction). Attached to the rule by its label; empty
     # for axioms and unconditioned rules.
     side_conditions: list[str] = field(default_factory=list)
+    # How steps are checked against this rule: "structural" (term unification,
+    # the default) or "string" (associative matching, for a string-rewriting
+    # rule such as MIU's — see website.logical.matching.rewriting).
+    matching: str = "structural"
 
 
 @dataclass
@@ -344,6 +348,9 @@ def _emit_rule(rule: Rule, emit) -> None:
             emit(base_level + 2, ant)
     emit(base_level + 1, "deduction:")
     emit(base_level + 2, rule.deduction)
+    if rule.matching != "structural":
+        emit(base_level + 1, "matching:")
+        emit(base_level + 2, rule.matching)
     if rule.side_conditions:
         emit(base_level + 1, "side_conditions:")
         for proviso in rule.side_conditions:

@@ -20,6 +20,7 @@ from ..kernel import (
     match_all,
 )
 from ..matching import StringPattern
+from ..matching.rewriting import joint_binding_exists
 from .proof import ProofLine, Subproof
 
 if TYPE_CHECKING:
@@ -104,6 +105,7 @@ class InferenceRule:
         allow_extra_antecedents: bool = False,
         variables: dict[str, Pattern] | None = None,
         subproof_schema: SubproofSchema | None = None,
+        matching: str = "structural",
     ) -> None:
 
         # The inference rule name
@@ -133,6 +135,16 @@ class InferenceRule:
         # The subproof this rule discharges (SubproofSchema), if it is a
         # discharge rule. None for an ordinary line-antecedent rule.
         self.subproof_schema: SubproofSchema | None = subproof_schema
+
+        # How a step is justified against this rule's schemas:
+        #   "structural" - first-order term unification (the default; logical
+        #                  systems, where a variable binds a whole subterm), or
+        #   "string"     - associative matching on the surface strings, for a
+        #                  string-rewriting (semi-Thue) system like MIU, whose
+        #                  rules split and concatenate flat strings in ways the
+        #                  term unifier structurally cannot. See
+        #                  ``website.logical.matching.rewriting``.
+        self.matching: str = matching
 
     @property
     def is_discharge(self) -> bool:
@@ -169,19 +181,28 @@ class InferenceRule:
         # Create an inference instance
         inference = Inference(self, antecedents, extra_antecedents, deduction)
 
-        # Structural check over terms (the graph representation): the deduction
-        # and every logical antecedent must match their schemas under one shared
-        # binding, derived by unification. The formulae are already parsed, so we
-        # project them straight to terms and never re-run the string matcher.
-        binding = self._term_binding(antecedents, deduction, context)
-        if binding is None:
-            # No consistent match
-            return False
+        if self.matching == "string":
+            # String-rewriting step: the deduction and every antecedent must
+            # match their schemas as *strings* under one shared substitution,
+            # found by associative matching (splitting/concatenation the term
+            # unifier cannot do). No kernel side-conditions on this path.
+            if not self._string_binding_exists(antecedents, deduction, context):
+                return False
+        else:
+            # Structural check over terms (the graph representation): the
+            # deduction and every logical antecedent must match their schemas
+            # under one shared binding, derived by unification. The formulae are
+            # already parsed, so we project them straight to terms and never
+            # re-run the string matcher.
+            binding = self._term_binding(antecedents, deduction, context)
+            if binding is None:
+                # No consistent match
+                return False
 
-        # Kernel side-conditions: soundness-critical provisos (freshness, $d,
-        # atomicity, equality) checked structurally against that same binding.
-        if not self._side_conditions_hold(binding, context):
-            return False
+            # Kernel side-conditions: soundness-critical provisos (freshness,
+            # $d, atomicity, equality) checked structurally against that binding.
+            if not self._side_conditions_hold(binding, context):
+                return False
 
         # Otherwise ok
         deduction.inference_rule = self
@@ -299,6 +320,35 @@ class InferenceRule:
 
         return match_all(pairs, context)
 
+    def _string_pairs(
+        self, antecedents: Sequence[ProofLine], deduction: ProofLine
+    ) -> list[tuple[StringPattern, str]] | None:
+        """The ``(schema, subject-string)`` pairs for a string-rewriting step.
+
+        One pair for the deduction and one per aligned antecedent, read off the
+        parsed formulae' surface strings. ``antecedents`` may be a *prefix* of
+        the rule's slots (the assignment search prunes on prefixes); ``zip``
+        aligns to whatever is supplied. Returns ``None`` — the step cannot hold —
+        if a needed formula is absent or a schema is not a string template.
+        """
+        if deduction.formula is None or not isinstance(self.deduction, StringPattern):
+            return None
+
+        pairs: list[tuple[StringPattern, str]] = [(self.deduction, deduction.formula.string)]
+        for pattern, ant in zip(self.antecedents, antecedents):
+            if ant.formula is None or not isinstance(pattern, StringPattern):
+                return None
+            pairs.append((pattern, ant.formula.string))
+        return pairs
+
+    def _string_binding_exists(
+        self, antecedents: Sequence[ProofLine], deduction: ProofLine, context: Context
+    ) -> bool:
+        """Whether one substitution makes every schema instantiate to its line,
+        as strings — the string-rewriting analogue of :meth:`_term_binding`."""
+        pairs = self._string_pairs(antecedents, deduction)
+        return pairs is not None and joint_binding_exists(pairs, context)
+
     def slot_admits(self, slot: int, line: ProofLine, context: Context) -> bool:
         """Whether ``line`` could fill antecedent ``slot`` on its own.
 
@@ -315,6 +365,14 @@ class InferenceRule:
             return False
 
         pattern = self.antecedents[slot]
+
+        if self.matching == "string":
+            # String rules bind by associative matching, not term unification;
+            # a line is admissible for the slot if its surface string can match
+            # the slot schema on its own (cross-slot sharing is settled later).
+            if line.formula is None or not isinstance(pattern, StringPattern):
+                return False
+            return joint_binding_exists([(pattern, line.formula.string)], context)
 
         if line.line_type.behaviour != "logical" and pattern.equivalent(
             line.line_type.pattern, context
@@ -342,6 +400,11 @@ class InferenceRule:
         which already includes the deduction pair (so a shared metavariable is
         forced to agree from the first slot on).
         """
+        if self.matching == "string":
+            # The string-rewriting analogue: a prefix that admits no joint
+            # substring binding across the deduction and the chosen slots cannot
+            # be completed, so the search can prune it here too.
+            return self._string_binding_exists(antecedents, deduction, context)
         return self._term_binding(antecedents, deduction, context) is not None
 
     def _schema_term(self, pattern: Pattern, occurrence: int, context: Context) -> Term:
@@ -417,6 +480,9 @@ class InferenceRule:
             return False
 
         if not self.label == other.label:
+            return False
+
+        if not self.matching == other.matching:
             return False
 
         if not len(self.antecedents) == len(other.antecedents):
