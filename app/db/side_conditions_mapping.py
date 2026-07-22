@@ -156,6 +156,34 @@ def build_rule_side_conditions(
         _materialise(tree, symbols, metavars, parent=None, position=0, rule=rule)
 
 
+def _require_metavar(name: str | None, metavars: set[str]) -> None:
+    """Raise unless ``name`` (a leaf predicate's metavariable) is declared.
+
+    ``None`` is the combinator/absent case (e.g. ``atom``'s missing right arg) and
+    is always allowed; a real name outside ``metavars`` has no binding to check
+    against and would raise in the kernel, so it is rejected here.
+    """
+    if name is not None and name not in metavars:
+        raise ValueError(
+            f"Side-condition metavariable {name!r} is not a declared binding."
+        )
+
+
+def validate_side_condition_metavars(
+    nodes: list[SideConditionRow], metavars: set[str]
+) -> None:
+    """Check an already-stored proviso tree against a (possibly new) binding set.
+
+    The build helpers validate on the way in; this re-checks the flat node list of
+    an *unchanged* proviso when its owner's bindings change, so dropping a binding
+    a stored proviso still names is caught here rather than in the kernel. Only
+    leaf nodes carry names; combinators have ``None`` and are skipped.
+    """
+    for node in nodes:
+        _require_metavar(node.left_name, metavars)
+        _require_metavar(node.right_name, metavars)
+
+
 def _materialise(
     node: _Leaf | _Combinator,
     symbols: dict[str, SymbolRow],
@@ -174,11 +202,8 @@ def _materialise(
     if isinstance(node, _Leaf):
         # A leaf's left/right are metavariable names (the sort argument is separate
         # and resolved below); every one must be a declared binding of the owner.
-        for name in (node.left, node.right):
-            if name is not None and name not in metavars:
-                raise ValueError(
-                    f"Side-condition metavariable {name!r} is not a declared binding."
-                )
+        _require_metavar(node.left, metavars)
+        _require_metavar(node.right, metavars)
         row.left_name = node.left
         row.right_name = node.right
         if node.sort is not None:

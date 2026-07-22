@@ -268,6 +268,32 @@ def test_definition_binding_and_proviso_updated_together(client):
     assert updated.json()["condition"] == "disjoint(x, y)"
 
 
+def test_binding_only_patch_that_orphans_a_proviso_metavar_is_422(client):
+    # Dropping a binding a stored proviso still names must be rejected even though
+    # the proviso itself isn't in the PATCH — otherwise the rule persists malformed
+    # and blows up in the kernel when applied.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+    rule = _post(client, f"/formal-systems/{sid}/rules", {
+        "label": "R", "name": "r", "deduction": "(p → q)", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "formula"}, {"var": "q", "sort": "formula"}],
+        "side_conditions": ["equal(p, q)"],
+    })
+    # PATCH bindings only, dropping q — the stored `equal(p, q)` now names an
+    # undeclared metavariable.
+    orphaning = client.patch(f"/formal-systems/{sid}/rules/{rule['id']}", json={
+        "bindings": [{"var": "p", "sort": "formula"}],
+    })
+    assert orphaning.status_code == 422
+
+    # A binding-only PATCH that keeps every named metavariable still succeeds.
+    ok = client.patch(f"/formal-systems/{sid}/rules/{rule['id']}", json={
+        "bindings": [{"var": "p", "sort": "formula"}, {"var": "q", "sort": "formula"}],
+    })
+    assert ok.status_code == 200
+
+
 def test_blank_rule_side_condition_is_rejected_not_dropped(client):
     # A blank proviso line is a malformed input, not a silent no-op: reject it
     # rather than storing the rule with the blank quietly discarded.

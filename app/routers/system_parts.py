@@ -38,6 +38,7 @@ from app.db.side_conditions import SideConditionRow
 from app.db.side_conditions_mapping import (
     build_rule_side_conditions,
     build_side_condition_rows,
+    validate_side_condition_metavars,
 )
 from app.db.systems import (
     AxiomBindingRow,
@@ -482,9 +483,11 @@ async def _assign_definition(session: AsyncSession, system_id: uuid.UUID, row: D
         row.lower = payload.lower
     # Bindings first: a proviso's metavariables are validated against them, so a
     # same-request binding change must land before the condition is rebuilt.
-    if "bindings" in fields and payload.bindings is not None:
+    bindings_changed = "bindings" in fields and payload.bindings is not None
+    if bindings_changed:
         row.bindings = await _binding_rows(session, system_id, DefinitionBindingRow, payload.bindings)
-    if "condition" in fields:
+    rebuilt = "condition" in fields
+    if rebuilt:
         # Rebuild the proviso as structured side-condition rows. `side_conditions`
         # is eager-loaded (see the definitions resource), so clearing it here is
         # safe on the async path; delete-orphan removes the previous tree.
@@ -497,6 +500,13 @@ async def _assign_definition(session: AsyncSession, system_id: uuid.UUID, row: D
                 )
             except ValueError as exc:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    elif bindings_changed and row.side_conditions:
+        # Bindings changed but the proviso wasn't rewritten: re-check the stored
+        # tree so a dropped binding can't orphan a metavariable it still names.
+        try:
+            validate_side_condition_metavars(row.side_conditions, {b.var for b in row.bindings})
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
 
 async def _assign_axiom(session: AsyncSession, system_id: uuid.UUID, row: AxiomRow, payload: Payload, fields: set[str], creating: bool) -> None:
@@ -521,9 +531,11 @@ async def _assign_rule(session: AsyncSession, system_id: uuid.UUID, row: RuleRow
         row.antecedents = [
             RuleAntecedentRow(position=i, pattern=pattern) for i, pattern in enumerate(payload.antecedents)
         ]
-    if "bindings" in fields and payload.bindings is not None:
+    bindings_changed = "bindings" in fields and payload.bindings is not None
+    if bindings_changed:
         row.bindings = await _binding_rows(session, system_id, RuleBindingRow, payload.bindings)
-    if "side_conditions" in fields and payload.side_conditions is not None:
+    rebuilt = "side_conditions" in fields and payload.side_conditions is not None
+    if rebuilt:
         # Rebuild the provisos as structured side-condition rows. `side_conditions`
         # is eager-loaded (see the rules resource), so clearing it here is safe on
         # the async path; delete-orphan removes the previous tree.
@@ -536,6 +548,13 @@ async def _assign_rule(session: AsyncSession, system_id: uuid.UUID, row: RuleRow
                 )
             except ValueError as exc:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    elif bindings_changed and row.side_conditions:
+        # Bindings changed but the provisos weren't rewritten: re-check the stored
+        # tree so a dropped binding can't orphan a metavariable it still names.
+        try:
+            validate_side_condition_metavars(row.side_conditions, {b.var for b in row.bindings})
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
