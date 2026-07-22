@@ -25,8 +25,10 @@ from app.db import alpha_digest, digest_term, store_term
 from app.db.base import Base
 from app.db.models import FormalSystem
 from app.db.terms import TermChildRow, TermRow
+from app.db.terms_mapping import _free_identity
 from website.logical.declarative import build
-from website.logical.kernel import from_match
+from website.logical.kernel import Bound, Node, Var, from_match, intern
+from website.logical.matching.patterns import AtomPattern
 
 SOURCE = """system ZFC
 
@@ -112,6 +114,129 @@ def test_alpha_digest_distinguishes_structure(context):
 
 def test_alpha_digest_is_deterministic(context):
     assert alpha_of(context, "(x ∈ y → x ∈ z)") == alpha_of(context, "(x ∈ y → x ∈ z)")
+
+
+# ---------------------------------------------------------------------------
+# Term-kind coverage: schematic Var, abstract Bound, constant atom
+# (from_match of these ZFC statements only yields regex-leaf object variables,
+# so the Var / Bound / constant branches need directly-built kernel terms).
+# ---------------------------------------------------------------------------
+
+
+def test_alpha_digest_renames_schematic_vars(context):
+    impl = context.variables["implication"]
+    formula = context.variables["formula"]
+    t1 = intern(Node(impl, {"p": Var("p", formula), "q": Var("q", formula)}))
+    t2 = intern(Node(impl, {"p": Var("m", formula), "q": Var("n", formula)}))
+    assert alpha_digest(t1) == alpha_digest(t2)                      # renamed → same
+    shared = intern(Node(impl, {"p": Var("p", formula), "q": Var("p", formula)}))
+    assert alpha_digest(shared) != alpha_digest(t1)                  # (p → p) differs
+
+
+def test_alpha_digest_treats_bound_by_index(context):
+    membership = context.variables["membership"]
+    term_sort = context.variables["term"]
+    b0, b1 = Bound(0, term_sort), Bound(1, term_sort)
+    same = intern(Node(membership, {"s": b0, "t": b0}))              # [0] ∈ [0]
+    diff = intern(Node(membership, {"s": b0, "t": b1}))              # [0] ∈ [1]
+    assert alpha_digest(same) != alpha_digest(diff)
+    # A Bound is index-canonical, not a renameable free variable.
+    assert _free_identity(b0) is None
+
+
+def test_alpha_digest_does_not_rename_constant_atoms(context):
+    impl = context.variables["implication"]
+    top = Node(AtomPattern(name="top", value="⊤"), literal="⊤")
+    bot = Node(AtomPattern(name="bot", value="⊥"), literal="⊥")
+    # Two distinct constants are fixed structure: swapping them is a real change
+    # (contrast two variables, where the swap would be α-equivalent).
+    t1 = intern(Node(impl, {"p": top, "q": bot}))
+    t2 = intern(Node(impl, {"p": bot, "q": top}))
+    assert alpha_digest(t1) != alpha_digest(t2)
+    assert _free_identity(top) is None
+
+
+# ---------------------------------------------------------------------------
+# is_free override: constant-denoting regex productions (finding #2)
+# ---------------------------------------------------------------------------
+
+NUMERAL_SOURCE = """system PA
+
+grammar
+  term    | numeral  | matches [0-9]+
+  term    | variable | matches [a-z][a-z0-9]*
+  formula | equality | s = t                | s, t : term
+
+line statement
+  shape <formula> [<reference>]
+  reference | matches [A-Za-z0-9 ,]+
+  logical formula
+
+rules
+  HYP | hypothesis | from | infer p | p : formula
+"""
+
+
+@pytest.fixture(scope="module")
+def numeral_context():
+    result = build(NUMERAL_SOURCE)
+    assert "errors" not in result, result.get("errors")
+    system = result["system"]
+    ctx = copy(system.context)
+    ctx.variables.update(system.build_context.variables)
+    return ctx
+
+
+def test_default_heuristic_treats_numerals_as_variables(numeral_context):
+    # The documented limitation: a `matches [0-9]+` production is renamed like a
+    # variable, so distinct numerals collapse into one α-bucket.
+    assert alpha_of(numeral_context, "2 = 5") == alpha_of(numeral_context, "7 = 9")
+
+
+def test_is_free_override_excludes_constant_like_leaves(numeral_context):
+    def numerals_are_constants(term):
+        identity = _free_identity(term)
+        if identity is not None and identity[:2] == ("leaf", "numeral"):
+            return None  # a numeral is a constant, not a renameable variable
+        return identity
+
+    two_five = term_of(numeral_context, "2 = 5")
+    seven_nine = term_of(numeral_context, "7 = 9")
+    # Under the override the distinct numerals stay distinct...
+    assert alpha_digest(two_five, numerals_are_constants) != alpha_digest(
+        seven_nine, numerals_are_constants
+    )
+    # ...while genuine variables are still renamed.
+    assert alpha_digest(term_of(numeral_context, "a = b"), numerals_are_constants) == \
+        alpha_digest(term_of(numeral_context, "c = d"), numerals_are_constants)
+
+
+# ---------------------------------------------------------------------------
+# Shared-DAG regression: memoisation must keep this linear, not exponential
+# ---------------------------------------------------------------------------
+
+
+def _shared_tower(base, impl, depth):
+    # A balanced shared DAG: each level's two children are the *same* object, so
+    # `depth` levels are 2**depth leaves structurally but only depth+base nodes.
+    # Built with raw Node (not intern, which is itself un-memoised and would
+    # rebuild exponentially) so only alpha_digest's memoisation is under test.
+    node = base
+    for _ in range(depth):
+        node = Node(impl, {"p": node, "q": node})
+    return node
+
+
+def test_alpha_digest_handles_shared_dag_without_blowup(context):
+    impl = context.variables["implication"]
+    # 2**30 leaves structurally; without DAG memoisation the walk would be 2**30
+    # steps and never return, so simply completing is the assertion.
+    node = _shared_tower(term_of(context, "x ∈ y"), impl, 30)
+    digest = alpha_digest(node)
+    assert isinstance(digest, str) and len(digest) == 64
+    # Correctness survives the sharing: the same shape with renamed leaves matches.
+    renamed = _shared_tower(term_of(context, "a ∈ b"), impl, 30)
+    assert alpha_digest(node) == alpha_digest(renamed)
 
 
 # ---------------------------------------------------------------------------
