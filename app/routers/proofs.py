@@ -22,14 +22,12 @@ Editing a proof's folder placement and its proof-to-proof references is a later
 phase — the read models expose `folder_id` so that layer can address it, exactly
 as the system read models expose each part's `id`.
 
-Two cross-object invariants against the *parent system* are deferred (they are
-same-owner, self-inflicted now that proofs are owned-only, so no user can affect
-another's proof): a published proof's cached `valid` can go stale if its owner
-edits the system's grammar/rules afterwards (the system-part routes keep the
-system compiling via `revalidate_if_published` but don't re-check dependent
-proofs), and unpublishing a system does not unpublish proofs that were published
-against it. Wiring the system routes to revalidate/unpublish dependent proofs is
-a follow-up.
+A published proof's parent system can never change under it: publishing a system
+is a one-way door — once published a system rejects every part edit, field edit,
+and unpublish (see `systems.require_editable_system`) — so a proof verified
+against a published system stays valid. A proof's *own* source is still editable
+by its owner; a published proof re-verifies on a source edit (below), and an edit
+that would break it is rejected.
 """
 
 from __future__ import annotations
@@ -180,8 +178,8 @@ async def _require_publishable(session: AsyncSession, proof: Proof) -> None:
 
     On success the fresh verdict is cached on the row, so a published proof always
     renders as checked. Also used to keep a *published* proof valid across source
-    edits (mirror of `systems.revalidate_if_published`): re-running it after an
-    edit rejects a change that would leave a world-readable proof unverifying.
+    edits: re-running it after a source edit rejects a change that would leave a
+    world-readable proof unverifying.
     """
     system = await load_system(session, proof.formal_system_id)
     if system is None:
@@ -336,8 +334,8 @@ async def update_proof(
     # Publishing is the write that makes a proof world-readable, so gate it —
     # after the field changes above so the checks see this request's final state.
     # A source edit on an already-published proof is re-gated too, so a
-    # world-readable proof can't be edited into a non-verifying state (mirror of
-    # systems.revalidate_if_published). Both paths re-cache the verdict.
+    # world-readable proof can't be edited into a non-verifying state. Both paths
+    # re-cache the verdict.
     if "published" in changes:
         if changes["published"]:
             await _require_publishable(session, proof)

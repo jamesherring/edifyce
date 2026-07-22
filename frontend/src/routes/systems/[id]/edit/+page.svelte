@@ -33,6 +33,7 @@
 	import CircleX from '@lucide/svelte/icons/circle-x';
 	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import Lock from '@lucide/svelte/icons/lock';
 
 	let system = $state<FormalSystemDetail | null>(null);
 	let loading = $state(true);
@@ -148,16 +149,17 @@
 		}
 	}
 
-	async function togglePublish() {
+	// Publishing is one-way: a published system is frozen (this control only
+	// renders for drafts), so there's no unpublish path.
+	async function publish() {
 		if (!system || publishing) return;
 		const id = system.id;
-		const next = system.published_at === null;
 		publishing = true;
 		try {
-			const updated = await api.systems.update(id, { published: next });
+			const updated = await api.systems.update(id, { published: true });
 			if (page.params.id !== id) return;
 			system = updated;
-			toastSuccess(next ? 'System published.' : 'System unpublished.');
+			toastSuccess('System published.');
 		} catch (err) {
 			if (page.params.id === id) toastError(err instanceof ApiError ? err.message : String(err));
 		} finally {
@@ -224,6 +226,43 @@
 				You can only edit systems you own. <a class="underline" href={`/systems/${system.id}`}>View this system</a>.
 			</Alert.Description>
 		</Alert.Root>
+	{:else if system.published_at}
+		<!-- Published systems are frozen: nothing here is editable, and they can't
+		     be unpublished (so proofs verified against them stay valid). Only the
+		     destructive delete remains available. -->
+		<PageHeader title="Edit system" description={system.name} />
+
+		<Alert.Root>
+			<Lock class="size-4" />
+			<Alert.Title>This system is published</Alert.Title>
+			<Alert.Description>
+				Published systems are frozen so that proofs verified against them stay valid — they
+				can't be edited or unpublished. <a class="underline" href={`/systems/${system.id}`}>View the system</a>.
+			</Alert.Description>
+		</Alert.Root>
+
+		<Card.Root class="border-destructive/40">
+			<Card.Header>
+				<Card.Title>Danger zone</Card.Title>
+				<Card.Description>Deleting a system removes it and all its contents (including its proofs). This cannot be undone.</Card.Description>
+			</Card.Header>
+			<Card.Content>
+				<Button variant="destructive" onclick={() => (confirmOpen = true)}>
+					<Trash2 class="size-4" /> Delete system
+				</Button>
+			</Card.Content>
+		</Card.Root>
+
+		<ConfirmDialog
+			bind:open={confirmOpen}
+			title="Delete this system?"
+			description={`"${system.name}" and all its notation, rules and definitions will be permanently deleted.`}
+			confirmLabel="Delete"
+			variant="destructive"
+			loading={deleting}
+			onConfirm={confirmDelete}
+			onCancel={() => (confirmOpen = false)}
+		/>
 	{:else}
 		<PageHeader title="Edit system" description={system.name} />
 
@@ -299,16 +338,17 @@
 			<Card.Header>
 				<Card.Title>Visibility</Card.Title>
 				<Card.Description>
-					Published systems appear in the public list for everyone; drafts are visible only to you.
+					Publishing lists the system publicly for everyone. It's permanent: a published system
+					is frozen — it can't be edited or unpublished — so proofs verified against it stay valid.
 				</Card.Description>
 			</Card.Header>
 			<Card.Content class="flex items-center justify-between gap-4">
-				<StatusBadge status={system.published_at ? 'published' : 'draft'} />
-				<Button variant="outline" onclick={togglePublish} disabled={publishing}>
+				<StatusBadge status="draft" />
+				<Button variant="outline" onclick={publish} disabled={publishing}>
 					{#if publishing}
 						<LoaderCircle class="size-4 animate-spin" />
 					{/if}
-					{system.published_at ? 'Unpublish' : 'Publish'}
+					Publish
 				</Button>
 			</Card.Content>
 		</Card.Root>
