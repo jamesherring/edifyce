@@ -33,6 +33,7 @@ from tests.spec_helpers import (
     universal_prod,
     variable_prod,
 )
+from website.logical.compiler import compile as compile_edi
 from website.logical.declarative import (
     DeclarativeError,
     LineSpec,
@@ -181,6 +182,79 @@ def test_modus_ponens_over_defined_notation(zfc):
     proof = zfc.parse("x ⊆ y [HYP]\n(x ⊆ y → x ⊇ y) [HYP]\nx ⊇ y [MP, 1, 2]")
     assert proof.valid is True
     assert all(line["valid"] for line in proof.data()["lines"])
+
+
+# ---------------------------------------------------------------------------
+# Structured accessors: the formula/reference are declared fields on the line
+# type, not interpreted `formula()`/`reference()` accessor functions.
+# ---------------------------------------------------------------------------
+
+
+def test_line_types_declare_formula_and_reference_fields(zfc):
+    statement = next(lt for lt in zfc.line_types if lt.name == "statement")
+    # The logical line names its formula and citation fields directly...
+    assert statement.formula_field == "f"
+    assert statement.reference_field == "r"
+    # ...and registers no interpreted accessor function on its pattern.
+    assert statement.pattern.functions == {}
+
+    # A bare axiom asserts its whole match: `formula: self`.
+    extensionality = next(lt for lt in zfc.line_types if lt.name == "extensionality")
+    assert extensionality.formula_field == "self"
+    assert extensionality.pattern.functions == {}
+
+
+def test_lowering_emits_field_declarations_not_accessor_functions():
+    edi = lower(zfc_spec())
+    assert "formula: f" in edi
+    assert "reference: r" in edi
+    assert "formula: self" in edi
+    # The interpreted accessor bodies are gone.
+    assert ".formula()" not in edi
+    assert ".reference()" not in edi
+
+
+def test_legacy_accessor_functions_still_work():
+    # A hand-written system with no declared fields falls back to `formula()`
+    # and `reference()` accessor functions — the field-less path the engine
+    # still supports for both the formula and the citation.
+    source = (
+        "FormalSystem Legacy:\n"
+        "\n"
+        "    Regex atom:\n"
+        "        ^[a-z]+$\n"
+        "\n"
+        "    Regex ref:\n"
+        "        ^[0-9]+$\n"
+        "\n"
+        "    ProofContext:\n"
+        "        given: MatchSet()\n"
+        "\n"
+        "    Pattern statement_pattern:\n"
+        "        with f as atom, r as ref:\n"
+        "            f [r]\n"
+        "\n"
+        "    statement_pattern.formula():\n"
+        "        return self.f\n"
+        "\n"
+        "    statement_pattern.reference():\n"
+        "        return self.r\n"
+        "\n"
+        "    LineType statement:\n"
+        "        pattern: statement_pattern\n"
+        "        behaviour: logical\n"
+    )
+    system = compile_edi(source)["system"]
+    statement = system.line_types[0]
+    # No declared fields; the accessor functions carry the contract instead.
+    assert statement.formula_field is None
+    assert statement.reference_field is None
+    assert "formula" in statement.pattern.functions
+    assert "reference" in statement.pattern.functions
+    # Both the formula and the citation still resolve via the fallback path.
+    line = system.parse("hello [1]").proof_lines[0]
+    assert line.formula is not None
+    assert line.reference_string == "1"
 
 
 # ---------------------------------------------------------------------------

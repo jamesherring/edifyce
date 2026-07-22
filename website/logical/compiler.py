@@ -935,6 +935,16 @@ class AbstractSyntaxTree:
                     # Update the scope this line opens (orthogonal to behaviour)
                     current_object.scope = value_string
 
+                elif key == "formula":
+                    # Which matched sub-field is the logical formula ("self" =
+                    # the whole match). Structured replacement for a `formula()`
+                    # accessor function.
+                    current_object.formula_field = value_string
+
+                elif key == "reference":
+                    # Which matched sub-field is the citation reference.
+                    current_object.reference_field = value_string
+
                 elif key[:7] == "context":
                     # Create an 'add to context' dictionary
 

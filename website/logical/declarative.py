@@ -260,19 +260,15 @@ def _emit_line(spec: SystemSpec, emit) -> None:
     emit(3, template)
     emit()
 
-    # The engine fetches logical content via formula() and the citation via
-    # reference(); those accessor names are part of its contract.
-    emit(1, "statement_pattern.formula():")
-    emit(2, f"return self.{logical_ph[1]}")
-    emit()
-    if reference_ph is not None:
-        emit(1, "statement_pattern.reference():")
-        emit(2, f"return self.{reference_ph[1]}")
-        emit()
-
+    # Declare which matched sub-field is the formula (and the citation) directly
+    # on the line type, rather than as interpreted `formula()`/`reference()`
+    # accessor functions — the engine projects these structurally.
     emit(1, f"LineType {line.name}:")
     emit(2, "pattern: statement_pattern")
     emit(2, "behaviour: logical")
+    emit(2, f"formula: {logical_ph[1]}")
+    if reference_ph is not None:
+        emit(2, f"reference: {reference_ph[1]}")
     emit()
 
 
@@ -323,15 +319,12 @@ def _emit_axiom(axiom: Rule, emit) -> None:
         emit(2, axiom.deduction)
     emit()
 
-    # The engine reads a logical line's content via formula(); for a bare axiom
-    # assertion the whole match is the formula.
-    emit(1, f"{pattern_name}.formula():")
-    emit(2, "return self")
-    emit()
-
+    # For a bare axiom assertion the whole match is the formula: `formula: self`
+    # declares that structurally (replacing a `formula(): return self` accessor).
     emit(1, f"LineType {_identifier(axiom.name)}:")
     emit(2, f"pattern: {pattern_name}")
     emit(2, "behaviour: axiom")
+    emit(2, "formula: self")
     emit()
 
 
