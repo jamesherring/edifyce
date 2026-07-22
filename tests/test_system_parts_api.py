@@ -303,6 +303,33 @@ def test_rule_or_proviso_round_trips_through_the_api(client):
     assert detail["rules"][0]["side_conditions"] == ["equal(p, q) or not occurs(p, q)"]
 
 
+def test_rule_member_proviso_round_trips_through_the_api(client):
+    # `member(x, sort)` names a sort argument; it round-trips like `atom`/`disjoint`.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+    rule = _post(client, f"/formal-systems/{sid}/rules", {
+        "label": "R", "name": "r", "deduction": "p", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "formula"}],
+        "side_conditions": ["member(p, formula)"],
+    })
+    assert rule["side_conditions"] == ["member(p, formula)"]
+    detail = client.get(f"/formal-systems/{sid}").json()
+    assert detail["rules"][0]["side_conditions"] == ["member(p, formula)"]
+
+
+def test_member_proviso_over_unknown_sort_is_422(client):
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+    response = client.post(f"/formal-systems/{sid}/rules", json={
+        "label": "R", "name": "r", "deduction": "p", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "formula"}],
+        "side_conditions": ["member(p, nope)"],  # `nope` is not a sort of the system
+    })
+    assert response.status_code == 422
+
+
 def test_rule_or_disjunct_over_undeclared_metavar_is_422(client):
     # Metavariable validation reaches into each disjunct: `z` is undeclared.
     _login(client, "ada@example.com")

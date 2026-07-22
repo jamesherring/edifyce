@@ -10,6 +10,7 @@ from ..kernel import (
     DisjointLeaves,
     Equal,
     IsAtom,
+    IsMember,
     Not,
     Occurs,
     Or,
@@ -85,6 +86,8 @@ def _normalise_side_condition(condition: SideCondition) -> tuple:
     if isinstance(condition, IsAtom):
         sort = None if condition.sort is None else condition.sort.name
         return ("IsAtom", condition.name, sort)
+    if isinstance(condition, IsMember):
+        return ("IsMember", condition.name, condition.sort.name)
     return (type(condition).__name__,)
 
 

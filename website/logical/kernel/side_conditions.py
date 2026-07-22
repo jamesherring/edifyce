@@ -168,6 +168,28 @@ class IsAtom(SideCondition):
 
 
 @dataclass(frozen=True)
+class IsMember(SideCondition):
+    """The term bound to ``name`` belongs to sort ``sort``.
+
+    Generic: the same sort test the unifier applies when a metavariable binds
+    (:func:`_sort_admits`), *without* :class:`IsAtom`'s extra atomicity guard — so
+    a compound term of the sort qualifies. It earns its keep only when a slot's
+    declared binding is broader than the guard needs: e.g. a metavariable bound to
+    a union sort that a rule must pin to one member sort, where ``atom`` would
+    wrongly reject any compound member.
+
+    FOL: ``IsMember("t", term)`` asserts ``t`` is a term (variable *or* compound),
+    unlike ``IsAtom("t", term)`` which additionally forces it to be a leaf.
+    """
+
+    name: str
+    sort: Pattern
+
+    def check(self, binding: Binding, context: Context) -> bool:
+        return _sort_admits(self.sort, _bound(binding, self.name), context)
+
+
+@dataclass(frozen=True)
 class Equal(SideCondition):
     """The terms bound to ``left`` and ``right`` are structurally equal.
 

@@ -365,6 +365,71 @@ def test_definition_where_or_round_trips(or_def_system):
 
 
 # ---------------------------------------------------------------------------
+# `member` — sort membership without atomicity (contrasted with `atom`)
+# ---------------------------------------------------------------------------
+
+# `term` has a compound production `f(t)`, so `member(t, term)` admits a compound
+# term where `atom(t, term)` (which also demands a leaf) rejects it.
+MEMBER_SOURCE = """system MemberSys
+
+notation
+  brackets ( )
+
+grammar
+  term    | variable | matches [a-z]
+  term    | app      | f(t)      | t : term
+  formula | pred     | P(t)      | t : term
+
+line statement
+  shape <formula> [<reference>]
+  reference | matches [A-Za-z0-9 ,]+
+  logical formula
+
+rules
+  ATOMR | atom rule   | from | infer P(t) | t : term
+  MEMBR | member rule | from | infer P(t) | t : term
+
+side_conditions
+  ATOMR | atom(t, term)
+  MEMBR | member(t, term)
+"""
+
+
+@pytest.fixture
+def member_system(session):
+    session.add(spec_to_system(parse(MEMBER_SOURCE)))
+    session.commit()
+    session.expire_all()
+    return session.scalar(select(FormalSystem).where(FormalSystem.name == "MemberSys"))
+
+
+def test_member_proviso_stores_its_sort_and_no_right_metavar(member_system):
+    membr = _rule(member_system, "MEMBR")
+    (root,) = membr.side_conditions
+    assert root.kind == "member"
+    assert root.left_name == "t" and root.right_name is None
+    # The sort is a real FK into the symbol namespace, not a string.
+    assert root.sort_symbol is not None and root.sort_symbol.name == "term"
+
+
+def test_member_proviso_round_trips(member_system):
+    assert system_to_spec(member_system) == parse(MEMBER_SOURCE)
+    assert rule_side_conditions_list(_rule(member_system, "MEMBR")) == ["member(t, term)"]
+
+
+def test_round_tripped_member_admits_compound_where_atom_rejects(member_system):
+    from website.logical.declarative import build_spec
+
+    system = build_spec(system_to_spec(member_system))["system"]
+    # A bare variable is both atomic and a member.
+    assert system.parse("P(a) [ATOMR]").valid is True
+    assert system.parse("P(a) [MEMBR]").valid is True
+    # A compound term is a member of `term` but not atomic — the whole point.
+    assert system.parse("P(f(a)) [ATOMR]").valid is False
+    assert system.parse("P(f(a)) [MEMBR]").valid is True
+
+
+# ---------------------------------------------------------------------------
 # Drift guard: the storage grammar matches the engine's surface grammar
 # ---------------------------------------------------------------------------
 
@@ -384,7 +449,9 @@ def test_storage_grammar_matches_the_engine_parser():
         "disjoint(x, y, variable)",
         "atom(x)",
         "atom(x, variable)",
+        "member(x, variable)",
         "atom(x) or equal(x, y)",
+        "member(x, variable) or equal(x, y)",
         "not occurs(x, phi) or disjoint(x, y, variable)",
         "atom(x) or equal(x, y) or occurs(x, phi)",
     ]
@@ -395,6 +462,7 @@ def test_storage_grammar_matches_the_engine_parser():
 
     rejected = [
         "occurs(x)", "bogus(x, y)", "disjoint()", "atom(x, y, z)", "occurs(x, y, z)",
+        "member(x)", "member(x, y, z)",
         "atom(x) or", "or atom(x)", "atom(x) or or atom(y)",
     ]
     for text in rejected:

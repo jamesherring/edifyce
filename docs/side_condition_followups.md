@@ -5,8 +5,8 @@ Definition provisos are written with a `where` clause —
 structurally over kernel terms (see `website/logical/formal_system/definitions.py`).
 `where`, like a rule's `side_conditions:` block, parses through the closed kernel
 algebra in `website/logical/kernel/side_conditions.py`
-(`occurs` / `equal` / `disjoint` / `atom`, with `not` on a predicate, `or`
-between predicates within a clause, and an implicit `and` across clauses — a
+(`occurs` / `equal` / `disjoint` / `atom` / `member`, with `not` on a predicate,
+`or` between predicates within a clause, and an implicit `and` across clauses — a
 rule's lines, or a `where`'s `;`-separated parts). There is no parenthesised
 grouping, so the boolean structure is a flat conjunction-of-disjunctions.
 
@@ -22,18 +22,19 @@ tracked here so the decisions aren't relitigated from scratch.
 
 ## 1. `Member` / `InSort` predicate
 
-*Status: deferred (small, additive when wanted).*
+*Status: **implemented**.*
 
-Membership in a declared sort — e.g. a guard like `x is a member of R` where
-`R` is a declared sort/`Pattern` — is not expressible today. `atom(x, R)`
-(`IsAtom`) over-constrains: it additionally forces `x` to be a single leaf, so
-it is wrong when `x` may bind a compound term.
+`member(x, R)` asserts the term bound to `x` belongs to sort `R` — the same sort
+test the unifier applies (`_sort_admits`) *without* `atom`'s extra atomicity
+guard, so a compound term of the sort qualifies. It is the tool to reach for when
+a slot's declared binding is broader than a rule needs (e.g. a metavariable bound
+to a union that the rule must pin to one member sort), where `atom(x, R)` would
+wrongly reject any compound member. The sort argument is required (unlike `atom`,
+where it is an optional extra guard). See `IsMember` in
+`website/logical/kernel/side_conditions.py`.
 
-A `member(x, R)` predicate would be `_sort_admits(R, bound(x), context)`
-*without* the atomicity guard — roughly a 10-line class mirroring `IsAtom.check`,
-plus a `_build` arm and a surface keyword. Only meaningful when `R` is a
-declared syntactic sort; membership in an *object-level* set is a proof
-obligation, not a structural guard (see below).
+Membership in an *object-level* set (e.g. `x ∈ S` over the proof's assumptions)
+is a different thing — a proof obligation, not a structural guard (see below).
 
 ## 2. Ordering / numeric comparison
 
