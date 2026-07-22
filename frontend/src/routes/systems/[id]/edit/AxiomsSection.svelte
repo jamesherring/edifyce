@@ -6,7 +6,7 @@
 	import { Label } from '$lib/components/ui/label';
 	import { Input } from '$lib/components/ui/input';
 	import { api, type Axiom, type Binding } from '$lib/api';
-	import { runMutation } from './crud';
+	import { createSectionController } from './section.svelte';
 
 	let {
 		systemId,
@@ -14,78 +14,36 @@
 		onChanged
 	}: { systemId: string; axioms: Axiom[]; onChanged: () => Promise<void> | void } = $props();
 
-	let open = $state(false);
-	let editing = $state<Axiom | null>(null);
 	let label = $state('');
 	let name = $state('');
 	let formula = $state('');
 	let bindings = $state<Binding[]>([]);
-	let saving = $state(false);
-	let busy = $state(false);
-
 	const canSave = $derived(
 		label.trim().length > 0 && name.trim().length > 0 && formula.trim().length > 0
 	);
 
-	function openNew() {
-		editing = null;
-		label = '';
-		name = '';
-		formula = '';
-		bindings = [];
-		open = true;
-	}
-	function openEdit(a: Axiom) {
-		editing = a;
-		label = a.label;
-		name = a.name;
-		formula = a.formula;
-		bindings = a.bindings.map((b) => ({ ...b }));
-		open = true;
-	}
+	const s = createSectionController<Axiom, ReturnType<typeof payload>>({
+		crud: api.parts.axioms,
+		systemId: () => systemId,
+		noun: 'Axiom',
+		onChanged: () => onChanged(),
+		canSave: () => canSave,
+		fill: (item) => {
+			label = item?.label ?? '';
+			name = item?.name ?? '';
+			formula = item?.formula ?? '';
+			bindings = item?.bindings.map((b) => ({ ...b })) ?? [];
+		},
+		payload
+	});
 
-	async function save() {
-		if (!canSave || saving) return;
-		saving = true;
-		const item = editing;
-		const payload = {
+	function payload() {
+		return {
 			label: label.trim(),
 			name: name.trim(),
 			formula: formula.trim(),
 			bindings: bindings.filter((b) => b.var.trim() && b.sort.trim())
 		};
-		const ok = await runMutation(
-			() =>
-				item
-					? api.parts.axioms.update(systemId, item.id, payload)
-					: api.parts.axioms.create(systemId, payload),
-			item ? 'Axiom updated.' : 'Axiom added.'
-		);
-		saving = false;
-		if (ok) {
-			open = false;
-			await onChanged();
-		}
-	}
-
-	async function del() {
-		if (!editing || saving) return;
-		saving = true;
-		const ok = await runMutation(
-			() => api.parts.axioms.remove(systemId, editing!.id),
-			'Axiom deleted.'
-		);
-		saving = false;
-		if (ok) {
-			open = false;
-			await onChanged();
-		}
-	}
-
-	async function reorder(ids: string[]) {
-		busy = true;
-		if (await runMutation(() => api.parts.axioms.reorder(systemId, ids))) await onChanged();
-		busy = false;
 	}
 </script>
 
@@ -94,10 +52,10 @@
 	addLabel="Add axiom"
 	items={axioms}
 	emptyMessage="No axioms yet."
-	onAdd={openNew}
-	onEdit={openEdit}
-	onReorder={reorder}
-	{busy}
+	onAdd={s.openNew}
+	onEdit={s.openEdit}
+	onReorder={s.reorder}
+	busy={s.busy}
 >
 	{#snippet row(a)}
 		<div class="min-w-0 text-sm">
@@ -109,12 +67,12 @@
 </PartSection>
 
 <EditSheet
-	{open}
-	onOpenChange={(o) => (open = o)}
-	title={editing ? 'Edit axiom' : 'Add axiom'}
-	onSave={save}
-	onDelete={editing ? del : undefined}
-	{saving}
+	open={s.open}
+	onOpenChange={(o) => (s.open = o)}
+	title={s.editing ? 'Edit axiom' : 'Add axiom'}
+	onSave={s.save}
+	onDelete={s.editing ? s.del : undefined}
+	saving={s.saving}
 	{canSave}
 >
 	<FormField label="Label" id="axiom-label" bind:value={label} placeholder="e.g. EXT" maxlength={64} />
