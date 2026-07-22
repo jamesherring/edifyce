@@ -171,14 +171,21 @@
 		deleting = true;
 		try {
 			await api.systems.remove(id);
-			// Delete is terminal: it succeeded on the backend, so always navigate
-			// away — never leave the user stranded on a now-deleted system.
+			// Navigate away only while still viewing the system we deleted — never
+			// strand the user on a now-deleted system, but don't yank them off a
+			// different one they navigated to before the DELETE resolved. Guarding
+			// on the route id (not loadSeq) keeps the strand fixed: a part refresh
+			// bumps loadSeq but leaves page.params.id unchanged.
+			if (page.params.id !== id) return;
 			toastSuccess('System deleted.');
 			goto('/systems');
 		} catch (err) {
-			toastError(err instanceof ApiError ? err.message : String(err));
+			if (page.params.id === id) {
+				toastError(err instanceof ApiError ? err.message : String(err));
+				confirmOpen = false;
+			}
+		} finally {
 			deleting = false;
-			confirmOpen = false;
 		}
 	}
 
