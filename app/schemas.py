@@ -342,7 +342,7 @@ class ProofDetail(ProofSummary):
 
 class ProofCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=256)
-    # The system this proof is written against; must be readable by the caller.
+    # The system this proof is written against; must be owned by the caller.
     formal_system_id: uuid.UUID
     description: str | None = None
     source: str = ""

@@ -13,9 +13,23 @@ makes a proof world-readable, so it is gated: the proof must verify **and** its
 formal system must itself be published (a published proof exposes its
 `formal_system_id`, and `GET` of a draft system 404s for anonymous viewers).
 
+A proof may only be created against a system the caller **owns** (mirroring the
+owned-only `inherits_from_id` reference), which keeps a proof and its system in
+one ownership domain — so an owner-scoped system delete never cascades into
+another user's proof.
+
 Editing a proof's folder placement and its proof-to-proof references is a later
 phase — the read models expose `folder_id` so that layer can address it, exactly
 as the system read models expose each part's `id`.
+
+Two cross-object invariants against the *parent system* are deferred (they are
+same-owner, self-inflicted now that proofs are owned-only, so no user can affect
+another's proof): a published proof's cached `valid` can go stale if its owner
+edits the system's grammar/rules afterwards (the system-part routes keep the
+system compiling via `revalidate_if_published` but don't re-check dependent
+proofs), and unpublishing a system does not unpublish proofs that were published
+against it. Wiring the system routes to revalidate/unpublish dependent proofs is
+a follow-up.
 """
 
 from __future__ import annotations
@@ -109,26 +123,27 @@ async def _get_readable_or_404(
     return proof
 
 
-async def _readable_system_or_400(
+async def _require_owned_system(
     session: AsyncSession, system_id: uuid.UUID, user: User
 ) -> None:
-    """The system a proof is written against must be readable by the caller.
+    """The system a proof is written against must be owned by the caller.
 
-    Readable = published, or owned. 400 (not 404) because it's a bad reference
-    in the request body, mirroring `_require_owned_reference` on the system side.
+    Owned-only (not merely readable), mirroring how `inherits_from_id` requires
+    an owned reference on the system side. This keeps a proof's system in the
+    same ownership domain as the proof: a system delete is owner-scoped and
+    cascades to proofs via `proofs.formal_system_id`, so allowing a proof against
+    someone else's system would let that owner's delete destroy another user's
+    proof. 400 (not 404) because it's a bad reference in the request body.
     """
-    row = (
-        await session.execute(
-            select(FormalSystem.owner_id, FormalSystem.published_at).where(
-                FormalSystem.id == system_id
-            )
+    owned = await session.scalar(
+        select(FormalSystem.id).where(
+            FormalSystem.id == system_id, FormalSystem.owner_id == user.id
         )
-    ).first()
-    readable = row is not None and (row.published_at is not None or row.owner_id == user.id)
-    if not readable:
+    )
+    if owned is None:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            f"formal_system_id {system_id} is not a system you can use.",
+            f"formal_system_id {system_id} is not one of your systems.",
         )
 
 
@@ -267,7 +282,7 @@ async def create_proof(
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
 ) -> ProofDetail:
-    await _readable_system_or_400(session, payload.formal_system_id, user)
+    await _require_owned_system(session, payload.formal_system_id, user)
 
     proof = Proof(
         owner_id=user.id,

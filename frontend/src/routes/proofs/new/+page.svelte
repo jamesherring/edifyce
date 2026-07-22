@@ -18,19 +18,13 @@
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
 
-	// A proof must be attached to a system the caller can use: their own systems,
-	// or any published one. Offer both, grouped, with owned systems first.
+	// A proof can only be attached to a system the caller owns (owned-only, like
+	// the system inherits_from reference), so offer just the user's own systems.
 	let ownSystems = $state<FormalSystemSummary[]>([]);
-	let publicSystems = $state<FormalSystemSummary[]>([]);
 	let loadingSystems = $state(true);
 	let loadError = $state<string | null>(null);
 
-	// A published system not owned by the caller is still selectable; dedupe so an
-	// owned-and-published system isn't offered twice.
-	const publicOnly = $derived(
-		publicSystems.filter((s) => !ownSystems.some((o) => o.id === s.id))
-	);
-	const hasSystems = $derived(ownSystems.length > 0 || publicOnly.length > 0);
+	const hasSystems = $derived(ownSystems.length > 0);
 
 	let systemId = $state('');
 	let name = $state('');
@@ -52,15 +46,13 @@
 		loadingSystems = true;
 		loadError = null;
 		try {
-			const [own, pub] = await Promise.all([api.systems.list(), api.systems.listPublic()]);
+			const own = await api.systems.list();
 			ownSystems = own;
-			publicSystems = pub;
 			// Preselect: a ?system= param (e.g. linked from a system page), else the
 			// first available option.
 			const preset = page.url.searchParams.get('system');
-			const all = [...own, ...pub];
-			if (preset && all.some((s) => s.id === preset)) systemId = preset;
-			else if (!systemId && all.length > 0) systemId = all[0].id;
+			if (preset && own.some((s) => s.id === preset)) systemId = preset;
+			else if (!systemId && own.length > 0) systemId = own[0].id;
 		} catch (err) {
 			loadError = err instanceof ApiError ? err.message : String(err);
 		} finally {
@@ -105,10 +97,10 @@
 	{:else if !hasSystems}
 		<Alert.Root>
 			<TriangleAlert class="size-4" />
-			<Alert.Title>No systems available</Alert.Title>
+			<Alert.Title>No systems yet</Alert.Title>
 			<Alert.Description>
-				A proof is checked against a formal system. <a class="underline" href="/systems/new">Create a system</a>
-				first, or browse <a class="underline" href="/systems">published systems</a>.
+				A proof is checked against one of your own formal systems.
+				<a class="underline" href="/systems/new">Create a system</a> first.
 			</Alert.Description>
 		</Alert.Root>
 	{:else}
@@ -129,20 +121,9 @@
 							required
 							class="border-input focus-visible:ring-ring flex h-9 w-full rounded-md border bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1"
 						>
-							{#if ownSystems.length}
-								<optgroup label="My systems">
-									{#each ownSystems as s (s.id)}
-										<option value={s.id}>{s.name}</option>
-									{/each}
-								</optgroup>
-							{/if}
-							{#if publicOnly.length}
-								<optgroup label="Published">
-									{#each publicOnly as s (s.id)}
-										<option value={s.id}>{s.name}</option>
-									{/each}
-								</optgroup>
-							{/if}
+							{#each ownSystems as s (s.id)}
+								<option value={s.id}>{s.name}</option>
+							{/each}
 						</select>
 					</div>
 					<div class="flex flex-col gap-2">

@@ -214,7 +214,10 @@ def test_create_rejects_another_users_draft_system(client, db):
     assert response.status_code == 400
 
 
-def test_create_allows_a_published_system_owned_by_another(client, db):
+def test_create_rejects_a_published_system_owned_by_another(client, db):
+    # Owned-only: even a *published* system owned by someone else can't be
+    # targeted, so one owner's system delete can never cascade into another
+    # user's proof.
     other = _register_login(client, "grace@example.com")
     published = _seed_system(db, other, published=True)
     _logout(client)
@@ -222,7 +225,7 @@ def test_create_allows_a_published_system_owned_by_another(client, db):
     response = client.post(
         "/proofs", json={"name": "P", "formal_system_id": published}
     )
-    assert response.status_code == 201, response.text
+    assert response.status_code == 400
 
 
 def test_get_returns_created_proof(client, db):
