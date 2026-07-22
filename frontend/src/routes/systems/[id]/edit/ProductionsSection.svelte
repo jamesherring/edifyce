@@ -30,7 +30,12 @@
 	let saving = $state(false);
 	let busy = $state(false);
 
-	const canSave = $derived(name.trim().length > 0 && !!sortName && value.trim().length > 0);
+	// `sortName` must resolve to a real sort: a production's stored sort may have
+	// been deleted since, leaving the <select> blank on a stale value — block
+	// saving that rather than POSTing an invalid sort for a backend 4xx.
+	const canSave = $derived(
+		name.trim().length > 0 && sortNames.includes(sortName) && value.trim().length > 0
+	);
 
 	function openNew() {
 		editing = null;

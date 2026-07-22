@@ -201,6 +201,53 @@ async def _require_owned_reference(
         )
 
 
+async def _require_publishable(session: AsyncSession, system: FormalSystem) -> None:
+    """Reject a publish that would expose a broken or dangling public system.
+
+    Two things a published system must not do, since it becomes world-readable:
+    it must compile (otherwise `/source` and future public consumers break on
+    it), and if it inherits from another system that parent must itself be
+    public — a published child exposes `inherits_from_id`, and `GET /{parent}`
+    404s for anonymous viewers when the parent is a private draft.
+    """
+    result = build_spec(system_to_spec(system))
+    if "errors" in result:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=result["errors"])
+
+    if system.inherits_from_id is not None:
+        parent_published_at = await session.scalar(
+            select(FormalSystem.published_at).where(FormalSystem.id == system.inherits_from_id)
+        )
+        if parent_published_at is None:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "Cannot publish a system that inherits from an unpublished draft; "
+                "publish the parent system first.",
+            )
+
+
+async def _require_unpublishable(session: AsyncSession, system: FormalSystem) -> None:
+    """Reject unpublishing a parent that still has published children.
+
+    The mirror of the inherits-from check in `_require_publishable`: unpublishing
+    here would strand each published child with an `inherits_from_id` that
+    `GET /{parent}` now 404s on for anonymous viewers — the same dangling-public
+    relationship the publish gate prohibits. Make the child unpublish first.
+    """
+    published_child = await session.scalar(
+        select(FormalSystem.id).where(
+            FormalSystem.inherits_from_id == system.id,
+            FormalSystem.published_at.is_not(None),
+        )
+    )
+    if published_child is not None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Cannot unpublish a system that published systems still inherit from; "
+            "unpublish those systems first.",
+        )
+
+
 def _owner_out(system: FormalSystem) -> SystemOwner | None:
     if system.owner is None:
         return None
@@ -391,7 +438,16 @@ async def update_system(
         system.description = changes["description"]
     if "inherits_from_id" in changes:
         system.inherits_from_id = changes["inherits_from_id"]
+
+    # Publishing is the write that makes a system world-readable, so gate it —
+    # after the field changes above so the checks see this request's final state.
+    # Unpublishing is gated too: a public child must not be left inheriting from
+    # a now-private parent.
     if "published" in changes:
+        if changes["published"]:
+            await _require_publishable(session, system)
+        else:
+            await _require_unpublishable(session, system)
         system.published_at = datetime.now(timezone.utc) if changes["published"] else None
 
     await session.commit()

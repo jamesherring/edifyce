@@ -45,10 +45,18 @@
 		}
 	}
 
-	// Re-fetch when the view changes (and once auth resolves, which gates 'mine').
+	// Logging out while on "My systems" would otherwise leave view='mine' and the
+	// next fetch 401s; fall back to the public list.
+	$effect(() => {
+		if (auth.ready && !auth.user && view === 'mine') view = 'public';
+	});
+
+	// Re-fetch when the view changes. Only 'mine' depends on auth resolving (it's
+	// the authenticated call); reading auth.ready only in that branch keeps the
+	// public list from re-fetching a second time when auth flips.
 	$effect(() => {
 		const current = view;
-		void auth.ready;
+		if (current === 'mine') void auth.ready;
 		fetchSystems(current);
 	});
 

@@ -8,6 +8,7 @@ auth flow (register/login) driving owner scoping.
 
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from datetime import datetime, timezone
 
 import pytest
 
@@ -127,15 +128,19 @@ def _register_login(client: TestClient, email: str, password: str = "password123
     return user_id
 
 
-def _seed_source(db_path, owner_id: str, source: str) -> str:
+def _seed_source(db_path, owner_id: str, source: str, published: bool = False) -> str:
     # Insert a system parsed from declarative source directly (child CRUD is a
     # later phase), owned by the given user, so the read/validate/source paths
-    # have real content.
+    # have real content. `published=True` sets published_at directly, which is
+    # the only way to reach a broken-but-published state now that the publish
+    # endpoint gates on the system compiling.
     engine = create_engine(f"sqlite:///{db_path}")
     try:
         with Session(engine) as session:
             system = spec_to_system(parse(source))
             system.owner_id = uuid.UUID(owner_id)
+            if published:
+                system.published_at = datetime.now(timezone.utc)
             session.add(system)
             session.commit()
             return str(system.id)
@@ -350,13 +355,13 @@ def test_source_returns_lowered_edi(client, db):
 
 
 def test_source_on_a_broken_published_system_is_422_not_500(client, db):
-    # A structurally-invalid system can be published (no compile gate yet), and
-    # published systems are world-readable. `lower()` raises on it, so an
-    # unguarded /source would be an unauthenticated 500. It must be a 422 with
-    # the error text instead.
+    # Defense in depth for a broken-but-published system (published before the
+    # compile gate existed, or broken by a later edit): published systems are
+    # world-readable and `lower()` raises on this one, so an unguarded /source
+    # would be an unauthenticated 500. It must be a 422 with the error text.
+    # Seed it published directly — the publish endpoint now refuses a broken one.
     owner_id = _register_login(client, "owner@example.com")
-    system_id = _seed_source(db, owner_id, BROKEN_SOURCE)
-    _publish(client, system_id)
+    system_id = _seed_source(db, owner_id, BROKEN_SOURCE, published=True)
     client.post("/auth/logout")
 
     response = client.get(f"/formal-systems/{system_id}/source")
@@ -435,6 +440,59 @@ def test_non_owner_cannot_publish_or_unpublish(client):
     public_ids = [s["id"] for s in client.get("/formal-systems/public").json()]
     assert draft["id"] not in public_ids  # the intruder's publish did nothing
     assert published["id"] in public_ids  # the intruder's unpublish did nothing
+
+
+def test_cannot_publish_a_non_compiling_system(client, db):
+    # Publishing makes a system world-readable; a broken one would then break
+    # /source (and any future public consumer) for anonymous viewers. Gate it.
+    owner_id = _register_login(client, "ada@example.com")
+    system_id = _seed_source(db, owner_id, BROKEN_SOURCE)
+
+    response = client.patch(f"/formal-systems/{system_id}", json={"published": True})
+    assert response.status_code == 422, response.text
+    assert isinstance(response.json()["detail"], list)  # the compile errors
+
+    # It stayed a draft: absent from the public list.
+    client.post("/auth/logout")
+    assert system_id not in [s["id"] for s in client.get("/formal-systems/public").json()]
+
+
+def test_cannot_publish_a_system_inheriting_from_an_unpublished_parent(client):
+    # A published child exposes inherits_from_id, and GET /{parent} 404s for
+    # anonymous viewers when the parent is still a private draft — so block the
+    # publish until the parent is public.
+    _register_login(client, "ada@example.com")
+    parent = client.post("/formal-systems", json={"name": "Parent"}).json()
+    child = client.post(
+        "/formal-systems", json={"name": "Child", "inherits_from_id": parent["id"]}
+    ).json()
+
+    blocked = client.patch(f"/formal-systems/{child['id']}", json={"published": True})
+    assert blocked.status_code == 400
+
+    # Publishing the parent first unblocks the child.
+    assert client.patch(f"/formal-systems/{parent['id']}", json={"published": True}).status_code == 200
+    assert client.patch(f"/formal-systems/{child['id']}", json={"published": True}).status_code == 200
+
+
+def test_cannot_unpublish_a_parent_with_published_children(client):
+    # The mirror of the publish gate: unpublishing the parent would strand the
+    # published child with an inherits_from_id that GET /{parent} now 404s on.
+    _register_login(client, "ada@example.com")
+    parent = client.post("/formal-systems", json={"name": "Parent"}).json()
+    child = client.post(
+        "/formal-systems", json={"name": "Child", "inherits_from_id": parent["id"]}
+    ).json()
+    _publish(client, parent["id"])
+    _publish(client, child["id"])
+
+    # The parent can't be pulled out from under a published child.
+    blocked = client.patch(f"/formal-systems/{parent['id']}", json={"published": False})
+    assert blocked.status_code == 400
+
+    # Unpublishing the child first frees the parent.
+    assert client.patch(f"/formal-systems/{child['id']}", json={"published": False}).status_code == 200
+    assert client.patch(f"/formal-systems/{parent['id']}", json={"published": False}).status_code == 200
 
 
 def test_published_system_is_readable_by_anyone(client, db):

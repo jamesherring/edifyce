@@ -30,7 +30,14 @@
 	let parts = $state<LinePartInput[]>([]);
 	let saving = $state(false);
 
-	const canSave = $derived(name.trim().length > 0 && shape.trim().length > 0);
+	// The logical sort is optional (empty = "none"), but a non-empty value must
+	// name a real sort: the stored one may have been deleted since, leaving the
+	// <select> blank on a stale value. Block saving that rather than PATCHing an
+	// invalid logical_sort for a backend 4xx.
+	const logicalSortValid = $derived(logicalSort === '' || sortNames.includes(logicalSort));
+	const canSave = $derived(
+		name.trim().length > 0 && shape.trim().length > 0 && logicalSortValid
+	);
 
 	function openNew() {
 		editing = null;
