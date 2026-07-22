@@ -122,37 +122,72 @@ def build_side_condition_rows(
     definition: DefinitionRow,
     condition: str | None,
     symbols: dict[str, SymbolRow],
+    metavars: set[str],
 ) -> None:
     """Parse ``condition`` and attach its proviso tree to ``definition`` (unsaved).
 
     A sort argument is resolved to a symbol in ``symbols``; an unknown sort name
-    is a malformed proviso (it could not have compiled) and raises.
+    is a malformed proviso (it could not have compiled) and raises. A predicate's
+    metavariable arguments must be among ``metavars`` (the owner's declared
+    binding names) — a proviso over an undeclared name has no binding to check
+    against and would raise deep in the kernel, so it is rejected here.
     """
     if condition is None:
         return
     tree = _parse(condition)
     if tree is not None:
-        _materialise(tree, symbols, parent=None, position=0, definition=definition)
+        _materialise(tree, symbols, metavars, parent=None, position=0, definition=definition)
 
 
 def build_rule_side_conditions(
     rule: RuleRow,
     provisos: list[str],
     symbols: dict[str, SymbolRow],
+    metavars: set[str],
 ) -> None:
     """Parse a rule's proviso ``lines`` and attach the tree to ``rule`` (unsaved).
 
     Mirrors :func:`build_side_condition_rows` for the rule owner; an empty list
-    (axioms, unconditioned rules) attaches nothing.
+    (axioms, unconditioned rules) attaches nothing. ``metavars`` are the rule's
+    declared binding names; a predicate over any other name is rejected.
     """
     tree = _parse_lines(provisos)
     if tree is not None:
-        _materialise(tree, symbols, parent=None, position=0, rule=rule)
+        _materialise(tree, symbols, metavars, parent=None, position=0, rule=rule)
+
+
+def _require_metavar(name: str | None, metavars: set[str]) -> None:
+    """Raise unless ``name`` (a leaf predicate's metavariable) is declared.
+
+    ``None`` is the combinator/absent case (e.g. ``atom``'s missing right arg) and
+    is always allowed; a real name outside ``metavars`` has no binding to check
+    against and would raise in the kernel, so it is rejected here.
+    """
+    if name is not None and name not in metavars:
+        raise ValueError(
+            f"Side-condition metavariable {name!r} is not a declared binding."
+        )
+
+
+def validate_side_condition_metavars(
+    nodes: list[SideConditionRow], metavars: set[str]
+) -> None:
+    """Check an already-stored proviso tree against a (possibly new) binding set.
+
+    The build helpers validate on the way in; this re-checks the flat node list of
+    an *unchanged* proviso when its owner's bindings change, so dropping a binding
+    a stored proviso still names is caught here rather than in the kernel. Only
+    leaf nodes carry names; combinators have ``None`` and are skipped.
+    """
+    for node in nodes:
+        _require_metavar(node.left_name, metavars)
+        _require_metavar(node.right_name, metavars)
 
 
 def _materialise(
     node: _Leaf | _Combinator,
     symbols: dict[str, SymbolRow],
+    metavars: set[str],
     parent: SideConditionRow | None,
     position: int,
     definition: DefinitionRow | None = None,
@@ -165,6 +200,10 @@ def _materialise(
         definition=definition, rule=rule, parent=parent, position=position, kind=node.kind
     )
     if isinstance(node, _Leaf):
+        # A leaf's left/right are metavariable names (the sort argument is separate
+        # and resolved below); every one must be a declared binding of the owner.
+        _require_metavar(node.left, metavars)
+        _require_metavar(node.right, metavars)
         row.left_name = node.left
         row.right_name = node.right
         if node.sort is not None:
@@ -175,7 +214,10 @@ def _materialise(
             row.sort_symbol = symbols[node.sort]
     else:
         for i, child in enumerate(node.children):
-            _materialise(child, symbols, parent=row, position=i, definition=definition, rule=rule)
+            _materialise(
+                child, symbols, metavars, parent=row, position=i,
+                definition=definition, rule=rule,
+            )
     return row
 
 

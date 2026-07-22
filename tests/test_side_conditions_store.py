@@ -234,6 +234,15 @@ def test_search_rules_with_an_equality_proviso(session, stored_system):
     assert labels == ["RImp"]
 
 
+def test_proviso_over_an_undeclared_metavar_is_rejected(session):
+    # A proviso may only reference the owner's declared bindings. `spec_to_system`
+    # rejects a rule proviso naming an undeclared metavar rather than storing a
+    # tree that has no binding to check against (which would raise in the kernel).
+    source = SOURCE.replace("  NOcc | not occurs(p, q)", "  NOcc | not occurs(p, z)")
+    with pytest.raises(ValueError, match="metavariable 'z'"):
+        session.add(spec_to_system(parse(source)))
+
+
 def test_round_tripped_rule_provisos_still_gate_proofs(stored_system):
     # The soundness payoff: a system reassembled from the DB rows enforces the
     # rule provisos exactly as the source system did.
