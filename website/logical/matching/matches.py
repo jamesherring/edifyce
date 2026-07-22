@@ -58,20 +58,6 @@ class Match:
         elif path == "definition()":
             return self.definition
 
-        elif len(path) > 2 and path[-2:] == "()" and path[:-2] in self.pattern.functions:
-            return self.run_function(path[:-2], context)
-
-        elif "(" in path and path[:path.index("(")] in self.pattern.functions:
-            # An attribute function with parameters
-
-            index = path.index("(")
-            name = path[:index]
-
-            args_string = path[index + 1:-1]
-            args, kwargs = parse_arguments(args_string, self, context)
-
-            return self.run_function(name, context, args=args, kwargs=kwargs)
-
         elif path in self.sub_matches:
             return self.sub_matches[path]
 
@@ -295,56 +281,6 @@ class Match:
         else:
             # Get by path
             return self.get_by_path(c.string, context)
-
-    def run_function(self, name, context, args=None, kwargs=None):
-        # Run a custom function with the given name, args and kwargs
-
-        fn = self.pattern.get_function(name)
-
-        if fn is None:
-            raise Exception(f"'{self.pattern.name}' does not have function '{name}'.")
-
-        # Check the params matches have the correct pattern
-        if args is None:
-            args = []
-
-        if kwargs is None:
-            kwargs = {}
-
-        arg_count = len(args) + len(kwargs)
-        if not arg_count == len(fn.params):
-            # Wrong number of parameters provided
-            raise Exception(f"'{name}' expected {len(fn['params'])!s} argument(s), {arg_count!s} provided.")
-
-        # Build a parameter mapping
-        param_mapping = {}
-
-        # Check args
-        for given, fn_param in zip(args, fn.params[:len(args)]):
-            param_mapping[fn_param[0]] = given
-
-        # kwargs don't have to be in order
-        remaining_fn_params = fn.params[len(args):]
-        remaining_fn_param_dict = {param[0]: param[1] for param in remaining_fn_params}
-
-        # Check kwargs
-        for given_name, given in kwargs.items():
-            if given_name not in remaining_fn_param_dict:
-                raise Exception(f"'{name}' does not accept parameter '{given_name}.")
-
-            param_mapping[given_name] = given
-
-        # Create a copy of context
-        context_copy = copy(context)
-
-        try:
-            # Run the tree as a function
-            tree = fn.tree
-            result = tree.run_function(item=self, context=context_copy, params=param_mapping, param_types=fn.params)
-
-            return result
-        except Exception as e:
-            raise Exception(f"Error runnning function {name}: {e!s}")
 
     def contains(self, other, context):
         # Check if this match contains other (ie is equivalent to self or some submatch)

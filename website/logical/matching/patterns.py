@@ -1,24 +1,11 @@
 """Pattern classes: the base :class:`Pattern` and its concrete subclasses."""
 
 import random
-from dataclasses import dataclass
 
 import regex as re
 
 from . import definitions, matches
 from .conditions import Condition
-
-
-@dataclass(eq=False)
-class PatternFunction:
-    """A user-defined function attached to a Pattern or LineType.
-
-    ``tree`` is the AbstractSyntaxTree to run; ``params`` is a tuple of
-    (variable, pattern) parameter pairs.
-    """
-
-    tree: object
-    params: tuple = ()
 
 
 class Pattern:
@@ -27,9 +14,6 @@ class Pattern:
     def __init__(self, name, respect_brackets=None, pre_format=None):
 
         self.name = name
-
-        # Keep a dictionary of functions on the pattern
-        self.functions = {}
 
         # Note any bracket pairs that should be respected
         self.respect_brackets = respect_brackets
@@ -73,20 +57,6 @@ class Pattern:
             return t
 
         return make_edits(s, self.pre_format)
-
-    def add_function(self, name, tree, params=None):
-        # Add an function to this pattern. tree is an AbstractSyntaxTree instance
-
-        # Optionally specify a list of (variable, pattern) tuples of parameters
-        self.functions[name] = PatternFunction(tree=tree, params=() if params is None else params)
-
-    def get_function(self, name):
-        # Get the given attribute function
-
-        if name in self.functions:
-            return self.functions[name]
-
-        return None
 
     def check_brackets(self, s):
         # Return a boolean indicating if the string s respects brackets
