@@ -17,16 +17,18 @@
 		onChanged
 	}: { systemId: string; rules: Rule[]; onChanged: () => Promise<void> | void } = $props();
 
-	// Antecedents are plain strings in the API; wrap them so each row has a stable
-	// identity to key on (bare strings aren't unique and change as you type).
-	type Premise = { value: string };
+	// Antecedents and provisos are plain strings in the API; wrap each in a row so
+	// it has a stable identity to key on (bare strings aren't unique and change as
+	// you type).
+	type StringRow = { value: string };
 
 	let open = $state(false);
 	let editing = $state<Rule | null>(null);
 	let label = $state('');
 	let name = $state('');
 	let deduction = $state('');
-	let antecedents = $state<Premise[]>([]);
+	let antecedents = $state<StringRow[]>([]);
+	let sideConditions = $state<StringRow[]>([]);
 	let bindings = $state<Binding[]>([]);
 	let saving = $state(false);
 	let busy = $state(false);
@@ -41,6 +43,7 @@
 		name = '';
 		deduction = '';
 		antecedents = [];
+		sideConditions = [];
 		bindings = [];
 		open = true;
 	}
@@ -50,6 +53,7 @@
 		name = r.name;
 		deduction = r.deduction;
 		antecedents = r.antecedents.map((v) => ({ value: v }));
+		sideConditions = r.side_conditions.map((v) => ({ value: v }));
 		bindings = r.bindings.map((b) => ({ ...b }));
 		open = true;
 	}
@@ -63,6 +67,7 @@
 			name: name.trim(),
 			deduction: deduction.trim(),
 			antecedents: antecedents.map((a) => a.value.trim()).filter(Boolean),
+			side_conditions: sideConditions.map((s) => s.value.trim()).filter(Boolean),
 			bindings: bindings.filter((b) => b.var.trim() && b.sort.trim())
 		};
 		const ok = await runMutation(
@@ -102,8 +107,15 @@
 	function addAntecedent() {
 		antecedents = [...antecedents, { value: '' }];
 	}
-	function removeAntecedent(premise: Premise) {
+	function removeAntecedent(premise: StringRow) {
 		antecedents = antecedents.filter((a) => a !== premise);
+	}
+
+	function addSideCondition() {
+		sideConditions = [...sideConditions, { value: '' }];
+	}
+	function removeSideCondition(proviso: StringRow) {
+		sideConditions = sideConditions.filter((s) => s !== proviso);
 	}
 </script>
 
@@ -164,4 +176,29 @@
 		<Input id="rule-deduction" bind:value={deduction} class="font-mono" placeholder="e.g. q" maxlength={512} />
 	</div>
 	<BindingsEditor bind:bindings />
+	<div class="space-y-2">
+		<Label>Side-conditions <span class="text-muted-foreground">(provisos)</span></Label>
+		{#each sideConditions as proviso (proviso)}
+			<div class="flex items-center gap-2">
+				<Input
+					bind:value={proviso.value}
+					class="font-mono"
+					placeholder="e.g. not occurs(x, p)"
+					maxlength={512}
+				/>
+				<Button
+					type="button"
+					variant="ghost"
+					size="icon"
+					class="shrink-0"
+					onclick={() => removeSideCondition(proviso)}
+				>
+					<X class="size-4" /><span class="sr-only">Remove proviso</span>
+				</Button>
+			</div>
+		{/each}
+		<Button type="button" variant="outline" size="sm" onclick={addSideCondition}>
+			<Plus class="size-4" /> Add proviso
+		</Button>
+	</div>
 </EditSheet>
