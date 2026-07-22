@@ -121,10 +121,16 @@
 		}
 	}
 
+	// System-level mutations guard on the route id (`page.params.id`), NOT on
+	// `loadSeq`. A part edit fires refresh() → ++loadSeq while a save/publish is
+	// in flight; gating on loadSeq would then strand the busy flag on (a spinner
+	// that never resets) and skip the terminal delete's navigation. The only
+	// thing a mutation must not do after its await is apply a result to a system
+	// the user has since navigated away from — that's what `page.params.id`
+	// tracks, and the busy flag always resets regardless.
 	async function saveDetails(event: SubmitEvent) {
 		event.preventDefault();
 		if (!system || saving || !name.trim()) return;
-		const seq = loadSeq;
 		const id = system.id;
 		saving = true;
 		try {
@@ -132,56 +138,66 @@
 				name: name.trim(),
 				description: description.trim() || null
 			});
-			if (seq !== loadSeq) return; // navigated to another system mid-flight
+			if (page.params.id !== id) return; // navigated to another system mid-flight
 			system = updated;
 			toastSuccess('Changes saved.');
 		} catch (err) {
-			if (seq === loadSeq) toastError(err instanceof ApiError ? err.message : String(err));
+			if (page.params.id === id) toastError(err instanceof ApiError ? err.message : String(err));
 		} finally {
-			if (seq === loadSeq) saving = false;
+			saving = false;
 		}
 	}
 
 	async function togglePublish() {
 		if (!system || publishing) return;
-		const seq = loadSeq;
 		const id = system.id;
 		const next = system.published_at === null;
 		publishing = true;
 		try {
 			const updated = await api.systems.update(id, { published: next });
-			if (seq !== loadSeq) return;
+			if (page.params.id !== id) return;
 			system = updated;
 			toastSuccess(next ? 'System published.' : 'System unpublished.');
 		} catch (err) {
-			if (seq === loadSeq) toastError(err instanceof ApiError ? err.message : String(err));
+			if (page.params.id === id) toastError(err instanceof ApiError ? err.message : String(err));
 		} finally {
-			if (seq === loadSeq) publishing = false;
+			publishing = false;
 		}
 	}
 
 	async function confirmDelete() {
 		if (!system || deleting) return;
-		const seq = loadSeq;
 		const id = system.id;
 		deleting = true;
 		try {
 			await api.systems.remove(id);
-			if (seq !== loadSeq) return; // a different system is loaded now; don't navigate
+			// Navigate away only while still viewing the system we deleted — never
+			// strand the user on a now-deleted system, but don't yank them off a
+			// different one they navigated to before the DELETE resolved. Guarding
+			// on the route id (not loadSeq) keeps the strand fixed: a part refresh
+			// bumps loadSeq but leaves page.params.id unchanged.
+			if (page.params.id !== id) return;
 			toastSuccess('System deleted.');
 			goto('/systems');
 		} catch (err) {
-			if (seq !== loadSeq) return;
-			toastError(err instanceof ApiError ? err.message : String(err));
+			if (page.params.id === id) {
+				toastError(err instanceof ApiError ? err.message : String(err));
+				confirmOpen = false;
+			}
+		} finally {
 			deleting = false;
-			confirmOpen = false;
 		}
 	}
 
 	$effect(() => {
 		const id = page.params.id;
 		if (!id) return;
-		if (auth.ready && !auth.user) {
+		// Wait for auth to resolve before loading. Loading earlier would flash the
+		// "read-only" alert to the owner (isOwner is false until `/users/me`
+		// lands) and, once auth flips, re-run this effect → a second load() and a
+		// redundant full recompile on every open.
+		if (!auth.ready) return;
+		if (!auth.user) {
 			goto(`/login?next=/systems/${id}/edit`);
 			return;
 		}
@@ -198,7 +214,7 @@
 			<Alert.Title>System unavailable</Alert.Title>
 			<Alert.Description>{loadError}</Alert.Description>
 		</Alert.Root>
-	{:else if loading || !system}
+	{:else if !auth.ready || loading || !system}
 		<LoadingSpinner message="Loading system…" />
 	{:else if !isOwner}
 		<Alert.Root>
