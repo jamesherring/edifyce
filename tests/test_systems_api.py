@@ -475,6 +475,26 @@ def test_cannot_publish_a_system_inheriting_from_an_unpublished_parent(client):
     assert client.patch(f"/formal-systems/{child['id']}", json={"published": True}).status_code == 200
 
 
+def test_cannot_unpublish_a_parent_with_published_children(client):
+    # The mirror of the publish gate: unpublishing the parent would strand the
+    # published child with an inherits_from_id that GET /{parent} now 404s on.
+    _register_login(client, "ada@example.com")
+    parent = client.post("/formal-systems", json={"name": "Parent"}).json()
+    child = client.post(
+        "/formal-systems", json={"name": "Child", "inherits_from_id": parent["id"]}
+    ).json()
+    _publish(client, parent["id"])
+    _publish(client, child["id"])
+
+    # The parent can't be pulled out from under a published child.
+    blocked = client.patch(f"/formal-systems/{parent['id']}", json={"published": False})
+    assert blocked.status_code == 400
+
+    # Unpublishing the child first frees the parent.
+    assert client.patch(f"/formal-systems/{child['id']}", json={"published": False}).status_code == 200
+    assert client.patch(f"/formal-systems/{parent['id']}", json={"published": False}).status_code == 200
+
+
 def test_published_system_is_readable_by_anyone(client, db):
     owner_id = _register_login(client, "owner@example.com")
     system_id = _seed_zfc(db, owner_id)
