@@ -29,7 +29,24 @@ from app.db.systems import (
     RuleRow,
     SymbolRow,
 )
-from website.logical.declarative import build_spec, lower, parse
+from tests.spec_helpers import (
+    axiom,
+    biconditional_prod,
+    brackets,
+    conjunction_prod,
+    defn,
+    equality_prod,
+    hyp_rule,
+    implication_prod,
+    membership_prod,
+    mp_rule,
+    negation_prod,
+    statement_line,
+    subset_def,
+    universal_prod,
+    variable_prod,
+)
+from website.logical.declarative import SystemSpec, build_spec, lower
 
 # The system decomposition now lives among the full app schema. The pgvector
 # `theorems` table (and other Postgres-only bits) aren't SQLite-creatable, so
@@ -45,37 +62,25 @@ _SYSTEM_TABLES = [
 ]
 
 
-ZFC_SOURCE = """system ZFC
-
-notation
-  brackets ( )
-
-grammar
-  term      | variable      | matches [a-z][a-z0-9]*
-  formula   | membership    | s ∈ t                   | s, t : term
-  formula   | equality      | s = t                   | s, t : term
-  formula   | negation      | ¬p                      | p : formula
-  formula   | conjunction   | (p ∧ q)                 | p, q : formula
-  formula   | implication   | (p → q)                 | p, q : formula
-  formula   | biconditional | (p ↔ q)                 | p, q : formula
-  formula   | universal     | ∀x p                    | x : variable, p : formula
-
-line statement
-  shape <formula> [<reference>]
-  reference | matches [A-Za-z0-9 ,]+
-  logical formula
-
-axioms
-  EXT | extensionality | ∀x ∀y (∀z (z ∈ x ↔ z ∈ y) → x = y)
-
-rules
-  HYP | hypothesis   | from             | infer p | p : formula
-  MP  | modus ponens | from p ; (p → q) | infer q | p, q : formula
-
-definitions
-  formula | subset   | x ⊆ y | means ∀z (z ∈ x → z ∈ y) | x, y, z : variable
-  formula | superset | x ⊇ y | means y ⊆ x              | x, y : variable
-"""
+def zfc_spec() -> SystemSpec:
+    # A compact but genuine fragment of ZFC, assembled directly as a SystemSpec.
+    return SystemSpec(
+        name="ZFC",
+        brackets=brackets(),
+        productions=[
+            variable_prod(), membership_prod(), equality_prod(), negation_prod(),
+            conjunction_prod(), implication_prod(), biconditional_prod(),
+            universal_prod(),
+        ],
+        line=statement_line(),
+        axioms=[axiom("EXT", "extensionality", "∀x ∀y (∀z (z ∈ x ↔ z ∈ y) → x = y)")],
+        rules=[hyp_rule(), mp_rule()],
+        definitions=[
+            subset_def(),
+            defn("formula", "superset", "x ⊇ y", "y ⊆ x",
+                 [("x", "variable"), ("y", "variable")]),
+        ],
+    )
 
 
 @pytest.fixture
@@ -88,8 +93,8 @@ def session():
 
 @pytest.fixture
 def stored_system(session):
-    # Parse -> rows -> commit -> reload from a fresh identity map.
-    spec = parse(ZFC_SOURCE)
+    # Spec -> rows -> commit -> reload from a fresh identity map.
+    spec = zfc_spec()
     session.add(spec_to_system(spec))
     session.commit()
     session.expire_all()
@@ -103,13 +108,13 @@ def stored_system(session):
 
 def test_spec_round_trips_through_the_database(stored_system):
     rebuilt = system_to_spec(stored_system)
-    assert rebuilt == parse(ZFC_SOURCE)
+    assert rebuilt == zfc_spec()
 
 
 def test_rebuilt_spec_lowers_identically(stored_system):
     # The strongest fidelity check: rows -> spec -> .edi is byte-identical to
-    # parsing the original source and lowering it.
-    assert lower(system_to_spec(stored_system)) == lower(parse(ZFC_SOURCE))
+    # lowering the originally-assembled spec.
+    assert lower(system_to_spec(stored_system)) == lower(zfc_spec())
 
 
 def test_decomposition_has_no_source_or_json_blob():
