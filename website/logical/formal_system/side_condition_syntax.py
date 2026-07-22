@@ -36,15 +36,16 @@ The predicates and their arities::
 
 An argument (``needle``/``haystack``/``left``/``right``/``name``) is either a
 declared metavariable of the owner — resolved against the match binding — or a
-literal term expression parsed against the grammar (which may use defined
-notation and embed the owner's metavariables, substituted at check time). A
-``sort`` argument is a pattern name resolved in the compile context. A line may
-combine predicates with ``or`` (each optionally ``not``-negated); ``and`` is the
-level above (across lines / ``;``).
+literal term expression parsed against the grammar's productions (it may embed the
+owner's metavariables, substituted at check time; defined notation is not yet
+resolvable here — see ``_parse_term``). A ``sort`` argument is a pattern name
+resolved in the compile context. A line may combine predicates with ``or`` (each
+optionally ``not``-negated); ``and`` is the level above (across lines / ``;``).
 """
 
 from __future__ import annotations
 
+from copy import copy
 from typing import TYPE_CHECKING
 
 from ..kernel import (
@@ -209,11 +210,20 @@ def _parse_term(text: str, context: Context) -> Term | None:
     Tries each sort in declaration order and takes the first that matches, then
     lifts any leaf that is a declared metavariable to a ``Var`` (via ``abstract``)
     so it stays schematic. Returns ``None`` when nothing parses.
+
+    Matches against the system's productions only, never its staged definitions:
+    during compilation ``context.definitions`` holds unresolved PendingDefinition
+    records, so letting the parse fall through to a definition-unfold would call
+    ``.match`` on one and crash (mirrors ``compiler.compose_schema_term``). A
+    consequence is that defined notation isn't yet usable in a term argument — it
+    simply doesn't parse.
     """
+    parse_context = copy(context)
+    parse_context.definitions = []
     for candidate in context.variables.values():
         if not isinstance(candidate, UnionPattern):
             continue
-        matched = candidate.match(text, context)
+        matched = candidate.match(text, parse_context)
         if matched is not None:
-            return abstract(from_match(matched, context), context.string_variables)
+            return abstract(from_match(matched, parse_context), context.string_variables)
     return None

@@ -500,6 +500,44 @@ def test_unparseable_term_argument_is_rejected_at_compile(session):
     assert "errors" in result and result["errors"]
 
 
+def test_term_argument_with_an_unbound_metavariable_fails_closed():
+    # `¬q` names `q`, which the deduction `p` never binds — the term can't be made
+    # ground, so the proviso must fail closed (reject) rather than compare a term
+    # with a wildcard leaf and pass vacuously through the `not`.
+    spec = SystemSpec(
+        name="Unbound",
+        brackets=brackets(),
+        productions=[
+            regex_prod("atom", "prop", "[a-z]"),
+            template_prod("formula", "atomic", "a", [("a", "atom")]),
+            negation_prod(),
+        ],
+        line=statement_line(),
+        rules=[rule("R", "r", [], "p", [("p", "formula"), ("q", "formula")],
+                    ["not equal(p, ¬q)"])],
+    )
+    result = build_spec(spec)
+    assert "errors" not in result, result.get("errors")  # compiles: q is declared
+    assert result["system"].parse("a [R]").valid is False  # but fails closed at check
+
+
+def test_defined_notation_in_a_term_argument_is_not_yet_supported():
+    # A term argument is parsed against productions, not definitions (unresolved at
+    # compile), so a defined constant `∅` doesn't parse — a clean compile error,
+    # not an internal crash. Documented as a further follow-up.
+    spec = SystemSpec(
+        name="DefArg",
+        brackets=brackets(),
+        productions=[regex_prod("term", "variable", "[a-z]"), membership_prod()],
+        line=statement_line(),
+        definitions=[defn("term", "emptyset", "∅", "z", [("z", "term")])],
+        rules=[rule("RE", "re", [], "(x ∈ y)",
+                    [("x", "term"), ("y", "term")], ["equal(x, ∅)"])],
+    )
+    result = build_spec(spec)
+    assert "errors" in result and result["errors"]
+
+
 # ---------------------------------------------------------------------------
 # Drift guard: the storage grammar matches the engine's surface grammar
 # ---------------------------------------------------------------------------

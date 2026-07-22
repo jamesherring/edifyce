@@ -283,7 +283,18 @@ def _resolve(arg: TermArg, binding: Binding, context: Context) -> Term:
     """
     if isinstance(arg, str):
         return _bound(binding, arg)
-    return arg.substitute(binding, context)
+    ground = arg.substitute(binding, context)
+    # A term argument may only reference metavariables the match actually bound.
+    # Any left-over Var means the proviso names something the match didn't
+    # determine — a malformed condition, which must fail loud (the caller fails
+    # closed) rather than compare a term with wildcard leaves and pass vacuously.
+    unbound = ground.free_vars()
+    if unbound:
+        raise ValueError(
+            "Side-condition term references metavariable(s) the rule match did not "
+            f"bind: {', '.join(sorted(unbound))}."
+        )
+    return ground
 
 
 def _is_atom(term: Term) -> bool:
