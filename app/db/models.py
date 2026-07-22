@@ -47,16 +47,16 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-
-# JSONB on Postgres (the real deployment), generic JSON elsewhere so a SQLite
-# test database can create the table. Same `jsonb` DDL on Postgres, so no drift.
-_JSON = JSON().with_variant(JSONB(), "postgresql")
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, uuid_pk_column
 
 if TYPE_CHECKING:
     from app.db.terms import TermRow
+
+# JSONB on Postgres (the real deployment), generic JSON elsewhere so a SQLite
+# test database can create the table. Same `jsonb` DDL on Postgres, so no drift.
+_JSON = JSON().with_variant(JSONB(), "postgresql")
 
 # Match this to the embedding model you deploy (e.g. Voyage voyage-3 = 1024,
 # OpenAI text-embedding-3-small = 1536). Changing it is a schema migration.

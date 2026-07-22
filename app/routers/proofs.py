@@ -162,12 +162,17 @@ async def _require_publishable(session: AsyncSession, proof: Proof) -> None:
     must verify against its system, and that system must itself be public — a
     published proof exposes `formal_system_id`, and `GET /formal-systems/{id}`
     404s for anonymous viewers when the system is a private draft.
+
+    On success the fresh verdict is cached on the row, so a published proof always
+    renders as checked. Also used to keep a *published* proof valid across source
+    edits (mirror of `systems.revalidate_if_published`): re-running it after an
+    edit rejects a change that would leave a world-readable proof unverifying.
     """
     system = await load_system(session, proof.formal_system_id)
     if system is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "The proof's system no longer exists.")
 
-    response, _ = _verify(system, proof.source)
+    response, valid = _verify(system, proof.source)
     if not response.success:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -180,6 +185,12 @@ async def _require_publishable(session: AsyncSession, proof: Proof) -> None:
             "Cannot publish a proof whose system is an unpublished draft; "
             "publish the system first.",
         )
+
+    # All gates passed. The proof was just verified as part of gating, so cache
+    # that verdict — otherwise a published proof that was never hit by /verify
+    # would render as "unchecked" despite publishing having proved it valid.
+    proof.valid = valid
+    proof.result = response.proof
 
 
 def _owner_out(proof: Proof) -> SystemOwner | None:
@@ -300,7 +311,8 @@ async def update_proof(
         )
     if "description" in changes:
         proof.description = changes["description"]
-    if "source" in changes and changes["source"] is not None:
+    source_changed = "source" in changes and changes["source"] is not None
+    if source_changed:
         proof.source = changes["source"]
         # The stored source changed, so the cached verdict is stale.
         proof.valid = None
@@ -308,10 +320,15 @@ async def update_proof(
 
     # Publishing is the write that makes a proof world-readable, so gate it —
     # after the field changes above so the checks see this request's final state.
+    # A source edit on an already-published proof is re-gated too, so a
+    # world-readable proof can't be edited into a non-verifying state (mirror of
+    # systems.revalidate_if_published). Both paths re-cache the verdict.
     if "published" in changes:
         if changes["published"]:
             await _require_publishable(session, proof)
         proof.published_at = datetime.now(timezone.utc) if changes["published"] else None
+    elif source_changed and proof.published_at is not None:
+        await _require_publishable(session, proof)
 
     await session.commit()
     return _detail(await _get_owned_or_404(session, proof_id, user.id))

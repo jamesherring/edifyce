@@ -78,17 +78,16 @@
 			cell: ({ row }) => row.original.owner?.display_name ?? '—',
 			meta: { cellClass: 'hidden text-muted-foreground md:table-cell' }
 		},
-		// Cached verdict from the last verification (null until first checked).
-		{
-			id: 'checked',
-			header: 'Checked',
-			cell: ({ row }) => renderComponent(CheckBadge, { valid: row.original.valid }),
-			meta: { cellClass: 'hidden sm:table-cell' }
-		},
-		// Every row in the public view is published, so the status column only
-		// earns its place in the owner's own list.
+		// Every row in the public view is published (and so verified), so the
+		// verdict and status columns only earn their place in the owner's own list.
 		...(view === 'mine'
 			? [
+					{
+						id: 'checked',
+						header: 'Checked',
+						cell: ({ row }) => renderComponent(CheckBadge, { valid: row.original.valid }),
+						meta: { cellClass: 'hidden sm:table-cell' }
+					} satisfies ColumnDef<ProofSummary, unknown>,
 					{
 						id: 'status',
 						header: 'Status',

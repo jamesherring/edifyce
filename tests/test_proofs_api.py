@@ -377,6 +377,50 @@ def test_publish_requires_a_published_system(client, db):
     assert response.status_code == 400
 
 
+def test_publishing_caches_the_verdict(client, db):
+    # Publishing verifies the proof; that verdict is cached so a published proof
+    # renders as checked without a separate /verify call.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner, published=True)
+    created = client.post(
+        "/proofs", json={"name": "P", "formal_system_id": system_id, "source": VALID_PROOF}
+    ).json()
+    assert created["valid"] is None  # never verified yet
+    client.patch(f"/proofs/{created['id']}", json={"published": True})
+    assert client.get(f"/proofs/{created['id']}").json()["valid"] is True
+
+
+def test_editing_a_published_proof_into_invalid_is_rejected(client, db):
+    # A published (world-readable) proof must keep verifying; a source edit that
+    # breaks it is rejected, leaving the published proof untouched.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner, published=True)
+    created = client.post(
+        "/proofs", json={"name": "P", "formal_system_id": system_id, "source": VALID_PROOF}
+    ).json()
+    client.patch(f"/proofs/{created['id']}", json={"published": True})
+
+    rejected = client.patch(f"/proofs/{created['id']}", json={"source": INVALID_PROOF})
+    assert rejected.status_code == 422
+    # The edit was rolled back: still valid, still the original source.
+    fetched = client.get(f"/proofs/{created['id']}").json()
+    assert fetched["valid"] is True
+    assert fetched["source"] == VALID_PROOF
+
+
+def test_editing_a_draft_proof_into_invalid_is_allowed(client, db):
+    # The published-proof guard must not apply to drafts (they may be saved
+    # mid-edit in any state).
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner, published=True)
+    created = client.post(
+        "/proofs", json={"name": "P", "formal_system_id": system_id, "source": VALID_PROOF}
+    ).json()
+    ok = client.patch(f"/proofs/{created['id']}", json={"source": INVALID_PROOF})
+    assert ok.status_code == 200
+    assert ok.json()["source"] == INVALID_PROOF
+
+
 def test_publish_then_public_read_and_listing(client, db):
     owner = _register_login(client, "ada@example.com")
     system_id = _seed_system(db, owner, published=True)
