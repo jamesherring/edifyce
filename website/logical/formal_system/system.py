@@ -160,33 +160,25 @@ class FormalSystem:
 
                 # Check for main line type attributes
                 # Try to get the formula, reference, label, display, is_axiom
-                try:
-                    # The logical formula: the LineType's declared field if it has
-                    # one, else a legacy `formula()` accessor function.
-                    if line_type.formula_field is not None:
-                        proof_line.formula = _line_field(result, line_type.formula_field, context)
-                    else:
-                        proof_line.formula = result.get_by_path("formula()", context)
+                if line_type.formula_field is not None:
+                    # The logical formula is the sub-field the line type declares
+                    # (or the whole match, for `formula: self`).
+                    try:
+                        formula = _line_field(result, line_type.formula_field, context)
+                        # It has to be a match
+                        if type(formula) is Match:
+                            proof_line.formula = formula
+                    except Exception:
+                        pass
 
-                    # It has to be a match
-                    if type(proof_line.formula) is not Match:
-                        proof_line.formula = None
-
-                except Exception:
-                    pass
-
-                try:
-                    # The citation reference: declared field, else `reference()`.
-                    if line_type.reference_field is not None:
+                if line_type.reference_field is not None:
+                    # The citation reference is the declared sub-field.
+                    try:
                         reference_match = _line_field(result, line_type.reference_field, context)
-                    else:
-                        reference_match = result.get_by_path("reference()", context)
-
-                    proof_line.reference_string = reference_match.formatted_string()
-                    proof_line.reference_string_display = reference_match.string
-
-                except Exception:
-                    pass
+                        proof_line.reference_string = reference_match.formatted_string()
+                        proof_line.reference_string_display = reference_match.string
+                    except Exception:
+                        pass
 
                 try:
                     label = result.get_by_path("label()", context)

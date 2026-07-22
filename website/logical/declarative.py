@@ -2,11 +2,10 @@
 
 The proof engine is powerful but its source language forces three unrelated
 jobs -- describing the *grammar*, the *inference rules*, and *side conditions*
--- through one imperative, whitespace-sensitive mechanism (``Pattern`` /
-``UnionPattern`` / ``with ... as ...`` / ``.each(...)`` / ``return self.f``).
-Recursive grammars only work if the author performs a non-obvious ordering
-dance (forward-declare an empty ``UnionPattern`` *then* fill it), and a wrong
-guess compiles cleanly yet silently matches nothing.
+-- through one whitespace-sensitive mechanism (``Pattern`` / ``UnionPattern`` /
+``with ... as ...``). Recursive grammars only work if the author performs a
+non-obvious ordering dance (forward-declare an empty ``UnionPattern`` *then*
+fill it), and a wrong guess compiles cleanly yet silently matches nothing.
 
 This module offers a structured, order-independent description of a system --
 the :class:`SystemSpec` dataclasses (grammar productions, a logical line,

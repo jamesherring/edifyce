@@ -6,7 +6,6 @@ from website.logical.compiler import (
     AbstractSyntaxTree,
     compile as compile_formal_system,
     get_inherited_system,
-    parse_arguments,
 )
 from website.logical.formal_system import FormalSystem
 
@@ -27,44 +26,6 @@ def test_get_inherited_system_returns_none_without_inherit():
 
 def test_get_inherited_system_last_inherit_wins():
     assert get_inherited_system("inherit first\ninherit second") == "second"
-
-
-# ---------------------------------------------------------------------------
-# parse_arguments
-# ---------------------------------------------------------------------------
-
-
-def test_parse_arguments_empty_string():
-    assert parse_arguments("") == []
-
-
-def test_parse_arguments_single_argument():
-    assert parse_arguments("x as formula") == [("x", "formula")]
-
-
-def test_parse_arguments_multiple_arguments():
-    assert parse_arguments("x as formula, y as term") == [
-        ("x", "formula"),
-        ("y", "term"),
-    ]
-
-
-def test_parse_arguments_commas_inside_brackets_stay_together():
-    assert parse_arguments("x as formula, s as set(a, b)") == [
-        ("x", "formula"),
-        ("s", "set(a, b)"),
-    ]
-
-
-def test_parse_arguments_nested_brackets():
-    assert parse_arguments("x as foo(bar(1, 2), 3), y as baz") == [
-        ("x", "foo(bar(1, 2), 3)"),
-        ("y", "baz"),
-    ]
-
-
-def test_parse_arguments_unbalanced_brackets_returns_none():
-    assert parse_arguments("x as broken(a, b") is None
 
 
 # ---------------------------------------------------------------------------

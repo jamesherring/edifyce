@@ -45,12 +45,6 @@ _LANGUAGE = r"""
     Pattern statement:
         with f as formula, r as reference:
             f [r]
-
-    statement.formula():
-        return self.f
-
-    statement.reference():
-        return self.r
 """
 
 
@@ -62,29 +56,27 @@ SCOPED_ZFC = (
         with phi as formula:
             assume phi
 
-    assumption_pattern.formula():
-        return self.phi
-
     Pattern variable_pattern:
         with x as setvar:
             let x
 
-    variable_pattern.formula():
-        return self.x
-
     LineType claim:
         pattern: statement
         behaviour: logical
+        formula: f
+        reference: r
 
     LineType assume:
         pattern: assumption_pattern
         behaviour: logical
         scope: assumption
+        formula: phi
 
     LineType introduce:
         pattern: variable_pattern
         behaviour: logical
         scope: variable
+        formula: x
 
     with p as formula, q as formula, x as setvar:
 
