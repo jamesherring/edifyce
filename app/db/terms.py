@@ -54,6 +54,9 @@ class TermRow(Base):
         Index("uq_terms_system_digest", "formal_system_id", "digest", unique=True),
         # Structural search: statements by constructor within a system.
         Index("ix_terms_system_constructor", "formal_system_id", "constructor"),
+        # "Same statement up to variable renaming" search: many exact terms map
+        # to one alpha class, so this is non-unique (contrast the digest index).
+        Index("ix_terms_system_alpha_digest", "formal_system_id", "alpha_digest"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk_column()
@@ -72,6 +75,11 @@ class TermRow(Base):
     # Structural hash over (kind, constructor, literal, sort, child digests) —
     # see terms_mapping.digest_term. Scoped per system by the unique index.
     digest: Mapped[str] = mapped_column(String(64))
+    # Structural hash invariant under consistent renaming of free variables —
+    # see terms_mapping.alpha_digest. Non-unique: the "same statement up to
+    # variable names" key. Nullable only to allow backfilling rows that predate
+    # this column; store_term always populates it.
+    alpha_digest: Mapped[str | None] = mapped_column(String(64))
 
     # Many-to-one only: no term collection on FormalSystem — a system's term
     # graph can be arbitrarily large, and must never be loaded as one list.

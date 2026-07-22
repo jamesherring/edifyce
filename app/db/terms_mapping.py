@@ -15,6 +15,7 @@ path lands.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 from typing import TYPE_CHECKING
 
@@ -30,6 +31,7 @@ from app.db.terms import (
     TermRow,
 )
 from website.logical.kernel import Bound, Node, Term, Var, intern
+from website.logical.matching.patterns import RegexPattern
 
 if TYPE_CHECKING:
     from app.db.models import FormalSystem
@@ -123,6 +125,104 @@ def digest_term(term: Term, _memo: dict[int, str] | None = None) -> str:
     return digest
 
 
+def _free_identity(term: Term) -> tuple[str, ...] | None:
+    """The renameable identity of a free-variable leaf, or ``None``.
+
+    Two leaf shapes are treated as free (renameable) variables:
+
+    * a kernel :class:`Var` — a schematic metavariable (``p``, ``x``); and
+    * a *regex-leaf* :class:`Node` — an object-language variable token like the
+      ``a`` in ``a ∈ b``, which parses to ``Node(<variable regex>, literal="a")``
+      rather than a ``Var``.
+
+    A :class:`Bound` is already index-canonical (De Bruijn), so it is not free
+    here; constant atoms, compound nodes and defined nodes are fixed structure.
+    The returned tuple's last element is the variable's *name* (forgotten by the
+    canonical form); its prefix is the variable's *class* (its sort/production),
+    which is preserved so a ``formula`` variable never collapses onto a ``term``
+    one.
+
+    Note the regex-leaf rule is a heuristic: it assumes a ``matches <regex>``
+    production denotes variables, true for every current system but wrong for a
+    regex that spells constants (e.g. numerals). A context-aware policy can
+    refine this when such a system appears; it would only change which leaves
+    are renamed, not the surrounding canonicalisation.
+    """
+    if isinstance(term, Bound):
+        return None
+    if isinstance(term, Var):
+        return ("var", term.sort.name, term.name)
+    if (
+        isinstance(term, Node)
+        and not term.children
+        and term.literal is not None
+        and isinstance(term.pattern, RegexPattern)
+    ):
+        return ("leaf", term.pattern.name, term.literal)
+    return None
+
+
+def _alpha_canon(
+    term: Term, numbering: dict[tuple[str, ...], int], counter: itertools.count
+) -> list:
+    # Canonical, JSON-serialisable structure for `term` with every free variable
+    # replaced by a first-occurrence index (its name forgotten, its class kept).
+    # A fixed template-order pre-order walk makes the numbering deterministic and
+    # identical for α-equivalent terms, so their canon — and thus digest — agree.
+    identity = _free_identity(term)
+    if identity is not None:
+        index = numbering.get(identity)
+        if index is None:
+            index = next(counter)
+            numbering[identity] = index
+        # identity[:-1] is the class (sort/production); the name is dropped.
+        return ["free", list(identity[:-1]), index]
+
+    if isinstance(term, Bound):
+        return ["bound", term.index, term.sort.name]
+
+    if isinstance(term, Node):
+        fields = _row_fields(term)
+        children = [
+            _alpha_canon(term.children[slot], numbering, counter)
+            for slot in _slot_order(term.pattern, term.children)
+        ]
+        return [
+            "node",
+            fields["kind"],
+            fields.get("constructor"),
+            fields.get("literal"),
+            fields.get("sort"),
+            children,
+        ]
+
+    raise TypeError(f"Unsupported term kind: {type(term).__name__}")
+
+
+def alpha_digest(term: Term) -> str:
+    """A structural sha256 invariant under consistent renaming of free variables.
+
+    Unlike :func:`digest_term` (which keys leaves by their exact name, so
+    ``a ∈ b`` and ``y ∈ z`` differ), this numbers every free variable by first
+    occurrence, so terms equal *up to a bijective renaming* share one digest —
+    the substrate for "same statement up to variable names" search. Variable
+    *sharing* is preserved (``a ∈ a`` and ``a ∈ b`` still differ), and bound
+    variables carried as :class:`Bound` are already index-canonical.
+
+    It is a whole-(sub)term property, not composable from child digests, so it
+    is computed per term rather than memoised across the DAG the way
+    ``digest_term`` is. Stored per row, it doubles as the isolated α-fingerprint
+    of that subterm (a root row's is its whole statement's).
+    """
+    return hashlib.sha256(
+        json.dumps(
+            _alpha_canon(term, {}, itertools.count()),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+
 def store_term(session: Session, system: FormalSystem, term: Term) -> TermRow:
     """Persist ``term``'s DAG for ``system`` and return the root's row.
 
@@ -168,7 +268,12 @@ def store_term(session: Session, system: FormalSystem, term: Term) -> TermRow:
     for digest, t in postorder.items():
         if digest in rows:
             continue
-        row = TermRow(formal_system=system, digest=digest, **_row_fields(t))
+        row = TermRow(
+            formal_system=system,
+            digest=digest,
+            alpha_digest=alpha_digest(t),
+            **_row_fields(t),
+        )
         if isinstance(t, Node) and t.children:
             for position, slot in enumerate(_slot_order(t.pattern, t.children)):
                 row.children.append(
