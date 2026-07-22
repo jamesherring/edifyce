@@ -83,6 +83,12 @@ if TYPE_CHECKING:
     # The substitution a rule match produces: metavariable name -> bound Term.
     Binding = dict[str, Term]
 
+    # A predicate argument is either a metavariable *name* (resolved against the
+    # binding) or a pre-parsed literal *term* (which may itself contain the rule's
+    # metavariables as Vars, substituted from the binding at check time). See
+    # `_resolve`. The surface parser decides which at compile time.
+    TermArg = str | Term
+
 
 class SideCondition:
     """Base class for the closed side-condition algebra.
@@ -108,12 +114,14 @@ class Occurs(SideCondition):
     occur in ``φ``" (e.g. the side-condition on vacuous/∀-introduction).
     """
 
-    needle: str
-    haystack: str
+    needle: TermArg
+    haystack: TermArg
 
     def check(self, binding: Binding, context: Context) -> bool:
         return _occurs(
-            _bound(binding, self.needle), _bound(binding, self.haystack), context
+            _resolve(self.needle, binding, context),
+            _resolve(self.haystack, binding, context),
+            context,
         )
 
 
@@ -133,13 +141,13 @@ class DisjointLeaves(SideCondition):
     occur (free) in ``φ``".
     """
 
-    left: str
-    right: str
+    left: TermArg
+    right: TermArg
     sort: Pattern | None = None
 
     def check(self, binding: Binding, context: Context) -> bool:
-        left = _leaves(_bound(binding, self.left), context, self.sort)
-        right = _leaves(_bound(binding, self.right), context, self.sort)
+        left = _leaves(_resolve(self.left, binding, context), context, self.sort)
+        right = _leaves(_resolve(self.right, binding, context), context, self.sort)
         return left.isdisjoint(right)
 
 
@@ -157,11 +165,11 @@ class IsAtom(SideCondition):
     variable rather than a compound formula/term.
     """
 
-    name: str
+    name: TermArg
     sort: Pattern | None = None
 
     def check(self, binding: Binding, context: Context) -> bool:
-        term = _bound(binding, self.name)
+        term = _resolve(self.name, binding, context)
         if not _is_atom(term):
             return False
         return self.sort is None or _sort_admits(self.sort, term, context)
@@ -182,11 +190,11 @@ class IsMember(SideCondition):
     unlike ``IsAtom("t", term)`` which additionally forces it to be a leaf.
     """
 
-    name: str
+    name: TermArg
     sort: Pattern
 
     def check(self, binding: Binding, context: Context) -> bool:
-        return _sort_admits(self.sort, _bound(binding, self.name), context)
+        return _sort_admits(self.sort, _resolve(self.name, binding, context), context)
 
 
 @dataclass(frozen=True)
@@ -202,11 +210,13 @@ class Equal(SideCondition):
     "these must differ" proviso is its negation, ``Not(Equal("p", "q"))``.
     """
 
-    left: str
-    right: str
+    left: TermArg
+    right: TermArg
 
     def check(self, binding: Binding, context: Context) -> bool:
-        return _bound(binding, self.left).equal(_bound(binding, self.right), context)
+        return _resolve(self.left, binding, context).equal(
+            _resolve(self.right, binding, context), context
+        )
 
 
 @dataclass(frozen=True)
@@ -259,6 +269,21 @@ def _bound(binding: Binding, name: str) -> Term:
             f"Side-condition references '{name}', which the rule match did not bind."
         )
     return binding[name]
+
+
+def _resolve(arg: TermArg, binding: Binding, context: Context) -> Term:
+    """Resolve a predicate argument to a concrete term against the match binding.
+
+    A ``str`` is a metavariable name looked up in the binding (fail-loud if
+    unbound). A pre-parsed ``Term`` is a literal argument — possibly containing
+    the rule's metavariables as ``Var`` nodes — so the binding is substituted into
+    it, yielding the ground term to compare (defined symbols stay opaque
+    constructors: no unfolding). ``equal``/``_occurs`` do not treat an unbound
+    ``Var`` as a wildcard, so the term must be fully substituted first.
+    """
+    if isinstance(arg, str):
+        return _bound(binding, arg)
+    return arg.substitute(binding, context)
 
 
 def _is_atom(term: Term) -> bool:

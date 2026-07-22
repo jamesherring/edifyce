@@ -34,20 +34,36 @@ The predicates and their arities::
     atom(name [, sort])               -> IsAtom
     member(name, sort)                -> IsMember
 
-Names are the rule's metavariables; a ``sort`` argument is a pattern name
-resolved in the compile context. A line may combine predicates with ``or`` (each
-optionally ``not``-negated); ``and`` is the level above (across lines / ``;``).
+An argument (``needle``/``haystack``/``left``/``right``/``name``) is either a
+declared metavariable of the owner — resolved against the match binding — or a
+literal term expression parsed against the grammar (which may use defined
+notation and embed the owner's metavariables, substituted at check time). A
+``sort`` argument is a pattern name resolved in the compile context. A line may
+combine predicates with ``or`` (each optionally ``not``-negated); ``and`` is the
+level above (across lines / ``;``).
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..kernel import DisjointLeaves, Equal, IsAtom, IsMember, Not, Occurs, Or, SideCondition
-from ..matching.patterns import Pattern
+from ..kernel import (
+    DisjointLeaves,
+    Equal,
+    IsAtom,
+    IsMember,
+    Not,
+    Occurs,
+    Or,
+    SideCondition,
+    abstract,
+    from_match,
+)
+from ..matching.patterns import Pattern, UnionPattern
 
 if TYPE_CHECKING:
     from ..matching.context import Context
+    from ..kernel import Term
 
 
 def parse_side_condition(text: str, context: Context) -> SideCondition:
@@ -62,6 +78,34 @@ def parse_side_condition(text: str, context: Context) -> SideCondition:
     """
     disjuncts = [_parse_disjunct(part, context) for part in _split_or(text)]
     return disjuncts[0] if len(disjuncts) == 1 else Or(tuple(disjuncts))
+
+
+_OPENERS = "([{⟨"
+_CLOSERS = ")]}⟩"
+
+
+def _split_args(inner: str) -> list[str]:
+    """Split a predicate's argument list on top-level commas.
+
+    A comma inside brackets belongs to a compound term argument (e.g.
+    ``equal(p, f(a, b))``), so only depth-0 commas separate arguments. Mirrored in
+    ``app.db.side_conditions_mapping`` so the storage parser splits identically.
+    """
+    if not inner:
+        return []
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    for i, char in enumerate(inner):
+        if char in _OPENERS:
+            depth += 1
+        elif char in _CLOSERS:
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(inner[start:i])
+            start = i + 1
+    parts.append(inner[start:])
+    return [part.strip() for part in parts]
 
 
 def _split_or(text: str) -> list[str]:
@@ -106,7 +150,7 @@ def _parse_disjunct(text: str, context: Context) -> SideCondition:
 
     name = text[:open_paren].strip()
     inner = text[open_paren + 1 : -1].strip()
-    args = [arg.strip() for arg in inner.split(",")] if inner else []
+    args = _split_args(inner)
     if any(not arg for arg in args):
         raise ValueError(f"Malformed side-condition arguments: '{text}'.")
 
@@ -116,19 +160,19 @@ def _parse_disjunct(text: str, context: Context) -> SideCondition:
 
 def _build(name: str, args: list[str], text: str, context: Context) -> SideCondition:
     if name == "occurs" and len(args) == 2:
-        return Occurs(args[0], args[1])
+        return Occurs(_arg(args[0], context), _arg(args[1], context))
     if name == "equal" and len(args) == 2:
-        return Equal(args[0], args[1])
+        return Equal(_arg(args[0], context), _arg(args[1], context))
     if name == "disjoint" and len(args) in (2, 3):
         sort = _sort(args[2], context) if len(args) == 3 else None
-        return DisjointLeaves(args[0], args[1], sort)
+        return DisjointLeaves(_arg(args[0], context), _arg(args[1], context), sort)
     if name == "atom" and len(args) in (1, 2):
         sort = _sort(args[1], context) if len(args) == 2 else None
-        return IsAtom(args[0], sort)
+        return IsAtom(_arg(args[0], context), sort)
     if name == "member" and len(args) == 2:
         # The sort is required: `member(x, R)` asks "is x of sort R", so R must be
         # named (unlike `atom`, where the sort is an optional extra guard).
-        return IsMember(args[0], _sort(args[1], context))
+        return IsMember(_arg(args[0], context), _sort(args[1], context))
     raise ValueError(f"Unknown or misapplied side-condition: '{text}'.")
 
 
@@ -137,3 +181,39 @@ def _sort(sort_name: str, context: Context) -> Pattern:
     if not isinstance(pattern, Pattern):
         raise ValueError(f"Side-condition sort '{sort_name}' is not a pattern.")
     return pattern
+
+
+def _arg(text: str, context: Context) -> str | Term:
+    """Resolve a predicate argument to a metavariable name or a literal term.
+
+    A declared metavariable of the rule/definition (``context.string_variables``)
+    stays a bare name, resolved against the match binding at check time — every
+    existing proviso takes this path unchanged. Anything else is parsed as a term
+    expression against the grammar (and may use defined notation), keeping the
+    owner's metavariables schematic as ``Var`` nodes so they substitute later.
+    """
+    if text in context.string_variables:
+        return text
+    term = _parse_term(text, context)
+    if term is None:
+        raise ValueError(
+            f"Side-condition argument '{text}' is neither a declared metavariable "
+            "nor a parseable term."
+        )
+    return term
+
+
+def _parse_term(text: str, context: Context) -> Term | None:
+    """Parse ``text`` as a term against the grammar's sorts (unions).
+
+    Tries each sort in declaration order and takes the first that matches, then
+    lifts any leaf that is a declared metavariable to a ``Var`` (via ``abstract``)
+    so it stays schematic. Returns ``None`` when nothing parses.
+    """
+    for candidate in context.variables.values():
+        if not isinstance(candidate, UnionPattern):
+            continue
+        matched = candidate.match(text, context)
+        if matched is not None:
+            return abstract(from_match(matched, context), context.string_variables)
+    return None
