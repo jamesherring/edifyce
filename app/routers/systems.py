@@ -248,6 +248,42 @@ async def _require_unpublishable(session: AsyncSession, system: FormalSystem) ->
         )
 
 
+async def revalidate_if_published(session: AsyncSession, system_id: uuid.UUID) -> None:
+    """Keep a *published* system compilable across child edits.
+
+    Publishing gates on the system compiling, but the child-CRUD routes could
+    then edit a published (world-readable) system into a non-compiling state,
+    reopening the broken-public-system hole the publish gate closes. So after a
+    child mutation — and before its commit — a published system is recompiled;
+    if it no longer builds, the transaction is rolled back and the edit rejected
+    with a 422. Drafts stay draft-tolerant (``POST /validate`` reports their
+    state), so this is a no-op for them. Shared with the child-CRUD router.
+
+    NOTE: this closes the common (sequential) hole, not a concurrent one. A
+    child edit that commits in the window between a publish transaction
+    compiling the draft and committing ``published_at`` reads ``published_at``
+    as still-NULL here, skips revalidation, and lands an invalid edit that the
+    publisher never rechecks — a published-but-broken end state. Closing that
+    means serializing publish against child edits (a ``FOR UPDATE`` lock on the
+    parent, with the publish path re-reading under the lock). It's deferred: the
+    window needs one owner racing a publish and an edit on the same system, and
+    the lock is Postgres-only behaviour the SQLite test suite can't exercise —
+    so it belongs with deliberate concurrency hardening, tested against Postgres.
+    """
+    published_at = await session.scalar(
+        select(FormalSystem.published_at).where(FormalSystem.id == system_id)
+    )
+    if published_at is None:
+        return
+    system = await _load_system(session, system_id)
+    if system is None:  # deleted mid-flight; nothing to keep valid
+        return
+    result = build_spec(system_to_spec(system))
+    if "errors" in result:
+        await session.rollback()
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=result["errors"])
+
+
 def _owner_out(system: FormalSystem) -> SystemOwner | None:
     if system.owner is None:
         return None
