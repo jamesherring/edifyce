@@ -183,10 +183,10 @@ def _build_published_zfc(client: TestClient) -> str:
     return sid
 
 
-def test_editing_a_published_system_into_a_non_compiling_state_is_rejected(client):
-    # Publishing gates on compiling, but a later child edit must not be able to
-    # break a world-readable system. A line shape with no <placeholder> can't be
-    # lowered — the exact break the publish gate rejects.
+def test_editing_a_published_system_part_is_rejected(client):
+    # A published system is frozen: its compiled behaviour is what published
+    # proofs were verified against, so no part may be edited — even a
+    # compile-preserving edit is refused (409), and it is left unchanged.
     _login(client, "ada@example.com")
     sid = _build_published_zfc(client)
     line = client.get(f"/formal-systems/{sid}").json()["lines"][0]
@@ -194,31 +194,25 @@ def test_editing_a_published_system_into_a_non_compiling_state_is_rejected(clien
     resp = client.patch(
         f"/formal-systems/{sid}/line-types/{line['id']}", json={"shape": "assertion"}
     )
-    assert resp.status_code == 422, resp.text
-    assert isinstance(resp.json()["detail"], list)  # the compile errors
+    assert resp.status_code == 409, resp.text
 
-    # Rolled back: the shape is unchanged and the system still compiles.
     after = client.get(f"/formal-systems/{sid}").json()["lines"][0]
     assert after["shape"] == line["shape"]
-    assert client.post(f"/formal-systems/{sid}/validate").json()["success"] is True
 
 
-def test_edits_that_keep_a_published_system_compiling_are_allowed(client):
-    # The gate rejects only breaking edits; valid create/update/delete still work
-    # on a published system.
+def test_all_part_mutations_on_a_published_system_are_rejected(client):
+    # The freeze covers every mutation kind, not just breaking edits: create and
+    # delete on a published system are both 409.
     _login(client, "ada@example.com")
     sid = _build_published_zfc(client)
 
-    # Create: a second bracket pair keeps it compiling.
     assert client.post(
         f"/formal-systems/{sid}/brackets", json={"opening": "[", "closing": "]"}
-    ).status_code == 201
-    # Delete: dropping the (optional) definition keeps it compiling.
+    ).status_code == 409
     definition_id = client.get(f"/formal-systems/{sid}").json()["definitions"][0]["id"]
     assert (
-        client.delete(f"/formal-systems/{sid}/definitions/{definition_id}").status_code == 204
+        client.delete(f"/formal-systems/{sid}/definitions/{definition_id}").status_code == 409
     )
-    assert client.post(f"/formal-systems/{sid}/validate").json()["success"] is True
 
 
 def test_a_draft_still_tolerates_a_non_compiling_edit(client):
