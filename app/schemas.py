@@ -302,3 +302,55 @@ class ReorderRequest(BaseModel):
     """A full permutation of a collection's ids, in the desired order."""
 
     ids: list[uuid.UUID] = Field(..., min_length=1)
+
+
+# ---------------------------------------------------------------------------
+# Proofs (CRUD)
+#
+# Mirror the formal-system CRUD models: a proof is an owner-scoped object that
+# belongs to a formal system, carries its `.edi` source text, and is verified
+# against that system on demand. Like systems, publishing makes it
+# world-readable. The read models carry the cached `valid`/`result` snapshot so
+# a client can render the last check without re-running it. `folder_id` is
+# surfaced read-only — folder CRUD (like formal-system child parts) is a later
+# phase — and proof-to-proof references are deferred with it.
+# ---------------------------------------------------------------------------
+
+
+class ProofSummary(BaseModel):
+    id: uuid.UUID
+    name: str
+    slug: str
+    description: str | None = None
+    formal_system_id: uuid.UUID
+    folder_id: uuid.UUID | None = None
+    # Last-known validity; null until the proof has been verified.
+    valid: bool | None = None
+    published_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+    # Null for ownerless proofs (owner_id is nullable). Reuses the system owner's
+    # public face — id + display name, never email.
+    owner: SystemOwner | None = None
+
+
+class ProofDetail(ProofSummary):
+    source: str
+    # Cached `proof.data()` payload from the last verification (null = never run).
+    result: dict | None = None
+
+
+class ProofCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=256)
+    # The system this proof is written against; must be readable by the caller.
+    formal_system_id: uuid.UUID
+    description: str | None = None
+    source: str = ""
+
+
+class ProofUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=256)
+    description: str | None = None
+    source: str | None = None
+    # True sets published_at to now, False clears it. Absent leaves it unchanged.
+    published: bool | None = None

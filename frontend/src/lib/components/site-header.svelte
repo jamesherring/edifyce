@@ -12,7 +12,8 @@
 
 	const nav = [
 		{ href: '/', label: 'Home' },
-		{ href: '/systems', label: 'Systems' }
+		{ href: '/systems', label: 'Systems' },
+		{ href: '/proofs', label: 'Proofs' }
 	];
 
 	function isActive(href: string) {

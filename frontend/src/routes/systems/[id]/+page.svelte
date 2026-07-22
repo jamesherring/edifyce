@@ -147,6 +147,11 @@
 					<Button href={`/systems/${system?.id}/verify`} variant="outline" size="sm">
 						<SquareCheck class="size-4" /> Verify a proof
 					</Button>
+					{#if auth.user}
+						<Button href={`/proofs/new?system=${system?.id}`} variant="outline" size="sm">
+							<Pencil class="size-4" /> New proof
+						</Button>
+					{/if}
 				</div>
 			{/snippet}
 		</EntityHeader>

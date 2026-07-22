@@ -33,6 +33,7 @@ from fastapi_users_db_sqlalchemy import (
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     DDL,
+    JSON,
     Boolean,
     Column,
     DateTime,
@@ -46,6 +47,10 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+
+# JSONB on Postgres (the real deployment), generic JSON elsewhere so a SQLite
+# test database can create the table. Same `jsonb` DDL on Postgres, so no drift.
+_JSON = JSON().with_variant(JSONB(), "postgresql")
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, uuid_pk_column
@@ -246,10 +251,13 @@ class Proof(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     source: Mapped[str] = mapped_column(Text, server_default="")
     position: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     # Cached `proof.data()` payload and last-known validity (null = never checked).
-    result: Mapped[dict | None] = mapped_column(JSONB)
+    result: Mapped[dict | None] = mapped_column(_JSON)
     valid: Mapped[bool | None] = mapped_column(Boolean)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # One-directional to the owning user (single FK, so no back_populates needed).
+    # A relationship adds no column, so this needs no migration.
+    owner: Mapped["User | None"] = relationship()
     formal_system: Mapped["FormalSystem"] = relationship(back_populates="proofs")
     folder: Mapped["ProofFolder | None"] = relationship(back_populates="proofs")
     theorems: Mapped[list["Theorem"]] = relationship(back_populates="proof")
