@@ -10,10 +10,29 @@ import { api } from '$lib/api';
 // `page.params.id` re-runs the page's load effect (see page-mock.svelte.ts).
 vi.mock('$app/state', async () => await import('$lib/testing/page-mock.svelte'));
 vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
-vi.mock('$lib/api', () => ({
-	api: { me: vi.fn(), systems: { get: vi.fn(), validate: vi.fn() } },
-	ApiError: class ApiError extends Error {}
-}));
+// The edit page renders every section, and each grabs its `api.parts.<x>` crud
+// object at init — so the mock must expose them (the methods are never called
+// here; no save happens). `partStub` is defined inside the factory because
+// vi.mock is hoisted above module-scope declarations.
+vi.mock('$lib/api', () => {
+	const partStub = () => ({ create: vi.fn(), update: vi.fn(), remove: vi.fn(), reorder: vi.fn() });
+	return {
+		api: {
+			me: vi.fn(),
+			systems: { get: vi.fn(), validate: vi.fn() },
+			parts: {
+				sorts: partStub(),
+				productions: partStub(),
+				brackets: partStub(),
+				lineTypes: partStub(),
+				definitions: partStub(),
+				axioms: partStub(),
+				rules: partStub()
+			}
+		},
+		ApiError: class ApiError extends Error {}
+	};
+});
 vi.mock('$lib/toast', () => ({ toastSuccess: vi.fn(), toastError: vi.fn() }));
 
 const apiMock = api as unknown as {
