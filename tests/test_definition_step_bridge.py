@@ -69,15 +69,11 @@ ALIAS_SYSTEM = """FormalSystem AliasSys:
         with f as formula, r as reference:
             f [r]
 
-    statement_pattern.formula():
-        return self.f
-
-    statement_pattern.reference():
-        return self.r
-
     LineType statement:
         pattern: statement_pattern
         behaviour: logical
+        formula: f
+        reference: r
 
     with f as formula:
         InferenceRule hypothesis:
@@ -131,15 +127,11 @@ BINDER_SYSTEM = """FormalSystem BinderSys:
         with f as formula, r as reference:
             f [r]
 
-    statement_pattern.formula():
-        return self.f
-
-    statement_pattern.reference():
-        return self.r
-
     LineType statement:
         pattern: statement_pattern
         behaviour: logical
+        formula: f
+        reference: r
 
     with f as formula:
         InferenceRule hypothesis:
@@ -307,15 +299,11 @@ FRESH_SYSTEM = """FormalSystem SetTheory:
         with f as formula, r as reference:
             f [r]
 
-    statement_pattern.formula():
-        return self.f
-
-    statement_pattern.reference():
-        return self.r
-
     LineType statement:
         pattern: statement_pattern
         behaviour: logical
+        formula: f
+        reference: r
 """
 
 
