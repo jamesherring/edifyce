@@ -24,6 +24,7 @@ from app.db.side_conditions import SideConditionRow
 from app.db.side_conditions_mapping import (  # grammars under test
     _parse,
     _parse_lines,
+    definition_condition_string,
     rule_side_conditions_list,
 )
 from app.db.systems import (
@@ -323,6 +324,44 @@ def test_round_tripped_or_proviso_gates_proofs(or_system):
     assert system.parse("(a → (b → c)) [DIS]").valid is True
     # both disjuncts fail: a ≠ (a → b) and a occurs in it.
     assert system.parse("(a → (a → b)) [DIS]").valid is False
+
+
+# The `or` disjunction also reaches the *definition* owner via the `where` clause.
+OR_DEF_SOURCE = """system OrDefSys
+
+notation
+  brackets ( )
+
+grammar
+  term    | variable   | matches [a-z]
+  formula | membership | s ∈ t | s, t : term
+  formula | equality   | s = t | s, t : term
+
+line statement
+  shape <formula> [<reference>]
+  reference | matches [A-Za-z0-9 ,]+
+  logical formula
+
+definitions
+  formula | rel | x ~ y | means x = y | x, y : variable | where disjoint(x, y) or atom(x)
+"""
+
+
+@pytest.fixture
+def or_def_system(session):
+    session.add(spec_to_system(parse(OR_DEF_SOURCE)))
+    session.commit()
+    session.expire_all()
+    return session.scalar(select(FormalSystem).where(FormalSystem.name == "OrDefSys"))
+
+
+def test_definition_where_or_round_trips(or_def_system):
+    assert system_to_spec(or_def_system) == parse(OR_DEF_SOURCE)
+    rel = _definition(or_def_system, "rel")
+    root = next(sc for sc in rel.side_conditions if sc.parent_id is None)
+    assert root.kind == "or"
+    assert [child.kind for child in root.children] == ["disjoint", "atom"]
+    assert definition_condition_string(rel) == "disjoint(x, y) or atom(x)"
 
 
 # ---------------------------------------------------------------------------

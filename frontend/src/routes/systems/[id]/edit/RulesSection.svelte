@@ -178,6 +178,9 @@
 	<BindingsEditor bind:bindings />
 	<div class="space-y-2">
 		<Label>Side-conditions <span class="text-muted-foreground">(provisos)</span></Label>
+		<p class="text-xs text-muted-foreground">
+			All lines must hold; within a line, combine predicates with <code>or</code>.
+		</p>
 		{#each sideConditions as proviso (proviso)}
 			<div class="flex items-center gap-2">
 				<Input
