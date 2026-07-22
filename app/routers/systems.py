@@ -28,7 +28,10 @@ from app.auth import current_active_user, current_active_user_optional
 from app.db import Base, FormalSystem, get_session, system_to_spec
 from app.db.models import User
 from app.db.side_conditions import SideConditionRow
-from app.db.side_conditions_mapping import definition_condition_string
+from app.db.side_conditions_mapping import (
+    definition_condition_string,
+    rule_side_conditions_list,
+)
 from app.db.systems import (
     AxiomBindingRow,
     AxiomRow,
@@ -91,6 +94,11 @@ _CHILD_LOADS = (
     selectinload(FormalSystem.rules)
     .selectinload(RuleRow.bindings)
     .selectinload(RuleBindingRow.symbol),
+    # The rule's proviso tree (flat) + each node's sort reference, for
+    # rule_side_conditions_list on the async read path.
+    selectinload(FormalSystem.rules)
+    .selectinload(RuleRow.side_conditions)
+    .selectinload(SideConditionRow.sort_symbol),
 )
 
 
@@ -277,6 +285,7 @@ def rule_out(r: RuleRow) -> Rule:
         deduction=r.deduction,
         antecedents=[ant.pattern for ant in r.antecedents],
         bindings=_bindings_out(r.bindings),
+        side_conditions=rule_side_conditions_list(r),
     )
 
 

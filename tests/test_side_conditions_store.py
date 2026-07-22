@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from app.db import Base, spec_to_system, system_to_spec
 from app.db.models import FormalSystem
 from app.db.side_conditions import SideConditionRow
-from app.db.side_conditions_mapping import _parse  # grammar under test
+from app.db.side_conditions_mapping import _parse, _parse_lines  # grammars under test
 from app.db.systems import (
     AxiomBindingRow,
     AxiomRow,
@@ -70,7 +70,13 @@ line statement
   logical formula
 
 rules
-  HYP | hypothesis | from | infer p | p : formula
+  HYP  | hypothesis | from | infer p       | p : formula
+  RImp | refl imp   | from | infer (p → q) | p, q : formula
+  NOcc | non occur  | from | infer (p → q) | p, q : formula
+
+side_conditions
+  RImp | equal(p, q)
+  NOcc | not occurs(p, q)
 
 definitions
   formula | subset   | x ⊆ y | means ∀z (z ∈ x → z ∈ y) | x, y, z : variable
@@ -97,6 +103,10 @@ def stored_system(session):
 
 def _definition(system, name):
     return next(d for d in system.definitions if d.name == name)
+
+
+def _rule(system, label):
+    return next(r for r in system.rules if r.label == label)
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +192,63 @@ def test_search_provisos_over_a_given_sort(session, stored_system):
 
 
 # ---------------------------------------------------------------------------
+# Rule provisos: the same structured storage generalised from definitions to the
+# rule owner (side_conditions.rule_id), rooted per rule.
+# ---------------------------------------------------------------------------
+
+
+def test_rule_provisos_round_trip_through_the_database(stored_system):
+    assert system_to_spec(stored_system) == parse(SOURCE)
+
+
+def test_single_leaf_rule_proviso_is_one_equal_row(stored_system):
+    rimp = _rule(stored_system, "RImp")
+    (root,) = rimp.side_conditions
+    assert root.parent_id is None
+    assert root.rule_id == rimp.id and root.definition_id is None
+    assert root.kind == "equal"
+    assert (root.left_name, root.right_name) == ("p", "q")
+
+
+def test_negated_rule_proviso_wraps_an_occurs_leaf(stored_system):
+    nocc = _rule(stored_system, "NOcc")
+    root = next(sc for sc in nocc.side_conditions if sc.parent_id is None)
+    assert root.kind == "not"
+    (occurs,) = root.children
+    assert occurs.kind == "occurs"
+    assert (occurs.left_name, occurs.right_name) == ("p", "q")
+    # Every node of a rule tree carries the rule owner, none a definition.
+    assert all(sc.rule_id == nocc.id and sc.definition_id is None for sc in nocc.side_conditions)
+
+
+def test_provisoless_rule_has_no_side_condition_rows(stored_system):
+    assert _rule(stored_system, "HYP").side_conditions == []
+
+
+def test_search_rules_with_an_equality_proviso(session, stored_system):
+    labels = session.scalars(
+        select(RuleRow.label)
+        .join(SideConditionRow, SideConditionRow.rule_id == RuleRow.id)
+        .where(SideConditionRow.kind == "equal")
+    ).all()
+    assert labels == ["RImp"]
+
+
+def test_round_tripped_rule_provisos_still_gate_proofs(stored_system):
+    # The soundness payoff: a system reassembled from the DB rows enforces the
+    # rule provisos exactly as the source system did.
+    from website.logical.declarative import build_spec
+
+    system = build_spec(system_to_spec(stored_system))["system"]
+    # RImp needs equal(p, q): the two sides of the implication must be identical.
+    assert system.parse("(x ∈ y → x ∈ y) [RImp]").valid is True
+    assert system.parse("(x ∈ y → x ∈ z) [RImp]").valid is False
+    # NOcc needs not occurs(p, q): the antecedent must not appear in the consequent.
+    assert system.parse("(x ∈ y → z ∈ w) [NOcc]").valid is True
+    assert system.parse("(x ∈ y → (x ∈ y → z ∈ w)) [NOcc]").valid is False
+
+
+# ---------------------------------------------------------------------------
 # Drift guard: the storage grammar matches the engine's surface grammar
 # ---------------------------------------------------------------------------
 
@@ -204,7 +271,8 @@ def test_storage_grammar_matches_the_engine_parser():
     ]
     for text in accepted:
         parse_side_condition(text, context)  # engine: must not raise
-        assert _parse(text) is not None  # storage: must not raise
+        assert _parse(text) is not None  # storage (definition `where`): must not raise
+        assert _parse_lines([text]) is not None  # storage (rule block): must not raise
 
     rejected = ["occurs(x)", "bogus(x, y)", "disjoint()", "atom(x, y, z)", "occurs(x, y, z)"]
     for text in rejected:
@@ -212,3 +280,5 @@ def test_storage_grammar_matches_the_engine_parser():
             parse_side_condition(text, context)
         with pytest.raises(ValueError):
             _parse(text)
+        with pytest.raises(ValueError):
+            _parse_lines([text])

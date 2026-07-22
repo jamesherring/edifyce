@@ -113,6 +113,8 @@ export interface Rule {
 	deduction: string;
 	antecedents: string[];
 	bindings: Binding[];
+	/** Soundness provisos, one kernel-vocabulary line each (implicit conjunction). */
+	side_conditions: string[];
 }
 
 /** The public face of a system's owner (never email) — mirrors `SystemOwner`. */
@@ -231,6 +233,7 @@ export interface RuleCreate {
 	deduction: string;
 	antecedents?: string[];
 	bindings?: Binding[];
+	side_conditions?: string[];
 }
 export type RuleUpdate = Partial<RuleCreate>;
 

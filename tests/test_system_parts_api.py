@@ -172,6 +172,71 @@ def test_build_a_system_through_endpoints_and_validate(client):
 
 
 # ---------------------------------------------------------------------------
+# Rule side-conditions round-trip through the child endpoints
+# ---------------------------------------------------------------------------
+
+
+def test_rule_side_conditions_round_trip_through_the_api(client):
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+    rule = _post(client, f"/formal-systems/{sid}/rules", {
+        "label": "RImp", "name": "refl imp", "deduction": "(p → q)", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "formula"}, {"var": "q", "sort": "formula"}],
+        "side_conditions": ["not occurs(p, q)", "equal(p, q)"],
+    })
+    assert rule["side_conditions"] == ["not occurs(p, q)", "equal(p, q)"]
+
+    # Read back through the aggregate detail.
+    detail = client.get(f"/formal-systems/{sid}").json()
+    assert detail["rules"][0]["side_conditions"] == ["not occurs(p, q)", "equal(p, q)"]
+
+    # Update replaces the provisos wholesale, including a multi-node tree (an
+    # update that deletes the old tree and inserts a new one in one flush).
+    updated = client.patch(
+        f"/formal-systems/{sid}/rules/{rule['id']}",
+        json={"side_conditions": ["not occurs(q, p)", "equal(p, q)"]},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["side_conditions"] == ["not occurs(q, p)", "equal(p, q)"]
+    # A single-node replacement and an empty list that clears the tree.
+    single = client.patch(
+        f"/formal-systems/{sid}/rules/{rule['id']}", json={"side_conditions": ["equal(p, q)"]}
+    )
+    assert single.json()["side_conditions"] == ["equal(p, q)"]
+    cleared = client.patch(
+        f"/formal-systems/{sid}/rules/{rule['id']}", json={"side_conditions": []}
+    )
+    assert cleared.json()["side_conditions"] == []
+
+
+def test_malformed_rule_side_condition_is_422(client):
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+    response = client.post(f"/formal-systems/{sid}/rules", json={
+        "label": "R", "name": "r", "deduction": "p", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "formula"}],
+        "side_conditions": ["bogus(p, q)"],
+    })
+    assert response.status_code == 422
+
+
+def test_blank_rule_side_condition_is_rejected_not_dropped(client):
+    # A blank proviso line is a malformed input, not a silent no-op: reject it
+    # rather than storing the rule with the blank quietly discarded.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+    response = client.post(f"/formal-systems/{sid}/rules", json={
+        "label": "R", "name": "r", "deduction": "(p → q)", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "formula"}, {"var": "q", "sort": "formula"}],
+        "side_conditions": ["equal(p, q)", ""],
+    })
+    assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
 # Productions: sort resolution and template/regex rules
 # ---------------------------------------------------------------------------
 
@@ -292,6 +357,30 @@ def test_deleting_a_sort_with_productions_is_blocked(client):
     assert client.delete(f"/formal-systems/{sid}/productions/{prod['id']}").status_code == 204
     assert client.delete(f"/formal-systems/{sid}/sorts/{sort['id']}").status_code == 204
     assert client.get(f"/formal-systems/{sid}").json()["sorts"] == []
+
+
+def test_deleting_a_sort_used_only_by_a_rule_proviso_is_blocked(client):
+    # A sort named by a proviso (disjoint/atom sort arg) is referenced only via
+    # SideConditionRow.sort_symbol_id — no binding points at it. Deleting it would
+    # cascade-drop the predicate and silently weaken the soundness condition, so
+    # it must 409. Remove the proviso first, then the sort deletes.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+    setvar = _post(client, f"/formal-systems/{sid}/sorts", {"name": "setvar"})
+    rule = _post(client, f"/formal-systems/{sid}/rules", {
+        "label": "R", "name": "r", "deduction": "(p → q)", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "formula"}, {"var": "q", "sort": "formula"}],
+        # `setvar` appears only as the proviso's sort argument, not as a binding.
+        "side_conditions": ["disjoint(p, q, setvar)"],
+    })
+    assert client.delete(f"/formal-systems/{sid}/sorts/{setvar['id']}").status_code == 409
+
+    # Clear the proviso; now nothing references setvar and it deletes.
+    assert client.patch(
+        f"/formal-systems/{sid}/rules/{rule['id']}", json={"side_conditions": []}
+    ).status_code == 200
+    assert client.delete(f"/formal-systems/{sid}/sorts/{setvar['id']}").status_code == 204
 
 
 def test_renaming_a_sort_keeps_references_intact(client):

@@ -266,6 +266,11 @@ class RuleRow(Base):
     bindings: Mapped[list[RuleBindingRow]] = relationship(
         back_populates="rule", cascade="all, delete-orphan", order_by="RuleBindingRow.position"
     )
+    # Soundness provisos, stored as the kernel side-condition algebra (flat; the
+    # root is the parent-less node). Defined in app/db/side_conditions.py.
+    side_conditions: Mapped[list["SideConditionRow"]] = relationship(
+        back_populates="rule", cascade="all, delete-orphan"
+    )
 
 
 class RuleAntecedentRow(Base):

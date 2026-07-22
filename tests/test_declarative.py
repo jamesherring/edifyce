@@ -219,6 +219,75 @@ def test_declarative_legacy_if_column_is_rejected():
 
 
 # ---------------------------------------------------------------------------
+# Rule side-conditions: a dedicated `side_conditions` section attaches soundness
+# provisos to a rule by its label, mirroring the engine's per-rule block.
+# ---------------------------------------------------------------------------
+
+
+# A tiny propositional system whose two custom rules are *only* sound because of
+# their provisos: RImp derives (p → q) but only when p and q are the same
+# formula; NOcc only when p does not occur in q.
+GATED = """system Gated
+
+notation
+  brackets ( )
+
+grammar
+  atom    | prop        | matches [a-z]
+  formula | atomic      | a       | a : atom
+  formula | implication | (p → q) | p, q : formula
+
+line statement
+  shape <formula> [<reference>]
+  reference | matches [A-Za-z0-9 ,]+
+  logical formula
+
+rules
+  HYP  | hypothesis | from      | infer p       | p : formula
+  RImp | refl imp   | from      | infer (p → q) | p, q : formula
+  NOcc | non occur  | from      | infer (p → q) | p, q : formula
+
+side_conditions
+  RImp | equal(p, q)
+  NOcc | not occurs(p, q)
+"""
+
+
+def test_side_conditions_section_attaches_provisos_to_rules():
+    spec = parse(GATED)
+    by_label = {rule.label: rule for rule in spec.rules}
+    assert by_label["RImp"].side_conditions == ["equal(p, q)"]
+    assert by_label["NOcc"].side_conditions == ["not occurs(p, q)"]
+    # A rule with no proviso row keeps an empty list.
+    assert by_label["HYP"].side_conditions == []
+
+
+def test_side_conditions_section_lowers_to_a_rule_block():
+    edi = lower(parse(GATED))
+    assert "side_conditions:" in edi
+    assert "equal(p, q)" in edi
+    assert "not occurs(p, q)" in edi
+
+
+def test_side_conditions_gate_the_rule_during_checking():
+    # The payoff: the lowered-and-compiled system enforces the provisos.
+    system = build(GATED)["system"]
+    # RImp requires p == q.
+    assert system.parse("(a → a) [RImp]").valid is True
+    assert system.parse("(a → b) [RImp]").valid is False
+    # NOcc requires p not to occur in q.
+    assert system.parse("(a → (c → b)) [NOcc]").valid is True
+    assert system.parse("(a → (a → b)) [NOcc]").valid is False
+
+
+def test_side_conditions_referencing_an_unknown_rule_is_an_error():
+    from website.logical.declarative import DeclarativeError
+
+    with pytest.raises(DeclarativeError):
+        parse(GATED.replace("  RImp | equal(p, q)", "  Bogus | equal(p, q)"))
+
+
+# ---------------------------------------------------------------------------
 # Escaped pipes in fields (regex alternation, pipe notation)
 # ---------------------------------------------------------------------------
 
