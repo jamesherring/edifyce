@@ -28,6 +28,7 @@ from app.db.side_conditions import (
     SIDE_KIND_ATOM,
     SIDE_KIND_DISJOINT,
     SIDE_KIND_EQUAL,
+    SIDE_KIND_MEMBER,
     SIDE_KIND_NOT,
     SIDE_KIND_OCCURS,
     SIDE_KIND_OR,
@@ -41,7 +42,11 @@ _PREDICATES = {
     "equal": (SIDE_KIND_EQUAL, (2,), None),
     "disjoint": (SIDE_KIND_DISJOINT, (2, 3), 2),
     "atom": (SIDE_KIND_ATOM, (1, 2), 1),
+    "member": (SIDE_KIND_MEMBER, (2,), 1),
 }
+
+# Predicates whose *second* argument is a sort, not a right-hand metavariable.
+_SORT_AT_ARG_1 = (SIDE_KIND_ATOM, SIDE_KIND_MEMBER)
 
 
 @dataclass(frozen=True)
@@ -77,7 +82,7 @@ def _parse_leaf(text: str) -> _Leaf | _Combinator:
         raise ValueError(f"Unknown or misapplied side-condition: {text!r}.")
     kind, _, sort_index = spec
     sort = args[sort_index] if sort_index is not None and len(args) > sort_index else None
-    right = args[1] if len(args) >= 2 and kind != SIDE_KIND_ATOM else None
+    right = args[1] if len(args) >= 2 and kind not in _SORT_AT_ARG_1 else None
     leaf = _Leaf(kind=kind, left=args[0], right=right, sort=sort)
     return _Combinator(SIDE_KIND_NOT, (leaf,)) if negated else leaf
 
@@ -319,6 +324,9 @@ def _render(row: SideConditionRow, children: dict[uuid.UUID, list[SideConditionR
         if row.sort_symbol is not None:
             return f"atom({row.left_name}, {row.sort_symbol.name})"
         return f"atom({row.left_name})"
+    if row.kind == SIDE_KIND_MEMBER:
+        # The sort is required for `member`, so it is always present.
+        return f"member({row.left_name}, {row.sort_symbol.name})"
     kids = children.get(row.id, [])
     if row.kind == SIDE_KIND_NOT:
         return f"not {_render(kids[0], children)}"

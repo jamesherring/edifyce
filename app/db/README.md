@@ -52,9 +52,9 @@ Modernised from the original Django app (`website/models.py` on `main`):
   `.edi` → compile.
 - **`side_conditions`** — a definition's proviso (`where` clause) stored as the
   kernel's closed side-condition algebra (`side_conditions.py`) rather than an
-  opaque string: one row per algebra node (`occurs`/`equal`/`disjoint`/`atom`
-  leaves referencing the definition's metavariables + an optional sort FK;
-  `not`/`and`/`or` combinators), a tree via `parent_id`. So "which definitions
+  opaque string: one row per algebra node (`occurs`/`equal`/`disjoint`/`atom`/
+  `member` leaves referencing the definition's metavariables + an optional sort
+  FK; `not`/`and`/`or` combinators), a tree via `parent_id`. So "which definitions
   have a disjoint-variable proviso" or "which constrain the `setvar` sort" are
   plain SQL. `side_conditions_mapping` parses the `where` surface syntax to rows
   and renders it back (the grammar mirrors the engine's `side_condition_syntax`,

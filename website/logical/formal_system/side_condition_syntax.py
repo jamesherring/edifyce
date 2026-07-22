@@ -32,6 +32,7 @@ The predicates and their arities::
     equal(left, right)                -> Equal
     disjoint(left, right [, sort])    -> DisjointLeaves
     atom(name [, sort])               -> IsAtom
+    member(name, sort)                -> IsMember
 
 Names are the rule's metavariables; a ``sort`` argument is a pattern name
 resolved in the compile context. A line may combine predicates with ``or`` (each
@@ -42,7 +43,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..kernel import DisjointLeaves, Equal, IsAtom, Not, Occurs, Or, SideCondition
+from ..kernel import DisjointLeaves, Equal, IsAtom, IsMember, Not, Occurs, Or, SideCondition
 from ..matching.patterns import Pattern
 
 if TYPE_CHECKING:
@@ -124,6 +125,10 @@ def _build(name: str, args: list[str], text: str, context: Context) -> SideCondi
     if name == "atom" and len(args) in (1, 2):
         sort = _sort(args[1], context) if len(args) == 2 else None
         return IsAtom(args[0], sort)
+    if name == "member" and len(args) == 2:
+        # The sort is required: `member(x, R)` asks "is x of sort R", so R must be
+        # named (unlike `atom`, where the sort is an optional extra guard).
+        return IsMember(args[0], _sort(args[1], context))
     raise ValueError(f"Unknown or misapplied side-condition: '{text}'.")
 
 

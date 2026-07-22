@@ -8,7 +8,7 @@ pytest.importorskip("regex")
 
 from website.logical.compiler import compile as compile_formal_system
 from website.logical.formal_system.side_condition_syntax import parse_side_condition
-from website.logical.kernel import DisjointLeaves, Equal, IsAtom, Not, Occurs, Or
+from website.logical.kernel import DisjointLeaves, Equal, IsAtom, IsMember, Not, Occurs, Or
 
 SYSTEM = """FormalSystem Sorts:
 
@@ -62,6 +62,24 @@ def test_atom_without_and_with_sort(context):
     setvar = context.variables["setvar"]
     assert parse_side_condition("atom(x)", context) == IsAtom("x", None)
     assert parse_side_condition("atom(x, setvar)", context) == IsAtom("x", setvar)
+
+
+def test_member_requires_a_sort(context):
+    setvar = context.variables["setvar"]
+    assert parse_side_condition("member(x, setvar)", context) == IsMember("x", setvar)
+
+
+@pytest.mark.parametrize("text", ["member(x)", "member(x, y, z)", "member()"])
+def test_member_wrong_arity_raises(context, text):
+    # `member` needs exactly a name and a sort — no 1-arg form (the sort is the
+    # whole point) and no 3-arg form.
+    with pytest.raises(ValueError):
+        parse_side_condition(text, context)
+
+
+def test_member_unknown_sort_raises(context):
+    with pytest.raises(ValueError, match="not a pattern"):
+        parse_side_condition("member(x, nope)", context)
 
 
 def test_whitespace_is_tolerated(context):
