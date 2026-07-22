@@ -30,11 +30,19 @@ from app.db.terms import (
     TermRow,
 )
 from website.logical.kernel import Bound, Node, Term, Var, intern
+from website.logical.matching.patterns import RegexPattern
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from app.db.models import FormalSystem
     from website.logical.matching.context import Context
     from website.logical.matching.patterns import Pattern
+
+    # Decides whether a leaf is a renameable free variable, and if so its
+    # identity (see _free_identity). Callers pass one to alpha_digest/store_term
+    # to override the default regex-leaf heuristic per system.
+    FreeIdentity = Callable[[Term], "tuple[str, ...] | None"]
 
 
 def _slot_order(pattern: Pattern, children: dict[str, Term]) -> list[str]:
@@ -123,12 +131,166 @@ def digest_term(term: Term, _memo: dict[int, str] | None = None) -> str:
     return digest
 
 
-def store_term(session: Session, system: FormalSystem, term: Term) -> TermRow:
+def _free_identity(term: Term) -> tuple[str, ...] | None:
+    """The renameable identity of a free-variable leaf, or ``None``.
+
+    Two leaf shapes are treated as free (renameable) variables:
+
+    * a kernel :class:`Var` — a schematic metavariable (``p``, ``x``); and
+    * a *regex-leaf* :class:`Node` — an object-language variable token like the
+      ``a`` in ``a ∈ b``, which parses to ``Node(<variable regex>, literal="a")``
+      rather than a ``Var``.
+
+    A :class:`Bound` is already index-canonical (De Bruijn), so it is not free
+    here; constant atoms, compound nodes and defined nodes are fixed structure.
+    The returned tuple's last element is the variable's *name* (forgotten by the
+    canonical form); its prefix is the variable's *class* (its sort/production),
+    which is preserved so a ``formula`` variable never collapses onto a ``term``
+    one.
+
+    Note the regex-leaf rule is a heuristic: it assumes a ``matches <regex>``
+    production denotes variables, true for every current system but wrong for a
+    regex that spells constants (e.g. numerals). A context-aware policy can
+    refine this when such a system appears; it would only change which leaves
+    are renamed, not the surrounding canonicalisation.
+    """
+    if isinstance(term, Bound):
+        return None
+    if isinstance(term, Var):
+        return ("var", term.sort.name, term.name)
+    if (
+        isinstance(term, Node)
+        and not term.children
+        and term.literal is not None
+        and isinstance(term.pattern, RegexPattern)
+    ):
+        return ("leaf", term.pattern.name, term.literal)
+    return None
+
+
+def _assign_free_indices(
+    term: Term,
+    resolve: FreeIdentity,
+    numbering: dict[tuple[str, ...], int],
+    visited: set[int],
+) -> None:
+    # Number distinct free variables by first occurrence in a fixed template-order
+    # pre-order walk. Memoised over the shared DAG (`visited`): a subterm reachable
+    # by many paths is descended once — without this a heavily-shared term DAG
+    # would expand exponentially. Skipping an already-visited node never drops a
+    # variable's *first* occurrence: every variable it contains was numbered when
+    # the node was first reached, so a later, shallower path cannot precede it.
+    if id(term) in visited:
+        return
+    visited.add(id(term))
+    identity = resolve(term)
+    if identity is not None:
+        numbering.setdefault(identity, len(numbering))
+        return
+    if isinstance(term, Node) and term.children:
+        for slot in _slot_order(term.pattern, term.children):
+            _assign_free_indices(term.children[slot], resolve, numbering, visited)
+
+
+def _alpha_hash(
+    term: Term,
+    resolve: FreeIdentity,
+    numbering: dict[tuple[str, ...], int],
+    memo: dict[int, str],
+) -> str:
+    # A per-node sha256 whose canon embeds the *child hashes* (fixed-size), not
+    # the children's full structure — a Merkle hash, exactly as digest_term. This
+    # is what keeps it O(distinct subterms): a shared canon of full structures
+    # would serialise exponentially under json.dumps. Free variables carry their
+    # pre-assigned first-occurrence index (name forgotten, class kept); the
+    # numbering is fixed before this runs, so a shared subterm's hash is
+    # position-independent and the id-memo is valid. Field extraction mirrors
+    # digest_term via _row_fields; keep the two consistent.
+    cached = memo.get(id(term))
+    if cached is not None:
+        return cached
+
+    identity = resolve(term)
+    if identity is not None:
+        # identity[:-1] is the class (sort/production); the name is dropped. json
+        # renders the tuple as an array, so no list() wrapper is needed.
+        canon: list = ["free", identity[:-1], numbering[identity]]
+    elif isinstance(term, Bound):
+        canon = ["bound", term.index, term.sort.name]
+    elif isinstance(term, Node):
+        fields = _row_fields(term)
+        # A ground leaf (no children) has no slots to order — and its pattern may
+        # be a Regex/Atom with no `variable_locations`, so guard as store_term does.
+        child_hashes = (
+            [
+                [slot, _alpha_hash(term.children[slot], resolve, numbering, memo)]
+                for slot in _slot_order(term.pattern, term.children)
+            ]
+            if term.children
+            else []
+        )
+        canon = [
+            "node",
+            fields["kind"],
+            fields.get("constructor"),
+            fields.get("literal"),
+            fields.get("sort"),
+            child_hashes,
+        ]
+    else:
+        raise TypeError(f"Unsupported term kind: {type(term).__name__}")
+
+    digest = hashlib.sha256(
+        json.dumps(canon, ensure_ascii=False, separators=(",", ":")).encode()
+    ).hexdigest()
+    memo[id(term)] = digest
+    return digest
+
+
+def alpha_digest(term: Term, is_free: FreeIdentity | None = None) -> str:
+    """A structural sha256 invariant under consistent renaming of free variables.
+
+    Unlike :func:`digest_term` (which keys leaves by their exact name, so
+    ``a ∈ b`` and ``y ∈ z`` differ), this numbers every free variable by first
+    occurrence, so terms equal *up to a bijective renaming* share one digest —
+    the substrate for "same statement up to variable names" search. Variable
+    *sharing* is preserved (``a ∈ a`` and ``a ∈ b`` still differ), and bound
+    variables carried as :class:`Bound` are already index-canonical.
+
+    Which leaves count as free variables is decided by ``is_free`` (default
+    :func:`_free_identity`): pass a custom resolver to override the regex-leaf
+    heuristic for a system whose ``matches`` productions denote constants (e.g.
+    numerals) rather than variables.
+
+    Two memoised passes over the shared DAG: number the free variables
+    (:func:`_assign_free_indices`), then compose a Merkle hash bottom-up
+    (:func:`_alpha_hash`). Both are ``O(distinct subterms)``, so a heavily-shared
+    term — which the naive whole-structure serialisation blew up exponentially —
+    stays linear.
+    """
+    resolve = is_free if is_free is not None else _free_identity
+    numbering: dict[tuple[str, ...], int] = {}
+    _assign_free_indices(term, resolve, numbering, set())
+    return _alpha_hash(term, resolve, numbering, {})
+
+
+def store_term(
+    session: Session,
+    system: FormalSystem,
+    term: Term,
+    is_free: FreeIdentity | None = None,
+) -> TermRow:
     """Persist ``term``'s DAG for ``system`` and return the root's row.
 
     Interned per system: a subterm whose digest already has a row (from this
     call or an earlier one) is reused, not duplicated — so storage stays a
     shared DAG. New rows are added to ``session`` unflushed.
+
+    Each new row also gets its ``alpha_digest`` (see :func:`alpha_digest`);
+    ``is_free`` overrides which leaves are treated as renameable variables.
+    Computing it per row is ``O(rows × subterm)``; bounded and fine for
+    statement-sized terms, and the alternative — root-only — is available if a
+    profile ever shows it matters (subterm α-search would then need a backfill).
     """
     digest_memo: dict[int, str] = {}
     root_digest = digest_term(term, digest_memo)
@@ -168,7 +330,12 @@ def store_term(session: Session, system: FormalSystem, term: Term) -> TermRow:
     for digest, t in postorder.items():
         if digest in rows:
             continue
-        row = TermRow(formal_system=system, digest=digest, **_row_fields(t))
+        row = TermRow(
+            formal_system=system,
+            digest=digest,
+            alpha_digest=alpha_digest(t, is_free),
+            **_row_fields(t),
+        )
         if isinstance(t, Node) and t.children:
             for position, slot in enumerate(_slot_order(t.pattern, t.children)):
                 row.children.append(

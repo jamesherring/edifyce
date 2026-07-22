@@ -6,7 +6,7 @@
 	import { Label } from '$lib/components/ui/label';
 	import { Input } from '$lib/components/ui/input';
 	import { api, type Production, type Binding } from '$lib/api';
-	import { runMutation } from './crud';
+	import { createSectionController } from './section.svelte';
 
 	let {
 		systemId,
@@ -20,15 +20,11 @@
 		onChanged: () => Promise<void> | void;
 	} = $props();
 
-	let open = $state(false);
-	let editing = $state<Production | null>(null);
 	let name = $state('');
 	let sortName = $state('');
 	let mode = $state<'template' | 'regex'>('template');
 	let value = $state('');
 	let bindings = $state<Binding[]>([]);
-	let saving = $state(false);
-	let busy = $state(false);
 
 	// `sortName` must resolve to a real sort: a production's stored sort may have
 	// been deleted since, leaving the <select> blank on a stale value — block
@@ -37,70 +33,32 @@
 		name.trim().length > 0 && sortNames.includes(sortName) && value.trim().length > 0
 	);
 
-	function openNew() {
-		editing = null;
-		name = '';
-		sortName = sortNames[0] ?? '';
-		mode = 'template';
-		value = '';
-		bindings = [];
-		open = true;
-	}
-	function openEdit(p: Production) {
-		editing = p;
-		name = p.name;
-		sortName = p.sort;
-		mode = p.template !== null ? 'template' : 'regex';
-		value = p.template ?? p.regex ?? '';
-		bindings = p.bindings.map((b) => ({ ...b }));
-		open = true;
-	}
+	const s = createSectionController<Production, ReturnType<typeof payload>>({
+		crud: api.parts.productions,
+		systemId: () => systemId,
+		noun: 'Production',
+		onChanged: () => onChanged(),
+		canSave: () => canSave,
+		fill: (item) => {
+			name = item?.name ?? '';
+			sortName = item ? item.sort : (sortNames[0] ?? '');
+			mode = item && item.template === null ? 'regex' : 'template';
+			value = item ? (item.template ?? item.regex ?? '') : '';
+			bindings = item?.bindings.map((b) => ({ ...b })) ?? [];
+		},
+		payload
+	});
 
-	async function save() {
-		if (!canSave || saving) return;
-		saving = true;
-		const item = editing;
+	function payload() {
 		// Send both fields with the inactive one nulled so switching template↔regex
 		// clears the other; the backend requires exactly one to be set.
-		const payload = {
+		return {
 			name: name.trim(),
 			sort: sortName,
 			template: mode === 'template' ? value.trim() : null,
 			regex: mode === 'regex' ? value.trim() : null,
 			bindings: bindings.filter((b) => b.var.trim() && b.sort.trim())
 		};
-		const ok = await runMutation(
-			() =>
-				item
-					? api.parts.productions.update(systemId, item.id, payload)
-					: api.parts.productions.create(systemId, payload),
-			item ? 'Production updated.' : 'Production added.'
-		);
-		saving = false;
-		if (ok) {
-			open = false;
-			await onChanged();
-		}
-	}
-
-	async function del() {
-		if (!editing || saving) return;
-		saving = true;
-		const ok = await runMutation(
-			() => api.parts.productions.remove(systemId, editing!.id),
-			'Production deleted.'
-		);
-		saving = false;
-		if (ok) {
-			open = false;
-			await onChanged();
-		}
-	}
-
-	async function reorder(ids: string[]) {
-		busy = true;
-		if (await runMutation(() => api.parts.productions.reorder(systemId, ids))) await onChanged();
-		busy = false;
 	}
 </script>
 
@@ -112,10 +70,10 @@
 	emptyMessage={sortNames.length === 0
 		? 'Add a sort first, then define its productions.'
 		: 'No productions yet — these define the concrete syntax of each sort.'}
-	onAdd={openNew}
-	onEdit={openEdit}
-	onReorder={reorder}
-	{busy}
+	onAdd={s.openNew}
+	onEdit={s.openEdit}
+	onReorder={s.reorder}
+	busy={s.busy}
 >
 	{#snippet row(p)}
 		<div class="min-w-0 text-sm">
@@ -129,12 +87,12 @@
 </PartSection>
 
 <EditSheet
-	{open}
-	onOpenChange={(o) => (open = o)}
-	title={editing ? 'Edit production' : 'Add production'}
-	onSave={save}
-	onDelete={editing ? del : undefined}
-	{saving}
+	open={s.open}
+	onOpenChange={(o) => (s.open = o)}
+	title={s.editing ? 'Edit production' : 'Add production'}
+	onSave={s.save}
+	onDelete={s.editing ? s.del : undefined}
+	saving={s.saving}
 	{canSave}
 >
 	<FormField label="Name" id="prod-name" bind:value={name} placeholder="e.g. implication" maxlength={128} />
@@ -145,8 +103,8 @@
 			bind:value={sortName}
 			class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
 		>
-			{#each sortNames as s (s)}
-				<option value={s}>{s}</option>
+			{#each sortNames as sort (sort)}
+				<option value={sort}>{sort}</option>
 			{/each}
 		</select>
 	</div>
