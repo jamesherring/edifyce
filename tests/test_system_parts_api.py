@@ -359,6 +359,30 @@ def test_deleting_a_sort_with_productions_is_blocked(client):
     assert client.get(f"/formal-systems/{sid}").json()["sorts"] == []
 
 
+def test_deleting_a_sort_used_only_by_a_rule_proviso_is_blocked(client):
+    # A sort named by a proviso (disjoint/atom sort arg) is referenced only via
+    # SideConditionRow.sort_symbol_id — no binding points at it. Deleting it would
+    # cascade-drop the predicate and silently weaken the soundness condition, so
+    # it must 409. Remove the proviso first, then the sort deletes.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+    setvar = _post(client, f"/formal-systems/{sid}/sorts", {"name": "setvar"})
+    rule = _post(client, f"/formal-systems/{sid}/rules", {
+        "label": "R", "name": "r", "deduction": "(p → q)", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "formula"}, {"var": "q", "sort": "formula"}],
+        # `setvar` appears only as the proviso's sort argument, not as a binding.
+        "side_conditions": ["disjoint(p, q, setvar)"],
+    })
+    assert client.delete(f"/formal-systems/{sid}/sorts/{setvar['id']}").status_code == 409
+
+    # Clear the proviso; now nothing references setvar and it deletes.
+    assert client.patch(
+        f"/formal-systems/{sid}/rules/{rule['id']}", json={"side_conditions": []}
+    ).status_code == 200
+    assert client.delete(f"/formal-systems/{sid}/sorts/{setvar['id']}").status_code == 204
+
+
 def test_renaming_a_sort_keeps_references_intact(client):
     # The point of the symbol model: rename a sort and its bindings follow, so
     # the system still compiles (no dangling name references).

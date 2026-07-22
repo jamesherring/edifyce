@@ -102,6 +102,10 @@ _SYMBOL_REFERENCES = (
     RuleBindingRow.symbol_id,
     DefinitionRow.symbol_id,
     LineRow.logical_symbol_id,
+    # A sort named by a `disjoint`/`atom` proviso (definition or rule). Its
+    # ON DELETE CASCADE would otherwise silently drop the predicate node and
+    # weaken a soundness condition, so a referenced sort must be undeletable too.
+    SideConditionRow.sort_symbol_id,
 )
 
 
@@ -287,7 +291,7 @@ async def _delete_symbol(
     if await _symbol_referenced(session, symbol_id):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            f"This {noun} is referenced by a binding, definition, or line type; remove those first.",
+            f"This {noun} is referenced by a binding, definition, line type, or proviso; remove those first.",
         )
     if union and await session.scalar(
         select(SymbolRow.id).where(SymbolRow.member_of_union_id == symbol_id).limit(1)
