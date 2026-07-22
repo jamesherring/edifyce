@@ -29,8 +29,6 @@ from app.auth.oauth import (
 from app.routers.system_parts import router as system_parts_router
 from app.routers.systems import router as systems_router
 from app.schemas import (
-    CompileRequest,
-    CompileResponse,
     HealthResponse,
     OAuthProvidersResponse,
     VerifyProofRequest,
@@ -80,24 +78,6 @@ app.add_middleware(
 @app.get("/health", response_model=HealthResponse)
 def healthcheck() -> HealthResponse:
     return HealthResponse()
-
-
-@app.post("/formal-systems/compile", response_model=CompileResponse)
-def compile_system(payload: CompileRequest) -> CompileResponse:
-    result = compile_formal_system(payload.code)
-
-    if "errors" in result:
-        return CompileResponse(success=False, errors=result["errors"])
-
-    system = result["system"]
-    system_name = system.name if system.name else None
-
-    return CompileResponse(
-        success=True,
-        system_name=system_name,
-        line_type_count=len(system.line_types),
-        inference_rule_count=len(system.inference_rules),
-    )
 
 
 @app.post("/proofs/verify", response_model=VerifyProofResponse)

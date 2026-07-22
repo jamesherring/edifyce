@@ -74,61 +74,6 @@ def test_healthcheck():
 
 
 # ---------------------------------------------------------------------------
-# /formal-systems/compile
-# ---------------------------------------------------------------------------
-
-
-def test_compile_requires_nonempty_code():
-    response = client.post("/formal-systems/compile", json={"code": ""})
-    assert response.status_code == 422
-
-
-def test_compile_requires_code_field():
-    response = client.post("/formal-systems/compile", json={})
-    assert response.status_code == 422
-
-
-def test_compile_valid_system_reports_metadata():
-    response = client.post("/formal-systems/compile", json={"code": MINIMAL_SYSTEM})
-    assert response.status_code == 200
-    assert response.json() == {
-        "success": True,
-        "errors": [],
-        "system_name": "Minimal",
-        "line_type_count": 1,
-        "inference_rule_count": 0,
-    }
-
-
-def test_compile_errors_are_returned_with_line_numbers():
-    response = client.post("/formal-systems/compile", json={"code": INVALID_SYSTEM})
-    assert response.status_code == 200
-    body = response.json()
-    assert body["success"] is False
-    assert body["errors"] == ["3: Invalid variable name: '123bad'."]
-    assert body["system_name"] is None
-    assert body["line_type_count"] is None
-    assert body["inference_rule_count"] is None
-
-
-def test_compile_unrecognized_input_yields_empty_unnamed_system():
-    # The compiler is lenient: content it does not recognise compiles to
-    # an empty, unnamed system rather than an error. Pin that behaviour
-    # down so a future compiler change is caught at the API boundary.
-    response = client.post(
-        "/formal-systems/compile", json={"code": "NotAKeyword ???:\n  broken"}
-    )
-    assert response.status_code == 200
-    assert response.json() == {
-        "success": True,
-        "errors": [],
-        "system_name": None,
-        "line_type_count": 0,
-        "inference_rule_count": 0,
-    }
-
-
-# ---------------------------------------------------------------------------
 # /proofs/verify — request validation
 # ---------------------------------------------------------------------------
 
