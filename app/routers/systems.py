@@ -231,6 +231,17 @@ async def require_editable_system(
     a one-way door — unpublishing is refused too (see `update_system`) — and
     editing a published system is a 409. 404 (not 409) when it isn't owned, so
     ids don't leak. Shared with the child-CRUD router.
+
+    NOTE: this closes the *sequential* hole (an edit after a system is published
+    is rejected), not a *concurrent* one. An owner who publishes and edits a part
+    in overlapping transactions can read ``published_at`` as still-NULL here,
+    admit the edit, and commit it after the publish commits — landing a change on
+    a now-published system. Closing that means serializing publication against
+    part writes (a ``SELECT ... FOR UPDATE`` lock on the parent row in both this
+    guard and the publish path). It's deferred: the window needs one owner racing
+    a publish and an edit on the same system, and the lock is Postgres-only
+    behaviour the SQLite test suite can't exercise — so it belongs with
+    deliberate concurrency hardening, tested against Postgres.
     """
     row = (
         await session.execute(
