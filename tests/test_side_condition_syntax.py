@@ -8,7 +8,7 @@ pytest.importorskip("regex")
 
 from website.logical.compiler import compile as compile_formal_system
 from website.logical.formal_system.side_condition_syntax import parse_side_condition
-from website.logical.kernel import DisjointLeaves, Equal, IsAtom, Not, Occurs
+from website.logical.kernel import DisjointLeaves, Equal, IsAtom, Not, Occurs, Or
 
 SYSTEM = """FormalSystem Sorts:
 
@@ -66,6 +66,36 @@ def test_atom_without_and_with_sort(context):
 
 def test_whitespace_is_tolerated(context):
     assert parse_side_condition("  occurs( x , phi )  ", context) == Occurs("x", "phi")
+
+
+def test_or_forms_a_disjunction(context):
+    assert parse_side_condition("atom(x) or equal(p, q)", context) == Or(
+        (IsAtom("x", None), Equal("p", "q"))
+    )
+
+
+def test_or_chains_more_than_two(context):
+    assert parse_side_condition("atom(x) or equal(p, q) or occurs(x, phi)", context) == Or(
+        (IsAtom("x", None), Equal("p", "q"), Occurs("x", "phi"))
+    )
+
+
+def test_not_binds_tighter_than_or(context):
+    # `not A or B` is `(not A) or B`, not `not (A or B)`.
+    assert parse_side_condition("not occurs(x, phi) or equal(p, q)", context) == Or(
+        (Not(Occurs("x", "phi")), Equal("p", "q"))
+    )
+
+
+def test_a_single_predicate_is_not_wrapped_in_or(context):
+    # No `or` present ⇒ the bare condition, so existing provisos are unchanged.
+    assert parse_side_condition("occurs(x, phi)", context) == Occurs("x", "phi")
+
+
+@pytest.mark.parametrize("text", ["occurs(x, phi) or", "or occurs(x, phi)", "atom(x) or or atom(y)"])
+def test_malformed_or_raises(context, text):
+    with pytest.raises(ValueError):
+        parse_side_condition(text, context)
 
 
 @pytest.mark.parametrize(
@@ -135,3 +165,10 @@ def test_valid_side_condition_compiles():
     assert "errors" not in result, result.get("errors")
     (rule,) = [r for r in result["system"].inference_rules if r.label == "R"]
     assert rule.side_conditions == [Equal("p", "q")]
+
+
+def test_or_side_condition_compiles():
+    result = compile_formal_system(RULE_SYSTEM.replace("{LINE}", "atom(p) or equal(p, q)"))
+    assert "errors" not in result, result.get("errors")
+    (rule,) = [r for r in result["system"].inference_rules if r.label == "R"]
+    assert rule.side_conditions == [Or((IsAtom("p", None), Equal("p", "q")))]

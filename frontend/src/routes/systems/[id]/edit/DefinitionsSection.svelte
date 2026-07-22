@@ -6,7 +6,7 @@
 	import { Label } from '$lib/components/ui/label';
 	import { Input } from '$lib/components/ui/input';
 	import { api, type Definition, type Binding } from '$lib/api';
-	import { runMutation } from './crud';
+	import { createSectionController } from './section.svelte';
 
 	let {
 		systemId,
@@ -20,47 +20,35 @@
 		onChanged: () => Promise<void> | void;
 	} = $props();
 
-	let open = $state(false);
-	let editing = $state<Definition | null>(null);
 	let sortName = $state('');
 	let name = $state('');
 	let higher = $state('');
 	let lower = $state('');
 	let condition = $state('');
 	let bindings = $state<Binding[]>([]);
-	let saving = $state(false);
-	let busy = $state(false);
-
 	const canSave = $derived(
 		!!sortName && name.trim().length > 0 && higher.trim().length > 0 && lower.trim().length > 0
 	);
 
-	function openNew() {
-		editing = null;
-		sortName = sortNames[0] ?? '';
-		name = '';
-		higher = '';
-		lower = '';
-		condition = '';
-		bindings = [];
-		open = true;
-	}
-	function openEdit(d: Definition) {
-		editing = d;
-		sortName = d.sort;
-		name = d.name;
-		higher = d.higher;
-		lower = d.lower;
-		condition = d.condition ?? '';
-		bindings = d.bindings.map((b) => ({ ...b }));
-		open = true;
-	}
+	const s = createSectionController<Definition, ReturnType<typeof payload>>({
+		crud: api.parts.definitions,
+		systemId: () => systemId,
+		noun: 'Definition',
+		onChanged: () => onChanged(),
+		canSave: () => canSave,
+		fill: (item) => {
+			sortName = item ? item.sort : (sortNames[0] ?? '');
+			name = item?.name ?? '';
+			higher = item?.higher ?? '';
+			lower = item?.lower ?? '';
+			condition = item?.condition ?? '';
+			bindings = item?.bindings.map((b) => ({ ...b })) ?? [];
+		},
+		payload
+	});
 
-	async function save() {
-		if (!canSave || saving) return;
-		saving = true;
-		const item = editing;
-		const payload = {
+	function payload() {
+		return {
 			sort: sortName,
 			name: name.trim(),
 			higher: higher.trim(),
@@ -68,38 +56,6 @@
 			condition: condition.trim() || null,
 			bindings: bindings.filter((b) => b.var.trim() && b.sort.trim())
 		};
-		const ok = await runMutation(
-			() =>
-				item
-					? api.parts.definitions.update(systemId, item.id, payload)
-					: api.parts.definitions.create(systemId, payload),
-			item ? 'Definition updated.' : 'Definition added.'
-		);
-		saving = false;
-		if (ok) {
-			open = false;
-			await onChanged();
-		}
-	}
-
-	async function del() {
-		if (!editing || saving) return;
-		saving = true;
-		const ok = await runMutation(
-			() => api.parts.definitions.remove(systemId, editing!.id),
-			'Definition deleted.'
-		);
-		saving = false;
-		if (ok) {
-			open = false;
-			await onChanged();
-		}
-	}
-
-	async function reorder(ids: string[]) {
-		busy = true;
-		if (await runMutation(() => api.parts.definitions.reorder(systemId, ids))) await onChanged();
-		busy = false;
 	}
 </script>
 
@@ -111,10 +67,10 @@
 	emptyMessage={sortNames.length === 0
 		? 'Add a sort first, then define abbreviations over it.'
 		: 'No definitions yet.'}
-	onAdd={openNew}
-	onEdit={openEdit}
-	onReorder={reorder}
-	{busy}
+	onAdd={s.openNew}
+	onEdit={s.openEdit}
+	onReorder={s.reorder}
+	busy={s.busy}
 >
 	{#snippet row(d)}
 		<div class="min-w-0 text-sm">
@@ -127,12 +83,12 @@
 </PartSection>
 
 <EditSheet
-	{open}
-	onOpenChange={(o) => (open = o)}
-	title={editing ? 'Edit definition' : 'Add definition'}
-	onSave={save}
-	onDelete={editing ? del : undefined}
-	{saving}
+	open={s.open}
+	onOpenChange={(o) => (s.open = o)}
+	title={s.editing ? 'Edit definition' : 'Add definition'}
+	onSave={s.save}
+	onDelete={s.editing ? s.del : undefined}
+	saving={s.saving}
 	{canSave}
 >
 	<div class="space-y-2">
@@ -142,8 +98,8 @@
 			bind:value={sortName}
 			class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
 		>
-			{#each sortNames as s (s)}
-				<option value={s}>{s}</option>
+			{#each sortNames as sort (sort)}
+				<option value={sort}>{sort}</option>
 			{/each}
 		</select>
 	</div>
