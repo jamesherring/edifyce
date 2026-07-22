@@ -101,6 +101,55 @@ API and the UI (see the static-frontend block at the bottom of `app/main.py`).
   depend on the kernel, so those directions import freely at the top; `matching`
   must never import the kernel or `formal_system`.
 
+## Database access & Atlas migrations (esp. Claude Code web)
+
+The database is Neon Postgres, provided to sessions as `POSTGRES_URL` (pooled)
+and `POSTGRES_URL_NON_POOLING` — there is no `DATABASE_URL` here despite what the
+`atlas.hcl` usage comments assume; substitute `POSTGRES_URL` where they say
+`DATABASE_URL`.
+
+**Claude Code web sessions are restricted to Neon's serverless SQL-over-HTTP.**
+The egress proxy only tunnels HTTPS (:443). The Postgres wire protocol (:5432) is
+blocked, so `psql`, asyncpg, and anything using a normal `postgresql://`
+connection will hang and time out. To read/write data, hit Neon's HTTP endpoint
+at `https://<host>/sql` instead:
+
+```bash
+HOST=$(echo "$POSTGRES_URL" | sed -E 's#.*@([^/]+)/.*#\1#')
+CONN=$(echo "$POSTGRES_URL" | sed -E 's#\?.*##')   # header wants the bare conn string
+curl -sS "https://$HOST/sql" \
+  -H "Neon-Connection-String: $CONN" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"select table_name from information_schema.tables where table_schema=$1","params":["public"]}'
+```
+
+Reads and writes both work over this endpoint; it is the only path to the DB in a
+web session. (For local dev with wire-protocol access, `psql "$POSTGRES_URL"` is
+fine — this restriction is specific to the sandboxed sessions.)
+
+**`atlas migrate diff` does NOT work in web sessions**, and allow-listing
+`api.atlasgo.cloud` (which fixes the token; see below) does not change that.
+`diff` needs a throwaway *dev database* to replay migrations against, and Atlas
+reaches it over the wire protocol — which is blocked. The default dev DB
+(`docker://pgvector/pg16/dev`) also can't start because there's no Docker daemon,
+and Neon's HTTP endpoint cannot serve as an Atlas dev DB. The same applies to any
+Atlas subcommand that touches a database: `migrate apply`, `migrate status`, and
+`migrate lint` (lint uses the dev DB too). **Plan and lint migrations locally or
+in CI**, commit the generated SQL + `atlas.sum`, and let CI apply them.
+
+What *does* work in a web session (all offline, directory-only):
+`atlas migrate validate` and `atlas migrate hash`. You can also hand-edit
+migration SQL and re-run `atlas migrate hash` to update `atlas.sum`.
+
+**`ATLAS_TOKEN` gotcha:** the token is present in sessions, but Atlas validates
+it against `api.atlasgo.cloud:443` on *every* invocation. If that host is
+egress-blocked, the check times out and **every** atlas command fails at
+startup — even fully-offline ones like `migrate validate` — with
+`login with environment variable ATLAS_TOKEN failed: context deadline exceeded`.
+Two ways out: allow-list `api.atlasgo.cloud` in the environment's network policy
+(preferred), or run offline atlas commands with the token unset, e.g.
+`env -u ATLAS_TOKEN atlas migrate validate --dir file://migrations`.
+
 ## On comments
 
 Keep comments **brief and forward-looking**. Explain **why**, not **how** — the
