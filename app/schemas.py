@@ -14,11 +14,6 @@ class HealthResponse(BaseModel):
     status: str = "ok"
 
 
-class VerifyProofRequest(BaseModel):
-    system_code: str = Field(..., min_length=1)
-    proof_text: str
-
-
 class VerifyProofResponse(BaseModel):
     success: bool
     errors: list[str] = Field(default_factory=list)

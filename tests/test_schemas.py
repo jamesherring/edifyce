@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from app.schemas import (
     HealthResponse,
-    VerifyProofRequest,
+    ProofVerifyRequest,
     VerifyProofResponse,
 )
 
@@ -21,23 +21,17 @@ def test_health_response_defaults_to_ok():
 
 
 # ---------------------------------------------------------------------------
-# VerifyProofRequest
+# ProofVerifyRequest — the DB-backed verify body (proof text only)
 # ---------------------------------------------------------------------------
 
 
-def test_verify_request_accepts_empty_proof_text():
-    request = VerifyProofRequest(system_code="FormalSystem X:", proof_text="")
-    assert request.proof_text == ""
+def test_proof_verify_request_accepts_empty_proof_text():
+    assert ProofVerifyRequest(proof_text="").proof_text == ""
 
 
-def test_verify_request_rejects_empty_system_code():
+def test_proof_verify_request_requires_proof_text():
     with pytest.raises(ValidationError):
-        VerifyProofRequest(system_code="", proof_text="abc")
-
-
-def test_verify_request_requires_proof_text():
-    with pytest.raises(ValidationError):
-        VerifyProofRequest(system_code="FormalSystem X:")
+        ProofVerifyRequest()
 
 
 # ---------------------------------------------------------------------------
