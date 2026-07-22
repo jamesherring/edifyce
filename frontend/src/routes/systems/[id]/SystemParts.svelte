@@ -155,9 +155,15 @@
 								</Table.Cell>
 								<Table.Cell class="font-mono">{rule.deduction}</Table.Cell>
 								<Table.Cell class="hidden font-mono text-xs text-muted-foreground sm:table-cell">
-									{rule.side_conditions.length > 0
-										? rule.side_conditions.join(' ; ')
-										: bindingsText(rule.bindings)}
+									{#if rule.side_conditions.length > 0}
+										<div>{rule.side_conditions.join(' ; ')}</div>
+									{/if}
+									{#if rule.bindings.length > 0}
+										<div class="opacity-70">{bindingsText(rule.bindings)}</div>
+									{/if}
+									{#if rule.side_conditions.length === 0 && rule.bindings.length === 0}
+										—
+									{/if}
 								</Table.Cell>
 							</Table.Row>
 						{/each}

@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from app.db import Base, spec_to_system, system_to_spec
 from app.db.models import FormalSystem
 from app.db.side_conditions import SideConditionRow
-from app.db.side_conditions_mapping import _parse  # grammar under test
+from app.db.side_conditions_mapping import _parse, _parse_lines  # grammars under test
 from app.db.systems import (
     AxiomBindingRow,
     AxiomRow,
@@ -271,7 +271,8 @@ def test_storage_grammar_matches_the_engine_parser():
     ]
     for text in accepted:
         parse_side_condition(text, context)  # engine: must not raise
-        assert _parse(text) is not None  # storage: must not raise
+        assert _parse(text) is not None  # storage (definition `where`): must not raise
+        assert _parse_lines([text]) is not None  # storage (rule block): must not raise
 
     rejected = ["occurs(x)", "bogus(x, y)", "disjoint()", "atom(x, y, z)", "occurs(x, y, z)"]
     for text in rejected:
@@ -279,3 +280,5 @@ def test_storage_grammar_matches_the_engine_parser():
             parse_side_condition(text, context)
         with pytest.raises(ValueError):
             _parse(text)
+        with pytest.raises(ValueError):
+            _parse_lines([text])

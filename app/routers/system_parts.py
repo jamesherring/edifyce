@@ -487,11 +487,6 @@ async def _assign_definition(session: AsyncSession, system_id: uuid.UUID, row: D
                 build_side_condition_rows(row, payload.condition, symbols)
             except ValueError as exc:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-            # Re-add the (persistent) owner so the freshly built subtree cascades
-            # into the session. Every node sits in both the owner collection and
-            # its parent's `children` (delete-orphan) collection; on an update
-            # that double membership otherwise leaves new nodes unflushed.
-            session.add(row)
     if "bindings" in fields and payload.bindings is not None:
         row.bindings = await _binding_rows(session, system_id, DefinitionBindingRow, payload.bindings)
 
@@ -531,8 +526,6 @@ async def _assign_rule(session: AsyncSession, system_id: uuid.UUID, row: RuleRow
                 build_rule_side_conditions(row, payload.side_conditions, symbols)
             except ValueError as exc:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-            # See _assign_definition: re-add so the new subtree reaches the session.
-            session.add(row)
 
 
 # ---------------------------------------------------------------------------
@@ -573,6 +566,12 @@ async def _update_child(
     await _owned(session, system_id, user)
     row = await _get_child_or_404(session, resource.row_cls, system_id, child_id, *resource.loads)
     await resource.assign(session, system_id, row, payload, payload.model_fields_set, False)
+    # Re-add the (persistent) row so any freshly built child subtree an assign
+    # created cascades into the session. A side-condition node sits in both its
+    # owner collection and its parent's `children` (delete-orphan) collection;
+    # on an update that double membership otherwise leaves new nodes unflushed.
+    # This mirrors the `session.add` the create path already does.
+    session.add(row)
     await _commit(session)
     return resource.serialize(await _get_child_or_404(session, resource.row_cls, system_id, child_id, *resource.loads))
 

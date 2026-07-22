@@ -101,8 +101,16 @@ def _parse_lines(lines: list[str]) -> _Leaf | _Combinator | None:
     predicate each), whereas a definition's ``where`` is a single ``;``-joined
     string — so rules skip the split ``_parse`` does. Two or more lines combine
     into an ``and``, matching how the engine treats the ``side_conditions:`` block.
+
+    A blank line is a malformed proviso, not a no-op: it is rejected (an empty
+    ``lines`` list, meaning "no proviso at all", is the only empty case allowed).
     """
-    conjuncts = [_parse_leaf(line.strip()) for line in lines if line.strip()]
+    conjuncts = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            raise ValueError("Empty side-condition line.")
+        conjuncts.append(_parse_leaf(stripped))
     if not conjuncts:
         return None
     if len(conjuncts) == 1:

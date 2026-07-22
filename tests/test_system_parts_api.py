@@ -222,6 +222,20 @@ def test_malformed_rule_side_condition_is_422(client):
     assert response.status_code == 422
 
 
+def test_blank_rule_side_condition_is_rejected_not_dropped(client):
+    # A blank proviso line is a malformed input, not a silent no-op: reject it
+    # rather than storing the rule with the blank quietly discarded.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+    response = client.post(f"/formal-systems/{sid}/rules", json={
+        "label": "R", "name": "r", "deduction": "(p → q)", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "formula"}, {"var": "q", "sort": "formula"}],
+        "side_conditions": ["equal(p, q)", ""],
+    })
+    assert response.status_code == 422
+
+
 # ---------------------------------------------------------------------------
 # Productions: sort resolution and template/regex rules
 # ---------------------------------------------------------------------------
