@@ -127,19 +127,37 @@ def _register_login(client: TestClient, email: str, password: str = "password123
     return user_id
 
 
-def _seed_zfc(db_path, owner_id: str) -> str:
-    # Insert a full ZFC system directly (child CRUD is a later phase), owned by
-    # the given user, so the read/validate/source paths have real content.
+def _seed_source(db_path, owner_id: str, source: str) -> str:
+    # Insert a system parsed from declarative source directly (child CRUD is a
+    # later phase), owned by the given user, so the read/validate/source paths
+    # have real content.
     engine = create_engine(f"sqlite:///{db_path}")
     try:
         with Session(engine) as session:
-            system = spec_to_system(parse(ZFC_SOURCE))
+            system = spec_to_system(parse(source))
             system.owner_id = uuid.UUID(owner_id)
             session.add(system)
             session.commit()
             return str(system.id)
     finally:
         engine.dispose()
+
+
+def _seed_zfc(db_path, owner_id: str) -> str:
+    return _seed_source(db_path, owner_id, ZFC_SOURCE)
+
+
+# A system that parses and stores fine but cannot be lowered: the line shape has
+# no `<placeholder>` naming a grammar sort, so `lower()` raises DeclarativeError.
+BROKEN_SOURCE = """system Broken
+
+grammar
+  formula | atom | matches [a-z]+
+
+line statement
+  shape assertion
+  logical formula
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +347,22 @@ def test_source_returns_lowered_edi(client, db):
     assert source.startswith("FormalSystem ZFC:")
     assert "InferenceRule modus_ponens:" in source
     assert "Define x ⊆ y as" in source
+
+
+def test_source_on_a_broken_published_system_is_422_not_500(client, db):
+    # A structurally-invalid system can be published (no compile gate yet), and
+    # published systems are world-readable. `lower()` raises on it, so an
+    # unguarded /source would be an unauthenticated 500. It must be a 422 with
+    # the error text instead.
+    owner_id = _register_login(client, "owner@example.com")
+    system_id = _seed_source(db, owner_id, BROKEN_SOURCE)
+    _publish(client, system_id)
+    client.post("/auth/logout")
+
+    response = client.get(f"/formal-systems/{system_id}/source")
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert isinstance(detail, list) and detail  # error strings, not an HTML 500
 
 
 def test_validate_is_owner_scoped(client, db):

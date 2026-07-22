@@ -61,7 +61,7 @@ from app.schemas import (
     SystemSource,
     SystemValidation,
 )
-from website.logical.declarative import build_spec, lower
+from website.logical.declarative import DeclarativeError, build_spec, lower
 
 router = APIRouter(prefix="/formal-systems", tags=["formal-systems"])
 
@@ -454,4 +454,14 @@ async def system_source(
     system = await _get_readable_or_404(session, system_id, user)
     # Describes this system alone; inheritance is not lowered yet (see the note
     # on validate_system).
-    return SystemSource(source=lower(system_to_spec(system)))
+    #
+    # `lower` raises `DeclarativeError` on a structurally-invalid spec (e.g. a
+    # line shape with no grammar-sort placeholder). Published systems are
+    # world-readable, so a broken one would otherwise be an unauthenticated 500;
+    # surface it as a 422 with the error text, mirroring how `validate` reports
+    # `build_spec` failures.
+    try:
+        source = lower(system_to_spec(system))
+    except DeclarativeError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=[str(exc)]) from exc
+    return SystemSource(source=source)
