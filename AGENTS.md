@@ -123,31 +123,45 @@ curl -sS "https://$HOST/sql" \
   -d '{"query":"select table_name from information_schema.tables where table_schema=$1","params":["public"]}'
 ```
 
-Reads and writes both work over this endpoint; it is the only path to the DB in a
-web session. (For local dev with wire-protocol access, `psql "$POSTGRES_URL"` is
-fine — this restriction is specific to the sandboxed sessions.)
+This endpoint is the only path to the DB in a web session. (For local dev with
+wire-protocol access, `psql "$POSTGRES_URL"` is fine — the HTTP-only restriction
+is specific to the sandboxed sessions.)
 
-**`atlas migrate diff` needs a dev database, which Docker can't provide here** —
-there's no Docker daemon, so the default `docker://pgvector/pg16/dev` won't start,
-and Neon's HTTP endpoint can't serve as an Atlas dev DB. But a *local* Postgres
-works: loopback traffic bypasses the egress proxy, so the :5432 block only applies
-to outbound connections, not `127.0.0.1`. Stand one up with pgvector (the Ubuntu
-archive is reachable through the proxy — only launchpad PPAs are blocked) and
-point `ATLAS_DEV_URL` at it:
+**Treat the Neon database as strictly read-only from web sessions.** Never
+`INSERT`/`UPDATE`/`DELETE` or run DDL against it — it is the live application
+database, and every schema change is owned by Atlas migrations applied in CI (see
+below), never by an ad-hoc session write. Read freely for inspection and debugging;
+change nothing. This should be enforced at the database, not left to convention:
+point the web environment's `POSTGRES_URL` at a Neon **read-replica endpoint**
+(physically read-only — writes are rejected at the storage layer) or a dedicated
+**read-only role** (`GRANT SELECT` only, plus
+`ALTER ROLE … SET default_transaction_read_only = on`) instead of the
+`neondb_owner` role, which currently carries full write + DDL rights. The local dev
+Postgres described next is the writable sandbox for anything that must mutate a DB.
+
+**The web environment provisions a loopback pgvector Postgres as Atlas's dev
+database** (via its setup script) and sets `ATLAS_DEV_URL` to point at it, so
+`atlas migrate diff` and `atlas migrate lint` work out of the box. Docker can't
+provide the dev DB here — there's no daemon, so the default
+`docker://pgvector/pg16/dev` won't start, and Neon's HTTP endpoint can't serve as an
+Atlas dev DB — but a *local* Postgres can, because loopback traffic bypasses the
+egress proxy (the :5432 block only applies to outbound connections, not
+`127.0.0.1`). To recreate it by hand, or to run outside the configured environment:
 
 ```bash
 apt-get install -y postgresql-16 postgresql-16-pgvector
 su postgres -c '/usr/lib/postgresql/16/bin/initdb -D /var/lib/postgresql/pgdev -A trust -U postgres'
-su postgres -c '/usr/lib/postgresql/16/bin/pg_ctl -D /var/lib/postgresql/pgdev -o "-p 5433 -k /tmp" -l /var/lib/postgresql/pg.log start'
+su postgres -c '/usr/lib/postgresql/16/bin/pg_ctl -D /var/lib/postgresql/pgdev -o "-p 5433 -k /tmp" -l /var/lib/postgresql/pgdev/server.log start'
 export ATLAS_DEV_URL='postgres://postgres@127.0.0.1:5433/postgres?sslmode=disable&search_path=public'
 atlas migrate diff <name> --env local   # replays migrations incl. CREATE EXTENSION vector
 ```
 
 With `ATLAS_DEV_URL` set this way, `migrate diff` and `migrate lint` both work —
-they only need the *dev* DB. Two prerequisites: `api.atlasgo.cloud` must be
-allow-listed (the token is validated on every invocation, and the `vector`
-extension is a logged-in-only feature — see below), and the dev Postgres must
-have pgvector, since the schema issues `CREATE EXTENSION vector`.
+they only need the *dev* DB. Two prerequisites, both satisfied by the configured
+environment: `api.atlasgo.cloud` must be allow-listed (the token is validated on
+every invocation, and the `vector` extension is a logged-in-only feature — see
+below), and the dev Postgres must have pgvector, since the schema issues
+`CREATE EXTENSION vector`.
 
 `migrate apply` and `migrate status` still **don't** work in a web session — they
 connect to the *target* (Neon) over the wire protocol on :5432, which stays
