@@ -41,7 +41,13 @@ from app.db.systems import (
     SymbolRow,
 )
 from app.main import app
-from website.logical.declarative import parse
+
+# `website.logical.declarative.parse` is imported lazily inside `_seed_source`
+# (see its use below). Under Python 3.14's stricter import machinery a module-top
+# `from website.logical.declarative import parse` can resolve against a
+# still-initializing `declarative` during collection and fail; deferring it to
+# call time, when every module is fully loaded, sidesteps that. (3.13 tolerated
+# the eager import.)
 
 # Auth tables + the system-decomposition tables (all SQLite-creatable).
 _TABLES = [
@@ -134,6 +140,9 @@ def _seed_source(db_path, owner_id: str, source: str, published: bool = False) -
     # have real content. `published=True` sets published_at directly, which is
     # the only way to reach a broken-but-published state now that the publish
     # endpoint gates on the system compiling.
+    # Deferred import — see the note by the top-of-module imports.
+    from website.logical.declarative import parse
+
     engine = create_engine(f"sqlite:///{db_path}")
     try:
         with Session(engine) as session:

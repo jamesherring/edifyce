@@ -42,7 +42,13 @@ from app.db.systems import (
     SymbolRow,
 )
 from app.main import app
-from website.logical.declarative import parse
+
+# NOTE: `website.logical.declarative.parse` is imported lazily inside
+# `_seed_system` rather than at module top. Under Python 3.14's stricter import
+# machinery, a module-top `from website.logical.declarative import parse` here
+# resolves against a still-initializing `declarative` during collection and
+# fails (`cannot import name 'parse'`); deferring it to call time, when every
+# module is fully loaded, sidesteps that. (3.13 tolerated the eager import.)
 
 # Auth tables + the system-decomposition tables + the proof tables (all
 # SQLite-creatable). The pgvector `theorems` table is deliberately omitted.
@@ -140,6 +146,9 @@ def _logout(client: TestClient) -> None:
 def _seed_system(db_path, owner_id: str, published: bool = False) -> str:
     # Insert a ZFC system owned by the given user directly, so a proof has a real
     # system to attach to and verify against.
+    # Deferred import — see the note by the top-of-module imports.
+    from website.logical.declarative import parse
+
     engine = create_engine(f"sqlite:///{db_path}")
     try:
         with Session(engine) as session:
