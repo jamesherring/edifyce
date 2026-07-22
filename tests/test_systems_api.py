@@ -379,6 +379,97 @@ def test_validate_is_owner_scoped(client, db):
 
 
 # ---------------------------------------------------------------------------
+# Verify a proof against a stored system (assembled server-side from rows)
+# ---------------------------------------------------------------------------
+
+
+def test_verify_valid_proof_against_owned_system(client, db):
+    owner_id = _register_login(client, "ada@example.com")
+    system_id = _seed_zfc(db, owner_id)
+    res = client.post(
+        f"/formal-systems/{system_id}/verify", json={"proof_text": "x ∈ y [HYP]"}
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["success"] is True
+    assert body["proof"]["indicator"] == "ok"
+    assert len(body["proof"]["lines"]) == 1
+
+
+def test_verify_unparseable_line_is_reported_not_raised(client, db):
+    owner_id = _register_login(client, "ada@example.com")
+    system_id = _seed_zfc(db, owner_id)
+    res = client.post(
+        f"/formal-systems/{system_id}/verify", json={"proof_text": "HELLO 123"}
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["success"] is False
+    assert body["proof"]["lines"][0]["valid"] is False
+
+
+def test_verify_on_a_non_compiling_system_is_400(client, db):
+    # A stored system that cannot be lowered/compiled surfaces the errors as a
+    # 400 the client renders verbatim, rather than a 500.
+    owner_id = _register_login(client, "ada@example.com")
+    system_id = _seed_spec(db, owner_id, broken_spec())
+    res = client.post(
+        f"/formal-systems/{system_id}/verify", json={"proof_text": "anything"}
+    )
+    assert res.status_code == 400
+    detail = res.json()["detail"]
+    assert isinstance(detail, list) and detail
+
+
+def test_verify_published_system_needs_no_auth(client, db):
+    owner_id = _register_login(client, "ada@example.com")
+    system_id = _seed_spec(db, owner_id, zfc_spec(), published=True)
+    client.post("/auth/logout")
+    res = client.post(
+        f"/formal-systems/{system_id}/verify", json={"proof_text": "x ∈ y [HYP]"}
+    )
+    assert res.status_code == 200
+    assert res.json()["success"] is True
+
+
+def test_verify_is_owner_scoped_for_drafts(client, db):
+    owner_id = _register_login(client, "owner@example.com")
+    system_id = _seed_zfc(db, owner_id)
+    client.post("/auth/logout")
+
+    _register_login(client, "intruder@example.com")
+    assert owner_id  # sanity
+    res = client.post(
+        f"/formal-systems/{system_id}/verify", json={"proof_text": "x ∈ y [HYP]"}
+    )
+    assert res.status_code == 404
+
+
+def test_verify_checker_exception_returns_structured_error(client, db, monkeypatch):
+    # If the checker raises against an otherwise-valid stored system (e.g. a line
+    # type whose context edit targets a missing key), the endpoint returns a
+    # structured error, not a 500.
+    import app.routers.systems as systems_router
+
+    class ExplodingSystem:
+        def parse(self, text):
+            raise Exception("Can't find 'bad' in proof context.")
+
+    owner_id = _register_login(client, "ada@example.com")
+    system_id = _seed_zfc(db, owner_id)
+    monkeypatch.setattr(
+        systems_router, "build_spec", lambda spec: {"system": ExplodingSystem()}
+    )
+    res = client.post(f"/formal-systems/{system_id}/verify", json={"proof_text": "x"})
+    assert res.status_code == 200
+    assert res.json() == {
+        "success": False,
+        "errors": ["Can't find 'bad' in proof context."],
+        "proof": None,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Public visibility: the shared master list + published-or-owner reads
 # ---------------------------------------------------------------------------
 

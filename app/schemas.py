@@ -25,6 +25,13 @@ class VerifyProofResponse(BaseModel):
     proof: dict | None = None
 
 
+class ProofVerifyRequest(BaseModel):
+    """Verify a proof against a *stored* system (identified by URL), so the
+    system source never crosses the wire — the server assembles it from rows."""
+
+    proof_text: str
+
+
 class OAuthProvidersResponse(BaseModel):
     # The social-login providers that are configured, so the UI shows only the
     # buttons that will actually work. Values match the /auth/<provider> prefix.
