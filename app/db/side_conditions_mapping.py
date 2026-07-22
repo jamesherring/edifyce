@@ -82,11 +82,46 @@ def _parse_leaf(text: str) -> _Leaf | _Combinator:
     return _Combinator(SIDE_KIND_NOT, (leaf,)) if negated else leaf
 
 
+def _split_or(text: str) -> list[str]:
+    """Split ``text`` on top-level ``or`` (paren depth 0).
+
+    Mirrors ``side_condition_syntax._split_or`` so the two parsers accept the same
+    disjunctions; an ``or`` inside a predicate's args is left untouched.
+    """
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        char = text[i]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif depth == 0 and text.startswith(" or ", i):
+            parts.append(text[start:i])
+            i += 4
+            start = i
+            continue
+        i += 1
+    parts.append(text[start:])
+    return parts
+
+
+def _parse_disjunction(text: str) -> _Leaf | _Combinator:
+    """Parse one segment/line into a disjunction of (optionally negated) leaves."""
+    disjuncts = [_parse_leaf(part.strip()) for part in _split_or(text)]
+    if len(disjuncts) == 1:
+        return disjuncts[0]
+    return _Combinator(SIDE_KIND_OR, tuple(disjuncts))
+
+
 def _parse(condition: str) -> _Leaf | _Combinator | None:
     condition = condition.strip()
     if not condition:
         return None
-    conjuncts = [_parse_leaf(part.strip()) for part in condition.split(";") if part.strip()]
+    conjuncts = [_parse_disjunction(part.strip()) for part in condition.split(";") if part.strip()]
     if not conjuncts:
         return None
     if len(conjuncts) == 1:
@@ -97,10 +132,11 @@ def _parse(condition: str) -> _Leaf | _Combinator | None:
 def _parse_lines(lines: list[str]) -> _Leaf | _Combinator | None:
     """Parse a rule's proviso lines into one tree (implicit conjunction).
 
-    A rule stores its provisos as a list of already-split lines (one kernel
-    predicate each), whereas a definition's ``where`` is a single ``;``-joined
-    string — so rules skip the split ``_parse`` does. Two or more lines combine
-    into an ``and``, matching how the engine treats the ``side_conditions:`` block.
+    A rule stores its provisos as a list of already-split lines (one disjunction
+    each), whereas a definition's ``where`` is a single ``;``-joined string — so
+    rules skip the ``;`` split ``_parse`` does. Two or more lines combine into an
+    ``and``, matching how the engine treats the ``side_conditions:`` block; a line
+    may itself be an ``or`` disjunction.
 
     A blank line is a malformed proviso, not a no-op: it is rejected (an empty
     ``lines`` list, meaning "no proviso at all", is the only empty case allowed).
@@ -110,7 +146,7 @@ def _parse_lines(lines: list[str]) -> _Leaf | _Combinator | None:
         stripped = line.strip()
         if not stripped:
             raise ValueError("Empty side-condition line.")
-        conjuncts.append(_parse_leaf(stripped))
+        conjuncts.append(_parse_disjunction(stripped))
     if not conjuncts:
         return None
     if len(conjuncts) == 1:
@@ -289,7 +325,7 @@ def _render(row: SideConditionRow, children: dict[uuid.UUID, list[SideConditionR
     if row.kind == SIDE_KIND_AND:
         return " ; ".join(_render(child, children) for child in kids)
     if row.kind == SIDE_KIND_OR:
-        # The kernel has Or, but there is no `where` surface syntax for it yet;
-        # nothing produces it, so hitting this is a bug, not a user error.
-        raise ValueError("`or` side-conditions have no surface syntax to render to.")
+        # A disjunction within one line/`;`-clause; `and` stays the level above, so
+        # no grouping parens are needed to round-trip unambiguously.
+        return " or ".join(_render(child, children) for child in kids)
     raise ValueError(f"Unknown side-condition kind: {row.kind!r}.")

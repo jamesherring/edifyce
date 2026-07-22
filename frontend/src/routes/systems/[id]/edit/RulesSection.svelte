@@ -112,6 +112,7 @@
 		bind:items={sideConditions}
 		label="Side-conditions"
 		hint="(provisos)"
+		description="All lines must hold; within a line, combine predicates with 'or'."
 		addLabel="Add proviso"
 		removeLabel="Remove proviso"
 		blank={() => ({ value: '' })}

@@ -21,7 +21,12 @@ from sqlalchemy.orm import Session
 from app.db import Base, spec_to_system, system_to_spec
 from app.db.models import FormalSystem
 from app.db.side_conditions import SideConditionRow
-from app.db.side_conditions_mapping import _parse, _parse_lines  # grammars under test
+from app.db.side_conditions_mapping import (  # grammars under test
+    _parse,
+    _parse_lines,
+    definition_condition_string,
+    rule_side_conditions_list,
+)
 from app.db.systems import (
     AxiomBindingRow,
     AxiomRow,
@@ -258,6 +263,108 @@ def test_round_tripped_rule_provisos_still_gate_proofs(stored_system):
 
 
 # ---------------------------------------------------------------------------
+# `or` disjunctions round-trip and gate proofs
+# ---------------------------------------------------------------------------
+
+# DIS derives (p → q) when p and q coincide OR p does not occur in q.
+OR_SOURCE = """system OrSys
+
+notation
+  brackets ( )
+
+grammar
+  atom    | prop        | matches [a-z]
+  formula | atomic      | a       | a : atom
+  formula | implication | (p → q) | p, q : formula
+
+line statement
+  shape <formula> [<reference>]
+  reference | matches [A-Za-z0-9 ,]+
+  logical formula
+
+rules
+  DIS | disj | from | infer (p → q) | p, q : formula
+
+side_conditions
+  DIS | equal(p, q) or not occurs(p, q)
+"""
+
+
+@pytest.fixture
+def or_system(session):
+    session.add(spec_to_system(parse(OR_SOURCE)))
+    session.commit()
+    session.expire_all()
+    return session.scalar(select(FormalSystem).where(FormalSystem.name == "OrSys"))
+
+
+def test_or_proviso_is_stored_as_an_or_tree(or_system):
+    dis = _rule(or_system, "DIS")
+    root = next(sc for sc in dis.side_conditions if sc.parent_id is None)
+    assert root.kind == "or"
+    kinds = [child.kind for child in root.children]
+    assert kinds == ["equal", "not"]
+    # The `not` wraps the occurs leaf.
+    assert [c.kind for c in root.children[1].children] == ["occurs"]
+
+
+def test_or_proviso_round_trips(or_system):
+    assert system_to_spec(or_system) == parse(OR_SOURCE)
+    dis = _rule(or_system, "DIS")
+    assert rule_side_conditions_list(dis) == ["equal(p, q) or not occurs(p, q)"]
+
+
+def test_round_tripped_or_proviso_gates_proofs(or_system):
+    from website.logical.declarative import build_spec
+
+    system = build_spec(system_to_spec(or_system))["system"]
+    # equal disjunct holds.
+    assert system.parse("(a → a) [DIS]").valid is True
+    # equal fails but `not occurs` holds (a not in (b → c)).
+    assert system.parse("(a → (b → c)) [DIS]").valid is True
+    # both disjuncts fail: a ≠ (a → b) and a occurs in it.
+    assert system.parse("(a → (a → b)) [DIS]").valid is False
+
+
+# The `or` disjunction also reaches the *definition* owner via the `where` clause.
+OR_DEF_SOURCE = """system OrDefSys
+
+notation
+  brackets ( )
+
+grammar
+  term    | variable   | matches [a-z]
+  formula | membership | s ∈ t | s, t : term
+  formula | equality   | s = t | s, t : term
+
+line statement
+  shape <formula> [<reference>]
+  reference | matches [A-Za-z0-9 ,]+
+  logical formula
+
+definitions
+  formula | rel | x ~ y | means x = y | x, y : variable | where disjoint(x, y) or atom(x)
+"""
+
+
+@pytest.fixture
+def or_def_system(session):
+    session.add(spec_to_system(parse(OR_DEF_SOURCE)))
+    session.commit()
+    session.expire_all()
+    return session.scalar(select(FormalSystem).where(FormalSystem.name == "OrDefSys"))
+
+
+def test_definition_where_or_round_trips(or_def_system):
+    assert system_to_spec(or_def_system) == parse(OR_DEF_SOURCE)
+    rel = _definition(or_def_system, "rel")
+    root = next(sc for sc in rel.side_conditions if sc.parent_id is None)
+    assert root.kind == "or"
+    assert [child.kind for child in root.children] == ["disjoint", "atom"]
+    assert definition_condition_string(rel) == "disjoint(x, y) or atom(x)"
+
+
+# ---------------------------------------------------------------------------
 # Drift guard: the storage grammar matches the engine's surface grammar
 # ---------------------------------------------------------------------------
 
@@ -277,13 +384,19 @@ def test_storage_grammar_matches_the_engine_parser():
         "disjoint(x, y, variable)",
         "atom(x)",
         "atom(x, variable)",
+        "atom(x) or equal(x, y)",
+        "not occurs(x, phi) or disjoint(x, y, variable)",
+        "atom(x) or equal(x, y) or occurs(x, phi)",
     ]
     for text in accepted:
         parse_side_condition(text, context)  # engine: must not raise
         assert _parse(text) is not None  # storage (definition `where`): must not raise
         assert _parse_lines([text]) is not None  # storage (rule block): must not raise
 
-    rejected = ["occurs(x)", "bogus(x, y)", "disjoint()", "atom(x, y, z)", "occurs(x, y, z)"]
+    rejected = [
+        "occurs(x)", "bogus(x, y)", "disjoint()", "atom(x, y, z)", "occurs(x, y, z)",
+        "atom(x) or", "or atom(x)", "atom(x) or or atom(y)",
+    ]
     for text in rejected:
         with pytest.raises(ValueError):
             parse_side_condition(text, context)
