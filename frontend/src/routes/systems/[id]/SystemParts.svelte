@@ -197,7 +197,15 @@
 								<Table.Cell class="font-mono">{def.higher}</Table.Cell>
 								<Table.Cell class="font-mono">{def.lower}</Table.Cell>
 								<Table.Cell class="hidden font-mono text-xs text-muted-foreground sm:table-cell">
-									{def.condition ?? bindingsText(def.bindings)}
+									{#if def.provisos.length > 0}
+										<div>{def.provisos.join(' ; ')}</div>
+									{/if}
+									{#if def.bindings.length > 0}
+										<div class="opacity-70">{bindingsText(def.bindings)}</div>
+									{/if}
+									{#if def.provisos.length === 0 && def.bindings.length === 0}
+										—
+									{/if}
 								</Table.Cell>
 							</Table.Row>
 						{/each}
