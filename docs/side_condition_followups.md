@@ -51,20 +51,42 @@ a **cited premise / proof obligation**, not a side-condition on the rewrite.
 
 ## 3. Formula arguments in predicate positions
 
-*Status: deferred (feasible, additive, structural-only).*
+*Status: **implemented**.*
 
-Today a predicate's arguments are **bound variable names** (looked up in the
-match binding), not formula expressions. So a guard cannot mention a
-defined-symbol formula in argument position (e.g. `equal(x, ∅)` where `∅` is
-introduced by another definition) — `∅` is treated as an unbound name and fails.
+A predicate argument is now either a declared metavariable (resolved against the
+match binding, as before) **or** a literal term expression built from the
+grammar. An argument that is not a declared metavariable of the owner is parsed
+against the grammar — its productions **and its definitions** (`sort.match` +
+`from_match`, keeping the owner's metavariables schematic via `abstract`); at
+check time the match binding is substituted into it (`Term.substitute`) to get the
+ground term to compare. So a guard can mention a constant, a compound term, or
+defined notation — `equal(p, ⊥)`, `not equal(x, ∅)`, `equal(p, ¬q)`,
+`occurs(⊥, phi)` — where the argument may embed the rule's metavariables.
 
-A future extension could parse argument-position formulas (which may use defined
-notation) into terms via `sort.match` + `from_match`, letting a guard *reference*
-defined notation. This stays **structural**: defined symbols are compared as
-opaque constructors, with no unfolding. Reasoning *up to* definitions
-(`equal` modulo unfolding) remains intentionally excluded — that is semantic and
-belongs in the proof (cite the definition and prove the equality as a step),
-mirroring the ordering decision above.
+Provisos (rule `side_conditions:` and definition `where`) are parsed in the
+compiler's finalisation pass, once the system's definitions have resolved, so
+defined notation in an argument resolves like it does anywhere else. Comparison
+stays structural: a defined symbol is an opaque constructor, so `equal(x, ∅)`
+holds when `x` is the `∅` term itself, not merely something equal to its
+definiens (no unfolding).
+
+A term argument must be **ground after substitution**: every metavariable it
+names must be one the match actually bound, or the condition fails loud (fails
+closed) — a term naming an unbound metavariable can't be compared soundly.
+
+Reasoning *up to* definitions (`equal` modulo unfolding) remains intentionally
+excluded — that is semantic and belongs in the proof (cite the definition and
+prove the equality as a step), mirroring the ordering decision above.
+
+Disambiguation is by the declared-metavariable set (`context.string_variables`
+for the engine, the owner's binding names for storage), so every existing proviso
+is unchanged and the two layers agree. One consequence: an argument that *looks*
+like a mistyped metavariable but isn't declared is treated as a term and validated
+when the system compiles, rather than rejected at write time — consistent with
+the rest of the draft-tolerant part API. In storage, `side_conditions` gains
+`left_is_term` / `right_is_term` flags so a dropped binding that a stored
+*metavariable* argument still names is still caught early, while term arguments
+defer to compile.
 
 ## Not in scope: retiring `get_by_path`
 

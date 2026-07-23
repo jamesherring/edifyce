@@ -73,7 +73,7 @@ def _parse_leaf(text: str) -> _Leaf | _Combinator:
         raise ValueError(f"Malformed side-condition: {text!r}.")
     name = text[:open_paren].strip()
     inner = text[open_paren + 1 : -1].strip()
-    args = [arg.strip() for arg in inner.split(",")] if inner else []
+    args = _split_args(inner)
     if any(not arg for arg in args):
         raise ValueError(f"Malformed side-condition arguments: {text!r}.")
 
@@ -85,6 +85,33 @@ def _parse_leaf(text: str) -> _Leaf | _Combinator:
     right = args[1] if len(args) >= 2 and kind not in _SORT_AT_ARG_1 else None
     leaf = _Leaf(kind=kind, left=args[0], right=right, sort=sort)
     return _Combinator(SIDE_KIND_NOT, (leaf,)) if negated else leaf
+
+
+_OPENERS = "([{⟨"
+_CLOSERS = ")]}⟩"
+
+
+def _split_args(inner: str) -> list[str]:
+    """Split a predicate's argument list on top-level (bracket-depth-0) commas.
+
+    Mirrors ``side_condition_syntax._split_args`` so a compound term argument such
+    as ``f(a, b)`` is one argument in both parsers, not split on its inner comma.
+    """
+    if not inner:
+        return []
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    for i, char in enumerate(inner):
+        if char in _OPENERS:
+            depth += 1
+        elif char in _CLOSERS:
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(inner[start:i])
+            start = i + 1
+    parts.append(inner[start:])
+    return [part.strip() for part in parts]
 
 
 def _split_or(text: str) -> list[str]:
@@ -217,12 +244,16 @@ def validate_side_condition_metavars(
 
     The build helpers validate on the way in; this re-checks the flat node list of
     an *unchanged* proviso when its owner's bindings change, so dropping a binding
-    a stored proviso still names is caught here rather than in the kernel. Only
-    leaf nodes carry names; combinators have ``None`` and are skipped.
+    a stored *metavariable* argument still names is caught here rather than in the
+    kernel. Term arguments (``*_is_term``) reference the grammar, not the binding
+    set, and may embed metavariables the storage layer can't introspect — those are
+    left to compile-time validation. Combinators carry no names and are skipped.
     """
     for node in nodes:
-        _require_metavar(node.left_name, metavars)
-        _require_metavar(node.right_name, metavars)
+        if not node.left_is_term:
+            _require_metavar(node.left_name, metavars)
+        if not node.right_is_term:
+            _require_metavar(node.right_name, metavars)
 
 
 def _materialise(
@@ -241,12 +272,14 @@ def _materialise(
         definition=definition, rule=rule, parent=parent, position=position, kind=node.kind
     )
     if isinstance(node, _Leaf):
-        # A leaf's left/right are metavariable names (the sort argument is separate
-        # and resolved below); every one must be a declared binding of the owner.
-        _require_metavar(node.left, metavars)
-        _require_metavar(node.right, metavars)
+        # A leaf's left/right are argument positions (the sort argument is separate
+        # and resolved below). An argument that is a declared metavariable is stored
+        # as a name; anything else is a literal term expression, flagged as such and
+        # validated when the system compiles (storage can't parse terms).
         row.left_name = node.left
         row.right_name = node.right
+        row.left_is_term = node.left is not None and node.left not in metavars
+        row.right_is_term = node.right is not None and node.right not in metavars
         if node.sort is not None:
             if node.sort not in symbols:
                 raise ValueError(

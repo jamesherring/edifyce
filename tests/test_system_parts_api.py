@@ -324,44 +324,38 @@ def test_member_proviso_over_unknown_sort_is_422(client):
     assert response.status_code == 422
 
 
-def test_rule_or_disjunct_over_undeclared_metavar_is_422(client):
-    # Metavariable validation reaches into each disjunct: `z` is undeclared.
+def test_rule_term_argument_proviso_round_trips_and_validates(client):
+    # A literal-term argument (here the compound `(p → p)`, using a production and
+    # the metavariable `p`) is accepted, read back verbatim, and compiles.
     _login(client, "ada@example.com")
-    sid = _new_system(client)
-    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
-    response = client.post(f"/formal-systems/{sid}/rules", json={
-        "label": "DIS", "name": "disj", "deduction": "(p → q)", "antecedents": [],
+    sid = _new_system(client, "ZFC")
+    _build_zfc(client, sid)
+    rule = _post(client, f"/formal-systems/{sid}/rules", {
+        "label": "TQ", "name": "term arg", "deduction": "(p → q)", "antecedents": [],
         "bindings": [{"var": "p", "sort": "formula"}, {"var": "q", "sort": "formula"}],
-        "side_conditions": ["equal(p, q) or occurs(p, z)"],
+        "side_conditions": ["equal(q, (p → p))"],
     })
-    assert response.status_code == 422
+    assert rule["side_conditions"] == ["equal(q, (p → p))"]
+    detail = client.get(f"/formal-systems/{sid}").json()
+    assert next(r for r in detail["rules"] if r["label"] == "TQ")["side_conditions"] == [
+        "equal(q, (p → p))"
+    ]
+    assert client.post(f"/formal-systems/{sid}/validate").json()["success"] is True
 
 
-def test_rule_proviso_over_undeclared_metavar_is_422(client):
-    # A proviso may only mention the rule's declared bindings: `q` is not one, so
-    # `equal(p, q)` has no metavariable to check against and is rejected up front
-    # rather than blowing up in the kernel when the rule is later applied.
+def test_undeclared_argument_is_accepted_as_a_term_not_rejected_at_write(client):
+    # An argument that isn't a declared metavariable is now a *literal term*, so the
+    # write is draft-tolerant (201) rather than an early 422 — a term that doesn't
+    # parse is caught by POST /validate, like any other draft breakage.
     _login(client, "ada@example.com")
     sid = _new_system(client)
     _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
     response = client.post(f"/formal-systems/{sid}/rules", json={
         "label": "R", "name": "r", "deduction": "(p → q)", "antecedents": [],
-        "bindings": [{"var": "p", "sort": "formula"}],  # only p is declared
+        "bindings": [{"var": "p", "sort": "formula"}],  # q is undeclared → a term
         "side_conditions": ["equal(p, q)"],
     })
-    assert response.status_code == 422
-
-
-def test_definition_proviso_over_undeclared_metavar_is_422(client):
-    _login(client, "ada@example.com")
-    sid = _new_system(client)
-    _post(client, f"/formal-systems/{sid}/sorts", {"name": "term"})
-    response = client.post(f"/formal-systems/{sid}/definitions", json={
-        "sort": "term", "name": "d", "higher": "x", "lower": "y",
-        "bindings": [{"var": "x", "sort": "term"}],  # only x is declared
-        "condition": "disjoint(x, y)",
-    })
-    assert response.status_code == 422
+    assert response.status_code == 201
 
 
 def test_definition_binding_and_proviso_updated_together(client):
