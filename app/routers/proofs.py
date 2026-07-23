@@ -35,10 +35,12 @@ from __future__ import annotations
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
+from graphlib import CycleError, TopologicalSorter
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import select, text
+from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -47,6 +49,7 @@ from app.db import FormalSystem, Proof, ProofReference, get_session, system_to_s
 from app.db.models import User
 from app.routers._common import PageParams, page_params, paginate_summaries, unique_slug
 from app.routers.systems import load_system
+from website.logical.formal_system.proof import Proof as EngineProof
 from app.schemas import (
     Page,
     ProofCreate,
@@ -157,27 +160,134 @@ async def _require_owned_system(
         )
 
 
-def _verify(system: FormalSystem, source: str) -> tuple[VerifyProofResponse, bool | None]:
-    """Build the parent system and check `source` against it.
+# One reference edge as loaded for the closure: (alias, target proof id, position).
+_Edge = tuple[str, uuid.UUID, int]
 
-    Returns the response payload plus the proof's validity (None when the proof
-    couldn't be checked at all — a system that doesn't build, or source the
-    engine can't parse). No proof-checking lives here: it defers to the same
-    `build_spec` + `FormalSystem.parse` path as the stateless `/proofs/verify`.
+
+async def _reference_closure(
+    session: AsyncSession, root_id: uuid.UUID
+) -> tuple[dict[uuid.UUID, Proof], dict[uuid.UUID, list[_Edge]]]:
+    """Load ``root_id`` and every proof it transitively references.
+
+    Returns the proofs keyed by id and each proof's outgoing edges. References are
+    same-system-only and the stored graph is acyclic (enforced on write), so this
+    BFS terminates within the root's system.
     """
-    result = build_spec(system_to_spec(system))
-    if "errors" in result:
-        return VerifyProofResponse(success=False, errors=result["errors"]), None
+    proofs: dict[uuid.UUID, Proof] = {}
+    edges: dict[uuid.UUID, list[_Edge]] = {}
+    frontier = [root_id]
+    while frontier:
+        to_load = [pid for pid in frontier if pid not in proofs]
+        frontier = []
+        if not to_load:
+            break
+        rows = (
+            await session.scalars(
+                select(Proof)
+                .where(Proof.id.in_(to_load))
+                .options(selectinload(Proof.reference_links))
+            )
+        ).all()
+        for proof in rows:
+            proofs[proof.id] = proof
+            edges[proof.id] = [
+                (link.alias, link.references_id, link.position) for link in proof.reference_links
+            ]
+            frontier.extend(
+                link.references_id
+                for link in proof.reference_links
+                if link.references_id not in proofs
+            )
+    return proofs, edges
 
-    compiled = result["system"]
-    # The proof checker raises on malformed proofs against otherwise valid
-    # systems; return a structured error instead of a 500 (mirrors main.py).
+
+def _dependency_order(
+    node_ids: list[uuid.UUID], edges: dict[uuid.UUID, list[_Edge]]
+) -> list[uuid.UUID]:
+    # Proofs ordered so a lemma is compiled before the proofs that cite it.
+    # Raises graphlib.CycleError if the graph is cyclic.
+    sorter: TopologicalSorter[uuid.UUID] = TopologicalSorter()
+    for pid in node_ids:
+        sorter.add(pid, *(target for _alias, target, _pos in edges.get(pid, ())))
+    return list(sorter.static_order())
+
+
+async def _verify_with_references(
+    session: AsyncSession, proof: Proof
+) -> tuple[VerifyProofResponse, bool | None]:
+    """Verify a stored proof, resolving the lemmas it cites from other proofs.
+
+    Compiles the system once and parses the whole transitive reference closure in
+    dependency order (a lemma before its dependents), pre-seeding each proof's
+    ``reference_context`` with the already-compiled proofs it references — keyed by
+    the stored citation alias — so a `[alias.line]` citation resolves to that
+    lemma's line. Only *valid* lemmas are seeded, so a proof leaning on an
+    unproven lemma fails rather than borrowing an unsound line.
+
+    Returns the response payload plus validity (None when the proof couldn't be
+    checked at all — the system doesn't build, or its source doesn't parse).
+    """
+    system = await load_system(session, proof.formal_system_id)
+    if system is None:
+        return VerifyProofResponse(success=False, errors=["The proof's system no longer exists."]), None
+
+    build = build_spec(system_to_spec(system))
+    if "errors" in build:
+        return VerifyProofResponse(success=False, errors=build["errors"]), None
+    compiled_system = build["system"]
+
+    closure, edges = await _reference_closure(session, proof.id)
     try:
-        proof = compiled.parse(source)
-    except Exception as exc:  # noqa: BLE001 — reshaped into a client error
-        return VerifyProofResponse(success=False, errors=[str(exc)]), None
+        order = _dependency_order(list(closure), edges)
+    except CycleError:
+        # The stored graph is kept acyclic (enforced on write); a defensive guard.
+        return VerifyProofResponse(success=False, errors=["Circular proof reference."]), None
 
-    return VerifyProofResponse(success=proof.valid, proof=proof.data()), proof.valid
+    compiled: dict[uuid.UUID, EngineProof] = {}
+    for pid in order:
+        reference_context = {
+            alias: compiled[target]
+            for alias, target, _pos in edges.get(pid, ())
+            if target in compiled and compiled[target].valid
+        }
+        engine_proof = EngineProof(formal_system=compiled_system)
+        engine_proof.reference_context = reference_context
+        # The checker raises on malformed proofs against otherwise-valid systems;
+        # reshape into a structured error for the target, and just don't seed a
+        # broken lemma downstream.
+        try:
+            compiled_system.parse(closure[pid].source, proof=engine_proof)
+        except Exception as exc:  # noqa: BLE001
+            if pid == proof.id:
+                return VerifyProofResponse(success=False, errors=[str(exc)]), None
+            engine_proof.valid = False
+        compiled[pid] = engine_proof
+
+    target = compiled[proof.id]
+    return VerifyProofResponse(success=target.valid, proof=target.data()), target.valid
+
+
+async def _invalidate_dependents(session: AsyncSession, proof_id: uuid.UUID) -> None:
+    """Clear the cached verdict of every proof that transitively references
+    ``proof_id``, so a stale ``valid`` can't survive a change to a lemma it leans
+    on (a source edit, or the proof's deletion). Those proofs re-verify on demand.
+    """
+    dependents: set[uuid.UUID] = set()
+    frontier = [proof_id]
+    while frontier:
+        rows = (
+            await session.scalars(
+                select(ProofReference.proof_id).where(
+                    ProofReference.references_id.in_(frontier)
+                )
+            )
+        ).all()
+        frontier = [pid for pid in rows if pid not in dependents]
+        dependents.update(frontier)
+    if dependents:
+        await session.execute(
+            sa_update(Proof).where(Proof.id.in_(dependents)).values(valid=None, result=None)
+        )
 
 
 async def _require_publishable(session: AsyncSession, proof: Proof) -> None:
@@ -188,6 +298,10 @@ async def _require_publishable(session: AsyncSession, proof: Proof) -> None:
     published proof exposes `formal_system_id`, and `GET /formal-systems/{id}`
     404s for anonymous viewers when the system is a private draft.
 
+    A third: every lemma it references must itself be published — a published
+    proof's references are part of the theorem it exposes, and a public reader
+    must be able to follow them.
+
     On success the fresh verdict is cached on the row, so a published proof always
     renders as checked. Also used to keep a *published* proof valid across source
     edits: re-running it after a source edit rejects a change that would leave a
@@ -197,18 +311,27 @@ async def _require_publishable(session: AsyncSession, proof: Proof) -> None:
     if system is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "The proof's system no longer exists.")
 
-    response, valid = _verify(system, proof.source)
-    if not response.success:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=response.errors or ["Proof does not verify against its system."],
-        )
-
     if system.published_at is None:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "Cannot publish a proof whose system is an unpublished draft; "
             "publish the system first.",
+        )
+
+    unpublished = [link for link in proof.reference_links if link.referenced.published_at is None]
+    if unpublished:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Every referenced proof must be published before this proof can be.",
+        )
+
+    # Verify with references resolved, so a proof that leans on a lemma is gated
+    # on the lemma actually proving it.
+    response, valid = await _verify_with_references(session, proof)
+    if not response.success:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=response.errors or ["Proof does not verify against its system."],
         )
 
     # All gates passed. The proof was just verified as part of gating, so cache
@@ -363,9 +486,11 @@ async def update_proof(
     source_changed = "source" in changes and changes["source"] is not None
     if source_changed:
         proof.source = changes["source"]
-        # The stored source changed, so the cached verdict is stale.
+        # The stored source changed, so this proof's verdict — and the cached
+        # verdict of anything that cites it as a lemma — is stale.
         proof.valid = None
         proof.result = None
+        await _invalidate_dependents(session, proof.id)
 
     # Publishing is the write that makes a proof world-readable, so gate it —
     # after the field changes above so the checks see this request's final state.
@@ -391,7 +516,7 @@ async def _lock_reference_graph(session: AsyncSession, system_id: uuid.UUID) -> 
     transaction-scoped advisory lock keyed by the system makes those edits
     serialize, so each sees the other's edge. Postgres only; a no-op on SQLite
     (the test DB, where requests don't run concurrently anyway). Verification
-    (a later phase) re-checks cycles in the engine as the authoritative backstop.
+    re-checks for cycles as a defensive backstop (``_dependency_order``).
     """
     if session.bind is not None and session.bind.dialect.name == "postgresql":
         await session.execute(
@@ -452,8 +577,10 @@ async def set_proof_references(
     A proof may reference another proof **in the same system** that is either the
     caller's own or published (a public lemma). Self-references, duplicate targets
     or aliases, and any edge that would make the reference graph cyclic are
-    rejected (422). References are stored here; wiring them into verification is a
-    later phase, so the cached verdict is left untouched.
+    rejected (422). A published proof may only reference published proofs (its
+    references are part of the public theorem). Changing the set invalidates the
+    cached verdict of this proof and of anything that cites it, since references
+    now feed verification.
     """
     proof = await _get_owned_or_404(session, proof_id, user.id)
 
@@ -495,6 +622,13 @@ async def set_proof_references(
                     status.HTTP_422_UNPROCESSABLE_ENTITY,
                     f"Referenced proof {tid} must be your own or a published proof.",
                 )
+            # A published proof's references are exposed publicly and must verify
+            # for a public reader, so they must be published too.
+            if proof.published_at is not None and target.published_at is None:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    "A published proof may only reference published proofs.",
+                )
 
         if await _reference_would_cycle(session, proof.id, target_ids, proof.formal_system_id):
             raise HTTPException(
@@ -510,6 +644,11 @@ async def set_proof_references(
         ProofReference(references_id=tid, alias=alias, position=i)
         for i, (tid, alias) in enumerate(zip(target_ids, aliases))
     ]
+    # References feed verification now, so this proof's verdict and every
+    # dependent's are stale.
+    proof.valid = None
+    proof.result = None
+    await _invalidate_dependents(session, proof.id)
     await session.commit()
     return _detail(await _get_owned_or_404(session, proof_id, user.id), user)
 
@@ -520,8 +659,11 @@ async def delete_proof(
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
+    # Deleting a proof removes its reference edges (FK cascade), so anything that
+    # cited it as a lemma is stale — clear those verdicts before the delete.
+    await _invalidate_dependents(session, proof_id)
     # One owner-scoped Core DELETE; references and theorems follow their FK
-    # ON DELETE rules, so nothing is loaded here.
+    # ON DELETE rules, so nothing else is loaded here.
     result = await session.execute(
         sa_delete(Proof).where(Proof.id == proof_id, Proof.owner_id == user.id)
     )
@@ -538,11 +680,7 @@ async def verify_stored_proof(
 ) -> VerifyProofResponse:
     proof = await _get_readable_or_404(session, proof_id, user)
 
-    system = await load_system(session, proof.formal_system_id)
-    if system is None:
-        return VerifyProofResponse(success=False, errors=["The proof's system no longer exists."])
-
-    response, valid = _verify(system, proof.source)
+    response, valid = await _verify_with_references(session, proof)
 
     # Cache the verdict on the row so a client can render it without re-checking.
     # Only the owner may write it back (an anonymous viewer of a published proof

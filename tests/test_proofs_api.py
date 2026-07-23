@@ -622,21 +622,109 @@ def test_reference_scope_allows_others_published_but_not_draft(client, db):
     assert _set_refs(client, mine, [{"referenced_proof_id": bob_draft, "alias": "D"}]).status_code == 422
 
 
-def test_reference_to_own_draft_is_hidden_from_public_readers(client, db):
-    # A published proof that cites the owner's own draft must not leak that
-    # draft's identity (name/slug/existence) to an anonymous reader.
+def test_reference_to_a_now_private_lemma_is_hidden_from_public_readers(client, db):
+    # A published proof must not leak the identity of a private-draft lemma it
+    # cites. The publish invariant forbids publishing while a reference is a
+    # draft, so this state is reached by unpublishing a lemma after the dependent
+    # is published — where the read-time filter still has to hide it.
     ada = _register_login(client, "ada@example.com")
     sid = _seed_system(db, ada, published=True)
-    draft = _create_proof(client, sid, "Secret Lemma")
-    main = _create_proof(client, sid, "Main")
-    assert _set_refs(client, main, [{"referenced_proof_id": draft, "alias": "L"}]).status_code == 200
+    lemma = _create_proof(client, sid, "Secret Lemma", source=_LEMMA_SRC)
+    main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
+    assert client.patch(f"/proofs/{lemma}", json={"published": True}).status_code == 200
     assert client.patch(f"/proofs/{main}", json={"published": True}).status_code == 200
+    # Unpublish the lemma: main (still published) now cites a private draft.
+    assert client.patch(f"/proofs/{lemma}", json={"published": False}).status_code == 200
 
-    # The owner still sees their own draft reference.
-    assert [r["alias"] for r in client.get(f"/proofs/{main}").json()["references"]] == ["L"]
+    # The owner still sees their own reference.
+    assert [r["alias"] for r in client.get(f"/proofs/{main}").json()["references"]] == ["A"]
 
-    # An anonymous reader of the published proof sees no trace of the draft.
+    # An anonymous reader of the published proof sees no trace of the draft lemma.
     _logout(client)
     public_view = client.get(f"/proofs/{main}")
     assert public_view.status_code == 200
     assert public_view.json()["references"] == []
+
+
+# ---------------------------------------------------------------------------
+# R1: references wired into verification
+# ---------------------------------------------------------------------------
+
+# A lemma proof asserting an implication, and a proof that uses it: cite the
+# lemma's line 1 (the implication) as MP's `(p → q)` antecedent alongside a local
+# `p`, to derive `q`.
+_LEMMA_SRC = "(x ∈ y → x = y) [HYP]"
+_USER_SRC = "x ∈ y [HYP]\nx = y [MP, A.1, 1]"
+
+
+def test_reference_resolves_a_cited_lemma_at_verify(client, db):
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
+    main = _create_proof(client, sid, "Main", source=_USER_SRC)
+
+    # Without the reference, `A.1` doesn't resolve, so the step fails.
+    assert client.post(f"/proofs/{main}/verify").json()["success"] is False
+
+    assert _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}]).status_code == 200
+    assert client.post(f"/proofs/{main}/verify").json()["success"] is True
+    # And the verdict is cached.
+    assert client.get(f"/proofs/{main}").json()["valid"] is True
+
+
+def test_reference_to_an_invalid_lemma_does_not_prove(client, db):
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    # Valid line 1, but invalid overall (line 2 cites MP with one antecedent).
+    broken = _create_proof(client, sid, "Broken", source="(x ∈ y → x = y) [HYP]\nx = y [MP, 1]")
+    main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    _set_refs(client, main, [{"referenced_proof_id": broken, "alias": "A"}])
+    # An invalid proof isn't a usable lemma, so `A.1` is not seeded.
+    assert client.post(f"/proofs/{main}/verify").json()["success"] is False
+
+
+def test_publish_requires_referenced_proofs_published(client, db):
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid, published=True)
+    lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)  # draft
+    main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
+
+    # Can't publish while the referenced lemma is a draft.
+    assert client.patch(f"/proofs/{main}", json={"published": True}).status_code == 422
+    # Publish the lemma, then the dependent can publish (it verifies via the ref).
+    assert client.patch(f"/proofs/{lemma}", json={"published": True}).status_code == 200
+    assert client.patch(f"/proofs/{main}", json={"published": True}).status_code == 200
+
+
+def test_editing_a_lemma_invalidates_dependents(client, db):
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
+    main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
+    assert client.post(f"/proofs/{main}/verify").json()["success"] is True
+    assert client.get(f"/proofs/{main}").json()["valid"] is True
+
+    # Editing the lemma's source makes the dependent's cached verdict stale.
+    assert client.patch(f"/proofs/{lemma}", json={"source": "x = x [HYP]"}).status_code == 200
+    assert client.get(f"/proofs/{main}").json()["valid"] is None
+
+
+def test_published_proof_rejects_adding_a_draft_reference(client, db):
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid, published=True)
+    lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
+    assert client.patch(f"/proofs/{lemma}", json={"published": True}).status_code == 200
+    main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
+    assert client.patch(f"/proofs/{main}", json={"published": True}).status_code == 200
+
+    # Adding a draft reference to the now-published proof is rejected.
+    draft = _create_proof(client, sid, "Draft", source=_LEMMA_SRC)
+    resp = _set_refs(client, main, [
+        {"referenced_proof_id": lemma, "alias": "A"},
+        {"referenced_proof_id": draft, "alias": "D"},
+    ])
+    assert resp.status_code == 422

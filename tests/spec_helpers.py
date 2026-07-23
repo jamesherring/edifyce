@@ -93,11 +93,16 @@ def axiom(label: str, name: str, formula: str, bindings: Iterable[Binding] = ())
 
 
 def statement_line() -> LineSpec:
-    """The ``<formula> [<reference>]`` logical line used by every test system."""
+    """The ``<formula> [<reference>]`` logical line used by every test system.
+
+    The reference field allows ``.`` so a proof can cite a lemma imported from
+    another proof with the engine's dotted navigation syntax (``[alias.line]``,
+    or ``[RULE, alias.line, ...]``); without it such a citation won't even parse.
+    """
     return LineSpec(
         name="statement",
         shape="<formula> [<reference>]",
-        parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,]+")],
+        parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,.]+")],
         logical_sort="formula",
     )
 
