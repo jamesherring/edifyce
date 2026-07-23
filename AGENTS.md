@@ -29,7 +29,7 @@ adapter over it, and the frontend is a thin client over the API.
 | `website/logical/` | The proof engine. This is where the real logic is. |
 | `website/logical/compiler.py` | Parses Edifyce source into a `FormalSystem` (AST → system). |
 | `website/logical/formal_system/` | `FormalSystem`, `Proof`, `ProofLine`, line types, inference rules — the compiled system and proof-checking. |
-| `website/logical/matching/` | Pattern-matching engine (patterns, conditions, contexts, matches) that inference rules are checked against. |
+| `website/logical/matching/` | Pattern-matching engine (patterns, contexts, matches) that inference rules are checked against. |
 | `frontend/` | SvelteKit (Svelte 5) SPA styled with Tailwind CSS v4 + shadcn-svelte. Static build talks to the API. `src/routes/` = pages, `src/lib/api.ts` = the API client. See `frontend/README.md`. |
 | `tests/` | pytest suite covering the API, compiler, engine, and matching. |
 | `deprecated/` | Legacy Django frontend, kept **only** as reference. Superseded by `frontend/`. Not imported or served. Don't wire it back in. |
@@ -131,8 +131,7 @@ wherever you run it:
 - **Import at module top.** Put imports at the top of the module, not inside
   functions. A function-local import is only justified to break a real import
   cycle or to defer a heavy/optional dependency — and when you use one, say why in
-  a comment (see `matching/paths.py`, which imports its siblings function-locally
-  on purpose). The kernel depends on `matching`, and `formal_system`/`compiler`
+  a comment. The kernel depends on `matching`, and `formal_system`/`compiler`
   depend on the kernel, so those directions import freely at the top; `matching`
   must never import the kernel or `formal_system`.
 

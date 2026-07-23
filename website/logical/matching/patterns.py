@@ -5,7 +5,6 @@ import random
 import regex as re
 
 from . import definitions, matches
-from .conditions import Condition
 
 
 class Pattern:
@@ -119,7 +118,7 @@ class Pattern:
             sub_patterns = tuple(self.variables.values())
 
         else:
-            # AbstractPattern, RegexPattern, or SystemConditionPattern
+            # AbstractPattern or RegexPattern
             return False
 
         for sub_pattern in sub_patterns:
@@ -1377,56 +1376,3 @@ class AbstractPattern(Pattern):
     def __str__(self):
         return f"AbstractPattern: {self.name}"
 
-
-class SystemConditionPattern(Pattern):
-    """Special pattern used to check if strings can be parsed as a Condition."""
-
-    def __init__(self, name):
-        Pattern.__init__(self, name)
-
-        # Arbitrary infinite certainty
-        self.certainty = 1000000
-
-        self.pattern_type = "SystemConditionPattern"
-
-    def match(self, s, context, debug=None):
-        # Try to match a string s.
-
-        # We only care if s could be a Condition
-        try:
-            condition = Condition(string=s, context=context)
-
-            result = condition.validate()
-
-            if result:
-                # Return a match
-                return matches.Match(
-                    pattern=self,
-                    string=s
-                )
-
-        except Exception:
-            pass
-
-        # Otherwise, no match
-        return None
-
-    def equivalent(self, other, context, memo=None, allow_mapping_to=False):
-        # Check equivalence
-
-        if memo is None:
-            memo = {}
-
-        if (self, other) in memo:
-            return memo[(self, other)]
-
-        memo[(self, other)] = False
-
-        if not isinstance(other, SystemConditionPattern):
-            return False
-
-        if not self.name == other.name:
-            return False
-
-        memo[(self, other)] = True
-        return True

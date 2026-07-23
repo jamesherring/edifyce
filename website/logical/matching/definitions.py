@@ -3,7 +3,6 @@
 from copy import copy
 
 from . import matches, patterns
-from .paths import get_by_path, parse_path
 
 
 class Definition:
@@ -165,38 +164,6 @@ class Definition:
         # No proviso to check: a definition carrying a `where` proviso was
         # refused at the top of this method, so one that reaches here has none.
         return True
-
-    def get_by_path(self, path, context, recurse=True):
-        # Get the value by a path
-
-        if context.reference_object is None:
-            context = copy(context)
-            context.reference_object = self
-
-        initial, remainder = parse_path(path)
-
-        if remainder:
-            # Use generic get by path
-            return get_by_path(self, path, context)
-
-        # Otherwise, only one part
-        if path == "higher()":
-            return self.higher
-
-        if path == "lower()":
-            return self.lower
-
-        if path == "pattern()":
-            return self.pattern
-
-        if path == "variables()":
-            return self.variables
-
-        if recurse:
-            # Try generic get_by_path
-            return get_by_path(self, path, context, recurse=False)
-
-        raise Exception(f"Could not find value from path '{path}'.")
 
     def equivalent(self, other, context, memo=None, allow_mapping_to=False):
         # Check if two definitions are the same.
