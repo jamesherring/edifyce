@@ -400,7 +400,9 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	let response: Response;
 	try {
-		response = await fetch(`${API_BASE_URL}${path}`, {
+		// Every JSON endpoint lives under `/api` so the API can never collide with a
+		// client-side SPA route (e.g. the `/proofs` page vs the proofs resource).
+		response = await fetch(`${API_BASE_URL}/api${path}`, {
 			// `credentials: 'include'` sends the httponly auth cookie on same- and
 			// cross-origin API calls (the backend sets allow_credentials to match).
 			credentials: 'include',

@@ -136,15 +136,15 @@ def client(db, monkeypatch) -> Iterator[TestClient]:
 
 
 def _register_login(client: TestClient, email: str, password: str = "password123") -> str:
-    response = client.post("/auth/register", json={"email": email, "password": password})
+    response = client.post("/api/auth/register", json={"email": email, "password": password})
     assert response.status_code == 201, response.text
     user_id = response.json()["id"]
-    assert client.post("/auth/login", data={"username": email, "password": password}).status_code == 204
+    assert client.post("/api/auth/login", data={"username": email, "password": password}).status_code == 204
     return user_id
 
 
 def _logout(client: TestClient) -> None:
-    assert client.post("/auth/logout").status_code == 204
+    assert client.post("/api/auth/logout").status_code == 204
 
 
 def _seed_system(db_path, owner_id: str, published: bool = False) -> str:
@@ -173,14 +173,14 @@ def _seed_system(db_path, owner_id: str, published: bool = False) -> str:
 
 
 def test_endpoints_require_authentication(client):
-    assert client.get("/proofs").status_code == 401
-    assert client.post("/proofs", json={"name": "X", "formal_system_id": str(uuid.uuid4())}).status_code == 401
+    assert client.get("/api/proofs").status_code == 401
+    assert client.post("/api/proofs", json={"name": "X", "formal_system_id": str(uuid.uuid4())}).status_code == 401
 
 
 def test_spa_guard_covers_the_proofs_collection_path():
     from app.main import _mounted_api_paths
 
-    assert "proofs" in _mounted_api_paths()
+    assert "api/proofs" in _mounted_api_paths()
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +192,7 @@ def test_create_returns_detail_with_slug_and_source(client, db):
     owner = _register_login(client, "ada@example.com")
     system_id = _seed_system(db, owner)
     response = client.post(
-        "/proofs",
+        "/api/proofs",
         json={"name": "My Proof", "formal_system_id": system_id, "source": VALID_PROOF},
     )
     assert response.status_code == 201, response.text
@@ -208,7 +208,7 @@ def test_create_returns_detail_with_slug_and_source(client, db):
 def test_create_rejects_unknown_system(client, db):
     _register_login(client, "ada@example.com")
     response = client.post(
-        "/proofs", json={"name": "P", "formal_system_id": str(uuid.uuid4())}
+        "/api/proofs", json={"name": "P", "formal_system_id": str(uuid.uuid4())}
     )
     assert response.status_code == 400
 
@@ -219,7 +219,7 @@ def test_create_rejects_another_users_draft_system(client, db):
     _logout(client)
     _register_login(client, "ada@example.com")
     response = client.post(
-        "/proofs", json={"name": "P", "formal_system_id": other_system}
+        "/api/proofs", json={"name": "P", "formal_system_id": other_system}
     )
     assert response.status_code == 400
 
@@ -233,7 +233,7 @@ def test_create_rejects_a_published_system_owned_by_another(client, db):
     _logout(client)
     _register_login(client, "ada@example.com")
     response = client.post(
-        "/proofs", json={"name": "P", "formal_system_id": published}
+        "/api/proofs", json={"name": "P", "formal_system_id": published}
     )
     assert response.status_code == 400
 
@@ -241,8 +241,8 @@ def test_create_rejects_a_published_system_owned_by_another(client, db):
 def test_get_returns_created_proof(client, db):
     owner = _register_login(client, "ada@example.com")
     system_id = _seed_system(db, owner)
-    created = client.post("/proofs", json={"name": "P", "formal_system_id": system_id}).json()
-    fetched = client.get(f"/proofs/{created['id']}")
+    created = client.post("/api/proofs", json={"name": "P", "formal_system_id": system_id}).json()
+    fetched = client.get(f"/api/proofs/{created['id']}")
     assert fetched.status_code == 200
     assert fetched.json()["id"] == created["id"]
 
@@ -250,9 +250,9 @@ def test_get_returns_created_proof(client, db):
 def test_list_returns_only_summaries_in_creation_order(client, db):
     owner = _register_login(client, "ada@example.com")
     system_id = _seed_system(db, owner)
-    client.post("/proofs", json={"name": "First", "formal_system_id": system_id})
-    client.post("/proofs", json={"name": "Second", "formal_system_id": system_id})
-    listed = client.get("/proofs").json()
+    client.post("/api/proofs", json={"name": "First", "formal_system_id": system_id})
+    client.post("/api/proofs", json={"name": "Second", "formal_system_id": system_id})
+    listed = client.get("/api/proofs").json()
     assert listed["total"] == 2
     assert [p["name"] for p in listed["items"]] == ["First", "Second"]
     assert "source" not in listed["items"][0]  # summary, not detail
@@ -262,9 +262,9 @@ def test_list_can_scope_to_one_system(client, db):
     owner = _register_login(client, "ada@example.com")
     system_a = _seed_system(db, owner)
     system_b = _seed_system(db, owner)
-    client.post("/proofs", json={"name": "A", "formal_system_id": system_a})
-    client.post("/proofs", json={"name": "B", "formal_system_id": system_b})
-    scoped = client.get("/proofs", params={"formal_system_id": system_a}).json()
+    client.post("/api/proofs", json={"name": "A", "formal_system_id": system_a})
+    client.post("/api/proofs", json={"name": "B", "formal_system_id": system_b})
+    scoped = client.get("/api/proofs", params={"formal_system_id": system_a}).json()
     assert [p["name"] for p in scoped["items"]] == ["A"]
 
 
@@ -272,24 +272,24 @@ def test_list_paginates_searches_and_sorts(client, db):
     owner = _register_login(client, "ada@example.com")
     system_id = _seed_system(db, owner)
     for name in ("Banana", "Apple", "Cherry"):
-        client.post("/proofs", json={"name": name, "formal_system_id": system_id})
+        client.post("/api/proofs", json={"name": name, "formal_system_id": system_id})
 
-    page = client.get("/proofs", params={"limit": 2, "offset": 0}).json()
+    page = client.get("/api/proofs", params={"limit": 2, "offset": 0}).json()
     assert page["total"] == 3  # full count, not just the page
     assert len(page["items"]) == 2
 
-    hits = client.get("/proofs", params={"search": "APP"}).json()
+    hits = client.get("/api/proofs", params={"search": "APP"}).json()
     assert [p["name"] for p in hits["items"]] == ["Apple"]
 
-    sorted_desc = client.get("/proofs", params={"sort": "name", "desc": True}).json()
+    sorted_desc = client.get("/api/proofs", params={"sort": "name", "desc": True}).json()
     assert [p["name"] for p in sorted_desc["items"]] == ["Cherry", "Banana", "Apple"]
 
 
 def test_duplicate_name_gets_a_distinct_slug(client, db):
     owner = _register_login(client, "ada@example.com")
     system_id = _seed_system(db, owner)
-    first = client.post("/proofs", json={"name": "Lemma", "formal_system_id": system_id}).json()
-    second = client.post("/proofs", json={"name": "Lemma", "formal_system_id": system_id}).json()
+    first = client.post("/api/proofs", json={"name": "Lemma", "formal_system_id": system_id}).json()
+    second = client.post("/api/proofs", json={"name": "Lemma", "formal_system_id": system_id}).json()
     assert first["slug"] == "lemma"
     assert second["slug"] == "lemma-2"
 
@@ -297,11 +297,11 @@ def test_duplicate_name_gets_a_distinct_slug(client, db):
 def test_another_users_draft_proof_is_not_readable(client, db):
     owner = _register_login(client, "ada@example.com")
     system_id = _seed_system(db, owner)
-    created = client.post("/proofs", json={"name": "Secret", "formal_system_id": system_id}).json()
+    created = client.post("/api/proofs", json={"name": "Secret", "formal_system_id": system_id}).json()
     _logout(client)
     _register_login(client, "eve@example.com")
-    assert client.get(f"/proofs/{created['id']}").status_code == 404
-    assert created["id"] not in [p["id"] for p in client.get("/proofs").json()["items"]]
+    assert client.get(f"/api/proofs/{created['id']}").status_code == 404
+    assert created["id"] not in [p["id"] for p in client.get("/api/proofs").json()["items"]]
 
 
 # ---------------------------------------------------------------------------
@@ -312,9 +312,9 @@ def test_another_users_draft_proof_is_not_readable(client, db):
 def test_update_edits_fields_and_reslugs(client, db):
     owner = _register_login(client, "ada@example.com")
     system_id = _seed_system(db, owner)
-    created = client.post("/proofs", json={"name": "Old", "formal_system_id": system_id}).json()
+    created = client.post("/api/proofs", json={"name": "Old", "formal_system_id": system_id}).json()
     updated = client.patch(
-        f"/proofs/{created['id']}", json={"name": "New Name", "source": VALID_PROOF}
+        f"/api/proofs/{created['id']}", json={"name": "New Name", "source": VALID_PROOF}
     ).json()
     assert updated["name"] == "New Name"
     assert updated["slug"] == "new-name"
@@ -325,30 +325,30 @@ def test_editing_source_clears_the_cached_verdict(client, db):
     owner = _register_login(client, "ada@example.com")
     system_id = _seed_system(db, owner)
     created = client.post(
-        "/proofs", json={"name": "P", "formal_system_id": system_id, "source": VALID_PROOF}
+        "/api/proofs", json={"name": "P", "formal_system_id": system_id, "source": VALID_PROOF}
     ).json()
-    assert client.post(f"/proofs/{created['id']}/verify").json()["success"] is True
-    assert client.get(f"/proofs/{created['id']}").json()["valid"] is True
+    assert client.post(f"/api/proofs/{created['id']}/verify").json()["success"] is True
+    assert client.get(f"/api/proofs/{created['id']}").json()["valid"] is True
     # A source edit invalidates the stored verdict until re-verified.
-    client.patch(f"/proofs/{created['id']}", json={"source": INVALID_PROOF})
-    assert client.get(f"/proofs/{created['id']}").json()["valid"] is None
+    client.patch(f"/api/proofs/{created['id']}", json={"source": INVALID_PROOF})
+    assert client.get(f"/api/proofs/{created['id']}").json()["valid"] is None
 
 
 def test_delete_removes_the_proof(client, db):
     owner = _register_login(client, "ada@example.com")
     system_id = _seed_system(db, owner)
-    created = client.post("/proofs", json={"name": "P", "formal_system_id": system_id}).json()
-    assert client.delete(f"/proofs/{created['id']}").status_code == 204
-    assert client.get(f"/proofs/{created['id']}").status_code == 404
+    created = client.post("/api/proofs", json={"name": "P", "formal_system_id": system_id}).json()
+    assert client.delete(f"/api/proofs/{created['id']}").status_code == 204
+    assert client.get(f"/api/proofs/{created['id']}").status_code == 404
 
 
 def test_delete_another_users_proof_is_404(client, db):
     owner = _register_login(client, "ada@example.com")
     system_id = _seed_system(db, owner)
-    created = client.post("/proofs", json={"name": "P", "formal_system_id": system_id}).json()
+    created = client.post("/api/proofs", json={"name": "P", "formal_system_id": system_id}).json()
     _logout(client)
     _register_login(client, "eve@example.com")
-    assert client.delete(f"/proofs/{created['id']}").status_code == 404
+    assert client.delete(f"/api/proofs/{created['id']}").status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -360,25 +360,25 @@ def test_verify_valid_proof(client, db):
     owner = _register_login(client, "ada@example.com")
     system_id = _seed_system(db, owner)
     created = client.post(
-        "/proofs", json={"name": "P", "formal_system_id": system_id, "source": VALID_PROOF}
+        "/api/proofs", json={"name": "P", "formal_system_id": system_id, "source": VALID_PROOF}
     ).json()
-    response = client.post(f"/proofs/{created['id']}/verify")
+    response = client.post(f"/api/proofs/{created['id']}/verify")
     assert response.status_code == 200
     body = response.json()
     assert body["success"] is True
     assert body["errors"] == []
     assert body["proof"]["indicator"] == "ok"
     # The verdict is cached back onto the row.
-    assert client.get(f"/proofs/{created['id']}").json()["valid"] is True
+    assert client.get(f"/api/proofs/{created['id']}").json()["valid"] is True
 
 
 def test_verify_invalid_proof_reports_not_raises(client, db):
     owner = _register_login(client, "ada@example.com")
     system_id = _seed_system(db, owner)
     created = client.post(
-        "/proofs", json={"name": "P", "formal_system_id": system_id, "source": INVALID_PROOF}
+        "/api/proofs", json={"name": "P", "formal_system_id": system_id, "source": INVALID_PROOF}
     ).json()
-    body = client.post(f"/proofs/{created['id']}/verify").json()
+    body = client.post(f"/api/proofs/{created['id']}/verify").json()
     assert body["success"] is False
     assert body["proof"]["indicator"] == "error"
 
@@ -392,9 +392,9 @@ def test_publish_requires_a_verifying_proof(client, db):
     owner = _register_login(client, "ada@example.com")
     system_id = _seed_system(db, owner, published=True)
     created = client.post(
-        "/proofs", json={"name": "P", "formal_system_id": system_id, "source": INVALID_PROOF}
+        "/api/proofs", json={"name": "P", "formal_system_id": system_id, "source": INVALID_PROOF}
     ).json()
-    response = client.patch(f"/proofs/{created['id']}", json={"published": True})
+    response = client.patch(f"/api/proofs/{created['id']}", json={"published": True})
     assert response.status_code == 422
 
 
@@ -402,9 +402,9 @@ def test_publish_requires_a_published_system(client, db):
     owner = _register_login(client, "ada@example.com")
     draft_system = _seed_system(db, owner, published=False)
     created = client.post(
-        "/proofs", json={"name": "P", "formal_system_id": draft_system, "source": VALID_PROOF}
+        "/api/proofs", json={"name": "P", "formal_system_id": draft_system, "source": VALID_PROOF}
     ).json()
-    response = client.patch(f"/proofs/{created['id']}", json={"published": True})
+    response = client.patch(f"/api/proofs/{created['id']}", json={"published": True})
     assert response.status_code == 400
 
 
@@ -414,11 +414,11 @@ def test_publishing_caches_the_verdict(client, db):
     owner = _register_login(client, "ada@example.com")
     system_id = _seed_system(db, owner, published=True)
     created = client.post(
-        "/proofs", json={"name": "P", "formal_system_id": system_id, "source": VALID_PROOF}
+        "/api/proofs", json={"name": "P", "formal_system_id": system_id, "source": VALID_PROOF}
     ).json()
     assert created["valid"] is None  # never verified yet
-    client.patch(f"/proofs/{created['id']}", json={"published": True})
-    assert client.get(f"/proofs/{created['id']}").json()["valid"] is True
+    client.patch(f"/api/proofs/{created['id']}", json={"published": True})
+    assert client.get(f"/api/proofs/{created['id']}").json()["valid"] is True
 
 
 def test_editing_a_published_proof_into_invalid_is_rejected(client, db):
@@ -427,14 +427,14 @@ def test_editing_a_published_proof_into_invalid_is_rejected(client, db):
     owner = _register_login(client, "ada@example.com")
     system_id = _seed_system(db, owner, published=True)
     created = client.post(
-        "/proofs", json={"name": "P", "formal_system_id": system_id, "source": VALID_PROOF}
+        "/api/proofs", json={"name": "P", "formal_system_id": system_id, "source": VALID_PROOF}
     ).json()
-    client.patch(f"/proofs/{created['id']}", json={"published": True})
+    client.patch(f"/api/proofs/{created['id']}", json={"published": True})
 
-    rejected = client.patch(f"/proofs/{created['id']}", json={"source": INVALID_PROOF})
+    rejected = client.patch(f"/api/proofs/{created['id']}", json={"source": INVALID_PROOF})
     assert rejected.status_code == 422
     # The edit was rolled back: still valid, still the original source.
-    fetched = client.get(f"/proofs/{created['id']}").json()
+    fetched = client.get(f"/api/proofs/{created['id']}").json()
     assert fetched["valid"] is True
     assert fetched["source"] == VALID_PROOF
 
@@ -445,9 +445,9 @@ def test_editing_a_draft_proof_into_invalid_is_allowed(client, db):
     owner = _register_login(client, "ada@example.com")
     system_id = _seed_system(db, owner, published=True)
     created = client.post(
-        "/proofs", json={"name": "P", "formal_system_id": system_id, "source": VALID_PROOF}
+        "/api/proofs", json={"name": "P", "formal_system_id": system_id, "source": VALID_PROOF}
     ).json()
-    ok = client.patch(f"/proofs/{created['id']}", json={"source": INVALID_PROOF})
+    ok = client.patch(f"/api/proofs/{created['id']}", json={"source": INVALID_PROOF})
     assert ok.status_code == 200
     assert ok.json()["source"] == INVALID_PROOF
 
@@ -456,16 +456,16 @@ def test_publish_then_public_read_and_listing(client, db):
     owner = _register_login(client, "ada@example.com")
     system_id = _seed_system(db, owner, published=True)
     created = client.post(
-        "/proofs", json={"name": "Public Proof", "formal_system_id": system_id, "source": VALID_PROOF}
+        "/api/proofs", json={"name": "Public Proof", "formal_system_id": system_id, "source": VALID_PROOF}
     ).json()
-    published = client.patch(f"/proofs/{created['id']}", json={"published": True})
+    published = client.patch(f"/api/proofs/{created['id']}", json={"published": True})
     assert published.status_code == 200
     assert published.json()["published_at"] is not None
 
     # Anonymous read + public listing now see it.
     _logout(client)
-    assert client.get(f"/proofs/{created['id']}").status_code == 200
-    public = client.get("/proofs/public").json()["items"]
+    assert client.get(f"/api/proofs/{created['id']}").status_code == 200
+    public = client.get("/api/proofs/public").json()["items"]
     assert created["id"] in [p["id"] for p in public]
 
 
@@ -473,13 +473,13 @@ def test_unpublish_removes_from_public_list(client, db):
     owner = _register_login(client, "ada@example.com")
     system_id = _seed_system(db, owner, published=True)
     created = client.post(
-        "/proofs", json={"name": "P", "formal_system_id": system_id, "source": VALID_PROOF}
+        "/api/proofs", json={"name": "P", "formal_system_id": system_id, "source": VALID_PROOF}
     ).json()
-    client.patch(f"/proofs/{created['id']}", json={"published": True})
-    client.patch(f"/proofs/{created['id']}", json={"published": False})
+    client.patch(f"/api/proofs/{created['id']}", json={"published": True})
+    client.patch(f"/api/proofs/{created['id']}", json={"published": False})
     _logout(client)
-    assert client.get(f"/proofs/{created['id']}").status_code == 404
-    assert client.get("/proofs/public").json()["items"] == []
+    assert client.get(f"/api/proofs/{created['id']}").status_code == 404
+    assert client.get("/api/proofs/public").json()["items"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -489,14 +489,14 @@ def test_unpublish_removes_from_public_list(client, db):
 
 def _create_proof(client: TestClient, system_id: str, name: str, source: str = VALID_PROOF) -> str:
     resp = client.post(
-        "/proofs", json={"name": name, "formal_system_id": system_id, "source": source}
+        "/api/proofs", json={"name": name, "formal_system_id": system_id, "source": source}
     )
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 
 
 def _set_refs(client: TestClient, proof_id: str, refs: list[dict]):
-    return client.put(f"/proofs/{proof_id}/references", json={"references": refs})
+    return client.put(f"/api/proofs/{proof_id}/references", json={"references": refs})
 
 
 def _seed_proof(db_path, owner_id: str, system_id: str, name: str, published: bool = False) -> str:
@@ -536,7 +536,7 @@ def test_set_and_read_back_references(client, db):
          "published": False}
     ]
     # Visible on the detail read too.
-    assert [r["alias"] for r in client.get(f"/proofs/{b}").json()["references"]] == ["A"]
+    assert [r["alias"] for r in client.get(f"/api/proofs/{b}").json()["references"]] == ["A"]
 
 
 def test_self_reference_is_rejected(client, db):
@@ -615,7 +615,7 @@ def test_reference_scope_allows_others_published_but_not_draft(client, db):
 
     # Back to ada.
     assert client.post(
-        "/auth/login", data={"username": "ada@example.com", "password": "password123"}
+        "/api/auth/login", data={"username": "ada@example.com", "password": "password123"}
     ).status_code == 204
 
     assert _set_refs(client, mine, [{"referenced_proof_id": bob_published, "alias": "P"}]).status_code == 200
@@ -650,11 +650,11 @@ def test_reference_to_a_private_lemma_is_hidden_from_public_readers(client, db):
     _seed_reference(db, main, lemma, "A")
 
     # The owner still sees their own reference.
-    assert [r["alias"] for r in client.get(f"/proofs/{main}").json()["references"]] == ["A"]
+    assert [r["alias"] for r in client.get(f"/api/proofs/{main}").json()["references"]] == ["A"]
 
     # An anonymous reader of the published proof sees no trace of the draft lemma.
     _logout(client)
-    public_view = client.get(f"/proofs/{main}")
+    public_view = client.get(f"/api/proofs/{main}")
     assert public_view.status_code == 200
     assert public_view.json()["references"] == []
 
@@ -667,7 +667,7 @@ def test_referenced_by_lists_incoming_edges(client, db):
     assert _set_refs(client, user1, [{"referenced_proof_id": lemma, "alias": "L"}]).status_code == 200
     assert _set_refs(client, user2, [{"referenced_proof_id": lemma, "alias": "Lem"}]).status_code == 200
 
-    body = client.get(f"/proofs/{lemma}").json()
+    body = client.get(f"/api/proofs/{lemma}").json()
     # Sorted by referrer name ("One" < "Two") for a stable "used by" order.
     assert [(r["proof_id"], r["alias"]) for r in body["referenced_by"]] == [
         (user1, "L"),
@@ -676,7 +676,7 @@ def test_referenced_by_lists_incoming_edges(client, db):
     # The lemma itself cites nothing.
     assert body["references"] == []
     # A proof with no incoming edges reports an empty "used by".
-    assert client.get(f"/proofs/{user1}").json()["referenced_by"] == []
+    assert client.get(f"/api/proofs/{user1}").json()["referenced_by"] == []
 
 
 def test_referenced_by_hides_referrers_the_viewer_cannot_read(client, db):
@@ -689,11 +689,11 @@ def test_referenced_by_hides_referrers_the_viewer_cannot_read(client, db):
     _seed_reference(db, referrer, lemma, "L")
 
     # The owner sees their own draft in the lemma's "used by".
-    assert [r["proof_id"] for r in client.get(f"/proofs/{lemma}").json()["referenced_by"]] == [referrer]
+    assert [r["proof_id"] for r in client.get(f"/api/proofs/{lemma}").json()["referenced_by"]] == [referrer]
 
     # An anonymous reader sees no trace of the draft referrer.
     _logout(client)
-    assert client.get(f"/proofs/{lemma}").json()["referenced_by"] == []
+    assert client.get(f"/api/proofs/{lemma}").json()["referenced_by"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -714,12 +714,12 @@ def test_reference_resolves_a_cited_lemma_at_verify(client, db):
     main = _create_proof(client, sid, "Main", source=_USER_SRC)
 
     # Without the reference, `A.1` doesn't resolve, so the step fails.
-    assert client.post(f"/proofs/{main}/verify").json()["success"] is False
+    assert client.post(f"/api/proofs/{main}/verify").json()["success"] is False
 
     assert _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}]).status_code == 200
-    assert client.post(f"/proofs/{main}/verify").json()["success"] is True
+    assert client.post(f"/api/proofs/{main}/verify").json()["success"] is True
     # And the verdict is cached.
-    assert client.get(f"/proofs/{main}").json()["valid"] is True
+    assert client.get(f"/api/proofs/{main}").json()["valid"] is True
 
 
 def test_reference_to_an_invalid_lemma_does_not_prove(client, db):
@@ -730,7 +730,7 @@ def test_reference_to_an_invalid_lemma_does_not_prove(client, db):
     main = _create_proof(client, sid, "Main", source=_USER_SRC)
     _set_refs(client, main, [{"referenced_proof_id": broken, "alias": "A"}])
     # An invalid proof isn't a usable lemma, so `A.1` is not seeded.
-    assert client.post(f"/proofs/{main}/verify").json()["success"] is False
+    assert client.post(f"/api/proofs/{main}/verify").json()["success"] is False
 
 
 def test_publish_requires_referenced_proofs_published(client, db):
@@ -741,10 +741,10 @@ def test_publish_requires_referenced_proofs_published(client, db):
     _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
 
     # Can't publish while the referenced lemma is a draft.
-    assert client.patch(f"/proofs/{main}", json={"published": True}).status_code == 422
+    assert client.patch(f"/api/proofs/{main}", json={"published": True}).status_code == 422
     # Publish the lemma, then the dependent can publish (it verifies via the ref).
-    assert client.patch(f"/proofs/{lemma}", json={"published": True}).status_code == 200
-    assert client.patch(f"/proofs/{main}", json={"published": True}).status_code == 200
+    assert client.patch(f"/api/proofs/{lemma}", json={"published": True}).status_code == 200
+    assert client.patch(f"/api/proofs/{main}", json={"published": True}).status_code == 200
 
 
 def test_editing_a_lemma_invalidates_dependents(client, db):
@@ -753,22 +753,22 @@ def test_editing_a_lemma_invalidates_dependents(client, db):
     lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
     main = _create_proof(client, sid, "Main", source=_USER_SRC)
     _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
-    assert client.post(f"/proofs/{main}/verify").json()["success"] is True
-    assert client.get(f"/proofs/{main}").json()["valid"] is True
+    assert client.post(f"/api/proofs/{main}/verify").json()["success"] is True
+    assert client.get(f"/api/proofs/{main}").json()["valid"] is True
 
     # Editing the lemma's source makes the dependent's cached verdict stale.
-    assert client.patch(f"/proofs/{lemma}", json={"source": "x = x [HYP]"}).status_code == 200
-    assert client.get(f"/proofs/{main}").json()["valid"] is None
+    assert client.patch(f"/api/proofs/{lemma}", json={"source": "x = x [HYP]"}).status_code == 200
+    assert client.get(f"/api/proofs/{main}").json()["valid"] is None
 
 
 def test_published_proof_rejects_adding_a_draft_reference(client, db):
     uid = _register_login(client, "ada@example.com")
     sid = _seed_system(db, uid, published=True)
     lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
-    assert client.patch(f"/proofs/{lemma}", json={"published": True}).status_code == 200
+    assert client.patch(f"/api/proofs/{lemma}", json={"published": True}).status_code == 200
     main = _create_proof(client, sid, "Main", source=_USER_SRC)
     _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
-    assert client.patch(f"/proofs/{main}", json={"published": True}).status_code == 200
+    assert client.patch(f"/api/proofs/{main}", json={"published": True}).status_code == 200
 
     # Adding a draft reference to the now-published proof is rejected.
     draft = _create_proof(client, sid, "Draft", source=_LEMMA_SRC)
@@ -788,17 +788,17 @@ def test_cannot_unpublish_or_delete_a_lemma_a_published_proof_rests_on(client, d
     lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
     main = _create_proof(client, sid, "Main", source=_USER_SRC)
     _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
-    assert client.patch(f"/proofs/{lemma}", json={"published": True}).status_code == 200
-    assert client.patch(f"/proofs/{main}", json={"published": True}).status_code == 200
+    assert client.patch(f"/api/proofs/{lemma}", json={"published": True}).status_code == 200
+    assert client.patch(f"/api/proofs/{main}", json={"published": True}).status_code == 200
 
     # main (published) depends on lemma, so lemma is load-bearing.
-    assert client.patch(f"/proofs/{lemma}", json={"published": False}).status_code == 409
-    assert client.delete(f"/proofs/{lemma}").status_code == 409
+    assert client.patch(f"/api/proofs/{lemma}", json={"published": False}).status_code == 409
+    assert client.delete(f"/api/proofs/{lemma}").status_code == 409
 
     # Once the dependent is unpublished, the lemma is free again.
-    assert client.patch(f"/proofs/{main}", json={"published": False}).status_code == 200
-    assert client.patch(f"/proofs/{lemma}", json={"published": False}).status_code == 200
-    assert client.delete(f"/proofs/{lemma}").status_code == 204
+    assert client.patch(f"/api/proofs/{main}", json={"published": False}).status_code == 200
+    assert client.patch(f"/api/proofs/{lemma}", json={"published": False}).status_code == 200
+    assert client.delete(f"/api/proofs/{lemma}").status_code == 204
 
 
 def test_draft_dependents_do_not_block_unpublish_or_delete(client, db):
@@ -809,8 +809,8 @@ def test_draft_dependents_do_not_block_unpublish_or_delete(client, db):
     lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
     main = _create_proof(client, sid, "Main", source=_USER_SRC)  # stays a draft
     _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
-    assert client.patch(f"/proofs/{lemma}", json={"published": True}).status_code == 200
+    assert client.patch(f"/api/proofs/{lemma}", json={"published": True}).status_code == 200
     # A draft dependent doesn't block unpublishing the lemma...
-    assert client.patch(f"/proofs/{lemma}", json={"published": False}).status_code == 200
+    assert client.patch(f"/api/proofs/{lemma}", json={"published": False}).status_code == 200
     # ...nor deleting it (the draft dependent just goes stale).
-    assert client.delete(f"/proofs/{lemma}").status_code == 204
+    assert client.delete(f"/api/proofs/{lemma}").status_code == 204

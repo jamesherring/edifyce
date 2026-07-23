@@ -26,17 +26,17 @@ scripts/edifyce-dev status  # what's running   ·   scripts/edifyce-dev down   #
 Then inspect <http://127.0.0.1:8000/> with the Playwright helper (§3). Prefer this
 over the manual steps below; reach for the modes in §2 only when you need Vite
 hot-reload. Full details and the sandbox pitfalls it handles (Postgres-as-root,
-UTF-8 cluster, detached-process reaping, the `/proofs` proxy break) are in
+UTF-8 cluster, detached-process reaping) are in
 [`scripts/README.md`](../../../scripts/README.md). The manual recipe follows for
 reference.
 
 ## Layout
 
-- **`app/`** — the **FastAPI** backend (`app.main:app`). Endpoints: `GET /health`,
-  owner-scoped `/formal-systems` CRUD, plus `POST /formal-systems/{id}/validate`
-  and `POST /formal-systems/{id}/verify` (both operate on stored systems). It
-  **also serves the built Svelte SPA at `/`** when `frontend/build/` exists (see
-  the SPA quirk below).
+- **`app/`** — the **FastAPI** backend (`app.main:app`). The whole JSON API lives
+  under **`/api`** (so it never collides with an SPA route): `GET /api/health`,
+  owner-scoped `/api/formal-systems` CRUD, plus `POST /api/formal-systems/{id}/validate`
+  and `.../verify` (both operate on stored systems). It **also serves the built
+  Svelte SPA at `/`** when `frontend/build/` exists (see the SPA quirk below).
 - **`website/logical/`** — the core proof engine imported by the backend. Not a
   web app despite the name.
 - **`frontend/`** — the **SvelteKit** SPA (Svelte 5, Tailwind v4, shadcn-svelte;
@@ -65,19 +65,21 @@ The backend is the same either way; the difference is how the frontend is served
 ### Mode A — dev servers (recommended for iterating on the UI; hot reload)
 
 Two processes: FastAPI on `:8000`, Vite dev on `:5173`. The Vite server proxies
-the API paths (`/health`, `/formal-systems`, `/auth`, `/users`) to `:8000`, so the app
-works with no CORS/URL config. **Inspect the UI at `:5173`.**
+the `/api` prefix (the whole API) to `:8000`, so the app works with no CORS/URL
+config. **Inspect the UI at `:5173`.**
 
 ```bash
 (uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/be.log 2>&1 &)
 (cd frontend && npm run dev -- --host 127.0.0.1 --port 5173 > /tmp/fe.log 2>&1 &)
 sleep 8
-curl -s http://127.0.0.1:5173/health      # -> {"status":"ok"}  (proxied to backend)
-# UI: http://127.0.0.1:5173/   (also /systems)
+curl -s http://127.0.0.1:5173/api/health  # -> {"status":"ok"}  (proxied to backend)
+# UI: http://127.0.0.1:5173/   (also /systems, /proofs)
 ```
 
-Stop: `pkill -f "uvicorn app.main"; pkill -f vite`. Vite needs a few seconds to
-boot — check `/tmp/fe.log` for the `ready` line if `:5173` isn't up yet.
+Stop by **port**, not name: `fuser -k 8000/tcp; fuser -k 5173/tcp`. (Avoid
+`pkill -f "uvicorn app.main"` — the pattern also matches the shell running your
+own command line and kills it.) Vite needs a few seconds to boot — check
+`/tmp/fe.log` for the `ready` line if `:5173` isn't up yet.
 
 ### Mode B — single server (production fidelity; one process)
 
@@ -88,8 +90,8 @@ the UI at `:8000`.**
 (cd frontend && npm run build && cd ..)   # writes frontend/build/ (~5s)
 (uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/be.log 2>&1 &)
 sleep 4
-curl -s http://127.0.0.1:8000/health      # -> {"status":"ok"}
-# UI: http://127.0.0.1:8000/   (also /systems)
+curl -s http://127.0.0.1:8000/api/health  # -> {"status":"ok"}
+# UI: http://127.0.0.1:8000/   (also /systems, /proofs)
 ```
 
 Rebuild (`npm run build`) after frontend edits — Mode B serves a static bundle,
@@ -122,8 +124,8 @@ the result) rather than just snapshot, write a one-off Playwright script followi
 1. **`curl http://127.0.0.1:8000/` returns 404 in Mode B — this is not a bug.**
    The SPA catch-all only returns the HTML shell for requests that
    `Accept: text/html` (browsers). `curl` sends `*/*` and gets a 404. Use
-   **`/health`** for readiness checks, a **browser** (Playwright) for the UI, or
-   `curl -H 'Accept: text/html' http://127.0.0.1:8000/` if you must curl it.
+   **`/api/health`** for readiness checks, a **browser** (Playwright) for the UI,
+   or `curl -H 'Accept: text/html' http://127.0.0.1:8000/` if you must curl it.
    (In Mode A, Vite serves `/` directly, so `curl :5173/` is 200.)
 
 2. **Playwright is installed globally, not in this repo.** A plain

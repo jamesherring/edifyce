@@ -40,6 +40,14 @@ app = FastAPI(
     description="FastAPI backend for compiling formal systems and verifying proofs.",
 )
 
+# Every JSON endpoint lives under this prefix so the API can never collide with a
+# client-side SPA route. Without it, `/proofs` was owned by *both* the proofs API
+# and the SvelteKit `/proofs` page, so a browser navigation to a proof rendered
+# raw JSON (and the dev proxy couldn't tell the two apart). A single reserved
+# namespace means the SPA owns every bare path and the API owns everything under
+# `/api` — no per-route disambiguation, now or in the future.
+API_PREFIX = "/api"
+
 # Cross-origin access for the Svelte frontend. The app is served same-origin in
 # most setups (dev proxies to this API; production serves the built bundle from
 # here), but a cross-origin frontend needs an explicit CORS allowance. The dev
@@ -73,7 +81,7 @@ app.add_middleware(
 )
 
 
-@app.get("/health", response_model=HealthResponse)
+@app.get(f"{API_PREFIX}/health", response_model=HealthResponse)
 def healthcheck() -> HealthResponse:
     return HealthResponse()
 
@@ -94,22 +102,23 @@ _auth_router = fastapi_users.get_auth_router(auth_backend)
 _register_router = fastapi_users.get_register_router(UserRead, UserCreate)
 _users_router = fastapi_users.get_users_router(UserRead, UserUpdate)
 
-app.include_router(_auth_router, prefix="/auth", tags=["auth"])
-app.include_router(_register_router, prefix="/auth", tags=["auth"])
-app.include_router(_users_router, prefix="/users", tags=["users"])
+app.include_router(_auth_router, prefix=f"{API_PREFIX}/auth", tags=["auth"])
+app.include_router(_register_router, prefix=f"{API_PREFIX}/auth", tags=["auth"])
+app.include_router(_users_router, prefix=f"{API_PREFIX}/users", tags=["users"])
 
 # Owner-scoped CRUD for formal systems (stored as normalised rows, not .edi
 # text). Like the fastapi-users routers, an included router mounts as a nested
 # router rather than flat APIRoutes on `app`, so it's registered with the SPA
-# guard below (its routes already carry the /formal-systems prefix).
-app.include_router(systems_router)
+# guard below (its routes already carry the /formal-systems prefix; API_PREFIX
+# puts the whole thing under /api).
+app.include_router(systems_router, prefix=API_PREFIX)
 # Per-object CRUD for a system's parts. Every route is under
-# /formal-systems/{system_id}/... (fully parameterized), so there's nothing for
-# the SPA path guard to add.
-app.include_router(system_parts_router)
+# /api/formal-systems/{system_id}/... (fully parameterized), so there's nothing
+# for the SPA path guard to add.
+app.include_router(system_parts_router, prefix=API_PREFIX)
 # Owner-scoped CRUD for proofs (stored rows verified against their system).
-# Like systems_router, its routes carry their own /proofs prefix.
-app.include_router(proofs_router)
+# Like systems_router, its routes carry their own /proofs prefix under /api.
+app.include_router(proofs_router, prefix=API_PREFIX)
 
 # fastapi-users' routers mount as nested routers, so their concrete paths are
 # not APIRoute entries on `app` — the SPA fallback's API-path guard can't find
@@ -117,13 +126,13 @@ app.include_router(proofs_router)
 # wrong-method browser GET to e.g. /auth/login still gets the API's 405 instead
 # of being masked by the SPA shell.
 _MOUNTED_API_ROUTERS: list[tuple[str, object]] = [
-    ("/auth", _auth_router),
-    ("/auth", _register_router),
-    ("/users", _users_router),
+    (f"{API_PREFIX}/auth", _auth_router),
+    (f"{API_PREFIX}/auth", _register_router),
+    (f"{API_PREFIX}/users", _users_router),
     # systems_router already carries its /formal-systems prefix on each route.
-    ("", systems_router),
+    (API_PREFIX, systems_router),
     # proofs_router likewise carries its /proofs prefix on each route.
-    ("", proofs_router),
+    (API_PREFIX, proofs_router),
 ]
 
 # Social login: one router per configured provider. `is_verified_by_default`
@@ -144,11 +153,13 @@ for _provider, _client in enabled_oauth_clients:
         # session cookie (e.g. local HTTP), so mirror its Secure flag.
         csrf_token_cookie_secure=AUTH_COOKIE_SECURE,
     )
-    app.include_router(_oauth_router, prefix=f"/auth/{_provider}", tags=["auth"])
-    _MOUNTED_API_ROUTERS.append((f"/auth/{_provider}", _oauth_router))
+    app.include_router(
+        _oauth_router, prefix=f"{API_PREFIX}/auth/{_provider}", tags=["auth"]
+    )
+    _MOUNTED_API_ROUTERS.append((f"{API_PREFIX}/auth/{_provider}", _oauth_router))
 
 
-@app.get("/auth/providers", response_model=OAuthProvidersResponse, tags=["auth"])
+@app.get(f"{API_PREFIX}/auth/providers", response_model=OAuthProvidersResponse, tags=["auth"])
 def oauth_providers() -> OAuthProvidersResponse:
     return OAuthProvidersResponse(
         providers=[name for name, _ in enabled_oauth_clients]
@@ -160,13 +171,15 @@ async def _http_exception_handler(
     request: Request, exc: StarletteHTTPException
 ) -> Response:
     # A failed OAuth callback is reached by a full-page browser navigation, so the
-    # default raw-JSON error would strand the user on the /auth/<provider>/callback
+    # default raw-JSON error would strand the user on the /api/auth/<provider>/callback
     # URL. Redirect browsers back to /login with an error code the SPA can turn
     # into a friendly message (e.g. the same-email account case, which every
     # password user hits since there's no email-verification flow). Every other
     # error — and non-browser clients — keep the default JSON response.
     path = request.url.path
-    is_oauth_callback = path.startswith("/auth/") and path.endswith("/callback")
+    is_oauth_callback = (
+        path.startswith(f"{API_PREFIX}/auth/") and path.endswith("/callback")
+    )
     wants_html = "text/html" in request.headers.get("accept", "")
     if is_oauth_callback and wants_html and 400 <= exc.status_code < 500:
         code = exc.detail if isinstance(exc.detail, str) else "oauth_error"
@@ -221,8 +234,16 @@ if (FRONTEND_BUILD / "index.html").is_file():
         # A GET that reaches here for a known API path is a wrong-method
         # request to an existing endpoint; preserve the API's 405 rather than
         # masking it with the SPA shell.
-        if path.strip("/") in _api_paths:
+        stripped = path.strip("/")
+        if stripped in _api_paths:
             raise HTTPException(status_code=405, detail="Method Not Allowed")
+
+        # Anything else under the reserved API namespace is a nonexistent endpoint,
+        # never a client route — 404 it instead of serving the SPA shell (which
+        # would turn a mistyped /api/... into a misleading 200 HTML page).
+        api_ns = API_PREFIX.strip("/")
+        if stripped == api_ns or stripped.startswith(f"{api_ns}/"):
+            raise HTTPException(status_code=404, detail="Not Found")
 
         # Serve a real build asset when the path maps to one. resolve() both
         # sides so the containment check holds even under symlinked deploy paths.

@@ -9,15 +9,14 @@ export default defineConfig(({ mode }) => {
 	const env = loadEnv(mode, '.', '');
 
 	// Where the dev server proxies API calls. Because the app makes same-origin
-	// (relative) requests by default, the dev server forwards the backend paths
-	// to the running FastAPI process — no CORS or absolute URL needed in dev.
+	// (relative) requests by default, the dev server forwards them to the running
+	// FastAPI process — no CORS or absolute URL needed in dev. Every JSON endpoint
+	// lives under `/api`, so a single prefix covers the whole API and never
+	// shadows an SPA route (the `/proofs` page vs the proofs resource, etc.).
 	const proxyTarget = env.VITE_API_PROXY_TARGET || 'http://localhost:8000';
-	const proxy = Object.fromEntries(
-		['/health', '/formal-systems', '/auth', '/users'].map((path) => [
-			path,
-			{ target: proxyTarget, changeOrigin: true }
-		])
-	);
+	const proxy = {
+		'/api': { target: proxyTarget, changeOrigin: true }
+	};
 
 	return {
 		plugins: [
