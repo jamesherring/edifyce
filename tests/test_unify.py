@@ -18,14 +18,13 @@ import pytest
 pytest.importorskip("regex")
 
 import website.logical.matching.patterns as patterns
-from website.logical.compiler import compile as compile_formal_system
+from website.logical.declarative import SystemSpec, build_system
 from website.logical.kernel import Node, Var, from_match, from_pattern, match, match_all
+from tests.spec_helpers import brackets, regex_prod, rule as rule_spec, statement_line, template_prod
 
 
-def build(code):
-    result = compile_formal_system(code)
-    assert "errors" not in result, result.get("errors")
-    system = result["system"]
+def build(spec):
+    system = build_system(spec)
     context = copy(system.context)
     context.variables.update(system.build_context.variables)
     return system, context
@@ -37,86 +36,55 @@ def rule(system, label):
 
 
 # Implication + conjunction, with modus ponens and conjunction introduction.
-RICH = """FormalSystem Rich:
-
-    Regex atom:
-        ^[a-z][a-z0-9]*$
-
-    UnionPattern formula:
-        atom
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p -> q)
-
-    Pattern conjunction:
-        with p as formula, q as formula:
-            (p ∧ q)
-
-    formula:
-        implication
-        conjunction
-
-    with p as formula, q as formula:
-        InferenceRule modus_ponens:
-            label:
-                MP
-            antecedents:
-                p
-                (p -> q)
-            deduction:
-                q
-
-        InferenceRule conjunction_intro:
-            label:
-                CONJ
-            antecedents:
-                p
-                q
-            deduction:
-                (p ∧ q)
-"""
+# `atom` is a leaf member of `formula` (order preserved so positional pattern
+# lookups in the tests resolve as before).
+RICH = SystemSpec(
+    name="Rich",
+    brackets=brackets(),
+    productions=[
+        regex_prod("formula", "atom", "[a-z][a-z0-9]*"),
+        template_prod("formula", "implication", "(p -> q)", [("p", "formula"), ("q", "formula")]),
+        template_prod("formula", "conjunction", "(p ∧ q)", [("p", "formula"), ("q", "formula")]),
+    ],
+    line=statement_line(),
+    rules=[
+        rule_spec(
+            "MP", "modus_ponens", ["p", "(p -> q)"], "q", [("p", "formula"), ("q", "formula")]
+        ),
+        rule_spec(
+            "CONJ", "conjunction_intro", ["p", "q"], "(p ∧ q)", [("p", "formula"), ("q", "formula")]
+        ),
+    ],
+)
 
 # A production names its slots lhs/rhs; the rule names them p/q.
-ALPHA_RENAMED = """FormalSystem AlphaRenamed:
+ALPHA_RENAMED = SystemSpec(
+    name="AlphaRenamed",
+    brackets=brackets(),
+    productions=[
+        regex_prod("formula", "atom", "[a-z][a-z0-9]*"),
+        template_prod(
+            "formula", "implication", "(lhs -> rhs)", [("lhs", "formula"), ("rhs", "formula")]
+        ),
+    ],
+    line=statement_line(),
+    rules=[
+        rule_spec("MP", "modus_ponens", ["p", "(p -> q)"], "q", [("p", "formula"), ("q", "formula")])
+    ],
+)
 
-    Regex atom:
-        ^[a-z][a-z0-9]*$
-
-    UnionPattern formula:
-        atom
-
-    Pattern implication:
-        with lhs as formula, rhs as formula:
-            (lhs -> rhs)
-
-    formula:
-        implication
-
-    with p as formula, q as formula:
-        InferenceRule modus_ponens:
-            label:
-                MP
-            antecedents:
-                p
-                (p -> q)
-            deduction:
-                q
-"""
-
-# Near-English set membership.
-SET_THEORY = """FormalSystem SetTheory:
-
-    Regex setvar:
-        ^[a-z]$
-
-    Pattern membership:
-        with x as setvar, y as setvar:
-            x is an element of y
-
-    UnionPattern formula:
-        membership
-"""
+# Near-English set membership. `setvar` is a leaf sort; its regex member is named
+# distinctly from the sort so the sort union does not list itself.
+SET_THEORY = SystemSpec(
+    name="SetTheory",
+    productions=[
+        regex_prod("setvar", "letter", "[a-z]"),
+        template_prod(
+            "formula", "membership", "x is an element of y", [("x", "setvar"), ("y", "setvar")]
+        ),
+    ],
+    line=statement_line(),
+)
 
 
 @pytest.fixture(scope="module")
@@ -322,28 +290,18 @@ def test_repeated_variable_schema_matches_production_instance():
     # distinct-slot production "(p -> q)" - the repeated variable binds in both
     # positions and enforces that they agree.
     system, context = build(
-        """FormalSystem SelfImplication:
-
-    Regex atom:
-        ^[a-z]$
-
-    UnionPattern formula:
-        atom
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p -> q)
-
-    formula:
-        implication
-
-    with p as formula:
-        InferenceRule self_implication:
-            label:
-                SELF
-            deduction:
-                (p -> p)
-"""
+        SystemSpec(
+            name="SelfImplication",
+            brackets=brackets(),
+            productions=[
+                regex_prod("formula", "atom", "[a-z]"),
+                template_prod(
+                    "formula", "implication", "(p -> q)", [("p", "formula"), ("q", "formula")]
+                ),
+            ],
+            line=statement_line(),
+            rules=[rule_spec("SELF", "self_implication", [], "(p -> p)", [("p", "formula")])],
+        )
     )
     formula = system.build_context.variables["formula"]
     schema = from_pattern(rule(system, "SELF").deduction, context)  # (p -> p)

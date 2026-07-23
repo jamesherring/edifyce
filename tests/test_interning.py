@@ -13,36 +13,31 @@ import pytest
 
 pytest.importorskip("regex")
 
-from website.logical.compiler import compile as compile_formal_system
-from website.logical.kernel import Node, Var, from_match, from_pattern, intern, match
+from website.logical.declarative import SystemSpec, build_system
+from website.logical.kernel import Node, Var, from_match, intern, match
 from website.logical.kernel.terms import _node
 from website.logical.matching import StringPattern
+from tests.spec_helpers import brackets, regex_prod, statement_line, template_prod
 
 
-def build(code):
-    result = compile_formal_system(code)
-    assert "errors" not in result, result.get("errors")
-    system = result["system"]
+def build(spec):
+    system = build_system(spec)
     context = copy(system.context)
     context.variables.update(system.build_context.variables)
     return system, context
 
 
-FOPL = """FormalSystem FOPL:
-
-    Regex atom:
-        ^[a-z]$
-
-    UnionPattern formula:
-        atom
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p -> q)
-
-    formula:
-        implication
-"""
+# First-order logic with a single ASCII-arrow `implication` production over
+# single-letter atoms — the grammar these interning tests build terms through.
+FOPL = SystemSpec(
+    name="FOPL",
+    brackets=brackets(),
+    productions=[
+        regex_prod("formula", "atom", "[a-z]"),
+        template_prod("formula", "implication", "(p -> q)", [("p", "formula"), ("q", "formula")]),
+    ],
+    line=statement_line(),
+)
 
 
 @pytest.fixture(scope="module")

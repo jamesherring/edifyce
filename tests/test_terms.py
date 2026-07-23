@@ -18,15 +18,21 @@ import pytest
 pytest.importorskip("regex")
 
 import website.logical.matching.patterns as patterns
-from website.logical.compiler import compile as compile_formal_system
+from website.logical.declarative import SystemSpec, build_system
 from website.logical.kernel import Bound, Node, Var, abstract, bind, from_match, from_pattern
 from website.logical.matching import Context, RegexPattern, StringPattern, UnionPattern
+from tests.spec_helpers import (
+    brackets,
+    defn,
+    regex_prod,
+    rule,
+    statement_line,
+    template_prod,
+)
 
 
-def build(code):
-    result = compile_formal_system(code)
-    assert "errors" not in result, result.get("errors")
-    system = result["system"]
+def build(spec):
+    system = build_system(spec)
 
     # A proof-parsing context that can see the system's productions.
     context = copy(system.context)
@@ -36,54 +42,42 @@ def build(code):
 
 # First-order logic: atoms and a named `implication` production, plus modus
 # ponens whose antecedents are written as a bare variable and an inline schema.
-FOPL = """FormalSystem FOPL:
-
-    Regex atom:
-        ^[a-z][a-z0-9]*$
-
-    UnionPattern formula:
-        atom
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p -> q)
-
-    formula:
-        implication
-
-    with p as formula, q as formula:
-        InferenceRule modus_ponens:
-            label:
-                MP
-            antecedents:
-                p
-                (p -> q)
-            deduction:
-                q
-"""
+# `atom` is a leaf member of `formula` (so `formula.patterns[0]` is the atom
+# sort and `[-1]` the implication production — several tests index by position).
+FOPL = SystemSpec(
+    name="FOPL",
+    brackets=brackets(),
+    productions=[
+        regex_prod("formula", "atom", "[a-z][a-z0-9]*"),
+        template_prod("formula", "implication", "(p -> q)", [("p", "formula"), ("q", "formula")]),
+    ],
+    line=statement_line(),
+    rules=[rule("MP", "modus_ponens", ["p", "(p -> q)"], "q", [("p", "formula"), ("q", "formula")])],
+)
 
 # A near-English set theory: membership and subset written the way a
 # mathematician would say them, plus a definition of "subset".
-SET_THEORY = """FormalSystem SetTheory:
-
-    Regex setvar:
-        ^[a-z]$
-
-    Pattern membership:
-        with x as setvar, y as setvar:
-            x is an element of y
-
-    UnionPattern formula:
-        membership
-
-    Pattern subset:
-        with x as setvar, y as setvar:
-            x is a subset of y
-        Define x is a subset of y as x is an element of y
-
-    formula:
-        subset
-"""
+SET_THEORY = SystemSpec(
+    name="SetTheory",
+    productions=[
+        # A leaf sort `setvar` (its regex member must be named distinctly from the
+        # sort, else the sort union would list itself and recurse).
+        regex_prod("setvar", "letter", "[a-z]"),
+        template_prod(
+            "formula", "membership", "x is an element of y", [("x", "setvar"), ("y", "setvar")]
+        ),
+    ],
+    line=statement_line(),
+    definitions=[
+        defn(
+            "formula",
+            "subset",
+            "x is a subset of y",
+            "x is an element of y",
+            [("x", "setvar"), ("y", "setvar")],
+        )
+    ],
+)
 
 
 @pytest.fixture(scope="module")
@@ -225,31 +219,18 @@ def test_modus_ponens_checks_over_terms(fopl):
 # A system whose `implication` production names its variables lhs/rhs, while
 # the modus ponens rule names them p/q - so schema and production are the same
 # constructor under alpha-renaming but spell their slots differently.
-ALPHA_RENAMED = """FormalSystem AlphaRenamed:
-
-    Regex atom:
-        ^[a-z][a-z0-9]*$
-
-    UnionPattern formula:
-        atom
-
-    Pattern implication:
-        with lhs as formula, rhs as formula:
-            (lhs -> rhs)
-
-    formula:
-        implication
-
-    with p as formula, q as formula:
-        InferenceRule modus_ponens:
-            label:
-                MP
-            antecedents:
-                p
-                (p -> q)
-            deduction:
-                q
-"""
+ALPHA_RENAMED = SystemSpec(
+    name="AlphaRenamed",
+    brackets=brackets(),
+    productions=[
+        regex_prod("formula", "atom", "[a-z][a-z0-9]*"),
+        template_prod(
+            "formula", "implication", "(lhs -> rhs)", [("lhs", "formula"), ("rhs", "formula")]
+        ),
+    ],
+    line=statement_line(),
+    rules=[rule("MP", "modus_ponens", ["p", "(p -> q)"], "q", [("p", "formula"), ("q", "formula")])],
+)
 
 
 def test_equality_aligns_slots_by_position_not_label():
@@ -313,40 +294,19 @@ def test_definition_backed_union_match_keeps_structure():
 # A propositional system with several connectives (negation, conjunction,
 # implication) sharing one `formula` union, plus a rule whose antecedent is a
 # bare sort. Uses Unicode operators to also exercise multi-codepoint templates.
-RICH = """FormalSystem Rich:
-
-    Regex atom:
-        ^[a-z][a-z0-9]*$
-
-    UnionPattern formula:
-        atom
-
-    Pattern negation:
-        with p as formula:
-            ¬p
-
-    Pattern conjunction:
-        with p as formula, q as formula:
-            (p ∧ q)
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p → q)
-
-    formula:
-        negation
-        conjunction
-        implication
-
-    with p as formula:
-        InferenceRule any_formula:
-            label:
-                ANY
-            antecedents:
-                formula
-            deduction:
-                p
-"""
+RICH = SystemSpec(
+    name="Rich",
+    brackets=brackets(),
+    productions=[
+        regex_prod("formula", "atom", "[a-z][a-z0-9]*"),
+        template_prod("formula", "negation", "¬p", [("p", "formula")]),
+        template_prod("formula", "conjunction", "(p ∧ q)", [("p", "formula"), ("q", "formula")]),
+        template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
+    ],
+    line=statement_line(),
+    # The antecedent is the bare sort `formula` — "any formula".
+    rules=[rule("ANY", "any_formula", ["formula"], "p", [("p", "formula")])],
+)
 
 
 @pytest.fixture(scope="module")

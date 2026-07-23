@@ -17,71 +17,40 @@ pytest.importorskip("regex")
 
 from copy import copy
 
+# `compile_formal_system` is still used by the two tests below that pin
+# compiler-specific behaviour (definition staging during compilation, and the
+# scope/subproof SCOPED_ZFC system the declarative model cannot yet express).
 from website.logical.compiler import compile as compile_formal_system
+from website.logical.declarative import SystemSpec, build_system
 from website.logical.kernel import from_match
 from website.logical.kernel.terms import _signature
+from tests.spec_helpers import brackets, regex_prod, rule as rule_spec, statement_line, template_prod
 
 
 # A minimal Hilbert-style implication system: axiom schemas as zero-premise
 # rules (K, S), plus modus ponens. Deeply nested axiom templates are the point.
-HILBERT = r"""FormalSystem Hilbert:
-
-    Regex atom:
-        ^[a-z][a-z0-9]*$
-
-    UnionPattern formula:
-        atom
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p → q)
-
-    formula:
-        implication
-
-    Regex reference:
-        ^[A-Za-z0-9, ]+$
-
-    Pattern statement:
-        with f as formula, r as reference:
-            f [r]
-
-    LineType claim:
-        pattern: statement
-        behaviour: logical
-        formula: f
-        reference: r
-
-    with p as formula, q as formula, r as formula:
-
-        InferenceRule axiom_k:
-            label:
-                K
-            deduction:
-                (p → (q → p))
-
-        InferenceRule axiom_s:
-            label:
-                S
-            deduction:
-                ((p → (q → r)) → ((p → q) → (p → r)))
-
-        InferenceRule modus_ponens:
-            label:
-                MP
-            antecedents:
-                p
-                (p → q)
-            deduction:
-                q
-"""
+_HILBERT_BINDINGS = [("p", "formula"), ("q", "formula"), ("r", "formula")]
+HILBERT = SystemSpec(
+    name="Hilbert",
+    brackets=brackets(),
+    productions=[
+        regex_prod("formula", "atom", "[a-z][a-z0-9]*"),
+        template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
+    ],
+    line=statement_line(),
+    rules=[
+        rule_spec("K", "axiom_k", [], "(p → (q → p))", _HILBERT_BINDINGS),
+        rule_spec(
+            "S", "axiom_s", [], "((p → (q → r)) → ((p → q) → (p → r)))", _HILBERT_BINDINGS
+        ),
+        rule_spec("MP", "modus_ponens", ["p", "(p → q)"], "q", _HILBERT_BINDINGS),
+    ],
+)
 
 
 @pytest.fixture(scope="module")
 def hilbert():
-    result = compile_formal_system(HILBERT)
-    assert "errors" not in result, result.get("errors")
-    return result["system"]
+    return build_system(HILBERT)
 
 
 def rule(system, label):
