@@ -139,6 +139,10 @@ class LineRow(Base):
     position: Mapped[int] = _position()
     name: Mapped[str] = mapped_column(String(128))
     shape: Mapped[str] = mapped_column(String(256))
+    # The subproof scope this line opens, orthogonal to its logical behaviour:
+    # NULL (a plain line), "assumption" or "variable". Mirrors LineType.scope /
+    # declarative LineSpec.scope.
+    scope: Mapped[str | None] = mapped_column(String(16))
     # Which sort the logical placeholder ranges over (a symbol reference).
     logical_symbol_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("symbols.id", ondelete="CASCADE"), index=True

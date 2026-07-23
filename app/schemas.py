@@ -26,6 +26,11 @@ class Page(BaseModel, Generic[T]):
 # as MIU). Mirrors RuleRow.matching / InferenceRule.matching.
 RuleMatching = Literal["structural", "string"]
 
+# The subproof scope a line type opens: "assumption" (a hypothesis) or
+# "variable" (a fresh variable); None opens no scope. Mirrors LineRow.scope /
+# LineType.scope / declarative LineSpec.scope.
+LineScope = Literal["assumption", "variable"]
+
 # Free-text fields map to length-bounded DB columns (see app/db/systems.py). The
 # caps below mirror those `String(N)` widths so oversized input is rejected as a
 # 422 rather than reaching the INSERT and erroring on Postgres.
@@ -106,6 +111,8 @@ class LineType(BaseModel):
     name: str
     shape: str
     logical_sort: str | None = None
+    # The subproof scope this line opens: None, "assumption" or "variable".
+    scope: str | None = None
     parts: list[LinePart] = Field(default_factory=list)
 
 
@@ -262,6 +269,9 @@ class LineTypeCreate(BaseModel):
     name: str = Field(..., max_length=128)
     shape: str = Field(..., max_length=256)
     logical_sort: str | None = Field(None, max_length=128)
+    # The subproof scope the line opens; the engine accepts only these two
+    # openers (or none), so an invalid value is a 422 rather than a build error.
+    scope: LineScope | None = None
     parts: list[LinePartInput] = Field(default_factory=list)
 
 
@@ -269,6 +279,7 @@ class LineTypeUpdate(BaseModel):
     name: str | None = Field(None, max_length=128)
     shape: str | None = Field(None, max_length=256)
     logical_sort: str | None = Field(None, max_length=128)
+    scope: LineScope | None = None
     parts: list[LinePartInput] | None = None
 
 

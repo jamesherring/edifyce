@@ -12,6 +12,7 @@ import pytest
 pytest.importorskip("regex")
 
 from tests.spec_helpers import (
+    assumption_line,
     atom_const_prod,
     atom_family_prod,
     axiom,
@@ -28,6 +29,7 @@ from tests.spec_helpers import (
     mp_rule,
     negation_prod,
     regex_prod,
+    reiteration_rule,
     rule,
     statement_line,
     subset_def,
@@ -434,3 +436,61 @@ def test_same_named_line_parts_are_scoped_per_line():
     # If `claim` had been rebound to `assume`'s digits-only regex, the citation
     # "HYP" would fail to match and no line would parse this.
     assert system.parse("(a → b) [HYP]").valid is True
+
+
+def scoped_spec() -> SystemSpec:
+    # Propositional fragment with a scope-opening `assume` line and reiteration,
+    # enough to exercise subproofs and scope-checked references without a
+    # discharge rule.
+    return SystemSpec(
+        name="Scoped",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        lines=[statement_line(), assumption_line()],
+        rules=[reiteration_rule()],
+    )
+
+
+def test_scope_line_builds_a_scope_opening_line_type():
+    system = build_system(scoped_spec())
+    by_name = {lt.name: lt for lt in system.line_types}
+    assume = by_name["assume"]
+    # The `assume` line is BOTH a formula-bearing logical line AND a scope
+    # opener — the two concerns the engine keeps orthogonal to `behaviour`.
+    assert assume.behaviour == "logical"
+    assert assume.scope == "assumption"
+    # A plain line opens no scope.
+    assert by_name["statement"].scope is None
+
+
+def test_scope_line_opens_a_subproof_and_scopes_references():
+    system = build_system(scoped_spec())
+
+    # A scope opener is granted by fiat — valid with no justification.
+    assert system.parse("assume a").proof_lines[0].valid is True
+
+    # A reference within the open scope is accessible.
+    assert system.parse("assume a\n    a [R, 1]").proof_lines[1].valid is True
+
+    # But citing a line inside an already-closed sibling subproof is rejected —
+    # the cross-scope unsoundness the scope machinery closes.
+    proof = system.parse(
+        "assume a\n"
+        "    a [R, 1]\n"
+        "assume b\n"
+        "    a [R, 2]"
+    )
+    assert proof.proof_lines[3].valid is False
+    assert "scope" in (proof.proof_lines[3].invalid_message or "").lower()
+
+
+def test_invalid_line_scope_is_rejected():
+    spec = SystemSpec(
+        name="BadScope",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]")],
+        lines=[LineSpec(name="weird", shape="<formula>", logical_sort="formula", scope="bogus")],
+    )
+    result = build_spec(spec)
+    assert "errors" in result
+    assert "scope" in result["errors"][0].lower()

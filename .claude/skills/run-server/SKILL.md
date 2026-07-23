@@ -11,6 +11,25 @@ description: >-
 
 # Run the Edifyce app & inspect the frontend with Playwright
 
+## Fastest path: the `edifyce-dev` CLI
+
+Anything auth-backed (systems, proofs, login) needs **Postgres + pgvector**, which
+a fresh container lacks — so `uvicorn` alone gets you a 401 wall. `scripts/edifyce-dev`
+provisions the database, applies migrations, and starts the app for you:
+
+```bash
+scripts/edifyce-dev up      # Postgres + migrations + built SPA + API on one server (:8000)
+scripts/edifyce-dev seed    # demo user + system + verified proof (prints login + ids)
+scripts/edifyce-dev status  # what's running   ·   scripts/edifyce-dev down   # stop it
+```
+
+Then inspect <http://127.0.0.1:8000/> with the Playwright helper (§3). Prefer this
+over the manual steps below; reach for the modes in §2 only when you need Vite
+hot-reload. Full details and the sandbox pitfalls it handles (Postgres-as-root,
+UTF-8 cluster, detached-process reaping, the `/proofs` proxy break) are in
+[`scripts/README.md`](../../../scripts/README.md). The manual recipe follows for
+reference.
+
 ## Layout
 
 - **`app/`** — the **FastAPI** backend (`app.main:app`). Endpoints: `GET /health`,

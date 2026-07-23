@@ -854,6 +854,40 @@ def test_duplicate_line_type_name_is_rejected(client):
     assert dup.status_code == 409
 
 
+def test_line_type_scope_is_stored_and_read_back(client):
+    # A scope-opening line persists its `scope` and surfaces it on read.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    created = _post(
+        client,
+        f"/formal-systems/{sid}/line-types",
+        {"name": "assume", "shape": "assume <x>", "scope": "assumption"},
+    )
+    assert created["scope"] == "assumption"
+
+    line = client.get(f"/formal-systems/{sid}").json()["lines"][0]
+    assert line["scope"] == "assumption"
+
+    # A PATCH can clear the scope back to a plain line.
+    patched = client.patch(
+        f"/formal-systems/{sid}/line-types/{created['id']}", json={"scope": None}
+    )
+    assert patched.status_code == 200
+    assert patched.json()["scope"] is None
+
+
+def test_invalid_line_type_scope_is_rejected_as_422(client):
+    # Only "assumption"/"variable"/None are valid openers; anything else is a
+    # validation error, not a build-time surprise.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    response = client.post(
+        f"/formal-systems/{sid}/line-types",
+        json={"name": "weird", "shape": "<x>", "scope": "bogus"},
+    )
+    assert response.status_code == 422
+
+
 def test_oversized_fields_are_rejected_as_422(client):
     # Free-text fields are capped to their DB column width, so an oversized value
     # is a validation error, not a Postgres truncation 500.

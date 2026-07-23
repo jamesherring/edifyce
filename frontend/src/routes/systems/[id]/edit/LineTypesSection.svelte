@@ -5,7 +5,7 @@
 	import RepeatableRows from './RepeatableRows.svelte';
 	import { Label } from '$lib/components/ui/label';
 	import { Input } from '$lib/components/ui/input';
-	import { api, type LineType, type LinePartInput } from '$lib/api';
+	import { api, type LineType, type LinePartInput, type LineScope } from '$lib/api';
 	import { createSectionController } from './section.svelte';
 
 	let {
@@ -23,6 +23,7 @@
 	let name = $state('');
 	let shape = $state('');
 	let logicalSort = $state('');
+	let scope = $state<LineScope | ''>('');
 	let parts = $state<LinePartInput[]>([]);
 
 	// The logical sort is optional (empty = "none"), but a non-empty value must
@@ -44,6 +45,7 @@
 			name = item?.name ?? '';
 			shape = item?.shape ?? '';
 			logicalSort = item?.logical_sort ?? '';
+			scope = item?.scope ?? '';
 			parts = item?.parts.map((p) => ({ name: p.name, regex: p.regex })) ?? [];
 		},
 		payload
@@ -54,6 +56,7 @@
 			name: name.trim(),
 			shape: shape.trim(),
 			logical_sort: logicalSort || null,
+			scope: scope || null,
 			parts: parts
 				.filter((p) => p.name.trim() && p.regex.trim())
 				.map((p) => ({ name: p.name.trim(), regex: p.regex.trim() }))
@@ -77,6 +80,11 @@
 		<div class="min-w-0 text-sm">
 			<span class="font-medium">{l.name}</span>
 			<span class="ml-2 font-mono text-xs text-muted-foreground">{l.shape}</span>
+			{#if l.scope}
+				<span class="ml-2 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
+					>opens {l.scope}</span
+				>
+			{/if}
 		</div>
 	{/snippet}
 </PartSection>
@@ -106,6 +114,18 @@
 			{#each sortNames as sortName (sortName)}
 				<option value={sortName}>{sortName}</option>
 			{/each}
+		</select>
+	</div>
+	<div class="space-y-2">
+		<Label for="line-scope">Opens scope <span class="text-muted-foreground">(optional)</span></Label>
+		<select
+			id="line-scope"
+			bind:value={scope}
+			class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+		>
+			<option value="">— none —</option>
+			<option value="assumption">assumption (hypothesis subproof)</option>
+			<option value="variable">variable (fresh-variable subproof)</option>
 		</select>
 	</div>
 	<RepeatableRows

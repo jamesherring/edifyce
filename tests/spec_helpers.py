@@ -119,6 +119,26 @@ def statement_line() -> LineSpec:
     )
 
 
+def assumption_line() -> LineSpec:
+    """An ``assume <formula>`` line that opens a hypothesis subproof (for →I).
+
+    Both a formula-bearing logical line *and* a scope opener — the two concerns
+    the engine keeps orthogonal. It carries no reference field: a scope opener is
+    granted by fiat, so it cites nothing.
+    """
+    return LineSpec(
+        name="assume",
+        shape="assume <formula>",
+        logical_sort="formula",
+        scope="assumption",
+    )
+
+
+def reiteration_rule() -> Rule:
+    """Reiteration (R): restate an in-scope formula. Exercises scope checking."""
+    return rule("R", "reiteration", ["p"], "p", [("p", "formula")])
+
+
 def variable_prod() -> Production:
     return regex_prod("term", "variable", "[a-z][a-z0-9]*")
 

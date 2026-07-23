@@ -48,6 +48,10 @@ class DeclarativeError(Exception):
     """Raised for problems detectable in a :class:`SystemSpec` before lowering."""
 
 
+# The scopes a line type may open (mirrors LineType.scope's accepted values).
+_LINE_SCOPES = (None, "assumption", "variable")
+
+
 # ---------------------------------------------------------------------------
 # Structured records: the declarative model of a system
 # ---------------------------------------------------------------------------
@@ -108,6 +112,11 @@ class LineSpec:
     shape: str
     parts: list[LinePart] = field(default_factory=list)
     logical_sort: str | None = None
+    # The scope this line opens, orthogonal to its logical behaviour: None (a
+    # plain line), "assumption" (opens a subproof under a hypothesis, for e.g.
+    # →I) or "variable" (opens one under a fresh variable, for e.g. ∀I). A scope
+    # opener may still bear a formula, so this is separate from the line's shape.
+    scope: str | None = None
 
 
 @dataclass
@@ -385,6 +394,11 @@ def build_system(spec: SystemSpec) -> FormalSystem:
 
 def _build_line(line: LineSpec, sorts: set[str], ctx: FormalSystemContext,
                 system: FormalSystem, register: Callable[[Pattern], Pattern]) -> None:
+    if line.scope not in _LINE_SCOPES:
+        raise DeclarativeError(
+            f"Line {line.name!r} has invalid scope {line.scope!r}; "
+            f"expected one of {', '.join(repr(s) for s in _LINE_SCOPES)}."
+        )
     template, placeholders, logical_ph, reference_ph = _line_layout(line, sorts)
 
     # Each line gets a distinctly-named pattern (a single line named "statement"
@@ -398,6 +412,7 @@ def _build_line(line: LineSpec, sorts: set[str], ctx: FormalSystemContext,
         name=line.name,
         pattern=pattern,
         behaviour="logical",
+        scope=line.scope,
         formula_field=logical_ph[1],
         reference_field=reference_ph[1] if reference_ph is not None else None,
     )

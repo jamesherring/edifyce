@@ -497,6 +497,10 @@ async def _assign_line(session: AsyncSession, system_id: uuid.UUID, row: LineRow
         row.name = payload.name
     if "shape" in fields and payload.shape is not None:
         row.shape = payload.shape
+    if "scope" in fields:
+        # None clears the scope (a plain line); the Literal on the payload has
+        # already rejected any value other than "assumption"/"variable".
+        row.scope = payload.scope
     if "logical_sort" in fields:
         row.logical_symbol = (
             await _resolve_sort(session, system_id, payload.logical_sort)

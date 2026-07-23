@@ -32,6 +32,7 @@ from app.db.systems import (
     SymbolRow,
 )
 from tests.spec_helpers import (
+    assumption_line,
     atom_const_prod,
     atom_family_prod,
     axiom,
@@ -46,6 +47,7 @@ from tests.spec_helpers import (
     mp_rule,
     negation_prod,
     regex_prod,
+    reiteration_rule,
     rule,
     statement_line,
     subset_def,
@@ -183,6 +185,38 @@ def test_atom_productions_round_trip_through_the_database(session):
     system = build_spec(system_to_spec(stored))["system"]
     assert system.parse("p_7 [HYP]").valid is True
     assert system.parse("p_0 [HYP]\n¬p_0 [HYP]\n⊥ [X, 1, 2]").valid is True
+
+
+def scoped_spec() -> SystemSpec:
+    # A scope-opening `assume` line alongside the plain `statement` line.
+    return SystemSpec(
+        name="Scoped",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        lines=[statement_line(), assumption_line()],
+        rules=[reiteration_rule()],
+    )
+
+
+def test_scoped_line_types_round_trip_through_the_database(session):
+    # The `scope` a line opens persists on the line row and rebuilds into an
+    # equal spec whose subproof scope-checking still holds.
+    session.add(spec_to_system(scoped_spec()))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Scoped"))
+
+    scopes = {line.name: line.scope for line in stored.lines}
+    assert scopes == {"statement": None, "assume": "assumption"}
+    assert system_to_spec(stored) == scoped_spec()
+
+    system = build_spec(system_to_spec(stored))["system"]
+    # In-scope reiteration checks; citing into a closed sibling subproof does not.
+    assert system.parse("assume a\n    a [R, 1]").proof_lines[1].valid is True
+    out_of_scope = system.parse(
+        "assume a\n    a [R, 1]\nassume b\n    a [R, 2]"
+    )
+    assert out_of_scope.proof_lines[3].valid is False
 
 
 def test_decomposition_has_no_source_or_json_blob():
