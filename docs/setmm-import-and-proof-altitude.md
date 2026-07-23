@@ -199,6 +199,10 @@ the altitude humans want.
 
 ## 5. Recommended enhancements
 
+> Each item below is expanded with reasoning and worked examples (real Edifyce DSL
+> and real `set.mm`) in the companion note
+> [`setmm-import-recommendations-detail.md`](setmm-import-recommendations-detail.md).
+
 Two tiers. **Tier A** is what an import strictly requires (correctness &
 coverage). **Tier B** is the human-altitude layer — the actual goal — which can
 land after import but should be *designed for now* so the import doesn't foreclose
