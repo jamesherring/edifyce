@@ -624,6 +624,18 @@ async def _assign_rule(session: AsyncSession, system_id: uuid.UUID, row: RuleRow
             "switch the rule to structural matching.",
         )
 
+    # A discharge rule is checked by consuming its subproof; that path never
+    # evaluates line antecedents or side-conditions, so keeping either would
+    # silently drop a soundness constraint. Reject across the final combined
+    # state (so adding a subproof to a rule that still has antecedents, or vice
+    # versa, is caught). Mirrors the guard in declarative.build_system.
+    if row.subproof_derive is not None and (row.antecedents or row.side_conditions):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "A discharge rule (with a subproof) cannot also carry antecedents or "
+            "side-conditions; the discharge check ignores them. Remove them.",
+        )
+
 
 # ---------------------------------------------------------------------------
 # Table-driven CRUD for brackets, line types, definitions, axioms, rules

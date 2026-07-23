@@ -343,6 +343,33 @@ def test_rule_subproof_requires_exactly_one_opener_via_api(client):
     assert neither.status_code == 422
 
 
+def test_discharge_rule_cannot_carry_antecedents_or_side_conditions_via_api(client):
+    # The discharge check ignores line antecedents and side-conditions, so the
+    # API rejects the pairing on create and when a PATCH flips a plain rule into
+    # a conflicting discharge rule (checked across the final combined state).
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+    binds = [{"var": "p", "sort": "formula"}, {"var": "q", "sort": "formula"}]
+
+    with_antecedents = client.post(f"/formal-systems/{sid}/rules", json={
+        "label": "CP", "name": "cp", "deduction": "(p → q)", "antecedents": ["p"],
+        "bindings": binds, "subproof": {"derive": "q", "assume": "p"},
+    })
+    assert with_antecedents.status_code == 422
+
+    # A plain rule with an antecedent, then PATCHed to add a subproof, is caught.
+    plain = _post(client, f"/formal-systems/{sid}/rules", {
+        "label": "R", "name": "reit", "deduction": "p", "antecedents": ["p"],
+        "bindings": [{"var": "p", "sort": "formula"}],
+    })
+    conflicted = client.patch(
+        f"/formal-systems/{sid}/rules/{plain['id']}",
+        json={"subproof": {"derive": "p", "assume": "p"}},
+    )
+    assert conflicted.status_code == 422
+
+
 def test_string_rule_cannot_carry_side_conditions_via_api(client):
     # The string path has no term binding to evaluate a proviso against, so the
     # API rejects the pairing (create and both PATCH directions) rather than

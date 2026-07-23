@@ -299,6 +299,16 @@ def build_system(spec: SystemSpec) -> FormalSystem:
                 f"Rule {rule.label!r} uses string matching, which cannot enforce "
                 f"side-conditions; drop them or switch it to structural matching."
             )
+        # A discharge rule is checked by consuming its subproof (check_discharge);
+        # that path never evaluates line antecedents or side-conditions, so
+        # configuring them would silently drop a soundness constraint. Refuse the
+        # pairing rather than accept a rule whose provisos are ignored.
+        if rule.subproof is not None and (rule.antecedents or rule.side_conditions):
+            raise DeclarativeError(
+                f"Rule {rule.label!r} discharges a subproof, so it cannot also carry "
+                f"antecedents or side-conditions (the discharge check ignores them); "
+                f"remove them."
+            )
 
     name = _identifier(spec.name) or "System"
     ctx = FormalSystemContext()

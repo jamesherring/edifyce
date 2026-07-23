@@ -593,6 +593,31 @@ def test_universal_generalisation_discharges_a_variable_subproof():
 
 
 @pytest.mark.parametrize(
+    "antecedents,side_conditions",
+    [
+        (["p"], []),                    # a discharge rule with a line antecedent
+        ([], ["equal(p, q)"]),          # a discharge rule with a proviso
+    ],
+)
+def test_discharge_rule_cannot_carry_antecedents_or_side_conditions(antecedents, side_conditions):
+    # The discharge check consumes the subproof and never evaluates line
+    # antecedents or side-conditions, so accepting them would silently drop a
+    # soundness constraint. build_system refuses the pairing.
+    spec = SystemSpec(
+        name="BadDischarge",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        lines=[statement_line(), assumption_line()],
+        rules=[Rule(label="CP", name="cp", antecedents=antecedents, deduction="(p → q)",
+                    bindings=[("p", "formula"), ("q", "formula")],
+                    side_conditions=side_conditions, subproof=Subproof(assume="p", derive="q"))],
+    )
+    result = build_spec(spec)
+    assert "errors" in result
+    assert "discharge" in result["errors"][0].lower()
+
+
+@pytest.mark.parametrize(
     "subproof",
     [
         Subproof(derive="q", assume="p", fresh="x"),  # both openers
