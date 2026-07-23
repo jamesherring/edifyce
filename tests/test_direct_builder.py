@@ -36,6 +36,7 @@ from tests.spec_helpers import (
     universal_prod,
     variable_prod,
 )
+from tests.miu_system import miu_spec
 from website.logical.compiler import compile as compile_edi
 from website.logical.declarative import (
     LineSpec,
@@ -239,6 +240,23 @@ def _no_reference():
     )
 
 
+def _defined_notation():
+    # A rule proviso whose argument is *defined notation* (`∅`, defined as `0`);
+    # the direct builder must resolve it after definitions finalise.
+    return SystemSpec(
+        name="DefArg",
+        brackets=brackets(),
+        productions=[
+            regex_prod("term", "variable", "[a-z]"),
+            template_prod("term", "zero", "0", []),
+            template_prod("formula", "pred", "P(t)", [("t", "term")]),
+        ],
+        line=statement_line(),
+        definitions=[defn("term", "emptyset", "∅", "0", [])],
+        rules=[rule("RE", "re", [], "P(t)", [("t", "term")], ["equal(t, ∅)"])],
+    )
+
+
 CORPUS = {
     "zfc": (_zfc(), [
         "∀x ∀y (∀z (z ∈ x ↔ z ∈ y) → x = y)",
@@ -258,6 +276,16 @@ CORPUS = {
     "ambiguous": (_ambiguous(), ["x ⋈ y [HYP]", "(x ∈ y ∧ y ∈ x) [HYP]"]),
     "where_def": (_where_def(), ["x ≠ y [HYP]", "x ⊘ y [HYP]", "x ⊆ y [HYP]"]),
     "no_reference": (_no_reference(), ["x ∈ y [HYP]", "(x ∈ y → x ∈ y) [HYP]"]),
+    # A string-rewriting (semi-Thue) system: every rule uses `matching="string"`.
+    "miu": (miu_spec(), [
+        "MI",
+        "MI\nMII [R2, 1]",
+        "MI\nMIU [R1, 1]",
+        "MI\nMII [R2, 1]\nMIIII [R2, 2]\nMUI [R3, 3]",
+        "MI\nMU [R1, 1]",  # bogus step
+    ]),
+    # A rule proviso whose argument is defined notation (`equal(t, ∅)`).
+    "defined_notation": (_defined_notation(), ["P(∅) [RE]", "P(a) [RE]", "P(0) [RE]"]),
 }
 
 

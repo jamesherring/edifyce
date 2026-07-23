@@ -431,6 +431,17 @@ def build_system(spec: SystemSpec) -> FormalSystem:
     shape with no grammar-sort placeholder); :func:`build_spec` wraps that into
     the ``{"errors": [...]}`` contract.
     """
+    # A string-rewriting rule is justified by associative matching over surface
+    # strings, with no term binding to evaluate side-conditions against; refuse
+    # the pairing rather than silently ignoring a proviso the author wrote (same
+    # guard `lower` applies before emitting `.edi`).
+    for rule in spec.rules:
+        if rule.matching == "string" and rule.side_conditions:
+            raise DeclarativeError(
+                f"Rule {rule.label!r} uses string matching, which cannot enforce "
+                f"side-conditions; drop them or switch it to structural matching."
+            )
+
     name = _identifier(spec.name) or "System"
     ctx = FormalSystemContext()
     system = FormalSystem(name=name)
@@ -438,7 +449,7 @@ def build_system(spec: SystemSpec) -> FormalSystem:
 
     brackets = _bracket_map(spec)
 
-    def register(pattern):
+    def register(pattern: Pattern) -> Pattern:
         # Every named pattern respects the system's brackets (parity with the
         # old post-compile `_patch_brackets`, which walked the same set).
         pattern.respect_brackets = brackets
@@ -496,7 +507,23 @@ def build_system(spec: SystemSpec) -> FormalSystem:
     for defn in spec.definitions:
         _finalise_definition(defn, ctx, system)
 
-    # 9. Wire the build context and index the patterns.
+    # 9. Parse each rule's provisos now that definitions have resolved, so a
+    # proviso's term argument may use defined notation (e.g. `equal(t, ∅)`). Each
+    # rule brings its own metavariables. Mirrors compile()'s finalisation pass.
+    for inference_rule in system.inference_rules:
+        if not inference_rule.pending_side_conditions:
+            continue
+        rule_context = copy(system.context)
+        rule_context.string_variables = {
+            **rule_context.string_variables, **(inference_rule.variables or {})
+        }
+        inference_rule.side_conditions.extend(
+            parse_side_condition(line, rule_context)
+            for line in inference_rule.pending_side_conditions
+        )
+        inference_rule.pending_side_conditions = []
+
+    # 10. Wire the build context and index the patterns.
     system.build_context = ctx
     system.build_pattern_dictionary()
     return system
@@ -547,13 +574,17 @@ def _build_rule(rule: Rule, ctx: FormalSystemContext) -> InferenceRule:
     rule_ctx.string_variables = dict(string_variables)
 
     inference_rule = InferenceRule(
-        name=_identifier(rule.name), label=rule.label, variables=dict(string_variables)
+        name=_identifier(rule.name),
+        label=rule.label,
+        variables=dict(string_variables),
+        matching=rule.matching,
     )
     for antecedent in rule.antecedents:
         inference_rule.antecedents.append(build_schema_pattern(antecedent, rule_ctx, "antecedent"))
     inference_rule.deduction = build_schema_pattern(rule.deduction, rule_ctx, "deduction")
-    for proviso in rule.side_conditions:
-        inference_rule.side_conditions.append(parse_side_condition(proviso, rule_ctx))
+    # Provisos are parsed later (see build_system), once definitions resolve, so a
+    # proviso's term argument may use defined notation. Here we only collect them.
+    inference_rule.pending_side_conditions = list(rule.side_conditions)
     return inference_rule
 
 
@@ -583,13 +614,18 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
 # ---------------------------------------------------------------------------
 
 
-def build_spec(spec: SystemSpec) -> dict:
+def build_spec(spec: SystemSpec, system_dict: dict | None = None) -> dict:
     """Build a ``FormalSystem`` from a :class:`SystemSpec`.
 
     The entry point for callers that hold a ``SystemSpec`` -- e.g. a persistence
     layer that reconstructs one from database rows, or a test that assembles one
     directly. Returns ``{"system": FormalSystem}`` on success or
     ``{"errors": [...]}`` when the spec is invalid.
+
+    ``system_dict`` is reserved for cross-system references (a parent system a
+    child inherits from). The declarative path does not resolve inheritance yet,
+    so it is currently unused; it is kept on the signature so callers of the
+    engine's public build entry point don't break when that lands.
     """
     try:
         return {"system": build_system(spec)}
