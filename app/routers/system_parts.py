@@ -474,10 +474,8 @@ async def _assign_bracket(session: AsyncSession, system_id: uuid.UUID, row: Brac
 
 
 async def _assign_line(session: AsyncSession, system_id: uuid.UUID, row: LineRow, payload: Payload, fields: set[str], creating: bool) -> None:
-    if creating and await session.scalar(
-        select(LineRow.id).where(LineRow.system_id == system_id)
-    ) is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "A system has at most one line type.")
+    # A system may declare several logical line types (e.g. a `claim` line and a
+    # scoped `assume` line); the engine tries each when parsing a proof line.
     if "name" in fields and payload.name is not None:
         row.name = payload.name
     if "shape" in fields and payload.shape is not None:

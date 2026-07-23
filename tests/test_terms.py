@@ -51,7 +51,7 @@ FOPL = SystemSpec(
         regex_prod("formula", "atom", "[a-z][a-z0-9]*"),
         template_prod("formula", "implication", "(p -> q)", [("p", "formula"), ("q", "formula")]),
     ],
-    line=statement_line(),
+    lines=[statement_line()],
     rules=[rule("MP", "modus_ponens", ["p", "(p -> q)"], "q", [("p", "formula"), ("q", "formula")])],
 )
 
@@ -67,7 +67,7 @@ SET_THEORY = SystemSpec(
             "formula", "membership", "x is an element of y", [("x", "setvar"), ("y", "setvar")]
         ),
     ],
-    line=statement_line(),
+    lines=[statement_line()],
     definitions=[
         defn(
             "formula",
@@ -228,7 +228,7 @@ ALPHA_RENAMED = SystemSpec(
             "formula", "implication", "(lhs -> rhs)", [("lhs", "formula"), ("rhs", "formula")]
         ),
     ],
-    line=statement_line(),
+    lines=[statement_line()],
     rules=[rule("MP", "modus_ponens", ["p", "(p -> q)"], "q", [("p", "formula"), ("q", "formula")])],
 )
 
@@ -303,7 +303,7 @@ RICH = SystemSpec(
         template_prod("formula", "conjunction", "(p ∧ q)", [("p", "formula"), ("q", "formula")]),
         template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
     ],
-    line=statement_line(),
+    lines=[statement_line()],
     # The antecedent is the bare sort `formula` — "any formula".
     rules=[rule("ANY", "any_formula", ["formula"], "p", [("p", "formula")])],
 )

@@ -87,7 +87,7 @@ def zfc_spec() -> SystemSpec:
         brackets=brackets(),
         productions=[variable_prod(), membership_prod(), equality_prod(),
                      implication_prod()],
-        line=statement_line(),
+        lines=[statement_line()],
         axioms=[axiom("EXT", "extensionality", "∀x x = x")],
         rules=[hyp_rule(), mp_rule()],
         definitions=[defn("formula", "subset", "x ⊆ y", "(x = y → x = y)",

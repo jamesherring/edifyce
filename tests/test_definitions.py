@@ -47,7 +47,7 @@ SET_THEORY = SystemSpec(
         template_prod("formula", "forall", "∀x.phi", [("x", "setvar"), ("phi", "formula")]),
         template_prod("formula", "subset", "(x ⊆ y)", [("x", "setvar"), ("y", "setvar")]),
     ],
-    line=statement_line(),
+    lines=[statement_line()],
 )
 
 
@@ -89,7 +89,7 @@ PROP = SystemSpec(
         template_prod("formula", "conjunction", "(p ∧ q)", [("p", "formula"), ("q", "formula")]),
         template_prod("formula", "biconditional", "(p ↔ q)", [("p", "formula"), ("q", "formula")]),
     ],
-    line=statement_line(),
+    lines=[statement_line()],
 )
 
 

@@ -46,7 +46,7 @@ RICH = SystemSpec(
         template_prod("formula", "implication", "(p -> q)", [("p", "formula"), ("q", "formula")]),
         template_prod("formula", "conjunction", "(p ∧ q)", [("p", "formula"), ("q", "formula")]),
     ],
-    line=statement_line(),
+    lines=[statement_line()],
     rules=[
         rule_spec(
             "MP", "modus_ponens", ["p", "(p -> q)"], "q", [("p", "formula"), ("q", "formula")]
@@ -67,7 +67,7 @@ ALPHA_RENAMED = SystemSpec(
             "formula", "implication", "(lhs -> rhs)", [("lhs", "formula"), ("rhs", "formula")]
         ),
     ],
-    line=statement_line(),
+    lines=[statement_line()],
     rules=[
         rule_spec("MP", "modus_ponens", ["p", "(p -> q)"], "q", [("p", "formula"), ("q", "formula")])
     ],
@@ -83,7 +83,7 @@ SET_THEORY = SystemSpec(
             "formula", "membership", "x is an element of y", [("x", "setvar"), ("y", "setvar")]
         ),
     ],
-    line=statement_line(),
+    lines=[statement_line()],
 )
 
 
@@ -299,7 +299,7 @@ def test_repeated_variable_schema_matches_production_instance():
                     "formula", "implication", "(p -> q)", [("p", "formula"), ("q", "formula")]
                 ),
             ],
-            line=statement_line(),
+            lines=[statement_line()],
             rules=[rule_spec("SELF", "self_implication", [], "(p -> p)", [("p", "formula")])],
         )
     )

@@ -45,7 +45,7 @@ def zfc_spec() -> SystemSpec:
         brackets=brackets(),
         productions=[variable_prod(), membership_prod(), implication_prod(),
                      universal_prod()],
-        line=statement_line(),
+        lines=[statement_line()],
         rules=[hyp_rule(), mp_rule()],
         definitions=[subset_def()],
     )
@@ -278,7 +278,7 @@ def ambiguous_spec() -> SystemSpec:
             membership_prod(),
             conjunction_prod(),
         ],
-        line=statement_line(),
+        lines=[statement_line()],
         rules=[hyp_rule()],
         definitions=[
             defn("formula", "both", "x ⋈ y", "(x ∈ y ∧ y ∈ x)",

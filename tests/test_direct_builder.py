@@ -48,7 +48,7 @@ def _zfc():
             conjunction_prod(), disjunction_prod(), implication_prod(),
             biconditional_prod(), universal_prod(), existential_prod(),
         ],
-        line=statement_line(),
+        lines=[statement_line()],
         axioms=[axiom("EXT", "extensionality", "∀x ∀y (∀z (z ∈ x ↔ z ∈ y) → x = y)")],
         rules=[hyp_rule(), mp_rule()],
         definitions=[
@@ -63,7 +63,7 @@ def _numeral():
     return SystemSpec(
         name="PA",
         productions=[regex_prod("term", "numeral", "[0-9]+"), variable_prod(), equality_prod()],
-        line=statement_line(),
+        lines=[statement_line()],
         rules=[hyp_rule()],
     )
 
@@ -99,7 +99,7 @@ def test_build_spec_reports_errors_for_an_unbuildable_spec():
     spec = SystemSpec(
         name="Broken",
         productions=[regex_prod("formula", "atom", "[a-z]+")],
-        line=LineSpec(name="statement", shape="assertion", parts=[], logical_sort="formula"),
+        lines=[LineSpec(name="statement", shape="assertion", parts=[], logical_sort="formula")],
     )
     result = build_spec(spec)
     assert "errors" in result and result["errors"]

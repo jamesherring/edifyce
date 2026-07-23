@@ -36,7 +36,7 @@ FOPL = SystemSpec(
         regex_prod("formula", "atom", "[a-z]"),
         template_prod("formula", "implication", "(p -> q)", [("p", "formula"), ("q", "formula")]),
     ],
-    line=statement_line(),
+    lines=[statement_line()],
 )
 
 
