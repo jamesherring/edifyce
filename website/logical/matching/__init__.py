@@ -10,7 +10,7 @@ Module layout (in dependency order)::
     conditions  - the Condition expression tree
     context     - the Context object
     matches     - Match and MatchSet
-    patterns    - Pattern and its subclasses (+ PatternFunction)
+    patterns    - Pattern and its subclasses
     definitions - Definition
     rewriting   - all-solutions associative matching for string-rewriting rules
 
@@ -27,7 +27,6 @@ from .patterns import (
     AbstractPattern,
     AtomPattern,
     Pattern,
-    PatternFunction,
     RegexPattern,
     StringPattern,
     SystemConditionPattern,
@@ -45,7 +44,6 @@ __all__ = [
     "Match",
     "MatchSet",
     "Pattern",
-    "PatternFunction",
     "RegexPattern",
     "StringPattern",
     "SystemConditionPattern",

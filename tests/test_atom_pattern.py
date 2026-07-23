@@ -94,24 +94,19 @@ REGEX_FREE = r"""FormalSystem RegexFree:
     Pattern statement:
         with f as formula, r as reference:
             f [r]
-    statement.formula():
-        return self.f
-    statement.reference():
-        return self.r
-
     Pattern assumption_pattern:
         with phi as formula:
             assume phi
-    assumption_pattern.formula():
-        return self.phi
-
     LineType claim:
         pattern: statement
         behaviour: logical
+        formula: f
+        reference: r
     LineType assume:
         pattern: assumption_pattern
         behaviour: logical
         scope: assumption
+        formula: phi
 
     with a as formula, b as formula:
 

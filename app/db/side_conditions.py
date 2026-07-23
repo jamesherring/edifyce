@@ -29,7 +29,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, String, text
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, Integer, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, uuid_pk_column
@@ -99,14 +99,20 @@ class SideConditionRow(Base):
     )
     position: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     kind: Mapped[str] = mapped_column(String(16))
-    # Metavariable arguments of a leaf predicate, by role:
+    # Arguments of a leaf predicate, by role:
     #   occurs(needle, haystack) -> (left_name, right_name)
     #   equal(left, right)       -> (left_name, right_name)
     #   disjoint(left, right)    -> (left_name, right_name)
     #   atom(name)               -> (left_name, -)
-    # Null on the not/and/or combinators.
-    left_name: Mapped[str | None] = mapped_column(String(128))
-    right_name: Mapped[str | None] = mapped_column(String(128))
+    # Null on the not/and/or combinators. An argument is either a metavariable
+    # *name* or a literal *term* expression (its surface string, possibly using
+    # defined notation and the owner's metavariables); the `*_is_term` flags record
+    # which — set once at write time so that dropping a binding a stored *metavar*
+    # argument still names is caught, while a term argument is validated on compile.
+    left_name: Mapped[str | None] = mapped_column(String(512))
+    right_name: Mapped[str | None] = mapped_column(String(512))
+    left_is_term: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    right_is_term: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     # The optional sort of a disjoint/atom predicate — a reference into the
     # symbol namespace (same symbols the grammar is built from), not a name.
     sort_symbol_id: Mapped[uuid.UUID | None] = mapped_column(

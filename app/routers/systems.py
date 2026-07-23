@@ -220,62 +220,44 @@ async def _require_publishable(session: AsyncSession, system: FormalSystem) -> N
             )
 
 
-async def _require_unpublishable(session: AsyncSession, system: FormalSystem) -> None:
-    """Reject unpublishing a parent that still has published children.
+async def require_editable_system(
+    session: AsyncSession, system_id: uuid.UUID, owner_id: uuid.UUID
+) -> None:
+    """Assert the system is owned *and* still a draft; the guard for every edit.
 
-    The mirror of the inherits-from check in `_require_publishable`: unpublishing
-    here would strand each published child with an `inherits_from_id` that
-    `GET /{parent}` now 404s on for anonymous viewers — the same dangling-public
-    relationship the publish gate prohibits. Make the child unpublish first.
+    A published system is **frozen**: its compiled behaviour is exactly what its
+    published proofs were verified against, so any part edit (child-CRUD router)
+    or system-level edit could silently invalidate them. Publishing is therefore
+    a one-way door — unpublishing is refused too (see `update_system`) — and
+    editing a published system is a 409. 404 (not 409) when it isn't owned, so
+    ids don't leak. Shared with the child-CRUD router.
+
+    NOTE: this closes the *sequential* hole (an edit after a system is published
+    is rejected), not a *concurrent* one. An owner who publishes and edits a part
+    in overlapping transactions can read ``published_at`` as still-NULL here,
+    admit the edit, and commit it after the publish commits — landing a change on
+    a now-published system. Closing that means serializing publication against
+    part writes (a ``SELECT ... FOR UPDATE`` lock on the parent row in both this
+    guard and the publish path). It's deferred: the window needs one owner racing
+    a publish and an edit on the same system, and the lock is Postgres-only
+    behaviour the SQLite test suite can't exercise — so it belongs with
+    deliberate concurrency hardening, tested against Postgres.
     """
-    published_child = await session.scalar(
-        select(FormalSystem.id).where(
-            FormalSystem.inherits_from_id == system.id,
-            FormalSystem.published_at.is_not(None),
+    row = (
+        await session.execute(
+            select(FormalSystem.published_at).where(
+                FormalSystem.id == system_id, FormalSystem.owner_id == owner_id
+            )
         )
-    )
-    if published_child is not None:
+    ).first()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Formal system not found.")
+    if row.published_at is not None:
         raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Cannot unpublish a system that published systems still inherit from; "
-            "unpublish those systems first.",
+            status.HTTP_409_CONFLICT,
+            "This system is published and can no longer be edited. Publishing is "
+            "final so that proofs verified against the system stay valid.",
         )
-
-
-async def revalidate_if_published(session: AsyncSession, system_id: uuid.UUID) -> None:
-    """Keep a *published* system compilable across child edits.
-
-    Publishing gates on the system compiling, but the child-CRUD routes could
-    then edit a published (world-readable) system into a non-compiling state,
-    reopening the broken-public-system hole the publish gate closes. So after a
-    child mutation — and before its commit — a published system is recompiled;
-    if it no longer builds, the transaction is rolled back and the edit rejected
-    with a 422. Drafts stay draft-tolerant (``POST /validate`` reports their
-    state), so this is a no-op for them. Shared with the child-CRUD router.
-
-    NOTE: this closes the common (sequential) hole, not a concurrent one. A
-    child edit that commits in the window between a publish transaction
-    compiling the draft and committing ``published_at`` reads ``published_at``
-    as still-NULL here, skips revalidation, and lands an invalid edit that the
-    publisher never rechecks — a published-but-broken end state. Closing that
-    means serializing publish against child edits (a ``FOR UPDATE`` lock on the
-    parent, with the publish path re-reading under the lock). It's deferred: the
-    window needs one owner racing a publish and an edit on the same system, and
-    the lock is Postgres-only behaviour the SQLite test suite can't exercise —
-    so it belongs with deliberate concurrency hardening, tested against Postgres.
-    """
-    published_at = await session.scalar(
-        select(FormalSystem.published_at).where(FormalSystem.id == system_id)
-    )
-    if published_at is None:
-        return
-    system = await load_system(session, system_id)
-    if system is None:  # deleted mid-flight; nothing to keep valid
-        return
-    result = build_spec(system_to_spec(system))
-    if "errors" in result:
-        await session.rollback()
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=result["errors"])
 
 
 def _owner_out(system: FormalSystem) -> SystemOwner | None:
@@ -457,6 +439,17 @@ async def update_system(
     system = await _get_owned_or_404(session, system_id, user.id)
     changes = payload.model_dump(exclude_unset=True)
 
+    # A published system is frozen: no field edits and no unpublishing, so proofs
+    # verified against it stay valid (child-part edits are blocked the same way in
+    # the system-parts router). Reject any change; an empty PATCH is a harmless
+    # no-op. Publishing a *draft* is still allowed (handled below).
+    if system.published_at is not None and changes:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This system is published and can no longer be edited or unpublished. "
+            "Publishing is final so that proofs verified against it stay valid.",
+        )
+
     if "inherits_from_id" in changes and changes["inherits_from_id"] is not None:
         if changes["inherits_from_id"] == system_id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "A system cannot inherit from itself.")
@@ -470,16 +463,12 @@ async def update_system(
     if "inherits_from_id" in changes:
         system.inherits_from_id = changes["inherits_from_id"]
 
-    # Publishing is the write that makes a system world-readable, so gate it —
-    # after the field changes above so the checks see this request's final state.
-    # Unpublishing is gated too: a public child must not be left inheriting from
-    # a now-private parent.
-    if "published" in changes:
-        if changes["published"]:
-            await _require_publishable(session, system)
-        else:
-            await _require_unpublishable(session, system)
-        system.published_at = datetime.now(timezone.utc) if changes["published"] else None
+    # Publishing makes a system world-readable and is a one-way door — once set,
+    # the freeze above rejects any later edit or unpublish. `published: false`
+    # only reaches here for a draft (already unpublished), so it's a no-op.
+    if changes.get("published"):
+        await _require_publishable(session, system)
+        system.published_at = datetime.now(timezone.utc)
 
     await session.commit()
     return _detail(await _get_owned_or_404(session, system_id, user.id))

@@ -72,77 +72,6 @@ def compile(code: str, system_dict: dict | None = None) -> dict:
     return {"system": FormalSystem(name="")}
 
 
-def parse_arguments(s: str) -> list[tuple[str, str]] | None:
-    # Parse comma separated arguments from a string s
-
-    if len(s) == 0:
-        return []
-
-    # Start by splitting on commas
-    parts = s.split(", ")
-
-    # Adjust for brackets - every part must be balanced
-    i = 0
-    while i < len(parts):
-
-        part = parts[i]
-
-        if "(" not in part and ")" not in part:
-            i += 1
-            continue
-
-        if not part.count("(") == part.count(")"):
-            # Brackets don't match
-
-            if i + 1 == len(parts):
-                # Invalid input
-                return None
-
-            parts[i] = f"{parts[i]}, {parts[i + 1]}"
-            parts.pop(i + 1)
-            continue
-
-        depth = 0
-        continue_flag = False
-
-        for char in part:
-            if char == "(":
-                depth += 1
-            elif char == ")":
-                depth -= 1
-
-            continue_flag = False
-
-            if depth < 0:
-                # Brackets don't match
-
-                if i + 1 == len(parts):
-                    # Invalid input
-                    return None
-
-                parts[i] = f"{parts[i]}, {parts[i + 1]}"
-                parts.pop(i + 1)
-
-                continue_flag = True
-                break
-
-        if continue_flag:
-            continue
-
-        i += 1
-
-    # Split the parts into variable names and pattern names
-    args = []
-
-    for part in parts:
-        vars, pattern = part.split(" as ")
-
-        for var in vars.split(", "):
-            args.append((var, pattern))
-
-    return args
-
-
 def build_schema_pattern(text: str, context, name: str):
     # Build a rule-schema pattern from a source token. A bare constant atom
     # (e.g. a falsum `⊥`) resolves to its *declared* AtomPattern, so the rule's
@@ -1060,13 +989,14 @@ class AbstractSyntaxTree:
                 elif stripped == "side_conditions:":
                     # Kernel side-conditions: a closed, structural vocabulary
                     # checked against the rule's term binding. Replaces the
-                    # legacy condition mini-language for rule provisos.
+                    # legacy condition mini-language for rule provisos. Parsing is
+                    # deferred to the formal-system finalisation pass (where the
+                    # system's definitions have resolved), so a proviso argument may
+                    # use defined notation; here we only collect the raw lines.
                     for line in self.sub_trees:
                         stripped_line = line.line.strip()
                         if len(stripped_line) > 0 and not stripped_line[0] == "#":
-                            current_object.side_conditions.append(
-                                parse_side_condition(stripped_line, context)
-                            )
+                            current_object.pending_side_conditions.append(stripped_line)
                     return
 
                 elif stripped == "allow_extra_antecedents:":
@@ -1155,64 +1085,6 @@ class AbstractSyntaxTree:
                 current_object.parse()
 
             else:
-
-                # Check for match functions
-                index = stripped.find(".")
-                if index > -1 and stripped[-2:] == "):":
-
-                    name = stripped[:index]
-                    remainder = stripped[index + 1:-1]
-
-                    if name not in context.variables:
-                        self.error = f"Unrecognised variable '{name}'."
-                        return
-
-                    obj = context.variables[name]
-
-                    if not isinstance(obj, (Pattern, LineType)):
-                        self.error = f"'{name}' is not a pattern or LineType."
-                        return
-
-                    index = remainder.find("(")
-                    if index == -1:
-                        self.error = f"Could not parse '{stripped}'."
-                        return
-
-                    fn_name = remainder[:index]
-
-                    args_string = remainder[index + 1:-1]
-                    args = parse_arguments(args_string)
-
-                    # Check the defined arguments are valid
-                    for arg in args:
-
-                        key, value = arg
-
-                        if not self.valid_variable_name(key):
-                            self.error = f"Invalid variable name: '{key}'."
-                            return
-
-                        if value not in context.variables and value not in ("dict", "list", "set", "tuple", "MatchSet"):
-                            self.error = f"'{value}' is not defined."
-                            return
-
-                    # Change dictionary values from strings to the corresponding patterns
-                    args = tuple(
-                        (arg[0], context.variables[arg[1]]) if arg[1] in context.variables else (arg[0], arg[1])
-                        for arg in args
-                    )
-
-                    if len(args) == 0:
-                        args = None
-
-                    # Add the function to the pattern
-                    obj.add_function(name=fn_name, tree=self, params=args)
-
-                    self.type = "function"
-
-                    # Don't run sub-trees
-                    return
-
                 # Can't parse line
                 self.error = f"Could not parse '{stripped}'."
                 return
@@ -1307,396 +1179,34 @@ class AbstractSyntaxTree:
                 if result is not None:
                     new_object.context.definitions.add(result)
 
+            # Parse each rule's deferred provisos now that every definition has
+            # resolved, so a proviso's term argument may use defined notation. Each
+            # rule brings its own metavariables (its `with ... as` binders). A
+            # malformed proviso is a source error, not a server fault, and this runs
+            # outside run()'s try/except, so record it as a compile error (as the
+            # definition `where` path above does) rather than letting it escape.
+            for rule in new_object.inference_rules:
+                if not rule.pending_side_conditions:
+                    continue
+                rule_context = copy(new_object.context)
+                rule_context.string_variables = {
+                    **rule_context.string_variables, **(rule.variables or {})
+                }
+                try:
+                    rule.side_conditions.extend(
+                        parse_side_condition(line, rule_context)
+                        for line in rule.pending_side_conditions
+                    )
+                except Exception as e:
+                    context.error_log.append(f"Inference rule '{rule.name}': {e}")
+                rule.pending_side_conditions = []
+
             # Set the formal system build context and build the pattern dictionary
             new_object.build_context = sub_context
             new_object.build_pattern_dictionary()
 
         return context
 
-    def run_function(self, item, context, params=None, param_types=None):
-        # Run a function for a given match or proof line. For 'function' type trees
-
-        if not self.type == "function":
-            raise Exception("Cannot run function on non-function trees.")
-
-        if params is None:
-            params = {}
-
-        if param_types is None:
-            param_types = ()
-
-        # Update the context reference object
-        context = copy(context)
-        context.reference_object = item
-
-        # Check the number of parameters is correct
-        if not len(params) == len(param_types):
-            raise Exception(f"Expected {len(param_types)!s} arguments, but {len(params)!s} were given.")
-
-        # Check the parameters are of the right type
-        param_type_dict = {param[0]: param[1] for param in param_types}
-
-        for key, value in params.items():
-            if key not in param_type_dict:
-                raise Exception(f"Unexpected argument '{key}'.")
-
-            param_type = param_type_dict[key]
-
-            if isinstance(value, Match):
-                if not value.pattern.equivalent(param_type, context):
-                    raise Exception("Incorrect argument type.")
-
-            elif isinstance(value, MatchSet) and param_type == "MatchSet":
-                pass
-
-            elif isinstance(value, ProofLine):
-                if not value.line_type.equivalent(param_type, context):
-                    raise Exception("Incorrect argument type.")
-
-            elif isinstance(value, dict) and param_type == "dict":
-                pass
-            elif isinstance(value, set) and param_type == "set":
-                pass
-            elif isinstance(value, list) and param_type == "list":
-                pass
-            elif isinstance(value, tuple) and param_type == "tuple":
-                pass
-
-            else:
-                raise Exception("Invalid parameter.")
-
-        # Otherwise ok
-
-        # Update variables with any parameters (e.g. 'alpha' as formula)
-        context.variables.update(params)
-
-        for tree in self.sub_trees:
-            result = tree.run_function_line(item, context)
-
-            if result is not None:
-                return result["return"]
-
-    def run_function_line(self, item, context):
-        # Run a line in a function for a given match or proof line
-
-        stripped = self.line.strip()
-
-        if len(stripped) == 0 or stripped[0] == "#":
-            # Nothing to do
-            return None
-
-        if stripped.startswith("return "):
-            remainder = stripped[7:]
-            return {"return": self.evaluate_line_part(item, remainder, context)}
-
-        if stripped.startswith("if ") and stripped[-1] == ":":
-            # If
-            condition_string = stripped[3:-1]
-
-            if self.evaluate_line_part(item, condition_string, context):
-                # Positive branch
-
-                for tree in self.sub_trees:
-                    result = tree.run_function_line(item, context)
-
-                    if result is not None:
-                        return result
-
-            else:
-                # Negative branch
-                pass
-
-            return None
-
-        if stripped.startswith("for ") and stripped[-1] == ":":
-            # Looks like a loop
-            index = stripped.find(" in ")
-            if index == -1:
-                raise Exception(f"Could not parse function line '{stripped}.")
-
-            var_name = stripped[4:index]
-            set_string = stripped[index + 4:-1]
-
-            try:
-                set_value = item.get_by_path(set_string, context)
-
-                if not isinstance(set_value, (list, tuple, set, MatchSet, dict)):
-                    raise ValueError(f"Set value {set_string} is not iterable.")
-
-                if isinstance(set_value, MatchSet):
-                    if not set_value.complete:
-                        # Can't iterate over an incomplete set
-                        raise Exception("Could not parse function line '" + stripped + "'." +
-                                        " Can't iterate over an incomplete set")
-
-                    iterable = set_value.instances
-
-                else:
-                    iterable = set_value
-
-                break_flag = False
-
-                for obj in iterable:
-                    # Add the object to context
-                    context.variables[var_name] = obj
-
-                    for sub_tree in self.sub_trees:
-
-                        result = sub_tree.run_function_line(item, context)
-
-                        if result is not None:
-                            if "loop" in result:
-                                command = result["loop"]
-
-                                if command == "break":
-                                    break_flag = True
-                                    break
-
-                                elif command == "continue":
-                                    # Go to the next object
-                                    break
-
-                            else:
-                                # Otherwise, return value
-                                return result
-
-                    if break_flag:
-                        break
-
-                # No return value
-                return None
-
-            except Exception as e:
-                raise Exception(f"Could not parse function line '{stripped}'. {e!s}.")
-
-        if stripped.startswith("while ") and stripped[-1] == ":":
-            # Looks like a while loop
-
-            condition_string = stripped[6:-1]
-            condition = Condition(string=condition_string)
-
-            while item.check_condition(condition, context):
-                # Evaluate the sub trees
-
-                break_flag = False
-                for sub_tree in self.sub_trees:
-
-                    result = sub_tree.run_function_line(item, context)
-
-                    if result is not None:
-                        if "loop" in result:
-                            command = result["loop"]
-
-                            if command == "break":
-                                break_flag = True
-                                break
-
-                            elif command == "continue":
-                                # Go to the next iteration
-                                break
-
-                        else:
-                            # Otherwise, return value
-                            return result
-
-                if break_flag:
-                    break
-
-            # No return value
-            return None
-
-        if stripped.startswith("print(") and stripped[-1] == ")":
-            # Print a value
-            inner = stripped[6:-1]
-            print(self.evaluate_line_part(item, inner, context))
-            return None
-
-        if " = " in stripped:
-            # Assignment to a variable in context
-            index = stripped.index(" = ")
-            var_name = stripped[:index]
-            value_string = stripped[index + 3:]
-
-            value = self.evaluate_line_part(item, value_string, context)
-            context.variables[var_name] = value
-
-            return None
-
-        if stripped in ("continue", "break"):
-            # Loop keywords
-            return {"loop": stripped}
-
-        # Try just evaluating the line as a part
-        try:
-            self.evaluate_line_part(item, stripped, context)
-            return None
-        except Exception:
-            pass
-
-        # Otherwise stuck
-        raise Exception(f"Could not parse '{stripped}'.")
-
-    def evaluate_line_part(self, item, line, context):
-        # Evaluate part of this line, which may utilise subtrees. Gets a value.
-
-        stripped = line.strip()
-
-        if ".each(" in stripped and stripped.endswith("):"):
-            # Looks like an each function
-
-            # First need an iterable
-            index = stripped.index(".each(")
-            path = stripped[:index]
-
-            obj = item.get_by_path(path, context)
-
-            if type(obj) is MatchSet:
-                items = obj.instances
-
-                if not obj.complete:
-                    # Can't iterate over incomplete match set - assume False
-                    return False
-
-            elif isinstance(obj, (list, tuple, set)):
-                # Normal iterable object
-                items = obj
-
-            else:
-                raise Exception(f"Cannot iterate over '{type(obj)!s}.")
-
-            # Get the parameter named for the loop
-            name = stripped[index + 6:-2]
-
-            # Loop through the match set
-            for i in items:
-
-                # Add this match to context
-                context.variables[name] = i
-
-                result = None
-
-                # Run sub-trees
-                for sub_tree in self.sub_trees:
-                    result = sub_tree.evaluate_line_part(item, sub_tree.line.strip(), context)
-
-                if not result:
-                    # This instance fails
-                    return False
-
-            # All instances pass the condition
-            return True
-
-        if stripped == "None":
-            return None
-
-        c = constant(stripped)
-        if c is not None:
-            return c
-
-        if stripped[0] == "[":
-            # Maybe it's a list
-
-            # Search for top-level commas or closing bracket
-            entries = []
-            entry_start_index = 1
-            depth = 0
-            is_string = False
-            string_delimiter = None
-            found_end = False
-            remainder = ""
-
-            for index in range(1, len(stripped)):
-                char = stripped[index]
-
-                if is_string and char == string_delimiter:
-                    # End string
-                    is_string = False
-                    depth -= 1
-                    continue
-
-                if is_string:
-                    # Not ending our string
-                    continue
-
-                if char == "'" or char == '"':
-                    # Starting a string
-                    is_string = True
-                    string_delimiter = char
-                    depth += 1
-                    continue
-
-                if char == "," and depth == 0:
-                    # Zero-depth comma - add the entry
-                    entries.append(stripped[entry_start_index:index].strip())
-                    entry_start_index = index + 1
-                    continue
-
-                if char == "]" and depth == 0:
-                    # This is the end
-                    found_end = True
-                    entries.append(stripped[entry_start_index:index].strip())
-                    remainder = stripped[index + 1:]
-                    break
-
-                if char in ("[", "(", "{"):
-                    depth += 1
-                    continue
-
-                if char in ("]", ")", "}"):
-                    depth -= 1
-                    continue
-
-            if not found_end or len(remainder) > 0:
-                # Currently don't support list indexing, ie ["x", "y"][0]
-                raise Exception(f"Could not parse '{stripped}'.")
-
-            return [self.evaluate_line_part(item, entry, context) for entry in entries]
-
-        # It may be a calculation
-        if " + " in stripped:
-            try:
-                parts = stripped.split(" + ")
-
-                if len(parts) >= 2:
-                    evaluated_parts = [self.evaluate_line_part(item, part, context) for part in parts]
-
-                    result = evaluated_parts[0]
-                    for part in evaluated_parts[1:]:
-                        result = result + part
-
-                    return result
-
-            except Exception:
-                pass
-
-        # Try to get by path
-        try:
-            return item.get_by_path(stripped, context)
-        except Exception:
-            pass
-
-        if stripped[-1] == "]":
-            # Maybe ends with an index
-            i = stripped.rfind("[")
-
-            if i > -1:
-                key = self.evaluate_line_part(item, stripped[i + 1:-1], context)
-                initial = self.evaluate_line_part(item, stripped[:i], context)
-
-                try:
-                    return initial[key]
-                except Exception:
-                    pass
-
-        # Try making a condition
-        try:
-            c = Condition(string=stripped)
-            return item.check_condition(c, context)
-
-        except Exception:
-            pass
-
-        raise Exception(f"Could not parse '{stripped}'.")
 
     @staticmethod
     def valid_variable_name(var):

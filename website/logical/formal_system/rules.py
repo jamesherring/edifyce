@@ -63,6 +63,18 @@ class SubproofSchema:
         return "variable" if self.fresh is not None else "assumption"
 
 
+def _normalise_arg(arg: str | Term) -> tuple[str, str]:
+    """A stable, uniformly-typed key for a predicate argument.
+
+    An argument is a metavariable name (``str``) or a literal term. Both map to a
+    2-tuple of strings so nested normal forms stay mutually comparable when
+    ``And``/``Or`` parts are ``sorted`` (a bare name vs a tuple would raise).
+    """
+    if isinstance(arg, str):
+        return ("var", arg)
+    return ("term", arg.to_string())
+
+
 def _normalise_side_condition(condition: SideCondition) -> tuple:
     """A structural normal form for comparing side-conditions across rules.
 
@@ -78,17 +90,17 @@ def _normalise_side_condition(condition: SideCondition) -> tuple:
     if isinstance(condition, Not):
         return ("Not", _normalise_side_condition(condition.inner))
     if isinstance(condition, Occurs):
-        return ("Occurs", condition.needle, condition.haystack)
+        return ("Occurs", _normalise_arg(condition.needle), _normalise_arg(condition.haystack))
     if isinstance(condition, Equal):
-        return ("Equal", condition.left, condition.right)
+        return ("Equal", _normalise_arg(condition.left), _normalise_arg(condition.right))
     if isinstance(condition, DisjointLeaves):
         sort = None if condition.sort is None else condition.sort.name
-        return ("DisjointLeaves", condition.left, condition.right, sort)
+        return ("DisjointLeaves", _normalise_arg(condition.left), _normalise_arg(condition.right), sort)
     if isinstance(condition, IsAtom):
         sort = None if condition.sort is None else condition.sort.name
-        return ("IsAtom", condition.name, sort)
+        return ("IsAtom", _normalise_arg(condition.name), sort)
     if isinstance(condition, IsMember):
-        return ("IsMember", condition.name, condition.sort.name)
+        return ("IsMember", _normalise_arg(condition.name), condition.sort.name)
     return (type(condition).__name__,)
 
 
@@ -125,6 +137,12 @@ class InferenceRule:
         self.side_conditions: list[SideCondition] = (
             side_conditions if side_conditions is not None else []
         )
+
+        # Raw proviso lines awaiting a parse. The compiler defers parsing to its
+        # finalisation pass — once the system's definitions have resolved, so a
+        # proviso argument may use defined notation — then fills `side_conditions`
+        # and clears this. Empty except transiently during compilation.
+        self.pending_side_conditions: list[str] = []
 
         # Optionally allow extra antecedents
         self.allow_extra_antecedents: bool = allow_extra_antecedents

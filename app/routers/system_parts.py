@@ -59,9 +59,8 @@ from app.routers.systems import (
     bracket_out,
     definition_out,
     line_out,
-    owned_system_id_or_404,
     production_out,
-    revalidate_if_published,
+    require_editable_system,
     rule_out,
     sort_out,
 )
@@ -117,7 +116,11 @@ _SYMBOL_REFERENCES = (
 
 
 async def _owned(session: AsyncSession, system_id: uuid.UUID, user: User) -> None:
-    await owned_system_id_or_404(session, system_id, user.id)
+    # Every child mutation guards on this: the system must be owned *and* still a
+    # draft. A published system is frozen (see require_editable_system) — its
+    # compiled behaviour is what its published proofs were verified against, so a
+    # part edit could silently invalidate them. Editing one is a 409.
+    await require_editable_system(session, system_id, user.id)
 
 
 async def _commit(session: AsyncSession) -> None:
@@ -128,21 +131,6 @@ async def _commit(session: AsyncSession) -> None:
     except IntegrityError:
         await session.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, "That change conflicts with an existing item.")
-
-
-async def _commit_checked(session: AsyncSession, system_id: uuid.UUID) -> None:
-    # The commit path for any mutation that changes a system's *content* (not
-    # just row order): flush first so a raced constraint is still a 409 (before
-    # revalidation's autoflush could surface it as a 500), then hold a published
-    # system to still compiling — a broken edit to a public system rolls back
-    # with a 422 rather than persisting.
-    try:
-        await session.flush()
-    except IntegrityError:
-        await session.rollback()
-        raise HTTPException(status.HTTP_409_CONFLICT, "That change conflicts with an existing item.")
-    await revalidate_if_published(session, system_id)
-    await _commit(session)
 
 
 async def _next_position(session: AsyncSession, row_cls: type[Base], system_id: uuid.UUID) -> int:
@@ -172,7 +160,7 @@ async def _delete_child(
     )
     if result.rowcount == 0:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found.")
-    await _commit_checked(session, system_id)
+    await _commit(session)
 
 
 async def _reorder_rows(
@@ -317,7 +305,7 @@ async def _delete_symbol(
             status.HTTP_409_CONFLICT, "This sort still has productions; delete them first."
         )
     await session.execute(sa_delete(SymbolRow).where(SymbolRow.id == symbol_id))
-    await _commit_checked(session, system_id)
+    await _commit(session)
 
 
 async def _reorder_symbols(
@@ -349,7 +337,7 @@ async def create_sort(
         position=await _next_symbol_position(session, system_id, union=True),
     )
     session.add(row)
-    await _commit_checked(session, system_id)
+    await _commit(session)
     return sort_out(row)
 
 
@@ -364,7 +352,7 @@ async def update_sort(
         # Rename is safe: references are FKs, so they follow automatically.
         await _require_symbol_name_free(session, system_id, payload.name, exclude_id=sort_id)
         row.name = payload.name
-    await _commit_checked(session, system_id)
+    await _commit(session)
     return sort_out(row)
 
 
@@ -408,7 +396,7 @@ async def create_production(
     )
     row.bindings = await _binding_rows(session, system_id, ProductionBindingRow, payload.bindings)
     session.add(row)
-    await _commit_checked(session, system_id)
+    await _commit(session)
     return production_out(await _get_symbol_or_404(session, system_id, row.id, False, *_PRODUCTION_LOADS))
 
 
@@ -433,7 +421,7 @@ async def update_production(
         row.kind = _production_kind(row.template, row.regex)
     if "bindings" in fields and payload.bindings is not None:
         row.bindings = await _binding_rows(session, system_id, ProductionBindingRow, payload.bindings)
-    await _commit_checked(session, system_id)
+    await _commit(session)
     return production_out(await _get_symbol_or_404(session, system_id, production_id, False, *_PRODUCTION_LOADS))
 
 
@@ -615,7 +603,7 @@ async def _create_child(
     row = resource.row_cls(system_id=system_id, position=await _next_position(session, resource.row_cls, system_id))
     await resource.assign(session, system_id, row, payload, set(type(payload).model_fields), True)
     session.add(row)
-    await _commit_checked(session, system_id)
+    await _commit(session)
     return resource.serialize(await _get_child_or_404(session, resource.row_cls, system_id, row.id, *resource.loads))
 
 
@@ -632,7 +620,7 @@ async def _update_child(
     # on an update that double membership otherwise leaves new nodes unflushed.
     # This mirrors the `session.add` the create path already does.
     session.add(row)
-    await _commit_checked(session, system_id)
+    await _commit(session)
     return resource.serialize(await _get_child_or_404(session, resource.row_cls, system_id, child_id, *resource.loads))
 
 

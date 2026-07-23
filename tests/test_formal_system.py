@@ -51,15 +51,11 @@ LOGICAL_SYSTEM = """FormalSystem Logic:
         with f as formula, r as reference:
             f [r]
 
-    statement_pattern.formula():
-        return self.f
-
-    statement_pattern.reference():
-        return self.r
-
     LineType statement:
         pattern: statement_pattern
         behaviour: logical
+        formula: f
+        reference: r
 
     with s as formula:
         InferenceRule hypothesis:
@@ -106,15 +102,11 @@ PROP_LOGIC_SYSTEM = """FormalSystem PropLogic:
         with f as formula, r as reference:
             f [r]
 
-    statement_pattern.formula():
-        return self.f
-
-    statement_pattern.reference():
-        return self.r
-
     LineType statement:
         pattern: statement_pattern
         behaviour: logical
+        formula: f
+        reference: r
 
     with p as formula, q as formula:
         InferenceRule hypothesis:
