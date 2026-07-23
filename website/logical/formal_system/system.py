@@ -6,13 +6,13 @@ from ..matching import Context, Match, Pattern, StringPattern, UnionPattern
 from .proof import Proof
 
 
-def _line_field(match: Match, field: str, context: Context) -> Match:
+def _line_field(match: Match, field: str) -> Match:
     # Project a LineType's declared formula/reference field off a line match.
     # The reserved value "self" denotes the whole match (an axiom asserting its
     # entire formula); any other value names a matched sub-field to read.
     if field == "self":
         return match
-    return match.get_by_path(field, context)
+    return match.field(field)
 
 
 class FormalSystem:
@@ -131,7 +131,7 @@ class FormalSystem:
                     # The logical formula is the sub-field the line type declares
                     # (or the whole match, for `formula: self`).
                     try:
-                        formula = _line_field(result, line_type.formula_field, context)
+                        formula = _line_field(result, line_type.formula_field)
                         # It has to be a match
                         if type(formula) is Match:
                             proof_line.formula = formula
@@ -141,7 +141,7 @@ class FormalSystem:
                 if line_type.reference_field is not None:
                     # The citation reference is the declared sub-field.
                     try:
-                        reference_match = _line_field(result, line_type.reference_field, context)
+                        reference_match = _line_field(result, line_type.reference_field)
                         proof_line.reference_string = reference_match.formatted_string()
                         proof_line.reference_string_display = reference_match.string
                     except Exception:

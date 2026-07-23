@@ -1,13 +1,9 @@
 """Pattern-matching engine for formal systems.
 
-This package was split out of a single large ``matching.py`` module. The
-public API is unchanged: every name previously importable from
-``website.logical.matching`` is re-exported here.
+This package was split out of a single large ``matching.py`` module.
 
 Module layout (in dependency order)::
 
-    paths       - path lookup / argument parsing helpers (leaf)
-    conditions  - the Condition expression tree
     context     - the Context object
     matches     - Match and MatchSet
     patterns    - Pattern and its subclasses
@@ -17,10 +13,13 @@ Module layout (in dependency order)::
 ``matches``, ``patterns`` and ``definitions`` are mutually recursive; they
 reference each other through module-level ``from . import ...`` imports and
 qualified names so that the import cycle resolves cleanly at runtime.
+
+The string ``get_by_path`` interpreter and its ``Condition`` expression tree
+(formerly the ``paths`` and ``conditions`` modules) have been retired; proof
+checking runs on kernel term unification, the closed side-condition algebra,
+and the scope/subproof mechanism instead.
 """
 
-from .paths import constant, get_by_path, parse_arguments, parse_path, path_maps_to
-from .conditions import Condition
 from .context import Context
 from .matches import Match, MatchSet
 from .patterns import (
@@ -29,7 +28,6 @@ from .patterns import (
     Pattern,
     RegexPattern,
     StringPattern,
-    SystemConditionPattern,
     UnionPattern,
 )
 from .definitions import Definition
@@ -38,7 +36,6 @@ from .rewriting import iter_bindings, iter_joint, joint_binding_exists
 __all__ = [
     "AbstractPattern",
     "AtomPattern",
-    "Condition",
     "Context",
     "Definition",
     "Match",
@@ -46,14 +43,8 @@ __all__ = [
     "Pattern",
     "RegexPattern",
     "StringPattern",
-    "SystemConditionPattern",
     "UnionPattern",
-    "constant",
     "iter_bindings",
     "iter_joint",
     "joint_binding_exists",
-    "get_by_path",
-    "parse_arguments",
-    "parse_path",
-    "path_maps_to",
 ]

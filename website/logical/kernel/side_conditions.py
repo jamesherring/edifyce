@@ -1,11 +1,12 @@
 """Side-conditions: a small, fixed vocabulary of structural provisos.
 
 Many inference rules carry a proviso - "``x`` is not free in ``φ``", "``x`` and
-``y`` are distinct" - that must hold for the rule to apply. Today those are
-written in a Turing-complete condition mini-language (``matching/conditions.py``
-plus the ``get_by_path`` interpreter) that the checker *executes* per proof
-line. Step 3 replaces that, for the common cases, with a **closed algebra** of
-side-conditions evaluated by total, terminating structural checks over terms.
+``y`` are distinct" - that must hold for the rule to apply. These once lived in a
+Turing-complete condition mini-language (a string ``get_by_path`` interpreter and
+its ``Condition`` tree) that the checker *executed* per proof line; that
+interpreter has since been **retired entirely**. Provisos are now this **closed
+algebra** of side-conditions, evaluated by total, terminating structural checks
+over terms.
 
 The whole vocabulary
 --------------------
