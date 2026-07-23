@@ -1077,15 +1077,20 @@ class ProofLine:
             self.axiom_pattern.name = self.label
 
         elif line_type.behaviour in ("definition", "import"):
-            # Inert. These line types derived their payload through the
-            # `get_by_path` string interpreter - lower()/higher()/for() for a
-            # definition, path() for an import - but that accessor-function
-            # mechanism was removed, so the derivation was already dead (every
-            # call raised and was swallowed). They are no-ops pending a typed
-            # reimplementation of the references/definitions feature (see
-            # docs/proof-references-and-definitions-plan.md). `Proof.import_path`
-            # itself remains for that rewire.
-            pass
+            # Not currently supported. These line types derived their payload
+            # through the `get_by_path` string interpreter - lower()/higher()/
+            # for() for a definition, path() for an import - and that
+            # accessor-function mechanism was removed, so the derivation is gone.
+            # Fail *closed* rather than accept an inert line: a proof line whose
+            # behaviour we can no longer honour must be rejected, not silently
+            # passed as valid. To be lifted when the references/definitions
+            # feature is reimplemented with a typed mechanism (see
+            # docs/proof-references-and-definitions-plan.md); `Proof.import_path`
+            # remains for that rewire.
+            self.valid = False
+            self.invalid_message = (
+                f"'{line_type.behaviour}' line types are not currently supported."
+            )
 
         elif line_type.behaviour in ("none", "comment"):
             # Don't need to do anything :)

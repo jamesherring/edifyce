@@ -194,12 +194,14 @@ already folded into this document. The shippable work:
      (like `formula`/`reference`), not via the interpreter — tracked for a later
      PR.
    - `get_references` (dead, no callers) removed, and the `behaviour: definition`
-     / `behaviour: import` branches in `ProofLine.execute` reduced to inert
-     no-ops (their `lower/higher/for/path` derivation was the dead accessor).
-     Those two behaviours are no-ops **until the references/definitions feature
-     is reimplemented with a typed mechanism** (see
-     `docs/proof-references-and-definitions-plan.md`); `Proof.import_path` — the
-     tested method — stays for that rewire.
+     / `behaviour: import` branches in `ProofLine.execute` now **fail closed** —
+     a proof line with one of these behaviours is rejected as unsupported rather
+     than silently accepted (their `lower/higher/for/path` derivation was the
+     dead accessor; passing the line as a valid no-op would let unsupported
+     syntax through, against the "fail loudly" rule). To be lifted **when the
+     references/definitions feature is reimplemented with a typed mechanism**
+     (see `docs/proof-references-and-definitions-plan.md`); `Proof.import_path` —
+     the tested method — stays for that rewire.
 
    Net: seven engine → interpreter call sites gone, all behaviour-preserving
    (suite unchanged at 629 passed). Interpreter stays in place for the DSL.
