@@ -328,8 +328,39 @@ class ReorderRequest(BaseModel):
 # world-readable. The read models carry the cached `valid`/`result` snapshot so
 # a client can render the last check without re-running it. `folder_id` is
 # surfaced read-only — folder CRUD (like formal-system child parts) is a later
-# phase — and proof-to-proof references are deferred with it.
+# phase.
 # ---------------------------------------------------------------------------
+
+
+# A citation alias must be a safe label for `[alias.line]` — no `.`/`,`/brackets/
+# spaces, which the proof-line citation grammar uses as delimiters.
+_ALIAS_PATTERN = r"^[A-Za-z][A-Za-z0-9_-]*$"
+
+
+class ProofReferenceInput(BaseModel):
+    """One outgoing reference edge, as submitted: the lemma proof plus the alias
+    this proof cites it by in its source (`[alias.line]`)."""
+
+    referenced_proof_id: uuid.UUID
+    alias: str = Field(..., min_length=1, max_length=64, pattern=_ALIAS_PATTERN)
+
+
+class ProofReferenceOut(BaseModel):
+    """One outgoing reference edge, read back: the alias plus the referenced
+    proof's public identity."""
+
+    referenced_proof_id: uuid.UUID
+    alias: str
+    name: str
+    slug: str
+    published: bool
+
+
+class ProofReferencesUpdate(BaseModel):
+    """Replace a proof's full set of outgoing references (wholesale, like the
+    nested value lists on system parts)."""
+
+    references: list[ProofReferenceInput] = Field(default_factory=list)
 
 
 class ProofSummary(BaseModel):
@@ -353,6 +384,8 @@ class ProofDetail(ProofSummary):
     source: str
     # Cached `proof.data()` payload from the last verification (null = never run).
     result: dict | None = None
+    # Outgoing references (lemmas this proof cites), in display order.
+    references: list[ProofReferenceOut] = Field(default_factory=list)
 
 
 class ProofCreate(BaseModel):

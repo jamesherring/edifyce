@@ -35,13 +35,11 @@ from sqlalchemy import (
     DDL,
     JSON,
     Boolean,
-    Column,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     String,
-    Table,
     Text,
     event,
     text,
@@ -214,21 +212,35 @@ class ProofFolder(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
 
 # Proof-to-proof dependency graph (the old `references` self-M2M). Directed:
-# a row (proof_id -> references_id) means `proof_id` cites `references_id`.
-proof_references = Table(
-    "proof_references",
-    Base.metadata,
-    Column(
-        "proof_id",
-        ForeignKey("proofs.id", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-    Column(
-        "references_id",
-        ForeignKey("proofs.id", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-)
+# a row (proof_id -> references_id) means `proof_id` cites `references_id` as a
+# lemma. An association object rather than a bare M2M, because the edge carries
+# attributes: the citation `alias` a proof uses to name the reference in its
+# source (`[alias.line]`), and a `position` for display order.
+class ProofReference(Base):
+    __tablename__ = "proof_references"
+    __table_args__ = (
+        # The citation alias must be unique within the citing proof so
+        # `[alias.line]` resolves to exactly one referenced proof.
+        Index("uq_proof_references_proof_alias", "proof_id", "alias", unique=True),
+    )
+
+    proof_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("proofs.id", ondelete="CASCADE"), primary_key=True
+    )
+    references_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("proofs.id", ondelete="CASCADE"), primary_key=True
+    )
+    # The label the citing proof uses for this reference in its source.
+    alias: Mapped[str] = mapped_column(String(64), server_default="")
+    position: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+
+    # Two FKs to the same table, so each relationship names its own.
+    proof: Mapped["Proof"] = relationship(
+        foreign_keys=[proof_id], back_populates="reference_links"
+    )
+    referenced: Mapped["Proof"] = relationship(
+        foreign_keys=[references_id], back_populates="referenced_by_links"
+    )
 
 
 class Proof(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -262,17 +274,20 @@ class Proof(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     folder: Mapped["ProofFolder | None"] = relationship(back_populates="proofs")
     theorems: Mapped[list["Theorem"]] = relationship(back_populates="proof")
 
-    references: Mapped[list["Proof"]] = relationship(
-        secondary=proof_references,
-        primaryjoin=lambda: Proof.id == proof_references.c.proof_id,
-        secondaryjoin=lambda: Proof.id == proof_references.c.references_id,
-        back_populates="referenced_by",
+    # Outgoing reference edges (the lemmas this proof cites), owned by this proof
+    # so editing/deleting them cascades. Ordered for stable display.
+    reference_links: Mapped[list["ProofReference"]] = relationship(
+        foreign_keys="ProofReference.proof_id",
+        back_populates="proof",
+        cascade="all, delete-orphan",
+        order_by="ProofReference.position",
     )
-    referenced_by: Mapped[list["Proof"]] = relationship(
-        secondary=proof_references,
-        primaryjoin=lambda: Proof.id == proof_references.c.references_id,
-        secondaryjoin=lambda: Proof.id == proof_references.c.proof_id,
-        back_populates="references",
+    # Incoming edges (the proofs that cite this one) — read-only, for a future
+    # "used by" surface. Not owned here, so no cascade.
+    referenced_by_links: Mapped[list["ProofReference"]] = relationship(
+        foreign_keys="ProofReference.references_id",
+        back_populates="referenced",
+        viewonly=True,
     )
 
 
