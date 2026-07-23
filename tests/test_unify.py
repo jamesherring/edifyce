@@ -155,7 +155,7 @@ def test_match_respects_sorts(rich):
 
 def test_concrete_schema_does_not_match_opaque_variable(rich):
     _system, context, formula = rich
-    implication = formula.patterns[0]
+    implication = formula.patterns[1]  # the implication production, keyed p/q
     schema = Node(implication, {"p": Var("p", formula), "q": Var("q", formula)})
 
     # Subject is a bare variable (opaque): a concrete production cannot match it.
