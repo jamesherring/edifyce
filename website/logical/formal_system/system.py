@@ -158,8 +158,11 @@ class FormalSystem:
                 proof_line.line_type = line_type
                 proof_line.match = result
 
-                # Check for main line type attributes
-                # Try to get the formula, reference, label, display, is_axiom
+                # Project the line type's declared formula/reference fields off
+                # the match. (`label`, `display` and axiom-marking are handled by
+                # ProofLine's defaults and the `behaviour: axiom` line type - not
+                # by string `get_by_path` accessors, which could no longer be
+                # defined since the accessor-function syntax was removed.)
                 if line_type.formula_field is not None:
                     # The logical formula is the sub-field the line type declares
                     # (or the whole match, for `formula: self`).
@@ -179,28 +182,6 @@ class FormalSystem:
                         proof_line.reference_string_display = reference_match.string
                     except Exception:
                         pass
-
-                try:
-                    label = result.get_by_path("label()", context)
-                    proof_line.label = label
-
-                except Exception:
-                    pass
-
-                # Check if the line type has a 'display' value
-                try:
-                    proof_line.display = result.get_by_path("display()", context)
-                except Exception:
-                    # No valid display path
-                    pass
-
-                try:
-                    # Check if there is a valid axiom
-                    result.get_by_path("axiom()", context)
-                    proof_line.is_axiom = True
-                except Exception:
-                    # Not an axiom
-                    pass
 
                 # No need to check other line types
                 break
