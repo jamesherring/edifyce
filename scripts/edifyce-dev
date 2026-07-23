@@ -109,20 +109,25 @@ ensure_deps() {
 db_running() { as_pg "$(pgbin)/pg_ctl" -D "$PG_DATADIR" status >/dev/null 2>&1; }
 
 db_up() {
-  if db_running; then ok "Postgres already running (:$PG_PORT)"; return 0; fi
   local PGB; PGB="$(pgbin)"
-  if [ ! -s "$PG_DATADIR/PG_VERSION" ]; then
-    log "initdb → $PG_DATADIR (UTF-8 cluster)"
-    if [ "$(id -u)" = "0" ]; then mkdir -p "$PG_DATADIR"; chown postgres:postgres "$PG_DATADIR"; fi
-    # UTF-8 cluster: a SQL_ASCII default DB rejects the Unicode in verification
-    # results (asyncpg 'UntranslatableCharacterError') and proof-verify persists fail.
-    as_pg "$PGB/initdb" -D "$PG_DATADIR" -U postgres --auth=trust \
-      --encoding=UTF8 --locale=C.UTF-8 >/dev/null
+  if db_running; then
+    ok "Postgres already running (:$PG_PORT)"
+  else
+    if [ ! -s "$PG_DATADIR/PG_VERSION" ]; then
+      log "initdb → $PG_DATADIR (UTF-8 cluster)"
+      if [ "$(id -u)" = "0" ]; then mkdir -p "$PG_DATADIR"; chown postgres:postgres "$PG_DATADIR"; fi
+      # UTF-8 cluster: a SQL_ASCII default DB rejects the Unicode in verification
+      # results (asyncpg 'UntranslatableCharacterError') and proof-verify persists fail.
+      as_pg "$PGB/initdb" -D "$PG_DATADIR" -U postgres --auth=trust \
+        --encoding=UTF8 --locale=C.UTF-8 >/dev/null
+    fi
+    log "starting Postgres on :$PG_PORT"
+    as_pg "$PGB/pg_ctl" -D "$PG_DATADIR" \
+      -o "-p $PG_PORT -k /tmp -c listen_addresses=127.0.0.1" \
+      -l "$PG_DATADIR/server.log" -w start >/dev/null
   fi
-  log "starting Postgres on :$PG_PORT"
-  as_pg "$PGB/pg_ctl" -D "$PG_DATADIR" \
-    -o "-p $PG_PORT -k /tmp -c listen_addresses=127.0.0.1" \
-    -l "$PG_DATADIR/server.log" -w start >/dev/null
+  # Ensure the app database + pgvector exist regardless of who started the cluster
+  # (idempotent, and re-creates the db if it was dropped under a still-running server).
   if ! as_pg "$PGB/psql" "host=/tmp port=$PG_PORT user=postgres dbname=postgres" \
         -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" | grep -q 1; then
     log "creating database '$DB_NAME'"
@@ -157,6 +162,9 @@ backend_up() {
   ensure_deps
   if port_up "$API_PORT"; then ok "backend already up (:$API_PORT)"; return 0; fi
   db_up
+  # The backend is useless against an unmigrated database — auth-backed routes hit
+  # missing tables — so guarantee the schema before every start, not just in `up`.
+  migrate
   log "starting FastAPI on :$API_PORT"
   # EDIFYCE_AUTH_COOKIE_SECURE=false so curl over plain http keeps the session
   # cookie (browsers treat localhost as secure regardless, so the UI is unaffected).
@@ -202,11 +210,23 @@ frontend_down() {
 seed() {
   backend_up
   local B="http://127.0.0.1:$API_PORT" J; J="$(mktemp)"
-  log "seeding demo user + ZFC system + proof"
   curl -s -X POST "$B/auth/register" -H 'Content-Type: application/json' \
     -d "{\"email\":\"$DEMO_EMAIL\",\"password\":\"$DEMO_PASSWORD\"}" >/dev/null || true
   curl -s -c "$J" -X POST "$B/auth/login" -H 'Content-Type: application/x-www-form-urlencoded' \
     -d "username=$DEMO_EMAIL&password=$DEMO_PASSWORD" >/dev/null
+  # Idempotent: if we already seeded and that system still exists, reuse it rather
+  # than minting another same-named system (the API slugs duplicates, so blindly
+  # re-posting would accumulate copies on every run).
+  if [ -f "$SEED_ENV" ]; then
+    # shellcheck disable=SC1090
+    . "$SEED_ENV"
+    if [ -n "${SID:-}" ] && [ "$(curl -s -o /dev/null -w '%{http_code}' -b "$J" "$B/formal-systems/$SID")" = "200" ]; then
+      ok "reusing existing seed — login $DEMO_EMAIL / $DEMO_PASSWORD"
+      ok "  system: /systems/$SID/edit    proof: /proofs/${PID:-?}/edit"
+      rm -f "$J"; return 0
+    fi
+  fi
+  log "seeding demo user + ZFC system + proof"
   local SID
   SID="$(curl -s -b "$J" -X POST "$B/formal-systems" -H 'Content-Type: application/json' \
     -d '{"name":"ZFC Set Theory","description":"Demo system: extensionality, membership, implication."}' \
@@ -257,12 +277,12 @@ status() {
 }
 
 up() {   # production-fidelity: one server on :$API_PORT serves API + built SPA
-  db_up; migrate; frontend_build; backend_up
+  frontend_build; backend_up   # backend_up ensures db + migrations
   ok "App is up — http://127.0.0.1:$API_PORT/   (run '$0 seed' for demo data)"
 }
 
 dev() {  # hot-reload: FastAPI + Vite (see the proofs caveat printed by frontend_dev)
-  db_up; migrate; backend_up; frontend_dev
+  backend_up; frontend_dev     # backend_up ensures db + migrations
   ok "Dev servers up — UI http://127.0.0.1:$WEB_PORT/ , API http://127.0.0.1:$API_PORT/"
 }
 
