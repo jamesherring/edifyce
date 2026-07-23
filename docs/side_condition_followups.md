@@ -205,11 +205,23 @@ already folded into this document. The shippable work:
 
    Net: seven engine → interpreter call sites gone, all behaviour-preserving
    (suite unchanged at 629 passed). Interpreter stays in place for the DSL.
-2. **Typed `edit_context` + definition construction.** The `sub_key`/`sub_value`
-   derivations (`proof.py` ~1285–1330) and definition-side accessors. Slightly
-   more involved (`edit_context` has genuinely dynamic keys — the one legitimate
-   `getattr` case per `CLAUDE.md`). *After this, no engine-internal caller uses
-   the interpreter; only `Condition` and the author-facing DSL remain.*
+2. **`edit_context` — *done*, and removed rather than typed.** The plan was to
+   convert the `sub_key`/`sub_value` derivations in `ProofLine.edit_context` into
+   a typed getattr mechanism. But the `context:` line-type block that feeds it is
+   a legacy feature: it is exercised by **no** test, has **no** representation in
+   the declarative authoring model (`SystemSpec`), and its job (accumulating
+   assumptions/fresh variables) is done by the `scope:`/`Subproof` mechanism and
+   the kernel side-condition algebra. Instrumenting the `edit_context` loop across
+   the full suite confirmed it **never fires**. Its `sub_key`/`sub_value` strings
+   are also author-facing DSL, so genuinely typing them would be the PR 4 work,
+   not a mechanical step. So, per the same reasoning as step 1, this was a
+   *removal*: `ProofLine.edit_context`, the compiler's `context:`/`context.X:`
+   line-type key parsing (a `context:` block is now an unrecognised line-type
+   parameter), and the `LineType.add_context` field are all gone, along with the
+   two `get_by_path` call sites inside them. Behaviour-preserving (the feature
+   was inert); the `AGENTS.md` `getattr` guidance that cited `edit_context` as its
+   example was reworded. *After this, no engine-internal caller uses the
+   interpreter; only `Condition` and the author-facing DSL remain.*
 3. **Design spike + decision.** Land the surface-syntax fork decision and a typed
    AST sketch (node per operation, exhaustive evaluator, how `instances` /
    `has_parent` / `replace` / `SystemConditionPattern` map onto it) as a short

@@ -162,24 +162,11 @@ class FormalSystem:
             if found:
                 # Follow indent/non-indent line rules
 
-                if not proof_line.line_type.behaviour == "indent":
-                    # Check for data to add to context
-                    try:
-                        proof_line.edit_context(context)
-
-                    except Exception as e:
-                        # Error in editing context
-                        proof_line.valid = False
-                        proof_line.invalid_message = str(e)
-
-                else:
+                if proof_line.line_type.behaviour == "indent":
                     # This is an indent line.
                     # Parse the block with a copied context
 
                     new_context = copy(context)
-
-                    # Edit context
-                    proof_line.edit_context(new_context)
 
                     # Find the next line with this indent
                     j = i + 1

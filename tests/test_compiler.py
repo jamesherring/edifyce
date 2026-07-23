@@ -144,6 +144,34 @@ def test_compile_line_type_attributes():
     assert if_line.pattern.name == "if_pattern"
 
 
+def test_context_block_on_line_type_is_rejected():
+    # The `context:` line-type block (which fed a `given` MatchSet through the
+    # removed `ProofLine.edit_context`) is no longer supported: it is now an
+    # unrecognised line-type parameter. Part of retiring the `get_by_path`
+    # string interpreter - see docs/side_condition_followups.md.
+    source = """FormalSystem Demo:
+
+    Regex word:
+        ^[a-z]+$
+
+    ProofContext:
+        given: MatchSet()
+
+    Pattern if_pattern:
+        with s as word:
+            if s:
+
+    LineType if:
+        pattern: if_pattern
+        behaviour: indent
+        context.given:
+            add: s
+"""
+    result = compile_formal_system(source)
+    assert "errors" in result
+    assert any("context.given" in e for e in result["errors"])
+
+
 def test_compile_inference_rule():
     system = compile_formal_system(
         """FormalSystem WithRule:

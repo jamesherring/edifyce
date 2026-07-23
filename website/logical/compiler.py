@@ -874,25 +874,6 @@ class AbstractSyntaxTree:
                     # Which matched sub-field is the citation reference.
                     current_object.reference_field = value_string
 
-                elif key[:7] == "context":
-                    # Create an 'add to context' dictionary
-
-                    if key == "context":
-                        new_object = current_object.add_context
-
-                    else:
-                        # Some path within the context
-                        index = key.find(".")
-                        if index == -1:
-                            raise Exception(f"Could not parse context key '{key}'.")
-
-                        sub_key = key[index + 1:]
-
-                        if sub_key not in current_object.add_context:
-                            current_object.add_context[sub_key] = {}
-
-                        new_object = current_object.add_context[sub_key]
-
                 else:
                     raise Exception(f"Unrecognised parameter for LineType '{key}'.")
 
