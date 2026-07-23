@@ -30,6 +30,7 @@ from app.db.models import User
 from app.db.side_conditions import SideConditionRow
 from app.db.side_conditions_mapping import (
     definition_condition_string,
+    definition_provisos_list,
     rule_side_conditions_list,
 )
 from app.db.systems import (
@@ -328,6 +329,7 @@ def definition_out(d: DefinitionRow) -> Definition:
         name=d.name,
         higher=d.higher,
         lower=d.lower,
+        provisos=definition_provisos_list(d),
         condition=definition_condition_string(d),
         bindings=_bindings_out(d.bindings),
     )
