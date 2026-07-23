@@ -74,11 +74,15 @@
 		};
 	});
 
-	// A `[alias.line]` citation only parses if the system's line reference field
-	// admits a `.`. Fetch the system and test whether any line part's regex accepts
-	// a dotted token; if none do, warn — otherwise the failure surfaces as an
-	// opaque parse error at verify time. `null` = unknown (not yet loaded / regex
-	// not JS-compatible), which suppresses the warning rather than crying wolf.
+	// A `[alias.line]` citation only parses if the *reference field* of the line
+	// type it's written on admits a `.`. The reference field is the first
+	// part-named placeholder in the line's shape (mirroring the engine's
+	// `_line_layout`) — not just any part, since a second permissive field
+	// (e.g. a free-text note) would otherwise mask a restrictive reference field.
+	// Fetch the system and, across the line types that have a reference field,
+	// warn only when none of them accept a dotted token; otherwise the failure
+	// surfaces as an opaque parse error at verify time. `null` = unknown (not yet
+	// loaded / no reference field / regex not JS-compatible) and shows no warning.
 	let citationDotOk = $state<boolean | null>(null);
 	$effect(() => {
 		const systemId = proof.formal_system_id;
@@ -88,23 +92,23 @@
 			.get(systemId)
 			.then((system) => {
 				if (cancelled) return;
-				let sawUsableRegex = false;
+				let anyTested = false;
 				for (const line of system.lines) {
-					for (const part of line.parts) {
-						try {
-							// Full-match: does this field accept a whole dotted token?
-							if (new RegExp(`^(?:${part.regex})$`).test('a.1')) {
-								citationDotOk = true;
-								return;
-							}
-							sawUsableRegex = true;
-						} catch {
-							// Python-only regex JS can't compile — leave the verdict unknown.
+					const regex = referenceFieldRegex(line);
+					if (regex === null) continue; // this line type carries no citation field
+					try {
+						// Full-match: does the reference field accept a whole dotted token?
+						if (new RegExp(`^(?:${regex})$`).test('a.1')) {
+							citationDotOk = true;
+							return;
 						}
+						anyTested = true;
+					} catch {
+						// Python-only regex JS can't compile — leave this line untested.
 					}
 				}
-				// Only assert "not supported" when we could actually test the regexes.
-				citationDotOk = sawUsableRegex ? false : null;
+				// Assert "not supported" only when a reference field was actually tested.
+				citationDotOk = anyTested ? false : null;
 			})
 			.catch(() => {
 				if (!cancelled) citationDotOk = null;
@@ -113,6 +117,18 @@
 			cancelled = true;
 		};
 	});
+
+	// The regex of a line type's reference field: the first placeholder in its
+	// shape whose name is one of its parts (the engine's citation slot), or null
+	// if the line has no such field.
+	function referenceFieldRegex(line: { shape: string; parts: { name: string; regex: string }[] }): string | null {
+		const partByName = new Map(line.parts.map((p) => [p.name, p.regex]));
+		for (const match of line.shape.matchAll(/<([^>]+)>/g)) {
+			const regex = partByName.get(match[1]);
+			if (regex !== undefined) return regex;
+		}
+		return null;
+	}
 
 	const referencedIds = $derived(new Set(rows.map((r) => r.referenced_proof_id)));
 

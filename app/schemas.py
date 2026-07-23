@@ -358,12 +358,14 @@ class ProofReferenceOut(BaseModel):
 
 class ProofReferrerOut(BaseModel):
     """One incoming reference edge, read back: a proof that cites this one as a
-    lemma (the "used by" direction), with the alias it cites this proof under."""
+    lemma (the "used by" direction), with the alias it cites this proof under.
+
+    Carries no ``slug``: the "used by" list routes by ``proof_id`` and shows the
+    referrer's name, so a slug would be dead payload."""
 
     proof_id: uuid.UUID
     alias: str
     name: str
-    slug: str
     published: bool
 
 

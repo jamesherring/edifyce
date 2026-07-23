@@ -419,18 +419,21 @@ def _references_out(proof: Proof, viewer: User | None) -> list[ProofReferenceOut
 def _referenced_by_out(proof: Proof, viewer: User | None) -> list[ProofReferrerOut]:
     # The "used by" direction: proofs that cite this one as a lemma. Filtered to
     # those the viewer may read, so a stranger's draft that references a published
-    # proof doesn't leak its existence to the public.
-    return [
+    # proof doesn't leak its existence to the public. The incoming edges have no
+    # inherent order (position orders a proof's *own* references), so sort by name
+    # then id for a stable, meaningful "used by" list across requests.
+    referrers = [
         ProofReferrerOut(
             proof_id=link.proof_id,
             alias=link.alias,
             name=link.proof.name,
-            slug=link.proof.slug,
             published=link.proof.published_at is not None,
         )
         for link in proof.referenced_by_links
         if _is_readable(link.proof, viewer)
     ]
+    referrers.sort(key=lambda r: (r.name, str(r.proof_id)))
+    return referrers
 
 
 def _detail(proof: Proof, viewer: User | None) -> ProofDetail:

@@ -45,11 +45,24 @@ function detail(references: ProofDetail['references'] = []): ProofDetail {
 	};
 }
 
+// A line type whose reference field (the `<reference>` part) has the given regex.
+function systemWithReferenceRegex(regex: string) {
+	return {
+		id: 'sys1',
+		lines: [
+			{
+				id: 'l1',
+				name: 'statement',
+				shape: '<formula> [<reference>]',
+				logical_sort: 'formula',
+				parts: [{ id: 'p1', name: 'reference', regex }]
+			}
+		]
+	};
+}
+
 // A system whose reference field admits a `.` — the happy path (no warning).
-const dottedSystem = {
-	id: 'sys1',
-	lines: [{ id: 'l1', name: 'statement', shape: '', logical_sort: 'formula', parts: [{ id: 'p1', name: 'reference', regex: '[A-Za-z0-9 ,.]+' }] }]
-};
+const dottedSystem = systemWithReferenceRegex('[A-Za-z0-9 ,.]+');
 
 beforeEach(() => {
 	apiMock.proofs.list.mockResolvedValue({
@@ -102,9 +115,33 @@ describe('LemmasPanel', () => {
 	});
 
 	it('warns when the system reference field does not allow a dot', async () => {
+		apiMock.systems.get.mockResolvedValue(systemWithReferenceRegex('[A-Za-z0-9 ,]+'));
+		render(LemmasPanel, {
+			proof: detail([
+				{ referenced_proof_id: 'lemA', alias: 'A', name: 'Lemma A', slug: 'lemma-a', published: false }
+			])
+		});
+		expect(await screen.findByText(/won't parse/)).toBeInTheDocument();
+	});
+
+	it('still warns when a permissive non-reference part could mask the check', async () => {
+		// The reference field forbids `.`, but a later free-text `note` part accepts
+		// anything. The warning must key off the reference field (the first
+		// part-named placeholder), not any permissive part.
 		apiMock.systems.get.mockResolvedValue({
 			id: 'sys1',
-			lines: [{ id: 'l1', name: 'statement', shape: '', logical_sort: 'formula', parts: [{ id: 'p1', name: 'reference', regex: '[A-Za-z0-9 ,]+' }] }]
+			lines: [
+				{
+					id: 'l1',
+					name: 'statement',
+					shape: '<formula> [<reference>] <note>',
+					logical_sort: 'formula',
+					parts: [
+						{ id: 'p1', name: 'reference', regex: '[A-Za-z0-9 ,]+' },
+						{ id: 'p2', name: 'note', regex: '.*' }
+					]
+				}
+			]
 		});
 		render(LemmasPanel, {
 			proof: detail([

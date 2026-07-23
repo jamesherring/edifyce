@@ -178,7 +178,12 @@
 								{#each proof.references as ref (ref.referenced_proof_id)}
 									<li class="flex items-center justify-between gap-2 text-sm">
 										<a class="truncate underline" href={`/proofs/${ref.referenced_proof_id}`}>{ref.name}</a>
-										<code class="shrink-0 rounded bg-muted px-1 py-0.5 text-xs">[{ref.alias}.line]</code>
+										<div class="flex shrink-0 items-center gap-2">
+											{#if !ref.published}
+												<span class="text-xs text-muted-foreground">draft</span>
+											{/if}
+											<code class="rounded bg-muted px-1 py-0.5 text-xs">[{ref.alias}.line]</code>
+										</div>
 									</li>
 								{/each}
 							</ul>
@@ -197,7 +202,12 @@
 								{#each proof.referenced_by as ref (ref.proof_id)}
 									<li class="flex items-center justify-between gap-2 text-sm">
 										<a class="truncate underline" href={`/proofs/${ref.proof_id}`}>{ref.name}</a>
-										<code class="shrink-0 rounded bg-muted px-1 py-0.5 text-xs">[{ref.alias}.line]</code>
+										<div class="flex shrink-0 items-center gap-2">
+											{#if !ref.published}
+												<span class="text-xs text-muted-foreground">draft</span>
+											{/if}
+											<code class="rounded bg-muted px-1 py-0.5 text-xs">[{ref.alias}.line]</code>
+										</div>
 									</li>
 								{/each}
 							</ul>

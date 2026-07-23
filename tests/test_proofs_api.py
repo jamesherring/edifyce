@@ -668,8 +668,11 @@ def test_referenced_by_lists_incoming_edges(client, db):
     assert _set_refs(client, user2, [{"referenced_proof_id": lemma, "alias": "Lem"}]).status_code == 200
 
     body = client.get(f"/proofs/{lemma}").json()
-    got = {(r["proof_id"], r["alias"]) for r in body["referenced_by"]}
-    assert got == {(user1, "L"), (user2, "Lem")}
+    # Sorted by referrer name ("One" < "Two") for a stable "used by" order.
+    assert [(r["proof_id"], r["alias"]) for r in body["referenced_by"]] == [
+        (user1, "L"),
+        (user2, "Lem"),
+    ]
     # The lemma itself cites nothing.
     assert body["references"] == []
     # A proof with no incoming edges reports an empty "used by".

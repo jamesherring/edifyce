@@ -285,7 +285,6 @@ export interface ProofReferrer {
 	/** The label the referring proof cites this one by (`[alias.line]`). */
 	alias: string;
 	name: string;
-	slug: string;
 	published: boolean;
 }
 
