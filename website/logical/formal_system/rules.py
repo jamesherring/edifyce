@@ -62,7 +62,7 @@ class SubproofSchema:
         return "variable" if self.fresh is not None else "assumption"
 
 
-def _normalise_arg(arg) -> tuple:
+def _normalise_arg(arg: str | Term) -> tuple[str, str]:
     """A stable, uniformly-typed key for a predicate argument.
 
     An argument is a metavariable name (``str``) or a literal term. Both map to a
