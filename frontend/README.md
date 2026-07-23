@@ -12,7 +12,7 @@ formal systems.
 | `/`                     | Landing page                                                                   |
 | `/systems`              | Master list of published systems (+ a "My systems" view) → `GET /formal-systems{,/public}` |
 | `/systems/new`          | Create a system → `POST /formal-systems`                                       |
-| `/systems/[id]`         | Read-only detail: contents, validation, source → `GET /formal-systems/{id}{,/validate,/source}` |
+| `/systems/[id]`         | Read-only detail: contents and validation → `GET /formal-systems/{id}` + `POST …/validate` |
 | `/systems/[id]/edit`    | Owner editor: settings, publish, and per-part CRUD → `PATCH`/`DELETE` + `…/{sorts,productions,…}` |
 | `/systems/[id]/verify`  | Verify a proof against the system, line by line → `POST /formal-systems/[id]/verify` |
 | `/login`                | Log in → `POST /auth/login`                                                     |

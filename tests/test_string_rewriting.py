@@ -3,9 +3,9 @@
 Covers the new ``matching="string"`` rule path added for semi-Thue systems:
 
 * the associative matcher primitive (``matching.rewriting``),
-* the MIU system compiling and checking real derivations (and rejecting bogus
+* the MIU system building and checking real derivations (and rejecting bogus
   steps), including a chain that exercises all four rules,
-* the ``matching`` kind surviving the declarative lower/recompile round trip, and
+* the ``matching`` kind carried through the declarative build, and
 * the ``matching`` column surviving storage in the normalised system tables.
 """
 
@@ -14,7 +14,7 @@ import pytest
 pytest.importorskip("regex")
 
 from tests.miu_system import miu_spec
-from website.logical.declarative import DeclarativeError, SystemSpec, build_spec, lower
+from website.logical.declarative import DeclarativeError, SystemSpec, build_spec, build_system
 from website.logical.matching import Context, RegexPattern, StringPattern, joint_binding_exists
 from website.logical.matching.rewriting import iter_bindings
 
@@ -128,14 +128,8 @@ def test_non_miu_alphabet_does_not_parse(miu):
 
 
 # ---------------------------------------------------------------------------
-# The matching kind round-trips through lowering and recompilation
+# The matching kind is carried through the declarative build
 # ---------------------------------------------------------------------------
-
-
-def test_matching_kind_lowers_to_the_edi_block():
-    edi = lower(miu_spec())
-    assert "matching:" in edi
-    assert "string" in edi
 
 
 def test_compiled_rules_carry_the_string_matching_kind(miu):
@@ -156,9 +150,9 @@ def _string_rule_with_proviso() -> SystemSpec:
     return spec
 
 
-def test_string_rule_with_side_conditions_is_rejected_by_lower():
+def test_string_rule_with_side_conditions_is_rejected_by_build():
     with pytest.raises(DeclarativeError):
-        lower(_string_rule_with_proviso())
+        build_system(_string_rule_with_proviso())
 
 
 def test_build_spec_surfaces_the_rejection_as_errors():
@@ -168,8 +162,9 @@ def test_build_spec_surfaces_the_rejection_as_errors():
 
 
 def test_structural_rule_may_still_carry_side_conditions():
-    # The guard is scoped to string rules; structural rules are unaffected.
+    # The guard is scoped to string rules; a structural rule with a proviso
+    # builds fine.
     spec = miu_spec()
     spec.rules[1].matching = "structural"
     spec.rules[1].side_conditions = ["equal(x, x)"]
-    assert "matching:" in lower(spec)  # lowers without raising
+    assert "system" in build_spec(spec)  # builds without raising

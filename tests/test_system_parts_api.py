@@ -165,11 +165,6 @@ def test_build_a_system_through_endpoints_and_validate(client):
     assert [r["label"] for r in detail["rules"]] == ["HYP", "MP"]
     assert detail["definitions"][0]["higher"] == "x ⊆ y"
 
-    # And the lowered source captures the layered pieces.
-    source = client.get(f"/formal-systems/{sid}/source").json()["source"]
-    assert "InferenceRule modus_ponens:" in source
-    assert "Define x ⊆ y as (x = y → x = y)" in source
-
 
 # ---------------------------------------------------------------------------
 # A published system must stay compilable across child edits
@@ -728,8 +723,8 @@ def test_production_needs_exactly_one_of_template_or_regex(client):
 
 
 def test_only_one_line_type_is_allowed(client):
-    # The declarative layer lowers a single line type, so a second is rejected
-    # rather than silently ignored by validate/source.
+    # The declarative layer builds a single line type, so a second is rejected
+    # rather than silently ignored by validate.
     _login(client, "ada@example.com")
     sid = _new_system(client)
     _post(client, f"/formal-systems/{sid}/line-types", {"name": "statement", "shape": "<x>"})

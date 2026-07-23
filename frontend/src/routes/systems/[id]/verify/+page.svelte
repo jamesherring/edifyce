@@ -15,14 +15,12 @@
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
-	import Code from '@lucide/svelte/icons/code';
 
-	// The system is fixed; its source is fetched from the store, not editable here.
+	// The system is fixed; only its name is needed here — proofs are checked
+	// server-side by id, not against any client-held source.
 	let systemName = $state<string | null>(null);
-	let systemCode = $state<string | null>(null);
 	let loadingSystem = $state(true);
 	let loadError = $state<string | null>(null);
-	let sourceOpen = $state(false);
 
 	let proofText = $state('');
 	let verifying = $state(false);
@@ -44,10 +42,9 @@
 		result = null;
 		requestError = null;
 		try {
-			const [detail, src] = await Promise.all([api.systems.get(id), api.systems.source(id)]);
+			const detail = await api.systems.get(id);
 			if (seq !== loadSeq) return;
 			systemName = detail.name;
-			systemCode = src.source;
 		} catch (err) {
 			if (seq !== loadSeq) return;
 			loadError =
@@ -57,7 +54,6 @@
 						: err.message
 					: String(err);
 			systemName = null;
-			systemCode = null;
 		} finally {
 			if (seq === loadSeq) loadingSystem = false;
 		}
@@ -65,7 +61,7 @@
 
 	async function verify() {
 		const id = page.params.id;
-		if (!systemCode || !id) return;
+		if (!systemName || !id) return;
 		const seq = ++verifySeq;
 		verifying = true;
 		result = null;
@@ -104,7 +100,7 @@
 			<Alert.Title>System unavailable</Alert.Title>
 			<Alert.Description>{loadError}</Alert.Description>
 		</Alert.Root>
-	{:else if loadingSystem || systemCode === null}
+	{:else if loadingSystem || systemName === null}
 		<LoadingSpinner message="Loading system…" />
 	{:else}
 		<PageHeader
@@ -137,21 +133,6 @@
 							{/if}
 						</Button>
 					</Card.Content>
-				</Card.Root>
-
-				<!-- The system's notation/rules for reference while writing the proof. -->
-				<Card.Root>
-					<Card.Header>
-						<Button variant="ghost" size="sm" class="-ml-2 w-fit" onclick={() => (sourceOpen = !sourceOpen)}>
-							<Code class="size-3.5" />
-							{sourceOpen ? 'Hide system source' : 'Show system source'}
-						</Button>
-					</Card.Header>
-					{#if sourceOpen}
-						<Card.Content>
-							<pre class="overflow-x-auto rounded-md border bg-muted/30 p-4 font-mono text-xs leading-relaxed">{systemCode}</pre>
-						</Card.Content>
-					{/if}
 				</Card.Root>
 			</div>
 

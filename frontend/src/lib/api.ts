@@ -168,10 +168,6 @@ export interface SystemValidation {
 	inference_rule_count: number | null;
 }
 
-export interface SystemSource {
-	source: string;
-}
-
 // --- Write payloads --------------------------------------------------------
 
 export interface FormalSystemCreate {
@@ -558,10 +554,8 @@ export const api = {
 		/** Assemble the stored rows and compile them, reporting any errors. */
 		validate: (id: string) =>
 			request<SystemValidation>(`/formal-systems/${id}/validate`, { method: 'POST' }),
-		/** The lowered `.edi` source for this system (read-only). */
-		source: (id: string) => request<SystemSource>(`/formal-systems/${id}/source`),
 		/** Verify a proof against this stored system, assembled server-side from
-		 * rows — only the proof text is sent, never the system source. */
+		 * rows — only the proof text is sent, never any system source. */
 		verify: (id: string, proofText: string) =>
 			request<VerifyResponse>(`/formal-systems/${id}/verify`, {
 				method: 'POST',

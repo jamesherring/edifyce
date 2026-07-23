@@ -197,12 +197,6 @@ class SystemValidation(BaseModel):
     inference_rule_count: int | None = None
 
 
-class SystemSource(BaseModel):
-    """The lowered `.edi` for the stored system (read-only transparency/export)."""
-
-    source: str
-
-
 # ---------------------------------------------------------------------------
 # Child-object writes (create / update). Nested value lists (bindings,
 # antecedents, line parts) are replaced wholesale on the parent write rather

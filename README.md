@@ -54,7 +54,6 @@ uv run pytest
 - `GET`/`POST /formal-systems` — List your systems / create one (stored as normalised rows, not source text).
 - `POST /formal-systems/{id}/validate` — Assemble the stored system and compile it, reporting any errors.
 - `POST /formal-systems/{id}/verify` — Verify a proof against a stored system (only the proof text is sent).
-- `GET /formal-systems/{id}/source` — The lowered `.edi` for a stored system (read-only export).
 - `POST /auth/register` — Create a user account.
 - `POST /auth/login` / `POST /auth/logout` — Start / end a session (httponly cookie).
 - `GET`/`PATCH /users/me` — Read or update the signed-in user.

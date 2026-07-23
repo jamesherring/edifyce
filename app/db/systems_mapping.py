@@ -2,8 +2,9 @@
 
 ``spec_to_system`` explodes a ``SystemSpec`` into an ORM object graph ready to
 persist; ``system_to_spec`` rebuilds an equal ``SystemSpec`` from a loaded row.
-Because ``SystemSpec`` lowers to ``.edi`` and compiles, this closes the loop
-    rows -> SystemSpec -> (lower) -> FormalSystem
+Because ``SystemSpec`` builds directly into a ``FormalSystem``
+(``declarative.build_system``), this closes the loop
+    rows -> SystemSpec -> FormalSystem
 so the relational tables, not a text blob, are the source of truth.
 
 The spec speaks in *names* (a production's sort, a binding's type). Storage
