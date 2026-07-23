@@ -149,7 +149,14 @@
 						{#each system.rules as rule (rule.id)}
 							<Table.Row>
 								<Table.Cell class="font-mono">{rule.label}</Table.Cell>
-								<Table.Cell class="font-medium">{rule.name}</Table.Cell>
+								<Table.Cell class="font-medium">
+									{rule.name}
+									{#if rule.matching === 'string'}
+										<Badge variant="secondary" class="ml-2 align-middle text-xs font-normal">
+											string rewriting
+										</Badge>
+									{/if}
+								</Table.Cell>
 								<Table.Cell class="font-mono text-muted-foreground">
 									{rule.antecedents.join(' ; ') || '—'}
 								</Table.Cell>

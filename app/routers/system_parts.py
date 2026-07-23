@@ -543,6 +543,8 @@ async def _assign_rule(session: AsyncSession, system_id: uuid.UUID, row: RuleRow
         row.name = payload.name
     if "deduction" in fields and payload.deduction is not None:
         row.deduction = payload.deduction
+    if "matching" in fields and payload.matching is not None:
+        row.matching = payload.matching
     if "antecedents" in fields and payload.antecedents is not None:
         row.antecedents = [
             RuleAntecedentRow(position=i, pattern=pattern) for i, pattern in enumerate(payload.antecedents)
