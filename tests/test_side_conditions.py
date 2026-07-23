@@ -12,7 +12,7 @@ import pytest
 
 pytest.importorskip("regex")
 
-from website.logical.compiler import compile as compile_formal_system
+from website.logical.declarative import SystemSpec, build_system
 from website.logical.kernel import (
     And,
     DisjointLeaves,
@@ -25,12 +25,11 @@ from website.logical.kernel import (
     from_pattern,
     match_all,
 )
+from tests.spec_helpers import brackets, regex_prod, rule as rule_spec, statement_line, template_prod
 
 
-def build(code):
-    result = compile_formal_system(code)
-    assert "errors" not in result, result.get("errors")
-    system = result["system"]
+def build(spec):
+    system = build_system(spec)
     context = copy(system.context)
     context.variables.update(system.build_context.variables)
     return system, context
@@ -43,55 +42,30 @@ def rule(system, label):
 
 # First-order logic: unary predicates, a binary relation, and a quantifier,
 # with a vacuous-quantification rule and an identity rule over a relation.
-FOL = """FormalSystem FOL:
-
-    Regex setvar:
-        ^[a-z]$
-
-    Regex predicate:
-        ^[A-Z]$
-
-    UnionPattern formula:
-        predicate
-
-    Pattern application:
-        with P as predicate, x as setvar:
-            P(x)
-
-    formula:
-        application
-
-    Pattern relation:
-        with R as predicate, x as setvar, y as setvar:
-            R(x, y)
-
-    formula:
-        relation
-
-    Pattern forall:
-        with x as setvar, phi as formula:
-            ∀x.phi
-
-    formula:
-        forall
-
-    with x as setvar, y as setvar, R as predicate, phi as formula:
-        InferenceRule vacuous:
-            label:
-                VAC
-            antecedents:
-                phi
-            deduction:
-                ∀x.phi
-
-        InferenceRule distinct_pair:
-            label:
-                DIST
-            antecedents:
-                R(x, y)
-            deduction:
-                R(x, y)
-"""
+# `setvar` and `predicate` are leaf sorts whose regex members are named
+# distinctly from the sort. (The original also listed a bare predicate letter as
+# a formula; nothing exercises that, and the declarative model reaches a leaf
+# sort only through a wrapping production, so it is omitted.)
+_RULE_BINDINGS = [("x", "setvar"), ("y", "setvar"), ("R", "predicate"), ("phi", "formula")]
+FOL = SystemSpec(
+    name="FOL",
+    brackets=brackets(),
+    productions=[
+        regex_prod("setvar", "letter", "[a-z]"),
+        regex_prod("predicate", "predicate_letter", "[A-Z]"),
+        template_prod("formula", "application", "P(x)", [("P", "predicate"), ("x", "setvar")]),
+        template_prod(
+            "formula", "relation", "R(x, y)",
+            [("R", "predicate"), ("x", "setvar"), ("y", "setvar")],
+        ),
+        template_prod("formula", "forall", "∀x.phi", [("x", "setvar"), ("phi", "formula")]),
+    ],
+    line=statement_line(),
+    rules=[
+        rule_spec("VAC", "vacuous", ["phi"], "∀x.phi", _RULE_BINDINGS),
+        rule_spec("DIST", "distinct_pair", ["R(x, y)"], "R(x, y)", _RULE_BINDINGS),
+    ],
+)
 
 
 @pytest.fixture(scope="module")

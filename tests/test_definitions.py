@@ -13,7 +13,7 @@ import pytest
 
 pytest.importorskip("regex")
 
-from website.logical.compiler import compile as compile_formal_system
+from website.logical.declarative import SystemSpec, build_system
 from website.logical.kernel import (
     Definition,
     DisjointLeaves,
@@ -24,52 +24,31 @@ from website.logical.kernel import (
     unfold,
 )
 from website.logical.matching import Context, RegexPattern, StringPattern, UnionPattern
+from tests.spec_helpers import brackets, regex_prod, statement_line, template_prod
 
 
-def build(code):
-    result = compile_formal_system(code)
-    assert "errors" not in result, result.get("errors")
-    system = result["system"]
+def build(spec):
+    system = build_system(spec)
     context = copy(system.context)
     context.variables.update(system.build_context.variables)
     return system, context
 
 
 # Set theory: membership, implication, a universal quantifier, and subset -
-# enough to state df-subset as a genuinely multi-level definition.
-SET_THEORY = """FormalSystem SetTheory:
-
-    Regex setvar:
-        ^[a-z]$
-
-    Pattern membership:
-        with x as setvar, y as setvar:
-            (x ∈ y)
-
-    UnionPattern formula:
-        membership
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p → q)
-
-    formula:
-        implication
-
-    Pattern forall:
-        with x as setvar, phi as formula:
-            ∀x.phi
-
-    formula:
-        forall
-
-    Pattern subset:
-        with x as setvar, y as setvar:
-            (x ⊆ y)
-
-    formula:
-        subset
-"""
+# enough to state df-subset as a genuinely multi-level definition. `setvar` is a
+# leaf sort whose regex member is named distinctly from the sort.
+SET_THEORY = SystemSpec(
+    name="SetTheory",
+    brackets=brackets(),
+    productions=[
+        regex_prod("setvar", "letter", "[a-z]"),
+        template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+        template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
+        template_prod("formula", "forall", "∀x.phi", [("x", "setvar"), ("phi", "formula")]),
+        template_prod("formula", "subset", "(x ⊆ y)", [("x", "setvar"), ("y", "setvar")]),
+    ],
+    line=statement_line(),
+)
 
 
 @pytest.fixture(scope="module")
@@ -101,35 +80,17 @@ def term(theory, formula, string):
 # df-subset (whose arguments are atoms and so cannot nest), df-bicon's redex can
 # contain another biconditional, which is what lets a definition apply at
 # overlapping (nested) positions.
-PROP = """FormalSystem Prop:
-
-    Regex atom:
-        ^[a-z]$
-
-    UnionPattern formula:
-        atom
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p → q)
-
-    formula:
-        implication
-
-    Pattern conjunction:
-        with p as formula, q as formula:
-            (p ∧ q)
-
-    formula:
-        conjunction
-
-    Pattern biconditional:
-        with p as formula, q as formula:
-            (p ↔ q)
-
-    formula:
-        biconditional
-"""
+PROP = SystemSpec(
+    name="Prop",
+    brackets=brackets(),
+    productions=[
+        regex_prod("formula", "atom", "[a-z]"),
+        template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
+        template_prod("formula", "conjunction", "(p ∧ q)", [("p", "formula"), ("q", "formula")]),
+        template_prod("formula", "biconditional", "(p ↔ q)", [("p", "formula"), ("q", "formula")]),
+    ],
+    line=statement_line(),
+)
 
 
 @pytest.fixture(scope="module")
