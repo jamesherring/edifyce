@@ -1,4 +1,4 @@
-"""A declarative model of a formal system that lowers to the Edifyce compiler.
+"""A declarative model of a formal system, built directly into the engine.
 
 The proof engine is powerful but its source language forces three unrelated
 jobs -- describing the *grammar*, the *inference rules*, and *side conditions*
@@ -45,7 +45,7 @@ from .compiler import (
 )
 from .formal_system import FormalSystem, InferenceRule, LineType
 from .formal_system.side_condition_syntax import parse_side_condition
-from .matching import MatchSet, RegexPattern, StringPattern, UnionPattern
+from .matching import MatchSet, Pattern, RegexPattern, StringPattern, UnionPattern
 
 
 class DeclarativeError(Exception):
@@ -490,7 +490,7 @@ def _build_line(spec: SystemSpec, ctx: FormalSystemContext, system: FormalSystem
     system.context.logical["given"] = MatchSet()
 
     pattern = StringPattern(name="statement_pattern", pattern=template, pre_format=ctx.pre_format)
-    pattern.add_variables({var: ctx.variables[ph] for ph, var in placeholders})
+    pattern.add_variables(_binding_patterns([(var, ph) for ph, var in placeholders], ctx))
     ctx.variables["statement_pattern"] = register(pattern)
 
     line_type = LineType(
@@ -564,7 +564,7 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
 # ---------------------------------------------------------------------------
 
 
-def build_spec(spec: SystemSpec, system_dict: dict | None = None) -> dict:
+def build_spec(spec: SystemSpec) -> dict:
     """Build a ``FormalSystem`` from a :class:`SystemSpec`.
 
     The entry point for callers that hold a ``SystemSpec`` -- e.g. a persistence
