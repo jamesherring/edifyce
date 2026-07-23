@@ -1,0 +1,290 @@
+#!/usr/bin/env bash
+#
+# edifyce-dev — one command to run the whole app in a sandbox / CI-like box.
+#
+# Edifyce needs Postgres (with pgvector) to boot anything auth-backed — systems,
+# proofs, login — so "just run uvicorn" isn't enough. This script encapsulates
+# the fiddly parts that are easy to get wrong from a fresh container:
+#
+#   * provisioning a local Postgres as the `postgres` user (initdb refuses to run
+#     as root) with a UTF-8 cluster (SQL_ASCII silently breaks Unicode JSONB, so
+#     proof verification fails to persist), pgvector enabled, on a private port;
+#   * applying the Atlas migrations;
+#   * starting the backend detached so it survives the shell that launched it,
+#     with the env it needs (DATABASE_URL, a stable auth secret, cookies over
+#     http for local curl);
+#   * seeding a demo user + system + proof so there's something to look at.
+#
+# It is idempotent: re-running a subcommand reuses what's already up. See
+# scripts/README.md for the full story and the pitfalls it papers over.
+#
+# Usage:
+#   scripts/edifyce-dev up        # db + migrate + backend + built SPA (one server on :8000)
+#   scripts/edifyce-dev dev       # db + migrate + backend + Vite dev server (hot reload)
+#   scripts/edifyce-dev seed      # create a demo user/system/proof (prints creds)
+#   scripts/edifyce-dev status    # what's running
+#   scripts/edifyce-dev down      # stop backend + frontend (leaves the db up)
+#   scripts/edifyce-dev db up|down|status | migrate | backend up|down | frontend build|dev
+#   scripts/edifyce-dev env       # print DATABASE_URL and the other vars
+#
+# Everything is overridable via env (EDIFYCE_DEV_* below).
+set -euo pipefail
+
+# --------------------------------------------------------------------------
+# Config
+# --------------------------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+PG_PORT="${EDIFYCE_DEV_PG_PORT:-5439}"
+PG_DATADIR="${EDIFYCE_DEV_PG_DATADIR:-/var/lib/postgresql/edifyce-pgdata}"
+DB_NAME="${EDIFYCE_DEV_DB:-edifyce}"
+API_PORT="${EDIFYCE_DEV_API_PORT:-8000}"
+WEB_PORT="${EDIFYCE_DEV_WEB_PORT:-5173}"
+AUTH_SECRET="${EDIFYCE_AUTH_SECRET:-edifyce-dev-secret}"
+
+RUN_DIR="$ROOT/.edifyce-dev"
+API_LOG="$RUN_DIR/backend.log"
+API_PID="$RUN_DIR/backend.pid"
+WEB_LOG="$RUN_DIR/frontend.log"
+WEB_PID="$RUN_DIR/frontend.pid"
+SEED_ENV="$RUN_DIR/seed.env"
+
+DB_URL="postgresql://postgres@127.0.0.1:${PG_PORT}/${DB_NAME}"
+# Atlas / psql want libpq-style; asyncpg (the app) is happy with the bare URL.
+DB_URL_PSQL="host=127.0.0.1 port=${PG_PORT} user=postgres dbname=${DB_NAME}"
+DB_URL_ATLAS="postgres://postgres@127.0.0.1:${PG_PORT}/${DB_NAME}?sslmode=disable"
+
+DEMO_EMAIL="${EDIFYCE_DEV_EMAIL:-demo@example.com}"
+DEMO_PASSWORD="${EDIFYCE_DEV_PASSWORD:-demopass123}"
+
+mkdir -p "$RUN_DIR"
+
+# --------------------------------------------------------------------------
+# Helpers
+# --------------------------------------------------------------------------
+c_blue='\033[0;34m'; c_green='\033[0;32m'; c_yellow='\033[0;33m'; c_red='\033[0;31m'; c_off='\033[0m'
+log()  { printf "${c_blue}[edifyce-dev]${c_off} %s\n" "$*"; }
+ok()   { printf "${c_green}[edifyce-dev]${c_off} %s\n" "$*"; }
+warn() { printf "${c_yellow}[edifyce-dev]${c_off} %s\n" "$*" >&2; }
+die()  { printf "${c_red}[edifyce-dev] %s${c_off}\n" "$*" >&2; exit 1; }
+
+# Newest installed Postgres bin dir (Debian layout).
+pgbin() {
+  local d
+  d="$(ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -V | tail -1 || true)"
+  [ -n "$d" ] || die "No Postgres server binaries under /usr/lib/postgresql/*/bin. Install postgresql."
+  printf '%s' "$d"
+}
+
+# initdb / pg_ctl must not run as root; drop to the postgres user when we are root.
+as_pg() {
+  if [ "$(id -u)" = "0" ]; then runuser -u postgres -- "$@"; else "$@"; fi
+}
+
+port_up() { curl -s --max-time 2 "http://127.0.0.1:$1/health" >/dev/null 2>&1; }
+
+# Background a long-lived process so it outlives THIS script. A plain `cmd &` from
+# a tool-driven shell gets reaped when the call returns; a `( ... & )` subshell
+# double-fork survives. We also record the child PID for `down`.
+spawn() { # spawn <logfile> <pidfile> <command...>
+  local logf="$1" pidf="$2"; shift 2
+  ( "$@" >"$logf" 2>&1 & echo $! >"$pidf" )
+}
+
+wait_health() { # wait_health <port> <what>
+  local port="$1" what="$2" i
+  for i in $(seq 1 30); do port_up "$port" && { ok "$what is up on :$port"; return 0; }; sleep 1; done
+  warn "$what did not answer /health on :$port in 30s — see the log"; return 1
+}
+
+ensure_deps() {
+  [ -d "$ROOT/.venv" ] || { log "uv sync (first run)…"; ( cd "$ROOT" && uv sync ); }
+  [ -d "$ROOT/frontend/node_modules" ] || { log "npm install (first run)…"; ( cd "$ROOT/frontend" && npm install ); }
+}
+
+# --------------------------------------------------------------------------
+# Database
+# --------------------------------------------------------------------------
+db_running() { as_pg "$(pgbin)/pg_ctl" -D "$PG_DATADIR" status >/dev/null 2>&1; }
+
+db_up() {
+  if db_running; then ok "Postgres already running (:$PG_PORT)"; return 0; fi
+  local PGB; PGB="$(pgbin)"
+  if [ ! -s "$PG_DATADIR/PG_VERSION" ]; then
+    log "initdb → $PG_DATADIR (UTF-8 cluster)"
+    if [ "$(id -u)" = "0" ]; then mkdir -p "$PG_DATADIR"; chown postgres:postgres "$PG_DATADIR"; fi
+    # UTF-8 cluster: a SQL_ASCII default DB rejects the Unicode in verification
+    # results (asyncpg 'UntranslatableCharacterError') and proof-verify persists fail.
+    as_pg "$PGB/initdb" -D "$PG_DATADIR" -U postgres --auth=trust \
+      --encoding=UTF8 --locale=C.UTF-8 >/dev/null
+  fi
+  log "starting Postgres on :$PG_PORT"
+  as_pg "$PGB/pg_ctl" -D "$PG_DATADIR" \
+    -o "-p $PG_PORT -k /tmp -c listen_addresses=127.0.0.1" \
+    -l "$PG_DATADIR/server.log" -w start >/dev/null
+  if ! as_pg "$PGB/psql" "host=/tmp port=$PG_PORT user=postgres dbname=postgres" \
+        -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" | grep -q 1; then
+    log "creating database '$DB_NAME'"
+    as_pg "$PGB/createdb" -h /tmp -p "$PG_PORT" -U postgres "$DB_NAME"
+  fi
+  as_pg "$PGB/psql" "host=/tmp port=$PG_PORT user=postgres dbname=$DB_NAME" \
+    -c "CREATE EXTENSION IF NOT EXISTS vector" >/dev/null
+  ok "Postgres ready — $DB_URL"
+}
+
+db_down() {
+  db_running || { ok "Postgres not running"; return 0; }
+  log "stopping Postgres"; as_pg "$(pgbin)/pg_ctl" -D "$PG_DATADIR" -w stop >/dev/null; ok "stopped"
+}
+
+db_status() {
+  if db_running; then ok "Postgres: UP  ($DB_URL)"; else warn "Postgres: down"; fi
+}
+
+migrate() {
+  db_up
+  command -v atlas >/dev/null 2>&1 || die "atlas not found — install it, or apply migrations/ by hand."
+  log "applying Atlas migrations"
+  atlas migrate apply --url "$DB_URL_ATLAS" --dir "file://migrations" >/dev/null \
+    && ok "migrations applied (or already current)"
+}
+
+# --------------------------------------------------------------------------
+# Backend
+# --------------------------------------------------------------------------
+backend_up() {
+  ensure_deps
+  if port_up "$API_PORT"; then ok "backend already up (:$API_PORT)"; return 0; fi
+  db_up
+  log "starting FastAPI on :$API_PORT"
+  # EDIFYCE_AUTH_COOKIE_SECURE=false so curl over plain http keeps the session
+  # cookie (browsers treat localhost as secure regardless, so the UI is unaffected).
+  spawn "$API_LOG" "$API_PID" \
+    env DATABASE_URL="$DB_URL" EDIFYCE_AUTH_COOKIE_SECURE=false EDIFYCE_AUTH_SECRET="$AUTH_SECRET" \
+    uv run --project "$ROOT" uvicorn app.main:app --host 127.0.0.1 --port "$API_PORT"
+  wait_health "$API_PORT" "backend"
+}
+
+backend_down() {
+  [ -f "$API_PID" ] && kill "$(cat "$API_PID")" 2>/dev/null || true
+  fuser -k "${API_PORT}/tcp" 2>/dev/null || true
+  rm -f "$API_PID"; ok "backend stopped"
+}
+
+# --------------------------------------------------------------------------
+# Frontend
+# --------------------------------------------------------------------------
+frontend_build() { ensure_deps; log "building SPA"; ( cd "$ROOT/frontend" && npm run build >/dev/null ); ok "SPA built → frontend/build"; }
+
+frontend_dev() {
+  ensure_deps
+  if curl -s --max-time 2 "http://127.0.0.1:$WEB_PORT/" >/dev/null 2>&1; then ok "Vite already up (:$WEB_PORT)"; return 0; fi
+  log "starting Vite dev server on :$WEB_PORT"
+  spawn "$WEB_LOG" "$WEB_PID" \
+    bash -c "cd '$ROOT/frontend' && npm run dev -- --host 127.0.0.1 --port $WEB_PORT"
+  sleep 6
+  curl -s --max-time 3 "http://127.0.0.1:$WEB_PORT/health" >/dev/null 2>&1 \
+    && ok "Vite up — http://127.0.0.1:$WEB_PORT/" || warn "Vite still starting — check $WEB_LOG"
+  warn "Heads up: in dev mode the proofs pages are broken by the /proofs API↔SPA prefix"
+  warn "collision (see docs/editor-ux-audit.md). Use 'up' (single server) to inspect proofs."
+}
+
+frontend_down() {
+  [ -f "$WEB_PID" ] && kill "$(cat "$WEB_PID")" 2>/dev/null || true
+  fuser -k "${WEB_PORT}/tcp" 2>/dev/null || true
+  rm -f "$WEB_PID"; ok "frontend dev server stopped"
+}
+
+# --------------------------------------------------------------------------
+# Seed demo data
+# --------------------------------------------------------------------------
+seed() {
+  backend_up
+  local B="http://127.0.0.1:$API_PORT" J; J="$(mktemp)"
+  log "seeding demo user + ZFC system + proof"
+  curl -s -X POST "$B/auth/register" -H 'Content-Type: application/json' \
+    -d "{\"email\":\"$DEMO_EMAIL\",\"password\":\"$DEMO_PASSWORD\"}" >/dev/null || true
+  curl -s -c "$J" -X POST "$B/auth/login" -H 'Content-Type: application/x-www-form-urlencoded' \
+    -d "username=$DEMO_EMAIL&password=$DEMO_PASSWORD" >/dev/null
+  local SID
+  SID="$(curl -s -b "$J" -X POST "$B/formal-systems" -H 'Content-Type: application/json' \
+    -d '{"name":"ZFC Set Theory","description":"Demo system: extensionality, membership, implication."}' \
+    | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')"
+  post() { curl -s -b "$J" -X POST "$B/formal-systems/$SID/$1" -H 'Content-Type: application/json' -d "$2" >/dev/null; }
+  post brackets '{"opening":"(","closing":")"}'
+  post sorts '{"name":"term"}'; post sorts '{"name":"formula"}'
+  post productions '{"name":"variable","sort":"term","regex":"[a-z][a-z0-9]*"}'
+  post productions '{"name":"membership","sort":"formula","template":"s ∈ t","bindings":[{"var":"s","sort":"term"},{"var":"t","sort":"term"}]}'
+  post productions '{"name":"equality","sort":"formula","template":"s = t","bindings":[{"var":"s","sort":"term"},{"var":"t","sort":"term"}]}'
+  post productions '{"name":"implication","sort":"formula","template":"(p → q)","bindings":[{"var":"p","sort":"formula"},{"var":"q","sort":"formula"}]}'
+  post line-types '{"name":"statement","shape":"<formula> [<reference>]","logical_sort":"formula","parts":[{"name":"reference","regex":"[A-Za-z0-9 ,]+"}]}'
+  post axioms '{"label":"EXT","name":"extensionality","formula":"∀x x = x"}'
+  post rules '{"label":"HYP","name":"hypothesis","deduction":"p","antecedents":[],"bindings":[{"var":"p","sort":"formula"}]}'
+  post rules '{"label":"MP","name":"modus ponens","deduction":"q","antecedents":["p","(p → q)"],"bindings":[{"var":"p","sort":"formula"},{"var":"q","sort":"formula"}]}'
+  post definitions '{"sort":"formula","name":"subset","higher":"x ⊆ y","lower":"(x = y → x = y)","bindings":[{"var":"x","sort":"variable"},{"var":"y","sort":"variable"}]}'
+  local PSRC PID
+  PSRC=$'x = x [HYP]\n(x = x → x = x) [HYP]\nx = x [MP]'
+  PID="$(curl -s -b "$J" -X POST "$B/proofs" -H 'Content-Type: application/json' \
+    -d "$(python3 -c "import json;print(json.dumps({'name':'Reflexivity of equality','formal_system_id':'$SID','description':'A short worked example.','source':'''$PSRC'''}))")" \
+    | python3 -c 'import sys,json;print(json.load(sys.stdin).get("id","ERR"))')"
+  curl -s -b "$J" -X POST "$B/proofs/$PID/verify" >/dev/null || true
+  rm -f "$J"
+  printf 'EMAIL=%s\nPASSWORD=%s\nSID=%s\nPID=%s\n' "$DEMO_EMAIL" "$DEMO_PASSWORD" "$SID" "$PID" > "$SEED_ENV"
+  ok "seeded — login $DEMO_EMAIL / $DEMO_PASSWORD"
+  ok "  system: /systems/$SID/edit    proof: /proofs/$PID/edit"
+  ok "  (ids saved to $SEED_ENV)"
+}
+
+# --------------------------------------------------------------------------
+# Composite / status
+# --------------------------------------------------------------------------
+show_env() {
+  cat <<EOF
+DATABASE_URL=$DB_URL
+EDIFYCE_AUTH_COOKIE_SECURE=false
+EDIFYCE_AUTH_SECRET=$AUTH_SECRET
+API=http://127.0.0.1:$API_PORT
+WEB=http://127.0.0.1:$WEB_PORT   (dev mode only)
+EOF
+}
+
+status() {
+  db_status
+  if port_up "$API_PORT"; then ok "backend: UP   http://127.0.0.1:$API_PORT"; else warn "backend: down"; fi
+  if curl -s --max-time 2 "http://127.0.0.1:$WEB_PORT/" >/dev/null 2>&1; then ok "frontend(dev): UP   http://127.0.0.1:$WEB_PORT"; else warn "frontend(dev): down"; fi
+  [ -f "$SEED_ENV" ] && { log "seed:"; sed 's/^/    /' "$SEED_ENV"; } || true
+}
+
+up() {   # production-fidelity: one server on :$API_PORT serves API + built SPA
+  db_up; migrate; frontend_build; backend_up
+  ok "App is up — http://127.0.0.1:$API_PORT/   (run '$0 seed' for demo data)"
+}
+
+dev() {  # hot-reload: FastAPI + Vite (see the proofs caveat printed by frontend_dev)
+  db_up; migrate; backend_up; frontend_dev
+  ok "Dev servers up — UI http://127.0.0.1:$WEB_PORT/ , API http://127.0.0.1:$API_PORT/"
+}
+
+down() { backend_down; frontend_down; log "database left running — '$0 db down' to stop it too"; }
+
+usage() { sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+
+# --------------------------------------------------------------------------
+# Dispatch
+# --------------------------------------------------------------------------
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  up)        up ;;
+  dev)       dev ;;
+  down)      down ;;
+  status)    status ;;
+  seed)      seed ;;
+  migrate)   migrate ;;
+  env)       show_env ;;
+  db)        case "${1:-status}" in up) db_up;; down) db_down;; status|"") db_status;; *) die "db: up|down|status";; esac ;;
+  backend)   case "${1:-}" in up) backend_up;; down) backend_down;; *) die "backend: up|down";; esac ;;
+  frontend)  case "${1:-}" in build) frontend_build;; dev) frontend_dev;; down) frontend_down;; *) die "frontend: build|dev|down";; esac ;;
+  help|-h|--help) usage ;;
+  *) die "unknown command '$cmd' — try '$0 help'" ;;
+esac
