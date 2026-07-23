@@ -575,6 +575,13 @@ async def _assign_rule(session: AsyncSession, system_id: uuid.UUID, row: RuleRow
         row.deduction = payload.deduction
     if "matching" in fields and payload.matching is not None:
         row.matching = payload.matching
+    if "subproof" in fields:
+        # None clears the discharge subproof (a plain line-antecedent rule); the
+        # Subproof model has already enforced exactly one of assume/fresh.
+        sub = payload.subproof
+        row.subproof_derive = sub.derive if sub is not None else None
+        row.subproof_assume = sub.assume if sub is not None else None
+        row.subproof_fresh = sub.fresh if sub is not None else None
     if "antecedents" in fields and payload.antecedents is not None:
         row.antecedents = [
             RuleAntecedentRow(position=i, pattern=pattern) for i, pattern in enumerate(payload.antecedents)

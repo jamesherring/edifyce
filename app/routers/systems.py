@@ -60,6 +60,7 @@ from app.schemas import (
     ProofVerifyRequest,
     Rule,
     Sort,
+    Subproof,
     SystemOwner,
     SystemValidation,
     VerifyProofResponse,
@@ -351,7 +352,15 @@ def rule_out(r: RuleRow) -> Rule:
         bindings=_bindings_out(r.bindings),
         side_conditions=rule_side_conditions_list(r),
         matching=r.matching,
+        subproof=_subproof_out(r),
     )
+
+
+def _subproof_out(r: RuleRow) -> Subproof | None:
+    # A discharge rule is exactly the one carrying a subproof conclusion.
+    if r.subproof_derive is None:
+        return None
+    return Subproof(derive=r.subproof_derive, assume=r.subproof_assume, fresh=r.subproof_fresh)
 
 
 def _detail(system: FormalSystem) -> FormalSystemDetail:

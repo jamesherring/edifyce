@@ -33,7 +33,8 @@ const rule: Rule = {
 		{ var: 'p', sort: 'formula' }
 	],
 	side_conditions: ['not occurs(x, p)'],
-	matching: 'structural'
+	matching: 'structural',
+	subproof: null
 };
 
 function renderSection() {

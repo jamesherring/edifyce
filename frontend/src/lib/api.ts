@@ -126,6 +126,17 @@ export interface Axiom {
  */
 export type RuleMatching = 'structural' | 'string';
 
+/**
+ * The subproof a discharge rule (→I, RAA, ∀I) consumes: `derive` is the pattern
+ * its final line must match, opened by exactly one of `assume` (a hypothesis) or
+ * `fresh` (an eigenvariable). Mirrors the engine's `SubproofSchema`.
+ */
+export interface Subproof {
+	derive: string;
+	assume: string | null;
+	fresh: string | null;
+}
+
 export interface Rule {
 	id: string;
 	label: string;
@@ -136,6 +147,8 @@ export interface Rule {
 	/** Soundness provisos, one kernel-vocabulary line each (implicit conjunction). */
 	side_conditions: string[];
 	matching: RuleMatching;
+	/** The subproof a discharge rule consumes, or null for a line-antecedent rule. */
+	subproof: Subproof | null;
 }
 
 /** The public face of a system's owner (never email) — mirrors `SystemOwner`. */
@@ -261,6 +274,7 @@ export interface RuleCreate {
 	bindings?: Binding[];
 	side_conditions?: string[];
 	matching?: RuleMatching;
+	subproof?: Subproof | null;
 }
 export type RuleUpdate = Partial<RuleCreate>;
 

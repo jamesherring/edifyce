@@ -21,6 +21,7 @@ from website.logical.declarative import (
     LineSpec,
     Production,
     Rule,
+    Subproof,
     SystemSpec,
 )
 
@@ -135,6 +136,22 @@ def assumption_line() -> LineSpec:
 def reiteration_rule() -> Rule:
     """Reiteration (R): restate an in-scope formula. Exercises scope checking."""
     return rule("R", "reiteration", ["p"], "p", [("p", "formula")])
+
+
+def cp_rule() -> Rule:
+    """Conditional proof (→I): discharge a hypothesis subproof to an implication.
+
+    Cites no lines — it consumes the whole subproof opened by ``assume p`` and
+    concluded by ``q``, yielding ``(p → q)``.
+    """
+    return Rule(
+        label="CP",
+        name="conditional proof",
+        antecedents=[],
+        deduction="(p → q)",
+        bindings=[("p", "formula"), ("q", "formula")],
+        subproof=Subproof(assume="p", derive="q"),
+    )
 
 
 def variable_prod() -> Production:

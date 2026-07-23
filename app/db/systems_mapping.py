@@ -24,6 +24,7 @@ from website.logical.declarative import (
     LineSpec,
     Production,
     Rule,
+    Subproof,
     SystemSpec,
 )
 
@@ -119,8 +120,14 @@ def spec_to_system(spec: SystemSpec) -> FormalSystem:
         system.axioms.append(row)
 
     for i, rule in enumerate(spec.rules):
-        row = RuleRow(position=i, label=rule.label, name=rule.name,
-                      deduction=rule.deduction, matching=rule.matching)
+        subproof = rule.subproof
+        row = RuleRow(
+            position=i, label=rule.label, name=rule.name,
+            deduction=rule.deduction, matching=rule.matching,
+            subproof_derive=subproof.derive if subproof is not None else None,
+            subproof_assume=subproof.assume if subproof is not None else None,
+            subproof_fresh=subproof.fresh if subproof is not None else None,
+        )
         for j, antecedent in enumerate(rule.antecedents):
             row.antecedents.append(RuleAntecedentRow(position=j, pattern=antecedent))
         for j, (var, sort) in enumerate(rule.bindings):
@@ -196,8 +203,21 @@ def system_to_spec(system: FormalSystem) -> SystemSpec:
             bindings=[(b.var, b.symbol.name) for b in rule.bindings],
             side_conditions=rule_side_conditions_list(rule),
             matching=rule.matching,
+            subproof=_subproof_from_row(rule),
         )
         for rule in system.rules
     ]
 
     return spec
+
+
+def _subproof_from_row(rule: RuleRow) -> Subproof | None:
+    # A discharge rule is exactly the one carrying a `subproof_derive`; rebuild
+    # its Subproof from the three stored schema lines.
+    if rule.subproof_derive is None:
+        return None
+    return Subproof(
+        derive=rule.subproof_derive,
+        assume=rule.subproof_assume,
+        fresh=rule.subproof_fresh,
+    )
