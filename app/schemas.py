@@ -356,6 +356,17 @@ class ProofReferenceOut(BaseModel):
     published: bool
 
 
+class ProofReferrerOut(BaseModel):
+    """One incoming reference edge, read back: a proof that cites this one as a
+    lemma (the "used by" direction), with the alias it cites this proof under."""
+
+    proof_id: uuid.UUID
+    alias: str
+    name: str
+    slug: str
+    published: bool
+
+
 class ProofReferencesUpdate(BaseModel):
     """Replace a proof's full set of outgoing references (wholesale, like the
     nested value lists on system parts)."""
@@ -386,6 +397,9 @@ class ProofDetail(ProofSummary):
     result: dict | None = None
     # Outgoing references (lemmas this proof cites), in display order.
     references: list[ProofReferenceOut] = Field(default_factory=list)
+    # Incoming references (proofs that cite this one as a lemma) — the "used by"
+    # direction. Filtered to those the viewer may read.
+    referenced_by: list[ProofReferrerOut] = Field(default_factory=list)
 
 
 class ProofCreate(BaseModel):

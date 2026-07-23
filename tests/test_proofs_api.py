@@ -659,6 +659,40 @@ def test_reference_to_a_private_lemma_is_hidden_from_public_readers(client, db):
     assert public_view.json()["references"] == []
 
 
+def test_referenced_by_lists_incoming_edges(client, db):
+    # The "used by" direction: fetching a lemma reports the proofs that cite it.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    lemma, user1, user2 = (_create_proof(client, sid, n) for n in ("Lemma", "One", "Two"))
+    assert _set_refs(client, user1, [{"referenced_proof_id": lemma, "alias": "L"}]).status_code == 200
+    assert _set_refs(client, user2, [{"referenced_proof_id": lemma, "alias": "Lem"}]).status_code == 200
+
+    body = client.get(f"/proofs/{lemma}").json()
+    got = {(r["proof_id"], r["alias"]) for r in body["referenced_by"]}
+    assert got == {(user1, "L"), (user2, "Lem")}
+    # The lemma itself cites nothing.
+    assert body["references"] == []
+    # A proof with no incoming edges reports an empty "used by".
+    assert client.get(f"/proofs/{user1}").json()["referenced_by"] == []
+
+
+def test_referenced_by_hides_referrers_the_viewer_cannot_read(client, db):
+    # A draft proof that cites a published lemma must not leak its existence to an
+    # anonymous reader of the lemma; the "used by" list is filtered by readability.
+    ada = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, ada, published=True)
+    lemma = _seed_proof(db, ada, sid, "PublicLemma", published=True)
+    referrer = _seed_proof(db, ada, sid, "DraftReferrer", published=False)
+    _seed_reference(db, referrer, lemma, "L")
+
+    # The owner sees their own draft in the lemma's "used by".
+    assert [r["proof_id"] for r in client.get(f"/proofs/{lemma}").json()["referenced_by"]] == [referrer]
+
+    # An anonymous reader sees no trace of the draft referrer.
+    _logout(client)
+    assert client.get(f"/proofs/{lemma}").json()["referenced_by"] == []
+
+
 # ---------------------------------------------------------------------------
 # R1: references wired into verification
 # ---------------------------------------------------------------------------

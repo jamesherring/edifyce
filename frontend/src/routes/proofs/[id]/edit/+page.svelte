@@ -16,6 +16,7 @@
 	import CheckBadge from '$lib/components/CheckBadge.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import ProofResults from '$lib/components/ProofResults.svelte';
+	import LemmasPanel from '$lib/components/LemmasPanel.svelte';
 	import { api, ApiError, type ProofDetail, type VerifyResponse } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
 	import { toastSuccess, toastError } from '$lib/toast';
@@ -220,6 +221,15 @@
 				</form>
 			</Card.Content>
 		</Card.Root>
+
+		<LemmasPanel
+			{proof}
+			onUpdated={(updated) => {
+				proof = updated;
+				// A reference change clears the server-side verdict; drop the stale result.
+				result = null;
+			}}
+		/>
 
 		<!-- Verification runs against the last *saved* source. -->
 		<div class="flex flex-col gap-3">

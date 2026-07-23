@@ -165,6 +165,48 @@
 			<ProofResults {result} {requestError} idleMessage="Verify the proof to see line-by-line results here." />
 		</div>
 
+		{#if proof.references.length > 0 || proof.referenced_by.length > 0}
+			<div class="grid gap-6 lg:grid-cols-2">
+				{#if proof.references.length > 0}
+					<Card.Root>
+						<Card.Header>
+							<Card.Title>References</Card.Title>
+							<Card.Description>Lemmas this proof cites from other proofs.</Card.Description>
+						</Card.Header>
+						<Card.Content>
+							<ul class="flex flex-col gap-2">
+								{#each proof.references as ref (ref.referenced_proof_id)}
+									<li class="flex items-center justify-between gap-2 text-sm">
+										<a class="truncate underline" href={`/proofs/${ref.referenced_proof_id}`}>{ref.name}</a>
+										<code class="shrink-0 rounded bg-muted px-1 py-0.5 text-xs">[{ref.alias}.line]</code>
+									</li>
+								{/each}
+							</ul>
+						</Card.Content>
+					</Card.Root>
+				{/if}
+
+				{#if proof.referenced_by.length > 0}
+					<Card.Root>
+						<Card.Header>
+							<Card.Title>Used by</Card.Title>
+							<Card.Description>Proofs that cite this one as a lemma.</Card.Description>
+						</Card.Header>
+						<Card.Content>
+							<ul class="flex flex-col gap-2">
+								{#each proof.referenced_by as ref (ref.proof_id)}
+									<li class="flex items-center justify-between gap-2 text-sm">
+										<a class="truncate underline" href={`/proofs/${ref.proof_id}`}>{ref.name}</a>
+										<code class="shrink-0 rounded bg-muted px-1 py-0.5 text-xs">[{ref.alias}.line]</code>
+									</li>
+								{/each}
+							</ul>
+						</Card.Content>
+					</Card.Root>
+				{/if}
+			</div>
+		{/if}
+
 		<EntityFooter id={proof.id} createdAt={proof.created_at} />
 	{/if}
 </PageContainer>
