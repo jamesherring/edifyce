@@ -723,18 +723,21 @@ class Proof:
             # A proviso is enforced only on the kernel definitional-step path; the
             # string path can't evaluate it and so refuses a proviso-carrying
             # definition outright (see follows_from_definition). When such a
-            # definition also has no kernel counterpart - its defining form binds a
-            # variable the checker can't treat as capture-avoiding - it can never
-            # apply anywhere. Name that cause instead of a bare "does not apply", so
-            # the author isn't left guessing why a well-formed citation fails.
+            # definition also has no kernel counterpart, it can never apply anywhere.
+            # `kernel_definition_for` returns None for several reasons (no lower form,
+            # a defining form that doesn't parse as a kernel definition, or an
+            # undeclared binder), so name the general cause - the kernel path is
+            # unavailable - rather than asserting one specific reason, while pointing
+            # at the usual fix. Beats a bare "does not apply" that hides the proviso.
             definition = reference.definition
             if definition.kernel_condition is not None \
                     and kernel_definition_for(definition, context) is None:
                 proof_line.invalid_message = (
-                    f"{reference.key} carries a proviso but can't be applied: its "
-                    f"expansion binds a variable that isn't declared capture-avoiding, "
-                    f"so the proviso can't be enforced. Declare the bound variable(s) "
-                    f"with a `fresh` clause, or remove the proviso."
+                    f"{reference.key} carries a proviso, but this definition has no "
+                    f"kernel counterpart to enforce it against, so the step can't be "
+                    f"verified. A proviso is enforced only on the kernel "
+                    f"definitional-step path, which needs the defining form to parse "
+                    f"as a kernel definition with any bound variable declared `fresh`."
                 )
             else:
                 proof_line.invalid_message = (
