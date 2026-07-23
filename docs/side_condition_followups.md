@@ -253,8 +253,10 @@ already folded into this document. The shippable work:
      default; and the `matching/__init__.py` re-exports of all the above.
    - Trimmed the vestiges the interpreter left in kept code: `Match.replace`'s
      dead `condition` parameter, the compiler's dead `type(current_object) is
-     Condition` branch, and the unsupported `mapsto` reference-mapping (now fails
-     loud instead of resolving a pattern through the interpreter).
+     Condition` branch, and the unsupported `mapsto` reference-mapping (which
+     resolved its source through the interpreter — it now raises, and the
+     caller's reference-resolution fallback leaves such a reference unresolved so
+     the citing line fails to justify).
    - Methods the definitional-step / kernel path calls directly — `Match.replace`,
      `equivalent`, `equivalent_under_definitions`, `maps_to_up_to_definition`,
      `MatchSet.contains`/`union`/… — were **kept**; only the string-dispatch layer

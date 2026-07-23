@@ -413,8 +413,12 @@ class Proof:
 
         # The `<source> mapsto <target>` reference-mapping syntax resolved
         # `source` to a pattern through the get_by_path interpreter, now retired.
-        # It was unused (no proof in the corpus contains `mapsto`); reject it
-        # explicitly rather than silently ignore an unsupported reference.
+        # It was unused (no proof in the corpus contains `mapsto`). Raising here
+        # is caught by the reference-resolution fallback in the caller, so the
+        # net effect is that a `mapsto` reference no longer resolves - the citing
+        # line's reference stays unresolved and the line fails to justify. That
+        # is the right outcome for an unsupported syntax; a typed reference
+        # mechanism would reintroduce it deliberately.
         raise Exception("Reference mapping ('<source> mapsto <target>') is no longer supported.")
 
     def check_logical_line(self, proof_line, context):
