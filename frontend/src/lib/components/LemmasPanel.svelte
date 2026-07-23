@@ -57,14 +57,16 @@
 
 	// Candidate lemmas: the owner's other proofs in the same system. (Cross-owner
 	// published references aren't creatable through the API yet, so listing the
-	// owner's own proofs is the reachable candidate set.)
+	// owner's own proofs is the reachable candidate set.) The list endpoint caps a
+	// page at 100, so walk the pages — a system with >100 proofs would otherwise
+	// leave later lemmas unreachable, since the picker filters the loaded set
+	// client-side.
 	$effect(() => {
 		const systemId = proof.formal_system_id;
 		let cancelled = false;
-		api.proofs
-			.list(systemId, { limit: 100 })
-			.then((page) => {
-				if (!cancelled) candidates = page.items;
+		loadAllCandidates(systemId)
+			.then((items) => {
+				if (!cancelled) candidates = items;
 			})
 			.catch(() => {
 				if (!cancelled) candidates = [];
@@ -73,6 +75,19 @@
 			cancelled = true;
 		};
 	});
+
+	const PAGE = 100;
+	async function loadAllCandidates(systemId: string): Promise<ProofSummary[]> {
+		const items: ProofSummary[] = [];
+		for (let offset = 0; ; offset += PAGE) {
+			const page = await api.proofs.list(systemId, { limit: PAGE, offset });
+			items.push(...page.items);
+			// Stop once this system is exhausted: a short page, or we've reached the
+			// reported total (guards against an off-by-one extra request).
+			if (page.items.length < PAGE || items.length >= page.total) break;
+		}
+		return items;
+	}
 
 	// A `[alias.line]` citation only parses if the *reference field* of the line
 	// type it's written on admits a `.`. The reference field is the first

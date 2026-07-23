@@ -114,6 +114,25 @@ describe('LemmasPanel', () => {
 		expect(onUpdated).toHaveBeenCalledOnce();
 	});
 
+	it('pages through all candidates so lemmas past the first page are selectable', async () => {
+		// A system with more than one page of proofs: the server caps a page at 100,
+		// so the picker must walk the pages or later lemmas are unreachable.
+		const firstPage = Array.from({ length: 100 }, (_, i) => summary(`p${i}`, `Proof ${i}`));
+		const secondPage = [summary('deep', 'Deep Lemma')];
+		apiMock.proofs.list.mockImplementation(async (_sys: string, params?: { offset?: number }) =>
+			(params?.offset ?? 0) === 0
+				? { items: firstPage, total: 101, limit: 100, offset: 0 }
+				: { items: secondPage, total: 101, limit: 100, offset: 100 }
+		);
+		render(LemmasPanel, { proof: detail() });
+
+		await userEvent.click(screen.getByRole('combobox'));
+		// The second-page lemma is present and pickable via search.
+		await userEvent.type(screen.getByPlaceholderText('Search proofs…'), 'Deep');
+		expect(await screen.findByText('Deep Lemma')).toBeInTheDocument();
+		expect(apiMock.proofs.list).toHaveBeenCalledTimes(2);
+	});
+
 	it('warns when the system reference field does not allow a dot', async () => {
 		apiMock.systems.get.mockResolvedValue(systemWithReferenceRegex('[A-Za-z0-9 ,]+'));
 		render(LemmasPanel, {
