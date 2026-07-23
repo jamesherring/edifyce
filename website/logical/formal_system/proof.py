@@ -1076,51 +1076,21 @@ class ProofLine:
             self.axiom_pattern = self.formula.create_pattern(context.string_variables)
             self.axiom_pattern.name = self.label
 
-        elif line_type.behaviour == "definition":
-            # Introduce a new definition to context
-
-            try:
-                # Get the higher and lower strings, and the pattern it should apply to.
-                lower = self.match.get_by_path("lower()", context)
-                higher = self.match.get_by_path("higher()", context)
-                pattern = self.match.get_by_path("for()", context)
-            except Exception:
-                # Not a valid definition
-                self.valid = False
-                self.invalid_message = "Missing higher or lower for definition."
-                return
-
-            if pattern.match(lower.string, context) is None:
-                self.valid = False
-                self.invalid_message = f"{lower.string} is not an instance of {pattern.name}."
-                return
-
-            # Add the definition (an in-proof alias; provisos are expressed with
-            # `where` on a system-level `Define`, not on this line type).
-            self.definition = pattern.add_definition(lower.formatted_string(), higher.formatted_string(), context)
-
-        elif line_type.behaviour == "import":
-            # Import a file or result
-
-            try:
-
-                if self.label is None:
-                    self.valid = False
-                    self.invalid_message = "Line has missing label."
-                    return
-
-                path = self.match.get_by_path("path()", context)
-                result = self.proof.import_path(path, self.label, context)
-
-                if not result.success:
-                    # Error
-                    self.valid = False
-                    self.invalid_message = result.error_message
-
-            except Exception as e:
-                # No valid path or label
-                self.valid = False
-                self.invalid_message = f"Could not get path or label from import line: {e!s}"
+        elif line_type.behaviour in ("definition", "import"):
+            # Not currently supported. These line types derived their payload
+            # through the `get_by_path` string interpreter - lower()/higher()/
+            # for() for a definition, path() for an import - and that
+            # accessor-function mechanism was removed, so the derivation is gone.
+            # Fail *closed* rather than accept an inert line: a proof line whose
+            # behaviour we can no longer honour must be rejected, not silently
+            # passed as valid. To be lifted when the references/definitions
+            # feature is reimplemented with a typed mechanism (see
+            # docs/proof-references-and-definitions-plan.md); `Proof.import_path`
+            # remains for that rewire.
+            self.valid = False
+            self.invalid_message = (
+                f"'{line_type.behaviour}' line types are not currently supported."
+            )
 
         elif line_type.behaviour in ("none", "comment"):
             # Don't need to do anything :)

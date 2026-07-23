@@ -72,42 +72,6 @@ class FormalSystem:
             # Add the pattern
             add_pattern(self.pattern_dictionary, item)
 
-    def get_references(self, text):
-        # Get references to external proofs from the given code.
-
-        # Create a default context
-        context = copy(self.context)
-
-        # Track the reference slugs
-        references = set()
-
-        # Get the import line types
-        import_line_types = [line_type for line_type in self.line_types if line_type.behaviour == "import"]
-
-        lines = text.split("\n")
-        for line in lines:
-
-            # Check the line is an import line type
-            for line_type in import_line_types:
-
-                result = line_type.parse_line(line, context)
-
-                if result is None:
-                    continue
-
-                # Get the path
-                try:
-                    path = result.get_by_path("path()", context)
-
-                except Exception:
-                    # No valid path here
-                    continue
-
-                references.add(path)
-                break
-
-        return references
-
     def parse(self, text, proof=None, proof_model_id=None, reference_proofs=None, context=None, line_number_offset=0):
         # Parse the text into a proof.
 
@@ -158,8 +122,11 @@ class FormalSystem:
                 proof_line.line_type = line_type
                 proof_line.match = result
 
-                # Check for main line type attributes
-                # Try to get the formula, reference, label, display, is_axiom
+                # Project the line type's declared formula/reference fields off
+                # the match. (`label`, `display` and axiom-marking are handled by
+                # ProofLine's defaults and the `behaviour: axiom` line type - not
+                # by string `get_by_path` accessors, which could no longer be
+                # defined since the accessor-function syntax was removed.)
                 if line_type.formula_field is not None:
                     # The logical formula is the sub-field the line type declares
                     # (or the whole match, for `formula: self`).
@@ -179,28 +146,6 @@ class FormalSystem:
                         proof_line.reference_string_display = reference_match.string
                     except Exception:
                         pass
-
-                try:
-                    label = result.get_by_path("label()", context)
-                    proof_line.label = label
-
-                except Exception:
-                    pass
-
-                # Check if the line type has a 'display' value
-                try:
-                    proof_line.display = result.get_by_path("display()", context)
-                except Exception:
-                    # No valid display path
-                    pass
-
-                try:
-                    # Check if there is a valid axiom
-                    result.get_by_path("axiom()", context)
-                    proof_line.is_axiom = True
-                except Exception:
-                    # Not an axiom
-                    pass
 
                 # No need to check other line types
                 break
