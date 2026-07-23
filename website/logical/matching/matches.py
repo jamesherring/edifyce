@@ -32,6 +32,14 @@ class Match:
         self.sub_matches[var] = m
         m.parent_match = self
 
+    def field(self, name):
+        # Project a declared sub-field off this match by name - a line type's
+        # formula_field / reference_field. This is the sole surviving use of the
+        # retired get_by_path interpreter, reduced to the direct sub-match lookup
+        # it always resolved to. Raises KeyError when the field is absent;
+        # FormalSystem.parse treats that as "the line has no such field".
+        return self.sub_matches[self.pattern.pre_format_apply(name)]
+
     def get_by_path(self, path, context, recurse=True):
         # Get the value by a path
 
