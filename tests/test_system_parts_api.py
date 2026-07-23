@@ -30,6 +30,7 @@ from app.db.systems import (
     AxiomRow,
     BracketRow,
     DefinitionBindingRow,
+    DefinitionFreshRow,
     DefinitionRow,
     LinePartRow,
     LineRow,
@@ -46,7 +47,7 @@ _TABLES = [
     for m in (
         User, OAuthAccount, FormalSystem, BracketRow, SymbolRow,
         ProductionBindingRow, LineRow, LinePartRow, DefinitionRow,
-        DefinitionBindingRow, AxiomRow, AxiomBindingRow, RuleRow,
+        DefinitionBindingRow, DefinitionFreshRow, AxiomRow, AxiomBindingRow, RuleRow,
         RuleAntecedentRow, RuleBindingRow,
         SideConditionRow,
     )
@@ -541,6 +542,33 @@ def _defn_system(client: TestClient) -> str:
     sid = _new_system(client)
     _post(client, f"/formal-systems/{sid}/sorts", {"name": "term"})
     return sid
+
+
+def test_definition_fresh_round_trips_through_the_api(client):
+    # The `fresh` clause (the defining form's bound variables) persists and reads
+    # back like bindings, both on the write response and the aggregate detail.
+    _login(client, "ada@example.com")
+    sid = _defn_system(client)
+    defn = _post(client, f"/formal-systems/{sid}/definitions", {
+        "sort": "term", "name": "subset", "higher": "x sub y", "lower": "all z . stuff",
+        "bindings": [{"var": "x", "sort": "term"}, {"var": "y", "sort": "term"}],
+        "fresh": [{"var": "z", "sort": "term"}],
+    })
+    assert defn["fresh"] == [{"var": "z", "sort": "term"}]
+    assert client.get(f"/formal-systems/{sid}").json()["definitions"][0]["fresh"] == [
+        {"var": "z", "sort": "term"}
+    ]
+
+    # PATCH replaces the fresh list wholesale; an empty list clears it.
+    updated = client.patch(f"/formal-systems/{sid}/definitions/{defn['id']}", json={
+        "fresh": [{"var": "z", "sort": "term"}, {"var": "w", "sort": "term"}],
+    })
+    assert updated.json()["fresh"] == [
+        {"var": "z", "sort": "term"}, {"var": "w", "sort": "term"}
+    ]
+    assert client.patch(
+        f"/formal-systems/{sid}/definitions/{defn['id']}", json={"fresh": []}
+    ).json()["fresh"] == []
 
 
 def test_definition_provisos_round_trip_through_the_api(client):

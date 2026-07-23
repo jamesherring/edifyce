@@ -72,6 +72,11 @@ class Definition:
     lower: str
     bindings: list[tuple[str, str]]
     condition: str | None = None
+    # The defining form's bound variables, `[(var, sort)]` (the `fresh` clause).
+    # Declaring a binder lets the term checker unfold the definition
+    # capture-avoidingly, so a quantified definition (and any proviso on it) takes
+    # the kernel path instead of being refused. Empty for a binder-free alias.
+    fresh: list[tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -452,8 +457,18 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
     )
     kernel_condition = _combine_side_conditions(where_strings, context_copy)
 
+    # The defining form's bound variables, resolved to their sort patterns, so the
+    # term checker treats them as binders (capture-avoiding unfold) rather than as
+    # stray ground leaves that would force the string path.
+    fresh_patterns = _binding_patterns(defn.fresh, ctx)
+
     result = union.add_definition(
-        defn.lower, defn.higher, context_copy, kernel_condition=kernel_condition, label=None
+        defn.lower,
+        defn.higher,
+        context_copy,
+        fresh=fresh_patterns or None,
+        kernel_condition=kernel_condition,
+        label=None,
     )
     if result is not None:
         system.context.definitions.add(result)

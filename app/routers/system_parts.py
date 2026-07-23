@@ -46,6 +46,7 @@ from app.db.systems import (
     AxiomRow,
     BracketRow,
     DefinitionBindingRow,
+    DefinitionFreshRow,
     DefinitionRow,
     LinePartRow,
     LineRow,
@@ -100,6 +101,7 @@ Payload = BaseModel
 _SYMBOL_REFERENCES = (
     ProductionBindingRow.symbol_id,
     DefinitionBindingRow.symbol_id,
+    DefinitionFreshRow.symbol_id,
     AxiomBindingRow.symbol_id,
     RuleBindingRow.symbol_id,
     DefinitionRow.symbol_id,
@@ -518,6 +520,11 @@ async def _assign_definition(session: AsyncSession, system_id: uuid.UUID, row: D
     bindings_changed = "bindings" in fields and payload.bindings is not None
     if bindings_changed:
         row.bindings = await _binding_rows(session, system_id, DefinitionBindingRow, payload.bindings)
+    # The `fresh` clause (the defining form's bound variables) replaces wholesale
+    # like bindings; it's a distinct role, not a proviso metavariable source, so it
+    # doesn't feed the side-condition validation below.
+    if "fresh" in fields and payload.fresh is not None:
+        row.fresh = await _binding_rows(session, system_id, DefinitionFreshRow, payload.fresh)
     # The proviso can be set two ways: the structured `provisos` list (preferred)
     # or the deprecated `;`-joined `condition` string. A pre-D0 client sending only
     # `condition` keeps working until it migrates. "Touched" means the client
@@ -722,6 +729,7 @@ RESOURCES: tuple[ChildResource, ...] = (
         "definitions", DefinitionRow, DefinitionCreate, DefinitionUpdate, Definition, definition_out,
         (selectinload(DefinitionRow.symbol),
          selectinload(DefinitionRow.bindings).selectinload(DefinitionBindingRow.symbol),
+         selectinload(DefinitionRow.fresh).selectinload(DefinitionFreshRow.symbol),
          selectinload(DefinitionRow.side_conditions).selectinload(SideConditionRow.sort_symbol)),
         _assign_definition,
     ),

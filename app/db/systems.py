@@ -189,6 +189,16 @@ class DefinitionRow(Base):
         cascade="all, delete-orphan",
         order_by="DefinitionBindingRow.position",
     )
+    # The defining form's bound variables (the `fresh` clause), same (var, sort)
+    # shape as `bindings` but a distinct role: declaring a binder lets the term
+    # checker unfold the definition capture-avoidingly (see
+    # website/logical/formal_system/definitions.py), so a quantified definition
+    # takes the kernel path and its proviso can be enforced.
+    fresh: Mapped[list[DefinitionFreshRow]] = relationship(
+        back_populates="definition",
+        cascade="all, delete-orphan",
+        order_by="DefinitionFreshRow.position",
+    )
     # The proviso (`where` clause), stored as the kernel side-condition algebra
     # tree rather than an opaque string. All nodes of the tree, flat; the root is
     # the parent-less one. Defined in app/db/side_conditions.py.
@@ -209,6 +219,21 @@ class DefinitionBindingRow(Base):
     symbol_id: Mapped[uuid.UUID] = _symbol_fk()
 
     definition: Mapped[DefinitionRow] = relationship(back_populates="bindings")
+    symbol: Mapped[SymbolRow] = relationship()
+
+
+class DefinitionFreshRow(Base):
+    __tablename__ = "definition_fresh"
+
+    id: Mapped[uuid.UUID] = uuid_pk_column()
+    definition_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("definitions.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = _position()
+    var: Mapped[str] = mapped_column(String(64))
+    symbol_id: Mapped[uuid.UUID] = _symbol_fk()
+
+    definition: Mapped[DefinitionRow] = relationship(back_populates="fresh")
     symbol: Mapped[SymbolRow] = relationship()
 
 

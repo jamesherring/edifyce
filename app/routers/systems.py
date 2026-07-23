@@ -37,6 +37,7 @@ from app.db.systems import (
     AxiomBindingRow,
     AxiomRow,
     DefinitionBindingRow,
+    DefinitionFreshRow,
     DefinitionRow,
     LineRow,
     ProductionBindingRow,
@@ -85,6 +86,9 @@ _CHILD_LOADS = (
     selectinload(FormalSystem.definitions)
     .selectinload(DefinitionRow.bindings)
     .selectinload(DefinitionBindingRow.symbol),
+    selectinload(FormalSystem.definitions)
+    .selectinload(DefinitionRow.fresh)
+    .selectinload(DefinitionFreshRow.symbol),
     # The proviso tree (flat) + each node's sort reference, for
     # definition_condition_string on the async read path.
     selectinload(FormalSystem.definitions)
@@ -333,6 +337,7 @@ def definition_out(d: DefinitionRow) -> Definition:
         provisos=definition_provisos_list(d),
         condition=definition_condition_string(d),
         bindings=_bindings_out(d.bindings),
+        fresh=_bindings_out(d.fresh),
     )
 
 

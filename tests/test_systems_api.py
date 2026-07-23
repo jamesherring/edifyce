@@ -31,6 +31,7 @@ from app.db.systems import (
     AxiomRow,
     BracketRow,
     DefinitionBindingRow,
+    DefinitionFreshRow,
     DefinitionRow,
     LinePartRow,
     LineRow,
@@ -62,7 +63,7 @@ _TABLES = [
     for m in (
         User, OAuthAccount, FormalSystem, BracketRow, SymbolRow,
         ProductionBindingRow, LineRow, LinePartRow, DefinitionRow,
-        DefinitionBindingRow, AxiomRow, AxiomBindingRow, RuleRow,
+        DefinitionBindingRow, DefinitionFreshRow, AxiomRow, AxiomBindingRow, RuleRow,
         RuleAntecedentRow, RuleBindingRow,
         SideConditionRow,
     )
@@ -332,7 +333,7 @@ def test_delete_cascades_to_symbols_and_bindings(client, db):
     assert client.delete(f"/formal-systems/{system_id}").status_code == 204
 
     for model in (
-        SymbolRow, ProductionBindingRow, DefinitionRow, DefinitionBindingRow,
+        SymbolRow, ProductionBindingRow, DefinitionRow, DefinitionBindingRow, DefinitionFreshRow,
         AxiomRow, AxiomBindingRow, RuleRow, RuleBindingRow, RuleAntecedentRow,
         LineRow, LinePartRow, BracketRow,
     ):
