@@ -292,9 +292,10 @@ def test_patch_updates_fields_and_reslugs_on_rename(client):
     assert body["slug"] == "new-name"
     assert body["published_at"] is not None
 
-    # Unpublish clears the timestamp.
-    cleared = client.patch(f"/formal-systems/{system['id']}", json={"published": False})
-    assert cleared.json()["published_at"] is None
+    # Publishing is a one-way door: once published the system is frozen, so a
+    # later rename (or any field edit) is refused.
+    frozen = client.patch(f"/formal-systems/{system['id']}", json={"name": "Renamed again"})
+    assert frozen.status_code == 409
 
 
 def test_delete_removes_the_system(client):
@@ -618,24 +619,18 @@ def test_cannot_publish_a_system_inheriting_from_an_unpublished_parent(client):
     assert client.patch(f"/formal-systems/{child['id']}", json={"published": True}).status_code == 200
 
 
-def test_cannot_unpublish_a_parent_with_published_children(client):
-    # The mirror of the publish gate: unpublishing the parent would strand the
-    # published child with an inherits_from_id that GET /{parent} now 404s on.
+def test_cannot_unpublish_a_published_system(client):
+    # Publishing is a one-way door: unpublishing is refused so that proofs
+    # verified against the system stay valid. The system also stays public.
     _register_login(client, "ada@example.com")
-    parent = client.post("/formal-systems", json={"name": "Parent"}).json()
-    child = client.post(
-        "/formal-systems", json={"name": "Child", "inherits_from_id": parent["id"]}
-    ).json()
-    _publish(client, parent["id"])
-    _publish(client, child["id"])
+    system = client.post("/formal-systems", json={"name": "Frozen"}).json()
+    _publish(client, system["id"])
 
-    # The parent can't be pulled out from under a published child.
-    blocked = client.patch(f"/formal-systems/{parent['id']}", json={"published": False})
-    assert blocked.status_code == 400
-
-    # Unpublishing the child first frees the parent.
-    assert client.patch(f"/formal-systems/{child['id']}", json={"published": False}).status_code == 200
-    assert client.patch(f"/formal-systems/{parent['id']}", json={"published": False}).status_code == 200
+    refused = client.patch(f"/formal-systems/{system['id']}", json={"published": False})
+    assert refused.status_code == 409
+    assert any(
+        s["id"] == system["id"] for s in client.get("/formal-systems/public").json()["items"]
+    )
 
 
 def test_published_system_is_readable_by_anyone(client, db):
@@ -656,7 +651,7 @@ def test_published_system_is_readable_by_anyone(client, db):
     assert client.get("/formal-systems").json()["items"] == []
 
 
-def test_unpublishing_removes_from_public_and_hides_from_others(client, db):
+def test_published_system_stays_public_and_cannot_be_unpublished(client, db):
     owner_id = _register_login(client, "owner@example.com")
     system_id = _seed_zfc(db, owner_id)
     _publish(client, system_id)
@@ -664,11 +659,12 @@ def test_unpublishing_removes_from_public_and_hides_from_others(client, db):
         s["id"] == system_id for s in client.get("/formal-systems/public").json()["items"]
     )
 
+    # Unpublishing is refused (published systems are frozen), so it stays public.
     assert (
-        client.patch(f"/formal-systems/{system_id}", json={"published": False}).status_code == 200
+        client.patch(f"/formal-systems/{system_id}", json={"published": False}).status_code == 409
     )
-    assert client.get("/formal-systems/public").json()["items"] == []
-
-    # Back to a draft: invisible to a signed-out visitor again.
+    assert any(
+        s["id"] == system_id for s in client.get("/formal-systems/public").json()["items"]
+    )
     client.post("/auth/logout")
-    assert client.get(f"/formal-systems/{system_id}").status_code == 404
+    assert client.get(f"/formal-systems/{system_id}").status_code == 200

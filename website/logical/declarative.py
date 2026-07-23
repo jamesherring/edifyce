@@ -2,11 +2,10 @@
 
 The proof engine is powerful but its source language forces three unrelated
 jobs -- describing the *grammar*, the *inference rules*, and *side conditions*
--- through one imperative, whitespace-sensitive mechanism (``Pattern`` /
-``UnionPattern`` / ``with ... as ...`` / ``.each(...)`` / ``return self.f``).
-Recursive grammars only work if the author performs a non-obvious ordering
-dance (forward-declare an empty ``UnionPattern`` *then* fill it), and a wrong
-guess compiles cleanly yet silently matches nothing.
+-- through one whitespace-sensitive mechanism (``Pattern`` / ``UnionPattern`` /
+``with ... as ...``). Recursive grammars only work if the author performs a
+non-obvious ordering dance (forward-declare an empty ``UnionPattern`` *then*
+fill it), and a wrong guess compiles cleanly yet silently matches nothing.
 
 This module offers a structured, order-independent description of a system --
 the :class:`SystemSpec` dataclasses (grammar productions, a logical line,
@@ -75,6 +74,10 @@ class Rule:
     # line each (implicit conjunction). Attached to the rule by its label; empty
     # for axioms and unconditioned rules.
     side_conditions: list[str] = field(default_factory=list)
+    # How steps are checked against this rule: "structural" (term unification,
+    # the default) or "string" (associative matching, for a string-rewriting
+    # rule such as MIU's — see website.logical.matching.rewriting).
+    matching: str = "structural"
 
 
 @dataclass
@@ -132,6 +135,18 @@ def lower(spec: SystemSpec) -> str:
     every sort's ``UnionPattern`` is declared empty up front, so productions in
     any order can reference any sort, and the unions are filled afterwards.
     """
+
+    # Side-conditions are the kernel's structural term algebra, checked against a
+    # rule's *term* binding. A string-rewriting rule is justified by associative
+    # matching over surface strings (no term binding), so it cannot evaluate
+    # them. Rather than silently ignore a proviso an author wrote — which would
+    # make the rule quietly more permissive than intended — reject the pairing.
+    for rule in spec.rules:
+        if rule.matching == "string" and rule.side_conditions:
+            raise DeclarativeError(
+                f"Rule {rule.label!r} uses string matching, which cannot enforce "
+                f"side-conditions; drop them or switch it to structural matching."
+            )
 
     out: list[str] = []
     pad = "    "
@@ -260,19 +275,15 @@ def _emit_line(spec: SystemSpec, emit) -> None:
     emit(3, template)
     emit()
 
-    # The engine fetches logical content via formula() and the citation via
-    # reference(); those accessor names are part of its contract.
-    emit(1, "statement_pattern.formula():")
-    emit(2, f"return self.{logical_ph[1]}")
-    emit()
-    if reference_ph is not None:
-        emit(1, "statement_pattern.reference():")
-        emit(2, f"return self.{reference_ph[1]}")
-        emit()
-
+    # Declare which matched sub-field is the formula (and the citation) directly
+    # on the line type, rather than as interpreted `formula()`/`reference()`
+    # accessor functions — the engine projects these structurally.
     emit(1, f"LineType {line.name}:")
     emit(2, "pattern: statement_pattern")
     emit(2, "behaviour: logical")
+    emit(2, f"formula: {logical_ph[1]}")
+    if reference_ph is not None:
+        emit(2, f"reference: {reference_ph[1]}")
     emit()
 
 
@@ -323,15 +334,12 @@ def _emit_axiom(axiom: Rule, emit) -> None:
         emit(2, axiom.deduction)
     emit()
 
-    # The engine reads a logical line's content via formula(); for a bare axiom
-    # assertion the whole match is the formula.
-    emit(1, f"{pattern_name}.formula():")
-    emit(2, "return self")
-    emit()
-
+    # For a bare axiom assertion the whole match is the formula: `formula: self`
+    # declares that structurally (replacing a `formula(): return self` accessor).
     emit(1, f"LineType {_identifier(axiom.name)}:")
     emit(2, f"pattern: {pattern_name}")
     emit(2, "behaviour: axiom")
+    emit(2, "formula: self")
     emit()
 
 
@@ -351,6 +359,9 @@ def _emit_rule(rule: Rule, emit) -> None:
             emit(base_level + 2, ant)
     emit(base_level + 1, "deduction:")
     emit(base_level + 2, rule.deduction)
+    if rule.matching != "structural":
+        emit(base_level + 1, "matching:")
+        emit(base_level + 2, rule.matching)
     if rule.side_conditions:
         emit(base_level + 1, "side_conditions:")
         for proviso in rule.side_conditions:

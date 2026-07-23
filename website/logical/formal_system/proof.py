@@ -1172,17 +1172,6 @@ class ProofLine:
         if path == "previous_formulae()":
             return self.previous_formulae()
 
-        if "(" in path and path[:path.index("(")] in self.line_type.inherited_functions(context):
-            # An attribute function with parameters
-
-            index = path.index("(")
-            name = path[:index]
-
-            args_strings = path[index + 1:-1]
-            args, kwargs = parse_arguments(args_strings, self, context)
-
-            return self.run_function(name, context, args=args, kwargs=kwargs)
-
         if path.startswith("check_condition(") and path[-1] == ")":
             inner = path[16:-1]
             kwargs = parse_arguments(inner, self, context, arg_names=("condition", "mapping"))[1]
@@ -1379,52 +1368,6 @@ class ProofLine:
             "display": self.display,
             "indent": self.indent
         }
-
-    def run_function(self, name, context, args=None, kwargs=None):
-        # Run a custom function with the given name, args and kwargs
-
-        fn = self.line_type.get_function(name, context)
-
-        if fn is None:
-            raise Exception(f"'{self.line_type.name}' does not have function '{name}'.")
-
-        # Check the params matches have the correct pattern
-        if args is None:
-            args = []
-
-        if kwargs is None:
-            kwargs = {}
-
-        arg_count = len(args) + len(kwargs)
-        if not arg_count == len(fn.params):
-            # Wrong number of parameters provided
-            raise Exception(f"'{name}' expected {len(fn['params'])!s} argument(s), {arg_count!s} provided.")
-
-        # Build a parameter mapping
-        param_mapping = {}
-
-        # Check args
-        for given, fn_param in zip(args, fn.params[:len(args)]):
-            param_mapping[fn_param[0]] = given
-
-        # kwargs don't have to be in order
-        remaining_fn_params = fn.params[len(args):]
-        remaining_fn_param_dict = {param[0]: param[1] for param in remaining_fn_params}
-
-        # Check kwargs
-        for given_name, given in kwargs.items():
-            if given_name not in remaining_fn_param_dict:
-                raise Exception(f"'{name}' does not accept parameter '{given_name}.")
-
-            param_mapping[given_name] = given
-
-        # Create a copy of proof line context
-        context_copy = copy(context)
-
-        # Run the tree as a function
-        tree = fn.tree
-
-        return tree.run_function(item=self, context=context_copy, params=param_mapping, param_types=fn.params)
 
     def previous_formulae(self):
         # Return a matchset of formulae that have been proven before this statement in the proof and share the same

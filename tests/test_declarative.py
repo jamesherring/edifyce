@@ -33,6 +33,7 @@ from tests.spec_helpers import (
     universal_prod,
     variable_prod,
 )
+from website.logical.compiler import compile as compile_edi
 from website.logical.declarative import (
     DeclarativeError,
     LineSpec,
@@ -181,6 +182,55 @@ def test_modus_ponens_over_defined_notation(zfc):
     proof = zfc.parse("x ⊆ y [HYP]\n(x ⊆ y → x ⊇ y) [HYP]\nx ⊇ y [MP, 1, 2]")
     assert proof.valid is True
     assert all(line["valid"] for line in proof.data()["lines"])
+
+
+# ---------------------------------------------------------------------------
+# Structured accessors: the formula/reference are declared fields on the line
+# type. The interpreted `formula()`/`reference()` accessor mini-language is gone.
+# ---------------------------------------------------------------------------
+
+
+def test_line_types_declare_formula_and_reference_fields(zfc):
+    statement = next(lt for lt in zfc.line_types if lt.name == "statement")
+    # The logical line names its formula and citation fields directly.
+    assert statement.formula_field == "f"
+    assert statement.reference_field == "r"
+
+    # A bare axiom asserts its whole match: `formula: self`.
+    extensionality = next(lt for lt in zfc.line_types if lt.name == "extensionality")
+    assert extensionality.formula_field == "self"
+
+
+def test_lowering_emits_field_declarations_not_accessor_functions():
+    edi = lower(zfc_spec())
+    assert "formula: f" in edi
+    assert "reference: r" in edi
+    assert "formula: self" in edi
+    # The interpreted accessor bodies are gone.
+    assert ".formula()" not in edi
+    assert ".reference()" not in edi
+
+
+def test_legacy_accessor_function_syntax_is_rejected():
+    # The interpreted `pattern.formula(): ...` accessor syntax has been removed;
+    # declaring one is now a parse error (use a `formula:` field on the line
+    # type instead).
+    source = (
+        "FormalSystem Legacy:\n"
+        "\n"
+        "    Regex atom:\n"
+        "        ^[a-z]+$\n"
+        "\n"
+        "    Pattern statement_pattern:\n"
+        "        with f as atom:\n"
+        "            f\n"
+        "\n"
+        "    statement_pattern.formula():\n"
+        "        return self.f\n"
+    )
+    result = compile_edi(source)
+    assert "errors" in result
+    assert any("statement_pattern.formula()" in e for e in result["errors"])
 
 
 # ---------------------------------------------------------------------------

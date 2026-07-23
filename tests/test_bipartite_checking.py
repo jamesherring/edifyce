@@ -49,15 +49,11 @@ MP_SYSTEM = """FormalSystem PropLogic:
         with f as formula, r as reference:
             f [r]
 
-    statement_pattern.formula():
-        return self.f
-
-    statement_pattern.reference():
-        return self.r
-
     LineType statement:
         pattern: statement_pattern
         behaviour: logical
+        formula: f
+        reference: r
 
     with p as formula, q as formula:
         InferenceRule hypothesis:
@@ -114,15 +110,11 @@ EXTRA_SYSTEM = """FormalSystem Extra:
         with f as formula, r as reference:
             f [r]
 
-    statement_pattern.formula():
-        return self.f
-
-    statement_pattern.reference():
-        return self.r
-
     LineType statement:
         pattern: statement_pattern
         behaviour: logical
+        formula: f
+        reference: r
 
     with p as formula, q as formula:
         InferenceRule hypothesis:

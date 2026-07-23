@@ -46,14 +46,11 @@ HILBERT = r"""FormalSystem Hilbert:
         with f as formula, r as reference:
             f [r]
 
-    statement.formula():
-        return self.f
-    statement.reference():
-        return self.r
-
     LineType claim:
         pattern: statement
         behaviour: logical
+        formula: f
+        reference: r
 
     with p as formula, q as formula, r as formula:
 
@@ -188,14 +185,11 @@ def test_schema_using_defined_notation_compiles():
     Pattern statement:
         with f as formula, r as reference:
             f [r]
-    statement.formula():
-        return self.f
-    statement.reference():
-        return self.r
-
     LineType claim:
         pattern: statement
         behaviour: logical
+        formula: f
+        reference: r
 
     with x as setvar, y as setvar:
         InferenceRule r1:

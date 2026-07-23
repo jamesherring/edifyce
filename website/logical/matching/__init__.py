@@ -10,8 +10,9 @@ Module layout (in dependency order)::
     conditions  - the Condition expression tree
     context     - the Context object
     matches     - Match and MatchSet
-    patterns    - Pattern and its subclasses (+ PatternFunction)
+    patterns    - Pattern and its subclasses
     definitions - Definition
+    rewriting   - all-solutions associative matching for string-rewriting rules
 
 ``matches``, ``patterns`` and ``definitions`` are mutually recursive; they
 reference each other through module-level ``from . import ...`` imports and
@@ -26,13 +27,13 @@ from .patterns import (
     AbstractPattern,
     AtomPattern,
     Pattern,
-    PatternFunction,
     RegexPattern,
     StringPattern,
     SystemConditionPattern,
     UnionPattern,
 )
 from .definitions import Definition
+from .rewriting import iter_bindings, iter_joint, joint_binding_exists
 
 __all__ = [
     "AbstractPattern",
@@ -43,12 +44,14 @@ __all__ = [
     "Match",
     "MatchSet",
     "Pattern",
-    "PatternFunction",
     "RegexPattern",
     "StringPattern",
     "SystemConditionPattern",
     "UnionPattern",
     "constant",
+    "iter_bindings",
+    "iter_joint",
+    "joint_binding_exists",
     "get_by_path",
     "parse_arguments",
     "parse_path",

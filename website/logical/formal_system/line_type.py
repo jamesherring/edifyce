@@ -1,18 +1,25 @@
 """The :class:`LineType` describing a category of proof line."""
 
-from ..matching import PatternFunction
-
 
 class LineType:
     """Class for types of lines in formal proofs."""
 
-    def __init__(self, name, pattern=None, behaviour="none", add_context=None, scope=None):
+    def __init__(self, name, pattern=None, behaviour="none", add_context=None, scope=None,
+                 formula_field: str | None = None, reference_field: str | None = None):
 
         # The name of this line type
         self.name = name
 
         # The pattern for these lines to match (Pattern instance)
         self.pattern = pattern
+
+        # Which matched sub-field carries the logical formula, and which the
+        # citation reference: `FormalSystem.parse` projects these off the line
+        # match directly. The reserved value "self" means the whole match (an
+        # axiom asserting its entire formula). None means the line declares no
+        # such field (e.g. a non-logical or scope-only line).
+        self.formula_field = formula_field
+        self.reference_field = reference_field
 
         # The behaviour of these lines
         self.behaviour = behaviour
@@ -33,31 +40,9 @@ class LineType:
         # The data paths (and their values) to add to context, if any
         self.add_context = add_context if add_context is not None else {}
 
-        # Custom functions
-        self.functions = {}
-
     def parse_line(self, line, context):
         # Check if the given line string is of this type
         return self.pattern.match(line, context)
-
-    def inherited_functions(self, context):
-        # Get all functions associated with this line type. This is to cover functions from formal system inheritance
-        return context.variables[self.name].functions
-
-    def add_function(self, name, tree, params=None):
-        # Add an function to this pattern. tree is an AbstractSyntaxTree instance
-
-        # Optionally specify a list of (variable, pattern) tuples of parameters
-        self.functions[name] = PatternFunction(tree=tree, params=() if params is None else params)
-
-    def get_function(self, name, context):
-        # Get the given attribute function
-
-        fns = self.inherited_functions(context)
-        if name in fns:
-            return fns[name]
-
-        return None
 
     def equivalent(self, other, context, memo=None):
         # Check equivalence
@@ -82,6 +67,12 @@ class LineType:
         if not self.scope == other.scope:
             return False
 
+        if not self.formula_field == other.formula_field:
+            return False
+
+        if not self.reference_field == other.reference_field:
+            return False
+
         if not self.add_context == other.add_context:
             return False
 
@@ -91,18 +82,6 @@ class LineType:
         if not self.pattern.equivalent(other.pattern, context, memo):
             memo[(self, other)] = False
             return False
-
-        if not len(self.functions) == len(other.functions):
-            memo[(self, other)] = False
-            return False
-
-        for key in self.functions:
-            if key not in other.functions:
-                memo[(self, other)] = False
-                return False
-
-            # print("TODO check functions are equivalent")
-            # TODO check functions are equivalent
 
         # Otherwise ok
         memo[(self, other)] = True

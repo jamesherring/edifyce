@@ -34,6 +34,12 @@ def context():
     system = result["system"]
     ctx = copy(system.context)
     ctx.variables.update(system.build_context.variables)
+    # Declare the metavariables these tests use, as a real rule's `with ... as`
+    # clause would: an argument is a metavariable iff it is in `string_variables`,
+    # otherwise the parser tries to read it as a literal term.
+    setvar = ctx.variables["setvar"]
+    ctx.string_variables = dict(ctx.string_variables)
+    ctx.string_variables.update({name: setvar for name in ("x", "y", "p", "q", "phi")})
     return ctx
 
 

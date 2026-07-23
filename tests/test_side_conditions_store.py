@@ -250,14 +250,21 @@ def test_search_rules_with_an_equality_proviso(session, stored_system):
     assert labels == ["RImp"]
 
 
-def test_proviso_over_an_undeclared_metavar_is_rejected(session):
-    # A proviso may only reference the owner's declared bindings. `spec_to_system`
-    # rejects a rule proviso naming an undeclared metavar rather than storing a
-    # tree that has no binding to check against (which would raise in the kernel).
+def test_undeclared_argument_is_stored_as_a_literal_term(session):
+    # An argument that isn't a declared metavariable is a literal term expression,
+    # stored with its `is_term` flag set (validated when the system compiles) rather
+    # than rejected at write time — this is what makes `equal(x, ∅)` expressible.
     spec = zfc_spec()
     next(r for r in spec.rules if r.label == "NOcc").side_conditions = ["not occurs(p, z)"]
-    with pytest.raises(ValueError, match="metavariable 'z'"):
-        session.add(spec_to_system(spec))
+    session.add(spec_to_system(spec))
+    session.commit()
+    session.expire_all()
+    system = session.scalar(select(FormalSystem).where(FormalSystem.name == "ZFC"))
+    nocc = _rule(system, "NOcc")
+    occurs = next(sc for sc in nocc.side_conditions if sc.kind == "occurs")
+    # `p` is a declared metavariable; `z` is a literal term.
+    assert (occurs.left_name, occurs.left_is_term) == ("p", False)
+    assert (occurs.right_name, occurs.right_is_term) == ("z", True)
 
 
 def test_round_tripped_rule_provisos_still_gate_proofs(stored_system):
@@ -417,6 +424,144 @@ def test_round_tripped_member_admits_compound_where_atom_rejects(member_system):
     # A compound term is a member of `term` but not atomic — the whole point.
     assert system.parse("P(f(a)) [ATOMR]").valid is False
     assert system.parse("P(f(a)) [MEMBR]").valid is True
+
+
+# ---------------------------------------------------------------------------
+# Literal-term arguments — a predicate arg may be a term, not just a metavariable
+# ---------------------------------------------------------------------------
+
+# `⊥` is a nullary constant and `¬q` a compound over a metavariable, so the two
+# rules below pin a metavariable to a literal term (a constant, and a term that
+# itself embeds a metavariable substituted from the match binding).
+def term_arg_spec() -> SystemSpec:
+    return SystemSpec(
+        name="TermArgSys",
+        brackets=brackets(),
+        productions=[
+            regex_prod("atom", "prop", "[a-z]"),
+            template_prod("formula", "atomic", "a", [("a", "atom")]),
+            template_prod("formula", "falsum", "⊥", []),
+            negation_prod(),
+            implication_prod(),
+        ],
+        line=statement_line(),
+        rules=[
+            rule("RC", "is falsum", [], "p", [("p", "formula")], ["equal(p, ⊥)"]),
+            rule("RN", "neg", [], "(p → q)",
+                 [("p", "formula"), ("q", "formula")], ["equal(p, ¬q)"]),
+        ],
+    )
+
+
+@pytest.fixture
+def term_arg_system(session):
+    session.add(spec_to_system(term_arg_spec()))
+    session.commit()
+    session.expire_all()
+    return session.scalar(select(FormalSystem).where(FormalSystem.name == "TermArgSys"))
+
+
+def test_term_argument_stores_string_and_is_term_flag(term_arg_system):
+    rc = _rule(term_arg_system, "RC")
+    (root,) = rc.side_conditions
+    assert root.kind == "equal"
+    # `p` is a metavariable; `⊥` is a literal term (flagged, stored by its surface).
+    assert (root.left_name, root.left_is_term) == ("p", False)
+    assert (root.right_name, root.right_is_term) == ("⊥", True)
+
+
+def test_term_argument_round_trips(term_arg_system):
+    assert system_to_spec(term_arg_system) == term_arg_spec()
+    assert rule_side_conditions_list(_rule(term_arg_system, "RC")) == ["equal(p, ⊥)"]
+    assert rule_side_conditions_list(_rule(term_arg_system, "RN")) == ["equal(p, ¬q)"]
+
+
+def test_round_tripped_term_argument_gates_proofs(term_arg_system):
+    system = build_spec(system_to_spec(term_arg_system))["system"]
+    # RC: p must be the literal constant ⊥.
+    assert system.parse("⊥ [RC]").valid is True
+    assert system.parse("a [RC]").valid is False
+    # RN: p must be ¬q — a term argument embedding the metavariable q, substituted
+    # from the match binding at check time.
+    assert system.parse("(¬a → a) [RN]").valid is True
+    assert system.parse("(a → b) [RN]").valid is False
+
+
+def test_unparseable_term_argument_is_rejected_at_compile(session):
+    # Storage is draft-tolerant (a term arg is stored by its surface), but a term
+    # that parses as nothing is caught when the system compiles.
+    spec = term_arg_spec()
+    spec.rules[0].side_conditions = ["equal(p, @@@)"]
+    session.add(spec_to_system(spec))  # storage accepts it
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "TermArgSys"))
+    result = build_spec(system_to_spec(stored))
+    assert "errors" in result and result["errors"]
+
+
+def test_term_argument_with_an_unbound_metavariable_fails_closed():
+    # `¬q` names `q`, which the deduction `p` never binds — the term can't be made
+    # ground, so the proviso must fail closed (reject) rather than compare a term
+    # with a wildcard leaf and pass vacuously through the `not`.
+    spec = SystemSpec(
+        name="Unbound",
+        brackets=brackets(),
+        productions=[
+            regex_prod("atom", "prop", "[a-z]"),
+            template_prod("formula", "atomic", "a", [("a", "atom")]),
+            negation_prod(),
+        ],
+        line=statement_line(),
+        rules=[rule("R", "r", [], "p", [("p", "formula"), ("q", "formula")],
+                    ["not equal(p, ¬q)"])],
+    )
+    result = build_spec(spec)
+    assert "errors" not in result, result.get("errors")  # compiles: q is declared
+    assert result["system"].parse("a [R]").valid is False  # but fails closed at check
+
+
+# A term argument may use *defined* notation: `∅` is a nullary definition, and a
+# rule pins a metavariable to it. Provisos are parsed after definitions resolve.
+def defined_notation_spec() -> SystemSpec:
+    return SystemSpec(
+        name="DefArg",
+        brackets=brackets(),
+        productions=[
+            regex_prod("term", "variable", "[a-z]"),
+            template_prod("term", "zero", "0", []),
+            template_prod("formula", "pred", "P(t)", [("t", "term")]),
+        ],
+        line=statement_line(),
+        definitions=[defn("term", "emptyset", "∅", "0", [])],
+        rules=[rule("RE", "re", [], "P(t)", [("t", "term")], ["equal(t, ∅)"])],
+    )
+
+
+@pytest.fixture
+def defined_notation_system(session):
+    session.add(spec_to_system(defined_notation_spec()))
+    session.commit()
+    session.expire_all()
+    return session.scalar(select(FormalSystem).where(FormalSystem.name == "DefArg"))
+
+
+def test_defined_notation_argument_stores_as_a_term_and_round_trips(defined_notation_system):
+    (root,) = _rule(defined_notation_system, "RE").side_conditions
+    assert root.kind == "equal"
+    assert (root.left_name, root.left_is_term) == ("t", False)
+    assert (root.right_name, root.right_is_term) == ("∅", True)
+    assert system_to_spec(defined_notation_system) == defined_notation_spec()
+    assert rule_side_conditions_list(_rule(defined_notation_system, "RE")) == ["equal(t, ∅)"]
+
+
+def test_round_tripped_defined_notation_argument_gates_proofs(defined_notation_system):
+    system = build_spec(system_to_spec(defined_notation_system))["system"]
+    assert system.parse("P(∅) [RE]").valid is True     # t is the empty set
+    assert system.parse("P(a) [RE]").valid is False    # a is a variable, not ∅
+    # `∅ ≝ 0`, but comparison is structural (opaque constructors, no unfolding), so
+    # the definiens `0` is *not* equal to `∅`.
+    assert system.parse("P(0) [RE]").valid is False
 
 
 # ---------------------------------------------------------------------------

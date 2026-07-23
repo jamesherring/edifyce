@@ -106,6 +106,13 @@ export interface Axiom {
 	bindings: Binding[];
 }
 
+/**
+ * How a rule justifies a step: `structural` (first-order term unification, the
+ * default — logical systems) or `string` (associative matching for a
+ * string-rewriting system such as MIU, whose rules split/concatenate strings).
+ */
+export type RuleMatching = 'structural' | 'string';
+
 export interface Rule {
 	id: string;
 	label: string;
@@ -115,6 +122,7 @@ export interface Rule {
 	bindings: Binding[];
 	/** Soundness provisos, one kernel-vocabulary line each (implicit conjunction). */
 	side_conditions: string[];
+	matching: RuleMatching;
 }
 
 /** The public face of a system's owner (never email) — mirrors `SystemOwner`. */
@@ -234,6 +242,7 @@ export interface RuleCreate {
 	antecedents?: string[];
 	bindings?: Binding[];
 	side_conditions?: string[];
+	matching?: RuleMatching;
 }
 export type RuleUpdate = Partial<RuleCreate>;
 

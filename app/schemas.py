@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Annotated, Generic, TypeVar
+from typing import Annotated, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -19,6 +19,12 @@ class Page(BaseModel, Generic[T]):
     total: int
     limit: int
     offset: int
+
+
+# How a rule justifies a step: "structural" (first-order term unification, the
+# default) or "string" (associative matching for a string-rewriting system such
+# as MIU). Mirrors RuleRow.matching / InferenceRule.matching.
+RuleMatching = Literal["structural", "string"]
 
 # Free-text fields map to length-bounded DB columns (see app/db/systems.py). The
 # caps below mirror those `String(N)` widths so oversized input is rejected as a
@@ -128,6 +134,7 @@ class Rule(BaseModel):
     bindings: list[Binding] = Field(default_factory=list)
     # Soundness provisos, one kernel-vocabulary line each (implicit conjunction).
     side_conditions: list[str] = Field(default_factory=list)
+    matching: RuleMatching = "structural"
 
 
 class SystemOwner(BaseModel):
@@ -293,6 +300,7 @@ class RuleCreate(BaseModel):
     antecedents: list[_Text512] = Field(default_factory=list)
     bindings: list[Binding] = Field(default_factory=list)
     side_conditions: list[_Text512] = Field(default_factory=list)
+    matching: RuleMatching = "structural"
 
 
 class RuleUpdate(BaseModel):
@@ -302,6 +310,7 @@ class RuleUpdate(BaseModel):
     antecedents: list[_Text512] | None = None
     bindings: list[Binding] | None = None
     side_conditions: list[_Text512] | None = None
+    matching: RuleMatching | None = None
 
 
 class ReorderRequest(BaseModel):
