@@ -245,8 +245,9 @@ def test_list_returns_only_summaries_in_creation_order(client, db):
     client.post("/proofs", json={"name": "First", "formal_system_id": system_id})
     client.post("/proofs", json={"name": "Second", "formal_system_id": system_id})
     listed = client.get("/proofs").json()
-    assert [p["name"] for p in listed] == ["First", "Second"]
-    assert "source" not in listed[0]  # summary, not detail
+    assert listed["total"] == 2
+    assert [p["name"] for p in listed["items"]] == ["First", "Second"]
+    assert "source" not in listed["items"][0]  # summary, not detail
 
 
 def test_list_can_scope_to_one_system(client, db):
@@ -256,7 +257,24 @@ def test_list_can_scope_to_one_system(client, db):
     client.post("/proofs", json={"name": "A", "formal_system_id": system_a})
     client.post("/proofs", json={"name": "B", "formal_system_id": system_b})
     scoped = client.get("/proofs", params={"formal_system_id": system_a}).json()
-    assert [p["name"] for p in scoped] == ["A"]
+    assert [p["name"] for p in scoped["items"]] == ["A"]
+
+
+def test_list_paginates_searches_and_sorts(client, db):
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner)
+    for name in ("Banana", "Apple", "Cherry"):
+        client.post("/proofs", json={"name": name, "formal_system_id": system_id})
+
+    page = client.get("/proofs", params={"limit": 2, "offset": 0}).json()
+    assert page["total"] == 3  # full count, not just the page
+    assert len(page["items"]) == 2
+
+    hits = client.get("/proofs", params={"search": "APP"}).json()
+    assert [p["name"] for p in hits["items"]] == ["Apple"]
+
+    sorted_desc = client.get("/proofs", params={"sort": "name", "desc": True}).json()
+    assert [p["name"] for p in sorted_desc["items"]] == ["Cherry", "Banana", "Apple"]
 
 
 def test_duplicate_name_gets_a_distinct_slug(client, db):
@@ -275,7 +293,7 @@ def test_another_users_draft_proof_is_not_readable(client, db):
     _logout(client)
     _register_login(client, "eve@example.com")
     assert client.get(f"/proofs/{created['id']}").status_code == 404
-    assert created["id"] not in [p["id"] for p in client.get("/proofs").json()]
+    assert created["id"] not in [p["id"] for p in client.get("/proofs").json()["items"]]
 
 
 # ---------------------------------------------------------------------------
@@ -439,7 +457,7 @@ def test_publish_then_public_read_and_listing(client, db):
     # Anonymous read + public listing now see it.
     _logout(client)
     assert client.get(f"/proofs/{created['id']}").status_code == 200
-    public = client.get("/proofs/public").json()
+    public = client.get("/proofs/public").json()["items"]
     assert created["id"] in [p["id"] for p in public]
 
 
@@ -453,4 +471,4 @@ def test_unpublish_removes_from_public_list(client, db):
     client.patch(f"/proofs/{created['id']}", json={"published": False})
     _logout(client)
     assert client.get(f"/proofs/{created['id']}").status_code == 404
-    assert client.get("/proofs/public").json() == []
+    assert client.get("/proofs/public").json()["items"] == []

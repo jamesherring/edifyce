@@ -44,9 +44,10 @@ from sqlalchemy.orm import selectinload
 from app.auth import current_active_user, current_active_user_optional
 from app.db import FormalSystem, Proof, get_session, system_to_spec
 from app.db.models import User
-from app.routers._common import unique_slug
+from app.routers._common import PageParams, page_params, paginate_summaries, unique_slug
 from app.routers.systems import load_system
 from app.schemas import (
+    Page,
     ProofCreate,
     ProofDetail,
     ProofSummary,
@@ -236,42 +237,48 @@ def _detail(proof: Proof) -> ProofDetail:
     )
 
 
-@router.get("", response_model=list[ProofSummary])
+@router.get("", response_model=Page[ProofSummary])
 async def list_proofs(
     formal_system_id: uuid.UUID | None = None,
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
-) -> list[ProofSummary]:
-    stmt = (
-        select(Proof)
-        .where(Proof.owner_id == user.id)
-        .options(selectinload(Proof.owner))
-        .order_by(Proof.created_at)
-    )
+    params: PageParams = Depends(page_params),
+) -> Page[ProofSummary]:
+    base = [Proof.owner_id == user.id]
     # Optional scope to one system, so an editor can list just that system's proofs.
     if formal_system_id is not None:
-        stmt = stmt.where(Proof.formal_system_id == formal_system_id)
-    proofs = await session.scalars(stmt)
-    return [_summary(proof) for proof in proofs]
+        base.append(Proof.formal_system_id == formal_system_id)
+    return await paginate_summaries(
+        session,
+        Proof,
+        User,
+        base_conditions=base,
+        default_order=[Proof.created_at],
+        params=params,
+        summarize=_summary,
+    )
 
 
 # Declared before `/{proof_id}` so "public" isn't parsed as a proof id.
-@router.get("/public", response_model=list[ProofSummary])
+@router.get("/public", response_model=Page[ProofSummary])
 async def list_public_proofs(
     session: AsyncSession = Depends(get_session),
-) -> list[ProofSummary]:
+    params: PageParams = Depends(page_params),
+) -> Page[ProofSummary]:
     """The shared master list: every published proof, any owner, no auth.
 
     Drafts (``published_at IS NULL``) are excluded; unpublishing removes a proof
-    from this list. Newest publications first.
+    from this list. Newest publications first, unless the client asks to sort.
     """
-    proofs = await session.scalars(
-        select(Proof)
-        .where(Proof.published_at.is_not(None))
-        .options(selectinload(Proof.owner))
-        .order_by(Proof.published_at.desc(), Proof.created_at.desc())
+    return await paginate_summaries(
+        session,
+        Proof,
+        User,
+        base_conditions=[Proof.published_at.is_not(None)],
+        default_order=[Proof.published_at.desc(), Proof.created_at.desc()],
+        params=params,
+        summarize=_summary,
     )
-    return [_summary(proof) for proof in proofs]
 
 
 @router.post("", response_model=ProofDetail, status_code=status.HTTP_201_CREATED)

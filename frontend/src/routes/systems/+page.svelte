@@ -8,56 +8,21 @@
 	import { DataTable, renderComponent } from '$lib/components/ui/data-table';
 	import * as Alert from '$lib/components/ui/alert';
 	import { Button } from '$lib/components/ui/button';
-	import { api, ApiError, type FormalSystemSummary } from '$lib/api';
+	import { api, type FormalSystemSummary } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
+	import { createPaginatedList } from '$lib/paged-list.svelte';
 	import { timeAgo } from '$lib/format';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import Plus from '@lucide/svelte/icons/plus';
 
-	// 'public' = the shared master list (published only); 'mine' = the signed-in
-	// user's own systems, drafts included.
-	type View = 'public' | 'mine';
-	let view = $state<View>('public');
+	const PAGE_SIZE = 10;
 
-	let systems = $state<FormalSystemSummary[]>([]);
-	let loading = $state(true);
-	let error = $state<string | null>(null);
-
-	// Guard against out-of-order responses: a fast toggle can leave an older
-	// request resolving last and clobbering the newer view's data.
-	let requestSeq = 0;
-
-	async function fetchSystems(current: View) {
-		const seq = ++requestSeq;
-		loading = true;
-		error = null;
-		try {
-			const result =
-				current === 'mine' ? await api.systems.list() : await api.systems.listPublic();
-			if (seq !== requestSeq) return;
-			systems = result;
-		} catch (err) {
-			if (seq !== requestSeq) return;
-			error = err instanceof ApiError ? err.message : String(err);
-			systems = [];
-		} finally {
-			if (seq === requestSeq) loading = false;
-		}
-	}
-
-	// Logging out while on "My systems" would otherwise leave view='mine' and the
-	// next fetch 401s; fall back to the public list.
-	$effect(() => {
-		if (auth.ready && !auth.user && view === 'mine') view = 'public';
-	});
-
-	// Re-fetch when the view changes. Only 'mine' depends on auth resolving (it's
-	// the authenticated call); reading auth.ready only in that branch keeps the
-	// public list from re-fetching a second time when auth flips.
-	$effect(() => {
-		const current = view;
-		if (current === 'mine') void auth.ready;
-		fetchSystems(current);
+	// Server-side paging/search/sort lives in the shared controller; the page
+	// supplies only the page size and which API call each view maps to.
+	const list = createPaginatedList<FormalSystemSummary>({
+		pageSize: PAGE_SIZE,
+		load: (view, params) =>
+			view === 'mine' ? api.systems.list(params) : api.systems.listPublic(params)
 	});
 
 	const columns = $derived<ColumnDef<FormalSystemSummary, unknown>[]>([
@@ -82,7 +47,7 @@
 		},
 		// Every row in the public view is published, so the status column only
 		// earns its place in the owner's own list.
-		...(view === 'mine'
+		...(list.view === 'mine'
 			? [
 					{
 						id: 'status',
@@ -111,10 +76,10 @@
 					<div class="inline-flex rounded-md border p-0.5 text-sm">
 						<button
 							type="button"
-							onclick={() => (view = 'public')}
+							onclick={() => list.switchView('public')}
 							class={[
 								'rounded px-3 py-1 font-medium transition-colors',
-								view === 'public'
+								list.view === 'public'
 									? 'bg-accent text-accent-foreground'
 									: 'text-muted-foreground hover:text-foreground'
 							]}
@@ -123,10 +88,10 @@
 						</button>
 						<button
 							type="button"
-							onclick={() => (view = 'mine')}
+							onclick={() => list.switchView('mine')}
 							class={[
 								'rounded px-3 py-1 font-medium transition-colors',
-								view === 'mine'
+								list.view === 'mine'
 									? 'bg-accent text-accent-foreground'
 									: 'text-muted-foreground hover:text-foreground'
 							]}
@@ -142,24 +107,28 @@
 		{/snippet}
 	</PageHeader>
 
-	{#if error}
+	{#if list.error}
 		<Alert.Root variant="destructive">
 			<TriangleAlert class="size-4" />
 			<Alert.Title>Could not load systems</Alert.Title>
-			<Alert.Description>{error}</Alert.Description>
+			<Alert.Description>{list.error}</Alert.Description>
 		</Alert.Root>
-	{:else if loading}
+	{:else if list.loading && list.items.length === 0}
 		<LoadingSpinner message="Loading systems…" />
 	{:else}
-		<DataTable
-			data={systems}
-			{columns}
-			globalSearch
-			searchPlaceholder="Search systems…"
-			onrowclick={(row) => goto(`/systems/${row.id}`)}
-			emptyMessage={view === 'mine'
-				? "You haven't created any systems yet."
-				: 'No published systems yet.'}
-		/>
+		<!-- Remount on view switch so the table's internal page/sort/search reset. -->
+		{#key list.view}
+			<DataTable
+				data={list.items}
+				{columns}
+				pageSize={PAGE_SIZE}
+				searchPlaceholder="Search systems…"
+				onrowclick={(row) => goto(`/systems/${row.id}`)}
+				serverSide={list.serverSide}
+				emptyMessage={list.view === 'mine'
+					? "You haven't created any systems yet."
+					: 'No published systems yet.'}
+			/>
+		{/key}
 	{/if}
 </PageContainer>

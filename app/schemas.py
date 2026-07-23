@@ -1,8 +1,25 @@
 import uuid
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, Field
+
+T = TypeVar("T")
+
+
+class Page(BaseModel, Generic[T]):
+    """One page of a server-paginated list.
+
+    ``items`` is the current slice; ``total`` is the full count matching the
+    query (before ``limit``/``offset``), so a client can render page controls
+    without a second request. ``limit``/``offset`` echo the request back.
+    """
+
+    items: list[T]
+    total: int
+    limit: int
+    offset: int
+
 
 # How a rule justifies a step: "structural" (first-order term unification, the
 # default) or "string" (associative matching for a string-rewriting system such

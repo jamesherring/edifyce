@@ -289,6 +289,51 @@ export interface ProofUpdate {
 	published?: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Server-side pagination — mirrors `Page[T]` in app/schemas.py. The list
+// endpoints return one page (`items`) plus the full `total` matching the query,
+// so a client can drive page controls without a second request.
+// ---------------------------------------------------------------------------
+
+export interface Page<T> {
+	items: T[];
+	total: number;
+	limit: number;
+	offset: number;
+}
+
+/** Query params shared by the paginated list endpoints. */
+export interface ListParams {
+	/** Page size (1–100). */
+	limit?: number;
+	/** Row offset of the page's first item. */
+	offset?: number;
+	/** Case-insensitive filter over name/description. */
+	search?: string;
+	/** Column id to sort by: name | description | author | created_at | updated_at. */
+	sort?: string;
+	/** Descending when true, ascending otherwise. */
+	desc?: boolean;
+}
+
+/** Serialise `ListParams` (plus any extras) into a `?a=b&…` string. */
+function listQuery(
+	params: ListParams = {},
+	extra: Record<string, string | undefined> = {}
+): string {
+	const q = new URLSearchParams();
+	if (params.limit != null) q.set('limit', String(params.limit));
+	if (params.offset != null) q.set('offset', String(params.offset));
+	if (params.search) q.set('search', params.search);
+	if (params.sort) q.set('sort', params.sort);
+	if (params.desc) q.set('desc', 'true');
+	for (const [key, value] of Object.entries(extra)) {
+		if (value != null) q.set(key, value);
+	}
+	const s = q.toString();
+	return s ? `?${s}` : '';
+}
+
 /** Raised when the backend answers with a non-2xx status or is unreachable. */
 export class ApiError extends Error {
 	status: number;
@@ -451,9 +496,11 @@ export const api = {
 
 	systems: {
 		/** The signed-in user's own systems (drafts included). Requires auth. */
-		list: () => request<FormalSystemSummary[]>('/formal-systems'),
+		list: (params?: ListParams) =>
+			request<Page<FormalSystemSummary>>(`/formal-systems${listQuery(params)}`),
 		/** The shared master list: every published system, any owner, no auth. */
-		listPublic: () => request<FormalSystemSummary[]>('/formal-systems/public'),
+		listPublic: (params?: ListParams) =>
+			request<Page<FormalSystemSummary>>(`/formal-systems/public${listQuery(params)}`),
 		/** A single system. Published ones are public; drafts are owner-only. */
 		get: (id: string) => request<FormalSystemDetail>(`/formal-systems/${id}`),
 		create: (payload: FormalSystemCreate) =>
@@ -485,12 +532,13 @@ export const api = {
 
 	proofs: {
 		/** The signed-in user's own proofs; optionally scoped to one system. */
-		list: (formalSystemId?: string) =>
-			request<ProofSummary[]>(
-				`/proofs${formalSystemId ? `?formal_system_id=${formalSystemId}` : ''}`
+		list: (formalSystemId?: string, params?: ListParams) =>
+			request<Page<ProofSummary>>(
+				`/proofs${listQuery(params, { formal_system_id: formalSystemId })}`
 			),
 		/** The shared master list: every published proof, any owner, no auth. */
-		listPublic: () => request<ProofSummary[]>('/proofs/public'),
+		listPublic: (params?: ListParams) =>
+			request<Page<ProofSummary>>(`/proofs/public${listQuery(params)}`),
 		/** A single proof. Published ones are public; drafts are owner-only. */
 		get: (id: string) => request<ProofDetail>(`/proofs/${id}`),
 		create: (payload: ProofCreate) =>
