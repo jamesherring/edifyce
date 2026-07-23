@@ -640,6 +640,25 @@ def test_malformed_definition_proviso_is_422(client):
     assert response.status_code == 422
 
 
+def test_metadata_only_patch_preserves_the_stored_provisos(client):
+    # The crux of the provisos/condition dispatch: a PATCH that touches neither
+    # field (here, a rename) must leave the stored proviso tree untouched. Guards
+    # the model_fields_set-vs-all-fields distinction the write path hinges on.
+    _login(client, "ada@example.com")
+    sid = _defn_system(client)
+    defn = _post(client, f"/formal-systems/{sid}/definitions", {
+        "sort": "term", "name": "d", "higher": "x", "lower": "y",
+        "bindings": [{"var": "x", "sort": "term"}, {"var": "y", "sort": "term"}],
+        "provisos": ["not occurs(x, y)", "disjoint(x, y)"],
+    })
+    renamed = client.patch(
+        f"/formal-systems/{sid}/definitions/{defn['id']}", json={"name": "renamed"}
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["name"] == "renamed"
+    assert renamed.json()["provisos"] == ["not occurs(x, y)", "disjoint(x, y)"]
+
+
 def test_definition_binding_only_patch_that_orphans_a_proviso_metavar_is_422(client):
     # Dropping a binding a stored proviso still names must be rejected even though
     # the proviso isn't in the PATCH — mirrors the rule guard so a definition can't
