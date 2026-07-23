@@ -113,6 +113,11 @@ class Definition(BaseModel):
     name: str
     higher: str
     lower: str
+    # Soundness provisos, one kernel-vocabulary line each (implicit conjunction) —
+    # the same structured surface a rule exposes via `side_conditions`.
+    provisos: list[str] = Field(default_factory=list)
+    # Deprecated compatibility view: the provisos joined with `;` as a single
+    # `where` string. Derived from the same tree as `provisos`; prefer `provisos`.
     condition: str | None = None
     bindings: list[Binding] = Field(default_factory=list)
 
@@ -266,6 +271,10 @@ class DefinitionCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     higher: _Text512
     lower: _Text512
+    # Structured provisos (preferred), mirroring rules' `side_conditions`.
+    provisos: list[_Text512] = Field(default_factory=list)
+    # Deprecated compatibility input: a single `;`-joined `where` string. Ignored
+    # when `provisos` is supplied; kept so pre-D0 clients keep working.
     condition: str | None = Field(None, max_length=512)
     bindings: list[Binding] = Field(default_factory=list)
 
@@ -275,6 +284,9 @@ class DefinitionUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=128)
     higher: str | None = Field(None, max_length=512)
     lower: str | None = Field(None, max_length=512)
+    # Provisos (preferred); wins over `condition` when both are present.
+    provisos: list[_Text512] | None = None
+    # Deprecated compatibility input; see DefinitionCreate.
     condition: str | None = Field(None, max_length=512)
     bindings: list[Binding] | None = None
 

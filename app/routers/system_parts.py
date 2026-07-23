@@ -36,6 +36,7 @@ from app.db import Base, get_session
 from app.db.models import User
 from app.db.side_conditions import SideConditionRow
 from app.db.side_conditions_mapping import (
+    build_definition_provisos,
     build_rule_side_conditions,
     build_side_condition_rows,
     validate_side_condition_metavars,
@@ -486,24 +487,34 @@ async def _assign_definition(session: AsyncSession, system_id: uuid.UUID, row: D
     if "lower" in fields and payload.lower is not None:
         row.lower = payload.lower
     # Bindings first: a proviso's metavariables are validated against them, so a
-    # same-request binding change must land before the condition is rebuilt.
+    # same-request binding change must land before the provisos are rebuilt.
     bindings_changed = "bindings" in fields and payload.bindings is not None
     if bindings_changed:
         row.bindings = await _binding_rows(session, system_id, DefinitionBindingRow, payload.bindings)
-    rebuilt = "condition" in fields
-    if rebuilt:
+    # The proviso can be set two ways: the structured `provisos` list (preferred)
+    # or the deprecated `;`-joined `condition` string. A pre-D0 client sending only
+    # `condition` keeps working until it migrates. "Touched" means the client
+    # addressed the proviso at all — on create every field is in `fields`, so this
+    # is always true there; on PATCH it is the `model_fields_set`, so a name-only
+    # edit leaves the stored tree alone. When touched, a non-empty `provisos` wins;
+    # otherwise a non-empty `condition` is used; otherwise the proviso is cleared.
+    provisos_touched = "provisos" in fields and payload.provisos is not None
+    condition_touched = "condition" in fields
+    if provisos_touched or condition_touched:
         # Rebuild the proviso as structured side-condition rows. `side_conditions`
         # is eager-loaded (see the definitions resource), so clearing it here is
         # safe on the async path; delete-orphan removes the previous tree.
         row.side_conditions = []
-        if payload.condition:
-            symbols = await _system_symbols(session, system_id)
-            try:
-                build_side_condition_rows(
-                    row, payload.condition, symbols, {b.var for b in row.bindings}
-                )
-            except ValueError as exc:
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        metavars = {b.var for b in row.bindings}
+        try:
+            if payload.provisos:
+                symbols = await _system_symbols(session, system_id)
+                build_definition_provisos(row, payload.provisos, symbols, metavars)
+            elif payload.condition:
+                symbols = await _system_symbols(session, system_id)
+                build_side_condition_rows(row, payload.condition, symbols, metavars)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     elif bindings_changed and row.side_conditions:
         # Bindings changed but the proviso wasn't rewritten: re-check the stored
         # tree so a dropped binding can't orphan a metavariable it still names.

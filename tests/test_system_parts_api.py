@@ -537,6 +537,145 @@ def test_blank_rule_side_condition_is_rejected_not_dropped(client):
 
 
 # ---------------------------------------------------------------------------
+# Definition provisos: the structured `provisos` surface (D0), at parity with
+# a rule's `side_conditions`, plus back-compat with the old `condition` string.
+# ---------------------------------------------------------------------------
+
+
+def _defn_system(client: TestClient) -> str:
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "term"})
+    return sid
+
+
+def test_definition_provisos_round_trip_through_the_api(client):
+    _login(client, "ada@example.com")
+    sid = _defn_system(client)
+    defn = _post(client, f"/formal-systems/{sid}/definitions", {
+        "sort": "term", "name": "d", "higher": "x", "lower": "y",
+        "bindings": [{"var": "x", "sort": "term"}, {"var": "y", "sort": "term"}],
+        "provisos": ["not occurs(x, y)", "disjoint(x, y)"],
+    })
+    assert defn["provisos"] == ["not occurs(x, y)", "disjoint(x, y)"]
+    # The deprecated `condition` view is the same tree, `;`-joined.
+    assert defn["condition"] == "not occurs(x, y) ; disjoint(x, y)"
+
+    # Read back through the aggregate detail.
+    detail = client.get(f"/formal-systems/{sid}").json()
+    assert detail["definitions"][0]["provisos"] == ["not occurs(x, y)", "disjoint(x, y)"]
+
+    # PATCH replaces the provisos wholesale (delete old tree, insert new in one flush).
+    updated = client.patch(
+        f"/formal-systems/{sid}/definitions/{defn['id']}",
+        json={"provisos": ["not occurs(y, x)", "disjoint(x, y)"]},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["provisos"] == ["not occurs(y, x)", "disjoint(x, y)"]
+    # A single-node replacement, then an empty list that clears the tree.
+    single = client.patch(
+        f"/formal-systems/{sid}/definitions/{defn['id']}", json={"provisos": ["disjoint(x, y)"]}
+    )
+    assert single.json()["provisos"] == ["disjoint(x, y)"]
+    assert single.json()["condition"] == "disjoint(x, y)"
+    cleared = client.patch(
+        f"/formal-systems/{sid}/definitions/{defn['id']}", json={"provisos": []}
+    )
+    assert cleared.json()["provisos"] == []
+    assert cleared.json()["condition"] is None
+
+
+def test_definition_condition_input_still_works_and_reads_back_as_provisos(client):
+    # A pre-D0 client sending the old `;`-joined `condition` keeps working, and the
+    # stored tree reads back through the new `provisos` surface too.
+    _login(client, "ada@example.com")
+    sid = _defn_system(client)
+    defn = _post(client, f"/formal-systems/{sid}/definitions", {
+        "sort": "term", "name": "d", "higher": "x", "lower": "y",
+        "bindings": [{"var": "x", "sort": "term"}, {"var": "y", "sort": "term"}],
+        "condition": "not occurs(x, y) ; disjoint(x, y)",
+    })
+    assert defn["condition"] == "not occurs(x, y) ; disjoint(x, y)"
+    assert defn["provisos"] == ["not occurs(x, y)", "disjoint(x, y)"]
+
+    # A PATCH sending only `condition` still rewrites the tree.
+    updated = client.patch(
+        f"/formal-systems/{sid}/definitions/{defn['id']}", json={"condition": "disjoint(x, y)"}
+    )
+    assert updated.json()["provisos"] == ["disjoint(x, y)"]
+
+
+def test_definition_provisos_win_over_condition_when_both_sent(client):
+    # When a client sends both, the structured `provisos` is authoritative.
+    _login(client, "ada@example.com")
+    sid = _defn_system(client)
+    defn = _post(client, f"/formal-systems/{sid}/definitions", {
+        "sort": "term", "name": "d", "higher": "x", "lower": "y",
+        "bindings": [{"var": "x", "sort": "term"}, {"var": "y", "sort": "term"}],
+        "provisos": ["disjoint(x, y)"],
+        "condition": "not occurs(x, y)",
+    })
+    assert defn["provisos"] == ["disjoint(x, y)"]
+    assert defn["condition"] == "disjoint(x, y)"
+
+
+def test_definition_or_proviso_round_trips_through_the_api(client):
+    _login(client, "ada@example.com")
+    sid = _defn_system(client)
+    defn = _post(client, f"/formal-systems/{sid}/definitions", {
+        "sort": "term", "name": "d", "higher": "x", "lower": "y",
+        "bindings": [{"var": "x", "sort": "term"}, {"var": "y", "sort": "term"}],
+        "provisos": ["occurs(x, y) or equal(x, y)"],
+    })
+    assert defn["provisos"] == ["occurs(x, y) or equal(x, y)"]
+
+
+def test_malformed_definition_proviso_is_422(client):
+    _login(client, "ada@example.com")
+    sid = _defn_system(client)
+    response = client.post(f"/formal-systems/{sid}/definitions", json={
+        "sort": "term", "name": "d", "higher": "x", "lower": "y",
+        "bindings": [{"var": "x", "sort": "term"}],
+        "provisos": ["not a real predicate(x)"],
+    })
+    assert response.status_code == 422
+
+
+def test_definition_binding_only_patch_that_orphans_a_proviso_metavar_is_422(client):
+    # Dropping a binding a stored proviso still names must be rejected even though
+    # the proviso isn't in the PATCH — mirrors the rule guard so a definition can't
+    # persist a proviso whose metavariable has no binding to check against.
+    _login(client, "ada@example.com")
+    sid = _defn_system(client)
+    defn = _post(client, f"/formal-systems/{sid}/definitions", {
+        "sort": "term", "name": "d", "higher": "x", "lower": "y",
+        "bindings": [{"var": "x", "sort": "term"}, {"var": "y", "sort": "term"}],
+        "provisos": ["equal(x, y)"],
+    })
+    orphaning = client.patch(f"/formal-systems/{sid}/definitions/{defn['id']}", json={
+        "bindings": [{"var": "x", "sort": "term"}],
+    })
+    assert orphaning.status_code == 422
+
+    # A binding-only PATCH that keeps every named metavariable still succeeds.
+    ok = client.patch(f"/formal-systems/{sid}/definitions/{defn['id']}", json={
+        "bindings": [{"var": "x", "sort": "term"}, {"var": "y", "sort": "term"}],
+    })
+    assert ok.status_code == 200
+
+
+def test_blank_definition_proviso_is_rejected_not_dropped(client):
+    # A blank proviso line is malformed input, not a silent no-op (mirrors rules).
+    _login(client, "ada@example.com")
+    sid = _defn_system(client)
+    response = client.post(f"/formal-systems/{sid}/definitions", json={
+        "sort": "term", "name": "d", "higher": "x", "lower": "y",
+        "bindings": [{"var": "x", "sort": "term"}, {"var": "y", "sort": "term"}],
+        "provisos": ["disjoint(x, y)", ""],
+    })
+    assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
 # Productions: sort resolution and template/regex rules
 # ---------------------------------------------------------------------------
 

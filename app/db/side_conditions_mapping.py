@@ -224,6 +224,26 @@ def build_rule_side_conditions(
         _materialise(tree, symbols, metavars, parent=None, position=0, rule=rule)
 
 
+def build_definition_provisos(
+    definition: DefinitionRow,
+    provisos: list[str],
+    symbols: dict[str, SymbolRow],
+    metavars: set[str],
+) -> None:
+    """Parse a definition's proviso ``lines`` and attach the tree to it (unsaved).
+
+    The structured (list-of-lines) analogue of :func:`build_side_condition_rows`,
+    which takes a single ``;``-joined ``where`` string: this gives a definition the
+    same full-vocabulary, multi-line proviso surface a rule has via
+    :func:`build_rule_side_conditions`. The two produce the same tree — a list of
+    ``n`` lines and a ``;``-joined string of the same ``n`` clauses both lower to
+    one ``and`` root — so the storage and every reader are unchanged.
+    """
+    tree = _parse_lines(provisos)
+    if tree is not None:
+        _materialise(tree, symbols, metavars, parent=None, position=0, definition=definition)
+
+
 def _require_metavar(name: str | None, metavars: set[str]) -> None:
     """Raise unless ``name`` (a leaf predicate's metavariable) is declared.
 
@@ -337,7 +357,25 @@ def rule_side_conditions_list(rule: RuleRow) -> list[str]:
     line per conjunct (the block's implicit conjunction); any other root is a
     single line. Empty when the rule has no proviso.
     """
-    tree = _owner_tree(list(rule.side_conditions))
+    return _proviso_lines(list(rule.side_conditions))
+
+
+def definition_provisos_list(definition: DefinitionRow) -> list[str]:
+    """Render a definition's proviso tree back to a ``provisos`` list.
+
+    The inverse of :func:`build_definition_provisos`, and the list-shaped analogue
+    of :func:`definition_condition_string`: an ``and`` root becomes one line per
+    conjunct, any other root a single line. Empty when the definition has no
+    proviso. Same node collection as ``definition_condition_string`` reads, so the
+    ``;``-joined string and this list stay in agreement.
+    """
+    return _proviso_lines(list(definition.side_conditions))
+
+
+def _proviso_lines(nodes: list[SideConditionRow]) -> list[str]:
+    # Shared by the rule and definition list readers: an ``and`` root is the
+    # implicit conjunction of one line per child; any other root is a single line.
+    tree = _owner_tree(nodes)
     if tree is None:
         return []
     root, children = tree
