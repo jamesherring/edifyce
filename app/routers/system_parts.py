@@ -279,12 +279,21 @@ async def _get_symbol_or_404(
     return symbol
 
 
-def _production_kind(template: str | None, regex: str | None) -> str:
-    if (template is None) == (regex is None):
+def _production_kind(
+    template: str | None, regex: str | None, atom_value: str | None, atom_base: str | None
+) -> str:
+    # A production is exactly one of: a composite (notation `template`), a leaf
+    # `regex`, an atom constant (`atom_value`), or an atom family (`atom_base`).
+    if sum(field is not None for field in (template, regex, atom_value, atom_base)) != 1:
         raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "A production needs exactly one of 'template' or 'regex'."
+            status.HTTP_400_BAD_REQUEST,
+            "A production needs exactly one of 'template', 'regex', 'atom_value', or 'atom_base'.",
         )
-    return "regex" if regex is not None else "composite"
+    if regex is not None:
+        return "regex"
+    if atom_value is not None or atom_base is not None:
+        return "atom"
+    return "composite"
 
 
 async def _delete_symbol(
@@ -391,8 +400,9 @@ async def create_production(
     union = await _resolve_sort(session, system_id, payload.sort)
     row = SymbolRow(
         system_id=system_id, name=payload.name,
-        kind=_production_kind(payload.template, payload.regex),
-        template=payload.template, regex=payload.regex, union=union,
+        kind=_production_kind(payload.template, payload.regex, payload.atom_value, payload.atom_base),
+        template=payload.template, regex=payload.regex,
+        atom_value=payload.atom_value, atom_base=payload.atom_base, union=union,
         position=await _next_symbol_position(session, system_id, union=False),
     )
     row.bindings = await _binding_rows(session, system_id, ProductionBindingRow, payload.bindings)
@@ -418,8 +428,12 @@ async def update_production(
         row.template = payload.template
     if "regex" in fields:
         row.regex = payload.regex
-    if "template" in fields or "regex" in fields:
-        row.kind = _production_kind(row.template, row.regex)
+    if "atom_value" in fields:
+        row.atom_value = payload.atom_value
+    if "atom_base" in fields:
+        row.atom_base = payload.atom_base
+    if fields & {"template", "regex", "atom_value", "atom_base"}:
+        row.kind = _production_kind(row.template, row.regex, row.atom_value, row.atom_base)
     if "bindings" in fields and payload.bindings is not None:
         row.bindings = await _binding_rows(session, system_id, ProductionBindingRow, payload.bindings)
     await _commit(session)

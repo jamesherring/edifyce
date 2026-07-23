@@ -42,6 +42,16 @@ def regex_prod(sort: str, name: str, regex: str) -> Production:
     return Production(sort=sort, name=name, regex=regex)
 
 
+def atom_const_prod(sort: str, name: str, value: str) -> Production:
+    """An atom *constant* production: a sort member matching one literal token."""
+    return Production(sort=sort, name=name, atom_value=value)
+
+
+def atom_family_prod(sort: str, name: str, base: str) -> Production:
+    """An atom *family* production: the infinite ``base_#`` (``p`` -> p, p_0, p_1, …)."""
+    return Production(sort=sort, name=name, atom_base=base)
+
+
 def defn(
     sort: str,
     name: str,

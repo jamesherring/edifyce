@@ -18,7 +18,17 @@ afterEach(() => {
 });
 
 function prod(sort: string) {
-	return { id: 'p1', name: 'membership', sort, kind: 'composite', template: 's ∈ t', regex: null, bindings: [] };
+	return {
+		id: 'p1',
+		name: 'membership',
+		sort,
+		kind: 'composite',
+		template: 's ∈ t',
+		regex: null,
+		atom_value: null,
+		atom_base: null,
+		bindings: []
+	};
 }
 
 // The P1 fix: a production's stored sort may have been deleted since, leaving the
@@ -54,5 +64,34 @@ describe('ProductionsSection sort validation', () => {
 		await user.click(screen.getByRole('button', { name: 'Edit' }));
 		const save = await screen.findByRole('button', { name: /Save Changes/ });
 		expect(save).toBeEnabled();
+	});
+});
+
+describe('ProductionsSection atom productions', () => {
+	function atomFamily() {
+		return {
+			id: 'p2',
+			name: 'prop',
+			sort: 'formula',
+			kind: 'atom',
+			template: null,
+			regex: null,
+			atom_value: null,
+			atom_base: 'p',
+			bindings: []
+		};
+	}
+
+	it('opens an atom family in Family mode showing its base', async () => {
+		render(ProductionsSection, {
+			systemId: 'sys-1',
+			productions: [atomFamily()],
+			sortNames: ['formula'],
+			onChanged: vi.fn()
+		});
+		await user.click(screen.getByRole('button', { name: 'Edit' }));
+		await screen.findByRole('button', { name: /Save Changes/ });
+		// fill() picked the atom_base discriminator, so the value input holds the base.
+		expect(screen.getByDisplayValue('p')).toBeTruthy();
 	});
 });

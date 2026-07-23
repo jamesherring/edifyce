@@ -71,6 +71,10 @@ export interface Production {
 	kind: string;
 	template: string | null;
 	regex: string | null;
+	/** kind==="atom": the constant's literal token. */
+	atom_value: string | null;
+	/** kind==="atom": the indexed family's base (e.g. `p` for the `p_#` family). */
+	atom_base: string | null;
 	bindings: Binding[];
 }
 
@@ -198,9 +202,13 @@ export type SortUpdate = Partial<SortCreate>;
 export interface ProductionCreate {
 	name: string;
 	sort: string;
-	/** Exactly one of `template` / `regex` is required by the backend. */
+	/** Exactly one of `template` / `regex` / `atom_value` / `atom_base` is required
+	 * by the backend — a composite, a leaf regex, an atom constant, or an atom
+	 * family respectively. */
 	template?: string | null;
 	regex?: string | null;
+	atom_value?: string | null;
+	atom_base?: string | null;
 	bindings?: Binding[];
 }
 export type ProductionUpdate = Partial<ProductionCreate>;

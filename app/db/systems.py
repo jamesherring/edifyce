@@ -62,10 +62,14 @@ class SymbolRow(Base):
     system_id: Mapped[uuid.UUID] = _system_fk()
     position: Mapped[int] = _position()
     name: Mapped[str] = mapped_column(String(128), index=True)
-    # "union" (a sort), "regex" or "template" (a production).
+    # "union" (a sort), or a production: "regex", "composite", or "atom".
     kind: Mapped[str] = mapped_column(String(16))
     template: Mapped[str | None] = mapped_column(String(512))
     regex: Mapped[str | None] = mapped_column(String(512))
+    # For kind="atom": the constant's literal token (`atom_value`) XOR the
+    # indexed family's base (`atom_base`, e.g. "p" for the p_# family).
+    atom_value: Mapped[str | None] = mapped_column(String(512))
+    atom_base: Mapped[str | None] = mapped_column(String(128))
     # The union (sort) this symbol belongs to — "membership is a formula". Null
     # for a top-level sort. Self-FK within symbols.
     member_of_union_id: Mapped[uuid.UUID | None] = mapped_column(
