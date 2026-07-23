@@ -231,10 +231,12 @@ class ProductionCreate(BaseModel):
     sort: str = Field(..., min_length=1, max_length=128)
     # Exactly one of template / regex / atom_value / atom_base — a composite
     # (notation), a leaf regex, an atom constant, or an atom family respectively.
+    # The atom fields are min_length=1: an empty base would match `_0`, `_1`, …
+    # and an empty constant no token at all, so neither may be stored.
     template: str | None = Field(None, max_length=512)
     regex: str | None = Field(None, max_length=512)
-    atom_value: str | None = Field(None, max_length=512)
-    atom_base: str | None = Field(None, max_length=128)
+    atom_value: str | None = Field(None, min_length=1, max_length=512)
+    atom_base: str | None = Field(None, min_length=1, max_length=128)
     bindings: list[Binding] = Field(default_factory=list)
 
 
@@ -243,8 +245,8 @@ class ProductionUpdate(BaseModel):
     sort: str | None = Field(None, max_length=128)
     template: str | None = Field(None, max_length=512)
     regex: str | None = Field(None, max_length=512)
-    atom_value: str | None = Field(None, max_length=512)
-    atom_base: str | None = Field(None, max_length=128)
+    atom_value: str | None = Field(None, min_length=1, max_length=512)
+    atom_base: str | None = Field(None, min_length=1, max_length=128)
     bindings: list[Binding] | None = None
 
 

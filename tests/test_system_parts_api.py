@@ -758,6 +758,19 @@ def test_production_rejects_mixing_atom_with_another_kind(client):
     assert resp.status_code == 400
 
 
+def test_production_rejects_empty_atom_inputs(client):
+    # An empty base would match `_0`, `_1`, … and an empty constant no token at
+    # all, so neither is a valid atom — rejected at the schema (422).
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+    for body in ({"atom_value": ""}, {"atom_base": ""}):
+        resp = client.post(
+            f"/formal-systems/{sid}/productions", json={"name": "x", "sort": "formula", **body}
+        )
+        assert resp.status_code == 422, resp.text
+
+
 def test_only_one_line_type_is_allowed(client):
     # The declarative layer builds a single line type, so a second is rejected
     # rather than silently ignored by validate.
