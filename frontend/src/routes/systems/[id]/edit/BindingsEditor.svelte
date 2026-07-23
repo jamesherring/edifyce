@@ -3,16 +3,30 @@
 	import RepeatableRows from './RepeatableRows.svelte';
 	import type { Binding } from '$lib/api';
 
-	let { bindings = $bindable([]), label = 'Bindings' }: { bindings?: Binding[]; label?: string } =
-		$props();
+	let {
+		bindings = $bindable([]),
+		label = 'Bindings',
+		hint = '(optional)',
+		description,
+		addLabel = 'Add binding',
+		removeLabel = 'Remove binding'
+	}: {
+		bindings?: Binding[];
+		label?: string;
+		hint?: string;
+		description?: string;
+		addLabel?: string;
+		removeLabel?: string;
+	} = $props();
 </script>
 
 <RepeatableRows
 	bind:items={bindings}
 	{label}
-	hint="(optional)"
-	addLabel="Add binding"
-	removeLabel="Remove binding"
+	{hint}
+	{description}
+	{addLabel}
+	{removeLabel}
 	blank={() => ({ var: '', sort: '' })}
 >
 	{#snippet row(binding)}

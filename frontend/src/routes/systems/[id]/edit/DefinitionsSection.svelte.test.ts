@@ -35,6 +35,7 @@ function defn(over: Partial<Definition> = {}): Definition {
 			{ var: 'x', sort: 'variable' },
 			{ var: 'y', sort: 'variable' }
 		],
+		fresh: [],
 		...over
 	};
 }
@@ -44,6 +45,33 @@ function renderSection(definitions: Definition[]) {
 	render(DefinitionsSection, { systemId: 'sys1', definitions, sortNames: ['formula'], onChanged });
 	return { onChanged };
 }
+
+describe('DefinitionsSection fresh (bound variables)', () => {
+	it('pre-fills the fresh editor and sends it in the payload', async () => {
+		renderSection([defn({ fresh: [{ var: 'z', sort: 'variable' }] })]);
+		await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+		// The stored bound variable is shown.
+		expect(screen.getByDisplayValue('z')).toBeInTheDocument();
+
+		// Add a second bound variable, then save.
+		await userEvent.click(screen.getByRole('button', { name: 'Add bound variable' }));
+		const varInputs = screen.getAllByPlaceholderText('var');
+		const sortInputs = screen.getAllByPlaceholderText('sort');
+		await userEvent.type(varInputs[varInputs.length - 1], 'w');
+		await userEvent.type(sortInputs[sortInputs.length - 1], 'variable');
+
+		await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+		const [, , payload] = vi.mocked(api.parts.definitions.update).mock.calls[0];
+		expect(payload).toMatchObject({
+			fresh: [
+				{ var: 'z', sort: 'variable' },
+				{ var: 'w', sort: 'variable' }
+			]
+		});
+	});
+});
 
 describe('DefinitionsSection provisos', () => {
 	it('pre-fills the provisos editor from a definition’s provisos', async () => {
