@@ -10,7 +10,7 @@ from ..graphs import find_cycle, saturating_matching, topological_order
 from ..kernel.side_conditions import Not, Occurs
 from ..kernel.terms import from_match
 from ..matching import Match, MatchSet, get_by_path, parse_arguments, parse_path
-from .definitions import follows_by_definition
+from .definitions import follows_by_definition, kernel_definition_for
 
 if TYPE_CHECKING:
     from ..matching.context import Context
@@ -720,9 +720,27 @@ class Proof:
 
         proof_line.valid = False
         if reference.definition is not None:
-            proof_line.invalid_message = (
-                f"{reference.key} does not apply between this line and line {source.index() + 1}."
-            )
+            # A proviso is enforced only on the kernel definitional-step path; the
+            # string path can't evaluate it and so refuses a proviso-carrying
+            # definition outright (see follows_from_definition). When such a
+            # definition also has no kernel counterpart - its defining form binds a
+            # variable the checker can't treat as capture-avoiding - it can never
+            # apply anywhere. Name that cause instead of a bare "does not apply", so
+            # the author isn't left guessing why a well-formed citation fails.
+            definition = reference.definition
+            if definition.kernel_condition is not None \
+                    and kernel_definition_for(definition, context) is None:
+                proof_line.invalid_message = (
+                    f"{reference.key} carries a proviso but can't be applied: its "
+                    f"expansion binds a variable that isn't declared capture-avoiding, "
+                    f"so the proviso can't be enforced. Declare the bound variable(s) "
+                    f"with a `fresh` clause, or remove the proviso."
+                )
+            else:
+                proof_line.invalid_message = (
+                    f"{reference.key} does not apply between this line and line "
+                    f"{source.index() + 1}."
+                )
         else:
             proof_line.invalid_message = (
                 f"{reference.key} does not apply: no definition in scope relates this line "

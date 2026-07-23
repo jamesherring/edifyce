@@ -457,3 +457,72 @@ def test_where_definition_refuses_when_the_kernel_path_is_unavailable(binder_sys
     # the string path, so the step is refused rather than silently accepted.
     assert kernel_definition_for(definition, context) is None
     assert subset_line.follows_from_definition(unfolded_line, definition, {}, context) is False
+
+
+# ---------------------------------------------------------------------------
+# check_definitional_line: the proof-check entry point (provisos honored
+# consistently, and a clear diagnostic when a proviso can't be enforced)
+# ---------------------------------------------------------------------------
+
+
+def _definition_reference(source_line, definition):
+    from website.logical.formal_system.proof import DefinitionReference
+
+    return DefinitionReference(key="df", source=source_line, definition=definition)
+
+
+def test_check_definitional_line_honors_the_proviso_on_the_kernel_path(guarded_system):
+    # End-to-end through the proof-check entry point (not just follows_by_definition):
+    # the df-subset proviso `disjoint(x, y, setvar)` gates a cited definitional step.
+    definition = only_definition(guarded_system)
+    context = context_of(guarded_system)
+
+    # Disjoint arguments: the cited step verifies.
+    ok_proof, _ = formulae(guarded_system, "(a ⊆ b)", "∀z.((z ∈ a) → (z ∈ b))")
+    ok_source, ok_target = ok_proof.proof_lines
+    assert ok_proof.check_definitional_line(
+        ok_target, _definition_reference(ok_source, definition), context
+    ) is True
+
+    # Equal arguments violate the proviso: the step is rejected as a normal
+    # non-application (the definition *is* kernel-expressible, so no special message).
+    bad_proof, _ = formulae(guarded_system, "(a ⊆ a)", "∀z.((z ∈ a) → (z ∈ a))")
+    bad_source, bad_target = bad_proof.proof_lines
+    assert bad_proof.check_definitional_line(
+        bad_target, _definition_reference(bad_source, definition), context
+    ) is False
+    assert "does not apply between" in bad_target.invalid_message
+
+
+def test_check_definitional_line_explains_an_unenforceable_proviso(binder_system):
+    # A proviso-carrying definition with no kernel counterpart (undeclared binder)
+    # can never apply: the message must name that cause, not a bare "does not apply".
+    from website.logical.kernel import Equal
+
+    definition = binder_definition(binder_system)
+    definition.kernel_condition = Equal("x", "y")
+    context = context_of(binder_system)
+    proof, _ = formulae(binder_system, "(a ⊆ b)", "∀z.((z ∈ a) → (z ∈ b))")
+    source, target = proof.proof_lines
+
+    assert proof.check_definitional_line(
+        target, _definition_reference(source, definition), context
+    ) is False
+    message = target.invalid_message
+    assert "proviso" in message and "fresh" in message
+
+
+def test_check_definitional_line_message_is_generic_without_a_proviso(binder_system):
+    # The clear-proviso message is scoped to proviso-carrying definitions: an
+    # undeclared-binder definition with *no* proviso still reports the plain
+    # non-application message (it falls back to the string path, which may simply
+    # not relate these two lines).
+    definition = binder_definition(binder_system)  # no kernel_condition
+    context = context_of(binder_system)
+    proof, _ = formulae(binder_system, "(a ⊆ b)", "(a ∈ b)")
+    source, target = proof.proof_lines
+
+    assert proof.check_definitional_line(
+        target, _definition_reference(source, definition), context
+    ) is False
+    assert "proviso" not in target.invalid_message
