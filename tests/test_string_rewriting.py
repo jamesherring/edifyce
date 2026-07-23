@@ -14,7 +14,7 @@ import pytest
 pytest.importorskip("regex")
 
 from tests.miu_system import miu_spec
-from website.logical.declarative import build_spec, lower
+from website.logical.declarative import DeclarativeError, SystemSpec, build_spec, lower
 from website.logical.matching import Context, RegexPattern, StringPattern, joint_binding_exists
 from website.logical.matching.rewriting import iter_bindings
 
@@ -141,3 +141,35 @@ def test_matching_kind_lowers_to_the_edi_block():
 def test_compiled_rules_carry_the_string_matching_kind(miu):
     kinds = {ir.label: ir.matching for ir in miu.inference_rules}
     assert kinds == {"R1": "string", "R2": "string", "R3": "string", "R4": "string"}
+
+
+# ---------------------------------------------------------------------------
+# A string rule cannot carry side-conditions: the string path has no term
+# binding to evaluate them against, so silently ignoring a proviso would let an
+# author weaken a rule by choosing string matching. Reject the pairing instead.
+# ---------------------------------------------------------------------------
+
+
+def _string_rule_with_proviso() -> SystemSpec:
+    spec = miu_spec()
+    spec.rules[1].side_conditions = ["equal(x, x)"]  # R2, a matching="string" rule
+    return spec
+
+
+def test_string_rule_with_side_conditions_is_rejected_by_lower():
+    with pytest.raises(DeclarativeError):
+        lower(_string_rule_with_proviso())
+
+
+def test_build_spec_surfaces_the_rejection_as_errors():
+    result = build_spec(_string_rule_with_proviso())
+    assert "errors" in result
+    assert result["errors"]
+
+
+def test_structural_rule_may_still_carry_side_conditions():
+    # The guard is scoped to string rules; structural rules are unaffected.
+    spec = miu_spec()
+    spec.rules[1].matching = "structural"
+    spec.rules[1].side_conditions = ["equal(x, x)"]
+    assert "matching:" in lower(spec)  # lowers without raising

@@ -308,6 +308,45 @@ def test_rule_matching_kind_round_trips_through_the_api(client):
     assert flipped.json()["deduction"] == "Mxx"
 
 
+def test_string_rule_cannot_carry_side_conditions_via_api(client):
+    # The string path has no term binding to evaluate a proviso against, so the
+    # API rejects the pairing (create and both PATCH directions) rather than
+    # store a rule whose side-conditions would be silently ignored.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+
+    # Create with both is a 422.
+    both = client.post(f"/formal-systems/{sid}/rules", json={
+        "label": "R", "name": "r", "deduction": "p", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "formula"}],
+        "matching": "string", "side_conditions": ["equal(p, p)"],
+    })
+    assert both.status_code == 422
+
+    # A structural rule with provisos is fine; flipping it to string then 422s.
+    rule = _post(client, f"/formal-systems/{sid}/rules", {
+        "label": "R", "name": "r", "deduction": "p", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "formula"}],
+        "side_conditions": ["equal(p, p)"],
+    })
+    flip = client.patch(
+        f"/formal-systems/{sid}/rules/{rule['id']}", json={"matching": "string"}
+    )
+    assert flip.status_code == 422
+
+    # And adding provisos to an existing string rule is likewise a 422.
+    string_rule = _post(client, f"/formal-systems/{sid}/rules", {
+        "label": "S", "name": "s", "deduction": "p", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "formula"}], "matching": "string",
+    })
+    add = client.patch(
+        f"/formal-systems/{sid}/rules/{string_rule['id']}",
+        json={"side_conditions": ["equal(p, p)"]},
+    )
+    assert add.status_code == 422
+
+
 def test_string_rewriting_system_authored_via_api_verifies_a_proof(client):
     # Author Hofstadter's MIU (a string-rewriting system) entirely through the
     # child endpoints, then check a real derivation against it — proving the

@@ -574,6 +574,19 @@ async def _assign_rule(session: AsyncSession, system_id: uuid.UUID, row: RuleRow
         except ValueError as exc:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
+    # A string-rewriting rule is checked by associative matching, which has no
+    # term binding to evaluate a side-condition against; the engine would ignore
+    # any proviso on it. Reject the pairing here (across the final combined state,
+    # so flipping either field into conflict is caught) rather than let an author
+    # silently weaken a rule by choosing string matching. Mirrors the guard in
+    # website.logical.declarative.lower.
+    if row.matching == "string" and row.side_conditions:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "String-rewriting rules cannot carry side-conditions; drop them or "
+            "switch the rule to structural matching.",
+        )
+
 
 # ---------------------------------------------------------------------------
 # Table-driven CRUD for brackets, line types, definitions, axioms, rules

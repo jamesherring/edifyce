@@ -137,6 +137,18 @@ def lower(spec: SystemSpec) -> str:
     any order can reference any sort, and the unions are filled afterwards.
     """
 
+    # Side-conditions are the kernel's structural term algebra, checked against a
+    # rule's *term* binding. A string-rewriting rule is justified by associative
+    # matching over surface strings (no term binding), so it cannot evaluate
+    # them. Rather than silently ignore a proviso an author wrote — which would
+    # make the rule quietly more permissive than intended — reject the pairing.
+    for rule in spec.rules:
+        if rule.matching == "string" and rule.side_conditions:
+            raise DeclarativeError(
+                f"Rule {rule.label!r} uses string matching, which cannot enforce "
+                f"side-conditions; drop them or switch it to structural matching."
+            )
+
     out: list[str] = []
     pad = "    "
 
