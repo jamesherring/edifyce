@@ -9,30 +9,43 @@ fill it), and a wrong guess compiles cleanly yet silently matches nothing.
 
 This module offers a structured, order-independent description of a system --
 the :class:`SystemSpec` dataclasses (grammar productions, a logical line,
-definitions, axioms, rules) -- and *lowers it to ordinary ``.edi`` source*,
-which the real :func:`website.logical.compiler.compile` then turns into a
-``FormalSystem``. It is deliberately a thin front-end: nothing here
-re-implements matching or proof checking -- it only rearranges the declarative
-model into the engine's own language and hands off. The one thing the ``.edi``
-language cannot express, ``respect_brackets``, is patched onto the compiled
-patterns afterwards.
+definitions, axioms, rules). :func:`build_spec` / :func:`build_system` turn one
+into a ``FormalSystem`` **directly**, by calling the engine's own construction
+primitives (``build_schema_pattern``, ``add_variables``, ``add_definition``,
+``parse_side_condition``, the ``Pattern`` constructors) -- no text pass. Nothing
+here re-implements matching or proof checking; it only wires the declarative
+model into engine objects. Because there is no text pass, ``respect_brackets``
+is set on each pattern at construction.
 
-A :class:`SystemSpec` is built directly -- by the persistence layer
+A :class:`SystemSpec` is built by the persistence layer
 (``app.db.system_to_spec`` reconstructs one from stored rows) or, in tests, by
-scripted assembly -- and handed to :func:`build_spec`. There is no text-syntax
-front-end; the relational storage, not a source blob, is the source of truth.
+scripted assembly. The relational storage, not a source blob, is the source of
+truth.
 
-Crucially, **definitions remain first-class**: a definition lowers to the
-engine's ``Define <higher> as <lower> [where <proviso>]``, so a complex base
-system (ZFC) can be layered up with familiar notation (``⊆``, ``∅``, ``P(x)``
-...) exactly as the engine already supports.
+:func:`lower` still renders a ``SystemSpec`` to equivalent ``.edi`` source for
+the read-only ``/source`` export (and as the oracle the direct builder is
+differentially tested against); it is no longer on the build path.
+
+Crucially, **definitions remain first-class**: a definition becomes the engine's
+``Define <higher> as <lower> [where <proviso>]``, so a complex base system (ZFC)
+can be layered up with familiar notation (``⊆``, ``∅``, ``P(x)`` ...) exactly as
+the engine already supports.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from copy import copy
 from dataclasses import dataclass, field
 
-from .compiler import compile as compile_edi
+from .compiler import (
+    FormalSystemContext,
+    _combine_side_conditions,
+    build_schema_pattern,
+)
+from .formal_system import FormalSystem, InferenceRule, LineType
+from .formal_system.side_condition_syntax import parse_side_condition
+from .matching import MatchSet, RegexPattern, StringPattern, UnionPattern
 
 
 class DeclarativeError(Exception):
@@ -219,7 +232,16 @@ def _anchor(regex: str) -> str:
     return regex
 
 
-def _emit_line(spec: SystemSpec, emit) -> None:
+def _line_layout(
+    spec: SystemSpec,
+) -> tuple[str, list[tuple[str, str]], tuple[str, str], tuple[str, str] | None]:
+    """Resolve a line's template and its formula/reference placeholders.
+
+    Returns ``(template, placeholders, logical_ph, reference_ph)`` where each
+    ``_ph`` is a ``(placeholder_name, variable)`` pair (``reference_ph`` may be
+    ``None``). Shared by :func:`_emit_line` (text path) and :func:`build_system`
+    (direct path) so both agree on which matched field is the formula/citation.
+    """
     line = spec.line
     sorts = set(spec.sort_names())
     part_names = {p.name for p in line.parts}
@@ -248,6 +270,13 @@ def _emit_line(spec: SystemSpec, emit) -> None:
         if ph in part_names:
             reference_ph = (ph, var)
             break
+
+    return template, placeholders, logical_ph, reference_ph
+
+
+def _emit_line(spec: SystemSpec, emit) -> None:
+    line = spec.line
+    template, placeholders, logical_ph, reference_ph = _line_layout(spec)
 
     emit(1, "ProofContext:")
     emit(2, "given: MatchSet()")
@@ -351,31 +380,183 @@ def _emit_rule(rule: Rule, emit) -> None:
 
 
 # ---------------------------------------------------------------------------
-# respect_brackets -- the one thing ``.edi`` can't express, patched on after.
+# Direct builder: SystemSpec -> FormalSystem, without the .edi round-trip.
+#
+# This constructs the engine objects straight from the SystemSpec by calling the
+# same low-level primitives compile() uses (build_schema_pattern, add_variables,
+# add_definition, parse_side_condition, the Pattern constructors), driven from
+# spec fields in lower()'s order. Because there is no text pass, respect_brackets
+# is set on each pattern at construction rather than patched on afterwards.
 # ---------------------------------------------------------------------------
 
 
-def _patch_brackets(system, bracket_pairs: list[tuple[str, str]]) -> None:
-    if not bracket_pairs:
-        return
-    mapping = {o: c for o, c in bracket_pairs}
+def _bracket_map(spec: SystemSpec) -> dict[str, str] | None:
+    # The opening->closing map every pattern respects: declared pairs, else the
+    # default `()` when any template/definition/deduction actually uses a paren.
+    brackets = list(spec.brackets)
+    if not brackets and _uses_parens(spec):
+        brackets = [("(", ")")]
+    return {o: c for o, c in brackets} or None
 
-    seen: set[int] = set()
 
-    def walk(pattern) -> None:
-        if pattern is None or id(pattern) in seen:
-            return
-        seen.add(id(pattern))
-        if hasattr(pattern, "respect_brackets"):
-            pattern.respect_brackets = mapping
-        for sub in getattr(pattern, "patterns", []) or []:
-            walk(sub)
-        for sub in (getattr(pattern, "variables", {}) or {}).values():
-            walk(sub)
+def _binding_patterns(bindings: list[tuple[str, str]], ctx: FormalSystemContext) -> dict[str, Pattern]:
+    # Map a `with`-style binding list `[(var, sort)]` to `{var: sort_pattern}`,
+    # the string-variable dict the engine's pattern/rule builders consume.
+    return {var: ctx.variables[sort] for var, sort in bindings}
 
-    for value in system.context.variables.values():
-        if hasattr(value, "respect_brackets"):
-            walk(value)
+
+def build_system(spec: SystemSpec) -> FormalSystem:
+    """Build a :class:`FormalSystem` directly from a :class:`SystemSpec`.
+
+    Raises :class:`DeclarativeError` for a structurally-invalid spec (e.g. a line
+    shape with no grammar-sort placeholder); :func:`build_spec` wraps that into
+    the ``{"errors": [...]}`` contract.
+    """
+    name = _identifier(spec.name) or "System"
+    ctx = FormalSystemContext()
+    system = FormalSystem(name=name)
+    ctx.variables[name] = system
+
+    brackets = _bracket_map(spec)
+
+    def register(pattern):
+        # Every named pattern respects the system's brackets (parity with the
+        # old post-compile `_patch_brackets`, which walked the same set).
+        pattern.respect_brackets = brackets
+        return pattern
+
+    # 1. Atomic (regex) productions and inline line parts.
+    for prod in spec.productions:
+        if prod.regex is not None:
+            ctx.variables[prod.name] = register(
+                RegexPattern(name=prod.name, pattern=_anchor(prod.regex), pre_format=ctx.pre_format)
+            )
+    if spec.line:
+        for part in spec.line.parts:
+            ctx.variables[part.name] = register(
+                RegexPattern(name=part.name, pattern=_anchor(part.regex), pre_format=ctx.pre_format)
+            )
+
+    # 2. Forward-declare every sort as an empty union (order independence).
+    for sort in spec.sort_names():
+        ctx.variables[sort] = register(
+            UnionPattern(name=sort, patterns=[], pre_format=ctx.pre_format)
+        )
+
+    # 3. Composite productions.
+    for prod in spec.productions:
+        if prod.template is None:
+            continue
+        pattern = StringPattern(name=prod.name, pattern=prod.template, pre_format=ctx.pre_format)
+        pattern.add_variables(_binding_patterns(prod.bindings, ctx))
+        ctx.variables[prod.name] = register(pattern)
+
+    # 4. Fill each sort union with its members, in declared order.
+    for sort in spec.sort_names():
+        union = ctx.variables[sort]
+        for prod in spec.productions:
+            if prod.sort == sort:
+                union.patterns.append(ctx.variables[prod.name])
+
+    # 5. Line: proof context + statement pattern + logical line type.
+    if spec.line:
+        _build_line(spec, ctx, system, register)
+
+    # 6. Axioms -> axiom-behaviour line types.
+    for ax in spec.axioms:
+        _build_axiom(ax, ctx, system, register)
+
+    # 7. Rules -> inference rules.
+    for rule in spec.rules:
+        system.add_inference_rule(_build_rule(rule, ctx))
+
+    # 8. Publish the build variables into the proof context, then finalise
+    # definitions against that (now complete) context -- the order compile()
+    # uses so `add_definition` can match the lower form against the productions.
+    system.context.variables.update(ctx.variables)
+    for defn in spec.definitions:
+        _finalise_definition(defn, ctx, system)
+
+    # 9. Wire the build context and index the patterns.
+    system.build_context = ctx
+    system.build_pattern_dictionary()
+    return system
+
+
+def _build_line(spec: SystemSpec, ctx: FormalSystemContext, system: FormalSystem,
+                register: Callable[[Pattern], Pattern]) -> None:
+    template, placeholders, logical_ph, reference_ph = _line_layout(spec)
+
+    system.context.logical["given"] = MatchSet()
+
+    pattern = StringPattern(name="statement_pattern", pattern=template, pre_format=ctx.pre_format)
+    pattern.add_variables({var: ctx.variables[ph] for ph, var in placeholders})
+    ctx.variables["statement_pattern"] = register(pattern)
+
+    line_type = LineType(
+        name=spec.line.name,
+        pattern=pattern,
+        behaviour="logical",
+        formula_field=logical_ph[1],
+        reference_field=reference_ph[1] if reference_ph is not None else None,
+    )
+    ctx.variables[spec.line.name] = line_type
+    system.add_line_type(line_type)
+
+
+def _build_axiom(axiom: Rule, ctx: FormalSystemContext, system: FormalSystem,
+                 register: Callable[[Pattern], Pattern]) -> None:
+    pattern_name = f"{_identifier(axiom.name)}_axiom"
+    pattern = StringPattern(name=pattern_name, pattern=axiom.deduction, pre_format=ctx.pre_format)
+    pattern.add_variables(_binding_patterns(axiom.bindings, ctx))
+    ctx.variables[pattern_name] = register(pattern)
+
+    # A bare axiom asserts its whole match, hence `formula_field="self"`.
+    line_type = LineType(
+        name=_identifier(axiom.name), pattern=pattern, behaviour="axiom", formula_field="self"
+    )
+    ctx.variables[_identifier(axiom.name)] = line_type
+    system.add_line_type(line_type)
+
+
+def _build_rule(rule: Rule, ctx: FormalSystemContext) -> InferenceRule:
+    # The rule's bindings are its metavariables; put them in a scoped copy of the
+    # build context so `build_schema_pattern` treats them as variables (exactly
+    # the string-variable scope compile() gets from a `with ... as ...` block).
+    string_variables = _binding_patterns(rule.bindings, ctx)
+    rule_ctx = copy(ctx)
+    rule_ctx.string_variables = dict(string_variables)
+
+    inference_rule = InferenceRule(
+        name=_identifier(rule.name), label=rule.label, variables=dict(string_variables)
+    )
+    for antecedent in rule.antecedents:
+        inference_rule.antecedents.append(build_schema_pattern(antecedent, rule_ctx, "antecedent"))
+    inference_rule.deduction = build_schema_pattern(rule.deduction, rule_ctx, "deduction")
+    for proviso in rule.side_conditions:
+        inference_rule.side_conditions.append(parse_side_condition(proviso, rule_ctx))
+    return inference_rule
+
+
+def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: FormalSystem) -> None:
+    union = ctx.variables[defn.sort]
+    context_copy = copy(system.context)
+    context_copy.string_variables.update(_binding_patterns(defn.bindings, ctx))
+
+    # A `;` inside a `where` proviso conjoins several kernel conditions, matching
+    # how the compiler splits the lowered `where` clause.
+    where_strings = (
+        [part.strip() for part in defn.condition.split(";") if part.strip()]
+        if defn.condition
+        else []
+    )
+    kernel_condition = _combine_side_conditions(where_strings, context_copy)
+
+    result = union.add_definition(
+        defn.lower, defn.higher, context_copy, kernel_condition=kernel_condition, label=None
+    )
+    if result is not None:
+        system.context.definitions.add(result)
 
 
 # ---------------------------------------------------------------------------
@@ -389,28 +570,17 @@ def build_spec(spec: SystemSpec, system_dict: dict | None = None) -> dict:
     The entry point for callers that hold a ``SystemSpec`` -- e.g. a persistence
     layer that reconstructs one from database rows, or a test that assembles one
     directly. Returns ``{"system": FormalSystem}`` on success or
-    ``{"errors": [...]}`` when lowering or compilation fails.
+    ``{"errors": [...]}`` when the spec is invalid.
     """
-
-    # Lowering can still reject a parsed-but-invalid spec (e.g. a line shape
-    # with no grammar-sort placeholder); surface that as errors, not an
-    # exception, to keep the build contract.
     try:
-        edi = lower(spec)
+        return {"system": build_system(spec)}
     except DeclarativeError as exc:
         return {"errors": [str(exc)]}
-
-    result = compile_edi(edi, system_dict=system_dict)
-
-    if "system" in result:
-        # Determine bracket pairs: those declared, else default '()' if any
-        # template/definition actually uses a parenthesis.
-        brackets = list(spec.brackets)
-        if not brackets and _uses_parens(spec):
-            brackets = [("(", ")")]
-        _patch_brackets(result["system"], brackets)
-
-    return result
+    except Exception as exc:  # noqa: BLE001
+        # A spec that reaches here passed storage validation but the engine still
+        # rejected it (e.g. a malformed proviso). Preserve the build contract --
+        # return errors rather than raising into the caller (a 500 at the API).
+        return {"errors": [str(exc)]}
 
 
 def _uses_parens(spec: SystemSpec) -> bool:
