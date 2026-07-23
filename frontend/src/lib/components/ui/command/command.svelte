@@ -1,0 +1,24 @@
+<script lang="ts">
+  import { Command as CommandPrimitive } from 'bits-ui';
+  import { cn, type WithoutChildrenOrChild } from '$lib/utils.js';
+
+  let {
+    ref = $bindable(null),
+    value = $bindable(''),
+    class: className,
+    ...restProps
+  }: WithoutChildrenOrChild<CommandPrimitive.RootProps> & {
+    children: import('svelte').Snippet;
+  } = $props();
+</script>
+
+<CommandPrimitive.Root
+  bind:ref
+  bind:value
+  data-slot="command"
+  class={cn(
+    'flex h-full w-full flex-col overflow-hidden rounded-md bg-popover text-popover-foreground',
+    className
+  )}
+  {...restProps}
+/>

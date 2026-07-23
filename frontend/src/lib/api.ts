@@ -278,6 +278,16 @@ export interface ProofReference {
 	published: boolean;
 }
 
+/** One incoming reference edge, read back — mirrors `ProofReferrerOut`. The
+ * "used by" direction: a proof that cites this one as a lemma. */
+export interface ProofReferrer {
+	proof_id: string;
+	/** The label the referring proof cites this one by (`[alias.line]`). */
+	alias: string;
+	name: string;
+	published: boolean;
+}
+
 /** One outgoing reference edge, as submitted — mirrors `ProofReferenceInput`. */
 export interface ProofReferenceInput {
 	referenced_proof_id: string;
@@ -291,6 +301,9 @@ export interface ProofDetail extends ProofSummary {
 	/** Outgoing references (lemmas this proof cites), filtered to those the
 	 * viewer may read. */
 	references: ProofReference[];
+	/** Incoming references (proofs that cite this one as a lemma), filtered to
+	 * those the viewer may read. */
+	referenced_by: ProofReferrer[];
 }
 
 export interface ProofCreate {
