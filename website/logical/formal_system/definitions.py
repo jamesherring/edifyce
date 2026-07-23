@@ -31,6 +31,16 @@ when a counterpart exists and signals a fall-back to the string path when it doe
 not. The binder guard below stays as a safety net: an undeclared binder would
 otherwise unfold capturingly, so it forces the fallback rather than risk
 unsoundness.
+
+Invariant: a **proviso is enforced only on this kernel path**. The string
+application path (``matching.Definition.check_application`` / ``get_lower``)
+cannot evaluate a ``kernel_condition`` and so refuses a proviso-carrying
+definition outright, and ``ProofLine.follows_from_definition`` refuses to fall
+back to it. The consequence is that a proviso-carrying definition with **no**
+kernel counterpart (e.g. an undeclared binder) can never apply anywhere - it is
+not silently accepted (that would drop the proviso), but it is also unusable.
+``Proof.check_definitional_line`` names this case explicitly so the failure is a
+clear diagnostic rather than an opaque "does not apply".
 """
 
 from __future__ import annotations
