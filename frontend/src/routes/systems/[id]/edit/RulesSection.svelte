@@ -6,7 +6,8 @@
 	import RepeatableRows from './RepeatableRows.svelte';
 	import { Label } from '$lib/components/ui/label';
 	import { Input } from '$lib/components/ui/input';
-	import { api, type Rule, type Binding } from '$lib/api';
+	import { Button } from '$lib/components/ui/button';
+	import { api, type Rule, type Binding, type RuleMatching } from '$lib/api';
 	import { createSectionController } from './section.svelte';
 
 	let {
@@ -23,6 +24,7 @@
 	let label = $state('');
 	let name = $state('');
 	let deduction = $state('');
+	let matching = $state<RuleMatching>('structural');
 	let antecedents = $state<StringRow[]>([]);
 	let sideConditions = $state<StringRow[]>([]);
 	let bindings = $state<Binding[]>([]);
@@ -40,6 +42,7 @@
 			label = item?.label ?? '';
 			name = item?.name ?? '';
 			deduction = item?.deduction ?? '';
+			matching = item?.matching ?? 'structural';
 			antecedents = item?.antecedents.map((v) => ({ value: v })) ?? [];
 			sideConditions = item?.side_conditions.map((v) => ({ value: v })) ?? [];
 			bindings = item?.bindings.map((b) => ({ ...b })) ?? [];
@@ -52,11 +55,17 @@
 			label: label.trim(),
 			name: name.trim(),
 			deduction: deduction.trim(),
+			matching,
 			antecedents: antecedents.map((a) => a.value.trim()).filter(Boolean),
 			side_conditions: sideConditions.map((sc) => sc.value.trim()).filter(Boolean),
 			bindings: bindings.filter((b) => b.var.trim() && b.sort.trim())
 		};
 	}
+
+	const MATCHING_OPTIONS: { value: RuleMatching; label: string }[] = [
+		{ value: 'structural', label: 'Structural' },
+		{ value: 'string', label: 'String rewriting' }
+	];
 </script>
 
 <PartSection
@@ -73,6 +82,9 @@
 		<div class="min-w-0 text-sm">
 			<span class="font-mono text-muted-foreground">{r.label}</span>
 			<span class="ml-2 font-medium">{r.name}</span>
+			{#if r.matching === 'string'}
+				<span class="ml-2 text-xs text-muted-foreground">· string rewriting</span>
+			{/if}
 			<span class="ml-2 font-mono text-xs text-muted-foreground">
 				{r.antecedents.join(' ; ') || '—'} ⊢ {r.deduction}
 			</span>
@@ -106,6 +118,30 @@
 	<div class="space-y-2">
 		<Label for="rule-deduction">Conclusion</Label>
 		<Input id="rule-deduction" bind:value={deduction} class="font-mono" placeholder="e.g. q" maxlength={512} />
+	</div>
+	<div class="space-y-2">
+		<Label>Checking</Label>
+		<div class="flex gap-2">
+			{#each MATCHING_OPTIONS as option (option.value)}
+				<Button
+					type="button"
+					size="sm"
+					variant={matching === option.value ? 'default' : 'outline'}
+					onclick={() => (matching = option.value)}
+				>
+					{option.label}
+				</Button>
+			{/each}
+		</div>
+		<p class="text-xs text-muted-foreground">
+			{#if matching === 'string'}
+				Steps are checked by associative string matching — for rewriting systems (e.g. MIU)
+				whose rules split and concatenate strings. Side-conditions do not apply.
+			{:else}
+				Steps are checked by term unification, where a variable binds a whole subterm (the
+				default, for logical systems).
+			{/if}
+		</p>
 	</div>
 	<BindingsEditor bind:bindings />
 	<RepeatableRows

@@ -1015,6 +1015,22 @@ class AbstractSyntaxTree:
                     current_object.allow_extra_antecedents = value
                     return
 
+                elif stripped == "matching:":
+                    # How steps are justified against this rule: "structural"
+                    # (term unification, the default) or "string" (associative
+                    # matching for a string-rewriting rule; see rules.py).
+                    value = None
+                    for line in self.sub_trees:
+                        stripped_line = line.line.strip()
+                        if stripped_line in ("string", "structural"):
+                            value = stripped_line
+
+                    if value is None:
+                        raise Exception(f"Could not parse 'matching' for '{current_object.name}'.")
+
+                    current_object.matching = value
+                    return
+
                 elif stripped == "format:":
                     # Create a format dictionary
 

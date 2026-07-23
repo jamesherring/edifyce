@@ -32,7 +32,8 @@ const rule: Rule = {
 		{ var: 'x', sort: 'variable' },
 		{ var: 'p', sort: 'formula' }
 	],
-	side_conditions: ['not occurs(x, p)']
+	side_conditions: ['not occurs(x, p)'],
+	matching: 'structural'
 };
 
 function renderSection() {
@@ -65,6 +66,26 @@ describe('RulesSection provisos', () => {
 			'sys1',
 			'r1',
 			expect.objectContaining({ side_conditions: ['not occurs(x, p)', 'equal(x, p)'] })
+		);
+	});
+});
+
+describe('RulesSection matching kind', () => {
+	it('defaults a new rule to structural and can switch it to string rewriting', async () => {
+		renderSection();
+		await userEvent.click(screen.getByRole('button', { name: 'Add rule' }));
+
+		// Minimal required fields so the save can fire.
+		await userEvent.type(screen.getByPlaceholderText('e.g. MP'), 'R2');
+		await userEvent.type(screen.getByPlaceholderText('e.g. modus ponens'), 'double');
+		await userEvent.type(screen.getByPlaceholderText('e.g. q'), 'Mxx');
+
+		await userEvent.click(screen.getByRole('button', { name: 'String rewriting' }));
+		await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+		expect(vi.mocked(api.parts.rules.create)).toHaveBeenCalledWith(
+			'sys1',
+			expect.objectContaining({ matching: 'string' })
 		);
 	});
 });

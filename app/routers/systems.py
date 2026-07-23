@@ -345,6 +345,7 @@ def rule_out(r: RuleRow) -> Rule:
         antecedents=[ant.pattern for ant in r.antecedents],
         bindings=_bindings_out(r.bindings),
         side_conditions=rule_side_conditions_list(r),
+        matching=r.matching,
     )
 
 

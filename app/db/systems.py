@@ -258,6 +258,10 @@ class RuleRow(Base):
     label: Mapped[str] = mapped_column(String(64), index=True)
     name: Mapped[str] = mapped_column(String(128), index=True)
     deduction: Mapped[str] = mapped_column(String(512))
+    # How steps are checked against this rule: "structural" (term unification,
+    # the default) or "string" (associative matching for a string-rewriting
+    # rule). Mirrors InferenceRule.matching / declarative Rule.matching.
+    matching: Mapped[str] = mapped_column(String(16), server_default=text("'structural'"))
 
     system: Mapped[FormalSystem] = relationship(back_populates="rules")
     antecedents: Mapped[list[RuleAntecedentRow]] = relationship(
