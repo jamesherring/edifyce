@@ -131,7 +131,11 @@ db_up() {
   if ! as_pg "$PGB/psql" "host=/tmp port=$PG_PORT user=postgres dbname=postgres" \
         -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" | grep -q 1; then
     log "creating database '$DB_NAME'"
-    as_pg "$PGB/createdb" -h /tmp -p "$PG_PORT" -U postgres "$DB_NAME"
+    # Force UTF-8 explicitly (via template0) rather than inheriting the cluster
+    # default — a cluster that was initdb'd SQL_ASCII would otherwise hand us a
+    # SQL_ASCII database, and Unicode verification results would fail to persist.
+    as_pg "$PGB/createdb" -h /tmp -p "$PG_PORT" -U postgres \
+      -E UTF8 -T template0 --locale=C.UTF-8 "$DB_NAME"
   fi
   as_pg "$PGB/psql" "host=/tmp port=$PG_PORT user=postgres dbname=$DB_NAME" \
     -c "CREATE EXTENSION IF NOT EXISTS vector" >/dev/null
