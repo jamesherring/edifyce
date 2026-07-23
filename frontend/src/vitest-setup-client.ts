@@ -3,8 +3,8 @@
 import '@testing-library/jest-dom/vitest';
 
 // jsdom implements no layout, so `scrollIntoView` is absent — bits-ui's command
-// list calls it while keeping the active item in view. Stub it so component tests
-// exercising the picker don't hit an unhandled rejection.
-if (!Element.prototype.scrollIntoView) {
-	Element.prototype.scrollIntoView = () => {};
-}
+// list calls it (inside a scheduled callback that can fire around teardown) to
+// keep the active item in view. Define it unconditionally as a no-op so picker
+// tests never hit an "scrollIntoView is not a function" unhandled rejection,
+// which would flake CI even though every test passes.
+Element.prototype.scrollIntoView = function scrollIntoView() {};
