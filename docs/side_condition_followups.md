@@ -176,12 +176,33 @@ slice of one game system in each candidate syntax before committing).
 Characterization (the old "PR 0") is **not** a PR — it is the local survey
 already folded into this document. The shippable work:
 
-1. **Typed value accessors (engine-authored fixed strings).** Replace
-   `result.get_by_path("label()"/"formula()"/"path()"/"display()"/"axiom()", …)`
-   in `formal_system/system.py` and `proof.py`, and the `lower()/higher()/for()`
-   sites, with direct typed method calls. These strings are engine-authored, not
-   user-authored — pure mechanical de-stringing, biggest safety win first. Split
-   2–3 PRs if the diff is large. Interpreter stays in place for the DSL.
+1. **Value accessors — *done*, and they turned out to be dead, not live.** The
+   plan assumed `result.get_by_path("label()"/"path()"/"display()"/"axiom()", …)`
+   in `formal_system/system.py` and `lower()/higher()/for()/path()` in
+   `proof.py` were live string-dispatch to convert into typed method calls. They
+   are not: `formula()`/`reference()` had already become declared LineType fields,
+   and the accessor-*function* definition syntax (`pattern.foo(): return …`) was
+   removed from the compiler, so **nothing can define these accessors** — every
+   call raises and is swallowed by its `try/except`. Instrumenting all seven
+   sites across the full suite confirmed **not one ever resolves**. So this step
+   was a *deletion* of dead, fail-silent plumbing, not a rewrite:
+   - `label()`/`display()`/`axiom()` in `FormalSystem.parse` removed — their
+     effects already come from live code (`ProofLine` defaults `display` to the
+     stripped text and `label` to `None`; `behaviour: axiom` sets `is_axiom`).
+     `label`/`display` per-line *overrides* are a real capability that is now
+     dormant; the intent is to **reintroduce them as declared LineType fields**
+     (like `formula`/`reference`), not via the interpreter — tracked for a later
+     PR.
+   - `get_references` (dead, no callers) removed, and the `behaviour: definition`
+     / `behaviour: import` branches in `ProofLine.execute` reduced to inert
+     no-ops (their `lower/higher/for/path` derivation was the dead accessor).
+     Those two behaviours are no-ops **until the references/definitions feature
+     is reimplemented with a typed mechanism** (see
+     `docs/proof-references-and-definitions-plan.md`); `Proof.import_path` — the
+     tested method — stays for that rewire.
+
+   Net: seven engine → interpreter call sites gone, all behaviour-preserving
+   (suite unchanged at 629 passed). Interpreter stays in place for the DSL.
 2. **Typed `edit_context` + definition construction.** The `sub_key`/`sub_value`
    derivations (`proof.py` ~1285–1330) and definition-side accessors. Slightly
    more involved (`edit_context` has genuinely dynamic keys — the one legitimate

@@ -72,42 +72,6 @@ class FormalSystem:
             # Add the pattern
             add_pattern(self.pattern_dictionary, item)
 
-    def get_references(self, text):
-        # Get references to external proofs from the given code.
-
-        # Create a default context
-        context = copy(self.context)
-
-        # Track the reference slugs
-        references = set()
-
-        # Get the import line types
-        import_line_types = [line_type for line_type in self.line_types if line_type.behaviour == "import"]
-
-        lines = text.split("\n")
-        for line in lines:
-
-            # Check the line is an import line type
-            for line_type in import_line_types:
-
-                result = line_type.parse_line(line, context)
-
-                if result is None:
-                    continue
-
-                # Get the path
-                try:
-                    path = result.get_by_path("path()", context)
-
-                except Exception:
-                    # No valid path here
-                    continue
-
-                references.add(path)
-                break
-
-        return references
-
     def parse(self, text, proof=None, proof_model_id=None, reference_proofs=None, context=None, line_number_offset=0):
         # Parse the text into a proof.
 
