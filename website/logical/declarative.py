@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from copy import copy
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 
 from .compiler import (
     FormalSystemContext,
@@ -117,6 +117,15 @@ class SystemSpec:
     definitions: list[Definition] = field(default_factory=list)
     axioms: list[Rule] = field(default_factory=list)
     rules: list[Rule] = field(default_factory=list)
+    # Back-compat for the former single-line API (`SystemSpec(line=...)`). An
+    # `InitVar` so it is accepted at construction but never a stored field —
+    # otherwise it would perturb the dataclass `==` the storage round-trip relies
+    # on. Prefer `lines`.
+    line: InitVar[LineSpec | None] = None
+
+    def __post_init__(self, line: LineSpec | None) -> None:
+        if line is not None:
+            self.lines = [line, *self.lines]
 
     def sort_names(self) -> list[str]:
         seen = []
@@ -294,11 +303,9 @@ def build_system(spec: SystemSpec) -> FormalSystem:
                 base=prod.atom_base,
                 pre_format=ctx.pre_format,
             )
-    for line in spec.lines:
-        for part in line.parts:
-            ctx.variables[part.name] = register(
-                RegexPattern(name=part.name, pattern=_anchor(part.regex), pre_format=ctx.pre_format)
-            )
+    # (Inline line parts are registered per-line in step 5, immediately before
+    # the line that uses them, so two lines may reuse a part name with different
+    # regexes without the shared namespace binding both to the last one.)
 
     # 2. Forward-declare every sort as an empty union (order independence).
     for sort in spec.sort_names():
@@ -321,11 +328,17 @@ def build_system(spec: SystemSpec) -> FormalSystem:
             if prod.sort == sort:
                 union.patterns.append(ctx.variables[prod.name])
 
-    # 5. Lines: a statement pattern + logical line type per declared line.
+    # 5. Lines: a statement pattern + logical line type per declared line. Each
+    # line's inline parts are registered just before it is built (see step 1).
     if spec.lines:
         system.context.logical["given"] = MatchSet()
         sorts = set(spec.sort_names())
         for line in spec.lines:
+            for part in line.parts:
+                ctx.variables[part.name] = register(
+                    RegexPattern(name=part.name, pattern=_anchor(part.regex),
+                                 pre_format=ctx.pre_format)
+                )
             _build_line(line, sorts, ctx, system, register)
 
     # 6. Axioms -> axiom-behaviour line types.

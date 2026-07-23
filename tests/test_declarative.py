@@ -385,3 +385,52 @@ def test_multiple_logical_line_types_build_and_parse():
     # A plain line matches `statement`; a ⊢-prefixed line matches `turnstile`.
     assert system.parse("(a → b) [HYP]").valid is True
     assert system.parse("⊢ (a → b) [HYP]").valid is True
+
+
+def test_single_line_kwarg_is_accepted_for_back_compat():
+    # The former single-line API (`line=`) still constructs and builds; it
+    # normalises into `lines` without becoming a compared field.
+    spec = SystemSpec(
+        name="Compat",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        line=statement_line(),
+        rules=[hyp_rule()],
+    )
+    assert [ls.name for ls in spec.lines] == ["statement"]
+    assert spec == SystemSpec(
+        name="Compat",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        lines=[statement_line()],
+        rules=[hyp_rule()],
+    )
+    assert build_system(spec).parse("(a → b) [HYP]").valid is True
+
+
+def test_same_named_line_parts_are_scoped_per_line():
+    # Two lines both name their reference part "reference" but with different
+    # regexes; each line must keep its own — the later, narrower `assume` part
+    # must not overwrite `claim`'s in the shared namespace.
+    spec = SystemSpec(
+        name="Parts",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        lines=[
+            LineSpec(
+                name="claim", shape="<formula> [<reference>]",
+                parts=[LinePart(name="reference", regex="[A-Za-z0-9, ]+")],
+                logical_sort="formula",
+            ),
+            LineSpec(
+                name="assume", shape="assume <formula> [<reference>]",
+                parts=[LinePart(name="reference", regex="[0-9]+")],
+                logical_sort="formula",
+            ),
+        ],
+        rules=[hyp_rule()],
+    )
+    system = build_system(spec)
+    # If `claim` had been rebound to `assume`'s digits-only regex, the citation
+    # "HYP" would fail to match and no line would parse this.
+    assert system.parse("(a → b) [HYP]").valid is True

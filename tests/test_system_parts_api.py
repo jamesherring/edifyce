@@ -785,6 +785,18 @@ def test_multiple_line_types_are_allowed(client):
     assert [line["name"] for line in lines] == ["claim", "assume"]
 
 
+def test_duplicate_line_type_name_is_rejected(client):
+    # The engine keys line types by name, so a duplicate would silently drop a
+    # shape; reject it (409) rather than store an unusable pair.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/line-types", {"name": "claim", "shape": "<x>"})
+    dup = client.post(
+        f"/formal-systems/{sid}/line-types", json={"name": "claim", "shape": "<y>"}
+    )
+    assert dup.status_code == 409
+
+
 def test_oversized_fields_are_rejected_as_422(client):
     # Free-text fields are capped to their DB column width, so an oversized value
     # is a validation error, not a Postgres truncation 500.
