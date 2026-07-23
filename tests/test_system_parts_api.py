@@ -571,6 +571,35 @@ def test_definition_fresh_round_trips_through_the_api(client):
     ).json()["fresh"] == []
 
 
+def test_definition_patch_omitting_fresh_leaves_it_unchanged(client):
+    # A metadata-only PATCH (model_fields_set excludes `fresh`) preserves the
+    # stored bound variables, exactly like bindings.
+    _login(client, "ada@example.com")
+    sid = _defn_system(client)
+    defn = _post(client, f"/formal-systems/{sid}/definitions", {
+        "sort": "term", "name": "d", "higher": "x", "lower": "y",
+        "fresh": [{"var": "z", "sort": "term"}],
+    })
+    renamed = client.patch(
+        f"/formal-systems/{sid}/definitions/{defn['id']}", json={"name": "renamed"}
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["fresh"] == [{"var": "z", "sort": "term"}]
+
+
+def test_definition_fresh_over_unknown_sort_is_rejected(client):
+    # A fresh var naming a sort the system doesn't declare is rejected at write
+    # time (400, the same _resolve_symbol path as bindings), not a 500 or a
+    # silently-dropped row.
+    _login(client, "ada@example.com")
+    sid = _defn_system(client)
+    response = client.post(f"/formal-systems/{sid}/definitions", json={
+        "sort": "term", "name": "d", "higher": "x", "lower": "y",
+        "fresh": [{"var": "z", "sort": "no_such_sort"}],
+    })
+    assert response.status_code == 400
+
+
 def test_definition_provisos_round_trip_through_the_api(client):
     _login(client, "ada@example.com")
     sid = _defn_system(client)

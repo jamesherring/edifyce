@@ -194,8 +194,8 @@
 						{#each system.definitions as def (def.id)}
 							<Table.Row>
 								<Table.Cell class="font-medium">
-										<a class="underline" href={`/systems/${system.id}/definitions/${def.id}`}>{def.name}</a>
-									</Table.Cell>
+									<a class="underline" href={`/systems/${system.id}/definitions/${def.id}`}>{def.name}</a>
+								</Table.Cell>
 								<Table.Cell class="font-mono">{def.higher}</Table.Cell>
 								<Table.Cell class="font-mono">{def.lower}</Table.Cell>
 								<Table.Cell class="hidden font-mono text-xs text-muted-foreground sm:table-cell">
