@@ -38,7 +38,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -240,7 +240,10 @@ def _summary(proof: Proof) -> ProofSummary:
     )
 
 
-def _references_out(proof: Proof) -> list[ProofReferenceOut]:
+def _references_out(proof: Proof, viewer: User | None) -> list[ProofReferenceOut]:
+    # Only surface references the viewer may themselves read. Otherwise a
+    # published proof that cites the owner's own draft would leak that draft's
+    # existence, name, and slug to any anonymous reader.
     return [
         ProofReferenceOut(
             referenced_proof_id=link.references_id,
@@ -250,15 +253,16 @@ def _references_out(proof: Proof) -> list[ProofReferenceOut]:
             published=link.referenced.published_at is not None,
         )
         for link in proof.reference_links
+        if _is_readable(link.referenced, viewer)
     ]
 
 
-def _detail(proof: Proof) -> ProofDetail:
+def _detail(proof: Proof, viewer: User | None) -> ProofDetail:
     return ProofDetail(
         **_summary(proof).model_dump(),
         source=proof.source,
         result=proof.result,
-        references=_references_out(proof),
+        references=_references_out(proof, viewer),
     )
 
 
@@ -326,7 +330,7 @@ async def create_proof(
     await session.commit()
 
     # Reload so server-default timestamps and the owner are eagerly present.
-    return _detail(await _get_owned_or_404(session, proof.id, user.id))
+    return _detail(await _get_owned_or_404(session, proof.id, user.id), user)
 
 
 @router.get("/{proof_id}", response_model=ProofDetail)
@@ -336,7 +340,7 @@ async def get_proof(
     session: AsyncSession = Depends(get_session),
 ) -> ProofDetail:
     # Published proofs are readable by anyone; drafts only by their owner.
-    return _detail(await _get_readable_or_404(session, proof_id, user))
+    return _detail(await _get_readable_or_404(session, proof_id, user), user)
 
 
 @router.patch("/{proof_id}", response_model=ProofDetail)
@@ -376,25 +380,47 @@ async def update_proof(
         await _require_publishable(session, proof)
 
     await session.commit()
-    return _detail(await _get_owned_or_404(session, proof_id, user.id))
+    return _detail(await _get_owned_or_404(session, proof_id, user.id), user)
+
+
+async def _lock_reference_graph(session: AsyncSession, system_id: uuid.UUID) -> None:
+    """Serialize concurrent reference-graph edits within one system.
+
+    The cycle check is read-then-write, so two concurrent PUTs (A→B and B→A)
+    could each pass against the committed graph and commit a cycle. A
+    transaction-scoped advisory lock keyed by the system makes those edits
+    serialize, so each sees the other's edge. Postgres only; a no-op on SQLite
+    (the test DB, where requests don't run concurrently anyway). Verification
+    (a later phase) re-checks cycles in the engine as the authoritative backstop.
+    """
+    if session.bind is not None and session.bind.dialect.name == "postgresql":
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": str(system_id)},
+        )
 
 
 async def _reference_would_cycle(
-    session: AsyncSession, proof_id: uuid.UUID, target_ids: list[uuid.UUID]
+    session: AsyncSession,
+    proof_id: uuid.UUID,
+    target_ids: list[uuid.UUID],
+    system_id: uuid.UUID,
 ) -> bool:
     """Whether pointing ``proof_id`` at every id in ``target_ids`` closes a cycle.
 
     The stored reference graph is kept acyclic, so a new cycle must run through
-    ``proof_id`` (proof → target → … → proof). Load every edge except this
-    proof's own (they are being replaced) and ask whether any target already
-    reaches ``proof_id``. The persistence-layer analogue of the engine's
-    transitive ``Proof.circular_dependency``.
+    ``proof_id`` (proof → target → … → proof). Load every edge in this system
+    except this proof's own (they are being replaced) and ask whether any target
+    already reaches ``proof_id``. References are same-system-only, so scoping the
+    load to the system captures the whole reachable closure without scanning the
+    global table. The persistence-layer analogue of the engine's transitive
+    ``Proof.circular_dependency``.
     """
     rows = (
         await session.execute(
-            select(ProofReference.proof_id, ProofReference.references_id).where(
-                ProofReference.proof_id != proof_id
-            )
+            select(ProofReference.proof_id, ProofReference.references_id)
+            .join(Proof, Proof.id == ProofReference.proof_id)
+            .where(Proof.formal_system_id == system_id, ProofReference.proof_id != proof_id)
         )
     ).all()
     adjacency: dict[uuid.UUID, list[uuid.UUID]] = defaultdict(list)
@@ -431,6 +457,10 @@ async def set_proof_references(
     """
     proof = await _get_owned_or_404(session, proof_id, user.id)
 
+    # Serialize concurrent reference edits in this system so the cycle check
+    # below can't be raced into committing a cycle.
+    await _lock_reference_graph(session, proof.formal_system_id)
+
     target_ids = [r.referenced_proof_id for r in payload.references]
     aliases = [r.alias for r in payload.references]
 
@@ -466,7 +496,7 @@ async def set_proof_references(
                     f"Referenced proof {tid} must be your own or a published proof.",
                 )
 
-        if await _reference_would_cycle(session, proof.id, target_ids):
+        if await _reference_would_cycle(session, proof.id, target_ids, proof.formal_system_id):
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
                 "That set of references would create a circular dependency.",
@@ -481,7 +511,7 @@ async def set_proof_references(
         for i, (tid, alias) in enumerate(zip(target_ids, aliases))
     ]
     await session.commit()
-    return _detail(await _get_owned_or_404(session, proof_id, user.id))
+    return _detail(await _get_owned_or_404(session, proof_id, user.id), user)
 
 
 @router.delete("/{proof_id}", status_code=status.HTTP_204_NO_CONTENT)

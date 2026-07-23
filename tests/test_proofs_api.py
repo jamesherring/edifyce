@@ -620,3 +620,23 @@ def test_reference_scope_allows_others_published_but_not_draft(client, db):
 
     assert _set_refs(client, mine, [{"referenced_proof_id": bob_published, "alias": "P"}]).status_code == 200
     assert _set_refs(client, mine, [{"referenced_proof_id": bob_draft, "alias": "D"}]).status_code == 422
+
+
+def test_reference_to_own_draft_is_hidden_from_public_readers(client, db):
+    # A published proof that cites the owner's own draft must not leak that
+    # draft's identity (name/slug/existence) to an anonymous reader.
+    ada = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, ada, published=True)
+    draft = _create_proof(client, sid, "Secret Lemma")
+    main = _create_proof(client, sid, "Main")
+    assert _set_refs(client, main, [{"referenced_proof_id": draft, "alias": "L"}]).status_code == 200
+    assert client.patch(f"/proofs/{main}", json={"published": True}).status_code == 200
+
+    # The owner still sees their own draft reference.
+    assert [r["alias"] for r in client.get(f"/proofs/{main}").json()["references"]] == ["L"]
+
+    # An anonymous reader of the published proof sees no trace of the draft.
+    _logout(client)
+    public_view = client.get(f"/proofs/{main}")
+    assert public_view.status_code == 200
+    assert public_view.json()["references"] == []
