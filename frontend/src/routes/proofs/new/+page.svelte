@@ -46,9 +46,20 @@
 		loadingSystems = true;
 		loadError = null;
 		try {
-			// This is a picker, not a paged list — pull a generous single page so
-			// the dropdown holds every system the user could write a proof against.
-			const own = (await api.systems.list({ limit: 100 })).items;
+			// The picker needs *every* owned system — a `?system=` link can point at
+			// any of them — so page through the (now server-paginated) list to its
+			// end rather than treating one capped response as the whole option set.
+			const pageSize = 100;
+			const own: FormalSystemSummary[] = [];
+			let total = Infinity;
+			while (own.length < total) {
+				const result = await api.systems.list({ limit: pageSize, offset: own.length });
+				own.push(...result.items);
+				total = result.total;
+				// A short page means the server has no more rows — stop even if a
+				// concurrent delete left `total` briefly ahead of what we can fetch.
+				if (result.items.length < pageSize) break;
+			}
 			ownSystems = own;
 			// Preselect: a ?system= param (e.g. linked from a system page), else the
 			// first available option.
