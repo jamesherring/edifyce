@@ -17,7 +17,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,14 +25,7 @@ from sqlalchemy.orm import selectinload
 
 from app.auth import current_active_user, current_active_user_optional
 from app.db import Base, FormalSystem, get_session, system_to_spec
-from app.routers._common import (
-    MAX_PAGE_SIZE,
-    count_stmt_for,
-    fetch_page,
-    order_by_clause,
-    search_conditions,
-    unique_slug,
-)
+from app.routers._common import PageParams, page_params, paginate_summaries, unique_slug
 from app.db.models import User
 from app.db.side_conditions import SideConditionRow
 from app.db.side_conditions_mapping import (
@@ -391,29 +384,16 @@ def _detail(system: FormalSystem) -> FormalSystemDetail:
 async def list_systems(
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
-    limit: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
-    offset: int = Query(0, ge=0),
-    search: str | None = Query(None),
-    sort: str | None = Query(None),
-    desc: bool = Query(False),
+    params: PageParams = Depends(page_params),
 ) -> Page[FormalSystemSummary]:
-    conditions = [FormalSystem.owner_id == user.id, *search_conditions(FormalSystem, search)]
-    order_by, by_author = order_by_clause(
-        FormalSystem, User, sort, desc, default=[FormalSystem.created_at]
-    )
-    stmt = select(FormalSystem).where(*conditions).options(selectinload(FormalSystem.owner))
-    if by_author:
-        stmt = stmt.outerjoin(User, FormalSystem.owner_id == User.id)
-    stmt = stmt.order_by(*order_by)
-
-    systems, total = await fetch_page(
-        session, stmt, count_stmt_for(FormalSystem, conditions), limit=limit, offset=offset
-    )
-    return Page(
-        items=[_summary(system) for system in systems],
-        total=total,
-        limit=limit,
-        offset=offset,
+    return await paginate_summaries(
+        session,
+        FormalSystem,
+        User,
+        base_conditions=[FormalSystem.owner_id == user.id],
+        default_order=[FormalSystem.created_at],
+        params=params,
+        summarize=_summary,
     )
 
 
@@ -421,41 +401,21 @@ async def list_systems(
 @router.get("/public", response_model=Page[FormalSystemSummary])
 async def list_public_systems(
     session: AsyncSession = Depends(get_session),
-    limit: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
-    offset: int = Query(0, ge=0),
-    search: str | None = Query(None),
-    sort: str | None = Query(None),
-    desc: bool = Query(False),
+    params: PageParams = Depends(page_params),
 ) -> Page[FormalSystemSummary]:
     """The shared master list: every published system, any owner, no auth.
 
     Drafts (``published_at IS NULL``) are excluded; unpublishing removes a system
     from this list. Newest publications first, unless the client asks to sort.
     """
-    conditions = [
-        FormalSystem.published_at.is_not(None),
-        *search_conditions(FormalSystem, search),
-    ]
-    order_by, by_author = order_by_clause(
+    return await paginate_summaries(
+        session,
         FormalSystem,
         User,
-        sort,
-        desc,
-        default=[FormalSystem.published_at.desc(), FormalSystem.created_at.desc()],
-    )
-    stmt = select(FormalSystem).where(*conditions).options(selectinload(FormalSystem.owner))
-    if by_author:
-        stmt = stmt.outerjoin(User, FormalSystem.owner_id == User.id)
-    stmt = stmt.order_by(*order_by)
-
-    systems, total = await fetch_page(
-        session, stmt, count_stmt_for(FormalSystem, conditions), limit=limit, offset=offset
-    )
-    return Page(
-        items=[_summary(system) for system in systems],
-        total=total,
-        limit=limit,
-        offset=offset,
+        base_conditions=[FormalSystem.published_at.is_not(None)],
+        default_order=[FormalSystem.published_at.desc(), FormalSystem.created_at.desc()],
+        params=params,
+        summarize=_summary,
     )
 
 

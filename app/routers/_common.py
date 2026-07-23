@@ -9,26 +9,56 @@ from __future__ import annotations
 
 import re
 from collections.abc import Awaitable, Callable, Sequence
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, TypeVar
 
+from fastapi import Query
 from sqlalchemy import func, or_, select
+from sqlalchemy.orm import selectinload
+
+from app.schemas import Page
 
 if TYPE_CHECKING:
-    from sqlalchemy import ColumnElement, Select
+    from sqlalchemy import ColumnElement
     from sqlalchemy.ext.asyncio import AsyncSession
+
+S = TypeVar("S")
 
 
 # The `.list()` / `.list()/public` endpoints all page over a summary row that
 # carries the same sortable surface (name, description, owner display name,
-# timestamps). These helpers keep that paging/search/sort logic in one place;
-# each stays model-agnostic by taking the ORM classes as arguments (mirroring
-# `unique_slug`), so `_common` never imports a concrete model.
+# timestamps) and an `owner` relationship. `paginate_summaries` keeps that whole
+# paging/search/sort recipe in one place; it stays model-agnostic by taking the
+# ORM classes as arguments (mirroring `unique_slug`), so `_common` never imports
+# a concrete model.
 
 # Cap the page size so a client can't ask the DB for an unbounded slice.
 MAX_PAGE_SIZE = 100
 
 
-def search_conditions(model: Any, search: str | None) -> list[ColumnElement[bool]]:
+@dataclass(frozen=True)
+class PageParams:
+    """The pagination/search/sort query params every list endpoint accepts."""
+
+    limit: int
+    offset: int
+    search: str | None
+    sort: str | None
+    descending: bool
+
+
+def page_params(
+    limit: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+    search: str | None = Query(None),
+    sort: str | None = Query(None),
+    desc: bool = Query(False),
+) -> PageParams:
+    """FastAPI dependency: parse the shared list query params once."""
+    return PageParams(limit=limit, offset=offset, search=search, sort=sort, descending=desc)
+
+
+def _search_conditions(model: Any, search: str | None) -> list[ColumnElement[bool]]:
     """A case-insensitive ``name``/``description`` filter, or nothing when blank."""
     if not search or not search.strip():
         return []
@@ -36,20 +66,20 @@ def search_conditions(model: Any, search: str | None) -> list[ColumnElement[bool
     return [or_(model.name.ilike(like), model.description.ilike(like))]
 
 
-def order_by_clause(
+def _order_by(
     model: Any,
     user_model: Any,
     sort: str | None,
     descending: bool,
     default: Sequence[ColumnElement[Any]],
 ) -> tuple[list[ColumnElement[Any]], bool]:
-    """Resolve a column id from the client into a stable ORDER BY.
+    """Resolve a client column id into a stable ORDER BY.
 
     Returns the ordering plus whether it references the owner (so the caller
-    knows to join ``user_model`` for the ``author`` sort). Unknown/blank sort
-    keys fall back to ``default`` untouched (its own creation-order tiebreak is
-    already deterministic). For an explicit sort, ``model.id`` is appended so
-    pages don't shuffle rows that share the sorted value.
+    joins ``user_model`` for the ``author`` sort). Unknown/blank sort keys fall
+    back to ``default`` untouched (its own creation-order tiebreak is already
+    deterministic). For an explicit sort, ``model.id`` is appended so pages don't
+    shuffle rows that share the sorted value.
     """
     columns: dict[str, ColumnElement[Any]] = {
         "name": model.name,
@@ -65,27 +95,46 @@ def order_by_clause(
     return [ordered, model.id], sort == "author"
 
 
-async def fetch_page(
+async def paginate_summaries(
     session: AsyncSession,
-    items_stmt: Select[Any],
-    count_stmt: Select[Any],
+    model: Any,
+    user_model: Any,
     *,
-    limit: int,
-    offset: int,
-) -> tuple[Sequence[Any], int]:
-    """Run the count and the (limited) item query, returning ``(rows, total)``.
+    base_conditions: Sequence[ColumnElement[bool]],
+    default_order: Sequence[ColumnElement[Any]],
+    params: PageParams,
+    summarize: Callable[[Any], S],
+) -> Page[S]:
+    """Assemble, run, and serialize one page of an owner-bearing summary list.
 
-    ``count_stmt`` must carry the same WHERE as ``items_stmt`` but no ORDER
-    BY/LIMIT — it answers "how many match" for the page controls.
+    Folds the whole recipe the four list endpoints share: apply the search
+    filter over ``base_conditions``, resolve the sort (joining ``user_model``
+    only when sorting by author), fetch the slice, and count the full match set
+    for the page controls. Owner is eager-loaded via ``selectinload`` so the
+    summarizer can name the author without a lazy load.
     """
-    total = await session.scalar(count_stmt) or 0
-    rows = (await session.scalars(items_stmt.limit(limit).offset(offset))).all()
-    return rows, total
+    conditions = [*base_conditions, *_search_conditions(model, params.search)]
+    order_by, by_author = _order_by(model, user_model, params.sort, params.descending, default_order)
 
+    stmt = select(model).where(*conditions).options(selectinload(model.owner))
+    if by_author:
+        stmt = stmt.outerjoin(user_model, model.owner_id == user_model.id)
+    stmt = stmt.order_by(*order_by)
 
-def count_stmt_for(model: Any, conditions: Sequence[ColumnElement[bool]]) -> Select[Any]:
-    """A ``SELECT count(*)`` over ``model`` filtered by ``conditions``."""
-    return select(func.count()).select_from(model).where(*conditions)
+    rows = (await session.scalars(stmt.limit(params.limit).offset(params.offset))).all()
+    # A first page that isn't full already holds every match, so the count query
+    # is pure waste — skip it. (The common "my systems"/"my proofs" load.)
+    if params.offset == 0 and len(rows) < params.limit:
+        total = len(rows)
+    else:
+        total = await session.scalar(select(func.count()).select_from(model).where(*conditions)) or 0
+
+    return Page(
+        items=[summarize(row) for row in rows],
+        total=total,
+        limit=params.limit,
+        offset=params.offset,
+    )
 
 
 def slugify(name: str, fallback: str) -> str:

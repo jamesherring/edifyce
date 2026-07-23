@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import type { ColumnDef, SortingState } from '@tanstack/table-core';
+	import type { ColumnDef } from '@tanstack/table-core';
 	import PageContainer from '$lib/components/PageContainer.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import LoadingSpinner from '$lib/components/LoadingSpinner.svelte';
@@ -9,115 +9,22 @@
 	import { DataTable, renderComponent } from '$lib/components/ui/data-table';
 	import * as Alert from '$lib/components/ui/alert';
 	import { Button } from '$lib/components/ui/button';
-	import { api, ApiError, type ProofSummary } from '$lib/api';
+	import { api, type ProofSummary } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
+	import { createPaginatedList } from '$lib/paged-list.svelte';
 	import { timeAgo } from '$lib/format';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import Plus from '@lucide/svelte/icons/plus';
 
-	// 'public' = the shared master list (published only); 'mine' = the signed-in
-	// user's own proofs, drafts included.
-	type View = 'public' | 'mine';
-	let view = $state<View>('public');
-
 	const PAGE_SIZE = 10;
 
-	let proofs = $state<ProofSummary[]>([]);
-	let total = $state(0);
-	let loading = $state(true);
-	let error = $state<string | null>(null);
-
-	// Pagination/search/sort state — the source of truth the DataTable delegates
-	// to in server-side mode. The fetch effect below reacts to all of them.
-	let pageIndex = $state(0);
-	let pageSize = $state(PAGE_SIZE);
-	let search = $state('');
-	let sorting = $state<SortingState>([]);
-
-	// Guard against out-of-order responses: a fast toggle can leave an older
-	// request resolving last and clobbering the newer view's data.
-	let requestSeq = 0;
-
-	async function fetchProofs(current: View) {
-		const seq = ++requestSeq;
-		loading = true;
-		error = null;
-		const params = {
-			limit: pageSize,
-			offset: pageIndex * pageSize,
-			search: search || undefined,
-			sort: sorting[0]?.id,
-			desc: sorting[0]?.desc ?? false
-		};
-		try {
-			const result =
-				current === 'mine'
-					? await api.proofs.list(undefined, params)
-					: await api.proofs.listPublic(params);
-			if (seq !== requestSeq) return;
-			proofs = result.items;
-			total = result.total;
-		} catch (err) {
-			if (seq !== requestSeq) return;
-			error = err instanceof ApiError ? err.message : String(err);
-			proofs = [];
-			total = 0;
-		} finally {
-			if (seq === requestSeq) loading = false;
-		}
-	}
-
-	// Switching views starts a fresh query; the `{#key view}` block below remounts
-	// the DataTable so its internal page/sort/search reset to match.
-	function switchView(next: View) {
-		if (next === view) return;
-		view = next;
-		pageIndex = 0;
-		search = '';
-		sorting = [];
-		// Clear the current rows so the switch shows the spinner, not the previous
-		// view's data under the (possibly different) new columns.
-		proofs = [];
-		total = 0;
-	}
-
-	// Logging out while on "My proofs" would otherwise leave view='mine' and the
-	// next fetch 401s; fall back to the public list.
-	$effect(() => {
-		if (auth.ready && !auth.user && view === 'mine') switchView('public');
+	// Server-side paging/search/sort lives in the shared controller; the page
+	// supplies only the page size and which API call each view maps to.
+	const list = createPaginatedList<ProofSummary>({
+		pageSize: PAGE_SIZE,
+		load: (view, params) =>
+			view === 'mine' ? api.proofs.list(undefined, params) : api.proofs.listPublic(params)
 	});
-
-	// Re-fetch whenever the view or any pagination/search/sort input changes. Only
-	// 'mine' depends on auth resolving.
-	$effect(() => {
-		void pageIndex;
-		void pageSize;
-		void search;
-		void sorting;
-		const current = view;
-		if (current === 'mine') void auth.ready;
-		fetchProofs(current);
-	});
-
-	// The DataTable owns its page/sort/search UI and hands changes back here.
-	const serverSide = {
-		get totalCount() {
-			return total;
-		},
-		get loading() {
-			return loading;
-		},
-		onpagechange: (pi: number, ps: number) => {
-			pageIndex = pi;
-			pageSize = ps;
-		},
-		onsearch: (value: string) => {
-			search = value;
-		},
-		onsortingchange: (next: SortingState) => {
-			sorting = next;
-		}
-	};
 
 	const columns = $derived<ColumnDef<ProofSummary, unknown>[]>([
 		{
@@ -141,7 +48,7 @@
 		},
 		// Every row in the public view is published (and so verified), so the
 		// verdict and status columns only earn their place in the owner's own list.
-		...(view === 'mine'
+		...(list.view === 'mine'
 			? [
 					{
 						id: 'checked',
@@ -176,10 +83,10 @@
 					<div class="inline-flex rounded-md border p-0.5 text-sm">
 						<button
 							type="button"
-							onclick={() => switchView('public')}
+							onclick={() => list.switchView('public')}
 							class={[
 								'rounded px-3 py-1 font-medium transition-colors',
-								view === 'public'
+								list.view === 'public'
 									? 'bg-accent text-accent-foreground'
 									: 'text-muted-foreground hover:text-foreground'
 							]}
@@ -188,10 +95,10 @@
 						</button>
 						<button
 							type="button"
-							onclick={() => switchView('mine')}
+							onclick={() => list.switchView('mine')}
 							class={[
 								'rounded px-3 py-1 font-medium transition-colors',
-								view === 'mine'
+								list.view === 'mine'
 									? 'bg-accent text-accent-foreground'
 									: 'text-muted-foreground hover:text-foreground'
 							]}
@@ -207,25 +114,25 @@
 		{/snippet}
 	</PageHeader>
 
-	{#if error}
+	{#if list.error}
 		<Alert.Root variant="destructive">
 			<TriangleAlert class="size-4" />
 			<Alert.Title>Could not load proofs</Alert.Title>
-			<Alert.Description>{error}</Alert.Description>
+			<Alert.Description>{list.error}</Alert.Description>
 		</Alert.Root>
-	{:else if loading && proofs.length === 0}
+	{:else if list.loading && list.items.length === 0}
 		<LoadingSpinner message="Loading proofs…" />
 	{:else}
 		<!-- Remount on view switch so the table's internal page/sort/search reset. -->
-		{#key view}
+		{#key list.view}
 			<DataTable
-				data={proofs}
+				data={list.items}
 				{columns}
 				pageSize={PAGE_SIZE}
 				searchPlaceholder="Search proofs…"
 				onrowclick={(row) => goto(`/proofs/${row.id}`)}
-				{serverSide}
-				emptyMessage={view === 'mine'
+				serverSide={list.serverSide}
+				emptyMessage={list.view === 'mine'
 					? "You haven't written any proofs yet."
 					: 'No published proofs yet.'}
 			/>

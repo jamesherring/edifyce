@@ -37,7 +37,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,14 +46,7 @@ from sqlalchemy.orm import selectinload
 from app.auth import current_active_user, current_active_user_optional
 from app.db import FormalSystem, Proof, get_session, system_to_spec
 from app.db.models import User
-from app.routers._common import (
-    MAX_PAGE_SIZE,
-    count_stmt_for,
-    fetch_page,
-    order_by_clause,
-    search_conditions,
-    unique_slug,
-)
+from app.routers._common import PageParams, page_params, paginate_summaries, unique_slug
 from app.routers.systems import load_system
 from app.schemas import (
     Page,
@@ -251,27 +244,20 @@ async def list_proofs(
     formal_system_id: uuid.UUID | None = None,
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
-    limit: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
-    offset: int = Query(0, ge=0),
-    search: str | None = Query(None),
-    sort: str | None = Query(None),
-    desc: bool = Query(False),
+    params: PageParams = Depends(page_params),
 ) -> Page[ProofSummary]:
-    conditions = [Proof.owner_id == user.id, *search_conditions(Proof, search)]
+    base = [Proof.owner_id == user.id]
     # Optional scope to one system, so an editor can list just that system's proofs.
     if formal_system_id is not None:
-        conditions.append(Proof.formal_system_id == formal_system_id)
-    order_by, by_author = order_by_clause(Proof, User, sort, desc, default=[Proof.created_at])
-    stmt = select(Proof).where(*conditions).options(selectinload(Proof.owner))
-    if by_author:
-        stmt = stmt.outerjoin(User, Proof.owner_id == User.id)
-    stmt = stmt.order_by(*order_by)
-
-    proofs, total = await fetch_page(
-        session, stmt, count_stmt_for(Proof, conditions), limit=limit, offset=offset
-    )
-    return Page(
-        items=[_summary(proof) for proof in proofs], total=total, limit=limit, offset=offset
+        base.append(Proof.formal_system_id == formal_system_id)
+    return await paginate_summaries(
+        session,
+        Proof,
+        User,
+        base_conditions=base,
+        default_order=[Proof.created_at],
+        params=params,
+        summarize=_summary,
     )
 
 
@@ -279,31 +265,21 @@ async def list_proofs(
 @router.get("/public", response_model=Page[ProofSummary])
 async def list_public_proofs(
     session: AsyncSession = Depends(get_session),
-    limit: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
-    offset: int = Query(0, ge=0),
-    search: str | None = Query(None),
-    sort: str | None = Query(None),
-    desc: bool = Query(False),
+    params: PageParams = Depends(page_params),
 ) -> Page[ProofSummary]:
     """The shared master list: every published proof, any owner, no auth.
 
     Drafts (``published_at IS NULL``) are excluded; unpublishing removes a proof
     from this list. Newest publications first, unless the client asks to sort.
     """
-    conditions = [Proof.published_at.is_not(None), *search_conditions(Proof, search)]
-    order_by, by_author = order_by_clause(
-        Proof, User, sort, desc, default=[Proof.published_at.desc(), Proof.created_at.desc()]
-    )
-    stmt = select(Proof).where(*conditions).options(selectinload(Proof.owner))
-    if by_author:
-        stmt = stmt.outerjoin(User, Proof.owner_id == User.id)
-    stmt = stmt.order_by(*order_by)
-
-    proofs, total = await fetch_page(
-        session, stmt, count_stmt_for(Proof, conditions), limit=limit, offset=offset
-    )
-    return Page(
-        items=[_summary(proof) for proof in proofs], total=total, limit=limit, offset=offset
+    return await paginate_summaries(
+        session,
+        Proof,
+        User,
+        base_conditions=[Proof.published_at.is_not(None)],
+        default_order=[Proof.published_at.desc(), Proof.created_at.desc()],
+        params=params,
+        summarize=_summary,
     )
 
 
