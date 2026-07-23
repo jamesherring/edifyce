@@ -21,6 +21,7 @@ from app.db.systems import (
     AxiomRow,
     BracketRow,
     DefinitionBindingRow,
+    DefinitionFreshRow,
     DefinitionRow,
     LinePartRow,
     LineRow,
@@ -62,7 +63,7 @@ _SYSTEM_TABLES = [
     m.__table__
     for m in (
         FormalSystem, BracketRow, SymbolRow, ProductionBindingRow,
-        LineRow, LinePartRow, DefinitionRow, DefinitionBindingRow,
+        LineRow, LinePartRow, DefinitionRow, DefinitionBindingRow, DefinitionFreshRow,
         AxiomRow, AxiomBindingRow, RuleRow, RuleAntecedentRow, RuleBindingRow,
         SideConditionRow,
     )

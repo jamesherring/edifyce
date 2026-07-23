@@ -32,6 +32,7 @@ from app.db.systems import (
     AxiomRow,
     BracketRow,
     DefinitionBindingRow,
+    DefinitionFreshRow,
     DefinitionRow,
     LinePartRow,
     LineRow,
@@ -64,7 +65,7 @@ _TABLES = [
     m.__table__
     for m in (
         FormalSystem, SymbolRow, ProductionBindingRow, BracketRow,
-        LineRow, LinePartRow, DefinitionRow, DefinitionBindingRow,
+        LineRow, LinePartRow, DefinitionRow, DefinitionBindingRow, DefinitionFreshRow,
         AxiomRow, AxiomBindingRow, RuleRow, RuleAntecedentRow, RuleBindingRow,
         SideConditionRow,
     )

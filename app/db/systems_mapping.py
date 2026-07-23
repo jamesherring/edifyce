@@ -39,6 +39,7 @@ from app.db.systems import (
     AxiomRow,
     BracketRow,
     DefinitionBindingRow,
+    DefinitionFreshRow,
     DefinitionRow,
     LinePartRow,
     LineRow,
@@ -109,6 +110,8 @@ def spec_to_system(spec: SystemSpec) -> FormalSystem:
                             higher=defn.higher, lower=defn.lower)
         for j, (var, sort) in enumerate(defn.bindings):
             row.bindings.append(DefinitionBindingRow(position=j, var=var, symbol=symbols[sort]))
+        for j, (var, sort) in enumerate(defn.fresh):
+            row.fresh.append(DefinitionFreshRow(position=j, var=var, symbol=symbols[sort]))
         build_side_condition_rows(row, defn.condition, symbols, {var for var, _ in defn.bindings})
         system.definitions.append(row)
 
@@ -172,6 +175,7 @@ def system_to_spec(system: FormalSystem) -> SystemSpec:
             lower=defn.lower,
             bindings=[(b.var, b.symbol.name) for b in defn.bindings],
             condition=definition_condition_string(defn),
+            fresh=[(f.var, f.symbol.name) for f in defn.fresh],
         )
         for defn in system.definitions
     ]

@@ -22,6 +22,7 @@
 	import CircleX from '@lucide/svelte/icons/circle-x';
 	import SquareCheck from '@lucide/svelte/icons/square-check-big';
 	import Pencil from '@lucide/svelte/icons/pencil';
+	import Layers from '@lucide/svelte/icons/layers';
 
 	let system = $state<FormalSystemDetail | null>(null);
 	let loading = $state(true);
@@ -118,6 +119,11 @@
 					<Button href={`/systems/${system?.id}/verify`} variant="outline" size="sm">
 						<SquareCheck class="size-4" /> Verify a proof
 					</Button>
+					{#if system?.definitions.length}
+						<Button href={`/systems/${system?.id}/definitions`} variant="outline" size="sm">
+							<Layers class="size-4" /> Definitions
+						</Button>
+					{/if}
 					{#if isOwner}
 						<Button href={`/proofs/new?system=${system?.id}`} variant="outline" size="sm">
 							<Pencil class="size-4" /> New proof

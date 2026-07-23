@@ -33,6 +33,7 @@
 	let lower = $state('');
 	let provisos = $state<StringRow[]>([]);
 	let bindings = $state<Binding[]>([]);
+	let fresh = $state<Binding[]>([]);
 	let layerPick = $state<string | null>(null);
 	const canSave = $derived(
 		!!sortName && name.trim().length > 0 && higher.trim().length > 0 && lower.trim().length > 0
@@ -51,6 +52,7 @@
 			lower = item?.lower ?? '';
 			provisos = item?.provisos.map((v) => ({ value: v })) ?? [];
 			bindings = item?.bindings.map((b) => ({ ...b })) ?? [];
+			fresh = item?.fresh.map((b) => ({ ...b })) ?? [];
 			layerPick = null;
 		},
 		payload
@@ -63,7 +65,8 @@
 			higher: higher.trim(),
 			lower: lower.trim(),
 			provisos: provisos.map((p) => p.value.trim()).filter(Boolean),
-			bindings: bindings.filter((b) => b.var.trim() && b.sort.trim())
+			bindings: bindings.filter((b) => b.var.trim() && b.sort.trim()),
+			fresh: fresh.filter((b) => b.var.trim() && b.sort.trim())
 		};
 	}
 
@@ -160,6 +163,14 @@
 		{/if}
 	</div>
 	<BindingsEditor bind:bindings />
+	<BindingsEditor
+		bind:bindings={fresh}
+		label="Bound variables"
+		hint="(fresh)"
+		description="Variables the expansion binds (e.g. the z in ∀z …). Declaring them lets a quantified definition and its provisos be checked capture-avoidingly."
+		addLabel="Add bound variable"
+		removeLabel="Remove bound variable"
+	/>
 	<RepeatableRows
 		bind:items={provisos}
 		label="Provisos"

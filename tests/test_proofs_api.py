@@ -40,6 +40,7 @@ from app.db.systems import (
     AxiomRow,
     BracketRow,
     DefinitionBindingRow,
+    DefinitionFreshRow,
     DefinitionRow,
     LinePartRow,
     LineRow,
@@ -71,7 +72,7 @@ _TABLES = [
     for m in (
         User, OAuthAccount, FormalSystem, BracketRow, SymbolRow,
         ProductionBindingRow, LineRow, LinePartRow, DefinitionRow,
-        DefinitionBindingRow, AxiomRow, AxiomBindingRow, RuleRow,
+        DefinitionBindingRow, DefinitionFreshRow, AxiomRow, AxiomBindingRow, RuleRow,
         RuleAntecedentRow, RuleBindingRow, SideConditionRow,
         ProofFolder, Proof, ProofReference,
     )

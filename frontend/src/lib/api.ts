@@ -109,6 +109,9 @@ export interface Definition {
 	 * from the same tree as `provisos`; prefer `provisos`. */
 	condition: string | null;
 	bindings: Binding[];
+	/** The defining form's bound variables (the `fresh` clause). Declaring them
+	 * lets a quantified definition take the kernel path so its proviso is enforced. */
+	fresh: Binding[];
 }
 
 export interface Axiom {
@@ -242,6 +245,8 @@ export interface DefinitionCreate {
 	 * supplied; kept so pre-D0 clients keep working. */
 	condition?: string | null;
 	bindings?: Binding[];
+	/** The defining form's bound variables (the `fresh` clause). */
+	fresh?: Binding[];
 }
 export type DefinitionUpdate = Partial<DefinitionCreate>;
 

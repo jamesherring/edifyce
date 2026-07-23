@@ -129,6 +129,9 @@ class Definition(BaseModel):
     # `where` string. Derived from the same tree as `provisos`; prefer `provisos`.
     condition: str | None = None
     bindings: list[Binding] = Field(default_factory=list)
+    # The defining form's bound variables (the `fresh` clause). Declaring them lets
+    # a quantified definition take the kernel path, so a proviso on it is enforced.
+    fresh: list[Binding] = Field(default_factory=list)
 
 
 class Axiom(BaseModel):
@@ -291,6 +294,8 @@ class DefinitionCreate(BaseModel):
     # when `provisos` is supplied; kept so pre-D0 clients keep working.
     condition: str | None = Field(None, max_length=512)
     bindings: list[Binding] = Field(default_factory=list)
+    # The defining form's bound variables (the `fresh` clause).
+    fresh: list[Binding] = Field(default_factory=list)
 
 
 class DefinitionUpdate(BaseModel):
@@ -303,6 +308,7 @@ class DefinitionUpdate(BaseModel):
     # Deprecated compatibility input; see DefinitionCreate.
     condition: str | None = Field(None, max_length=512)
     bindings: list[Binding] | None = None
+    fresh: list[Binding] | None = None
 
 
 class AxiomCreate(BaseModel):

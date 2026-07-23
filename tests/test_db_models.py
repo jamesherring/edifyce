@@ -31,6 +31,7 @@ def test_expected_tables_present():
         "line_parts",
         "definitions",
         "definition_bindings",
+        "definition_fresh",
         "axioms",
         "axiom_bindings",
         "rules",
