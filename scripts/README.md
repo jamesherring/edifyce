@@ -37,6 +37,19 @@ demo credentials); see the header of `scripts/edifyce-dev`.
 Logs and pid files live in `.edifyce-dev/` (git-ignored): `backend.log`,
 `frontend.log`, `seed.env`.
 
+### Which database it uses
+
+- **`DATABASE_URL` set** → the CLI uses it as-is (migrate + run against it, no
+  local cluster), so `edifyce-dev` targets the same database a bare `uvicorn`
+  would — the app reads `DATABASE_URL` first (`app/db/session.py`).
+- **`DATABASE_URL` unset** → the CLI self-provisions an isolated local Postgres
+  (its own data dir on `:5439`, separate from the Atlas dev cluster the web
+  session runs on `:5433` for `atlas migrate diff`).
+
+`POSTGRES_URL` (e.g. a shared Neon dev DB the app would otherwise fall back to)
+is **not** adopted automatically — `seed` writes demo data, which shouldn't land
+in a shared remote database without an explicit `DATABASE_URL` opt-in.
+
 ### `up` vs `dev` — and the proofs caveat
 
 - **`up` (single server, recommended for inspection).** Builds the SPA and lets
