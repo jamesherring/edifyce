@@ -1,8 +1,30 @@
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, Field
+
+T = TypeVar("T")
+
+
+class Page(BaseModel, Generic[T]):
+    """One page of a server-paginated list.
+
+    ``items`` is the current slice; ``total`` is the full count matching the
+    query (before ``limit``/``offset``), so a client can render page controls
+    without a second request. ``limit``/``offset`` echo the request back.
+    """
+
+    items: list[T]
+    total: int
+    limit: int
+    offset: int
+
+
+# How a rule justifies a step: "structural" (first-order term unification, the
+# default) or "string" (associative matching for a string-rewriting system such
+# as MIU). Mirrors RuleRow.matching / InferenceRule.matching.
+RuleMatching = Literal["structural", "string"]
 
 # Free-text fields map to length-bounded DB columns (see app/db/systems.py). The
 # caps below mirror those `String(N)` widths so oversized input is rejected as a
@@ -112,6 +134,7 @@ class Rule(BaseModel):
     bindings: list[Binding] = Field(default_factory=list)
     # Soundness provisos, one kernel-vocabulary line each (implicit conjunction).
     side_conditions: list[str] = Field(default_factory=list)
+    matching: RuleMatching = "structural"
 
 
 class SystemOwner(BaseModel):
@@ -277,6 +300,7 @@ class RuleCreate(BaseModel):
     antecedents: list[_Text512] = Field(default_factory=list)
     bindings: list[Binding] = Field(default_factory=list)
     side_conditions: list[_Text512] = Field(default_factory=list)
+    matching: RuleMatching = "structural"
 
 
 class RuleUpdate(BaseModel):
@@ -286,6 +310,7 @@ class RuleUpdate(BaseModel):
     antecedents: list[_Text512] | None = None
     bindings: list[Binding] | None = None
     side_conditions: list[_Text512] | None = None
+    matching: RuleMatching | None = None
 
 
 class ReorderRequest(BaseModel):
@@ -303,8 +328,39 @@ class ReorderRequest(BaseModel):
 # world-readable. The read models carry the cached `valid`/`result` snapshot so
 # a client can render the last check without re-running it. `folder_id` is
 # surfaced read-only — folder CRUD (like formal-system child parts) is a later
-# phase — and proof-to-proof references are deferred with it.
+# phase.
 # ---------------------------------------------------------------------------
+
+
+# A citation alias must be a safe label for `[alias.line]` — no `.`/`,`/brackets/
+# spaces, which the proof-line citation grammar uses as delimiters.
+_ALIAS_PATTERN = r"^[A-Za-z][A-Za-z0-9_-]*$"
+
+
+class ProofReferenceInput(BaseModel):
+    """One outgoing reference edge, as submitted: the lemma proof plus the alias
+    this proof cites it by in its source (`[alias.line]`)."""
+
+    referenced_proof_id: uuid.UUID
+    alias: str = Field(..., min_length=1, max_length=64, pattern=_ALIAS_PATTERN)
+
+
+class ProofReferenceOut(BaseModel):
+    """One outgoing reference edge, read back: the alias plus the referenced
+    proof's public identity."""
+
+    referenced_proof_id: uuid.UUID
+    alias: str
+    name: str
+    slug: str
+    published: bool
+
+
+class ProofReferencesUpdate(BaseModel):
+    """Replace a proof's full set of outgoing references (wholesale, like the
+    nested value lists on system parts)."""
+
+    references: list[ProofReferenceInput] = Field(default_factory=list)
 
 
 class ProofSummary(BaseModel):
@@ -328,6 +384,8 @@ class ProofDetail(ProofSummary):
     source: str
     # Cached `proof.data()` payload from the last verification (null = never run).
     result: dict | None = None
+    # Outgoing references (lemmas this proof cites), in display order.
+    references: list[ProofReferenceOut] = Field(default_factory=list)
 
 
 class ProofCreate(BaseModel):

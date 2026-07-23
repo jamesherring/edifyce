@@ -33,22 +33,26 @@ that would break it is rejected.
 from __future__ import annotations
 
 import uuid
+from collections import defaultdict
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.auth import current_active_user, current_active_user_optional
-from app.db import FormalSystem, Proof, get_session, system_to_spec
+from app.db import FormalSystem, Proof, ProofReference, get_session, system_to_spec
 from app.db.models import User
-from app.routers._common import unique_slug
+from app.routers._common import PageParams, page_params, paginate_summaries, unique_slug
 from app.routers.systems import load_system
 from app.schemas import (
+    Page,
     ProofCreate,
     ProofDetail,
+    ProofReferenceOut,
+    ProofReferencesUpdate,
     ProofSummary,
     ProofUpdate,
     SystemOwner,
@@ -82,13 +86,21 @@ async def _unique_slug(
     return await unique_slug(name, _taken, fallback="proof")
 
 
+# Loads for a detail view: the owner, plus outgoing reference edges and each
+# referenced proof (for its public identity in ProofReferenceOut).
+_DETAIL_LOADS = (
+    selectinload(Proof.owner),
+    selectinload(Proof.reference_links).selectinload(ProofReference.referenced),
+)
+
+
 async def _load_owned(
     session: AsyncSession, proof_id: uuid.UUID, owner_id: uuid.UUID
 ) -> Proof | None:
     stmt = (
         select(Proof)
         .where(Proof.id == proof_id, Proof.owner_id == owner_id)
-        .options(selectinload(Proof.owner))
+        .options(*_DETAIL_LOADS)
     )
     return await session.scalar(stmt)
 
@@ -113,7 +125,7 @@ def _is_readable(proof: Proof, user: User | None) -> bool:
 async def _get_readable_or_404(
     session: AsyncSession, proof_id: uuid.UUID, user: User | None
 ) -> Proof:
-    stmt = select(Proof).where(Proof.id == proof_id).options(selectinload(Proof.owner))
+    stmt = select(Proof).where(Proof.id == proof_id).options(*_DETAIL_LOADS)
     proof = await session.scalar(stmt)
     if proof is None or not _is_readable(proof, user):
         # 404 (not 403) for a draft you don't own, so unpublished ids don't leak.
@@ -228,50 +240,74 @@ def _summary(proof: Proof) -> ProofSummary:
     )
 
 
-def _detail(proof: Proof) -> ProofDetail:
+def _references_out(proof: Proof, viewer: User | None) -> list[ProofReferenceOut]:
+    # Only surface references the viewer may themselves read. Otherwise a
+    # published proof that cites the owner's own draft would leak that draft's
+    # existence, name, and slug to any anonymous reader.
+    return [
+        ProofReferenceOut(
+            referenced_proof_id=link.references_id,
+            alias=link.alias,
+            name=link.referenced.name,
+            slug=link.referenced.slug,
+            published=link.referenced.published_at is not None,
+        )
+        for link in proof.reference_links
+        if _is_readable(link.referenced, viewer)
+    ]
+
+
+def _detail(proof: Proof, viewer: User | None) -> ProofDetail:
     return ProofDetail(
         **_summary(proof).model_dump(),
         source=proof.source,
         result=proof.result,
+        references=_references_out(proof, viewer),
     )
 
 
-@router.get("", response_model=list[ProofSummary])
+@router.get("", response_model=Page[ProofSummary])
 async def list_proofs(
     formal_system_id: uuid.UUID | None = None,
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
-) -> list[ProofSummary]:
-    stmt = (
-        select(Proof)
-        .where(Proof.owner_id == user.id)
-        .options(selectinload(Proof.owner))
-        .order_by(Proof.created_at)
-    )
+    params: PageParams = Depends(page_params),
+) -> Page[ProofSummary]:
+    base = [Proof.owner_id == user.id]
     # Optional scope to one system, so an editor can list just that system's proofs.
     if formal_system_id is not None:
-        stmt = stmt.where(Proof.formal_system_id == formal_system_id)
-    proofs = await session.scalars(stmt)
-    return [_summary(proof) for proof in proofs]
+        base.append(Proof.formal_system_id == formal_system_id)
+    return await paginate_summaries(
+        session,
+        Proof,
+        User,
+        base_conditions=base,
+        default_order=[Proof.created_at],
+        params=params,
+        summarize=_summary,
+    )
 
 
 # Declared before `/{proof_id}` so "public" isn't parsed as a proof id.
-@router.get("/public", response_model=list[ProofSummary])
+@router.get("/public", response_model=Page[ProofSummary])
 async def list_public_proofs(
     session: AsyncSession = Depends(get_session),
-) -> list[ProofSummary]:
+    params: PageParams = Depends(page_params),
+) -> Page[ProofSummary]:
     """The shared master list: every published proof, any owner, no auth.
 
     Drafts (``published_at IS NULL``) are excluded; unpublishing removes a proof
-    from this list. Newest publications first.
+    from this list. Newest publications first, unless the client asks to sort.
     """
-    proofs = await session.scalars(
-        select(Proof)
-        .where(Proof.published_at.is_not(None))
-        .options(selectinload(Proof.owner))
-        .order_by(Proof.published_at.desc(), Proof.created_at.desc())
+    return await paginate_summaries(
+        session,
+        Proof,
+        User,
+        base_conditions=[Proof.published_at.is_not(None)],
+        default_order=[Proof.published_at.desc(), Proof.created_at.desc()],
+        params=params,
+        summarize=_summary,
     )
-    return [_summary(proof) for proof in proofs]
 
 
 @router.post("", response_model=ProofDetail, status_code=status.HTTP_201_CREATED)
@@ -294,7 +330,7 @@ async def create_proof(
     await session.commit()
 
     # Reload so server-default timestamps and the owner are eagerly present.
-    return _detail(await _get_owned_or_404(session, proof.id, user.id))
+    return _detail(await _get_owned_or_404(session, proof.id, user.id), user)
 
 
 @router.get("/{proof_id}", response_model=ProofDetail)
@@ -304,7 +340,7 @@ async def get_proof(
     session: AsyncSession = Depends(get_session),
 ) -> ProofDetail:
     # Published proofs are readable by anyone; drafts only by their owner.
-    return _detail(await _get_readable_or_404(session, proof_id, user))
+    return _detail(await _get_readable_or_404(session, proof_id, user), user)
 
 
 @router.patch("/{proof_id}", response_model=ProofDetail)
@@ -344,7 +380,138 @@ async def update_proof(
         await _require_publishable(session, proof)
 
     await session.commit()
-    return _detail(await _get_owned_or_404(session, proof_id, user.id))
+    return _detail(await _get_owned_or_404(session, proof_id, user.id), user)
+
+
+async def _lock_reference_graph(session: AsyncSession, system_id: uuid.UUID) -> None:
+    """Serialize concurrent reference-graph edits within one system.
+
+    The cycle check is read-then-write, so two concurrent PUTs (A→B and B→A)
+    could each pass against the committed graph and commit a cycle. A
+    transaction-scoped advisory lock keyed by the system makes those edits
+    serialize, so each sees the other's edge. Postgres only; a no-op on SQLite
+    (the test DB, where requests don't run concurrently anyway). Verification
+    (a later phase) re-checks cycles in the engine as the authoritative backstop.
+    """
+    if session.bind is not None and session.bind.dialect.name == "postgresql":
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": str(system_id)},
+        )
+
+
+async def _reference_would_cycle(
+    session: AsyncSession,
+    proof_id: uuid.UUID,
+    target_ids: list[uuid.UUID],
+    system_id: uuid.UUID,
+) -> bool:
+    """Whether pointing ``proof_id`` at every id in ``target_ids`` closes a cycle.
+
+    The stored reference graph is kept acyclic, so a new cycle must run through
+    ``proof_id`` (proof → target → … → proof). Load every edge in this system
+    except this proof's own (they are being replaced) and ask whether any target
+    already reaches ``proof_id``. References are same-system-only, so scoping the
+    load to the system captures the whole reachable closure without scanning the
+    global table. The persistence-layer analogue of the engine's transitive
+    ``Proof.circular_dependency``.
+    """
+    rows = (
+        await session.execute(
+            select(ProofReference.proof_id, ProofReference.references_id)
+            .join(Proof, Proof.id == ProofReference.proof_id)
+            .where(Proof.formal_system_id == system_id, ProofReference.proof_id != proof_id)
+        )
+    ).all()
+    adjacency: dict[uuid.UUID, list[uuid.UUID]] = defaultdict(list)
+    for src, dst in rows:
+        adjacency[src].append(dst)
+
+    seen: set[uuid.UUID] = set()
+    stack = list(target_ids)
+    while stack:
+        node = stack.pop()
+        if node == proof_id:
+            return True
+        if node in seen:
+            continue
+        seen.add(node)
+        stack.extend(adjacency.get(node, ()))
+    return False
+
+
+@router.put("/{proof_id}/references", response_model=ProofDetail)
+async def set_proof_references(
+    proof_id: uuid.UUID,
+    payload: ProofReferencesUpdate,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_session),
+) -> ProofDetail:
+    """Replace a proof's outgoing references (the lemmas it cites) wholesale.
+
+    A proof may reference another proof **in the same system** that is either the
+    caller's own or published (a public lemma). Self-references, duplicate targets
+    or aliases, and any edge that would make the reference graph cyclic are
+    rejected (422). References are stored here; wiring them into verification is a
+    later phase, so the cached verdict is left untouched.
+    """
+    proof = await _get_owned_or_404(session, proof_id, user.id)
+
+    # Serialize concurrent reference edits in this system so the cycle check
+    # below can't be raced into committing a cycle.
+    await _lock_reference_graph(session, proof.formal_system_id)
+
+    target_ids = [r.referenced_proof_id for r in payload.references]
+    aliases = [r.alias for r in payload.references]
+
+    if proof.id in target_ids:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "A proof cannot reference itself.")
+    if len(set(target_ids)) != len(target_ids):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "A proof may reference another proof at most once."
+        )
+    if len(set(aliases)) != len(aliases):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Reference aliases must be unique within a proof."
+        )
+
+    if target_ids:
+        targets = (await session.scalars(select(Proof).where(Proof.id.in_(target_ids)))).all()
+        by_id = {t.id: t for t in targets}
+        for tid in target_ids:
+            target = by_id.get(tid)
+            if target is None:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY, f"Referenced proof {tid} does not exist."
+                )
+            if target.formal_system_id != proof.formal_system_id:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    "A proof may only reference proofs in the same system.",
+                )
+            # Own proofs (draft or published) or anyone's published proof.
+            if target.owner_id != user.id and target.published_at is None:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    f"Referenced proof {tid} must be your own or a published proof.",
+                )
+
+        if await _reference_would_cycle(session, proof.id, target_ids, proof.formal_system_id):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "That set of references would create a circular dependency.",
+            )
+
+    # Replace the edge set. Clear-then-flush before inserting so the unique
+    # (proof_id, alias) index can't trip on an alias reused from the old set.
+    proof.reference_links.clear()
+    await session.flush()
+    proof.reference_links = [
+        ProofReference(references_id=tid, alias=alias, position=i)
+        for i, (tid, alias) in enumerate(zip(target_ids, aliases))
+    ]
+    await session.commit()
+    return _detail(await _get_owned_or_404(session, proof_id, user.id), user)
 
 
 @router.delete("/{proof_id}", status_code=status.HTTP_204_NO_CONTENT)

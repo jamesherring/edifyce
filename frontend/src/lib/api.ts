@@ -106,6 +106,13 @@ export interface Axiom {
 	bindings: Binding[];
 }
 
+/**
+ * How a rule justifies a step: `structural` (first-order term unification, the
+ * default — logical systems) or `string` (associative matching for a
+ * string-rewriting system such as MIU, whose rules split/concatenate strings).
+ */
+export type RuleMatching = 'structural' | 'string';
+
 export interface Rule {
 	id: string;
 	label: string;
@@ -115,6 +122,7 @@ export interface Rule {
 	bindings: Binding[];
 	/** Soundness provisos, one kernel-vocabulary line each (implicit conjunction). */
 	side_conditions: string[];
+	matching: RuleMatching;
 }
 
 /** The public face of a system's owner (never email) — mirrors `SystemOwner`. */
@@ -234,6 +242,7 @@ export interface RuleCreate {
 	antecedents?: string[];
 	bindings?: Binding[];
 	side_conditions?: string[];
+	matching?: RuleMatching;
 }
 export type RuleUpdate = Partial<RuleCreate>;
 
@@ -259,10 +268,29 @@ export interface ProofSummary {
 	owner: SystemOwner | null;
 }
 
+/** One outgoing reference edge, read back — mirrors `ProofReferenceOut`. */
+export interface ProofReference {
+	referenced_proof_id: string;
+	/** The label this proof cites the lemma by in its source (`[alias.line]`). */
+	alias: string;
+	name: string;
+	slug: string;
+	published: boolean;
+}
+
+/** One outgoing reference edge, as submitted — mirrors `ProofReferenceInput`. */
+export interface ProofReferenceInput {
+	referenced_proof_id: string;
+	alias: string;
+}
+
 export interface ProofDetail extends ProofSummary {
 	source: string;
 	/** Cached `proof.data()` from the last verification (null = never run). */
 	result: ProofData | null;
+	/** Outgoing references (lemmas this proof cites), filtered to those the
+	 * viewer may read. */
+	references: ProofReference[];
 }
 
 export interface ProofCreate {
@@ -278,6 +306,51 @@ export interface ProofUpdate {
 	source?: string;
 	/** true → publish (public), false → unpublish (draft), omitted → unchanged. */
 	published?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Server-side pagination — mirrors `Page[T]` in app/schemas.py. The list
+// endpoints return one page (`items`) plus the full `total` matching the query,
+// so a client can drive page controls without a second request.
+// ---------------------------------------------------------------------------
+
+export interface Page<T> {
+	items: T[];
+	total: number;
+	limit: number;
+	offset: number;
+}
+
+/** Query params shared by the paginated list endpoints. */
+export interface ListParams {
+	/** Page size (1–100). */
+	limit?: number;
+	/** Row offset of the page's first item. */
+	offset?: number;
+	/** Case-insensitive filter over name/description. */
+	search?: string;
+	/** Column id to sort by: name | description | author | created_at | updated_at. */
+	sort?: string;
+	/** Descending when true, ascending otherwise. */
+	desc?: boolean;
+}
+
+/** Serialise `ListParams` (plus any extras) into a `?a=b&…` string. */
+function listQuery(
+	params: ListParams = {},
+	extra: Record<string, string | undefined> = {}
+): string {
+	const q = new URLSearchParams();
+	if (params.limit != null) q.set('limit', String(params.limit));
+	if (params.offset != null) q.set('offset', String(params.offset));
+	if (params.search) q.set('search', params.search);
+	if (params.sort) q.set('sort', params.sort);
+	if (params.desc) q.set('desc', 'true');
+	for (const [key, value] of Object.entries(extra)) {
+		if (value != null) q.set(key, value);
+	}
+	const s = q.toString();
+	return s ? `?${s}` : '';
 }
 
 /** Raised when the backend answers with a non-2xx status or is unreachable. */
@@ -442,9 +515,11 @@ export const api = {
 
 	systems: {
 		/** The signed-in user's own systems (drafts included). Requires auth. */
-		list: () => request<FormalSystemSummary[]>('/formal-systems'),
+		list: (params?: ListParams) =>
+			request<Page<FormalSystemSummary>>(`/formal-systems${listQuery(params)}`),
 		/** The shared master list: every published system, any owner, no auth. */
-		listPublic: () => request<FormalSystemSummary[]>('/formal-systems/public'),
+		listPublic: (params?: ListParams) =>
+			request<Page<FormalSystemSummary>>(`/formal-systems/public${listQuery(params)}`),
 		/** A single system. Published ones are public; drafts are owner-only. */
 		get: (id: string) => request<FormalSystemDetail>(`/formal-systems/${id}`),
 		create: (payload: FormalSystemCreate) =>
@@ -476,12 +551,13 @@ export const api = {
 
 	proofs: {
 		/** The signed-in user's own proofs; optionally scoped to one system. */
-		list: (formalSystemId?: string) =>
-			request<ProofSummary[]>(
-				`/proofs${formalSystemId ? `?formal_system_id=${formalSystemId}` : ''}`
+		list: (formalSystemId?: string, params?: ListParams) =>
+			request<Page<ProofSummary>>(
+				`/proofs${listQuery(params, { formal_system_id: formalSystemId })}`
 			),
 		/** The shared master list: every published proof, any owner, no auth. */
-		listPublic: () => request<ProofSummary[]>('/proofs/public'),
+		listPublic: (params?: ListParams) =>
+			request<Page<ProofSummary>>(`/proofs/public${listQuery(params)}`),
 		/** A single proof. Published ones are public; drafts are owner-only. */
 		get: (id: string) => request<ProofDetail>(`/proofs/${id}`),
 		create: (payload: ProofCreate) =>
@@ -490,7 +566,13 @@ export const api = {
 			request<ProofDetail>(`/proofs/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
 		remove: (id: string) => request<null>(`/proofs/${id}`, { method: 'DELETE' }),
 		/** Rebuild the parent system and check this proof against it, caching the verdict. */
-		verify: (id: string) => request<VerifyResponse>(`/proofs/${id}/verify`, { method: 'POST' })
+		verify: (id: string) => request<VerifyResponse>(`/proofs/${id}/verify`, { method: 'POST' }),
+		/** Replace this proof's outgoing references (lemmas it cites) wholesale. */
+		setReferences: (id: string, references: ProofReferenceInput[]) =>
+			request<ProofDetail>(`/proofs/${id}/references`, {
+				method: 'PUT',
+				body: JSON.stringify({ references })
+			})
 	},
 
 	/**

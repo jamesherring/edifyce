@@ -270,6 +270,125 @@ def test_rule_side_conditions_round_trip_through_the_api(client):
     assert cleared.json()["side_conditions"] == []
 
 
+def test_rule_matching_kind_round_trips_through_the_api(client):
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "miustr"})
+
+    # Defaults to structural when omitted.
+    default_rule = _post(client, f"/formal-systems/{sid}/rules", {
+        "label": "HYP", "name": "hyp", "deduction": "p", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "miustr"}],
+    })
+    assert default_rule["matching"] == "structural"
+
+    # A string-rewriting rule stores and reads back its kind.
+    rule = _post(client, f"/formal-systems/{sid}/rules", {
+        "label": "R2", "name": "double", "deduction": "Mxx", "antecedents": ["Mx"],
+        "bindings": [{"var": "x", "sort": "miustr"}], "matching": "string",
+    })
+    assert rule["matching"] == "string"
+    detail = client.get(f"/formal-systems/{sid}").json()
+    assert {r["label"]: r["matching"] for r in detail["rules"]} == {
+        "HYP": "structural", "R2": "string",
+    }
+
+    # PATCH can flip the kind, and only the kind.
+    flipped = client.patch(
+        f"/formal-systems/{sid}/rules/{rule['id']}", json={"matching": "structural"}
+    )
+    assert flipped.status_code == 200
+    assert flipped.json()["matching"] == "structural"
+    assert flipped.json()["deduction"] == "Mxx"
+
+
+def test_string_rule_cannot_carry_side_conditions_via_api(client):
+    # The string path has no term binding to evaluate a proviso against, so the
+    # API rejects the pairing (create and both PATCH directions) rather than
+    # store a rule whose side-conditions would be silently ignored.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+
+    # Create with both is a 422.
+    both = client.post(f"/formal-systems/{sid}/rules", json={
+        "label": "R", "name": "r", "deduction": "p", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "formula"}],
+        "matching": "string", "side_conditions": ["equal(p, p)"],
+    })
+    assert both.status_code == 422
+
+    # A structural rule with provisos is fine; flipping it to string then 422s.
+    rule = _post(client, f"/formal-systems/{sid}/rules", {
+        "label": "R", "name": "r", "deduction": "p", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "formula"}],
+        "side_conditions": ["equal(p, p)"],
+    })
+    flip = client.patch(
+        f"/formal-systems/{sid}/rules/{rule['id']}", json={"matching": "string"}
+    )
+    assert flip.status_code == 422
+
+    # And adding provisos to an existing string rule is likewise a 422.
+    string_rule = _post(client, f"/formal-systems/{sid}/rules", {
+        "label": "S", "name": "s", "deduction": "p", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "formula"}], "matching": "string",
+    })
+    add = client.patch(
+        f"/formal-systems/{sid}/rules/{string_rule['id']}",
+        json={"side_conditions": ["equal(p, p)"]},
+    )
+    assert add.status_code == 422
+
+
+def test_string_rewriting_system_authored_via_api_verifies_a_proof(client):
+    # Author Hofstadter's MIU (a string-rewriting system) entirely through the
+    # child endpoints, then check a real derivation against it — proving the
+    # matching="string" path works end to end from the API down to the checker.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    base = f"/formal-systems/{sid}"
+
+    _post(client, f"{base}/sorts", {"name": "miustr"})
+    _post(client, f"{base}/productions", {"name": "raw", "sort": "miustr", "regex": "[MIU]+"})
+    _post(client, f"{base}/line-types", {
+        "name": "theorem", "shape": "<miustr> [<reference>]", "logical_sort": "miustr",
+        "parts": [{"name": "reference", "regex": "[A-Za-z0-9 ,]+"}],
+    })
+    _post(client, f"{base}/axioms", {"label": "AX", "name": "mi axiom", "formula": "MI"})
+    for label, name, ant, ded, variables in [
+        ("R1", "rule one", ["xI"], "xIU", ["x"]),
+        ("R2", "rule two", ["Mx"], "Mxx", ["x"]),
+        ("R3", "rule three", ["xIIIy"], "xUy", ["x", "y"]),
+        ("R4", "rule four", ["xUUy"], "xy", ["x", "y"]),
+    ]:
+        _post(client, f"{base}/rules", {
+            "label": label, "name": name, "deduction": ded, "antecedents": ant,
+            "bindings": [{"var": v, "sort": "miustr"} for v in variables],
+            "matching": "string",
+        })
+
+    good = client.post(f"{base}/verify", json={
+        "proof_text": "MI\nMII [R2, 1]\nMIIII [R2, 2]\nMUI [R3, 3]"
+    })
+    assert good.status_code == 200, good.text
+    assert good.json()["success"] is True
+
+    bad = client.post(f"{base}/verify", json={"proof_text": "MI\nMIII [R2, 1]"})
+    assert bad.json()["success"] is False
+
+
+def test_unknown_rule_matching_kind_is_422(client):
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+    response = client.post(f"/formal-systems/{sid}/rules", json={
+        "label": "R", "name": "r", "deduction": "p", "antecedents": [],
+        "bindings": [{"var": "p", "sort": "formula"}], "matching": "bogus",
+    })
+    assert response.status_code == 422
+
+
 def test_malformed_rule_side_condition_is_422(client):
     _login(client, "ada@example.com")
     sid = _new_system(client)
@@ -324,44 +443,38 @@ def test_member_proviso_over_unknown_sort_is_422(client):
     assert response.status_code == 422
 
 
-def test_rule_or_disjunct_over_undeclared_metavar_is_422(client):
-    # Metavariable validation reaches into each disjunct: `z` is undeclared.
+def test_rule_term_argument_proviso_round_trips_and_validates(client):
+    # A literal-term argument (here the compound `(p → p)`, using a production and
+    # the metavariable `p`) is accepted, read back verbatim, and compiles.
     _login(client, "ada@example.com")
-    sid = _new_system(client)
-    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
-    response = client.post(f"/formal-systems/{sid}/rules", json={
-        "label": "DIS", "name": "disj", "deduction": "(p → q)", "antecedents": [],
+    sid = _new_system(client, "ZFC")
+    _build_zfc(client, sid)
+    rule = _post(client, f"/formal-systems/{sid}/rules", {
+        "label": "TQ", "name": "term arg", "deduction": "(p → q)", "antecedents": [],
         "bindings": [{"var": "p", "sort": "formula"}, {"var": "q", "sort": "formula"}],
-        "side_conditions": ["equal(p, q) or occurs(p, z)"],
+        "side_conditions": ["equal(q, (p → p))"],
     })
-    assert response.status_code == 422
+    assert rule["side_conditions"] == ["equal(q, (p → p))"]
+    detail = client.get(f"/formal-systems/{sid}").json()
+    assert next(r for r in detail["rules"] if r["label"] == "TQ")["side_conditions"] == [
+        "equal(q, (p → p))"
+    ]
+    assert client.post(f"/formal-systems/{sid}/validate").json()["success"] is True
 
 
-def test_rule_proviso_over_undeclared_metavar_is_422(client):
-    # A proviso may only mention the rule's declared bindings: `q` is not one, so
-    # `equal(p, q)` has no metavariable to check against and is rejected up front
-    # rather than blowing up in the kernel when the rule is later applied.
+def test_undeclared_argument_is_accepted_as_a_term_not_rejected_at_write(client):
+    # An argument that isn't a declared metavariable is now a *literal term*, so the
+    # write is draft-tolerant (201) rather than an early 422 — a term that doesn't
+    # parse is caught by POST /validate, like any other draft breakage.
     _login(client, "ada@example.com")
     sid = _new_system(client)
     _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
     response = client.post(f"/formal-systems/{sid}/rules", json={
         "label": "R", "name": "r", "deduction": "(p → q)", "antecedents": [],
-        "bindings": [{"var": "p", "sort": "formula"}],  # only p is declared
+        "bindings": [{"var": "p", "sort": "formula"}],  # q is undeclared → a term
         "side_conditions": ["equal(p, q)"],
     })
-    assert response.status_code == 422
-
-
-def test_definition_proviso_over_undeclared_metavar_is_422(client):
-    _login(client, "ada@example.com")
-    sid = _new_system(client)
-    _post(client, f"/formal-systems/{sid}/sorts", {"name": "term"})
-    response = client.post(f"/formal-systems/{sid}/definitions", json={
-        "sort": "term", "name": "d", "higher": "x", "lower": "y",
-        "bindings": [{"var": "x", "sort": "term"}],  # only x is declared
-        "condition": "disjoint(x, y)",
-    })
-    assert response.status_code == 422
+    assert response.status_code == 201
 
 
 def test_definition_binding_and_proviso_updated_together(client):

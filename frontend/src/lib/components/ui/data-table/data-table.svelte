@@ -9,6 +9,7 @@
 		getFilteredRowModel,
 		getPaginationRowModel
 	} from '@tanstack/table-core';
+	import type { ServerSideConfig } from './types.js';
 	import { createSvelteTable } from './create-svelte-table.svelte.js';
 	import FlexRender from './flex-render.svelte';
 	import * as Table from '$lib/components/ui/table';
@@ -25,26 +26,6 @@
 	import ChevronsLeft from '@lucide/svelte/icons/chevrons-left';
 	import ChevronsRight from '@lucide/svelte/icons/chevrons-right';
 	import type { Snippet } from 'svelte';
-
-	/**
-	 * Server-side pagination config. When provided, the DataTable delegates
-	 * pagination, sorting, and search to the server — it won't filter or
-	 * paginate client-side. The parent must supply `data` (current page),
-	 * `totalCount`, and react to the `onpagechange` callback to fetch the
-	 * next page.
-	 */
-	type ServerSideConfig = {
-		/** Total number of rows across all pages (for page count calculation). */
-		totalCount: number;
-		/** Fired when the user navigates pages. The parent should re-fetch data. */
-		onpagechange: (pageIndex: number, pageSize: number) => void;
-		/** Fired when the user types in the search box (debounce is the parent's job). */
-		onsearch?: (value: string) => void;
-		/** Fired when sorting changes. */
-		onsortingchange?: (sorting: SortingState) => void;
-		/** Whether a fetch is currently in flight (shows loading indicator). */
-		loading?: boolean;
-	};
 
 	type Props = {
 		data: TData[];

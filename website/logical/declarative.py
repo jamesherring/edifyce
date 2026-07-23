@@ -87,6 +87,10 @@ class Rule:
     # line each (implicit conjunction). Attached to the rule by its label; empty
     # for axioms and unconditioned rules.
     side_conditions: list[str] = field(default_factory=list)
+    # How steps are checked against this rule: "structural" (term unification,
+    # the default) or "string" (associative matching, for a string-rewriting
+    # rule such as MIU's — see website.logical.matching.rewriting).
+    matching: str = "structural"
 
 
 @dataclass
@@ -144,6 +148,18 @@ def lower(spec: SystemSpec) -> str:
     every sort's ``UnionPattern`` is declared empty up front, so productions in
     any order can reference any sort, and the unions are filled afterwards.
     """
+
+    # Side-conditions are the kernel's structural term algebra, checked against a
+    # rule's *term* binding. A string-rewriting rule is justified by associative
+    # matching over surface strings (no term binding), so it cannot evaluate
+    # them. Rather than silently ignore a proviso an author wrote — which would
+    # make the rule quietly more permissive than intended — reject the pairing.
+    for rule in spec.rules:
+        if rule.matching == "string" and rule.side_conditions:
+            raise DeclarativeError(
+                f"Rule {rule.label!r} uses string matching, which cannot enforce "
+                f"side-conditions; drop them or switch it to structural matching."
+            )
 
     out: list[str] = []
     pad = "    "
@@ -372,6 +388,9 @@ def _emit_rule(rule: Rule, emit) -> None:
             emit(base_level + 2, ant)
     emit(base_level + 1, "deduction:")
     emit(base_level + 2, rule.deduction)
+    if rule.matching != "structural":
+        emit(base_level + 1, "matching:")
+        emit(base_level + 2, rule.matching)
     if rule.side_conditions:
         emit(base_level + 1, "side_conditions:")
         for proviso in rule.side_conditions:

@@ -32,8 +32,9 @@ const USER = {
 };
 
 beforeEach(async () => {
-	apiMock.systems.list.mockResolvedValue([]);
-	apiMock.systems.listPublic.mockResolvedValue([]);
+	const emptyPage = { items: [], total: 0, limit: 10, offset: 0 };
+	apiMock.systems.list.mockResolvedValue(emptyPage);
+	apiMock.systems.listPublic.mockResolvedValue(emptyPage);
 	apiMock.logout.mockResolvedValue(undefined);
 	// Sign in through the real auth store (ready becomes true).
 	apiMock.me.mockResolvedValue(USER);
@@ -61,5 +62,39 @@ describe('systems list', () => {
 		await waitFor(() => expect(apiMock.systems.listPublic).toHaveBeenCalled());
 		// …and the owner-only toggle is gone.
 		expect(screen.queryByRole('button', { name: 'My systems' })).not.toBeInTheDocument();
+	});
+
+	it('requests pages from the server and re-fetches on navigation', async () => {
+		// A full page of 10 rows out of 25 total → the server owns the paging, and
+		// the pagination controls appear because total exceeds the page size.
+		const rows = Array.from({ length: 10 }, (_, i) => ({
+			id: `s${i}`,
+			name: `System ${i}`,
+			slug: `system-${i}`,
+			description: null,
+			inherits_from_id: null,
+			published_at: '2020-01-01T00:00:00Z',
+			created_at: '2020-01-01T00:00:00Z',
+			updated_at: '2020-01-01T00:00:00Z',
+			owner: { id: 'u1', display_name: 'Ada' }
+		}));
+		apiMock.systems.listPublic.mockResolvedValue({ items: rows, total: 25, limit: 10, offset: 0 });
+
+		render(Page);
+		// The first request asks for page one (offset 0) at the configured size.
+		await waitFor(() =>
+			expect(apiMock.systems.listPublic).toHaveBeenLastCalledWith(
+				expect.objectContaining({ limit: 10, offset: 0 })
+			)
+		);
+
+		// Navigating forward re-queries the server at the next offset — proof the
+		// paging is server-side, not a client-side slice of one big response.
+		await user.click(await screen.findByRole('button', { name: 'Next page' }));
+		await waitFor(() =>
+			expect(apiMock.systems.listPublic).toHaveBeenLastCalledWith(
+				expect.objectContaining({ offset: 10 })
+			)
+		);
 	});
 });

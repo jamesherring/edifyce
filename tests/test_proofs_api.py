@@ -24,7 +24,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import Session
 
 import app.auth.backend as backend
-from app.db import Base, FormalSystem, Proof, ProofFolder, SideConditionRow, spec_to_system
+from app.db import (
+    Base,
+    FormalSystem,
+    Proof,
+    ProofFolder,
+    ProofReference,
+    SideConditionRow,
+    spec_to_system,
+)
 from app.db.models import OAuthAccount, User
 from app.db.session import get_session
 from app.db.systems import (
@@ -65,7 +73,7 @@ _TABLES = [
         ProductionBindingRow, LineRow, LinePartRow, DefinitionRow,
         DefinitionBindingRow, AxiomRow, AxiomBindingRow, RuleRow,
         RuleAntecedentRow, RuleBindingRow, SideConditionRow,
-        ProofFolder, Proof,
+        ProofFolder, Proof, ProofReference,
     )
 ]
 
@@ -245,8 +253,9 @@ def test_list_returns_only_summaries_in_creation_order(client, db):
     client.post("/proofs", json={"name": "First", "formal_system_id": system_id})
     client.post("/proofs", json={"name": "Second", "formal_system_id": system_id})
     listed = client.get("/proofs").json()
-    assert [p["name"] for p in listed] == ["First", "Second"]
-    assert "source" not in listed[0]  # summary, not detail
+    assert listed["total"] == 2
+    assert [p["name"] for p in listed["items"]] == ["First", "Second"]
+    assert "source" not in listed["items"][0]  # summary, not detail
 
 
 def test_list_can_scope_to_one_system(client, db):
@@ -256,7 +265,24 @@ def test_list_can_scope_to_one_system(client, db):
     client.post("/proofs", json={"name": "A", "formal_system_id": system_a})
     client.post("/proofs", json={"name": "B", "formal_system_id": system_b})
     scoped = client.get("/proofs", params={"formal_system_id": system_a}).json()
-    assert [p["name"] for p in scoped] == ["A"]
+    assert [p["name"] for p in scoped["items"]] == ["A"]
+
+
+def test_list_paginates_searches_and_sorts(client, db):
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner)
+    for name in ("Banana", "Apple", "Cherry"):
+        client.post("/proofs", json={"name": name, "formal_system_id": system_id})
+
+    page = client.get("/proofs", params={"limit": 2, "offset": 0}).json()
+    assert page["total"] == 3  # full count, not just the page
+    assert len(page["items"]) == 2
+
+    hits = client.get("/proofs", params={"search": "APP"}).json()
+    assert [p["name"] for p in hits["items"]] == ["Apple"]
+
+    sorted_desc = client.get("/proofs", params={"sort": "name", "desc": True}).json()
+    assert [p["name"] for p in sorted_desc["items"]] == ["Cherry", "Banana", "Apple"]
 
 
 def test_duplicate_name_gets_a_distinct_slug(client, db):
@@ -275,7 +301,7 @@ def test_another_users_draft_proof_is_not_readable(client, db):
     _logout(client)
     _register_login(client, "eve@example.com")
     assert client.get(f"/proofs/{created['id']}").status_code == 404
-    assert created["id"] not in [p["id"] for p in client.get("/proofs").json()]
+    assert created["id"] not in [p["id"] for p in client.get("/proofs").json()["items"]]
 
 
 # ---------------------------------------------------------------------------
@@ -439,7 +465,7 @@ def test_publish_then_public_read_and_listing(client, db):
     # Anonymous read + public listing now see it.
     _logout(client)
     assert client.get(f"/proofs/{created['id']}").status_code == 200
-    public = client.get("/proofs/public").json()
+    public = client.get("/proofs/public").json()["items"]
     assert created["id"] in [p["id"] for p in public]
 
 
@@ -453,4 +479,164 @@ def test_unpublish_removes_from_public_list(client, db):
     client.patch(f"/proofs/{created['id']}", json={"published": False})
     _logout(client)
     assert client.get(f"/proofs/{created['id']}").status_code == 404
-    assert client.get("/proofs/public").json() == []
+    assert client.get("/proofs/public").json()["items"] == []
+
+
+# ---------------------------------------------------------------------------
+# Proof-to-proof references (R0: storage + validation, not yet wired to verify)
+# ---------------------------------------------------------------------------
+
+
+def _create_proof(client: TestClient, system_id: str, name: str, source: str = VALID_PROOF) -> str:
+    resp = client.post(
+        "/proofs", json={"name": name, "formal_system_id": system_id, "source": source}
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
+
+
+def _set_refs(client: TestClient, proof_id: str, refs: list[dict]):
+    return client.put(f"/proofs/{proof_id}/references", json={"references": refs})
+
+
+def _seed_proof(db_path, owner_id: str, system_id: str, name: str, published: bool = False) -> str:
+    # Insert a proof owned by an arbitrary user directly. The create endpoint
+    # requires owning the proof's system, so a second owner can only get a proof
+    # into someone else's system by seeding — which is exactly the cross-owner
+    # case the reference-scope rule guards.
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with Session(engine) as session:
+            proof = Proof(
+                owner_id=uuid.UUID(owner_id),
+                formal_system_id=uuid.UUID(system_id),
+                name=name,
+                slug=f"{name.lower()}-{uuid.uuid4().hex[:6]}",
+                source=VALID_PROOF,
+                published_at=datetime.now(timezone.utc) if published else None,
+            )
+            session.add(proof)
+            session.commit()
+            return str(proof.id)
+    finally:
+        engine.dispose()
+
+
+def test_set_and_read_back_references(client, db):
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    a = _create_proof(client, sid, "Lemma A")
+    b = _create_proof(client, sid, "Main B")
+
+    resp = _set_refs(client, b, [{"referenced_proof_id": a, "alias": "A"}])
+    assert resp.status_code == 200, resp.text
+    refs = resp.json()["references"]
+    assert refs == [
+        {"referenced_proof_id": a, "alias": "A", "name": "Lemma A", "slug": refs[0]["slug"],
+         "published": False}
+    ]
+    # Visible on the detail read too.
+    assert [r["alias"] for r in client.get(f"/proofs/{b}").json()["references"]] == ["A"]
+
+
+def test_self_reference_is_rejected(client, db):
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    a = _create_proof(client, sid, "A")
+    assert _set_refs(client, a, [{"referenced_proof_id": a, "alias": "self"}]).status_code == 422
+
+
+def test_duplicate_target_and_alias_are_rejected(client, db):
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    a, b, c = (_create_proof(client, sid, n) for n in ("A", "B", "C"))
+    assert _set_refs(client, c, [
+        {"referenced_proof_id": a, "alias": "A1"}, {"referenced_proof_id": a, "alias": "A2"},
+    ]).status_code == 422
+    assert _set_refs(client, c, [
+        {"referenced_proof_id": a, "alias": "X"}, {"referenced_proof_id": b, "alias": "X"},
+    ]).status_code == 422
+
+
+def test_bad_alias_is_rejected(client, db):
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    a = _create_proof(client, sid, "A")
+    b = _create_proof(client, sid, "B")
+    for bad in ("has space", "1leading", "dot.ted", "com,ma", ""):
+        assert _set_refs(client, b, [{"referenced_proof_id": a, "alias": bad}]).status_code == 422
+
+
+def test_cross_system_reference_is_rejected(client, db):
+    uid = _register_login(client, "ada@example.com")
+    s1, s2 = _seed_system(db, uid), _seed_system(db, uid)
+    a = _create_proof(client, s1, "A in s1")
+    b = _create_proof(client, s2, "B in s2")
+    assert _set_refs(client, b, [{"referenced_proof_id": a, "alias": "A"}]).status_code == 422
+
+
+def test_cycle_is_rejected_directly_and_transitively(client, db):
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    a, b, c = (_create_proof(client, sid, n) for n in ("A", "B", "C"))
+    # a -> b
+    assert _set_refs(client, a, [{"referenced_proof_id": b, "alias": "B"}]).status_code == 200
+    # b -> a closes a 2-cycle.
+    assert _set_refs(client, b, [{"referenced_proof_id": a, "alias": "A"}]).status_code == 422
+    # a -> b -> c, then c -> a closes a 3-cycle.
+    assert _set_refs(client, b, [{"referenced_proof_id": c, "alias": "C"}]).status_code == 200
+    assert _set_refs(client, c, [{"referenced_proof_id": a, "alias": "A"}]).status_code == 422
+
+
+def test_references_replace_wholesale(client, db):
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    a, b, c = (_create_proof(client, sid, n) for n in ("A", "B", "C"))
+    assert _set_refs(client, c, [{"referenced_proof_id": a, "alias": "A"}]).status_code == 200
+    # Reuse the alias "A" for a different target — the old edge is fully replaced.
+    resp = _set_refs(client, c, [{"referenced_proof_id": b, "alias": "A"}])
+    assert resp.status_code == 200
+    assert [(r["referenced_proof_id"], r["alias"]) for r in resp.json()["references"]] == [(b, "A")]
+    # Clearing removes them all.
+    assert _set_refs(client, c, []).json()["references"] == []
+
+
+def test_reference_scope_allows_others_published_but_not_draft(client, db):
+    # A proof may reference another owner's *published* proof in the same system,
+    # but not their draft. (Reachable only via seeding today — the create gate
+    # keeps a system's proofs single-owner; the rule is forward-looking.)
+    ada = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, ada)
+    mine = _create_proof(client, sid, "Mine")
+
+    bob = _register_login(client, "bob@example.com")  # switches the session to bob
+    bob_published = _seed_proof(db, bob, sid, "BobPublished", published=True)
+    bob_draft = _seed_proof(db, bob, sid, "BobDraft", published=False)
+
+    # Back to ada.
+    assert client.post(
+        "/auth/login", data={"username": "ada@example.com", "password": "password123"}
+    ).status_code == 204
+
+    assert _set_refs(client, mine, [{"referenced_proof_id": bob_published, "alias": "P"}]).status_code == 200
+    assert _set_refs(client, mine, [{"referenced_proof_id": bob_draft, "alias": "D"}]).status_code == 422
+
+
+def test_reference_to_own_draft_is_hidden_from_public_readers(client, db):
+    # A published proof that cites the owner's own draft must not leak that
+    # draft's identity (name/slug/existence) to an anonymous reader.
+    ada = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, ada, published=True)
+    draft = _create_proof(client, sid, "Secret Lemma")
+    main = _create_proof(client, sid, "Main")
+    assert _set_refs(client, main, [{"referenced_proof_id": draft, "alias": "L"}]).status_code == 200
+    assert client.patch(f"/proofs/{main}", json={"published": True}).status_code == 200
+
+    # The owner still sees their own draft reference.
+    assert [r["alias"] for r in client.get(f"/proofs/{main}").json()["references"]] == ["L"]
+
+    # An anonymous reader of the published proof sees no trace of the draft.
+    _logout(client)
+    public_view = client.get(f"/proofs/{main}")
+    assert public_view.status_code == 200
+    assert public_view.json()["references"] == []

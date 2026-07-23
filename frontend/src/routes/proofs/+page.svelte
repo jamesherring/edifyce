@@ -9,53 +9,21 @@
 	import { DataTable, renderComponent } from '$lib/components/ui/data-table';
 	import * as Alert from '$lib/components/ui/alert';
 	import { Button } from '$lib/components/ui/button';
-	import { api, ApiError, type ProofSummary } from '$lib/api';
+	import { api, type ProofSummary } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
+	import { createPaginatedList } from '$lib/paged-list.svelte';
 	import { timeAgo } from '$lib/format';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import Plus from '@lucide/svelte/icons/plus';
 
-	// 'public' = the shared master list (published only); 'mine' = the signed-in
-	// user's own proofs, drafts included.
-	type View = 'public' | 'mine';
-	let view = $state<View>('public');
+	const PAGE_SIZE = 10;
 
-	let proofs = $state<ProofSummary[]>([]);
-	let loading = $state(true);
-	let error = $state<string | null>(null);
-
-	// Guard against out-of-order responses: a fast toggle can leave an older
-	// request resolving last and clobbering the newer view's data.
-	let requestSeq = 0;
-
-	async function fetchProofs(current: View) {
-		const seq = ++requestSeq;
-		loading = true;
-		error = null;
-		try {
-			const result = current === 'mine' ? await api.proofs.list() : await api.proofs.listPublic();
-			if (seq !== requestSeq) return;
-			proofs = result;
-		} catch (err) {
-			if (seq !== requestSeq) return;
-			error = err instanceof ApiError ? err.message : String(err);
-			proofs = [];
-		} finally {
-			if (seq === requestSeq) loading = false;
-		}
-	}
-
-	// Logging out while on "My proofs" would otherwise leave view='mine' and the
-	// next fetch 401s; fall back to the public list.
-	$effect(() => {
-		if (auth.ready && !auth.user && view === 'mine') view = 'public';
-	});
-
-	// Re-fetch when the view changes. Only 'mine' depends on auth resolving.
-	$effect(() => {
-		const current = view;
-		if (current === 'mine') void auth.ready;
-		fetchProofs(current);
+	// Server-side paging/search/sort lives in the shared controller; the page
+	// supplies only the page size and which API call each view maps to.
+	const list = createPaginatedList<ProofSummary>({
+		pageSize: PAGE_SIZE,
+		load: (view, params) =>
+			view === 'mine' ? api.proofs.list(undefined, params) : api.proofs.listPublic(params)
 	});
 
 	const columns = $derived<ColumnDef<ProofSummary, unknown>[]>([
@@ -80,7 +48,7 @@
 		},
 		// Every row in the public view is published (and so verified), so the
 		// verdict and status columns only earn their place in the owner's own list.
-		...(view === 'mine'
+		...(list.view === 'mine'
 			? [
 					{
 						id: 'checked',
@@ -115,10 +83,10 @@
 					<div class="inline-flex rounded-md border p-0.5 text-sm">
 						<button
 							type="button"
-							onclick={() => (view = 'public')}
+							onclick={() => list.switchView('public')}
 							class={[
 								'rounded px-3 py-1 font-medium transition-colors',
-								view === 'public'
+								list.view === 'public'
 									? 'bg-accent text-accent-foreground'
 									: 'text-muted-foreground hover:text-foreground'
 							]}
@@ -127,10 +95,10 @@
 						</button>
 						<button
 							type="button"
-							onclick={() => (view = 'mine')}
+							onclick={() => list.switchView('mine')}
 							class={[
 								'rounded px-3 py-1 font-medium transition-colors',
-								view === 'mine'
+								list.view === 'mine'
 									? 'bg-accent text-accent-foreground'
 									: 'text-muted-foreground hover:text-foreground'
 							]}
@@ -146,24 +114,28 @@
 		{/snippet}
 	</PageHeader>
 
-	{#if error}
+	{#if list.error}
 		<Alert.Root variant="destructive">
 			<TriangleAlert class="size-4" />
 			<Alert.Title>Could not load proofs</Alert.Title>
-			<Alert.Description>{error}</Alert.Description>
+			<Alert.Description>{list.error}</Alert.Description>
 		</Alert.Root>
-	{:else if loading}
+	{:else if list.loading && list.items.length === 0}
 		<LoadingSpinner message="Loading proofs…" />
 	{:else}
-		<DataTable
-			data={proofs}
-			{columns}
-			globalSearch
-			searchPlaceholder="Search proofs…"
-			onrowclick={(row) => goto(`/proofs/${row.id}`)}
-			emptyMessage={view === 'mine'
-				? "You haven't written any proofs yet."
-				: 'No published proofs yet.'}
-		/>
+		<!-- Remount on view switch so the table's internal page/sort/search reset. -->
+		{#key list.view}
+			<DataTable
+				data={list.items}
+				{columns}
+				pageSize={PAGE_SIZE}
+				searchPlaceholder="Search proofs…"
+				onrowclick={(row) => goto(`/proofs/${row.id}`)}
+				serverSide={list.serverSide}
+				emptyMessage={list.view === 'mine'
+					? "You haven't written any proofs yet."
+					: 'No published proofs yet.'}
+			/>
+		{/key}
 	{/if}
 </PageContainer>

@@ -25,7 +25,7 @@ from sqlalchemy.orm import selectinload
 
 from app.auth import current_active_user, current_active_user_optional
 from app.db import Base, FormalSystem, get_session, system_to_spec
-from app.routers._common import unique_slug
+from app.routers._common import PageParams, page_params, paginate_summaries, unique_slug
 from app.db.models import User
 from app.db.side_conditions import SideConditionRow
 from app.db.side_conditions_mapping import (
@@ -54,6 +54,7 @@ from app.schemas import (
     FormalSystemUpdate,
     LinePart,
     LineType,
+    Page,
     Production,
     ProofVerifyRequest,
     Rule,
@@ -345,6 +346,7 @@ def rule_out(r: RuleRow) -> Rule:
         antecedents=[ant.pattern for ant in r.antecedents],
         bindings=_bindings_out(r.bindings),
         side_conditions=rule_side_conditions_list(r),
+        matching=r.matching,
     )
 
 
@@ -361,37 +363,43 @@ def _detail(system: FormalSystem) -> FormalSystemDetail:
     )
 
 
-@router.get("", response_model=list[FormalSystemSummary])
+@router.get("", response_model=Page[FormalSystemSummary])
 async def list_systems(
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
-) -> list[FormalSystemSummary]:
-    systems = await session.scalars(
-        select(FormalSystem)
-        .where(FormalSystem.owner_id == user.id)
-        .options(selectinload(FormalSystem.owner))
-        .order_by(FormalSystem.created_at)
+    params: PageParams = Depends(page_params),
+) -> Page[FormalSystemSummary]:
+    return await paginate_summaries(
+        session,
+        FormalSystem,
+        User,
+        base_conditions=[FormalSystem.owner_id == user.id],
+        default_order=[FormalSystem.created_at],
+        params=params,
+        summarize=_summary,
     )
-    return [_summary(system) for system in systems]
 
 
 # Declared before `/{system_id}` so "public" isn't parsed as a system id.
-@router.get("/public", response_model=list[FormalSystemSummary])
+@router.get("/public", response_model=Page[FormalSystemSummary])
 async def list_public_systems(
     session: AsyncSession = Depends(get_session),
-) -> list[FormalSystemSummary]:
+    params: PageParams = Depends(page_params),
+) -> Page[FormalSystemSummary]:
     """The shared master list: every published system, any owner, no auth.
 
     Drafts (``published_at IS NULL``) are excluded; unpublishing removes a system
-    from this list. Newest publications first.
+    from this list. Newest publications first, unless the client asks to sort.
     """
-    systems = await session.scalars(
-        select(FormalSystem)
-        .where(FormalSystem.published_at.is_not(None))
-        .options(selectinload(FormalSystem.owner))
-        .order_by(FormalSystem.published_at.desc(), FormalSystem.created_at.desc())
+    return await paginate_summaries(
+        session,
+        FormalSystem,
+        User,
+        base_conditions=[FormalSystem.published_at.is_not(None)],
+        default_order=[FormalSystem.published_at.desc(), FormalSystem.created_at.desc()],
+        params=params,
+        summarize=_summary,
     )
-    return [_summary(system) for system in systems]
 
 
 @router.post("", response_model=FormalSystemDetail, status_code=status.HTTP_201_CREATED)

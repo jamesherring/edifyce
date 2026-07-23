@@ -531,6 +531,8 @@ async def _assign_rule(session: AsyncSession, system_id: uuid.UUID, row: RuleRow
         row.name = payload.name
     if "deduction" in fields and payload.deduction is not None:
         row.deduction = payload.deduction
+    if "matching" in fields and payload.matching is not None:
+        row.matching = payload.matching
     if "antecedents" in fields and payload.antecedents is not None:
         row.antecedents = [
             RuleAntecedentRow(position=i, pattern=pattern) for i, pattern in enumerate(payload.antecedents)
@@ -559,6 +561,19 @@ async def _assign_rule(session: AsyncSession, system_id: uuid.UUID, row: RuleRow
             validate_side_condition_metavars(row.side_conditions, {b.var for b in row.bindings})
         except ValueError as exc:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+    # A string-rewriting rule is checked by associative matching, which has no
+    # term binding to evaluate a side-condition against; the engine would ignore
+    # any proviso on it. Reject the pairing here (across the final combined state,
+    # so flipping either field into conflict is caught) rather than let an author
+    # silently weaken a rule by choosing string matching. Mirrors the guard in
+    # website.logical.declarative.lower.
+    if row.matching == "string" and row.side_conditions:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "String-rewriting rules cannot carry side-conditions; drop them or "
+            "switch the rule to structural matching.",
+        )
 
 
 # ---------------------------------------------------------------------------

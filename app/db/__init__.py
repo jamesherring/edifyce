@@ -11,9 +11,9 @@ from app.db.models import (
     OAuthAccount,
     Proof,
     ProofFolder,
+    ProofReference,
     Theorem,
     User,
-    proof_references,
 )
 from app.db.session import get_session
 from app.db.systems import (
@@ -44,7 +44,7 @@ __all__ = [
     "ProofFolder",
     "Theorem",
     "User",
-    "proof_references",
+    "ProofReference",
     "get_session",
     # Normalised system decomposition (app/db/systems.py) + spec round trip.
     "AxiomBindingRow",
