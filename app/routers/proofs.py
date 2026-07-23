@@ -212,8 +212,16 @@ def _dependency_order(
     return list(sorter.static_order())
 
 
+def _is_usable_lemma(engine_proof: EngineProof) -> bool:
+    # Match the engine's own import rule (proof.py `import_path`): only a fully
+    # valid, warning-free proof is a usable lemma. A warning-carrying proof is
+    # not seeded, so this path and the engine's native import agree on what a
+    # usable lemma is.
+    return bool(engine_proof.valid) and not engine_proof.has_warnings
+
+
 async def _verify_with_references(
-    session: AsyncSession, proof: Proof
+    session: AsyncSession, proof: Proof, system: FormalSystem | None = None
 ) -> tuple[VerifyProofResponse, bool | None]:
     """Verify a stored proof, resolving the lemmas it cites from other proofs.
 
@@ -221,13 +229,16 @@ async def _verify_with_references(
     dependency order (a lemma before its dependents), pre-seeding each proof's
     ``reference_context`` with the already-compiled proofs it references — keyed by
     the stored citation alias — so a `[alias.line]` citation resolves to that
-    lemma's line. Only *valid* lemmas are seeded, so a proof leaning on an
-    unproven lemma fails rather than borrowing an unsound line.
+    lemma's line. Only *usable* lemmas (fully valid, warning-free) are seeded, so
+    a proof leaning on an unproven lemma fails rather than borrowing an unsound
+    line. Pass ``system`` to reuse an already-loaded system (a publish gate has
+    one in hand); otherwise it is loaded here.
 
     Returns the response payload plus validity (None when the proof couldn't be
     checked at all — the system doesn't build, or its source doesn't parse).
     """
-    system = await load_system(session, proof.formal_system_id)
+    if system is None:
+        system = await load_system(session, proof.formal_system_id)
     if system is None:
         return VerifyProofResponse(success=False, errors=["The proof's system no longer exists."]), None
 
@@ -248,7 +259,7 @@ async def _verify_with_references(
         reference_context = {
             alias: compiled[target]
             for alias, target, _pos in edges.get(pid, ())
-            if target in compiled and compiled[target].valid
+            if target in compiled and _is_usable_lemma(compiled[target])
         }
         engine_proof = EngineProof(formal_system=compiled_system)
         engine_proof.reference_context = reference_context
@@ -263,8 +274,12 @@ async def _verify_with_references(
             engine_proof.valid = False
         compiled[pid] = engine_proof
 
-    target = compiled[proof.id]
-    return VerifyProofResponse(success=target.valid, proof=target.data()), target.valid
+    # The root can be absent if the proof was deleted concurrently between the
+    # caller's load and the closure query — a structured failure, not a 500.
+    root = compiled.get(proof.id)
+    if root is None:
+        return VerifyProofResponse(success=False, errors=["Proof not found."]), None
+    return VerifyProofResponse(success=root.valid, proof=root.data()), root.valid
 
 
 async def _invalidate_dependents(session: AsyncSession, proof_id: uuid.UUID) -> None:
@@ -288,6 +303,24 @@ async def _invalidate_dependents(session: AsyncSession, proof_id: uuid.UUID) -> 
         await session.execute(
             sa_update(Proof).where(Proof.id.in_(dependents)).values(valid=None, result=None)
         )
+
+
+async def _has_published_dependents(session: AsyncSession, proof_id: uuid.UUID) -> bool:
+    """Whether any *published* proof references ``proof_id``.
+
+    Only direct dependents are checked: the publish invariant already forces
+    every ancestor of a published proof to be published, so a published proof
+    that transitively depends on this one has a published proof directly citing
+    it somewhere in the chain. Used to block unpublishing or deleting a lemma
+    that a public theorem rests on (which would silently break that theorem).
+    """
+    dependent = await session.scalar(
+        select(ProofReference.proof_id)
+        .join(Proof, Proof.id == ProofReference.proof_id)
+        .where(ProofReference.references_id == proof_id, Proof.published_at.is_not(None))
+        .limit(1)
+    )
+    return dependent is not None
 
 
 async def _require_publishable(session: AsyncSession, proof: Proof) -> None:
@@ -326,8 +359,8 @@ async def _require_publishable(session: AsyncSession, proof: Proof) -> None:
         )
 
     # Verify with references resolved, so a proof that leans on a lemma is gated
-    # on the lemma actually proving it.
-    response, valid = await _verify_with_references(session, proof)
+    # on the lemma actually proving it. Reuse the system already loaded above.
+    response, valid = await _verify_with_references(session, proof, system=system)
     if not response.success:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -500,6 +533,14 @@ async def update_proof(
     if "published" in changes:
         if changes["published"]:
             await _require_publishable(session, proof)
+        elif await _has_published_dependents(session, proof.id):
+            # Unpublishing a lemma a published proof rests on would leave that
+            # public theorem depending on a private draft; block it (the
+            # dependents must be unpublished first).
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Cannot unpublish a proof that a published proof references.",
+            )
         proof.published_at = datetime.now(timezone.utc) if changes["published"] else None
     elif source_changed and proof.published_at is not None:
         await _require_publishable(session, proof)
@@ -659,16 +700,26 @@ async def delete_proof(
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    # Deleting a proof removes its reference edges (FK cascade), so anything that
-    # cited it as a lemma is stale — clear those verdicts before the delete.
-    await _invalidate_dependents(session, proof_id)
-    # One owner-scoped Core DELETE; references and theorems follow their FK
-    # ON DELETE rules, so nothing else is loaded here.
-    result = await session.execute(
-        sa_delete(Proof).where(Proof.id == proof_id, Proof.owner_id == user.id)
+    # Establish ownership first (404 for a stranger's id, so nothing leaks) before
+    # any dependency checks reveal the proof exists.
+    owned = await session.scalar(
+        select(Proof.id).where(Proof.id == proof_id, Proof.owner_id == user.id)
     )
-    if result.rowcount == 0:
+    if owned is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Proof not found.")
+
+    # Deleting a proof drops its reference edges (FK cascade), so a dependent's
+    # `[alias.line]` citation would dangle. If a *published* proof rests on it,
+    # that would silently break a public theorem — block it. Otherwise just clear
+    # the (draft) dependents' stale verdicts.
+    if await _has_published_dependents(session, proof_id):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Cannot delete a proof that a published proof references.",
+        )
+    await _invalidate_dependents(session, proof_id)
+
+    await session.execute(sa_delete(Proof).where(Proof.id == proof_id))
     await session.commit()
 
 

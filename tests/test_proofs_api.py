@@ -622,20 +622,32 @@ def test_reference_scope_allows_others_published_but_not_draft(client, db):
     assert _set_refs(client, mine, [{"referenced_proof_id": bob_draft, "alias": "D"}]).status_code == 422
 
 
-def test_reference_to_a_now_private_lemma_is_hidden_from_public_readers(client, db):
-    # A published proof must not leak the identity of a private-draft lemma it
-    # cites. The publish invariant forbids publishing while a reference is a
-    # draft, so this state is reached by unpublishing a lemma after the dependent
-    # is published — where the read-time filter still has to hide it.
+def _seed_reference(db_path, proof_id: str, referenced_id: str, alias: str) -> None:
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with Session(engine) as session:
+            session.add(
+                ProofReference(
+                    proof_id=uuid.UUID(proof_id),
+                    references_id=uuid.UUID(referenced_id),
+                    alias=alias,
+                )
+            )
+            session.commit()
+    finally:
+        engine.dispose()
+
+
+def test_reference_to_a_private_lemma_is_hidden_from_public_readers(client, db):
+    # Defense in depth: the lifecycle gates now keep a published proof from ever
+    # referencing a private draft through the API, but seeded/legacy data or a
+    # future path could produce that state — the read-time filter must still hide
+    # the draft's identity from an anonymous reader. Seed the state directly.
     ada = _register_login(client, "ada@example.com")
     sid = _seed_system(db, ada, published=True)
-    lemma = _create_proof(client, sid, "Secret Lemma", source=_LEMMA_SRC)
-    main = _create_proof(client, sid, "Main", source=_USER_SRC)
-    _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
-    assert client.patch(f"/proofs/{lemma}", json={"published": True}).status_code == 200
-    assert client.patch(f"/proofs/{main}", json={"published": True}).status_code == 200
-    # Unpublish the lemma: main (still published) now cites a private draft.
-    assert client.patch(f"/proofs/{lemma}", json={"published": False}).status_code == 200
+    lemma = _seed_proof(db, ada, sid, "SecretLemma", published=False)
+    main = _seed_proof(db, ada, sid, "Main", published=True)
+    _seed_reference(db, main, lemma, "A")
 
     # The owner still sees their own reference.
     assert [r["alias"] for r in client.get(f"/proofs/{main}").json()["references"]] == ["A"]
@@ -728,3 +740,40 @@ def test_published_proof_rejects_adding_a_draft_reference(client, db):
         {"referenced_proof_id": draft, "alias": "D"},
     ])
     assert resp.status_code == 422
+
+
+def test_cannot_unpublish_or_delete_a_lemma_a_published_proof_rests_on(client, db):
+    # Unpublishing or deleting a lemma that a published proof references would
+    # silently break that public theorem, so both are blocked (409) until the
+    # dependent is taken down first.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid, published=True)
+    lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
+    main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
+    assert client.patch(f"/proofs/{lemma}", json={"published": True}).status_code == 200
+    assert client.patch(f"/proofs/{main}", json={"published": True}).status_code == 200
+
+    # main (published) depends on lemma, so lemma is load-bearing.
+    assert client.patch(f"/proofs/{lemma}", json={"published": False}).status_code == 409
+    assert client.delete(f"/proofs/{lemma}").status_code == 409
+
+    # Once the dependent is unpublished, the lemma is free again.
+    assert client.patch(f"/proofs/{main}", json={"published": False}).status_code == 200
+    assert client.patch(f"/proofs/{lemma}", json={"published": False}).status_code == 200
+    assert client.delete(f"/proofs/{lemma}").status_code == 204
+
+
+def test_draft_dependents_do_not_block_unpublish_or_delete(client, db):
+    # Only *published* dependents lock a lemma. A draft dependent's verdict is
+    # just invalidated.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid, published=True)
+    lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
+    main = _create_proof(client, sid, "Main", source=_USER_SRC)  # stays a draft
+    _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
+    assert client.patch(f"/proofs/{lemma}", json={"published": True}).status_code == 200
+    # A draft dependent doesn't block unpublishing the lemma...
+    assert client.patch(f"/proofs/{lemma}", json={"published": False}).status_code == 200
+    # ...nor deleting it (the draft dependent just goes stale).
+    assert client.delete(f"/proofs/{lemma}").status_code == 204
