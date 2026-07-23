@@ -57,7 +57,7 @@ from tests.spec_helpers import (
     universal_prod,
     variable_prod,
 )
-from website.logical.declarative import SystemSpec, build_spec, lower
+from website.logical.declarative import SystemSpec, build_spec
 from website.logical.formal_system.side_condition_syntax import parse_side_condition
 
 _TABLES = [
@@ -133,10 +133,6 @@ def _rule(system, label):
 def test_provisos_round_trip_through_the_database(stored_system):
     rebuilt = system_to_spec(stored_system)
     assert rebuilt == zfc_spec()
-
-
-def test_rebuilt_spec_lowers_identically(stored_system):
-    assert lower(system_to_spec(stored_system)) == lower(zfc_spec())
 
 
 def test_provisoless_definition_has_no_side_condition_rows(stored_system):

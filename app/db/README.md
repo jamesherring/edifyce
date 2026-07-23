@@ -48,8 +48,8 @@ Modernised from the original Django app (`website/models.py` on `main`):
   and explicit `position` ordering. This makes every part of a system a
   first-class, indexable, searchable entity — "which systems define `⊆`", "which
   rules take two premises" — answerable in plain SQL with no recompile. The
-  bridge to the engine is `systems_mapping`: rows → `SystemSpec` → lower to
-  `.edi` → compile.
+  bridge to the engine is `systems_mapping`: rows → `SystemSpec` →
+  `FormalSystem` (`declarative.build_system`).
 - **`side_conditions`** — a definition's proviso (`where` clause) stored as the
   kernel's closed side-condition algebra (`side_conditions.py`) rather than an
   opaque string: one row per algebra node (`occurs`/`equal`/`disjoint`/`atom`/

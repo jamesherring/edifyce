@@ -70,8 +70,8 @@ _TABLES = [
 
 
 def zfc_spec() -> SystemSpec:
-    # A small but genuine ZFC fragment used to give the read/validate/source
-    # paths real content, assembled directly as a SystemSpec.
+    # A small but genuine ZFC fragment used to give the read/validate paths
+    # real content, assembled directly as a SystemSpec.
     return SystemSpec(
         name="ZFC",
         brackets=brackets(),
@@ -131,8 +131,8 @@ def _register_login(client: TestClient, email: str, password: str = "password123
 
 def _seed_spec(db_path, owner_id: str, spec: SystemSpec, published: bool = False) -> str:
     # Insert a system assembled as a SystemSpec directly (child CRUD is a later
-    # phase), owned by the given user, so the read/validate/source paths have
-    # real content. `published=True` sets published_at directly, which is the
+    # phase), owned by the given user, so the read/validate paths have real
+    # content. `published=True` sets published_at directly, which is the
     # only way to reach a broken-but-published state now that the publish
     # endpoint gates on the system compiling.
     engine = create_engine(f"sqlite:///{db_path}")
@@ -153,8 +153,8 @@ def _seed_zfc(db_path, owner_id: str) -> str:
     return _seed_spec(db_path, owner_id, zfc_spec())
 
 
-# A system that stores fine but cannot be lowered: the line shape has no
-# `<placeholder>` naming a grammar sort, so `lower()` raises DeclarativeError.
+# A system that stores fine but cannot be built: the line shape has no
+# `<placeholder>` naming a grammar sort, so `build_system` raises DeclarativeError.
 def broken_spec() -> SystemSpec:
     return SystemSpec(
         name="Broken",
@@ -376,7 +376,7 @@ def test_a_user_cannot_see_another_users_system(client):
 
 
 # ---------------------------------------------------------------------------
-# Validate + source, against seeded content
+# Validate, against seeded content
 # ---------------------------------------------------------------------------
 
 
@@ -391,34 +391,6 @@ def test_validate_reports_a_compilable_system(client, db):
     assert body["system_name"] == "ZFC"
     assert body["inference_rule_count"] == 2  # HYP, MP (EXT is an axiom line type)
     assert body["line_type_count"] >= 1
-
-
-def test_source_returns_lowered_edi(client, db):
-    owner_id = _register_login(client, "ada@example.com")
-    system_id = _seed_zfc(db, owner_id)
-
-    response = client.get(f"/formal-systems/{system_id}/source")
-    assert response.status_code == 200
-    source = response.json()["source"]
-    assert source.startswith("FormalSystem ZFC:")
-    assert "InferenceRule modus_ponens:" in source
-    assert "Define x ⊆ y as" in source
-
-
-def test_source_on_a_broken_published_system_is_422_not_500(client, db):
-    # Defense in depth for a broken-but-published system (published before the
-    # compile gate existed, or broken by a later edit): published systems are
-    # world-readable and `lower()` raises on this one, so an unguarded /source
-    # would be an unauthenticated 500. It must be a 422 with the error text.
-    # Seed it published directly — the publish endpoint now refuses a broken one.
-    owner_id = _register_login(client, "owner@example.com")
-    system_id = _seed_spec(db, owner_id, broken_spec(), published=True)
-    client.post("/auth/logout")
-
-    response = client.get(f"/formal-systems/{system_id}/source")
-    assert response.status_code == 422, response.text
-    detail = response.json()["detail"]
-    assert isinstance(detail, list) and detail  # error strings, not an HTML 500
 
 
 def test_validate_is_owner_scoped(client, db):
@@ -461,8 +433,8 @@ def test_verify_unparseable_line_is_reported_not_raised(client, db):
 
 
 def test_verify_on_a_non_compiling_system_is_400(client, db):
-    # A stored system that cannot be lowered/compiled surfaces the errors as a
-    # 400 the client renders verbatim, rather than a 500.
+    # A stored system that cannot be built surfaces the errors as a 400 the
+    # client renders verbatim, rather than a 500.
     owner_id = _register_login(client, "ada@example.com")
     system_id = _seed_spec(db, owner_id, broken_spec())
     res = client.post(
@@ -586,7 +558,7 @@ def test_non_owner_cannot_publish_or_unpublish(client):
 
 def test_cannot_publish_a_non_compiling_system(client, db):
     # Publishing makes a system world-readable; a broken one would then break
-    # /source (and any future public consumer) for anonymous viewers. Gate it.
+    # read/validate (and any future public consumer) for anonymous viewers. Gate it.
     owner_id = _register_login(client, "ada@example.com")
     system_id = _seed_spec(db, owner_id, broken_spec())
 
@@ -639,10 +611,9 @@ def test_published_system_is_readable_by_anyone(client, db):
     _publish(client, system_id)
     client.post("/auth/logout")
 
-    # Signed out: detail, validate and source are all served.
+    # Signed out: detail and validate are both served.
     assert client.get(f"/formal-systems/{system_id}").status_code == 200
     assert client.post(f"/formal-systems/{system_id}/validate").json()["success"] is True
-    assert client.get(f"/formal-systems/{system_id}/source").status_code == 200
 
     # A different signed-in user can read it too, but it is not one of *their*
     # systems (the owner-scoped list stays empty for them).

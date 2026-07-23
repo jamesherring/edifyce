@@ -1,14 +1,14 @@
 """CRUD for formal systems, owner-scoped.
 
 Systems are stored as normalised rows (`app/db/systems.py`); this router is the
-thin HTTP layer over them. Reads assemble the full aggregate; `validate` and
-`source` rebuild a `SystemSpec` (`app.db.system_to_spec`) and hand it to the
-engine (`declarative.build_spec` / `lower`) — no compile logic lives here.
+thin HTTP layer over them. Reads assemble the full aggregate; `validate`
+rebuilds a `SystemSpec` (`app.db.system_to_spec`) and hands it to the engine
+(`declarative.build_spec`) — no compile logic lives here.
 
-This phase covers **system-level** writes (create / update / delete) plus read,
-validate and source. Editing the component parts (productions, definitions,
-rules, …) is a later phase; the read models already expose each part's `id` so
-that layer can address them.
+This phase covers **system-level** writes (create / update / delete) plus read
+and validate. Editing the component parts (productions, definitions, rules, …)
+is a later phase; the read models already expose each part's `id` so that layer
+can address them.
 """
 
 from __future__ import annotations
@@ -60,11 +60,10 @@ from app.schemas import (
     Rule,
     Sort,
     SystemOwner,
-    SystemSource,
     SystemValidation,
     VerifyProofResponse,
 )
-from website.logical.declarative import DeclarativeError, build_spec, lower
+from website.logical.declarative import build_spec
 
 router = APIRouter(prefix="/formal-systems", tags=["formal-systems"])
 
@@ -200,8 +199,8 @@ async def _require_publishable(session: AsyncSession, system: FormalSystem) -> N
     """Reject a publish that would expose a broken or dangling public system.
 
     Two things a published system must not do, since it becomes world-readable:
-    it must compile (otherwise `/source` and future public consumers break on
-    it), and if it inherits from another system that parent must itself be
+    it must compile (otherwise public read/validate and future public consumers
+    break on it), and if it inherits from another system that parent must itself be
     public — a published child exposes `inherits_from_id`, and `GET /{parent}`
     404s for anonymous viewers when the parent is a private draft.
     """
@@ -509,10 +508,10 @@ async def validate_system(
 
     # NOTE: inheritance is not resolved yet. `inherits_from_id` is stored (and
     # its reference validated on write), but the declarative pipeline has no
-    # `inherit` concept — `system_to_spec`/`lower` describe this system alone and
-    # no parent `system_dict` is supplied — so a child that relies on a parent's
-    # grammar/rules would validate in isolation. Wiring the parent chain through
-    # here (and `/source`) is deferred to the inheritance phase; see
+    # `inherit` concept — `system_to_spec`/`build_spec` describe this system
+    # alone and no parent `system_dict` is supplied — so a child that relies on a
+    # parent's grammar/rules would validate in isolation. Wiring the parent chain
+    # through here is deferred to the inheritance phase; see
     # docs/object-crud-design.md.
     result = build_spec(system_to_spec(system))
 
@@ -560,25 +559,3 @@ async def verify_proof(
         return VerifyProofResponse(success=False, errors=[str(e)])
 
     return VerifyProofResponse(success=proof.valid, proof=proof.data())
-
-
-@router.get("/{system_id}/source", response_model=SystemSource)
-async def system_source(
-    system_id: uuid.UUID,
-    user: User | None = Depends(current_active_user_optional),
-    session: AsyncSession = Depends(get_session),
-) -> SystemSource:
-    system = await _get_readable_or_404(session, system_id, user)
-    # Describes this system alone; inheritance is not lowered yet (see the note
-    # on validate_system).
-    #
-    # `lower` raises `DeclarativeError` on a structurally-invalid spec (e.g. a
-    # line shape with no grammar-sort placeholder). Published systems are
-    # world-readable, so a broken one would otherwise be an unauthenticated 500;
-    # surface it as a 422 with the error text, mirroring how `validate` reports
-    # `build_spec` failures.
-    try:
-        source = lower(system_to_spec(system))
-    except DeclarativeError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=[str(exc)]) from exc
-    return SystemSource(source=source)

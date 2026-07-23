@@ -15,13 +15,11 @@
 		api,
 		ApiError,
 		type FormalSystemDetail,
-		type SystemValidation,
-		type SystemSource
+		type SystemValidation
 	} from '$lib/api';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import CircleCheck from '@lucide/svelte/icons/circle-check-big';
 	import CircleX from '@lucide/svelte/icons/circle-x';
-	import Code from '@lucide/svelte/icons/code';
 	import SquareCheck from '@lucide/svelte/icons/square-check-big';
 	import Pencil from '@lucide/svelte/icons/pencil';
 
@@ -32,13 +30,8 @@
 	let validation = $state<SystemValidation | null>(null);
 	let validating = $state(false);
 
-	let source = $state<SystemSource | null>(null);
-	let sourceOpen = $state(false);
-	let sourceLoading = $state(false);
-	let sourceError = $state<string | null>(null);
-
-	// Bumped on every load so late responses from a previous id (system,
-	// validation, or source) are dropped instead of overwriting the current one.
+	// Bumped on every load so late responses from a previous id (system or
+	// validation) are dropped instead of overwriting the current one.
 	let requestSeq = 0;
 
 	async function load(id: string) {
@@ -46,8 +39,6 @@
 		loading = true;
 		error = null;
 		validation = null;
-		source = null;
-		sourceOpen = false;
 		let detail: FormalSystemDetail;
 		try {
 			detail = await api.systems.get(id);
@@ -86,26 +77,6 @@
 			};
 		} finally {
 			if (seq === requestSeq) validating = false;
-		}
-	}
-
-	async function toggleSource() {
-		sourceOpen = !sourceOpen;
-		if (sourceOpen && source === null && system) {
-			const seq = requestSeq;
-			const id = system.id;
-			sourceLoading = true;
-			sourceError = null;
-			try {
-				const result = await api.systems.source(id);
-				if (seq !== requestSeq) return;
-				source = result;
-			} catch (err) {
-				if (seq !== requestSeq) return;
-				sourceError = err instanceof ApiError ? err.message : String(err);
-			} finally {
-				if (seq === requestSeq) sourceLoading = false;
-			}
 		}
 	}
 
@@ -200,28 +171,6 @@
 		{/if}
 
 		<SystemParts {system} />
-
-		<!-- The lowered .edi source, fetched lazily. -->
-		<div>
-			<Button variant="outline" size="sm" onclick={toggleSource}>
-				<Code class="size-4" />
-				{sourceOpen ? 'Hide source' : 'View source'}
-			</Button>
-			{#if sourceOpen}
-				<div class="mt-3">
-					{#if sourceLoading}
-						<LoadingSpinner message="Lowering source…" />
-					{:else if sourceError}
-						<Alert.Root variant="destructive">
-							<TriangleAlert class="size-4" />
-							<Alert.Description>{sourceError}</Alert.Description>
-						</Alert.Root>
-					{:else if source}
-						<pre class="overflow-x-auto rounded-md border bg-muted/30 p-4 font-mono text-xs leading-relaxed">{source.source}</pre>
-					{/if}
-				</div>
-			{/if}
-		</div>
 
 		<EntityFooter id={system.id} createdAt={system.created_at} />
 	{/if}

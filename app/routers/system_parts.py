@@ -567,7 +567,7 @@ async def _assign_rule(session: AsyncSession, system_id: uuid.UUID, row: RuleRow
     # any proviso on it. Reject the pairing here (across the final combined state,
     # so flipping either field into conflict is caught) rather than let an author
     # silently weaken a rule by choosing string matching. Mirrors the guard in
-    # website.logical.declarative.lower.
+    # website.logical.declarative.build_system.
     if row.matching == "string" and row.side_conditions:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,

@@ -1,10 +1,10 @@
 """Tests for the declarative spec→system pipeline (website.logical.declarative).
 
 Formal systems are assembled directly as :class:`SystemSpec` objects (the
-scripted-assembly path) and driven through the *real* compiler and proof
-checker: grammar parsing, order-independence (the fix for the engine's silent
-forward-declaration trap), and -- the headline requirement -- definitions that
-remain first-class from the grammar down into inference checking.
+scripted-assembly path) and driven through the *real* builder (``build_system``)
+and proof checker: grammar parsing, order-independence (the fix for the engine's
+silent forward-declaration trap), and -- the headline requirement -- definitions
+that remain first-class from the grammar down into inference checking.
 """
 
 import pytest
@@ -39,7 +39,7 @@ from website.logical.declarative import (
     LineSpec,
     SystemSpec,
     build_spec,
-    lower,
+    build_system,
 )
 
 
@@ -201,16 +201,6 @@ def test_line_types_declare_formula_and_reference_fields(zfc):
     assert extensionality.formula_field == "self"
 
 
-def test_lowering_emits_field_declarations_not_accessor_functions():
-    edi = lower(zfc_spec())
-    assert "formula: f" in edi
-    assert "reference: r" in edi
-    assert "formula: self" in edi
-    # The interpreted accessor bodies are gone.
-    assert ".formula()" not in edi
-    assert ".reference()" not in edi
-
-
 def test_legacy_accessor_function_syntax_is_rejected():
     # The interpreted `pattern.formula(): ...` accessor syntax has been removed;
     # declaring one is now a parse error (use a `formula:` field on the line
@@ -231,28 +221,6 @@ def test_legacy_accessor_function_syntax_is_rejected():
     result = compile_edi(source)
     assert "errors" in result
     assert any("statement_pattern.formula()" in e for e in result["errors"])
-
-
-# ---------------------------------------------------------------------------
-# Lowering: forward-declaration order and definition provisos
-# ---------------------------------------------------------------------------
-
-
-def test_lowering_forward_declares_before_use():
-    # The empty union declaration must precede the Pattern that references it.
-    edi = lower(zfc_spec())
-    assert edi.index("UnionPattern formula:") < edi.index("with p as formula")
-
-
-def test_definition_proviso_lowers_to_a_where_clause():
-    # A definition's `condition` lowers to a `Define ... where ...` clause -
-    # the structural kernel proviso.
-    spec = zfc_spec()
-    next(d for d in spec.definitions if d.name == "superset").condition = (
-        "disjoint(x, y, variable)"
-    )
-    edi = lower(spec)
-    assert "where disjoint(x, y, variable)" in edi
 
 
 # ---------------------------------------------------------------------------
@@ -285,15 +253,8 @@ def gated_spec() -> SystemSpec:
     )
 
 
-def test_side_conditions_lower_to_a_rule_block():
-    edi = lower(gated_spec())
-    assert "side_conditions:" in edi
-    assert "equal(p, q)" in edi
-    assert "not occurs(p, q)" in edi
-
-
 def test_side_conditions_gate_the_rule_during_checking():
-    # The payoff: the lowered-and-compiled system enforces the provisos.
+    # The payoff: the built system enforces the provisos.
     system = build_spec(gated_spec())["system"]
     # RImp requires p == q.
     assert system.parse("(a → a) [RImp]").valid is True
@@ -322,9 +283,10 @@ def test_build_spec_returns_errors_for_invalid_shape():
     assert result["errors"]
 
 
-def test_lower_raises_declarative_error_on_invalid_shape():
-    # `lower` itself raises DeclarativeError (build_spec catches it); the routers
-    # depend on that surface for the /source 422 path.
+def test_build_system_raises_declarative_error_on_invalid_shape():
+    # `build_system` raises DeclarativeError directly (build_spec catches it and
+    # reports errors); a shape whose sole placeholder is not a grammar sort has
+    # no logical field to project.
     spec = SystemSpec(
         name="S",
         productions=[template_prod("formula", "atom", "a")],
@@ -332,4 +294,4 @@ def test_lower_raises_declarative_error_on_invalid_shape():
                       logical_sort="formula"),
     )
     with pytest.raises(DeclarativeError):
-        lower(spec)
+        build_system(spec)

@@ -1,8 +1,9 @@
 """The formal-system decomposition round-trips through a real database.
 
 Proves the ``source``/``compiled`` blob can go: a system is stored as flat rows,
-reloaded, rebuilt into a ``SystemSpec``, and still lowers to a system that
-checks the same proofs -- and the rows are queryable with plain SQL, no compile.
+reloaded, and rebuilt into a ``SystemSpec`` equal to the original that still
+builds a system checking the same proofs -- and the rows are queryable with
+plain SQL, no compile.
 """
 
 import pytest
@@ -46,7 +47,7 @@ from tests.spec_helpers import (
     universal_prod,
     variable_prod,
 )
-from website.logical.declarative import SystemSpec, build_spec, lower
+from website.logical.declarative import SystemSpec, build_spec
 
 # The system decomposition now lives among the full app schema. The pgvector
 # `theorems` table (and other Postgres-only bits) aren't SQLite-creatable, so
@@ -109,12 +110,6 @@ def stored_system(session):
 def test_spec_round_trips_through_the_database(stored_system):
     rebuilt = system_to_spec(stored_system)
     assert rebuilt == zfc_spec()
-
-
-def test_rebuilt_spec_lowers_identically(stored_system):
-    # The strongest fidelity check: rows -> spec -> .edi is byte-identical to
-    # lowering the originally-assembled spec.
-    assert lower(system_to_spec(stored_system)) == lower(zfc_spec())
 
 
 def test_decomposition_has_no_source_or_json_blob():

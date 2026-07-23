@@ -137,109 +137,6 @@ def _identifier(name: str) -> str:
     return ident
 
 
-def _with_clause(bindings: list[tuple[str, str]]) -> str:
-    return ", ".join(f"{var} as {sort}" for var, sort in bindings)
-
-
-def lower(spec: SystemSpec) -> str:
-    """Lower a :class:`SystemSpec` to ``.edi`` source text.
-
-    The ordering here is what removes the engine's forward-declaration trap:
-    every sort's ``UnionPattern`` is declared empty up front, so productions in
-    any order can reference any sort, and the unions are filled afterwards.
-    """
-
-    # Side-conditions are the kernel's structural term algebra, checked against a
-    # rule's *term* binding. A string-rewriting rule is justified by associative
-    # matching over surface strings (no term binding), so it cannot evaluate
-    # them. Rather than silently ignore a proviso an author wrote — which would
-    # make the rule quietly more permissive than intended — reject the pairing.
-    for rule in spec.rules:
-        if rule.matching == "string" and rule.side_conditions:
-            raise DeclarativeError(
-                f"Rule {rule.label!r} uses string matching, which cannot enforce "
-                f"side-conditions; drop them or switch it to structural matching."
-            )
-
-    out: list[str] = []
-    pad = "    "
-
-    def emit(level: int = 0, text: str = "") -> None:
-        out.append((pad * level + text) if text else "")
-
-    emit(0, f"FormalSystem {_identifier(spec.name) or 'System'}:")
-    emit()
-
-    # 1. Atomic (regex) sort members and inline line parts.
-    for prod in spec.productions:
-        if prod.regex is not None:
-            emit(1, f"Regex {prod.name}:")
-            emit(2, _anchor(prod.regex))
-            emit()
-
-    if spec.line:
-        for part in spec.line.parts:
-            emit(1, f"Regex {part.name}:")
-            emit(2, _anchor(part.regex))
-            emit()
-
-    # 2. Forward-declare every sort as an empty union (order independence).
-    for sort in spec.sort_names():
-        emit(1, f"UnionPattern {sort}:")
-        emit()
-
-    # 3. Composite productions.
-    for prod in spec.productions:
-        if prod.template is None:
-            continue
-        emit(1, f"Pattern {prod.name}:")
-        if prod.bindings:
-            emit(2, f"with {_with_clause(prod.bindings)}:")
-            emit(3, prod.template)
-        else:
-            emit(2, prod.template)
-        emit()
-
-    # 4. Fill each sort union with its members, in declared order.
-    for sort in spec.sort_names():
-        members = [p.name for p in spec.productions if p.sort == sort]
-        if not members:
-            continue
-        emit(1, f"{sort}:")
-        for member in members:
-            emit(2, member)
-        emit()
-
-    # 5. Proof context + line type (statement pattern and accessors).
-    if spec.line:
-        _emit_line(spec, emit)
-
-    # 6. Definitions -- layered abbreviations, first-class.
-    for defn in spec.definitions:
-        emit(1, f"{defn.sort}:")
-        tail = f" where {defn.condition}" if defn.condition else ""
-        if defn.bindings:
-            emit(2, f"with {_with_clause(defn.bindings)}:")
-            emit(3, f"Define {defn.higher} as {defn.lower}{tail}")
-        else:
-            emit(2, f"Define {defn.higher} as {defn.lower}{tail}")
-        emit()
-
-    # 7a. Axioms -> axiom line types. An axiom is *asserted*, not derived by a
-    # rule: the engine's `behaviour: axiom` marks a line matching the axiom
-    # formula valid on its own. (This also sidesteps the kernel's schema->term
-    # projection, which cannot represent a whole concrete formula in rule
-    # deduction position.)
-    for axiom in spec.axioms:
-        _emit_axiom(axiom, emit)
-
-    # 7b. Rules -> inference rules.
-    for rule in spec.rules:
-        _emit_rule(rule, emit)
-
-    return "\n".join(out) + "\n"
-
-
 def _anchor(regex: str) -> str:
     if not regex.startswith("^"):
         regex = "^" + regex
@@ -290,32 +187,6 @@ def _line_layout(
     return template, placeholders, logical_ph, reference_ph
 
 
-def _emit_line(spec: SystemSpec, emit) -> None:
-    line = spec.line
-    template, placeholders, logical_ph, reference_ph = _line_layout(spec)
-
-    emit(1, "ProofContext:")
-    emit(2, "given: MatchSet()")
-    emit()
-
-    bindings = [(var, ph) for ph, var in placeholders]
-    emit(1, "Pattern statement_pattern:")
-    emit(2, f"with {_with_clause(bindings)}:")
-    emit(3, template)
-    emit()
-
-    # Declare which matched sub-field is the formula (and the citation) directly
-    # on the line type, rather than as interpreted `formula()`/`reference()`
-    # accessor functions — the engine projects these structurally.
-    emit(1, f"LineType {line.name}:")
-    emit(2, "pattern: statement_pattern")
-    emit(2, "behaviour: logical")
-    emit(2, f"formula: {logical_ph[1]}")
-    if reference_ph is not None:
-        emit(2, f"reference: {reference_ph[1]}")
-    emit()
-
-
 def _shape_to_template(shape: str) -> tuple[str, list[tuple[str, str]]]:
     # Replace each <name> placeholder with a fresh single-letter variable,
     # preserving all literal text (spaces, brackets) verbatim.
@@ -350,62 +221,14 @@ def _fresh_var(placeholder: str, used: set[str]) -> str:
     return f"{base}{n}"
 
 
-def _emit_axiom(axiom: Rule, emit) -> None:
-    # An axiom lowers to a Pattern for its formula plus an axiom-behaviour line
-    # type; a line matching the formula is self-justifying.
-    pattern_name = f"{_identifier(axiom.name)}_axiom"
-
-    emit(1, f"Pattern {pattern_name}:")
-    if axiom.bindings:
-        emit(2, f"with {_with_clause(axiom.bindings)}:")
-        emit(3, axiom.deduction)
-    else:
-        emit(2, axiom.deduction)
-    emit()
-
-    # For a bare axiom assertion the whole match is the formula: `formula: self`
-    # declares that structurally (replacing a `formula(): return self` accessor).
-    emit(1, f"LineType {_identifier(axiom.name)}:")
-    emit(2, f"pattern: {pattern_name}")
-    emit(2, "behaviour: axiom")
-    emit(2, "formula: self")
-    emit()
-
-
-def _emit_rule(rule: Rule, emit) -> None:
-    has_bindings = bool(rule.bindings)
-    base_level = 1
-    if has_bindings:
-        emit(1, f"with {_with_clause(rule.bindings)}:")
-        base_level = 2
-
-    emit(base_level, f"InferenceRule {_identifier(rule.name)}:")
-    emit(base_level + 1, "label:")
-    emit(base_level + 2, rule.label)
-    if rule.antecedents:
-        emit(base_level + 1, "antecedents:")
-        for ant in rule.antecedents:
-            emit(base_level + 2, ant)
-    emit(base_level + 1, "deduction:")
-    emit(base_level + 2, rule.deduction)
-    if rule.matching != "structural":
-        emit(base_level + 1, "matching:")
-        emit(base_level + 2, rule.matching)
-    if rule.side_conditions:
-        emit(base_level + 1, "side_conditions:")
-        for proviso in rule.side_conditions:
-            emit(base_level + 2, proviso)
-    emit()
-
-
 # ---------------------------------------------------------------------------
-# Direct builder: SystemSpec -> FormalSystem, without the .edi round-trip.
+# Direct builder: SystemSpec -> FormalSystem.
 #
 # This constructs the engine objects straight from the SystemSpec by calling the
 # same low-level primitives compile() uses (build_schema_pattern, add_variables,
 # add_definition, parse_side_condition, the Pattern constructors), driven from
-# spec fields in lower()'s order. Because there is no text pass, respect_brackets
-# is set on each pattern at construction rather than patched on afterwards.
+# the spec fields directly. There is no text pass, so respect_brackets is set on
+# each pattern at construction rather than patched on afterwards.
 # ---------------------------------------------------------------------------
 
 
