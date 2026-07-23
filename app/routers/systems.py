@@ -319,6 +319,7 @@ def line_out(line: LineRow) -> LineType:
         name=line.name,
         shape=line.shape,
         logical_sort=line.logical_symbol.name if line.logical_symbol is not None else None,
+        scope=line.scope,
         parts=[LinePart(id=pt.id, name=pt.name, regex=pt.regex) for pt in line.parts],
     )
 

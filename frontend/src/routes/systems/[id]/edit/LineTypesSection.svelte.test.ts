@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 function line(logicalSort: string | null) {
-	return { id: 'l1', name: 'statement', shape: '<formula>', logical_sort: logicalSort, parts: [] };
+	return { id: 'l1', name: 'statement', shape: '<formula>', logical_sort: logicalSort, scope: null, parts: [] };
 }
 
 // The P1 fix: the logical sort is optional (empty = none), but a non-empty value

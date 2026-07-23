@@ -84,11 +84,15 @@ export interface LinePart {
 	regex: string;
 }
 
+/** The subproof scope a line type opens, or null for a plain line. */
+export type LineScope = 'assumption' | 'variable';
+
 export interface LineType {
 	id: string;
 	name: string;
 	shape: string;
 	logical_sort: string | null;
+	scope: LineScope | null;
 	parts: LinePart[];
 }
 
@@ -222,6 +226,7 @@ export interface LineTypeCreate {
 	name: string;
 	shape: string;
 	logical_sort?: string | null;
+	scope?: LineScope | null;
 	parts?: LinePartInput[];
 }
 export type LineTypeUpdate = Partial<LineTypeCreate>;
