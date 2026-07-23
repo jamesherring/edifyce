@@ -126,8 +126,8 @@ wherever you run it:
   or may not carry a field, that field belongs in the class as a declared
   attribute with a default (so every instance has it and callers stay typed), not
   as something attached ad hoc and probed with `getattr`. Reserve `getattr`/
-  `setattr` for genuinely dynamic keys not known until runtime (e.g. the
-  `add_context` edits in `ProofLine.edit_context`).
+  `setattr` for genuinely dynamic keys not known until runtime — a lookup keyed
+  by user-authored strings, say — never for a field your own code declares.
 - **Import at module top.** Put imports at the top of the module, not inside
   functions. A function-local import is only justified to break a real import
   cycle or to defer a heavy/optional dependency — and when you use one, say why in

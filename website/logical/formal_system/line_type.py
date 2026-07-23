@@ -4,7 +4,7 @@
 class LineType:
     """Class for types of lines in formal proofs."""
 
-    def __init__(self, name, pattern=None, behaviour="none", add_context=None, scope=None,
+    def __init__(self, name, pattern=None, behaviour="none", scope=None,
                  formula_field: str | None = None, reference_field: str | None = None):
 
         # The name of this line type
@@ -37,9 +37,6 @@ class LineType:
         if self.scope not in (None, "assumption", "variable"):
             raise ValueError(f"'{self.scope}' is not a valid LineType scope.")
 
-        # The data paths (and their values) to add to context, if any
-        self.add_context = add_context if add_context is not None else {}
-
     def parse_line(self, line, context):
         # Check if the given line string is of this type
         return self.pattern.match(line, context)
@@ -71,9 +68,6 @@ class LineType:
             return False
 
         if not self.reference_field == other.reference_field:
-            return False
-
-        if not self.add_context == other.add_context:
             return False
 
         # Assume true for recursive checks
