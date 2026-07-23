@@ -145,15 +145,18 @@
 		<Label for="def-lower">Expansion</Label>
 		<Input id="def-lower" bind:value={lower} class="font-mono" placeholder="e.g. (x = y → x = y)" maxlength={512} />
 		{#if layerOptions.length > 0}
-			<Combobox
-				options={layerOptions}
-				bind:value={layerPick}
-				onSelect={insertNotation}
-				placeholder="Build on an earlier definition…"
-				searchPlaceholder="Search definitions…"
-				emptyText="No earlier definitions."
-				class="text-muted-foreground"
-			/>
+			<div class="space-y-1">
+				<Label class="text-xs text-muted-foreground">Build on an earlier definition</Label>
+				<Combobox
+					options={layerOptions}
+					bind:value={layerPick}
+					onSelect={insertNotation}
+					placeholder="Insert defined notation…"
+					searchPlaceholder="Search definitions…"
+					emptyText="No earlier definitions."
+					class="text-muted-foreground"
+				/>
+			</div>
 		{/if}
 	</div>
 	<BindingsEditor bind:bindings />

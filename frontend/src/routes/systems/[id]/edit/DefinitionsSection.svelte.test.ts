@@ -72,6 +72,23 @@ describe('DefinitionsSection provisos', () => {
 	});
 });
 
+// Open the layering picker. Its trigger is the <button> that carries the
+// `combobox` role; the native Sort <select> carries that role too (and its
+// <option>s carry role="option"), so we disambiguate by tag rather than role.
+async function openLayerPicker() {
+	const picker = screen.getAllByRole('combobox').find((el) => el.tagName === 'BUTTON');
+	await userEvent.click(picker!);
+}
+
+// The picker's own options, by our command-item slot — the notation also shows
+// in the definition list rows and the Sort <select>'s <option>s, so a bare role
+// query would be ambiguous.
+function pickerOptionTexts(): string[] {
+	return Array.from(document.querySelectorAll('[data-slot="command-item"]')).map(
+		(el) => el.textContent ?? ''
+	);
+}
+
 describe('DefinitionsSection layering', () => {
 	it('inserts an earlier definition’s notation into the expansion', async () => {
 		const earlier = defn({ id: 'd0', name: 'member', higher: 'x in y', lower: '…', provisos: [] });
@@ -79,19 +96,8 @@ describe('DefinitionsSection layering', () => {
 		renderSection([earlier, later]);
 
 		// Edit the *second* definition — only the earlier one is offered to build on.
-		// Target the picker by its placeholder text (the native Sort <select> also
-		// has the `combobox` role, and bits-ui doesn't expose the placeholder as the
-		// trigger's accessible name).
 		await userEvent.click(screen.getAllByRole('button', { name: 'Edit' })[1]);
-		// The picker trigger is the <button> combobox (the Sort <select> shares the
-		// role); click it to open, then choose the earlier definition's notation.
-		const picker = screen
-			.getAllByRole('combobox')
-			.find((el) => el.tagName === 'BUTTON');
-		await userEvent.click(picker!);
-		// Target the picker's own option by its command-item slot — the notation
-		// also shows in the definition list row, and the BindingsEditor's <select>s
-		// contribute their own role="option" elements.
+		await openLayerPicker();
 		const option = await waitFor(() => {
 			const el = document.querySelector<HTMLElement>('[data-slot="command-item"]');
 			if (!el) throw new Error('option not yet rendered');
@@ -103,10 +109,50 @@ describe('DefinitionsSection layering', () => {
 		expect(screen.getByDisplayValue('x in y')).toBeInTheDocument();
 	});
 
+	it('appends to a non-empty expansion without clobbering it', async () => {
+		const earlier = defn({ id: 'd0', name: 'member', higher: 'x in y', lower: '…', provisos: [] });
+		const later = defn({ id: 'd1', name: 'subset', higher: 'x sub y', lower: '(a ->', provisos: [] });
+		renderSection([earlier, later]);
+
+		await userEvent.click(screen.getAllByRole('button', { name: 'Edit' })[1]);
+		await openLayerPicker();
+		const option = await waitFor(() => {
+			const el = document.querySelector<HTMLElement>('[data-slot="command-item"]');
+			if (!el) throw new Error('option not yet rendered');
+			return el;
+		});
+		await userEvent.click(option);
+
+		// Appended after the existing text with a separating space.
+		expect(screen.getByDisplayValue('(a -> x in y')).toBeInTheDocument();
+	});
+
+	it('offers only *earlier* definitions when editing a middle one', async () => {
+		// The picker's whole purpose is positional layering: editing d1 (index 1)
+		// must offer d0 and neither itself (d1) nor the later d2.
+		const defs = [
+			defn({ id: 'd0', name: 'member', higher: 'mem', lower: 'a', provisos: [] }),
+			defn({ id: 'd1', name: 'subset', higher: 'sub', lower: 'b', provisos: [] }),
+			defn({ id: 'd2', name: 'power', higher: 'pow', lower: 'c', provisos: [] })
+		];
+		renderSection(defs);
+
+		await userEvent.click(screen.getAllByRole('button', { name: 'Edit' })[1]);
+		await openLayerPicker();
+		await waitFor(() => expect(pickerOptionTexts().length).toBeGreaterThan(0));
+
+		const texts = pickerOptionTexts();
+		expect(texts).toHaveLength(1);
+		expect(texts[0]).toContain('mem'); // d0, the only earlier definition
+		expect(texts.join(' ')).not.toContain('pow'); // d2 (later) is excluded
+		expect(texts.join(' ')).not.toContain('sub'); // d1 (self) is excluded
+	});
+
 	it('offers nothing to build on for the first definition', async () => {
 		renderSection([defn({ id: 'd0', lower: 'first' })]);
 		await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
-		// The layering picker only renders when an earlier definition exists.
-		expect(screen.queryByText('Build on an earlier definition…')).not.toBeInTheDocument();
+		// The layering picker (label + combobox) only renders when an earlier
+		// definition exists.
+		expect(screen.queryByText('Build on an earlier definition')).not.toBeInTheDocument();
 	});
 });
