@@ -771,16 +771,30 @@ def test_production_rejects_empty_atom_inputs(client):
         assert resp.status_code == 422, resp.text
 
 
-def test_only_one_line_type_is_allowed(client):
-    # The declarative layer builds a single line type, so a second is rejected
-    # rather than silently ignored by validate.
+def test_multiple_line_types_are_allowed(client):
+    # A system may declare several logical line types; both are stored and read
+    # back in creation order.
     _login(client, "ada@example.com")
     sid = _new_system(client)
-    _post(client, f"/formal-systems/{sid}/line-types", {"name": "statement", "shape": "<x>"})
+    _post(client, f"/formal-systems/{sid}/line-types", {"name": "claim", "shape": "<x>"})
     second = client.post(
-        f"/formal-systems/{sid}/line-types", json={"name": "other", "shape": "<y>"}
+        f"/formal-systems/{sid}/line-types", json={"name": "assume", "shape": "<y>"}
     )
-    assert second.status_code == 409
+    assert second.status_code == 201, second.text
+    lines = client.get(f"/formal-systems/{sid}").json()["lines"]
+    assert [line["name"] for line in lines] == ["claim", "assume"]
+
+
+def test_duplicate_line_type_name_is_rejected(client):
+    # The engine keys line types by name, so a duplicate would silently drop a
+    # shape; reject it (409) rather than store an unusable pair.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/line-types", {"name": "claim", "shape": "<x>"})
+    dup = client.post(
+        f"/formal-systems/{sid}/line-types", json={"name": "claim", "shape": "<y>"}
+    )
+    assert dup.status_code == 409
 
 
 def test_oversized_fields_are_rejected_as_422(client):

@@ -49,7 +49,7 @@ def zfc_spec() -> SystemSpec:
         brackets=brackets(),
         productions=[variable_prod(), membership_prod(), implication_prod(),
                      universal_prod()],
-        line=statement_line(),
+        lines=[statement_line()],
         rules=[hyp_rule(), mp_rule()],
         definitions=[subset_def()],
     )
@@ -165,7 +165,7 @@ def numeral_spec() -> SystemSpec:
         name="PA",
         productions=[regex_prod("term", "numeral", "[0-9]+"), variable_prod(),
                      equality_prod()],
-        line=statement_line(),
+        lines=[statement_line()],
         rules=[hyp_rule()],
     )
 

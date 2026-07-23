@@ -82,7 +82,7 @@ def zfc_spec() -> SystemSpec:
             variable_prod(), membership_prod(), equality_prod(), negation_prod(),
             implication_prod(), universal_prod(),
         ],
-        line=statement_line(),
+        lines=[statement_line()],
         rules=[
             hyp_rule(),
             rule("RImp", "refl imp", [], "(p → q)",
@@ -289,7 +289,7 @@ def or_spec() -> SystemSpec:
             template_prod("formula", "atomic", "a", [("a", "atom")]),
             implication_prod(),
         ],
-        line=statement_line(),
+        lines=[statement_line()],
         rules=[
             rule("DIS", "disj", [], "(p → q)",
                  [("p", "formula"), ("q", "formula")],
@@ -342,7 +342,7 @@ def or_def_spec() -> SystemSpec:
             membership_prod(),
             equality_prod(),
         ],
-        line=statement_line(),
+        lines=[statement_line()],
         definitions=[
             defn("formula", "rel", "x ~ y", "x = y",
                  [("x", "variable"), ("y", "variable")], "disjoint(x, y) or atom(x)"),
@@ -382,7 +382,7 @@ def member_spec() -> SystemSpec:
             template_prod("term", "app", "f(t)", [("t", "term")]),
             template_prod("formula", "pred", "P(t)", [("t", "term")]),
         ],
-        line=statement_line(),
+        lines=[statement_line()],
         rules=[
             rule("ATOMR", "atom rule", [], "P(t)", [("t", "term")], ["atom(t, term)"]),
             rule("MEMBR", "member rule", [], "P(t)", [("t", "term")], ["member(t, term)"]),
@@ -440,7 +440,7 @@ def term_arg_spec() -> SystemSpec:
             negation_prod(),
             implication_prod(),
         ],
-        line=statement_line(),
+        lines=[statement_line()],
         rules=[
             rule("RC", "is falsum", [], "p", [("p", "formula")], ["equal(p, ⊥)"]),
             rule("RN", "neg", [], "(p → q)",
@@ -508,7 +508,7 @@ def test_term_argument_with_an_unbound_metavariable_fails_closed():
             template_prod("formula", "atomic", "a", [("a", "atom")]),
             negation_prod(),
         ],
-        line=statement_line(),
+        lines=[statement_line()],
         rules=[rule("R", "r", [], "p", [("p", "formula"), ("q", "formula")],
                     ["not equal(p, ¬q)"])],
     )
@@ -528,7 +528,7 @@ def defined_notation_spec() -> SystemSpec:
             template_prod("term", "zero", "0", []),
             template_prod("formula", "pred", "P(t)", [("t", "term")]),
         ],
-        line=statement_line(),
+        lines=[statement_line()],
         definitions=[defn("term", "emptyset", "∅", "0", [])],
         rules=[rule("RE", "re", [], "P(t)", [("t", "term")], ["equal(t, ∅)"])],
     )

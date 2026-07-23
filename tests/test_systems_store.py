@@ -44,13 +44,14 @@ from tests.spec_helpers import (
     membership_prod,
     mp_rule,
     negation_prod,
+    regex_prod,
     rule,
     statement_line,
     subset_def,
     universal_prod,
     variable_prod,
 )
-from website.logical.declarative import SystemSpec, build_spec
+from website.logical.declarative import LinePart, LineSpec, SystemSpec, build_spec
 
 # The system decomposition now lives among the full app schema. The pgvector
 # `theorems` table (and other Postgres-only bits) aren't SQLite-creatable, so
@@ -76,7 +77,7 @@ def zfc_spec() -> SystemSpec:
             conjunction_prod(), implication_prod(), biconditional_prod(),
             universal_prod(),
         ],
-        line=statement_line(),
+        lines=[statement_line()],
         axioms=[axiom("EXT", "extensionality", "∀x ∀y (∀z (z ∈ x ↔ z ∈ y) → x = y)")],
         rules=[hyp_rule(), mp_rule()],
         definitions=[
@@ -126,9 +127,43 @@ def atomic_spec() -> SystemSpec:
             negation_prod(),
             implication_prod(),
         ],
-        line=statement_line(),
+        lines=[statement_line()],
         rules=[hyp_rule(), rule("X", "contradiction", ["a", "¬a"], "⊥", [("a", "formula")])],
     )
+
+
+def two_line_spec() -> SystemSpec:
+    # Two logical line types: the usual `statement` plus a ⊢-prefixed `turnstile`.
+    return SystemSpec(
+        name="TwoLines",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        lines=[
+            statement_line(),
+            LineSpec(
+                name="turnstile",
+                shape="⊢ <formula> [<ref>]",
+                parts=[LinePart(name="ref", regex="[A-Za-z0-9 ,.]+")],
+                logical_sort="formula",
+            ),
+        ],
+        rules=[hyp_rule()],
+    )
+
+
+def test_multiple_line_types_round_trip_through_the_database(session):
+    session.add(spec_to_system(two_line_spec()))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "TwoLines"))
+
+    # Both line rows persist, in position order.
+    assert [line.name for line in stored.lines] == ["statement", "turnstile"]
+    assert system_to_spec(stored) == two_line_spec()
+
+    system = build_spec(system_to_spec(stored))["system"]
+    assert system.parse("(a → b) [HYP]").valid is True
+    assert system.parse("⊢ (a → b) [HYP]").valid is True
 
 
 def test_atom_productions_round_trip_through_the_database(session):

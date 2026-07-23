@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from copy import copy
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 
 from .compiler import (
     FormalSystemContext,
@@ -110,10 +110,22 @@ class SystemSpec:
     name: str = ""
     brackets: list[tuple[str, str]] = field(default_factory=list)
     productions: list[Production] = field(default_factory=list)
-    line: LineSpec | None = None
+    # Logical line types, in order. A system typically has one (`statement`), but
+    # may declare several (e.g. a `claim` line and a scoped `assume` line); the
+    # engine tries each when parsing a proof line.
+    lines: list[LineSpec] = field(default_factory=list)
     definitions: list[Definition] = field(default_factory=list)
     axioms: list[Rule] = field(default_factory=list)
     rules: list[Rule] = field(default_factory=list)
+    # Back-compat for the former single-line API (`SystemSpec(line=...)`). An
+    # `InitVar` so it is accepted at construction but never a stored field —
+    # otherwise it would perturb the dataclass `==` the storage round-trip relies
+    # on. Prefer `lines`.
+    line: InitVar[LineSpec | None] = None
+
+    def __post_init__(self, line: LineSpec | None) -> None:
+        if line is not None:
+            self.lines = [line, *self.lines]
 
     def sort_names(self) -> list[str]:
         seen = []
@@ -144,17 +156,15 @@ def _anchor(regex: str) -> str:
 
 
 def _line_layout(
-    spec: SystemSpec,
+    line: LineSpec, sorts: set[str],
 ) -> tuple[str, list[tuple[str, str]], tuple[str, str], tuple[str, str] | None]:
     """Resolve a line's template and its formula/reference placeholders.
 
     Returns ``(template, placeholders, logical_ph, reference_ph)`` where each
     ``_ph`` is a ``(placeholder_name, variable)`` pair (``reference_ph`` may be
-    ``None``). Shared by :func:`_emit_line` (text path) and :func:`build_system`
-    (direct path) so both agree on which matched field is the formula/citation.
+    ``None``), given the system's grammar ``sorts`` so the logical placeholder
+    can be resolved.
     """
-    line = spec.line
-    sorts = set(spec.sort_names())
     part_names = {p.name for p in line.parts}
 
     # Tokenise the shape into (placeholder | literal) fragments.
@@ -293,11 +303,9 @@ def build_system(spec: SystemSpec) -> FormalSystem:
                 base=prod.atom_base,
                 pre_format=ctx.pre_format,
             )
-    if spec.line:
-        for part in spec.line.parts:
-            ctx.variables[part.name] = register(
-                RegexPattern(name=part.name, pattern=_anchor(part.regex), pre_format=ctx.pre_format)
-            )
+    # (Inline line parts are registered per-line in step 5, immediately before
+    # the line that uses them, so two lines may reuse a part name with different
+    # regexes without the shared namespace binding both to the last one.)
 
     # 2. Forward-declare every sort as an empty union (order independence).
     for sort in spec.sort_names():
@@ -320,9 +328,18 @@ def build_system(spec: SystemSpec) -> FormalSystem:
             if prod.sort == sort:
                 union.patterns.append(ctx.variables[prod.name])
 
-    # 5. Line: proof context + statement pattern + logical line type.
-    if spec.line:
-        _build_line(spec, ctx, system, register)
+    # 5. Lines: a statement pattern + logical line type per declared line. Each
+    # line's inline parts are registered just before it is built (see step 1).
+    if spec.lines:
+        system.context.logical["given"] = MatchSet()
+        sorts = set(spec.sort_names())
+        for line in spec.lines:
+            for part in line.parts:
+                ctx.variables[part.name] = register(
+                    RegexPattern(name=part.name, pattern=_anchor(part.regex),
+                                 pre_format=ctx.pre_format)
+                )
+            _build_line(line, sorts, ctx, system, register)
 
     # 6. Axioms -> axiom-behaviour line types.
     for ax in spec.axioms:
@@ -361,24 +378,25 @@ def build_system(spec: SystemSpec) -> FormalSystem:
     return system
 
 
-def _build_line(spec: SystemSpec, ctx: FormalSystemContext, system: FormalSystem,
-                register: Callable[[Pattern], Pattern]) -> None:
-    template, placeholders, logical_ph, reference_ph = _line_layout(spec)
+def _build_line(line: LineSpec, sorts: set[str], ctx: FormalSystemContext,
+                system: FormalSystem, register: Callable[[Pattern], Pattern]) -> None:
+    template, placeholders, logical_ph, reference_ph = _line_layout(line, sorts)
 
-    system.context.logical["given"] = MatchSet()
-
-    pattern = StringPattern(name="statement_pattern", pattern=template, pre_format=ctx.pre_format)
+    # Each line gets a distinctly-named pattern (a single line named "statement"
+    # keeps the historical "statement_pattern" name).
+    pattern_name = f"{_identifier(line.name)}_pattern"
+    pattern = StringPattern(name=pattern_name, pattern=template, pre_format=ctx.pre_format)
     pattern.add_variables(_binding_patterns([(var, ph) for ph, var in placeholders], ctx))
-    ctx.variables["statement_pattern"] = register(pattern)
+    ctx.variables[pattern_name] = register(pattern)
 
     line_type = LineType(
-        name=spec.line.name,
+        name=line.name,
         pattern=pattern,
         behaviour="logical",
         formula_field=logical_ph[1],
         reference_field=reference_ph[1] if reference_ph is not None else None,
     )
-    ctx.variables[spec.line.name] = line_type
+    ctx.variables[line.name] = line_type
     system.add_line_type(line_type)
 
 

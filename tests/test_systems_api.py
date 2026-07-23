@@ -77,7 +77,7 @@ def zfc_spec() -> SystemSpec:
         brackets=brackets(),
         productions=[variable_prod(), membership_prod(), equality_prod(),
                      implication_prod()],
-        line=statement_line(),
+        lines=[statement_line()],
         axioms=[axiom("EXT", "extensionality", "∀x x = x")],
         rules=[hyp_rule(), mp_rule()],
         definitions=[defn("formula", "subset", "x ⊆ y", "(x = y → x = y)",
@@ -159,8 +159,8 @@ def broken_spec() -> SystemSpec:
     return SystemSpec(
         name="Broken",
         productions=[regex_prod("formula", "atom", "[a-z]+")],
-        line=LineSpec(name="statement", shape="assertion", parts=[],
-                      logical_sort="formula"),
+        lines=[LineSpec(name="statement", shape="assertion", parts=[],
+                        logical_sort="formula")],
     )
 
 

@@ -96,10 +96,10 @@ def spec_to_system(spec: SystemSpec) -> FormalSystem:
         for j, (var, sort) in enumerate(prod.bindings):
             symbol.bindings.append(ProductionBindingRow(position=j, var=var, symbol=symbols[sort]))
 
-    if spec.line is not None:
-        logical = symbols[spec.line.logical_sort] if spec.line.logical_sort else None
-        line = LineRow(position=0, name=spec.line.name, shape=spec.line.shape, logical_symbol=logical)
-        for j, part in enumerate(spec.line.parts):
+    for i, line_spec in enumerate(spec.lines):
+        logical = symbols[line_spec.logical_sort] if line_spec.logical_sort else None
+        line = LineRow(position=i, name=line_spec.name, shape=line_spec.shape, logical_symbol=logical)
+        for j, part in enumerate(line_spec.parts):
             line.parts.append(LinePartRow(position=j, name=part.name, regex=part.regex))
         system.lines.append(line)
 
@@ -152,14 +152,15 @@ def system_to_spec(system: FormalSystem) -> SystemSpec:
         if symbol.kind != "union"
     ]
 
-    if system.lines:
-        line = system.lines[0]
-        spec.line = LineSpec(
+    spec.lines = [
+        LineSpec(
             name=line.name,
             shape=line.shape,
             parts=[LinePart(name=part.name, regex=part.regex) for part in line.parts],
             logical_sort=line.logical_symbol.name if line.logical_symbol is not None else None,
         )
+        for line in system.lines
+    ]
 
     spec.definitions = [
         Definition(

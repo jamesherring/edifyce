@@ -244,6 +244,19 @@ async def _require_symbol_name_free(
         raise HTTPException(status.HTTP_409_CONFLICT, f"A sort or production named '{name}' already exists.")
 
 
+async def _require_line_name_free(
+    session: AsyncSession, system_id: uuid.UUID, name: str, exclude_id: uuid.UUID | None = None
+) -> None:
+    # The engine keys line types by name (`add_line_type` replaces one of the
+    # same name), so two same-named lines would silently drop a shape. Keep names
+    # unique per system.
+    stmt = select(LineRow.id).where(LineRow.system_id == system_id, LineRow.name == name)
+    if exclude_id is not None:
+        stmt = stmt.where(LineRow.id != exclude_id)
+    if await session.scalar(stmt) is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"A line type named '{name}' already exists.")
+
+
 async def _symbol_referenced(session: AsyncSession, symbol_id: uuid.UUID) -> bool:
     # One round-trip instead of one SELECT per referencing column: OR together an
     # EXISTS per column and let the database short-circuit.
@@ -474,11 +487,11 @@ async def _assign_bracket(session: AsyncSession, system_id: uuid.UUID, row: Brac
 
 
 async def _assign_line(session: AsyncSession, system_id: uuid.UUID, row: LineRow, payload: Payload, fields: set[str], creating: bool) -> None:
-    if creating and await session.scalar(
-        select(LineRow.id).where(LineRow.system_id == system_id)
-    ) is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "A system has at most one line type.")
+    # A system may declare several logical line types (e.g. a `claim` line and a
+    # scoped `assume` line); the engine tries each when parsing a proof line, but
+    # keys them by name, so names must stay unique.
     if "name" in fields and payload.name is not None:
+        await _require_line_name_free(session, system_id, payload.name, exclude_id=row.id)
         row.name = payload.name
     if "shape" in fields and payload.shape is not None:
         row.shape = payload.shape

@@ -61,17 +61,17 @@
 	}
 </script>
 
-<!-- The backend allows a single line type per system. -->
+<!-- A system may declare several logical line types; the engine tries each when
+	parsing a proof line. -->
 <PartSection
-	title="Line type"
+	title="Line types"
 	addLabel="Add line type"
-	canAdd={lines.length === 0}
 	items={lines}
-	emptyMessage="No line type yet — this defines the shape of each proof line."
+	emptyMessage="No line types yet — these define the shapes a proof line may take."
 	onAdd={s.openNew}
 	onEdit={s.openEdit}
-	onReorder={() => {}}
-	busy={s.saving}
+	onReorder={s.reorder}
+	busy={s.busy}
 >
 	{#snippet row(l)}
 		<div class="min-w-0 text-sm">

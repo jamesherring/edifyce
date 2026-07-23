@@ -37,7 +37,7 @@ HILBERT = SystemSpec(
         regex_prod("formula", "atom", "[a-z][a-z0-9]*"),
         template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
     ],
-    line=statement_line(),
+    lines=[statement_line()],
     rules=[
         rule_spec("K", "axiom_k", [], "(p → (q → p))", _HILBERT_BINDINGS),
         rule_spec(

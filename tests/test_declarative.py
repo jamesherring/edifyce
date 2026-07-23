@@ -38,6 +38,7 @@ from tests.spec_helpers import (
 from website.logical.compiler import compile as compile_edi
 from website.logical.declarative import (
     DeclarativeError,
+    LinePart,
     LineSpec,
     SystemSpec,
     build_spec,
@@ -61,7 +62,7 @@ def zfc_spec() -> SystemSpec:
             conjunction_prod(), disjunction_prod(), implication_prod(),
             biconditional_prod(), universal_prod(), existential_prod(),
         ],
-        line=statement_line(),
+        lines=[statement_line()],
         axioms=[axiom("EXT", "extensionality", "∀x ∀y (∀z (z ∈ x ↔ z ∈ y) → x = y)")],
         rules=[hyp_rule(), mp_rule()],
         definitions=[subset_def(), superset_def()],
@@ -244,7 +245,7 @@ def gated_spec() -> SystemSpec:
             template_prod("formula", "atomic", "a", [("a", "atom")]),
             implication_prod(),
         ],
-        line=statement_line(),
+        lines=[statement_line()],
         rules=[
             hyp_rule(),
             rule("RImp", "refl imp", [], "(p → q)",
@@ -277,8 +278,8 @@ def test_build_spec_returns_errors_for_invalid_shape():
     spec = SystemSpec(
         name="S",
         productions=[template_prod("formula", "atom", "a")],
-        line=LineSpec(name="statement", shape="<reference>", parts=[],
-                      logical_sort=None),
+        lines=[LineSpec(name="statement", shape="<reference>", parts=[],
+                        logical_sort=None)],
     )
     result = build_spec(spec)
     assert "errors" in result
@@ -292,8 +293,8 @@ def test_build_system_raises_declarative_error_on_invalid_shape():
     spec = SystemSpec(
         name="S",
         productions=[template_prod("formula", "atom", "a")],
-        line=LineSpec(name="statement", shape="assertion", parts=[],
-                      logical_sort="formula"),
+        lines=[LineSpec(name="statement", shape="assertion", parts=[],
+                        logical_sort="formula")],
     )
     with pytest.raises(DeclarativeError):
         build_system(spec)
@@ -317,7 +318,7 @@ def atomic_spec() -> SystemSpec:
             negation_prod(),
             implication_prod(),
         ],
-        line=statement_line(),
+        lines=[statement_line()],
         rules=[
             hyp_rule(),
             rule("X", "contradiction", ["a", "¬a"], "⊥",
@@ -355,3 +356,81 @@ def test_atom_constant_is_a_literal_and_a_rule_conclusion():
     assert proof.valid is True
     # ⊥ nests inside a compound like any other formula member.
     assert system.parse("(p_0 → ⊥) [HYP]").valid is True
+
+
+# ---------------------------------------------------------------------------
+# Multiple logical line types: a system may declare several line shapes; the
+# engine tries each when parsing a proof line.
+# ---------------------------------------------------------------------------
+
+
+def test_multiple_logical_line_types_build_and_parse():
+    spec = SystemSpec(
+        name="TwoLines",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        lines=[
+            statement_line(),  # `<formula> [<reference>]`, named "statement"
+            LineSpec(
+                name="turnstile",
+                shape="⊢ <formula> [<reference>]",
+                parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,.]+")],
+                logical_sort="formula",
+            ),
+        ],
+        rules=[hyp_rule()],
+    )
+    system = build_system(spec)
+    assert [lt.name for lt in system.line_types] == ["statement", "turnstile"]
+    # A plain line matches `statement`; a ⊢-prefixed line matches `turnstile`.
+    assert system.parse("(a → b) [HYP]").valid is True
+    assert system.parse("⊢ (a → b) [HYP]").valid is True
+
+
+def test_single_line_kwarg_is_accepted_for_back_compat():
+    # The former single-line API (`line=`) still constructs and builds; it
+    # normalises into `lines` without becoming a compared field.
+    spec = SystemSpec(
+        name="Compat",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        line=statement_line(),
+        rules=[hyp_rule()],
+    )
+    assert [ls.name for ls in spec.lines] == ["statement"]
+    assert spec == SystemSpec(
+        name="Compat",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        lines=[statement_line()],
+        rules=[hyp_rule()],
+    )
+    assert build_system(spec).parse("(a → b) [HYP]").valid is True
+
+
+def test_same_named_line_parts_are_scoped_per_line():
+    # Two lines both name their reference part "reference" but with different
+    # regexes; each line must keep its own — the later, narrower `assume` part
+    # must not overwrite `claim`'s in the shared namespace.
+    spec = SystemSpec(
+        name="Parts",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        lines=[
+            LineSpec(
+                name="claim", shape="<formula> [<reference>]",
+                parts=[LinePart(name="reference", regex="[A-Za-z0-9, ]+")],
+                logical_sort="formula",
+            ),
+            LineSpec(
+                name="assume", shape="assume <formula> [<reference>]",
+                parts=[LinePart(name="reference", regex="[0-9]+")],
+                logical_sort="formula",
+            ),
+        ],
+        rules=[hyp_rule()],
+    )
+    system = build_system(spec)
+    # If `claim` had been rebound to `assume`'s digits-only regex, the citation
+    # "HYP" would fail to match and no line would parse this.
+    assert system.parse("(a → b) [HYP]").valid is True

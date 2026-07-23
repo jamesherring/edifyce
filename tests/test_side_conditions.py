@@ -60,7 +60,7 @@ FOL = SystemSpec(
         ),
         template_prod("formula", "forall", "∀x.phi", [("x", "setvar"), ("phi", "formula")]),
     ],
-    line=statement_line(),
+    lines=[statement_line()],
     rules=[
         rule_spec("VAC", "vacuous", ["phi"], "∀x.phi", _RULE_BINDINGS),
         rule_spec("DIST", "distinct_pair", ["R(x, y)"], "R(x, y)", _RULE_BINDINGS),

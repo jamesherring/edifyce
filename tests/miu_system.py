@@ -42,12 +42,12 @@ def miu_spec() -> SystemSpec:
     return SystemSpec(
         name="MIU",
         productions=[Production(sort="miustr", name="raw", regex="[MIU]+")],
-        line=LineSpec(
+        lines=[LineSpec(
             name="theorem",
             shape="<miustr> [<reference>]",
             parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,]+")],
             logical_sort="miustr",
-        ),
+        )],
         axioms=[Rule(label="AX", name="mi axiom", antecedents=[], deduction="MI", bindings=[])],
         rules=[
             _rule("R1", "rule one", "xI", "xIU", ["x"]),
