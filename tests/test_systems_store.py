@@ -31,6 +31,8 @@ from app.db.systems import (
     SymbolRow,
 )
 from tests.spec_helpers import (
+    atom_const_prod,
+    atom_family_prod,
     axiom,
     biconditional_prod,
     brackets,
@@ -42,6 +44,7 @@ from tests.spec_helpers import (
     membership_prod,
     mp_rule,
     negation_prod,
+    rule,
     statement_line,
     subset_def,
     universal_prod,
@@ -110,6 +113,40 @@ def stored_system(session):
 def test_spec_round_trips_through_the_database(stored_system):
     rebuilt = system_to_spec(stored_system)
     assert rebuilt == zfc_spec()
+
+
+def atomic_spec() -> SystemSpec:
+    # An atom constant (⊥) and an atom family (p_#) alongside a composite.
+    return SystemSpec(
+        name="Atomic",
+        brackets=brackets(),
+        productions=[
+            atom_family_prod("formula", "prop", "p"),
+            atom_const_prod("formula", "falsum", "⊥"),
+            negation_prod(),
+            implication_prod(),
+        ],
+        line=statement_line(),
+        rules=[hyp_rule(), rule("X", "contradiction", ["a", "¬a"], "⊥", [("a", "formula")])],
+    )
+
+
+def test_atom_productions_round_trip_through_the_database(session):
+    # Constant / family atoms persist as kind="atom" rows carrying atom_value /
+    # atom_base, and rebuild into an equal SystemSpec.
+    session.add(spec_to_system(atomic_spec()))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Atomic"))
+
+    kinds = {s.name: s.kind for s in stored.symbols}
+    assert kinds["prop"] == "atom" and kinds["falsum"] == "atom"
+    assert system_to_spec(stored) == atomic_spec()
+
+    # And the rebuilt spec still builds a system that checks atom proofs.
+    system = build_spec(system_to_spec(stored))["system"]
+    assert system.parse("p_7 [HYP]").valid is True
+    assert system.parse("p_0 [HYP]\n¬p_0 [HYP]\n⊥ [X, 1, 2]").valid is True
 
 
 def test_decomposition_has_no_source_or_json_blob():

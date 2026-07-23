@@ -90,6 +90,8 @@ class Production(BaseModel):
     kind: str
     template: str | None = None
     regex: str | None = None
+    atom_value: str | None = None
+    atom_base: str | None = None
     bindings: list[Binding] = Field(default_factory=list)
 
 
@@ -227,9 +229,12 @@ class ProductionCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     # The name of an existing sort in this system that the production belongs to.
     sort: str = Field(..., min_length=1, max_length=128)
-    # Exactly one of template / regex (a composite production vs a leaf).
+    # Exactly one of template / regex / atom_value / atom_base — a composite
+    # (notation), a leaf regex, an atom constant, or an atom family respectively.
     template: str | None = Field(None, max_length=512)
     regex: str | None = Field(None, max_length=512)
+    atom_value: str | None = Field(None, max_length=512)
+    atom_base: str | None = Field(None, max_length=128)
     bindings: list[Binding] = Field(default_factory=list)
 
 
@@ -238,6 +243,8 @@ class ProductionUpdate(BaseModel):
     sort: str | None = Field(None, max_length=128)
     template: str | None = Field(None, max_length=512)
     regex: str | None = Field(None, max_length=512)
+    atom_value: str | None = Field(None, max_length=512)
+    atom_base: str | None = Field(None, max_length=128)
     bindings: list[Binding] | None = None
 
 

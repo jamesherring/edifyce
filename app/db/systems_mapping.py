@@ -74,12 +74,15 @@ def spec_to_system(spec: SystemSpec) -> FormalSystem:
 
     production_symbols: list[tuple[Production, SymbolRow]] = []
     for prod in spec.productions:
+        is_atom = prod.atom_value is not None or prod.atom_base is not None
         symbol = SymbolRow(
             position=position,
             name=prod.name,
-            kind="regex" if prod.regex is not None else "composite",
+            kind="regex" if prod.regex is not None else "atom" if is_atom else "composite",
             template=prod.template,
             regex=prod.regex,
+            atom_value=prod.atom_value,
+            atom_base=prod.atom_base,
             union=symbols[prod.sort],
         )
         symbols[prod.name] = symbol
@@ -141,6 +144,8 @@ def system_to_spec(system: FormalSystem) -> SystemSpec:
             name=symbol.name,
             template=symbol.template,
             regex=symbol.regex,
+            atom_value=symbol.atom_value,
+            atom_base=symbol.atom_base,
             bindings=[(b.var, b.symbol.name) for b in symbol.bindings],
         )
         for symbol in system.symbols

@@ -722,6 +722,42 @@ def test_production_needs_exactly_one_of_template_or_regex(client):
     assert neither.status_code == 400
 
 
+def test_atom_productions_round_trip_through_the_api(client):
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+
+    const = _post(
+        client, f"/formal-systems/{sid}/productions",
+        {"name": "falsum", "sort": "formula", "atom_value": "⊥"},
+    )
+    assert const["kind"] == "atom"
+    assert const["atom_value"] == "⊥" and const["atom_base"] is None
+
+    family = _post(
+        client, f"/formal-systems/{sid}/productions",
+        {"name": "prop", "sort": "formula", "atom_base": "p"},
+    )
+    assert family["kind"] == "atom"
+    assert family["atom_base"] == "p" and family["atom_value"] is None
+
+    # Read back through the full aggregate.
+    by_name = {p["name"]: p for p in client.get(f"/formal-systems/{sid}").json()["productions"]}
+    assert by_name["falsum"]["atom_value"] == "⊥"
+    assert by_name["prop"]["atom_base"] == "p"
+
+
+def test_production_rejects_mixing_atom_with_another_kind(client):
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/formal-systems/{sid}/sorts", {"name": "formula"})
+    resp = client.post(
+        f"/formal-systems/{sid}/productions",
+        json={"name": "x", "sort": "formula", "atom_value": "⊥", "template": "a"},
+    )
+    assert resp.status_code == 400
+
+
 def test_only_one_line_type_is_allowed(client):
     # The declarative layer builds a single line type, so a second is rejected
     # rather than silently ignored by validate.

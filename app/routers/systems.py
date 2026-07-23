@@ -307,6 +307,8 @@ def production_out(p: SymbolRow) -> Production:
         kind=p.kind,
         template=p.template,
         regex=p.regex,
+        atom_value=p.atom_value,
+        atom_base=p.atom_base,
         bindings=_bindings_out(p.bindings),
     )
 

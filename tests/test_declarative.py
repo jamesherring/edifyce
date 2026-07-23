@@ -12,6 +12,8 @@ import pytest
 pytest.importorskip("regex")
 
 from tests.spec_helpers import (
+    atom_const_prod,
+    atom_family_prod,
     axiom,
     biconditional_prod,
     brackets,
@@ -295,3 +297,61 @@ def test_build_system_raises_declarative_error_on_invalid_shape():
     )
     with pytest.raises(DeclarativeError):
         build_system(spec)
+
+
+# ---------------------------------------------------------------------------
+# Atom productions: constants (one literal) and indexed families (`base_#`),
+# built directly into the engine's AtomPattern — the going-forward way to
+# declare atomic sort members without a stand-in regex.
+# ---------------------------------------------------------------------------
+
+
+def atomic_spec() -> SystemSpec:
+    # `prop` is the infinite family p, p_0, p_1, …; `falsum` is the constant ⊥.
+    return SystemSpec(
+        name="Atomic",
+        brackets=brackets(),
+        productions=[
+            atom_family_prod("formula", "prop", "p"),
+            atom_const_prod("formula", "falsum", "⊥"),
+            negation_prod(),
+            implication_prod(),
+        ],
+        line=statement_line(),
+        rules=[
+            hyp_rule(),
+            rule("X", "contradiction", ["a", "¬a"], "⊥",
+                 [("a", "formula")]),
+        ],
+    )
+
+
+def test_atoms_build_into_atom_patterns():
+    from website.logical.matching import AtomPattern
+
+    system = build_system(atomic_spec())
+    prop = system.build_context.variables["prop"]
+    falsum = system.build_context.variables["falsum"]
+    assert isinstance(prop, AtomPattern) and prop.base == "p" and prop.value is None
+    assert isinstance(falsum, AtomPattern) and falsum.value == "⊥" and falsum.base is None
+    # Both are members of the `formula` sort, in declared order.
+    formula = system.build_context.variables["formula"]
+    assert [p.name for p in formula.patterns] == ["prop", "falsum", "negation", "implication"]
+
+
+def test_atom_family_admits_arbitrary_members():
+    system = build_system(atomic_spec())
+    # The base and any indexed member are well-formed formulas…
+    assert system.parse("p [HYP]").valid is True
+    assert system.parse("p_42 [HYP]").valid is True
+    # …but a different base is not in the family.
+    assert system.parse("q_0 [HYP]").valid is False
+
+
+def test_atom_constant_is_a_literal_and_a_rule_conclusion():
+    system = build_system(atomic_spec())
+    # The contradiction rule concludes the *constant* ⊥ from p and ¬p.
+    proof = system.parse("p_0 [HYP]\n¬p_0 [HYP]\n⊥ [X, 1, 2]")
+    assert proof.valid is True
+    # ⊥ nests inside a compound like any other formula member.
+    assert system.parse("(p_0 → ⊥) [HYP]").valid is True

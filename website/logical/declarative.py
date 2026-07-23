@@ -22,10 +22,6 @@ A :class:`SystemSpec` is built by the persistence layer
 scripted assembly. The relational storage, not a source blob, is the source of
 truth.
 
-:func:`lower` still renders a ``SystemSpec`` to equivalent ``.edi`` source for
-the read-only ``/source`` export (and as the oracle the direct builder is
-differentially tested against); it is no longer on the build path.
-
 Crucially, **definitions remain first-class**: a definition becomes the engine's
 ``Define <higher> as <lower> [where <proviso>]``, so a complex base system (ZFC)
 can be layered up with familiar notation (``⊆``, ``∅``, ``P(x)`` ...) exactly as
@@ -45,7 +41,7 @@ from .compiler import (
 )
 from .formal_system import FormalSystem, InferenceRule, LineType
 from .formal_system.side_condition_syntax import parse_side_condition
-from .matching import MatchSet, Pattern, RegexPattern, StringPattern, UnionPattern
+from .matching import AtomPattern, MatchSet, Pattern, RegexPattern, StringPattern, UnionPattern
 
 
 class DeclarativeError(Exception):
@@ -62,7 +58,9 @@ class Production:
     sort: str
     name: str
     template: str | None = None        # composite: the notation template
-    regex: str | None = None           # atomic: a raw regex
+    regex: str | None = None           # atomic (leaf): a raw regex
+    atom_value: str | None = None      # atom constant: the single literal token it matches
+    atom_base: str | None = None       # atom family: base of the `p_#` indexed family
     bindings: list[tuple[str, str]] = field(default_factory=list)  # (var, sort)
 
 
@@ -278,11 +276,22 @@ def build_system(spec: SystemSpec) -> FormalSystem:
         pattern.respect_brackets = brackets
         return pattern
 
-    # 1. Atomic (regex) productions and inline line parts.
+    # 1. Atomic productions: regex leaves, atom constants, and atom families.
     for prod in spec.productions:
         if prod.regex is not None:
             ctx.variables[prod.name] = register(
                 RegexPattern(name=prod.name, pattern=_anchor(prod.regex), pre_format=ctx.pre_format)
+            )
+        elif prod.atom_value is not None or prod.atom_base is not None:
+            # An atom constant (`value`, one literal token) or indexed family
+            # (`base`, the infinite `p_#` -> p_0, p_1, ...). A single token needs
+            # no bracket parity, so it is not `register`ed — its `respect_brackets`
+            # stays None, matching what the compiler produces.
+            ctx.variables[prod.name] = AtomPattern(
+                name=prod.name,
+                value=prod.atom_value,
+                base=prod.atom_base,
+                pre_format=ctx.pre_format,
             )
     if spec.line:
         for part in spec.line.parts:

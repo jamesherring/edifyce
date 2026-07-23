@@ -20,11 +20,21 @@
 		onChanged: () => Promise<void> | void;
 	} = $props();
 
+	type Mode = 'template' | 'regex' | 'atom_value' | 'atom_base';
+	const MODES: { key: Mode; label: string; placeholder: string }[] = [
+		{ key: 'template', label: 'Template', placeholder: 'e.g. (p → q)' },
+		{ key: 'regex', label: 'Regex', placeholder: 'e.g. [a-z][a-z0-9]*' },
+		{ key: 'atom_value', label: 'Atom', placeholder: 'a constant token, e.g. ⊥' },
+		{ key: 'atom_base', label: 'Family', placeholder: 'a base, e.g. p (the p_# family)' }
+	];
+
 	let name = $state('');
 	let sortName = $state('');
-	let mode = $state<'template' | 'regex'>('template');
+	let mode = $state<Mode>('template');
 	let value = $state('');
 	let bindings = $state<Binding[]>([]);
+
+	const placeholder = $derived(MODES.find((m) => m.key === mode)!.placeholder);
 
 	// `sortName` must resolve to a real sort: a production's stored sort may have
 	// been deleted since, leaving the <select> blank on a stale value — block
@@ -42,22 +52,36 @@
 		fill: (item) => {
 			name = item?.name ?? '';
 			sortName = item ? item.sort : (sortNames[0] ?? '');
-			mode = item && item.template === null ? 'regex' : 'template';
-			value = item ? (item.template ?? item.regex ?? '') : '';
+			mode = !item
+				? 'template'
+				: item.regex !== null
+					? 'regex'
+					: item.atom_value !== null
+						? 'atom_value'
+						: item.atom_base !== null
+							? 'atom_base'
+							: 'template';
+			value = item
+				? (item.template ?? item.regex ?? item.atom_value ?? item.atom_base ?? '')
+				: '';
 			bindings = item?.bindings.map((b) => ({ ...b })) ?? [];
 		},
 		payload
 	});
 
 	function payload() {
-		// Send both fields with the inactive one nulled so switching template↔regex
-		// clears the other; the backend requires exactly one to be set.
+		// Send all four discriminator fields with the inactive ones nulled so a
+		// mode switch clears the others; the backend requires exactly one set.
+		// Bindings only apply to a composite template.
+		const v = value.trim();
 		return {
 			name: name.trim(),
 			sort: sortName,
-			template: mode === 'template' ? value.trim() : null,
-			regex: mode === 'regex' ? value.trim() : null,
-			bindings: bindings.filter((b) => b.var.trim() && b.sort.trim())
+			template: mode === 'template' ? v : null,
+			regex: mode === 'regex' ? v : null,
+			atom_value: mode === 'atom_value' ? v : null,
+			atom_base: mode === 'atom_base' ? v : null,
+			bindings: mode === 'template' ? bindings.filter((b) => b.var.trim() && b.sort.trim()) : []
 		};
 	}
 </script>
@@ -80,7 +104,9 @@
 			<span class="font-medium">{p.name}</span>
 			<span class="text-muted-foreground"> : {p.sort}</span>
 			<span class="ml-2 font-mono text-xs text-muted-foreground">
-				{p.template ?? `matches ${p.regex}`}
+				{p.template ??
+					p.atom_value ??
+					(p.atom_base !== null ? `${p.atom_base}_#` : `matches ${p.regex}`)}
 			</span>
 		</div>
 	{/snippet}
@@ -110,34 +136,23 @@
 	</div>
 	<div class="space-y-2">
 		<Label>Rule</Label>
-		<div class="inline-flex rounded-md border p-0.5 text-sm">
-			<button
-				type="button"
-				onclick={() => (mode = 'template')}
-				class={[
-					'rounded px-3 py-1',
-					mode === 'template' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'
-				]}
-			>
-				Template
-			</button>
-			<button
-				type="button"
-				onclick={() => (mode = 'regex')}
-				class={[
-					'rounded px-3 py-1',
-					mode === 'regex' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'
-				]}
-			>
-				Regex
-			</button>
+		<div class="inline-flex flex-wrap rounded-md border p-0.5 text-sm">
+			{#each MODES as m (m.key)}
+				<button
+					type="button"
+					onclick={() => (mode = m.key)}
+					class={[
+						'rounded px-3 py-1',
+						mode === m.key ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'
+					]}
+				>
+					{m.label}
+				</button>
+			{/each}
 		</div>
-		<Input
-			bind:value
-			class="font-mono"
-			placeholder={mode === 'template' ? 'e.g. (p → q)' : 'e.g. [a-z][a-z0-9]*'}
-			maxlength={512}
-		/>
+		<Input bind:value class="font-mono" {placeholder} maxlength={512} />
 	</div>
-	<BindingsEditor bind:bindings />
+	{#if mode === 'template'}
+		<BindingsEditor bind:bindings />
+	{/if}
 </EditSheet>
