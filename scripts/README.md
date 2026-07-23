@@ -23,7 +23,7 @@ are written to `.edifyce-dev/seed.env`.
 
 | Command | Does |
 |---|---|
-| `dev` | Hot-reload mode: FastAPI **and** the Vite dev server (`:5173`). See the proofs caveat below. |
+| `dev` | Hot-reload mode: FastAPI **and** the Vite dev server (`:5173`). |
 | `migrate` | Apply the Atlas migrations to the dev database. |
 | `db up \| down \| status` | Manage just Postgres. |
 | `backend up \| down` | Manage just the API. |
@@ -50,18 +50,15 @@ Logs and pid files live in `.edifyce-dev/` (git-ignored): `backend.log`,
 is **not** adopted automatically — `seed` writes demo data, which shouldn't land
 in a shared remote database without an explicit `DATABASE_URL` opt-in.
 
-### `up` vs `dev` — and the proofs caveat
+### `up` vs `dev`
 
-- **`up` (single server, recommended for inspection).** Builds the SPA and lets
-  FastAPI serve it at `/` alongside the API on `:8000` — production fidelity, and
-  the proofs pages load. Rebuild (`frontend build` / `up`) after frontend edits.
-- **`dev` (hot reload).** FastAPI on `:8000`, Vite on `:5173` proxying API paths.
-  Great for iterating on the **systems** UI. **The proofs pages are broken in this
-  mode** — the Vite proxy doesn't forward `/proofs`, and even if it did, the
-  `/proofs` prefix is shared by the JSON API and the SPA router, so navigations
-  render raw JSON. This is a real app bug (root-caused in
-  [`docs/editor-ux-audit.md`](../docs/editor-ux-audit.md), §0 — fix: namespace the
-  API under `/api`). Until that lands, inspect proofs via `up`.
+- **`up` (single server, production fidelity).** Builds the SPA and lets FastAPI
+  serve it at `/` alongside the API on `:8000`. Rebuild (`frontend build` / `up`)
+  after frontend edits.
+- **`dev` (hot reload).** FastAPI on `:8000`, Vite on `:5173` proxying the `/api`
+  prefix. Use this while iterating on the UI. Both modes serve every page,
+  including proofs: the whole JSON API lives under `/api`, so it never collides
+  with an SPA route (the `/proofs` resource vs the `/proofs` page).
 
 ## Pitfalls this script papers over
 

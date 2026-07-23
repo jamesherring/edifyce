@@ -97,7 +97,8 @@ as_pg() {
   if [ "$(id -u)" = "0" ]; then runuser -u postgres -- "$@"; else "$@"; fi
 }
 
-port_up() { curl -s --max-time 2 "http://127.0.0.1:$1/health" >/dev/null 2>&1; }
+# The whole JSON API (health included) lives under /api; the SPA owns bare paths.
+port_up() { curl -s --max-time 2 "http://127.0.0.1:$1/api/health" >/dev/null 2>&1; }
 
 # Background a long-lived process so it outlives THIS script. A plain `cmd &` from
 # a tool-driven shell gets reaped when the call returns; a `( ... & )` subshell
@@ -110,7 +111,7 @@ spawn() { # spawn <logfile> <pidfile> <command...>
 wait_health() { # wait_health <port> <what>
   local port="$1" what="$2" i
   for i in $(seq 1 30); do port_up "$port" && { ok "$what is up on :$port"; return 0; }; sleep 1; done
-  warn "$what did not answer /health on :$port in 30s — see the log"; return 1
+  warn "$what did not answer /api/health on :$port in 30s — see the log"; return 1
 }
 
 ensure_deps() {
@@ -214,10 +215,8 @@ frontend_dev() {
   spawn "$WEB_LOG" "$WEB_PID" \
     bash -c "cd '$ROOT/frontend' && npm run dev -- --host 127.0.0.1 --port $WEB_PORT"
   sleep 6
-  curl -s --max-time 3 "http://127.0.0.1:$WEB_PORT/health" >/dev/null 2>&1 \
+  curl -s --max-time 3 "http://127.0.0.1:$WEB_PORT/api/health" >/dev/null 2>&1 \
     && ok "Vite up — http://127.0.0.1:$WEB_PORT/" || warn "Vite still starting — check $WEB_LOG"
-  warn "Heads up: in dev mode the proofs pages are broken by the /proofs API↔SPA prefix"
-  warn "collision (see docs/editor-ux-audit.md). Use 'up' (single server) to inspect proofs."
 }
 
 frontend_down() {
@@ -232,9 +231,9 @@ frontend_down() {
 seed() {
   backend_up
   local B="http://127.0.0.1:$API_PORT" J; J="$(mktemp)"
-  curl -s -X POST "$B/auth/register" -H 'Content-Type: application/json' \
+  curl -s -X POST "$B/api/auth/register" -H 'Content-Type: application/json' \
     -d "{\"email\":\"$DEMO_EMAIL\",\"password\":\"$DEMO_PASSWORD\"}" >/dev/null || true
-  curl -s -c "$J" -X POST "$B/auth/login" -H 'Content-Type: application/x-www-form-urlencoded' \
+  curl -s -c "$J" -X POST "$B/api/auth/login" -H 'Content-Type: application/x-www-form-urlencoded' \
     -d "username=$DEMO_EMAIL&password=$DEMO_PASSWORD" >/dev/null
   # Idempotent: if we already seeded and that system still exists, reuse it rather
   # than minting another same-named system (the API slugs duplicates, so blindly
@@ -242,7 +241,7 @@ seed() {
   if [ -f "$SEED_ENV" ]; then
     # shellcheck disable=SC1090
     . "$SEED_ENV"
-    if [ -n "${SID:-}" ] && [ "$(curl -s -o /dev/null -w '%{http_code}' -b "$J" "$B/formal-systems/$SID")" = "200" ]; then
+    if [ -n "${SID:-}" ] && [ "$(curl -s -o /dev/null -w '%{http_code}' -b "$J" "$B/api/formal-systems/$SID")" = "200" ]; then
       ok "reusing existing seed — login $DEMO_EMAIL / $DEMO_PASSWORD"
       ok "  system: /systems/$SID/edit    proof: /proofs/${PID:-?}/edit"
       rm -f "$J"; return 0
@@ -250,10 +249,10 @@ seed() {
   fi
   log "seeding demo user + ZFC system + proof"
   local SID
-  SID="$(curl -s -b "$J" -X POST "$B/formal-systems" -H 'Content-Type: application/json' \
+  SID="$(curl -s -b "$J" -X POST "$B/api/formal-systems" -H 'Content-Type: application/json' \
     -d '{"name":"ZFC Set Theory","description":"Demo system: extensionality, membership, implication."}' \
     | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')"
-  post() { curl -s -b "$J" -X POST "$B/formal-systems/$SID/$1" -H 'Content-Type: application/json' -d "$2" >/dev/null; }
+  post() { curl -s -b "$J" -X POST "$B/api/formal-systems/$SID/$1" -H 'Content-Type: application/json' -d "$2" >/dev/null; }
   post brackets '{"opening":"(","closing":")"}'
   post sorts '{"name":"term"}'; post sorts '{"name":"formula"}'
   post productions '{"name":"variable","sort":"term","regex":"[a-z][a-z0-9]*"}'
@@ -267,10 +266,10 @@ seed() {
   post definitions '{"sort":"formula","name":"subset","higher":"x ⊆ y","lower":"(x = y → x = y)","bindings":[{"var":"x","sort":"variable"},{"var":"y","sort":"variable"}]}'
   local PSRC PID
   PSRC=$'x = x [HYP]\n(x = x → x = x) [HYP]\nx = x [MP]'
-  PID="$(curl -s -b "$J" -X POST "$B/proofs" -H 'Content-Type: application/json' \
+  PID="$(curl -s -b "$J" -X POST "$B/api/proofs" -H 'Content-Type: application/json' \
     -d "$(python3 -c "import json;print(json.dumps({'name':'Reflexivity of equality','formal_system_id':'$SID','description':'A short worked example.','source':'''$PSRC'''}))")" \
     | python3 -c 'import sys,json;print(json.load(sys.stdin).get("id","ERR"))')"
-  curl -s -b "$J" -X POST "$B/proofs/$PID/verify" >/dev/null || true
+  curl -s -b "$J" -X POST "$B/api/proofs/$PID/verify" >/dev/null || true
   rm -f "$J"
   printf 'EMAIL=%s\nPASSWORD=%s\nSID=%s\nPID=%s\n' "$DEMO_EMAIL" "$DEMO_PASSWORD" "$SID" "$PID" > "$SEED_ENV"
   ok "seeded — login $DEMO_EMAIL / $DEMO_PASSWORD"

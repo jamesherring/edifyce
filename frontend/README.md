@@ -10,23 +10,23 @@ formal systems.
 | Route                   | Purpose                                                                        |
 | ----------------------- | ------------------------------------------------------------------------------ |
 | `/`                     | Landing page                                                                   |
-| `/systems`              | Master list of published systems (+ a "My systems" view) → `GET /formal-systems{,/public}` |
-| `/systems/new`          | Create a system → `POST /formal-systems`                                       |
-| `/systems/[id]`         | Read-only detail: contents and validation → `GET /formal-systems/{id}` + `POST …/validate` |
+| `/systems`              | Master list of published systems (+ a "My systems" view) → `GET /api/formal-systems{,/public}` |
+| `/systems/new`          | Create a system → `POST /api/formal-systems`                                       |
+| `/systems/[id]`         | Read-only detail: contents and validation → `GET /api/formal-systems/{id}` + `POST …/validate` |
 | `/systems/[id]/edit`    | Owner editor: settings, publish, and per-part CRUD → `PATCH`/`DELETE` + `…/{sorts,productions,…}` |
-| `/systems/[id]/verify`  | Verify a proof against the system, line by line → `POST /formal-systems/[id]/verify` |
-| `/login`                | Log in → `POST /auth/login`                                                     |
-| `/register`             | Create an account → `POST /auth/register`                                       |
-| `/account`              | Manage the signed-in user → `GET`/`PATCH /users/me`                             |
+| `/systems/[id]/verify`  | Verify a proof against the system, line by line → `POST /api/formal-systems/[id]/verify` |
+| `/login`                | Log in → `POST /api/auth/login`                                                     |
+| `/register`             | Create an account → `POST /api/auth/register`                                       |
+| `/account`              | Manage the signed-in user → `GET`/`PATCH /api/users/me`                             |
 
 Auth state is held in `src/lib/auth.svelte.ts` (a reactive store fed by
-`GET /users/me`); the session itself lives in an httponly cookie the browser
+`GET /api/users/me`); the session itself lives in an httponly cookie the browser
 sends automatically. Requests go through `src/lib/api.ts` with
 `credentials: 'include'`.
 
 `/login` and `/register` also render GitHub/Google buttons
 (`components/oauth-buttons.svelte`) for whichever providers the backend reports
-from `GET /auth/providers`; clicking one sends the browser to the provider's
+from `GET /api/auth/providers`; clicking one sends the browser to the provider's
 authorization URL and the backend completes the flow on its callback.
 
 ## Development
@@ -46,10 +46,10 @@ The dev server runs on http://localhost:5173. Start the backend separately:
 uv run uvicorn app.main:app --reload
 ```
 
-The app makes same-origin (relative) API requests. In development the dev
-server proxies the API paths (`/health`, `/formal-systems`, `/auth`, `/users`) to the
-backend at `http://localhost:8000`, so the two servers work together with no
-extra configuration. Override the proxy target with `VITE_API_PROXY_TARGET`, or
+The app makes same-origin (relative) API requests, all under the `/api` prefix.
+In development the dev server proxies `/api` to the backend at
+`http://localhost:8000`, so the two servers work together with no extra
+configuration. Override the proxy target with `VITE_API_PROXY_TARGET`, or
 point the app at a backend on a different origin with `VITE_API_BASE_URL` (that
 origin must then be listed in the backend's `EDIFYCE_CORS_ORIGINS`). See
 `.env.example`.

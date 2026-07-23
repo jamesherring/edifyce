@@ -92,5 +92,5 @@ enabled_oauth_clients: list[tuple[str, "BaseOAuth2"]] = [
 def redirect_url_for(provider: str) -> str | None:
     """The pinned redirect_uri for a provider, or None to derive from the request."""
     if OAUTH_REDIRECT_URL_BASE:
-        return f"{OAUTH_REDIRECT_URL_BASE.rstrip('/')}/auth/{provider}/callback"
+        return f"{OAUTH_REDIRECT_URL_BASE.rstrip('/')}/api/auth/{provider}/callback"
     return None

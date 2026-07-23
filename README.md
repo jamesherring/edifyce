@@ -50,13 +50,13 @@ uv run pytest
 
 ## API Endpoints
 
-- `GET /health` — Health check.
-- `GET`/`POST /formal-systems` — List your systems / create one (stored as normalised rows, not source text).
-- `POST /formal-systems/{id}/validate` — Assemble the stored system and compile it, reporting any errors.
-- `POST /formal-systems/{id}/verify` — Verify a proof against a stored system (only the proof text is sent).
-- `POST /auth/register` — Create a user account.
-- `POST /auth/login` / `POST /auth/logout` — Start / end a session (httponly cookie).
-- `GET`/`PATCH /users/me` — Read or update the signed-in user.
+- `GET /api/health` — Health check.
+- `GET`/`POST /api/formal-systems` — List your systems / create one (stored as normalised rows, not source text).
+- `POST /api/formal-systems/{id}/validate` — Assemble the stored system and compile it, reporting any errors.
+- `POST /api/formal-systems/{id}/verify` — Verify a proof against a stored system (only the proof text is sent).
+- `POST /api/auth/register` — Create a user account.
+- `POST /api/auth/login` / `POST /api/auth/logout` — Start / end a session (httponly cookie).
+- `GET`/`PATCH /api/users/me` — Read or update the signed-in user.
 
 ## Authentication
 
@@ -66,7 +66,7 @@ httponly cookie; the SvelteKit UI exposes `/login`, `/register`, and `/account`.
 
 The auth routes require a database — point `DATABASE_URL` at your Postgres (see
 [`app/db/README.md`](app/db/README.md)); so do the formal-system routes, since
-they now read stored systems (verification included). Only `/health` runs
+they now read stored systems (verification included). Only `/api/health` runs
 without a database. Configuration:
 
 | Variable | Purpose | Default |
@@ -86,9 +86,9 @@ the missing configuration obvious. Always set it in a real deployment.
 
 GitHub and Google sign-in are supported via [httpx-oauth](https://frankie567.github.io/httpx-oauth/),
 linking accounts into the `oauth_accounts` table. Each provider is enabled only
-when its client id/secret are set, so `GET /auth/providers` (and the UI) shows
+when its client id/secret are set, so `GET /api/auth/providers` (and the UI) shows
 just the configured ones. Set the credentials from an OAuth app on each provider,
-with the callback URL `https://<your-host>/auth/<provider>/callback`:
+with the callback URL `https://<your-host>/api/auth/<provider>/callback`:
 
 | Variable | Purpose |
 |---|---|
@@ -97,8 +97,8 @@ with the callback URL `https://<your-host>/auth/<provider>/callback`:
 | `EDIFYCE_OAUTH_REDIRECT_URL_BASE` | Pin the callback origin (e.g. `https://edifyce.example.com`) when behind a TLS-terminating proxy that would otherwise derive an `http://` redirect_uri. Optional. |
 | `EDIFYCE_OAUTH_SUCCESS_REDIRECT` | Where the browser lands after a successful sign-in (default `/`). Optional. |
 
-The flow mounts `GET /auth/<provider>/authorize` (returns the provider's
-authorization URL) and `GET /auth/<provider>/callback` (creates or links the
+The flow mounts `GET /api/auth/<provider>/authorize` (returns the provider's
+authorization URL) and `GET /api/auth/<provider>/callback` (creates or links the
 user, sets the session cookie, and redirects back into the app). A social login
 is linked to an existing account with the same email **only when that account is
 already verified** — this refuses to attach to an unverified password
