@@ -268,10 +268,29 @@ export interface ProofSummary {
 	owner: SystemOwner | null;
 }
 
+/** One outgoing reference edge, read back — mirrors `ProofReferenceOut`. */
+export interface ProofReference {
+	referenced_proof_id: string;
+	/** The label this proof cites the lemma by in its source (`[alias.line]`). */
+	alias: string;
+	name: string;
+	slug: string;
+	published: boolean;
+}
+
+/** One outgoing reference edge, as submitted — mirrors `ProofReferenceInput`. */
+export interface ProofReferenceInput {
+	referenced_proof_id: string;
+	alias: string;
+}
+
 export interface ProofDetail extends ProofSummary {
 	source: string;
 	/** Cached `proof.data()` from the last verification (null = never run). */
 	result: ProofData | null;
+	/** Outgoing references (lemmas this proof cites), filtered to those the
+	 * viewer may read. */
+	references: ProofReference[];
 }
 
 export interface ProofCreate {
@@ -547,7 +566,13 @@ export const api = {
 			request<ProofDetail>(`/proofs/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
 		remove: (id: string) => request<null>(`/proofs/${id}`, { method: 'DELETE' }),
 		/** Rebuild the parent system and check this proof against it, caching the verdict. */
-		verify: (id: string) => request<VerifyResponse>(`/proofs/${id}/verify`, { method: 'POST' })
+		verify: (id: string) => request<VerifyResponse>(`/proofs/${id}/verify`, { method: 'POST' }),
+		/** Replace this proof's outgoing references (lemmas it cites) wholesale. */
+		setReferences: (id: string, references: ProofReferenceInput[]) =>
+			request<ProofDetail>(`/proofs/${id}/references`, {
+				method: 'PUT',
+				body: JSON.stringify({ references })
+			})
 	},
 
 	/**

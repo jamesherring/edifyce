@@ -63,7 +63,12 @@ Modernised from the original Django app (`website/models.py` on `main`):
   Ordering is a plain `position`; publishing is a `published_at` timestamp. (The
   old app modelled both through a separate `FolderEntry`/`OrderedModel`; this
   flattens that indirection.)
-- **`proof_references`** — the directed proof-to-proof dependency graph.
+- **`proof_references`** — the directed proof-to-proof dependency graph (an
+  association object, `ProofReference`): each edge carries the citation `alias`
+  the citing proof uses to name the lemma in its source (`[alias.line]`) and a
+  display `position`. The graph is kept acyclic; the API rejects an edge that
+  would close a cycle (the persistence-layer analogue of the engine's transitive
+  `Proof.circular_dependency`).
 - **`terms`** / **`term_children`** — the **term graph** (`terms.py`): kernel
   term DAGs stored as shared rows, interned per system by a structural
   `digest` so equal subterms are stored once. This is the structural-search
