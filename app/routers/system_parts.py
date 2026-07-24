@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.auth import current_active_user
-from app.db import Base, get_session
+from app.db import Base, get_session, system_to_spec
 from app.db.models import User
 from app.db.side_conditions import SideConditionRow
 from app.db.side_conditions_mapping import (
@@ -61,6 +61,7 @@ from app.routers.systems import (
     bracket_out,
     definition_out,
     line_out,
+    load_system,
     production_out,
     require_editable_system,
     rule_out,
@@ -91,6 +92,7 @@ from app.schemas import (
     SortCreate,
     SortUpdate,
 )
+from website.logical.declarative import registered_definition_layering
 
 router = APIRouter(prefix="/formal-systems/{system_id}", tags=["formal-systems"])
 
@@ -649,6 +651,61 @@ async def _assign_rule(session: AsyncSession, system_id: uuid.UUID, row: RuleRow
 # ---------------------------------------------------------------------------
 
 AssignFn = Callable[[AsyncSession, uuid.UUID, Base, Payload, set[str], bool], Awaitable[None]]
+ReorderGuard = Callable[[AsyncSession, uuid.UUID, list[uuid.UUID]], Awaitable[None]]
+
+
+async def _guard_definition_reorder(
+    session: AsyncSession, system_id: uuid.UUID, ids: list[uuid.UUID]
+) -> None:
+    """Reject a definition reorder that would silently un-layer a definition.
+
+    Definitions layer by position: a definition may build on the ones before it,
+    so its defining form is parsed against the grammar those extend. Dragging one
+    ahead of a definition whose notation it uses does not error — the dependent
+    definition just stops being recognised (``registered_definition_forms``
+    surfaces which survive). Catch that here so an editor can't quietly break
+    their own system with a reorder; the drop would otherwise only show up later
+    as proofs that no longer parse.
+    """
+    system = await load_system(session, system_id)
+    if system is None:
+        # _owned already ran; a race that removed the system just falls through to
+        # the reorder's own not-found handling.
+        return
+    stored = [row.id for row in system.definitions]
+    if set(ids) != set(stored) or len(ids) != len(stored):
+        # Not a valid permutation — let _apply_order raise the canonical 400.
+        return
+
+    # Layering is tracked by position and mapped back to the row id at that
+    # position, so a definition is identified by *which row* it is — not by its
+    # defined form (two definitions can share one) nor by structural identity
+    # (equivalent definitions de-duplicate). `system.definitions` and
+    # `spec.definitions` are both in stored order, so index i lines up.
+    spec = system_to_spec(system)
+    layered_before = registered_definition_layering(spec)
+    live_before = {stored[i] for i, ok in enumerate(layered_before) if ok}
+
+    index_of = {row_id: i for i, row_id in enumerate(stored)}
+    proposed = system_to_spec(system)
+    proposed.definitions = [proposed.definitions[index_of[i]] for i in ids]
+    layered_after = registered_definition_layering(proposed)
+    live_after = {ids[i] for i, ok in enumerate(layered_after) if ok}
+
+    lost = live_before - live_after
+    if not lost:
+        return
+    names = [
+        spec.definitions[i].name or spec.definitions[i].higher
+        for i, row_id in enumerate(stored)
+        if row_id in lost
+    ]
+    listed = ", ".join(f"'{name}'" for name in names)
+    raise HTTPException(
+        status.HTTP_400_BAD_REQUEST,
+        f"This order would un-define {listed}: a definition must stay after the "
+        "definitions whose notation it builds on.",
+    )
 
 
 @dataclass(frozen=True)
@@ -661,6 +718,10 @@ class ChildResource:
     serialize: Callable[[Base], BaseModel]
     loads: tuple[Any, ...]
     assign: AssignFn
+    # Optional pre-commit check run before a reorder is applied, to reject an
+    # order that is structurally valid row-by-row but breaks the collection as a
+    # whole (definitions, whose positional layering a reorder can silently break).
+    reorder_guard: ReorderGuard | None = None
 
 
 async def _create_child(
@@ -705,6 +766,8 @@ async def _reorder_route(
     session: AsyncSession,
 ) -> list[BaseModel]:
     await _owned(session, system_id, user)
+    if resource.reorder_guard is not None:
+        await resource.reorder_guard(session, system_id, ids)
     rows = await _reorder_rows(session, resource.row_cls, system_id, ids, resource.loads)
     return [resource.serialize(row) for row in rows]
 
@@ -755,6 +818,7 @@ RESOURCES: tuple[ChildResource, ...] = (
          selectinload(DefinitionRow.fresh).selectinload(DefinitionFreshRow.symbol),
          selectinload(DefinitionRow.side_conditions).selectinload(SideConditionRow.sort_symbol)),
         _assign_definition,
+        reorder_guard=_guard_definition_reorder,
     ),
     ChildResource(
         "axioms", AxiomRow, AxiomCreate, AxiomUpdate, Axiom, axiom_out,

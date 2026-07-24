@@ -32,6 +32,13 @@ class FormalSystem:
         # The build context from compiler
         self.build_context = build_context
 
+        # Per declared definition, in spec order, whether it layered: i.e. its
+        # defining form was recognised given the definitions before it. The
+        # declarative builder sets this; it stays empty for systems built another
+        # way. Keyed by position (not by notation) so callers can tell two
+        # distinct definitions apart even when they share a defined form.
+        self.definition_layering: list[bool] = []
+
         # A pattern dictionary of all the patterns used in build context
         self.pattern_dictionary = {}
 

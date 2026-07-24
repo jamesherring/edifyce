@@ -395,8 +395,12 @@ def build_system(spec: SystemSpec) -> FormalSystem:
     # definitions against that (now complete) context -- the order compile()
     # uses so `add_definition` can match the lower form against the productions.
     system.context.variables.update(ctx.variables)
-    for defn in spec.definitions:
-        _finalise_definition(defn, ctx, system)
+    # Per position, whether the definition layered — kept in spec order so a
+    # caller can map it back to a specific definition even when two share a
+    # defined form (see registered_definition_layering).
+    system.definition_layering = [
+        _finalise_definition(defn, ctx, system) for defn in spec.definitions
+    ]
 
     # 9. Parse each rule's provisos now that definitions have resolved, so a
     # proviso's term argument may use defined notation (e.g. `equal(t, ∅)`). Each
@@ -509,7 +513,11 @@ def _build_subproof(rule: Rule, rule_ctx: FormalSystemContext) -> SubproofSchema
     )
 
 
-def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: FormalSystem) -> None:
+def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: FormalSystem) -> bool:
+    """Register ``defn`` against the now-complete grammar, returning whether it
+    layered — ``True`` when its defining (lower) form was recognised (given the
+    definitions already in context), ``False`` when it matched nothing and so was
+    dropped. A recognised form is added to the proof context."""
     union = ctx.variables[defn.sort]
     context_copy = copy(system.context)
     context_copy.string_variables.update(_binding_patterns(defn.bindings, ctx))
@@ -538,6 +546,10 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
     )
     if result is not None:
         system.context.definitions.add(result)
+    # Non-None covers both a freshly added definition and one that de-duplicated
+    # into an existing equivalent — either way its form was recognised, so the
+    # definition layers. None means the lower form matched nothing.
+    return result is not None
 
 
 # ---------------------------------------------------------------------------
@@ -567,6 +579,40 @@ def build_spec(spec: SystemSpec, system_dict: dict | None = None) -> dict:
         # rejected it (e.g. a malformed proviso). Preserve the build contract --
         # return errors rather than raising into the caller (a 500 at the API).
         return {"errors": [str(exc)]}
+
+
+def registered_definition_layering(spec: SystemSpec) -> list[bool]:
+    """Per definition, in ``spec.definitions`` order, whether it *layers*.
+
+    Definitions layer positionally: a definition may build on the ones before it,
+    so its defining (lower) form is parsed against the grammar those earlier
+    definitions have already extended. A definition placed **ahead** of one whose
+    notation its lower form uses does not raise -- its lower form simply matches
+    nothing, and it is dropped silently. The returned flag is ``True`` for a
+    definition that was recognised, ``False`` for one that was dropped.
+
+    Keyed by **position**, not by defined form, so a caller can tell whether a
+    *specific* definition would be dropped even when two definitions share a
+    higher form (a set of forms would collapse them) or are structurally
+    equivalent up to renaming (which ``add_definition`` de-duplicates).
+
+    Layering depends only on the grammar (productions, in their sort unions) and
+    the definitions themselves; axioms, rules and lines contribute nothing to it.
+    So the build is done against a spec **reduced** to grammar plus definitions:
+    an unrelated draft error the draft-tolerant CRUD persisted (a half-written
+    rule, a malformed proviso) then can't fail the build and blind the check into
+    reporting every definition dropped. Only a broken *grammar* still errors —
+    and there no definition can layer at all, so all-``False`` is the honest
+    answer (nothing is live for a reorder to drop).
+    """
+    reduced = copy(spec)
+    reduced.axioms = []
+    reduced.rules = []
+    reduced.lines = []
+    result = build_spec(reduced)
+    if "errors" in result:
+        return [False] * len(spec.definitions)
+    return result["system"].definition_layering
 
 
 def _uses_parens(spec: SystemSpec) -> bool:

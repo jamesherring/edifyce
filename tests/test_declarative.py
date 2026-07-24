@@ -48,6 +48,7 @@ from website.logical.declarative import (
     SystemSpec,
     build_spec,
     build_system,
+    registered_definition_layering,
 )
 
 
@@ -158,6 +159,73 @@ def test_defined_notation_is_backed_by_a_definition(zfc):
     formula = zfc.context.variables["formula"]
     match = formula.match("x ⊆ y", zfc.context)
     assert match.definition is not None
+
+
+# ---------------------------------------------------------------------------
+# Positional layering: a definition builds on the ones before it, so ordering
+# matters. `registered_definition_layering` reports, per position, which survive
+# -- the basis for rejecting a reorder that would silently un-layer a definition.
+# `x ⊇ y ≝ y ⊆ x` builds on `x ⊆ y`, so it registers only when subset precedes it.
+# ---------------------------------------------------------------------------
+
+
+def _layered_spec(definitions):
+    return SystemSpec(
+        name="Layered",
+        brackets=brackets(),
+        productions=[
+            variable_prod(), membership_prod(), equality_prod(), negation_prod(),
+            conjunction_prod(), implication_prod(), universal_prod(),
+        ],
+        lines=[statement_line()],
+        definitions=definitions,
+    )
+
+
+def test_layered_definitions_register_when_ordered_dependency_first():
+    layering = registered_definition_layering(_layered_spec([subset_def(), superset_def()]))
+    assert layering == [True, True]
+
+
+def test_dependent_definition_silently_drops_when_placed_before_its_dependency():
+    # The reversed order does not raise -- superset's defining form `y ⊆ x` just
+    # matches nothing without subset ahead of it, so it (position 0) drops.
+    layering = registered_definition_layering(_layered_spec([superset_def(), subset_def()]))
+    assert layering == [False, True]
+
+
+def test_layering_is_positional_when_two_definitions_share_a_defined_form():
+    # `pos` (higher `x ⊆ y`, lower an atom) and `dep` (SAME higher `x ⊆ y`, lower
+    # `y ⊇ x`) both define `x ⊆ y`; `dep` builds on the separate `sup`. Tracking
+    # by position — not by defined-form string, which would collapse the two —
+    # catches that reordering `dep` ahead of `sup` drops `dep` even though the
+    # other `x ⊆ y` keeps the form present.
+    pos = defn("formula", "pos", "x ⊆ y", "x ∈ y", [("x", "variable"), ("y", "variable")])
+    sup = superset_def()
+    dep = defn("formula", "dep", "x ⊆ y", "y ⊇ x", [("x", "variable"), ("y", "variable")])
+
+    assert registered_definition_layering(_layered_spec([pos, sup, dep])) == [True, True, True]
+    # `dep` (position 0) now precedes `sup`, so its `y ⊇ x` is unrecognised.
+    assert registered_definition_layering(_layered_spec([dep, pos, sup])) == [False, True, True]
+
+
+def test_layering_is_unaffected_by_an_unrelated_draft_error():
+    # Draft-tolerant CRUD can persist a system that does not fully compile (here a
+    # rule binding names a sort the grammar lacks). Layering must still be read
+    # off the grammar+definitions alone, so a reorder guard can trust it rather
+    # than seeing the whole build fail and treating every definition as dropped.
+    broken_rule = rule("BAD", "bad", ["p"], "p", [("p", "no_such_sort")])
+
+    def spec(definitions):
+        s = _layered_spec(definitions)
+        s.rules = [broken_rule]
+        return s
+
+    # The unrelated error does fail a full build...
+    assert "errors" in build_spec(spec([subset_def(), superset_def()]))
+    # ...but layering is computed regardless, and still catches the bad order.
+    assert registered_definition_layering(spec([subset_def(), superset_def()])) == [True, True]
+    assert registered_definition_layering(spec([superset_def(), subset_def()])) == [False, True]
 
 
 # ---------------------------------------------------------------------------

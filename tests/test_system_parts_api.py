@@ -1134,6 +1134,101 @@ def test_reorder_rejects_a_non_permutation(client):
     assert bad.status_code == 400
 
 
+def _defs_grammar(client: TestClient) -> str:
+    # A minimal grammar for layering tests: one sort `f` with an atom production,
+    # so a definition's higher form is new notation and its lower form is either
+    # an atom or an earlier definition's higher form.
+    sid = _new_system(client)
+    _post(client, f"/api/formal-systems/{sid}/sorts", {"name": "f"})
+    _post(client, f"/api/formal-systems/{sid}/productions", {"name": "atom", "sort": "f", "regex": "[a-z]+"})
+    return sid
+
+
+def test_definition_reorder_that_breaks_layering_is_rejected(client):
+    # `T ≝ S` builds on `S ≝ a`, so S must stay ahead of T. Dragging T first would
+    # leave T's defining form `S` unrecognised — the endpoint rejects it rather
+    # than silently un-defining T.
+    _login(client, "ada@example.com")
+    sid = _defs_grammar(client)
+    sub = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "f", "name": "sub", "higher": "S", "lower": "a",
+    })
+    sup = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "f", "name": "sup", "higher": "T", "lower": "S",
+    })
+
+    rejected = client.put(
+        f"/api/formal-systems/{sid}/definitions/order", json={"ids": [sup["id"], sub["id"]]}
+    )
+    assert rejected.status_code == 400
+    assert "sup" in rejected.json()["detail"]
+    # The stored order is untouched — the reorder never committed.
+    detail = client.get(f"/api/formal-systems/{sid}").json()
+    assert [d["name"] for d in detail["definitions"]] == ["sub", "sup"]
+
+
+def test_definition_reorder_that_preserves_layering_is_allowed(client):
+    # Two independent definitions (neither uses the other) may be reordered freely.
+    _login(client, "ada@example.com")
+    sid = _defs_grammar(client)
+    first = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "f", "name": "one", "higher": "S", "lower": "a",
+    })
+    second = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "f", "name": "two", "higher": "T", "lower": "b",
+    })
+
+    ok = client.put(
+        f"/api/formal-systems/{sid}/definitions/order", json={"ids": [second["id"], first["id"]]}
+    )
+    assert ok.status_code == 200
+    assert [d["name"] for d in ok.json()] == ["two", "one"]
+
+
+def test_definition_reorder_may_fix_an_already_broken_order(client):
+    # A definition created ahead of its dependency never layered to begin with, so
+    # a reorder that moves the dependency in front of it drops nothing — it's an
+    # improvement, and must be allowed.
+    _login(client, "ada@example.com")
+    sid = _defs_grammar(client)
+    sup = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "f", "name": "sup", "higher": "T", "lower": "S",
+    })
+    sub = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "f", "name": "sub", "higher": "S", "lower": "a",
+    })
+
+    ok = client.put(
+        f"/api/formal-systems/{sid}/definitions/order", json={"ids": [sub["id"], sup["id"]]}
+    )
+    assert ok.status_code == 200
+    assert [d["name"] for d in ok.json()] == ["sub", "sup"]
+
+
+def test_definition_reorder_guard_is_keyed_by_row_not_by_defined_form(client):
+    # `base` and `dup` both define `Q`; `dup` builds on `S`. Moving `dup` ahead of
+    # `S` drops `dup` even though `base` keeps `Q` recognised — the guard tracks
+    # each definition by row, so it isn't fooled by the shared defined form.
+    _login(client, "ada@example.com")
+    sid = _defs_grammar(client)
+    s = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "f", "name": "s", "higher": "S", "lower": "a",
+    })
+    base = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "f", "name": "base", "higher": "Q", "lower": "a",
+    })
+    dup = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "f", "name": "dup", "higher": "Q", "lower": "S",
+    })
+
+    rejected = client.put(
+        f"/api/formal-systems/{sid}/definitions/order",
+        json={"ids": [dup["id"], s["id"], base["id"]]},
+    )
+    assert rejected.status_code == 400
+    assert "dup" in rejected.json()["detail"]
+
+
 # ---------------------------------------------------------------------------
 # Owner scoping
 # ---------------------------------------------------------------------------
