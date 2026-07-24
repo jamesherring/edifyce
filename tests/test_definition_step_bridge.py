@@ -31,6 +31,7 @@ from website.logical.formal_system.definitions import (
 from website.logical.matching.definitions import Definition
 
 from tests.spec_helpers import (
+    atom_const_prod,
     brackets,
     defn,
     regex_prod,
@@ -111,6 +112,28 @@ def binder_spec() -> SystemSpec:
     )
 
 
+# A defining form that mentions a grammar *constant* (`⊥`, a nullary atom) which
+# the defined form does not. The constant is a lower-only ground leaf like an
+# undeclared binder would be, but it can never be captured, so the bridge must
+# still take the kernel path rather than refuse it.
+def const_spec() -> SystemSpec:
+    return SystemSpec(
+        name="ConstSys",
+        brackets=brackets(),
+        productions=[
+            _setvar_prod(),
+            template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+            template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
+            atom_const_prod("formula", "falsum", "⊥"),
+        ],
+        lines=[statement_line()],
+        definitions=[
+            defn("formula", "notin", "(x ∉ y)", "((x ∈ y) → ⊥)", [("x", "setvar"), ("y", "setvar")]),
+        ],
+        rules=[_hyp_rule()],
+    )
+
+
 @pytest.fixture(scope="module")
 def alias_system():
     return build_declarative(alias_spec())
@@ -119,6 +142,11 @@ def alias_system():
 @pytest.fixture(scope="module")
 def binder_system():
     return build_declarative(binder_spec())
+
+
+@pytest.fixture(scope="module")
+def const_system():
+    return build_declarative(const_spec())
 
 
 def binder_definition(system):
@@ -160,6 +188,16 @@ def test_binder_carrying_definition_is_refused(binder_system):
     assert definition.kernel_definition_ready is True
 
 
+def test_constant_carrying_definition_builds_a_kernel_definition(const_system):
+    # `⊥` is a lower-only ground leaf, like an undeclared binder — but it is a
+    # grammar constant, which can never be captured, so the gate admits it and the
+    # definition stays on the kernel path.
+    definition = only_definition(const_system)
+    kernel_def = kernel_definition_for(definition, context_of(const_system))
+    assert kernel_def is not None
+    assert definition.kernel_definition is kernel_def
+
+
 # ---------------------------------------------------------------------------
 # follows_by_definition - the term-based step check (kernel path)
 # ---------------------------------------------------------------------------
@@ -187,6 +225,21 @@ def test_alias_unfold_rejects_a_different_formula(alias_system):
     _proof, (alias, other) = formulae(alias_system, "a sub b", "(a ∈ c)")
 
     assert follows_by_definition(alias, other, definition, context) is False
+
+
+def test_constant_definition_unfold_checked_by_the_kernel(const_system):
+    # The unfold of a constant-carrying definition is verified over kernel terms,
+    # in both directions, and a wrong formula is rejected — the constant `⊥` rides
+    # through the term check unchanged.
+    definition = only_definition(const_system)
+    context = context_of(const_system)
+    _proof, (folded, unfolded, other) = formulae(
+        const_system, "(a ∉ b)", "((a ∈ b) → ⊥)", "(a ∈ b)"
+    )
+
+    assert follows_by_definition(folded, unfolded, definition, context) is True
+    assert follows_by_definition(unfolded, folded, definition, context) is True
+    assert follows_by_definition(folded, other, definition, context) is False
 
 
 def test_follows_from_definition_uses_the_kernel_path(alias_system):
