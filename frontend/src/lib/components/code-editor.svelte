@@ -100,17 +100,20 @@
 				</div>
 			{/each}
 		</div>
+		<!-- wrap="off": each logical line is exactly one visual row, so the gutter
+		     numbers and per-line tints stay aligned (long lines scroll sideways). -->
 		<textarea
 			bind:this={textarea}
 			{id}
 			bind:value
 			{placeholder}
 			{rows}
+			wrap="off"
 			spellcheck="false"
 			autocapitalize="off"
 			onkeydown={handleKeydown}
 			onscroll={syncScroll}
-			class="flex-1 resize-y bg-transparent py-2 pr-3 pl-2 font-mono text-sm leading-relaxed outline-none"
+			class="flex-1 resize-y overflow-auto bg-transparent py-2 pr-3 pl-2 font-mono text-sm leading-relaxed outline-none"
 		></textarea>
 	</div>
 {:else}

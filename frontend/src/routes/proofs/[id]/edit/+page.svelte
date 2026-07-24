@@ -116,11 +116,15 @@
 		}
 	}
 
-	// Debounced live verify: re-checks a short beat after typing stops.
+	// Debounced live verify: re-checks a short beat after typing stops. Bumping
+	// liveSeq on *every* edit invalidates any still-in-flight response so a slow
+	// reply can't land its diagnostics on newer (or cleared) text.
 	$effect(() => {
 		const text = source;
 		const systemId = proof?.formal_system_id;
 		if (!systemId) return;
+		liveSeq++;
+		liveVerifying = false;
 		if (!text.trim()) {
 			liveResult = null;
 			liveError = null;

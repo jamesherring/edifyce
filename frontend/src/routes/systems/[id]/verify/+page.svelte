@@ -96,10 +96,14 @@
 
 	// Debounced live verify: re-checks a beat after typing stops, so results track
 	// the editor without a button. Empty input clears back to the idle hint.
+	// Bumping verifySeq on every edit invalidates any in-flight response so a slow
+	// reply can't repopulate diagnostics for newer (or cleared) text.
 	$effect(() => {
 		const text = proofText;
 		const id = page.params.id;
 		if (!id || systemName === null) return;
+		verifySeq++;
+		verifying = false;
 		if (!text.trim()) {
 			result = null;
 			requestError = null;
