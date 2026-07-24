@@ -286,7 +286,7 @@ def _theorem_schema(
         # A fresh shell, never the pattern build_schema_pattern returned: that can
         # be a system-owned pattern out of the grammar, which must not be given a
         # theorem's schema term.
-        pattern = StringPattern(name=name, pattern=text, pre_format=context.pre_format)
+        pattern = StringPattern(name=name, pattern=text)
         pattern.schema_term = ground
     return pattern
 
