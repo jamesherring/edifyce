@@ -549,25 +549,25 @@ def test_definition_fresh_round_trips_through_the_api(client):
     # back like bindings, both on the write response and the aggregate detail.
     _login(client, "ada@example.com")
     sid = _defn_system(client)
-    defn = _post(client, f"/formal-systems/{sid}/definitions", {
+    defn = _post(client, f"/api/formal-systems/{sid}/definitions", {
         "sort": "term", "name": "subset", "higher": "x sub y", "lower": "all z . stuff",
         "bindings": [{"var": "x", "sort": "term"}, {"var": "y", "sort": "term"}],
         "fresh": [{"var": "z", "sort": "term"}],
     })
     assert defn["fresh"] == [{"var": "z", "sort": "term"}]
-    assert client.get(f"/formal-systems/{sid}").json()["definitions"][0]["fresh"] == [
+    assert client.get(f"/api/formal-systems/{sid}").json()["definitions"][0]["fresh"] == [
         {"var": "z", "sort": "term"}
     ]
 
     # PATCH replaces the fresh list wholesale; an empty list clears it.
-    updated = client.patch(f"/formal-systems/{sid}/definitions/{defn['id']}", json={
+    updated = client.patch(f"/api/formal-systems/{sid}/definitions/{defn['id']}", json={
         "fresh": [{"var": "z", "sort": "term"}, {"var": "w", "sort": "term"}],
     })
     assert updated.json()["fresh"] == [
         {"var": "z", "sort": "term"}, {"var": "w", "sort": "term"}
     ]
     assert client.patch(
-        f"/formal-systems/{sid}/definitions/{defn['id']}", json={"fresh": []}
+        f"/api/formal-systems/{sid}/definitions/{defn['id']}", json={"fresh": []}
     ).json()["fresh"] == []
 
 
@@ -576,12 +576,12 @@ def test_definition_patch_omitting_fresh_leaves_it_unchanged(client):
     # stored bound variables, exactly like bindings.
     _login(client, "ada@example.com")
     sid = _defn_system(client)
-    defn = _post(client, f"/formal-systems/{sid}/definitions", {
+    defn = _post(client, f"/api/formal-systems/{sid}/definitions", {
         "sort": "term", "name": "d", "higher": "x", "lower": "y",
         "fresh": [{"var": "z", "sort": "term"}],
     })
     renamed = client.patch(
-        f"/formal-systems/{sid}/definitions/{defn['id']}", json={"name": "renamed"}
+        f"/api/formal-systems/{sid}/definitions/{defn['id']}", json={"name": "renamed"}
     )
     assert renamed.status_code == 200, renamed.text
     assert renamed.json()["fresh"] == [{"var": "z", "sort": "term"}]
@@ -593,7 +593,7 @@ def test_definition_fresh_over_unknown_sort_is_rejected(client):
     # silently-dropped row.
     _login(client, "ada@example.com")
     sid = _defn_system(client)
-    response = client.post(f"/formal-systems/{sid}/definitions", json={
+    response = client.post(f"/api/formal-systems/{sid}/definitions", json={
         "sort": "term", "name": "d", "higher": "x", "lower": "y",
         "fresh": [{"var": "z", "sort": "no_such_sort"}],
     })
@@ -1059,6 +1059,77 @@ def test_reorder_rejects_a_non_permutation(client):
         json={"ids": [a["id"], str(uuid.uuid4())]},
     )
     assert bad.status_code == 400
+
+
+def _defs_grammar(client: TestClient) -> str:
+    # A minimal grammar for layering tests: one sort `f` with an atom production,
+    # so a definition's higher form is new notation and its lower form is either
+    # an atom or an earlier definition's higher form.
+    sid = _new_system(client)
+    _post(client, f"/api/formal-systems/{sid}/sorts", {"name": "f"})
+    _post(client, f"/api/formal-systems/{sid}/productions", {"name": "atom", "sort": "f", "regex": "[a-z]+"})
+    return sid
+
+
+def test_definition_reorder_that_breaks_layering_is_rejected(client):
+    # `T ≝ S` builds on `S ≝ a`, so S must stay ahead of T. Dragging T first would
+    # leave T's defining form `S` unrecognised — the endpoint rejects it rather
+    # than silently un-defining T.
+    _login(client, "ada@example.com")
+    sid = _defs_grammar(client)
+    sub = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "f", "name": "sub", "higher": "S", "lower": "a",
+    })
+    sup = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "f", "name": "sup", "higher": "T", "lower": "S",
+    })
+
+    rejected = client.put(
+        f"/api/formal-systems/{sid}/definitions/order", json={"ids": [sup["id"], sub["id"]]}
+    )
+    assert rejected.status_code == 400
+    assert "sup" in rejected.json()["detail"]
+    # The stored order is untouched — the reorder never committed.
+    detail = client.get(f"/api/formal-systems/{sid}").json()
+    assert [d["name"] for d in detail["definitions"]] == ["sub", "sup"]
+
+
+def test_definition_reorder_that_preserves_layering_is_allowed(client):
+    # Two independent definitions (neither uses the other) may be reordered freely.
+    _login(client, "ada@example.com")
+    sid = _defs_grammar(client)
+    first = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "f", "name": "one", "higher": "S", "lower": "a",
+    })
+    second = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "f", "name": "two", "higher": "T", "lower": "b",
+    })
+
+    ok = client.put(
+        f"/api/formal-systems/{sid}/definitions/order", json={"ids": [second["id"], first["id"]]}
+    )
+    assert ok.status_code == 200
+    assert [d["name"] for d in ok.json()] == ["two", "one"]
+
+
+def test_definition_reorder_may_fix_an_already_broken_order(client):
+    # A definition created ahead of its dependency never layered to begin with, so
+    # a reorder that moves the dependency in front of it drops nothing — it's an
+    # improvement, and must be allowed.
+    _login(client, "ada@example.com")
+    sid = _defs_grammar(client)
+    sup = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "f", "name": "sup", "higher": "T", "lower": "S",
+    })
+    sub = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "f", "name": "sub", "higher": "S", "lower": "a",
+    })
+
+    ok = client.put(
+        f"/api/formal-systems/{sid}/definitions/order", json={"ids": [sub["id"], sup["id"]]}
+    )
+    assert ok.status_code == 200
+    assert [d["name"] for d in ok.json()] == ["sub", "sup"]
 
 
 # ---------------------------------------------------------------------------

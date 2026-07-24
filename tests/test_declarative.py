@@ -45,6 +45,7 @@ from website.logical.declarative import (
     SystemSpec,
     build_spec,
     build_system,
+    registered_definition_forms,
 )
 
 
@@ -155,6 +156,39 @@ def test_defined_notation_is_backed_by_a_definition(zfc):
     formula = zfc.context.variables["formula"]
     match = formula.match("x ⊆ y", zfc.context)
     assert match.definition is not None
+
+
+# ---------------------------------------------------------------------------
+# Positional layering: a definition builds on the ones before it, so ordering
+# matters. `registered_definition_forms` reports which survive -- the basis for
+# rejecting a reorder that would silently un-layer a definition.
+# `x ⊇ y ≝ y ⊆ x` builds on `x ⊆ y`, so it registers only when subset precedes it.
+# ---------------------------------------------------------------------------
+
+
+def _layered_spec(definitions):
+    return SystemSpec(
+        name="Layered",
+        brackets=brackets(),
+        productions=[
+            variable_prod(), membership_prod(), equality_prod(), negation_prod(),
+            conjunction_prod(), implication_prod(), universal_prod(),
+        ],
+        lines=[statement_line()],
+        definitions=definitions,
+    )
+
+
+def test_layered_definitions_register_when_ordered_dependency_first():
+    forms = registered_definition_forms(_layered_spec([subset_def(), superset_def()]))
+    assert forms == {"x ⊆ y", "x ⊇ y"}
+
+
+def test_dependent_definition_silently_drops_when_placed_before_its_dependency():
+    # The reversed order does not raise -- superset's defining form `y ⊆ x` just
+    # matches nothing without subset ahead of it, so only subset survives.
+    forms = registered_definition_forms(_layered_spec([superset_def(), subset_def()]))
+    assert forms == {"x ⊆ y"}
 
 
 # ---------------------------------------------------------------------------

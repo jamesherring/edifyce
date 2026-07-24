@@ -518,6 +518,37 @@ def build_spec(spec: SystemSpec, system_dict: dict | None = None) -> dict:
         return {"errors": [str(exc)]}
 
 
+def registered_definition_forms(spec: SystemSpec) -> set[str]:
+    """The higher (defined) forms of the definitions in ``spec`` that actually
+    *layer* when it is built in its given order.
+
+    Definitions layer positionally: a definition may build on the ones before it,
+    so its defining (lower) form is parsed against the grammar those earlier
+    definitions have already extended. A definition placed **ahead** of one whose
+    notation its lower form uses does not raise -- its lower form simply matches
+    nothing, and ``add_definition`` drops it silently (returns ``None``). This
+    exposes the set that survived, keyed by the raw higher form each definition
+    was declared with, so a caller can tell whether a reordering would drop one.
+
+    Returns an empty set when the spec does not build at all: a systemic error
+    (a malformed production, say) is unrelated to definition order and is the
+    caller's concern to surface elsewhere, not something this predicate ranks.
+    """
+    result = build_spec(spec)
+    if "errors" in result:
+        return set()
+    system = result["system"]
+    declared = {defn.higher for defn in spec.definitions}
+    # A built definition keeps the exact higher text it was declared with
+    # (`matching.Definition.higher.pattern`); intersect with this spec's own
+    # declared forms so nothing a future inheritance path might inject counts.
+    return {
+        defn.higher.pattern
+        for defn in system.context.definitions
+        if defn.higher.pattern in declared
+    }
+
+
 def _uses_parens(spec: SystemSpec) -> bool:
     texts = [p.template or "" for p in spec.productions]
     texts += [d.lower for d in spec.definitions]
