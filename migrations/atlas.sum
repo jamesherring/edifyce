@@ -1,4 +1,4 @@
-h1:qlBWcGmjgC7q/fT6PA6TTOtLJabMjZJQE3v9xcpElJI=
+h1:rgQBN8c+wSkRV4iJd2mqe60OG4cmpoznj07mq+iDVV4=
 20260715084842_initial_schema.sql h1:li+tGjd1xfzUC+Oet1ytZRgaeJlFFn6zwKJKRRHQR5o=
 20260717121403_normalize_constraint_names.sql h1:VfGJbOd7VWShF/0kWpgvlm+iMJLrutRP+qweQ/rJR4k=
 20260721060312_unify_symbols.sql h1:TEriOjT9h56DIRBgors2hB/rmp9gUzezuiMsaX5Fk8Q=
@@ -14,3 +14,4 @@ h1:qlBWcGmjgC7q/fT6PA6TTOtLJabMjZJQE3v9xcpElJI=
 20260723203422_add_definition_fresh.sql h1:hjGpJa4Q2si2cFs3sWmxxpOgco6dA8XZOSCBZjL8JlQ=
 20260723211700_add_rule_subproof_columns.sql h1:PRfGePQFFHShrBOGYjIk0U+ejjD9cNiapOfdvHTzQ6E=
 20260724083236_add_definition_label.sql h1:FDOz8WoObncPMCvfPLBVc6G91+SV2lyHS57v96NHL/c=
+20260724200341_add_rule_allow_extra_antecedents.sql h1:di1StZnGSL2UoCGfHQMWu3qf6DgcXCqe3hwTbP85+eU=

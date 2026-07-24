@@ -155,6 +155,9 @@ export interface Rule {
 	matching: RuleMatching;
 	/** The subproof a discharge rule consumes, or null for a line-antecedent rule. */
 	subproof: Subproof | null;
+	/** Whether a citation may name more lines than the rule has antecedent slots;
+	 * the surplus is kept unconstrained. False means an exact citation. */
+	allow_extra_antecedents: boolean;
 }
 
 /** The public face of a system's owner (never email) — mirrors `SystemOwner`. */
@@ -285,6 +288,7 @@ export interface RuleCreate {
 	side_conditions?: string[];
 	matching?: RuleMatching;
 	subproof?: Subproof | null;
+	allow_extra_antecedents?: boolean;
 }
 export type RuleUpdate = Partial<RuleCreate>;
 

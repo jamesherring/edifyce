@@ -176,6 +176,9 @@ class Rule(BaseModel):
     matching: RuleMatching = "structural"
     # The subproof a discharge rule consumes, or None for a line-antecedent rule.
     subproof: Subproof | None = None
+    # Whether a citation may name more lines than the rule has antecedent slots;
+    # the surplus is kept unconstrained. Off by default (an exact citation).
+    allow_extra_antecedents: bool = False
 
 
 class SystemOwner(BaseModel):
@@ -361,6 +364,7 @@ class RuleCreate(BaseModel):
     side_conditions: list[_Text512] = Field(default_factory=list)
     matching: RuleMatching = "structural"
     subproof: Subproof | None = None
+    allow_extra_antecedents: bool = False
 
 
 class RuleUpdate(BaseModel):
@@ -372,6 +376,7 @@ class RuleUpdate(BaseModel):
     side_conditions: list[_Text512] | None = None
     matching: RuleMatching | None = None
     subproof: Subproof | None = None
+    allow_extra_antecedents: bool | None = None
 
 
 class ReorderRequest(BaseModel):

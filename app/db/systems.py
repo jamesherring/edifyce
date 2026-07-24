@@ -23,7 +23,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, Index, Integer, String, text
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, uuid_pk_column
@@ -308,6 +308,12 @@ class RuleRow(Base):
     subproof_derive: Mapped[str | None] = mapped_column(String(512))
     subproof_assume: Mapped[str | None] = mapped_column(String(512))
     subproof_fresh: Mapped[str | None] = mapped_column(String(512))
+    # Whether a citation may name more lines than the rule has antecedent slots;
+    # the surplus is kept as unconstrained `extra_antecedents`. Mirrors
+    # InferenceRule.allow_extra_antecedents / declarative Rule.
+    allow_extra_antecedents: Mapped[bool] = mapped_column(
+        Boolean, server_default=text("false")
+    )
 
     system: Mapped[FormalSystem] = relationship(back_populates="rules")
     antecedents: Mapped[list[RuleAntecedentRow]] = relationship(

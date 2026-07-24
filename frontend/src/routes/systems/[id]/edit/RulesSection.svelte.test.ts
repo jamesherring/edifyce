@@ -34,14 +34,48 @@ const rule: Rule = {
 	],
 	side_conditions: ['not occurs(x, p)'],
 	matching: 'structural',
-	subproof: null
+	subproof: null,
+	allow_extra_antecedents: false
 };
 
-function renderSection() {
+function renderSection(over: Partial<Rule> = {}) {
 	const onChanged = vi.fn();
-	render(RulesSection, { systemId: 'sys1', rules: [rule], onChanged });
+	render(RulesSection, { systemId: 'sys1', rules: [{ ...rule, ...over }], onChanged });
 	return { onChanged };
 }
+
+describe('RulesSection allow_extra_antecedents', () => {
+	it('pre-fills the toggle and sends the flipped value', async () => {
+		renderSection({ allow_extra_antecedents: true });
+		await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+		// The stored value drives the toggle's label.
+		const toggle = screen.getByRole('button', { name: 'Enabled' });
+		await userEvent.click(toggle);
+		await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+		const [, , payload] = vi.mocked(api.parts.rules.update).mock.calls[0];
+		expect(payload).toMatchObject({ allow_extra_antecedents: false });
+	});
+
+	it('is hidden and forced off for a discharge rule', async () => {
+		// A discharge rule carries no antecedents or side-conditions either — the API
+		// rejects those pairings too, so the fixture must be a state the API accepts.
+		renderSection({
+			subproof: { derive: 'q', assume: 'p', fresh: null },
+			antecedents: [],
+			side_conditions: []
+		});
+		await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+		// The discharge check cites one subproof opener, so the option is not offered.
+		expect(screen.queryByText('Allow extra antecedents')).not.toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+		const [, , payload] = vi.mocked(api.parts.rules.update).mock.calls[0];
+		expect(payload.allow_extra_antecedents).toBe(false);
+	});
+});
 
 describe('RulesSection provisos', () => {
 	it('pre-fills the provisos editor from a rule’s side_conditions', async () => {

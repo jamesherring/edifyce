@@ -55,7 +55,7 @@ from tests.spec_helpers import (
     universal_prod,
     variable_prod,
 )
-from website.logical.declarative import LinePart, LineSpec, SystemSpec, build_spec
+from website.logical.declarative import LinePart, LineSpec, Rule, SystemSpec, build_spec
 
 # The system decomposition now lives among the full app schema. The pgvector
 # `theorems` table (and other Postgres-only bits) aren't SQLite-creatable, so
@@ -281,6 +281,52 @@ def test_labelled_definitions_round_trip_through_the_database(session):
     system = build_spec(system_to_spec(stored))["system"]
     proof = system.parse("a sub b [HYP]\na ∈ b [sub, 1]")
     assert proof.proof_lines[1].valid is True
+
+
+def extra_antecedents_spec() -> SystemSpec:
+    # MPX permits a citation to name more lines than it has premises; MP does not.
+    return SystemSpec(
+        name="ExtraAntecedents",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        lines=[statement_line()],
+        rules=[
+            hyp_rule(),
+            Rule(
+                label="MPX",
+                name="modus_ponens_extra",
+                antecedents=["p", "(p → q)"],
+                deduction="q",
+                bindings=[("p", "formula"), ("q", "formula")],
+                allow_extra_antecedents=True,
+            ),
+            mp_rule(),
+        ],
+    )
+
+
+def test_extra_antecedents_flag_round_trips_through_the_database(session):
+    # `allow_extra_antecedents` persists on the rule row and rebuilds into an equal
+    # spec whose surplus-citation behaviour still holds.
+    session.add(spec_to_system(extra_antecedents_spec()))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(
+        select(FormalSystem).where(FormalSystem.name == "ExtraAntecedents")
+    )
+
+    flags = {r.label: r.allow_extra_antecedents for r in stored.rules}
+    assert flags == {"HYP": False, "MPX": True, "MP": False}
+    assert system_to_spec(stored) == extra_antecedents_spec()
+
+    system = build_spec(system_to_spec(stored))["system"]
+    src = "a [HYP]\n(a → b) [HYP]\nc [HYP]\nb [{rule}, 1, 2, 3]"
+    # MPX fills its two slots and keeps the third line as an unconstrained extra.
+    extra_line = system.parse(src.format(rule="MPX")).proof_lines[-1]
+    assert extra_line.valid is True
+    assert (len(extra_line.antecedents), len(extra_line.extra_antecedents)) == (2, 1)
+    # MP, without the flag, rejects the surplus citation.
+    assert system.parse(src.format(rule="MP")).proof_lines[-1].valid is False
 
 
 def test_decomposition_has_no_source_or_json_blob():

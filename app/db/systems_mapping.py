@@ -130,6 +130,7 @@ def spec_to_system(spec: SystemSpec) -> FormalSystem:
             subproof_derive=subproof.derive if subproof is not None else None,
             subproof_assume=subproof.assume if subproof is not None else None,
             subproof_fresh=subproof.fresh if subproof is not None else None,
+            allow_extra_antecedents=rule.allow_extra_antecedents,
         )
         for j, antecedent in enumerate(rule.antecedents):
             row.antecedents.append(RuleAntecedentRow(position=j, pattern=antecedent))
@@ -209,6 +210,7 @@ def system_to_spec(system: FormalSystem) -> SystemSpec:
             side_conditions=rule_side_conditions_list(rule),
             matching=rule.matching,
             subproof=_subproof_from_row(rule),
+            allow_extra_antecedents=rule.allow_extra_antecedents,
         )
         for rule in system.rules
     ]

@@ -371,6 +371,71 @@ def test_discharge_rule_cannot_carry_antecedents_or_side_conditions_via_api(clie
     assert conflicted.status_code == 422
 
 
+def test_rule_allow_extra_antecedents_round_trips_through_the_api(client):
+    # The flag persists on the write response and the aggregate detail, defaults
+    # to False when omitted, and PATCH flips it back off.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/api/formal-systems/{sid}/sorts", {"name": "formula"})
+    binds = [{"var": "p", "sort": "formula"}, {"var": "q", "sort": "formula"}]
+
+    extra = _post(client, f"/api/formal-systems/{sid}/rules", {
+        "label": "MPX", "name": "mpx", "deduction": "q",
+        "antecedents": ["p", "(p → q)"], "bindings": binds,
+        "allow_extra_antecedents": True,
+    })
+    assert extra["allow_extra_antecedents"] is True
+
+    # Omitting the field on create leaves it off (an exact citation).
+    plain = _post(client, f"/api/formal-systems/{sid}/rules", {
+        "label": "MP", "name": "mp", "deduction": "q",
+        "antecedents": ["p", "(p → q)"], "bindings": binds,
+    })
+    assert plain["allow_extra_antecedents"] is False
+
+    detail = client.get(f"/api/formal-systems/{sid}").json()
+    assert {r["label"]: r["allow_extra_antecedents"] for r in detail["rules"]} == {
+        "MPX": True, "MP": False
+    }
+
+    # A metadata-only PATCH (model_fields_set excludes the flag) preserves it.
+    assert client.patch(
+        f"/api/formal-systems/{sid}/rules/{extra['id']}", json={"name": "renamed"}
+    ).json()["allow_extra_antecedents"] is True
+
+    assert client.patch(
+        f"/api/formal-systems/{sid}/rules/{extra['id']}",
+        json={"allow_extra_antecedents": False},
+    ).json()["allow_extra_antecedents"] is False
+
+
+def test_discharge_rule_cannot_allow_extra_antecedents_via_api(client):
+    # A discharge rule cites exactly one subproof opener, so the discharge check
+    # never consults extra antecedents; the API rejects the pairing rather than
+    # store a flag that would be silently ignored.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/api/formal-systems/{sid}/sorts", {"name": "formula"})
+    binds = [{"var": "p", "sort": "formula"}, {"var": "q", "sort": "formula"}]
+
+    both = client.post(f"/api/formal-systems/{sid}/rules", json={
+        "label": "CP", "name": "cp", "deduction": "(p → q)", "bindings": binds,
+        "subproof": {"derive": "q", "assume": "p"}, "allow_extra_antecedents": True,
+    })
+    assert both.status_code == 422
+
+    # An extra-antecedent rule later PATCHed into a discharge rule is caught too.
+    plain = _post(client, f"/api/formal-systems/{sid}/rules", {
+        "label": "MPX", "name": "mpx", "deduction": "q", "bindings": binds,
+        "allow_extra_antecedents": True,
+    })
+    conflicted = client.patch(
+        f"/api/formal-systems/{sid}/rules/{plain['id']}",
+        json={"subproof": {"derive": "q", "assume": "p"}},
+    )
+    assert conflicted.status_code == 422
+
+
 def test_string_rule_cannot_carry_side_conditions_via_api(client):
     # The string path has no term binding to evaluate a proviso against, so the
     # API rejects the pairing (create and both PATCH directions) rather than

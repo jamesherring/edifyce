@@ -26,6 +26,7 @@
 	let deduction = $state('');
 	let matching = $state<RuleMatching>('structural');
 	let antecedents = $state<StringRow[]>([]);
+	let allowExtraAntecedents = $state(false);
 	let sideConditions = $state<StringRow[]>([]);
 	let bindings = $state<Binding[]>([]);
 
@@ -57,6 +58,7 @@
 			deduction = item?.deduction ?? '';
 			matching = item?.matching ?? 'structural';
 			antecedents = item?.antecedents.map((v) => ({ value: v })) ?? [];
+			allowExtraAntecedents = item?.allow_extra_antecedents ?? false;
 			sideConditions = item?.side_conditions.map((v) => ({ value: v })) ?? [];
 			bindings = item?.bindings.map((b) => ({ ...b })) ?? [];
 			const sub = item?.subproof ?? null;
@@ -76,6 +78,9 @@
 			deduction: deduction.trim(),
 			matching,
 			antecedents: antecedents.map((a) => a.value.trim()).filter(Boolean),
+			// A discharge rule cites one subproof opener, so the discharge check never
+			// consults extra antecedents; the API rejects the pairing. Force it off.
+			allow_extra_antecedents: hasSubproof ? false : allowExtraAntecedents,
 			side_conditions: sideConditions.map((sc) => sc.value.trim()).filter(Boolean),
 			bindings: bindings.filter((b) => b.var.trim() && b.sort.trim()),
 			subproof: hasSubproof
@@ -146,6 +151,25 @@
 			<Input bind:value={antecedent.value} class="font-mono" placeholder="e.g. (p → q)" maxlength={512} />
 		{/snippet}
 	</RepeatableRows>
+	{#if !hasSubproof}
+		<div class="space-y-2">
+			<div class="flex items-center justify-between">
+				<Label>Allow extra antecedents</Label>
+				<Button
+					type="button"
+					size="sm"
+					variant={allowExtraAntecedents ? 'default' : 'outline'}
+					onclick={() => (allowExtraAntecedents = !allowExtraAntecedents)}
+				>
+					{allowExtraAntecedents ? 'Enabled' : 'Off'}
+				</Button>
+			</div>
+			<p class="text-xs text-muted-foreground">
+				Lets a citation name more lines than there are premises. The surplus is
+				recorded but left unconstrained, so it justifies nothing.
+			</p>
+		</div>
+	{/if}
 	<div class="space-y-2">
 		<Label for="rule-deduction">Conclusion</Label>
 		<Input id="rule-deduction" bind:value={deduction} class="font-mono" placeholder="e.g. q" maxlength={512} />
