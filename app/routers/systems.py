@@ -359,6 +359,7 @@ def rule_out(r: RuleRow) -> Rule:
         side_conditions=rule_side_conditions_list(r),
         matching=r.matching,
         subproof=_subproof_out(r),
+        allow_extra_antecedents=r.allow_extra_antecedents,
     )
 
 

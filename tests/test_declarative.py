@@ -661,16 +661,20 @@ def test_universal_generalisation_discharges_a_variable_subproof():
 
 
 @pytest.mark.parametrize(
-    "antecedents,side_conditions",
+    "antecedents,side_conditions,allow_extra",
     [
-        (["p"], []),                    # a discharge rule with a line antecedent
-        ([], ["equal(p, q)"]),          # a discharge rule with a proviso
+        (["p"], [], False),             # a discharge rule with a line antecedent
+        ([], ["equal(p, q)"], False),   # a discharge rule with a proviso
+        ([], [], True),                 # a discharge rule allowing extra antecedents
     ],
 )
-def test_discharge_rule_cannot_carry_antecedents_or_side_conditions(antecedents, side_conditions):
+def test_discharge_rule_cannot_carry_antecedents_or_side_conditions(
+    antecedents, side_conditions, allow_extra
+):
     # The discharge check consumes the subproof and never evaluates line
-    # antecedents or side-conditions, so accepting them would silently drop a
-    # soundness constraint. build_system refuses the pairing.
+    # antecedents or side-conditions (it cites exactly one subproof opener, so
+    # extra antecedents are ignored too), so accepting any of them would silently
+    # drop a soundness constraint. build_system refuses the pairing.
     spec = SystemSpec(
         name="BadDischarge",
         brackets=brackets(),
@@ -678,11 +682,41 @@ def test_discharge_rule_cannot_carry_antecedents_or_side_conditions(antecedents,
         lines=[statement_line(), assumption_line()],
         rules=[Rule(label="CP", name="cp", antecedents=antecedents, deduction="(p → q)",
                     bindings=[("p", "formula"), ("q", "formula")],
-                    side_conditions=side_conditions, subproof=Subproof(assume="p", derive="q"))],
+                    side_conditions=side_conditions, subproof=Subproof(assume="p", derive="q"),
+                    allow_extra_antecedents=allow_extra)],
     )
     result = build_spec(spec)
     assert "errors" in result
     assert "discharge" in result["errors"][0].lower()
+
+
+def test_extra_antecedents_flag_governs_a_surplus_citation():
+    # With the flag on, a citation may name more lines than the rule has slots:
+    # the surplus is kept as unconstrained `extra_antecedents`. With it off (the
+    # default), the same citation is rejected as over-specified.
+    def spec(allow_extra: bool) -> SystemSpec:
+        return SystemSpec(
+            name="Extra",
+            brackets=brackets(),
+            productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+            lines=[statement_line()],
+            rules=[
+                rule("HYP", "hypothesis", [], "p", [("p", "formula")]),
+                Rule(label="MPX", name="mpx", antecedents=["p", "(p → q)"], deduction="q",
+                     bindings=[("p", "formula"), ("q", "formula")],
+                     allow_extra_antecedents=allow_extra),
+            ],
+        )
+
+    source = "a [HYP]\n(a → b) [HYP]\nc [HYP]\nb [MPX, 1, 2, 3]"
+
+    permitted = build_system(spec(True)).parse(source).proof_lines[-1]
+    assert permitted.valid is True
+    assert (len(permitted.antecedents), len(permitted.extra_antecedents)) == (2, 1)
+
+    refused = build_system(spec(False)).parse(source).proof_lines[-1]
+    assert refused.valid is False
+    assert "exactly 2 antecedent" in refused.invalid_message
 
 
 @pytest.mark.parametrize(

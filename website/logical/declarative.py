@@ -120,6 +120,11 @@ class Rule:
     # The subproof this rule discharges, or None for an ordinary line-antecedent
     # rule. A discharge rule typically has no `antecedents`.
     subproof: Subproof | None = None
+    # Whether a citation may name *more* lines than the rule has antecedent slots.
+    # The surplus lines are recorded as `extra_antecedents` and left unconstrained
+    # (they justify nothing), so this weakens what the citation must prove; off by
+    # default, so a citation must name exactly the rule's antecedents.
+    allow_extra_antecedents: bool = False
 
 
 @dataclass
@@ -312,11 +317,13 @@ def build_system(spec: SystemSpec) -> FormalSystem:
         # that path never evaluates line antecedents or side-conditions, so
         # configuring them would silently drop a soundness constraint. Refuse the
         # pairing rather than accept a rule whose provisos are ignored.
-        if rule.subproof is not None and (rule.antecedents or rule.side_conditions):
+        if rule.subproof is not None and (
+            rule.antecedents or rule.side_conditions or rule.allow_extra_antecedents
+        ):
             raise DeclarativeError(
                 f"Rule {rule.label!r} discharges a subproof, so it cannot also carry "
-                f"antecedents or side-conditions (the discharge check ignores them); "
-                f"remove them."
+                f"antecedents, side-conditions, or extra antecedents (the discharge "
+                f"check ignores them; it cites one subproof opener); remove them."
             )
 
     name = _identifier(spec.name) or "System"
@@ -493,6 +500,7 @@ def _build_rule(rule: Rule, ctx: FormalSystemContext) -> InferenceRule:
         variables=dict(string_variables),
         matching=rule.matching,
         subproof_schema=_build_subproof(rule, rule_ctx),
+        allow_extra_antecedents=rule.allow_extra_antecedents,
     )
     for antecedent in rule.antecedents:
         inference_rule.antecedents.append(build_schema_pattern(antecedent, rule_ctx, "antecedent"))

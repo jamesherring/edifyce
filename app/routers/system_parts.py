@@ -588,6 +588,8 @@ async def _assign_rule(session: AsyncSession, system_id: uuid.UUID, row: RuleRow
         row.deduction = payload.deduction
     if "matching" in fields and payload.matching is not None:
         row.matching = payload.matching
+    if "allow_extra_antecedents" in fields and payload.allow_extra_antecedents is not None:
+        row.allow_extra_antecedents = payload.allow_extra_antecedents
     if "subproof" in fields:
         # None clears the discharge subproof (a plain line-antecedent rule); the
         # Subproof model has already enforced exactly one of assume/fresh.
@@ -642,11 +644,14 @@ async def _assign_rule(session: AsyncSession, system_id: uuid.UUID, row: RuleRow
     # silently drop a soundness constraint. Reject across the final combined
     # state (so adding a subproof to a rule that still has antecedents, or vice
     # versa, is caught). Mirrors the guard in declarative.build_system.
-    if row.subproof_derive is not None and (row.antecedents or row.side_conditions):
+    if row.subproof_derive is not None and (
+        row.antecedents or row.side_conditions or row.allow_extra_antecedents
+    ):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "A discharge rule (with a subproof) cannot also carry antecedents or "
-            "side-conditions; the discharge check ignores them. Remove them.",
+            "A discharge rule (with a subproof) cannot also carry antecedents, "
+            "side-conditions, or extra antecedents; the discharge check ignores "
+            "them (it cites one subproof opener). Remove them.",
         )
 
 
