@@ -36,7 +36,7 @@ class Match:
         # retired get_by_path interpreter, reduced to the direct sub-match lookup
         # it always resolved to. Raises KeyError when the field is absent;
         # FormalSystem.parse treats that as "the line has no such field".
-        return self.sub_matches[self.pattern.pre_format_apply(name)]
+        return self.sub_matches[name]
 
     def replace(self, needle, value, context, allow_variables=False):
         # Return a new match replacing sub matches equivalent to needle with value. Optionally allow variables which
@@ -117,7 +117,7 @@ class Match:
                     part = pattern_used.variable_locations[i]["label"]
                     match_part = self.sub_matches[part].string
 
-                new_string += self.pattern.pre_format_apply(match_part)
+                new_string += match_part
                 i += len(part)
 
             self.string = new_string
@@ -340,8 +340,9 @@ class Match:
         return False
 
     def formatted_string(self):
-        # Apply pattern formatting to the match string
-        return self.pattern.pre_format_apply(self.string)
+        # The match's surface string. Retained as the matching layer's accessor
+        # for it (many callers); the pre-format hook it used to apply is gone.
+        return self.string
 
     def variables(self, context, variables=None):
         # Get the variable leaves in this match structure
@@ -366,11 +367,10 @@ class Match:
             return patterns.StringPattern(
                 name=formatted_string,
                 pattern=formatted_string,
-                pre_format=self.pattern.pre_format,
                 variables={formatted_string: context.string_variables[formatted_string]}
              )
 
-        pattern = patterns.StringPattern(name=self.string, pattern=self.string, pre_format=self.pattern.pre_format)
+        pattern = patterns.StringPattern(name=self.string, pattern=self.string)
 
         # Need to be careful as variables may collide with parts of non-variable strings - which leads to unexpected
         # behaviour.

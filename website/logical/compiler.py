@@ -95,7 +95,7 @@ def build_schema_pattern(text: str, context, name: str):
         if isinstance(candidate, AtomPattern) and candidate.is_constant and candidate.is_member(text):
             return candidate
 
-    pattern = StringPattern(name=name, pattern=text, pre_format=context.pre_format)
+    pattern = StringPattern(name=name, pattern=text)
     pattern.add_variables(context.string_variables)
 
     # Precompute the schema's nested kernel term. A template like a Hilbert axiom
@@ -316,9 +316,6 @@ class FormalSystemContext:
     # Proof context
     proof_context: dict = field(default_factory=dict)
 
-    # Formatting context
-    pre_format: dict = field(default_factory=dict)
-
     # External systems for reference
     system_dict: dict = field(default_factory=dict)
 
@@ -331,7 +328,6 @@ class FormalSystemContext:
         self.variables.update(parent.variables)
         self.definitions.extend(parent.definitions)
         self.proof_context.update(parent.proof_context)
-        self.pre_format.update(parent.pre_format)
         self.system_dict.update(parent.system_dict)
 
         # Don't inherit string_variables or current_object
@@ -352,7 +348,6 @@ class FormalSystemContext:
         new_context.definitions = copy(self.definitions)
         new_context.current_object = self.current_object
         new_context.proof_context = copy(self.proof_context)
-        new_context.pre_format = copy(self.pre_format)
         new_context.system_dict = copy(self.system_dict)
         new_context.error_log = copy(self.error_log)
 
@@ -535,34 +530,6 @@ class AbstractSyntaxTree:
                 self.type = "ProofContext"
                 new_object = current_object.context.logical
 
-            elif stripped.startswith("Format ") and stripped[-1] == ":":
-                # Create a format dictionary
-                self.type = "Format"
-
-                name = stripped[7:-1]
-
-                if not self.valid_variable_name(name):
-                    self.error = f"Invalid variable name: '{name}'."
-                    return
-
-                # Create a new ordered dictionary to keep the format
-                new_object = OrderedDict()
-
-                context.variables[name] = new_object
-
-            elif stripped.startswith("Format "):
-                # Apply a format dictionary
-
-                name = stripped[7:]
-
-                if name not in context.variables:
-                    raise Exception(f"Could not find format dictionary '{name}'.")
-
-                pre_format = context.variables[name]
-
-                # Update context formatting, which is used for patterns, string variables, etc.
-                context.pre_format.update(pre_format)
-
             elif stripped.startswith("Abstract "):
                 # Create an abstract pattern variable
 
@@ -594,9 +561,9 @@ class AbstractSyntaxTree:
                     return
 
                 if spec.endswith("_#"):
-                    atom = AtomPattern(name=name, base=spec[:-2], pre_format=context.pre_format)
+                    atom = AtomPattern(name=name, base=spec[:-2])
                 else:
-                    atom = AtomPattern(name=name, value=spec, pre_format=context.pre_format)
+                    atom = AtomPattern(name=name, value=spec)
 
                 context.variables[name] = atom
                 return
@@ -613,7 +580,7 @@ class AbstractSyntaxTree:
                     return
 
                 # Add to context with placeholder pattern
-                pattern = RegexPattern(name=name, pattern="", pre_format=context.pre_format)
+                pattern = RegexPattern(name=name, pattern="")
                 context.variables[name] = pattern
 
                 new_object = pattern
@@ -630,7 +597,7 @@ class AbstractSyntaxTree:
                     return
 
                 # Create the pattern
-                pattern = StringPattern(name=name, pattern="", pre_format=context.pre_format)
+                pattern = StringPattern(name=name, pattern="")
                 context.variables[name] = pattern
 
                 new_object = pattern
@@ -647,7 +614,7 @@ class AbstractSyntaxTree:
                     return
 
                 # Create the union with no patterns to begin with
-                union = UnionPattern(name=name, patterns=[], pre_format=context.pre_format)
+                union = UnionPattern(name=name, patterns=[])
                 context.variables[name] = union
 
                 new_object = union
@@ -704,7 +671,7 @@ class AbstractSyntaxTree:
                     lower=lower,
                     higher=higher,
                     pattern=current_object,
-                    variables={current_object.pre_format_apply(key): context.string_variables[key] for key in context.string_variables},
+                    variables=dict(context.string_variables),
                     fresh=fresh,
                     where_strings=where_strings,
                     label=label,
@@ -742,8 +709,7 @@ class AbstractSyntaxTree:
                     return
 
                 # Gather variables
-                temp_pattern = StringPattern(name="temporary", pattern="", pre_format=context.pre_format)
-                variables = {temp_pattern.pre_format_apply(var): context.string_variables[var] for var in context.string_variables}
+                variables = dict(context.string_variables)
 
                 # Create the rule
                 new_object = InferenceRule(name=name, variables=variables)
@@ -848,49 +814,6 @@ class AbstractSyntaxTree:
 
                 return
 
-            elif stripped[-8:] == ".format:":
-                # Add format dictionary to pattern
-
-                name = stripped[:-8]
-
-                if name not in context.variables:
-                    raise Exception(f"Could not find pattern '{name}.")
-
-                # Pattern is a StringPattern or UnionPattern instance
-                pattern = context.variables[name]
-
-                # Get the dictionary of variables to add - starting with pre_format context
-                format_dict = copy(context.pre_format)
-                for sub_tree in self.sub_trees:
-
-                    s = sub_tree.line.strip()
-
-                    if len(s) == 0 or s[0] == "#":
-                        continue
-
-                    if s == "clear":
-                        # Clear the format so far
-                        format_dict = {}
-                        continue
-
-                    if s in context.variables and type(context.variables[s]) is dict:
-                        # This is a formatting dictionary
-                        format_dict.update(context.variables[s])
-                        continue
-
-                    index = s.find(":")
-
-                    if index == -1:
-                        raise Exception(f"Could not parse line '{stripped}'.")
-
-                    key = s[:index]
-                    value = s[index + 2:]
-
-                    format_dict[key] = value
-
-                pattern.set_pre_format(format_dict)
-                return
-
             elif self.parent.type == "ProofContext":
                 # Add the item to proof context
 
@@ -929,7 +852,7 @@ class AbstractSyntaxTree:
                     pattern = context.string_variables[stripped]
 
                 else:
-                    pattern = StringPattern(name=current_object.name, pattern=stripped, pre_format=context.pre_format)
+                    pattern = StringPattern(name=current_object.name, pattern=stripped)
 
                     # Add any relevant string variables
                     pattern.add_variables(context.string_variables)
@@ -1116,17 +1039,6 @@ class AbstractSyntaxTree:
                     current_object.matching = value
                     return
 
-                elif stripped == "format:":
-                    # Create a format dictionary
-
-                    new_object = {}
-
-                    if current_object.deduction is not None:
-                        current_object.deduction.pre_format = new_object
-
-                    for ant in current_object.antecedents:
-                        ant.pre_format = new_object
-
                 elif stripped == "condition:":
                     # The legacy condition mini-language was removed from rules.
                     # Error the line rather than silently dropping the proviso
@@ -1241,7 +1153,7 @@ class AbstractSyntaxTree:
                 # compile() as a 500.
                 try:
                     fresh = {
-                        defn.pattern.pre_format_apply(name): _resolve_sort(sort, context_copy)
+                        name: _resolve_sort(sort, context_copy)
                         for name, sort in defn.fresh
                     }
                     kernel_condition = _combine_side_conditions(defn.where_strings, context_copy)

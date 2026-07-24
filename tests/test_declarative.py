@@ -260,6 +260,20 @@ def test_modus_ponens_over_defined_notation(zfc):
     assert all(line["valid"] for line in proof.data()["lines"])
 
 
+def test_a_very_long_formula_still_parses(zfc):
+    # A deeply nested but well-formed formula over 1000 characters. The retired
+    # `pre_format` hook capped every matched string at that length, so a line
+    # this long used to fail with "Limit exceeded in apply pre-format
+    # replacements" — a valid proof reported invalid.
+    formula = "x ∈ y"
+    while len(formula) < 1100:
+        formula = f"({formula} → x ∈ y)"
+    assert len(formula) > 1000
+
+    proof = zfc.parse(f"{formula} [HYP]")
+    assert proof.valid is True
+
+
 # ---------------------------------------------------------------------------
 # Structured accessors: the formula/reference are declared fields on the line
 # type. The interpreted `formula()`/`reference()` accessor mini-language is gone.

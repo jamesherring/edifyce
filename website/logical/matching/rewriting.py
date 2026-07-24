@@ -76,7 +76,7 @@ def iter_bindings(
     substitution (see :func:`iter_joint`).
     """
     tokens = _tokens(pattern)
-    subject = pattern.pre_format_apply(s)
+    subject = s
     start: Binding = {} if binding is None else dict(binding)
 
     def admits(sort: Pattern | None, value: str) -> bool:

@@ -465,21 +465,6 @@ def test_from_match_maps_variable_leaf_to_var():
     assert term.sort.name == "formula"
 
 
-def test_from_match_respects_pre_format():
-    # A user types "->" but the system stores it as "→" (pre-format). The term
-    # renders in the stored/formatted form, matching formatted_string().
-    context = Context()
-    atom = RegexPattern("atom", "^[a-z]$")
-    arrow = StringPattern(
-        "arrow", "p -> q", variables={"p": atom, "q": atom}, pre_format={"->": "→"}
-    )
-
-    match = arrow.match("a -> b", context)
-    term = from_match(match, context)
-
-    assert term.to_string() == match.formatted_string() == "a → b"
-
-
 def test_deeply_nested_terms_do_not_reparse(rich, monkeypatch):
     # The no-reparse guarantee holds for a deep tree, not just a shallow one.
     _system, context, formula = rich
