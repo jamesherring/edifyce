@@ -92,7 +92,7 @@ from app.schemas import (
     SortCreate,
     SortUpdate,
 )
-from website.logical.declarative import registered_definition_forms
+from website.logical.declarative import registered_definition_layering
 
 router = APIRouter(prefix="/formal-systems/{system_id}", tags=["formal-systems"])
 
@@ -658,18 +658,29 @@ async def _guard_definition_reorder(
         # Not a valid permutation — let _apply_order raise the canonical 400.
         return
 
+    # Layering is tracked by position and mapped back to the row id at that
+    # position, so a definition is identified by *which row* it is — not by its
+    # defined form (two definitions can share one) nor by structural identity
+    # (equivalent definitions de-duplicate). `system.definitions` and
+    # `spec.definitions` are both in stored order, so index i lines up.
     spec = system_to_spec(system)
-    survivors_before = registered_definition_forms(spec)
+    layered_before = registered_definition_layering(spec)
+    live_before = {stored[i] for i, ok in enumerate(layered_before) if ok}
 
     index_of = {row_id: i for i, row_id in enumerate(stored)}
     proposed = system_to_spec(system)
     proposed.definitions = [proposed.definitions[index_of[i]] for i in ids]
-    survivors_after = registered_definition_forms(proposed)
+    layered_after = registered_definition_layering(proposed)
+    live_after = {ids[i] for i, ok in enumerate(layered_after) if ok}
 
-    lost = survivors_before - survivors_after
+    lost = live_before - live_after
     if not lost:
         return
-    names = [defn.name or defn.higher for defn in spec.definitions if defn.higher in lost]
+    names = [
+        spec.definitions[i].name or spec.definitions[i].higher
+        for i, row_id in enumerate(stored)
+        if row_id in lost
+    ]
     listed = ", ".join(f"'{name}'" for name in names)
     raise HTTPException(
         status.HTTP_400_BAD_REQUEST,

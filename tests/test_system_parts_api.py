@@ -1132,6 +1132,30 @@ def test_definition_reorder_may_fix_an_already_broken_order(client):
     assert [d["name"] for d in ok.json()] == ["sub", "sup"]
 
 
+def test_definition_reorder_guard_is_keyed_by_row_not_by_defined_form(client):
+    # `base` and `dup` both define `Q`; `dup` builds on `S`. Moving `dup` ahead of
+    # `S` drops `dup` even though `base` keeps `Q` recognised — the guard tracks
+    # each definition by row, so it isn't fooled by the shared defined form.
+    _login(client, "ada@example.com")
+    sid = _defs_grammar(client)
+    s = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "f", "name": "s", "higher": "S", "lower": "a",
+    })
+    base = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "f", "name": "base", "higher": "Q", "lower": "a",
+    })
+    dup = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "f", "name": "dup", "higher": "Q", "lower": "S",
+    })
+
+    rejected = client.put(
+        f"/api/formal-systems/{sid}/definitions/order",
+        json={"ids": [dup["id"], s["id"], base["id"]]},
+    )
+    assert rejected.status_code == 400
+    assert "dup" in rejected.json()["detail"]
+
+
 # ---------------------------------------------------------------------------
 # Owner scoping
 # ---------------------------------------------------------------------------

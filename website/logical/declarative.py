@@ -367,8 +367,12 @@ def build_system(spec: SystemSpec) -> FormalSystem:
     # definitions against that (now complete) context -- the order compile()
     # uses so `add_definition` can match the lower form against the productions.
     system.context.variables.update(ctx.variables)
-    for defn in spec.definitions:
-        _finalise_definition(defn, ctx, system)
+    # Per position, whether the definition layered — kept in spec order so a
+    # caller can map it back to a specific definition even when two share a
+    # defined form (see registered_definition_layering).
+    system.definition_layering = [
+        _finalise_definition(defn, ctx, system) for defn in spec.definitions
+    ]
 
     # 9. Parse each rule's provisos now that definitions have resolved, so a
     # proviso's term argument may use defined notation (e.g. `equal(t, ∅)`). Each
@@ -458,7 +462,11 @@ def _build_rule(rule: Rule, ctx: FormalSystemContext) -> InferenceRule:
     return inference_rule
 
 
-def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: FormalSystem) -> None:
+def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: FormalSystem) -> bool:
+    """Register ``defn`` against the now-complete grammar, returning whether it
+    layered — ``True`` when its defining (lower) form was recognised (given the
+    definitions already in context), ``False`` when it matched nothing and so was
+    dropped. A recognised form is added to the proof context."""
     union = ctx.variables[defn.sort]
     context_copy = copy(system.context)
     context_copy.string_variables.update(_binding_patterns(defn.bindings, ctx))
@@ -487,6 +495,10 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
     )
     if result is not None:
         system.context.definitions.add(result)
+    # Non-None covers both a freshly added definition and one that de-duplicated
+    # into an existing equivalent — either way its form was recognised, so the
+    # definition layers. None means the lower form matched nothing.
+    return result is not None
 
 
 # ---------------------------------------------------------------------------
@@ -518,35 +530,29 @@ def build_spec(spec: SystemSpec, system_dict: dict | None = None) -> dict:
         return {"errors": [str(exc)]}
 
 
-def registered_definition_forms(spec: SystemSpec) -> set[str]:
-    """The higher (defined) forms of the definitions in ``spec`` that actually
-    *layer* when it is built in its given order.
+def registered_definition_layering(spec: SystemSpec) -> list[bool]:
+    """Per definition, in ``spec.definitions`` order, whether it *layers*.
 
     Definitions layer positionally: a definition may build on the ones before it,
     so its defining (lower) form is parsed against the grammar those earlier
     definitions have already extended. A definition placed **ahead** of one whose
     notation its lower form uses does not raise -- its lower form simply matches
-    nothing, and ``add_definition`` drops it silently (returns ``None``). This
-    exposes the set that survived, keyed by the raw higher form each definition
-    was declared with, so a caller can tell whether a reordering would drop one.
+    nothing, and it is dropped silently. The returned flag is ``True`` for a
+    definition that was recognised, ``False`` for one that was dropped.
 
-    Returns an empty set when the spec does not build at all: a systemic error
+    Keyed by **position**, not by defined form, so a caller can tell whether a
+    *specific* definition would be dropped even when two definitions share a
+    higher form (a set of forms would collapse them) or are structurally
+    equivalent up to renaming (which ``add_definition`` de-duplicates).
+
+    Returns all-``False`` when the spec does not build at all: a systemic error
     (a malformed production, say) is unrelated to definition order and is the
     caller's concern to surface elsewhere, not something this predicate ranks.
     """
     result = build_spec(spec)
     if "errors" in result:
-        return set()
-    system = result["system"]
-    declared = {defn.higher for defn in spec.definitions}
-    # A built definition keeps the exact higher text it was declared with
-    # (`matching.Definition.higher.pattern`); intersect with this spec's own
-    # declared forms so nothing a future inheritance path might inject counts.
-    return {
-        defn.higher.pattern
-        for defn in system.context.definitions
-        if defn.higher.pattern in declared
-    }
+        return [False] * len(spec.definitions)
+    return result["system"].definition_layering
 
 
 def _uses_parens(spec: SystemSpec) -> bool:
