@@ -353,7 +353,7 @@ class Proof:
 
         for ir in self.formal_system.inference_rules:
             # Compare against the ir label and formatted label
-            if ref == ir.label or ref == self.formal_system.format_string(ir.label):
+            if ref == ir.label:
                 return InferenceReference(inference_rule=ir, key=ref)
 
         # A zero-premise proved/imported theorem cited by its label alone. The

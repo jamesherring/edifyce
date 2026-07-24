@@ -10,52 +10,18 @@ from . import definitions, matches
 class Pattern:
     """Parent class for Pattern objects StringPattern and UnionPattern."""
 
-    def __init__(self, name, respect_brackets=None, pre_format=None):
+    def __init__(self, name, respect_brackets=None):
 
         self.name = name
 
         # Note any bracket pairs that should be respected
         self.respect_brackets = respect_brackets
 
-        # Any formatting to be removed from patterns
-        self.pre_format = pre_format
-
         # Default certainty of 0
         self.certainty = 0
 
         # Arbitrary id for use in URLs
         self.url_id = "".join(random.SystemRandom().choice("0123456789abcdef") for _ in range(8))
-
-    def pre_format_apply(self, s):
-        # Remove formatting in the given string before matching
-
-        if type(s) is not str:
-            # Can't do much about non-strings
-            return s
-
-        if self.pre_format is None:
-            # No formatting
-            return s
-
-        # Apply the first entry until it no longer applies. After any change - go back to the first entry.
-        def make_edits(t, pre_format, depth=0):
-            # Use this recursive function to make edits
-
-            if depth > 1000 or len(t) > 1000:
-                # This is getting out of hand
-                raise Exception(f"Limit exceeded in apply pre-format replacements for {t}")
-
-            for pattern, replacement in pre_format.items():
-                new_t = re.sub(pattern, replacement, t)
-
-                if not t == new_t:
-                    # Go back to the start using this new string
-                    return make_edits(new_t, pre_format, depth + 1)
-
-            # No changes to make
-            return t
-
-        return make_edits(s, self.pre_format)
 
     def check_brackets(self, s):
         # Return a boolean indicating if the string s respects brackets
@@ -204,9 +170,9 @@ class Pattern:
 class RegexPattern(Pattern):
     """RegEx pattern matching."""
 
-    def __init__(self, name, pattern, pre_format=None):
+    def __init__(self, name, pattern):
 
-        Pattern.__init__(self, name, pre_format=pre_format)
+        Pattern.__init__(self, name)
 
         self.pattern = pattern
 
@@ -215,9 +181,7 @@ class RegexPattern(Pattern):
     def match(self, s, context, debug=None):
         # Try to match a string s with the pattern
 
-        formatted = self.pre_format_apply(s)
-
-        for re_match in re.finditer(self.pattern, formatted, overlapped=True):
+        for re_match in re.finditer(self.pattern, s, overlapped=True):
 
             if re_match is None:
                 # No match
@@ -279,9 +243,9 @@ class AtomPattern(Pattern):
     for the kernel's structural side-conditions (occurrence, disjoint-leaves).
     """
 
-    def __init__(self, name, value: str | None = None, base: str | None = None, pre_format=None) -> None:
+    def __init__(self, name, value: str | None = None, base: str | None = None) -> None:
 
-        Pattern.__init__(self, name, pre_format=pre_format)
+        Pattern.__init__(self, name)
 
         # Exactly one of `value` (constant) or `base` (indexed family) is set.
         if (value is None) == (base is None):
@@ -313,7 +277,7 @@ class AtomPattern(Pattern):
 
     def match(self, s, context, debug=None) -> "matches.Match | None":
         # Match a whole token against this atom. Leaf match, no sub-matches.
-        token = self.pre_format_apply(s)
+        token = s
 
         if not self.is_member(token):
             return None
@@ -349,12 +313,12 @@ class AtomPattern(Pattern):
 class StringPattern(Pattern):
     """A string pattern created in compiling lattice"""
 
-    def __init__(self, name, pattern, variables=None, respect_brackets=None, pre_format=None):
+    def __init__(self, name, pattern, variables=None, respect_brackets=None):
 
-        Pattern.__init__(self, name, respect_brackets, pre_format)
+        Pattern.__init__(self, name, respect_brackets)
 
         # The pattern string
-        self.pattern = self.pre_format_apply(pattern)
+        self.pattern = pattern
 
         # An optional precomputed nested kernel Term for a rule-schema template,
         # set by the compiler (compose_schema_term) and consumed by the checker;
@@ -445,19 +409,6 @@ class StringPattern(Pattern):
                 print(spaces, "Attempting to match", s, "in", self.name, ", with pattern:", self.pattern)
 
             next_debug = debug + 1
-
-        if pattern_offset == 0:
-
-            formatted = self.pre_format_apply(s)
-            if not s == formatted:
-                # s has been reformatted
-                m = self.match(formatted, context, pattern_offset, non_variable_mapping, debug)
-
-                if m is not None:
-                    # Correct the matched string to pre-formatted.
-                    m.string = s
-
-                return m
 
         string_variables = context.string_variables
 
@@ -810,8 +761,6 @@ class StringPattern(Pattern):
 
         self.display_variables[name] = pattern
 
-        # Format the variable name
-        name = self.pre_format_apply(name)
         self.variables[name] = pattern
 
         # Get the variable location dict
@@ -884,7 +833,7 @@ class StringPattern(Pattern):
         # Add variables using a dictionary
 
         for name, var in variable_dict.items():
-            if self.pre_format_apply(name) in self.pattern:
+            if name in self.pattern:
                 self.add_variable(name, var)
 
     def reset_variables(self):
@@ -905,18 +854,10 @@ class StringPattern(Pattern):
         # Reset the pattern string
 
         self.display_pattern = pattern
-        self.pattern = self.pre_format_apply(pattern)
+        self.pattern = pattern
 
         # Reset variables
         self.reset_variables()
-
-    def set_pre_format(self, pre_format):
-        # Set the pre-format dictionary.
-
-        self.pre_format = pre_format
-
-        # Reset the pattern and variables
-        self.set_pattern(self.display_pattern)
 
     def reverse_variables(self):
         # Get the reverse dictionary for variables
@@ -981,9 +922,6 @@ class StringPattern(Pattern):
         if not self.name == other.name:
             return False
 
-        if not self.pre_format == other.pre_format:
-            return False
-
         if not self.respect_brackets == other.respect_brackets:
             return False
 
@@ -1019,9 +957,9 @@ class StringPattern(Pattern):
 class UnionPattern(Pattern):
     """A union of patterns."""
 
-    def __init__(self, name, patterns, respect_brackets=None, pre_format=None, inherits=None):
+    def __init__(self, name, patterns, respect_brackets=None, inherits=None):
 
-        Pattern.__init__(self, name, respect_brackets, pre_format)
+        Pattern.__init__(self, name, respect_brackets)
 
         # The list of patterns
         self.patterns = patterns
@@ -1040,16 +978,6 @@ class UnionPattern(Pattern):
             spaces = debug * 4 * " "
             print(spaces, "Attempting to match", s, " in ", self.name, ", a UnionPattern.")
             next_debug = debug + 1
-
-        formatted = self.pre_format_apply(s)
-        if not s == formatted:
-            # s has been reformatted
-            m = self.match(formatted, context, debug)
-
-            if m is not None:
-                m.string = s
-
-            return m
 
         # Get the nested options
         nested_options = self.nested_options(context, path_dict=True)
@@ -1249,10 +1177,6 @@ class UnionPattern(Pattern):
 
         return found
 
-    def set_pre_format(self, pre_format):
-        # Set the pre-format dictionary.
-        self.pre_format = pre_format
-
     def inherits_from(self, other, context):
         # Check if this pattern inherits from another
 
@@ -1284,9 +1208,6 @@ class UnionPattern(Pattern):
             return False
 
         if not self.name == other.name:
-            return False
-
-        if not self.pre_format == other.pre_format:
             return False
 
         if not self.respect_brackets == other.respect_brackets:

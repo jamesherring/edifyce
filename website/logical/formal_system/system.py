@@ -301,10 +301,5 @@ class FormalSystem:
         # Otherwise ok
         return True
 
-    def format_string(self, s):
-        # Format a string s
-        pattern = StringPattern(name="temporary", pattern="", pre_format=self.build_context.pre_format)
-        return pattern.pre_format_apply(s)
-
     def __str__(self):
         return self.name

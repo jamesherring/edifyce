@@ -40,7 +40,6 @@ class Definition:
             name="Definition (higher)",
             pattern=higher,
             variables=copy(context.string_variables),
-            pre_format=self.pattern.pre_format
         )
 
         self.variables = copy(self.higher.variables)

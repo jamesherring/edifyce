@@ -57,13 +57,21 @@ def test_string_pattern_no_match(word, context):
     assert pattern.match("while hello:", context) is None
 
 
-def test_string_pattern_pre_format(context):
-    pattern = StringPattern(name="arrow", pattern="x -> y", pre_format={"->": "→"})
-    assert pattern.pre_format_apply("a -> b") == "a → b"
+def test_long_strings_match_without_a_length_limit(context):
+    # The retired `pre_format` hook ran every candidate string through a rewriter
+    # that raised above 1000 characters. Since the engine always passed it an
+    # empty (but non-None) dictionary, that limit applied to *every* match, so a
+    # long-but-legitimate formula was rejected with an incomprehensible error.
+    # Matching must have no length ceiling.
+    long_word = "a" * 5000
+    word = RegexPattern(name="word", pattern="^[a-z]+$")
+    assert word.match(long_word, context) is not None
 
-    match = pattern.match("x → y", context)
-    assert match is not None
-    assert match.string == "x → y"
+    pattern = StringPattern(name="wrap", pattern="(s)", variables={"s": word})
+    assert pattern.match(f"({long_word})", context) is not None
+
+    union = UnionPattern(name="either", patterns=[word])
+    assert union.match(long_word, context) is not None
 
 
 # ---------------------------------------------------------------------------

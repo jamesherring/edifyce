@@ -343,7 +343,7 @@ def build_system(spec: SystemSpec) -> FormalSystem:
     for prod in spec.productions:
         if prod.regex is not None:
             ctx.variables[prod.name] = register(
-                RegexPattern(name=prod.name, pattern=_anchor(prod.regex), pre_format=ctx.pre_format)
+                RegexPattern(name=prod.name, pattern=_anchor(prod.regex))
             )
         elif prod.atom_value is not None or prod.atom_base is not None:
             # An atom constant (`value`, one literal token) or indexed family
@@ -354,7 +354,6 @@ def build_system(spec: SystemSpec) -> FormalSystem:
                 name=prod.name,
                 value=prod.atom_value,
                 base=prod.atom_base,
-                pre_format=ctx.pre_format,
             )
     # (Inline line parts are registered per-line in step 5, immediately before
     # the line that uses them, so two lines may reuse a part name with different
@@ -363,14 +362,14 @@ def build_system(spec: SystemSpec) -> FormalSystem:
     # 2. Forward-declare every sort as an empty union (order independence).
     for sort in spec.sort_names():
         ctx.variables[sort] = register(
-            UnionPattern(name=sort, patterns=[], pre_format=ctx.pre_format)
+            UnionPattern(name=sort, patterns=[])
         )
 
     # 3. Composite productions.
     for prod in spec.productions:
         if prod.template is None:
             continue
-        pattern = StringPattern(name=prod.name, pattern=prod.template, pre_format=ctx.pre_format)
+        pattern = StringPattern(name=prod.name, pattern=prod.template)
         pattern.add_variables(_binding_patterns(prod.bindings, ctx))
         ctx.variables[prod.name] = register(pattern)
 
@@ -389,8 +388,7 @@ def build_system(spec: SystemSpec) -> FormalSystem:
         for line in spec.lines:
             for part in line.parts:
                 ctx.variables[part.name] = register(
-                    RegexPattern(name=part.name, pattern=_anchor(part.regex),
-                                 pre_format=ctx.pre_format)
+                    RegexPattern(name=part.name, pattern=_anchor(part.regex))
                 )
             _build_line(line, sorts, ctx, system, register)
 
@@ -455,7 +453,7 @@ def _build_line(line: LineSpec, sorts: set[str], ctx: FormalSystemContext,
     # Each line gets a distinctly-named pattern (a single line named "statement"
     # keeps the historical "statement_pattern" name).
     pattern_name = f"{_identifier(line.name)}_pattern"
-    pattern = StringPattern(name=pattern_name, pattern=template, pre_format=ctx.pre_format)
+    pattern = StringPattern(name=pattern_name, pattern=template)
     pattern.add_variables(_binding_patterns([(var, ph) for ph, var in placeholders], ctx))
     ctx.variables[pattern_name] = register(pattern)
 
@@ -474,7 +472,7 @@ def _build_line(line: LineSpec, sorts: set[str], ctx: FormalSystemContext,
 def _build_axiom(axiom: Rule, ctx: FormalSystemContext, system: FormalSystem,
                  register: Callable[[Pattern], Pattern]) -> None:
     pattern_name = f"{_identifier(axiom.name)}_axiom"
-    pattern = StringPattern(name=pattern_name, pattern=axiom.deduction, pre_format=ctx.pre_format)
+    pattern = StringPattern(name=pattern_name, pattern=axiom.deduction)
     pattern.add_variables(_binding_patterns(axiom.bindings, ctx))
     ctx.variables[pattern_name] = register(pattern)
 
