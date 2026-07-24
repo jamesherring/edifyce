@@ -295,6 +295,15 @@ class RuleRow(Base):
     # the default) or "string" (associative matching for a string-rewriting
     # rule). Mirrors InferenceRule.matching / declarative Rule.matching.
     matching: Mapped[str] = mapped_column(String(16), server_default=text("'structural'"))
+    # The subproof a discharge rule consumes (→I, RAA, ∀I), as three rule-schema
+    # source lines. `subproof_derive` (the conclusion) is set iff the rule is a
+    # discharge rule; the subproof is opened by exactly one of `subproof_assume`
+    # (a hypothesis) or `subproof_fresh` (an eigenvariable). All NULL for an
+    # ordinary line-antecedent rule. Mirrors declarative Rule.subproof /
+    # SubproofSchema.
+    subproof_derive: Mapped[str | None] = mapped_column(String(512))
+    subproof_assume: Mapped[str | None] = mapped_column(String(512))
+    subproof_fresh: Mapped[str | None] = mapped_column(String(512))
 
     system: Mapped[FormalSystem] = relationship(back_populates="rules")
     antecedents: Mapped[list[RuleAntecedentRow]] = relationship(

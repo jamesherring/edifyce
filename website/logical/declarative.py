@@ -39,7 +39,7 @@ from .compiler import (
     _combine_side_conditions,
     build_schema_pattern,
 )
-from .formal_system import FormalSystem, InferenceRule, LineType
+from .formal_system import FormalSystem, InferenceRule, LineType, SubproofSchema
 from .formal_system.side_condition_syntax import parse_side_condition
 from .matching import AtomPattern, MatchSet, Pattern, RegexPattern, StringPattern, UnionPattern
 
@@ -84,6 +84,21 @@ class Definition:
 
 
 @dataclass
+class Subproof:
+    """The subproof a discharge rule consumes as a unit (→I, RAA, ∀I).
+
+    A discharge rule cites no lines: it consumes a whole subproof. ``derive`` is
+    the pattern its final line must match; the subproof is opened by exactly one
+    of ``assume`` (a hypothesis pattern, an *assumption* subproof) or ``fresh``
+    (an eigenvariable pattern, a *variable* subproof). All three are rule-schema
+    source lines, parsed against the rule's metavariables like its deduction.
+    """
+    derive: str
+    assume: str | None = None
+    fresh: str | None = None
+
+
+@dataclass
 class Rule:
     label: str
     name: str
@@ -98,6 +113,9 @@ class Rule:
     # the default) or "string" (associative matching, for a string-rewriting
     # rule such as MIU's — see website.logical.matching.rewriting).
     matching: str = "structural"
+    # The subproof this rule discharges, or None for an ordinary line-antecedent
+    # rule. A discharge rule typically has no `antecedents`.
+    subproof: Subproof | None = None
 
 
 @dataclass
@@ -286,6 +304,16 @@ def build_system(spec: SystemSpec) -> FormalSystem:
                 f"Rule {rule.label!r} uses string matching, which cannot enforce "
                 f"side-conditions; drop them or switch it to structural matching."
             )
+        # A discharge rule is checked by consuming its subproof (check_discharge);
+        # that path never evaluates line antecedents or side-conditions, so
+        # configuring them would silently drop a soundness constraint. Refuse the
+        # pairing rather than accept a rule whose provisos are ignored.
+        if rule.subproof is not None and (rule.antecedents or rule.side_conditions):
+            raise DeclarativeError(
+                f"Rule {rule.label!r} discharges a subproof, so it cannot also carry "
+                f"antecedents or side-conditions (the discharge check ignores them); "
+                f"remove them."
+            )
 
     name = _identifier(spec.name) or "System"
     ctx = FormalSystemContext()
@@ -452,6 +480,7 @@ def _build_rule(rule: Rule, ctx: FormalSystemContext) -> InferenceRule:
         label=rule.label,
         variables=dict(string_variables),
         matching=rule.matching,
+        subproof_schema=_build_subproof(rule, rule_ctx),
     )
     for antecedent in rule.antecedents:
         inference_rule.antecedents.append(build_schema_pattern(antecedent, rule_ctx, "antecedent"))
@@ -460,6 +489,28 @@ def _build_rule(rule: Rule, ctx: FormalSystemContext) -> InferenceRule:
     # proviso's term argument may use defined notation. Here we only collect them.
     inference_rule.pending_side_conditions = list(rule.side_conditions)
     return inference_rule
+
+
+def _build_subproof(rule: Rule, rule_ctx: FormalSystemContext) -> SubproofSchema | None:
+    # A discharge rule consumes a subproof opened by exactly one of a hypothesis
+    # (`assume`) or a fresh variable (`fresh`); its final line must match
+    # `derive`. Each is a rule-schema line parsed against the rule's variables,
+    # exactly like the deduction.
+    subproof = rule.subproof
+    if subproof is None:
+        return None
+    if (subproof.assume is None) == (subproof.fresh is None):
+        raise DeclarativeError(
+            f"Rule {rule.label!r} subproof must be opened by exactly one of "
+            f"'assume' or 'fresh'."
+        )
+    return SubproofSchema(
+        conclusion=build_schema_pattern(subproof.derive, rule_ctx, "subproof"),
+        assumption=(build_schema_pattern(subproof.assume, rule_ctx, "subproof")
+                    if subproof.assume is not None else None),
+        fresh=(build_schema_pattern(subproof.fresh, rule_ctx, "subproof")
+               if subproof.fresh is not None else None),
+    )
 
 
 def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: FormalSystem) -> bool:

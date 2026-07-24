@@ -19,6 +19,7 @@ from tests.spec_helpers import (
     biconditional_prod,
     brackets,
     conjunction_prod,
+    cp_rule,
     defn,
     disjunction_prod,
     equality_prod,
@@ -42,6 +43,8 @@ from website.logical.declarative import (
     DeclarativeError,
     LinePart,
     LineSpec,
+    Rule,
+    Subproof,
     SystemSpec,
     build_spec,
     build_system,
@@ -562,3 +565,142 @@ def test_invalid_line_scope_is_rejected():
     result = build_spec(spec)
     assert "errors" in result
     assert "scope" in result["errors"][0].lower()
+
+
+# ---------------------------------------------------------------------------
+# Discharge rules: a rule consumes a subproof rather than citing lines.
+# ---------------------------------------------------------------------------
+
+
+def cp_spec() -> SystemSpec:
+    # Propositional fragment with an `assume` scope line, reiteration, and a
+    # conditional-proof discharge rule (→I).
+    return SystemSpec(
+        name="CP",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        lines=[statement_line(), assumption_line()],
+        rules=[reiteration_rule(), cp_rule()],
+    )
+
+
+def scoped_fol_spec() -> SystemSpec:
+    # A first-order fragment with both discharge rules: CP (→I, an assumption
+    # subproof) and UG (∀I, a fresh-variable subproof). `setvar` is a leaf sort
+    # whose member name differs from the sort (the binding-sort gotcha).
+    return SystemSpec(
+        name="ScopedFOL",
+        brackets=brackets(),
+        productions=[
+            regex_prod("setvar", "setvar_atom", "[a-z][a-z0-9]*"),
+            template_prod("formula", "membership", "x ∈ y", [("x", "setvar"), ("y", "setvar")]),
+            implication_prod(),
+            template_prod("formula", "universal", "∀x p", [("x", "setvar"), ("p", "formula")]),
+        ],
+        lines=[
+            statement_line(),
+            assumption_line(),
+            LineSpec(name="introduce", shape="let <setvar>", logical_sort="setvar", scope="variable"),
+        ],
+        rules=[
+            reiteration_rule(),
+            cp_rule(),
+            Rule(
+                label="UG", name="universal generalisation", antecedents=[], deduction="∀x p",
+                bindings=[("x", "setvar"), ("p", "formula")],
+                subproof=Subproof(fresh="x", derive="p"),
+            ),
+        ],
+    )
+
+
+def test_discharge_rule_builds_a_subproof_schema():
+    system = build_system(cp_spec())
+    cp = {r.label: r for r in system.inference_rules}["CP"]
+    assert cp.is_discharge is True
+    assert cp.subproof_schema.kind == "assumption"
+    # A plain rule is not a discharge rule.
+    assert {r.label: r for r in system.inference_rules}["R"].is_discharge is False
+
+
+def test_conditional_proof_discharges_an_assumption_subproof():
+    system = build_system(cp_spec())
+    # →I: assume a, reiterate it, discharge to (a → a).
+    proof = system.parse("assume a\n    a [R, 1]\n(a → a) [CP, 1]")
+    assert proof.valid is True, [(l.display, l.valid) for l in proof.proof_lines]
+    # Discharging to a conclusion that was never derived is rejected.
+    bogus = system.parse("assume a\n    a [R, 1]\n(a → b) [CP, 1]")
+    assert bogus.proof_lines[2].valid is False
+
+
+def test_universal_generalisation_discharges_a_variable_subproof():
+    system = build_system(scoped_fol_spec())
+    ug = {r.label: r for r in system.inference_rules}["UG"]
+    assert ug.subproof_schema.kind == "variable"
+
+    # ∀x (x∈c → x∈c): introduce an arbitrary x, prove the implication under it,
+    # then generalise. x is genuinely fresh, so ∀I is sound.
+    sound = system.parse(
+        "let x\n"
+        "    assume x ∈ c\n"
+        "        x ∈ c [R, 2]\n"
+        "    (x ∈ c → x ∈ c) [CP, 2]\n"
+        "∀x (x ∈ c → x ∈ c) [UG, 1]"
+    )
+    assert sound.valid is True, [(l.display, l.valid) for l in sound.proof_lines]
+
+    # Freshness violation: x occurs in the enclosing open hypothesis, so
+    # generalising over it is unsound — the fresh-variable subproof rejects it.
+    unsound = system.parse(
+        "assume x ∈ c\n"
+        "    let x\n"
+        "        x ∈ c [R, 1]\n"
+        "    ∀x x ∈ c [UG, 2]"
+    )
+    assert unsound.proof_lines[3].valid is False
+
+
+@pytest.mark.parametrize(
+    "antecedents,side_conditions",
+    [
+        (["p"], []),                    # a discharge rule with a line antecedent
+        ([], ["equal(p, q)"]),          # a discharge rule with a proviso
+    ],
+)
+def test_discharge_rule_cannot_carry_antecedents_or_side_conditions(antecedents, side_conditions):
+    # The discharge check consumes the subproof and never evaluates line
+    # antecedents or side-conditions, so accepting them would silently drop a
+    # soundness constraint. build_system refuses the pairing.
+    spec = SystemSpec(
+        name="BadDischarge",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        lines=[statement_line(), assumption_line()],
+        rules=[Rule(label="CP", name="cp", antecedents=antecedents, deduction="(p → q)",
+                    bindings=[("p", "formula"), ("q", "formula")],
+                    side_conditions=side_conditions, subproof=Subproof(assume="p", derive="q"))],
+    )
+    result = build_spec(spec)
+    assert "errors" in result
+    assert "discharge" in result["errors"][0].lower()
+
+
+@pytest.mark.parametrize(
+    "subproof",
+    [
+        Subproof(derive="q", assume="p", fresh="x"),  # both openers
+        Subproof(derive="q"),                          # neither opener
+    ],
+)
+def test_subproof_requires_exactly_one_opener(subproof):
+    spec = SystemSpec(
+        name="BadSubproof",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        lines=[statement_line(), assumption_line()],
+        rules=[Rule(label="CP", name="cp", antecedents=[], deduction="(p → q)",
+                    bindings=[("p", "formula"), ("q", "formula")], subproof=subproof)],
+    )
+    result = build_spec(spec)
+    assert "errors" in result
+    assert "exactly one" in result["errors"][0].lower()

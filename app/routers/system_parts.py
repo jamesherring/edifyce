@@ -584,6 +584,13 @@ async def _assign_rule(session: AsyncSession, system_id: uuid.UUID, row: RuleRow
         row.deduction = payload.deduction
     if "matching" in fields and payload.matching is not None:
         row.matching = payload.matching
+    if "subproof" in fields:
+        # None clears the discharge subproof (a plain line-antecedent rule); the
+        # Subproof model has already enforced exactly one of assume/fresh.
+        sub = payload.subproof
+        row.subproof_derive = sub.derive if sub is not None else None
+        row.subproof_assume = sub.assume if sub is not None else None
+        row.subproof_fresh = sub.fresh if sub is not None else None
     if "antecedents" in fields and payload.antecedents is not None:
         row.antecedents = [
             RuleAntecedentRow(position=i, pattern=pattern) for i, pattern in enumerate(payload.antecedents)
@@ -624,6 +631,18 @@ async def _assign_rule(session: AsyncSession, system_id: uuid.UUID, row: RuleRow
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "String-rewriting rules cannot carry side-conditions; drop them or "
             "switch the rule to structural matching.",
+        )
+
+    # A discharge rule is checked by consuming its subproof; that path never
+    # evaluates line antecedents or side-conditions, so keeping either would
+    # silently drop a soundness constraint. Reject across the final combined
+    # state (so adding a subproof to a rule that still has antecedents, or vice
+    # versa, is caught). Mirrors the guard in declarative.build_system.
+    if row.subproof_derive is not None and (row.antecedents or row.side_conditions):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "A discharge rule (with a subproof) cannot also carry antecedents or "
+            "side-conditions; the discharge check ignores them. Remove them.",
         )
 
 

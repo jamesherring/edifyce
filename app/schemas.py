@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 T = TypeVar("T")
 
@@ -142,6 +142,25 @@ class Axiom(BaseModel):
     bindings: list[Binding] = Field(default_factory=list)
 
 
+class Subproof(BaseModel):
+    """The subproof a discharge rule consumes (→I, RAA, ∀I).
+
+    ``derive`` is the pattern the subproof's final line must match; it is opened
+    by exactly one of ``assume`` (a hypothesis) or ``fresh`` (an eigenvariable).
+    Mirrors declarative ``Subproof`` / engine ``SubproofSchema``.
+    """
+
+    derive: _Text512
+    assume: _Text512 | None = None
+    fresh: _Text512 | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_opener(self) -> "Subproof":
+        if (self.assume is None) == (self.fresh is None):
+            raise ValueError("A subproof must be opened by exactly one of 'assume' or 'fresh'.")
+        return self
+
+
 class Rule(BaseModel):
     id: uuid.UUID
     label: str
@@ -152,6 +171,8 @@ class Rule(BaseModel):
     # Soundness provisos, one kernel-vocabulary line each (implicit conjunction).
     side_conditions: list[str] = Field(default_factory=list)
     matching: RuleMatching = "structural"
+    # The subproof a discharge rule consumes, or None for a line-antecedent rule.
+    subproof: Subproof | None = None
 
 
 class SystemOwner(BaseModel):
@@ -333,6 +354,7 @@ class RuleCreate(BaseModel):
     bindings: list[Binding] = Field(default_factory=list)
     side_conditions: list[_Text512] = Field(default_factory=list)
     matching: RuleMatching = "structural"
+    subproof: Subproof | None = None
 
 
 class RuleUpdate(BaseModel):
@@ -343,6 +365,7 @@ class RuleUpdate(BaseModel):
     bindings: list[Binding] | None = None
     side_conditions: list[_Text512] | None = None
     matching: RuleMatching | None = None
+    subproof: Subproof | None = None
 
 
 class ReorderRequest(BaseModel):
