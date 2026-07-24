@@ -124,6 +124,12 @@ class Rule:
     # The surplus lines are recorded as `extra_antecedents` and left unconstrained
     # (they justify nothing), so this weakens what the citation must prove; off by
     # default, so a citation must name exactly the rule's antecedents.
+    #
+    # Inert on a discharge rule: that path cites exactly one subproof opener and
+    # never consults this flag. Unlike antecedents/side-conditions (which the
+    # discharge check also ignores, but whose loss would drop a *soundness*
+    # constraint, hence the guard in build_system), an ignored allowance can only
+    # ever be stricter, so the pairing is permitted rather than rejected.
     allow_extra_antecedents: bool = False
 
 
@@ -317,13 +323,11 @@ def build_system(spec: SystemSpec) -> FormalSystem:
         # that path never evaluates line antecedents or side-conditions, so
         # configuring them would silently drop a soundness constraint. Refuse the
         # pairing rather than accept a rule whose provisos are ignored.
-        if rule.subproof is not None and (
-            rule.antecedents or rule.side_conditions or rule.allow_extra_antecedents
-        ):
+        if rule.subproof is not None and (rule.antecedents or rule.side_conditions):
             raise DeclarativeError(
                 f"Rule {rule.label!r} discharges a subproof, so it cannot also carry "
-                f"antecedents, side-conditions, or extra antecedents (the discharge "
-                f"check ignores them; it cites one subproof opener); remove them."
+                f"antecedents or side-conditions (the discharge check ignores them); "
+                f"remove them."
             )
 
     name = _identifier(spec.name) or "System"

@@ -1263,20 +1263,20 @@ class AbstractSyntaxTree:
                 rule.pending_side_conditions = []
 
             # A discharge rule is checked by consuming its subproof: that path never
-            # evaluates line antecedents or side-conditions, and it cites exactly one
-            # subproof opener, so extra antecedents are ignored too. Keeping any of
-            # them would leave a constraint the author wrote but the checker never
+            # evaluates line antecedents or side-conditions, so keeping either would
+            # leave a soundness constraint the author wrote but the checker never
             # applies. Runs after the proviso pass above so `side_conditions` is
             # final. Mirrors the guards in declarative.build_system and the systems
             # API, so `.edi` and the declarative model reject the same rules.
+            # (`allow_extra_antecedents` is deliberately not included: the discharge
+            # check ignores it too, but an ignored allowance is only ever stricter,
+            # so it is inert rather than unsound.)
             for rule in new_object.inference_rules:
-                if rule.is_discharge and (
-                    rule.antecedents or rule.side_conditions or rule.allow_extra_antecedents
-                ):
+                if rule.is_discharge and (rule.antecedents or rule.side_conditions):
                     context.error_log.append(
                         f"Inference rule '{rule.name}' discharges a subproof, so it "
-                        f"cannot also carry antecedents, side-conditions, or extra "
-                        f"antecedents (the discharge check ignores them)."
+                        f"cannot also carry antecedents or side-conditions (the "
+                        f"discharge check ignores them)."
                     )
 
             # Set the formal system build context and build the pattern dictionary

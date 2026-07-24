@@ -644,14 +644,14 @@ async def _assign_rule(session: AsyncSession, system_id: uuid.UUID, row: RuleRow
     # silently drop a soundness constraint. Reject across the final combined
     # state (so adding a subproof to a rule that still has antecedents, or vice
     # versa, is caught). Mirrors the guard in declarative.build_system.
-    if row.subproof_derive is not None and (
-        row.antecedents or row.side_conditions or row.allow_extra_antecedents
-    ):
+    # (`allow_extra_antecedents` is *not* part of this guard: the discharge check
+    # ignores it too, but an ignored allowance is only ever stricter, so it is
+    # inert rather than a dropped soundness constraint. See declarative.Rule.)
+    if row.subproof_derive is not None and (row.antecedents or row.side_conditions):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "A discharge rule (with a subproof) cannot also carry antecedents, "
-            "side-conditions, or extra antecedents; the discharge check ignores "
-            "them (it cites one subproof opener). Remove them.",
+            "A discharge rule (with a subproof) cannot also carry antecedents or "
+            "side-conditions; the discharge check ignores them. Remove them.",
         )
 
 
