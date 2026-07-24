@@ -1,8 +1,16 @@
 from website.logical.matching import *
 from website.logical.matching import Pattern
-from website.logical.formal_system import FormalSystem, LineType, InferenceRule, ProofLine, SubproofSchema
+from website.logical.formal_system import (
+    FormalSystem,
+    InferenceRule,
+    LineType,
+    ProofLine,
+    PromotedTheorem,
+    SubproofSchema,
+)
 from website.logical.formal_system.side_condition_syntax import parse_side_condition
 from website.logical.kernel import And, Node, Var, from_match, intern
+from collections.abc import Mapping, Sequence
 from copy import copy, deepcopy
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -190,6 +198,88 @@ def _combine_side_conditions(where_strings: list, context):
         return None
     conditions = [parse_side_condition(text, context) for text in where_strings]
     return conditions[0] if len(conditions) == 1 else And(tuple(conditions))
+
+
+def _theorem_schema(text: str, context: "FormalSystemContext", name: str) -> Pattern:
+    # Build one schema pattern for a promoted theorem's statement or premise, and
+    # insist a *structured* formula actually parsed. build_schema_pattern falls
+    # back to a flat projection (schema_term None) both for a bare metavariable -
+    # legitimate - and for a template no production matched - a silent
+    # mis-promotion that would yield a theorem which never applies. A pattern with
+    # both literal and variable structure but no composed term is the latter, so
+    # reject it: an importer should hear about a malformed statement, not get a
+    # dead theorem.
+    pattern = build_schema_pattern(text, context, name)
+    if (
+        isinstance(pattern, StringPattern)
+        and pattern.schema_term is None
+        and pattern.variable_locations
+        and pattern.non_variable_locations
+    ):
+        raise ValueError(f"Theorem schema {text!r} does not parse against the system grammar.")
+    return pattern
+
+
+def promote_from_source(
+    system: FormalSystem,
+    label: str,
+    statement: str,
+    metavariables: Mapping[str, str],
+    premises: Sequence[str] = (),
+    distinct: Sequence[str] = (),
+) -> PromotedTheorem:
+    """Build a :class:`PromotedTheorem` from a proved/imported theorem's source.
+
+    The import-facing promotion route. The theorem is given as source text in the
+    system's own grammar: its conclusion ``statement``, its hypotheses
+    ``premises``, its ``metavariables`` (name -> sort name), and its distinct-
+    variable provisos ``distinct`` (each a ``disjoint(...)`` line). A Metamath
+    ``$p`` maps here directly - ``$e`` -> ``premises``, ``$f`` -> ``metavariables``,
+    ``$d`` -> ``distinct``. The metavariables are re-instantiated at each citation
+    by unification and the provisos enforced against that binding (see
+    :class:`~website.logical.formal_system.promotion.PromotedTheorem`).
+
+    Unlike generalising a concrete proof line by renaming leaves, this parses the
+    statement against the grammar with the metavariables held schematic, so a
+    formula metavariable may stand for a *compound* (the usual case).
+
+    Register the result with :meth:`FormalSystem.promote` to make it citable. The
+    theorem is not added to the system's primitive ``inference_rules``.
+
+    Raises :class:`ValueError` if the system has no build context, if a sort name
+    is not a declared pattern of the system, or if a structured statement or
+    premise does not parse against the grammar. A fully ground (metavariable-free)
+    compound statement is not yet supported and should be promoted as a rule.
+    """
+    if system.build_context is None:
+        raise ValueError("Cannot promote a theorem against a system with no build context.")
+
+    context = copy(system.build_context)
+    string_variables: dict[str, Pattern] = {}
+    for name, sort_name in metavariables.items():
+        sort = system.build_context.variables.get(sort_name)
+        if not isinstance(sort, Pattern):
+            raise ValueError(
+                f"Metavariable {name!r} names sort {sort_name!r}, which is not a "
+                "declared pattern of the system."
+            )
+        string_variables[name] = sort
+    context.string_variables = string_variables
+
+    deduction = _theorem_schema(statement, context, label)
+    antecedents = tuple(
+        _theorem_schema(text, context, f"{label}.premise{index}")
+        for index, text in enumerate(premises)
+    )
+    side_conditions = tuple(parse_side_condition(line, context) for line in distinct)
+
+    return PromotedTheorem(
+        label=label,
+        deduction=deduction,
+        antecedents=antecedents,
+        side_conditions=side_conditions,
+        variables=dict(string_variables),
+    )
 
 
 @dataclass(eq=False)

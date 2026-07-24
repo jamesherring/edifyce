@@ -33,10 +33,10 @@ import pytest
 pytest.importorskip("regex")
 
 from tests.test_engine_neutrality import HILBERT
-from website.logical.compiler import _revariabilise, build_schema_pattern
+from website.logical.compiler import _revariabilise
 from website.logical.compiler import compile as compile_formal_system
+from website.logical.compiler import promote_from_source
 from website.logical.formal_system.promotion import PromotedTheorem
-from website.logical.formal_system.side_condition_syntax import parse_side_condition
 from website.logical.kernel.terms import from_match
 from website.logical.matching.patterns import StringPattern
 
@@ -116,34 +116,10 @@ def promote_proved_leaf(system, proof, generalise: str, sort_name: str) -> Promo
     return PromotedTheorem(label="I", deduction=deduction, variables={generalise: sort})
 
 
-def promote_from_source(
-    system,
-    label: str,
-    statement: str,
-    metavariables: dict[str, str],
-    premises: tuple[str, ...] = (),
-    distinct: tuple[str, ...] = (),
-) -> PromotedTheorem:
-    """Source route (import-style): read a *schematic* statement + premises + $d
-    directly. Handles formula-metavariables over compounds, which a leaf rename
-    cannot. This is what an importer does with `$p`/`$e`/`$d`.
-    """
-    context = copy(system.build_context)
-    context.string_variables = {
-        name: system.build_context.variables[sort] for name, sort in metavariables.items()
-    }
-    deduction = build_schema_pattern(statement, context, label)
-    antecedents = tuple(
-        build_schema_pattern(text, context, f"{label}.ant{i}") for i, text in enumerate(premises)
-    )
-    side_conditions = tuple(parse_side_condition(line, context) for line in distinct)
-    return PromotedTheorem(
-        label=label,
-        deduction=deduction,
-        antecedents=antecedents,
-        side_conditions=side_conditions,
-        variables=dict(context.string_variables),
-    )
+# `promote_from_source` (the import-facing route: schematic statement + premises +
+# $d, handling formula metavariables over compounds) now lives in the engine
+# (website.logical.compiler) and is exercised by the citation and $d tests below,
+# plus its own error-handling tests.
 
 
 # ---------------------------------------------------------------------------
@@ -245,3 +221,34 @@ def test_distinct_variable_proviso_is_carried_and_enforced():
     )
     unsound = system.parse("(x ∈ y → ∀x x ∈ y) [AX5NODV]")
     assert unsound.valid is True
+
+
+# ---------------------------------------------------------------------------
+# 4. The engine-level promote_from_source API: what it builds and what it rejects.
+# ---------------------------------------------------------------------------
+def test_promote_from_source_builds_the_expected_schema():
+    system = compiled(HILBERT)
+    theorem = promote_from_source(system, "I", "(p → p)", {"p": "formula"})
+
+    # A formula metavariable, schematic, at the widened sort.
+    free = theorem.deduction.schema_term.free_vars()
+    assert set(free) == {"p"}
+    assert free["p"] is system.build_context.variables["formula"]
+
+    # ...and it is citable at a compound once registered.
+    system.promote(theorem)
+    assert system.parse("((a → b) → (a → b)) [I]").valid is True
+
+
+def test_promote_from_source_rejects_an_unknown_sort():
+    system = compiled(HILBERT)
+    with pytest.raises(ValueError, match="not a declared pattern"):
+        promote_from_source(system, "T", "(p → p)", {"p": "nonsense"})
+
+
+def test_promote_from_source_rejects_an_unparseable_statement():
+    # `∧` is not in HILBERT's grammar, so the template has literal-and-variable
+    # structure but composes to nothing — a malformed statement, not a bare var.
+    system = compiled(HILBERT)
+    with pytest.raises(ValueError, match="does not parse"):
+        promote_from_source(system, "T", "(p ∧ q)", {"p": "formula", "q": "formula"})
