@@ -79,21 +79,25 @@ schematic application as a general mechanism. And independently, Edifyce targets
 systems, term-rewriting) where metasubstitution is the *only* reuse mechanism. So
 A1 is required; it just shouldn't crowd out object-level UI where that's cleaner.
 
-**What Edifyce does today — measured, not assumed.** Tested against the Hilbert
-system in `tests/test_engine_neutrality.py` (axiom schemes K, S + MP, no
-substitution rule):
+> **Status: implemented.** See `website/logical/formal_system/promotion.py`,
+> `compiler.promote_from_source`, and `tests/test_theorem_promotion.py`. The
+> diagnosis below is kept because it explains *why* the bridge has the shape it
+> does; what shipped is summarised at the end of this section.
 
-- **Axiom *schemes* re-instantiate at arbitrary compound formulas** — they are
+**The gap, as originally measured.** Tested against the Hilbert system in
+`tests/test_engine_neutrality.py` (axiom schemes K, S + MP, no substitution rule):
+
+- **Axiom *schemes* re-instantiated at arbitrary compound formulas** — they are
   `InferenceRule`s with metavariables, and the written instance is unified against
   the scheme. `((a→a) → (a→a))` is derivable from S/K/MP by instantiating the
   schemes at the compound formula `(a→a)`. So the schematic-application
-  *mechanism already exists and is load-bearing.*
-- **A proved *theorem* is a concrete line with no re-instantiation.** After
-  proving `(a → a)`, there is **no** way to cite it and obtain `((y→y) → (y→y))`:
+  *mechanism already existed and was load-bearing.*
+- **A proved *theorem* was a concrete line with no re-instantiation.** Having
+  proved `(a → a)`, there was **no** way to cite it and obtain `((y→y) → (y→y))`:
   bare citation `[5]` is not even reiteration here, the `mapsto` explicit-
-  substitution syntax is retired (`proof.py:411`), and there is no substitution
-  rule. The only way to get the instance is to *re-derive it from the schemes* at
-  `(y→y)`. **So today, reusing a proved theorem as a template is not possible.**
+  substitution syntax is retired (`proof.py`), and there is no substitution rule.
+  The only route was to *re-derive it from the schemes* at `(y→y)`. **Reusing a
+  proved theorem as a template was impossible.**
 
 **A1 is therefore a small, precise bridge, not a new subsystem: promote a proved
 theorem into an `InferenceRule` so it joins the mechanism the axiom schemes
@@ -158,19 +162,63 @@ The three `$e` become the three antecedents; the `$p` statement becomes the
 deduction; any `$d` becomes `side_conditions:` (see A3). The rule is now citable
 as `[sqrt2irrlem, i, j, k]` with `ph, A, B` bound afresh each time.
 
-**Recommended first move:** the mechanism is confirmed present (schemes
-instantiate) and the gap is confirmed real (proved theorems don't). So the first
-build task is the *promotion* itself: a function that takes a proved theorem's
-statement + hypotheses + `$d` and registers it as an `InferenceRule`, then a
-hand-promoted dozen (`nncn`, `zcn`, `2cnd`, `oveq1d`, `sqrt2irrlem`) checked in a
-hand-built proof that cites them. The open design choice is *where* promoted rules
-live (a per-system rule namespace that the reference/import path feeds) and
-whether promotion happens eagerly on import or lazily on first citation. Cheapest
-possible de-risking of the entire project.
+### What shipped
+
+- **`PromotedTheorem`** records a theorem's schematic statement — conclusion,
+  premises, metavariables, `$d` provisos, and matching regime — and `as_rule()`
+  builds the *ephemeral* `InferenceRule` a citation is checked against.
+- **A separate namespace.** `FormalSystem.promoted_theorems` keeps derived
+  theorems out of `inference_rules`, so a set.mm-scale library never pollutes the
+  rules that *define* a system. `Proof.get_reference` resolves `[Thm]` and
+  `[Thm, i, …]` to an ephemeral rule built on demand: nothing per-theorem is
+  persisted as a rule. (That settles the "where do they live" question — and the
+  answer to "eagerly or lazily" is *neither*: constructed per citation.)
+- **`compiler.promote_from_source(system, label, statement, metavariables,
+  premises, distinct, matching)`** — the import-facing builder. A Metamath `$p`
+  maps straight in: `$e`→premises, `$f`→metavariables, `$d`→distinct.
+- **`$d` is enforced**, and demonstrably load-bearing: an `ax-5`-shaped theorem
+  `(φ → ∀x φ)` rejects the capturing instance `(x ∈ y → ∀x (x ∈ y))` with the
+  proviso and *accepts* it without — so dropping `$d` is genuinely unsound, not
+  merely untidy.
+- **Closed theorems** (`2re`: `|- 2 e. RR`) promote too: with no metavariables the
+  statement justifies exactly itself.
+- **Matching regime is carried**, so a theorem promoted from a string-rewriting
+  system stays string-checked.
+
+Two findings from building it are worth keeping, because both contradicted a
+reasonable guess:
+
+1. **Promotion is a graph operation, not a string one.** The checker unifies
+   kernel terms, so generalising a proved conclusion is `from_match` →
+   re-variabilise the leaves → hang the term on a schema shell. `create_pattern`
+   (which re-serialises a match to a string, with collision repair) is *not* on
+   the path.
+2. **A schema with no composed term is not automatically broken.** Defined
+   notation composes none yet applies fine via the flat projection; only a
+   *ground* compound is dead, and it needs its nested term composed explicitly —
+   at the system's declared **logical sorts**, not the first sort in the grammar
+   that happens to match.
+
+### Still open
+
+Promoting a **natively-authored** Edifyce proof (rather than an imported one)
+needs a generalisation policy the importer gets for free from `$f`/`$d`: which
+leaves are general, what sort to widen them to, and — the part with real
+soundness surface — deriving `$d` constraints from the proof's ∀I freshness
+steps. Deferred deliberately; imports never hit it.
 
 ---
 
 ## A2. Compressed-proof decoder → primitive Edifyce proof
+
+> **Status: implemented as a vertical slice.** `website/logical/metamath/`
+> (`parser` → `compressed` → `importer`) reads `.mm` source, builds the grammar
+> from the syntax axioms, promotes the logical assertions, decodes the compressed
+> proof, and emits Edifyce proof text. `tests/test_metamath_import.py` imports
+> `sqrt2re` from its verbatim set.mm proof string and has the kernel check it.
+> The worked example below is exactly what it produces. What is *not* yet done:
+> scale (A5), definition classification (A4), and the full statement-level mapping
+> for constructs this fragment doesn't reach (A3).
 
 **The reasoning.** `set.mm` stores proofs in a compressed format: a parenthesised
 **label table** followed by a run of capital letters encoding a **reverse-Polish
@@ -195,16 +243,26 @@ label 1, then 2, then 3, then 4" (`A`→1, `B`→2, …). Executing it on a stac
 | C | `2pos` | logic — `\|- 0 < 2` | `[ 2, (2∈ℝ), (0<2) ]` |
 | D | `sqrtpclii` | logic — `\|- ( sqrt ` A ) e. RR` from `A∈ℝ`, `0<A` | `[ ((sqrt`2)∈ℝ) ]` |
 
-`sqrtpclii` has hypotheses `A ∈ ℝ` and `0 < A`; the stack machine pops the two
-results below it, unifies `A := 2`, and pushes the conclusion. The syntax step `A`
-(`c2`) never becomes a line. So the four-token program imports to a **three-line**
-Edifyce proof (with `sqrtpclii`, `2re`, `2pos` promoted per A1):
+`sqrtpclii` pops **three** entries, not two — its *mandatory hypotheses* are the
+floating `$f class A` followed by the two essentials `|- A e. RR` and `|- 0 < A`,
+in declaration order. The floating slot is what supplies the substitution
+(`A := 2`, read off the `c2` entry); the two essential slots become the cited
+lines. Getting that order or count wrong silently misaligns every application, so
+it is computed at parse time (`Assertion.mandatory`).
+
+The syntax step `A` (`c2`) never becomes a line. So the four-token program imports
+to a **three-line** Edifyce proof (with `sqrtpclii`, `2re`, `2pos` promoted per
+A1) — verbatim output of the importer:
 
 ```
-1.  2 ∈ ℝ            [2re]
-2.  0 < 2            [2pos]
-3.  (sqrt ` 2) ∈ ℝ   [sqrtpclii, 1, 2]
+2 e. RR [2re]
+0 < 2 [2pos]
+( sqrt ` 2 ) e. RR [sqrtpclii, 1, 2]
 ```
+
+(The notation stays Metamath's own — `e.`, `` ` `` — because the grammar is built
+from set.mm's syntax axioms, so its tokens *are* the surface syntax. Rendering it
+as `∈`/`√` is a display concern, and exactly the sort of thing B4/B5 address.)
 
 which is already recognisably a proof a human could read. The decoder's job is to
 run this stack machine over the (much larger) `sqrt2irr` program, tag each label
@@ -526,12 +584,15 @@ The author states the symmetry once; the checked proof contains both directions.
 
 ---
 
-## Sequencing (unchanged from the companion, restated for convenience)
+## Sequencing (mirrors the companion)
 
-1. **Prototype A1** on ~12 hand-picked theorems — de-risks everything cheaply.
-2. **A2–A4**: decoder + mapping + definition classification; get `sqrt2re`, then
-   `sqrt2irr` and its dependency closure, importing as primitive checked proofs.
-3. **A5** in parallel: benchmark parser and rule resolution at scale.
-4. **B1 + B2**: tactic framework + closure solver — biggest readability jump for
+1. ~~**A1**, schematic theorem application~~ — **done**.
+2. ~~**A2**, the compressed-proof decoder~~ — **done as a vertical slice**:
+   `sqrt2re` imports from its verbatim set.mm proof and the kernel checks it.
+3. **Widen the slice** — **A3** (statement-level mapping beyond what the `sqrt2re`
+   fragment reaches) and **A4** (definition classification), then `sqrt2irr`'s
+   dependency closure.
+4. **A5** in parallel: benchmark parser and rule resolution at scale.
+5. **B1 + B2**: tactic framework + closure solver — biggest readability jump for
    the least surface area, and they shorten *new* proofs too, not just imports.
-5. **B4** (zoom) and **B3** (`calc`); then stretch items **B5 / B6**.
+6. **B4** (zoom) and **B3** (`calc`); then stretch items **B5 / B6**.

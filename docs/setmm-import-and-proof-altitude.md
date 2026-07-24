@@ -301,16 +301,21 @@ justification is a cited lemma, not a built-in.
 
 ## 6. Suggested sequencing
 
-1. **Prototype A1** (schematic theorem application) against a dozen hand-picked
-   `set.mm` theorems — this de-risks the entire import in the cheapest possible way.
-2. **A2–A4**: decoder + mapping + definition classification; get `sqrt2irr` and its
-   transitive dependencies importing as primitive, kernel-checked proofs.
-3. **A5** in parallel: benchmark parser and rule-resolution at scale; switch bulk
+1. ~~**Prototype A1** (schematic theorem application)~~ — **done.** Proved/imported
+   theorems promote to citable schematic rules, with `$d` enforced and closed
+   theorems supported. See A1 in the companion for what shipped.
+2. ~~**A2**: the compressed-proof decoder~~ — **done as a vertical slice.**
+   `website/logical/metamath/` imports `sqrt2re` from its verbatim set.mm proof
+   and the kernel checks it.
+3. **Widen the slice**: `A3` (the statement-level mapping this fragment doesn't
+   reach) and `A4` (definition classification), then walk `sqrt2irr`'s dependency
+   closure — the natural next target, and the first one large enough to hurt.
+4. **A5** in parallel: benchmark parser and rule-resolution at scale; switch bulk
    import to the declarative/precompiled path if needed.
-4. **B1 + B2** next: the tactic framework and the closure solver deliver the biggest
+5. **B1 + B2** next: the tactic framework and the closure solver deliver the biggest
    readability jump for the least surface area, and are what make *new* Edifyce
    proofs (not just imports) short.
-5. **B4** (zoom) and **B3** (`calc`); then the stretch items **B5/B6**.
+6. **B4** (zoom) and **B3** (`calc`); then the stretch items **B5/B6**.
 
 The throughline: Edifyce should keep the property that makes Metamath trustworthy
 — **a small kernel that checks a fully-primitive object** — while adding the
