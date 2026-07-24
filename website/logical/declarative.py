@@ -81,6 +81,10 @@ class Definition:
     # capture-avoidingly, so a quantified definition (and any proviso on it) takes
     # the kernel path instead of being refused. Empty for a binder-free alias.
     fresh: list[tuple[str, str]] = field(default_factory=list)
+    # Optional name a proof cites this definition by (`[<label>, <line>]`); the
+    # generic `[Def, <line>]` keyword searches all in-scope definitions instead.
+    # Must be unique within a system so a named citation resolves unambiguously.
+    label: str | None = None
 
 
 @dataclass
@@ -397,10 +401,18 @@ def build_system(spec: SystemSpec) -> FormalSystem:
     system.context.variables.update(ctx.variables)
     # Per position, whether the definition layered — kept in spec order so a
     # caller can map it back to a specific definition even when two share a
-    # defined form (see registered_definition_layering).
-    system.definition_layering = [
-        _finalise_definition(defn, ctx, system) for defn in spec.definitions
-    ]
+    # defined form (see registered_definition_layering). A cited definition name
+    # must be unambiguous, so a duplicate label is rejected here (mirroring
+    # compile()) rather than silently letting `[<name>, <line>]` pick one.
+    seen_labels: set[str] = set()
+    layering: list[bool] = []
+    for defn in spec.definitions:
+        if defn.label is not None:
+            if defn.label in seen_labels:
+                raise DeclarativeError(f"Duplicate definition label '{defn.label}'.")
+            seen_labels.add(defn.label)
+        layering.append(_finalise_definition(defn, ctx, system))
+    system.definition_layering = layering
 
     # 9. Parse each rule's provisos now that definitions have resolved, so a
     # proviso's term argument may use defined notation (e.g. `equal(t, ∅)`). Each
@@ -542,7 +554,7 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
         context_copy,
         fresh=fresh_patterns or None,
         kernel_condition=kernel_condition,
-        label=None,
+        label=defn.label,
     )
     if result is not None:
         system.context.definitions.add(result)

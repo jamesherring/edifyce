@@ -185,6 +185,10 @@ class DefinitionRow(Base):
     name: Mapped[str] = mapped_column(String(128), index=True)
     higher: Mapped[str] = mapped_column(String(512))
     lower: Mapped[str] = mapped_column(String(512))
+    # Optional name a proof cites this definition by (`[<label>, <line>]`); NULL
+    # when unnamed (cited only via the generic `[Def, <line>]` keyword). Unique
+    # within a system, enforced at build time, not by a DB constraint.
+    label: Mapped[str | None] = mapped_column(String(64))
 
     system: Mapped[FormalSystem] = relationship(back_populates="definitions")
     symbol: Mapped[SymbolRow] = relationship()

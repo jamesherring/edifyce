@@ -340,6 +340,7 @@ def definition_out(d: DefinitionRow) -> Definition:
         condition=definition_condition_string(d),
         bindings=_bindings_out(d.bindings),
         fresh=_bindings_out(d.fresh),
+        label=d.label,
     )
 
 

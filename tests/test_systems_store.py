@@ -251,6 +251,38 @@ def test_discharge_rules_round_trip_through_the_database(session):
     assert system.parse("assume a\n    a [R, 1]\n(a → a) [CP, 1]").valid is True
 
 
+def labelled_definition_spec() -> SystemSpec:
+    # An alias definition carrying a citation label (`sub`); the label must persist
+    # on the definition row and rebuild into a definition citable as `[sub, line]`.
+    return SystemSpec(
+        name="Labelled",
+        brackets=brackets(),
+        productions=[variable_prod(), membership_prod()],
+        lines=[statement_line()],
+        definitions=[
+            defn("formula", "sub", "x sub y", "x ∈ y",
+                 [("x", "term"), ("y", "term")], label="sub"),
+        ],
+        rules=[hyp_rule()],
+    )
+
+
+def test_labelled_definitions_round_trip_through_the_database(session):
+    # A definition's citation `label` persists on its row and rebuilds into an
+    # equal spec whose named citation still resolves.
+    session.add(spec_to_system(labelled_definition_spec()))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Labelled"))
+
+    assert {d.name: d.label for d in stored.definitions} == {"sub": "sub"}
+    assert system_to_spec(stored) == labelled_definition_spec()
+
+    system = build_spec(system_to_spec(stored))["system"]
+    proof = system.parse("a sub b [HYP]\na ∈ b [sub, 1]")
+    assert proof.proof_lines[1].valid is True
+
+
 def test_decomposition_has_no_source_or_json_blob():
     # The system row stores structure, not a dumped source string or JSON.
     columns = {c.name for c in FormalSystem.__table__.columns}

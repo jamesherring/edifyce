@@ -36,6 +36,7 @@ function defn(over: Partial<Definition> = {}): Definition {
 			{ var: 'y', sort: 'variable' }
 		],
 		fresh: [],
+		label: null,
 		...over
 	};
 }
@@ -70,6 +71,32 @@ describe('DefinitionsSection fresh (bound variables)', () => {
 				{ var: 'w', sort: 'variable' }
 			]
 		});
+	});
+});
+
+describe('DefinitionsSection label (citation name)', () => {
+	it('pre-fills the label and sends the edited value in the payload', async () => {
+		renderSection([defn({ label: 'df-subset' })]);
+		await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+		const input = screen.getByDisplayValue('df-subset');
+		await userEvent.clear(input);
+		await userEvent.type(input, 'subseteq');
+		await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+		const [, , payload] = vi.mocked(api.parts.definitions.update).mock.calls[0];
+		expect(payload).toMatchObject({ label: 'subseteq' });
+	});
+
+	it('sends null when the label is cleared (unnamed definition)', async () => {
+		renderSection([defn({ label: 'df-subset' })]);
+		await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+		await userEvent.clear(screen.getByDisplayValue('df-subset'));
+		await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+		const [, , payload] = vi.mocked(api.parts.definitions.update).mock.calls[0];
+		expect(payload.label).toBeNull();
 	});
 });
 
