@@ -198,6 +198,24 @@ def test_constant_carrying_definition_builds_a_kernel_definition(const_system):
     assert definition.kernel_definition is kernel_def
 
 
+# A constant grammar plus an unused sort whose regex is malformed. The bad regex
+# is never exercised at build time (its sort is referenced by nothing), so it
+# compiles lazily — only when the constant probe matches a leaf against it. The
+# gate must stay fail-closed: fall back to the string path, never let the error
+# abort the proof check.
+def const_bad_regex_spec() -> SystemSpec:
+    spec = const_spec()
+    spec.productions.append(regex_prod("junk", "junk_atom", "[unclosed"))
+    return spec
+
+
+def test_malformed_unused_regex_sort_does_not_abort_the_gate():
+    system = build_declarative(const_bad_regex_spec())
+    definition = only_definition(system)
+    # The probe trips the bad regex, so the gate declines rather than raising.
+    assert kernel_definition_for(definition, context_of(system)) is None
+
+
 # ---------------------------------------------------------------------------
 # follows_by_definition - the term-based step check (kernel path)
 # ---------------------------------------------------------------------------

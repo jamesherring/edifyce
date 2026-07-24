@@ -149,26 +149,28 @@ def _build(legacy: MatchingDefinition, context: Context) -> Definition | None:
             condition=legacy.kernel_condition,
             fresh=dict(legacy.fresh) or None,
         )
+
+        # Binder guard: with no `fresh` declared, a bound variable of the defining
+        # form survives as a ground leaf present in `lower` but not in `higher`.
+        # Such a definition cannot be checked soundly by a capture-blind unfold, so
+        # refuse it here (the fix is to declare the binder with `fresh`). A
+        # lower-only leaf that is a grammar *constant* is exempt, though: a
+        # constant can never be captured, so a defining form that merely mentions
+        # one (e.g. `∅`, `⊥`) stays on the kernel path rather than being pushed to
+        # the string fallback.
+        higher_leaves = _ground_leaf_literals(kernel_def.higher)
+        lower_leaves = _ground_leaf_literals(kernel_def.lower)
+        unexplained = lower_leaves - higher_leaves
+        if any(not _is_capture_safe_constant(leaf, context) for leaf in unexplained):
+            return None
     except Exception:
-        # Any build failure - a surface form that does not parse as its sort (an
-        # alias notation the grammar cannot recognise on its own), or a deeper
-        # matcher error - must fall back to the string path, never abort the
-        # proof check. This is the same fail-closed stance as
+        # Any failure - a surface form that does not parse as its sort (an alias
+        # notation the grammar cannot recognise on its own), a deeper matcher
+        # error, or the constant probe tripping over a malformed/unused regex sort
+        # that only compiles when matched - must fall back to the string path,
+        # never abort the proof check. This is the same fail-closed stance as
         # InferenceRule._side_conditions_hold: declining the kernel path can only
         # keep the legacy behaviour, never accept an invalid step.
-        return None
-
-    # Binder guard: with no `fresh` declared, a bound variable of the defining
-    # form survives as a ground leaf present in `lower` but not in `higher`. Such
-    # a definition cannot be checked soundly by a capture-blind unfold, so refuse
-    # it here (the fix is to declare the binder with `fresh`). A lower-only leaf
-    # that is a grammar *constant* is exempt, though: a constant can never be
-    # captured, so a defining form that merely mentions one (e.g. `∅`, `⊥`) stays
-    # on the kernel path rather than being pushed to the string fallback.
-    higher_leaves = _ground_leaf_literals(kernel_def.higher)
-    lower_leaves = _ground_leaf_literals(kernel_def.lower)
-    unexplained = lower_leaves - higher_leaves
-    if any(not _is_capture_safe_constant(leaf, context) for leaf in unexplained):
         return None
 
     return kernel_def
