@@ -22,6 +22,14 @@ The tests cover three things:
    its distinct-variable provisos; a capturing instance is rejected. Demonstrated
    with an ``ax-5``-shaped theorem ``(phi -> A.x phi)`` whose ``$d x phi`` blocks
    substituting ``phi`` with a formula in which ``x`` occurs free.
+
+4. **The ``promote_from_source`` API** — what it builds, and what it rejects.
+
+5. **Matching regime.** A theorem promoted from a string-rewriting (semi-Thue)
+   system stays string-checked, so associative rewrites survive promotion.
+
+6. **Closed (ground) theorems.** A statement with no metavariables — Metamath's
+   ``2re`` (``|- 2 e. RR``) — justifies exactly itself and nothing else.
 """
 
 from __future__ import annotations
@@ -86,6 +94,45 @@ AX_FIVE_SYSTEM = r"""FormalSystem AxFive:
         membership
         implication
         universal
+
+    Regex reference:
+        ^[A-Za-z0-9, ]+$
+
+    Pattern statement:
+        with f as formula, r as reference:
+            f [r]
+
+    LineType claim:
+        pattern: statement
+        behaviour: logical
+        formula: f
+        reference: r
+"""
+
+
+# A constants-only fragment for closed (ground) theorems: numerals and
+# collections as atoms, so a statement like `2 ∈ ℝ` has no metavariables at all.
+CLOSED_SYSTEM = r"""FormalSystem Closed:
+
+    Atom two: 2
+    Atom three: 3
+    Atom reals: ℝ
+    Atom nats: ℕ
+
+    UnionPattern num:
+        two
+        three
+
+    UnionPattern coll:
+        reals
+        nats
+
+    Pattern membership:
+        with n as num, c as coll:
+            n ∈ c
+
+    UnionPattern formula:
+        membership
 
     Regex reference:
         ^[A-Za-z0-9, ]+$
@@ -249,13 +296,13 @@ def test_promote_from_source_rejects_an_unknown_sort():
         promote_from_source(system, "T", "(p → p)", {"p": "nonsense"})
 
 
-def test_promote_from_source_rejects_a_ground_compound():
-    # A compound with no metavariables composes no schema term and its flat
-    # projection cannot match a nested proof formula — a theorem that never
-    # applies, so it is rejected rather than silently built.
+def test_promote_from_source_rejects_an_unparseable_ground_statement():
+    # A ground statement is composed explicitly, so one the grammar cannot parse
+    # is a genuine error rather than a silently dead theorem. `∧` is not in
+    # HILBERT's grammar.
     system = build_system(HILBERT)
-    with pytest.raises(ValueError, match="no metavariables"):
-        promote_from_source(system, "T", "(a → a)", {})
+    with pytest.raises(ValueError, match="does not parse"):
+        promote_from_source(system, "T", "(a ∧ a)", {})
 
 
 def test_promote_from_source_accepts_defined_notation():
@@ -291,3 +338,33 @@ def test_promoted_theorem_keeps_string_matching():
         promote_from_source(system, "DBLS", "Mxx", {"x": "miustr"}, premises=("Mx",))
     )
     assert system.parse("MI\nMII [DBLS, 1]").proof_lines[1].valid is False
+
+
+# ---------------------------------------------------------------------------
+# 6. Closed (ground) theorems: no metavariables to instantiate, so the statement
+#    justifies exactly itself. Metamath's `2re` (|- 2 e. RR) is the shape.
+# ---------------------------------------------------------------------------
+def test_closed_theorem_justifies_exactly_its_own_statement():
+    system = compiled(CLOSED_SYSTEM)
+    system.promote(promote_from_source(system, "2re", "2 ∈ ℝ", {}))
+
+    # The statement itself checks...
+    assert system.parse("2 ∈ ℝ [2re]").valid is True
+
+    # ...and nothing else does: a closed theorem is not a schema, so neither a
+    # different numeral nor a different collection may be substituted in.
+    assert system.parse("3 ∈ ℝ [2re]").proof_lines[0].valid is False
+    assert system.parse("2 ∈ ℕ [2re]").proof_lines[0].valid is False
+
+
+def test_closed_statement_is_usable_as_a_premise():
+    # A ground *premise* composes the same way, so a mixed theorem — ground
+    # premise, ground conclusion — is citable with the premise line.
+    system = compiled(CLOSED_SYSTEM)
+    system.promote(
+        promote_from_source(system, "up", "2 ∈ ℝ", {}, premises=("2 ∈ ℕ",))
+    )
+    system.promote(promote_from_source(system, "2nn", "2 ∈ ℕ", {}))
+
+    proof = system.parse("2 ∈ ℕ [2nn]\n2 ∈ ℝ [up, 1]")
+    assert proof.valid is True

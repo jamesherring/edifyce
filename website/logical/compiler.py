@@ -200,16 +200,40 @@ def _combine_side_conditions(where_strings: list, context):
     return conditions[0] if len(conditions) == 1 else And(tuple(conditions))
 
 
+def _ground_schema_term(text: str, context: "FormalSystemContext") -> "Term | None":
+    # Compose the nested kernel term of a *ground* statement - one with literal
+    # structure but no metavariables, like a closed theorem `2 ∈ ℝ`.
+    #
+    # compose_schema_term deliberately declines these (it keys on a metavariable),
+    # so promotion composes them here instead. Two differences from that path: the
+    # parse may use the system's *resolved* definitions - a promoted theorem is
+    # built against an already-compiled system, unlike a rule schema composed mid
+    # compilation where definitions are still pending - and there is nothing to
+    # re-variabilise, since a ground statement binds nothing. Returns None when
+    # nothing in the grammar parses the text.
+    parse_context = copy(context)
+    parse_context.definitions = [d for d in context.definitions if hasattr(d, "match")]
+    for candidate in context.variables.values():
+        if not isinstance(candidate, UnionPattern):
+            continue
+        matched = candidate.match(text, parse_context)
+        if matched is not None:
+            return from_match(matched, parse_context)
+    return None
+
+
 def _theorem_schema(text: str, context: "FormalSystemContext", name: str) -> Pattern:
-    # Build one schema pattern for a promoted theorem's statement or premise, and
-    # reject a *ground* compound - literal structure but no metavariables.
-    # compose_schema_term keys on a metavariable, so such a statement composes no
-    # nested term, and its flat projection cannot match a nested proof formula: it
-    # would be a theorem that never applies. A statement *with* metavariables
-    # projects structurally even when nothing is composed - notably defined
-    # notation, whose flat projection does apply (a `sub` alias matches an
-    # `a sub b` line) - so those are kept. Supporting ground compound conclusions
-    # (Metamath closed theorems like `2 e. RR`) is future work.
+    # Build one schema pattern for a promoted theorem's statement or premise.
+    #
+    # A *ground* compound - literal structure but no metavariables - composes no
+    # schema term through the rule path, and its flat projection cannot match the
+    # nested term a proof formula parses to, so it would be a theorem that never
+    # applies. Compose the ground term explicitly instead: the schema is then that
+    # exact term, and unification against a cited line is structural equality -
+    # precisely the semantics of a closed theorem (`2 ∈ ℝ` justifies `2 ∈ ℝ` and
+    # nothing else). A statement *with* metavariables is left alone: it projects
+    # structurally even when nothing is composed, notably defined notation, whose
+    # flat projection does apply (a `sub` alias matches an `a sub b` line).
     pattern = build_schema_pattern(text, context, name)
     if (
         isinstance(pattern, StringPattern)
@@ -217,10 +241,13 @@ def _theorem_schema(text: str, context: "FormalSystemContext", name: str) -> Pat
         and pattern.non_variable_locations
         and not pattern.variable_locations
     ):
-        raise ValueError(
-            f"Statement {text!r} has no metavariables and composes no schema term "
-            "(a ground/atomic compound); it is not yet supported - promote it as a rule."
-        )
+        ground = _ground_schema_term(text, context)
+        if ground is None:
+            raise ValueError(
+                f"Statement {text!r} has no metavariables and does not parse "
+                "against the system grammar."
+            )
+        pattern.schema_term = ground
     return pattern
 
 
@@ -256,13 +283,15 @@ def promote_from_source(
     Register the result with :meth:`FormalSystem.promote` to make it citable. The
     theorem is not added to the system's primitive ``inference_rules``.
 
+    A *closed* theorem - one whose statement is ground, such as Metamath's
+    ``2 e. RR`` - is supported: with no metavariables to instantiate it justifies
+    exactly its own statement and nothing else.
+
     Raises :class:`ValueError` if the system has no build context, if a sort name
-    is not a declared pattern of the system, or if a conclusion/premise is a
-    ground compound (literal structure but no metavariables) - a closed theorem
-    such as Metamath's ``2 e. RR``, not yet supported here; promote it as a rule.
-    As with an authored rule schema, a statement naming an *undefined* symbol is
-    not rejected here - it simply yields a theorem that never applies - so
-    validate imported statements upstream.
+    is not a declared pattern of the system, or if a ground conclusion/premise does
+    not parse against the grammar. A statement *with* metavariables that names an
+    undefined symbol is not rejected here - as with an authored rule schema it
+    simply yields a theorem that never applies - so validate imports upstream.
     """
     if system.build_context is None:
         raise ValueError("Cannot promote a theorem against a system with no build context.")
