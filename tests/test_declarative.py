@@ -206,6 +206,25 @@ def test_layering_is_positional_when_two_definitions_share_a_defined_form():
     assert registered_definition_layering(_layered_spec([dep, pos, sup])) == [False, True, True]
 
 
+def test_layering_is_unaffected_by_an_unrelated_draft_error():
+    # Draft-tolerant CRUD can persist a system that does not fully compile (here a
+    # rule binding names a sort the grammar lacks). Layering must still be read
+    # off the grammar+definitions alone, so a reorder guard can trust it rather
+    # than seeing the whole build fail and treating every definition as dropped.
+    broken_rule = rule("BAD", "bad", ["p"], "p", [("p", "no_such_sort")])
+
+    def spec(definitions):
+        s = _layered_spec(definitions)
+        s.rules = [broken_rule]
+        return s
+
+    # The unrelated error does fail a full build...
+    assert "errors" in build_spec(spec([subset_def(), superset_def()]))
+    # ...but layering is computed regardless, and still catches the bad order.
+    assert registered_definition_layering(spec([subset_def(), superset_def()])) == [True, True]
+    assert registered_definition_layering(spec([superset_def(), subset_def()])) == [False, True]
+
+
 # ---------------------------------------------------------------------------
 # Full proof checking -- axioms, and the same inference machinery over both the
 # raw base and layered defined notation.

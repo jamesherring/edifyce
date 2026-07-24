@@ -545,11 +545,20 @@ def registered_definition_layering(spec: SystemSpec) -> list[bool]:
     higher form (a set of forms would collapse them) or are structurally
     equivalent up to renaming (which ``add_definition`` de-duplicates).
 
-    Returns all-``False`` when the spec does not build at all: a systemic error
-    (a malformed production, say) is unrelated to definition order and is the
-    caller's concern to surface elsewhere, not something this predicate ranks.
+    Layering depends only on the grammar (productions, in their sort unions) and
+    the definitions themselves; axioms, rules and lines contribute nothing to it.
+    So the build is done against a spec **reduced** to grammar plus definitions:
+    an unrelated draft error the draft-tolerant CRUD persisted (a half-written
+    rule, a malformed proviso) then can't fail the build and blind the check into
+    reporting every definition dropped. Only a broken *grammar* still errors —
+    and there no definition can layer at all, so all-``False`` is the honest
+    answer (nothing is live for a reorder to drop).
     """
-    result = build_spec(spec)
+    reduced = copy(spec)
+    reduced.axioms = []
+    reduced.rules = []
+    reduced.lines = []
+    result = build_spec(reduced)
     if "errors" in result:
         return [False] * len(spec.definitions)
     return result["system"].definition_layering
