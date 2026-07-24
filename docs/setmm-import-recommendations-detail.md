@@ -43,30 +43,82 @@ meaningfully shorter than Metamath's, before any Tier-B automation.
 
 ## A1. Schematic theorem application ("theorems as rules")
 
-**The reasoning.** In Metamath there is *no difference* between citing an axiom
-(`$a`) and citing a proved theorem (`$p`): both are **schemes**, and using one
-means substituting terms for its variables (subject to `$d`). A proof of
-`sqrt2irr` is essentially ninety such substitutions. So the load-bearing
-capability an import needs is: **a proved theorem must become a reusable schematic
-rule, re-instantiated at every call site by unification.**
+**First, a distinction that decides when this is even needed.** "Theorems are
+templates" is true, but it splits into two cases by *what kind of variable* is
+re-instantiated:
 
-Edifyce already does exactly this for `InferenceRule`s — they are schemas over
-metavariables, and `check` unifies the schema against the cited lines. The open
-question (flagged honestly, because it decides the whole import) is whether
-*citing a proved lemma* (`[Alias.n]`) **re-instantiates that lemma's
-metavariables against your terms**, or merely trusts a fixed, already-concrete
-statement. If it's the latter, the import can't be expressed and we must build
-*promotion*: proved theorem → schematic `InferenceRule`.
+- **Object / term variables** (Metamath `setvar`; a free term position). In a
+  system with `∀` and universal instantiation, templating is an *object-level*
+  rule: prove `⊢ φ(x)`, generalise to `⊢ ∀x φ(x)`, re-instantiate `⊢ φ(t)`. **No
+  new machinery needed.** For example `nncn |- ( A e. NN -> A e. CC )` is, in ZFC,
+  reducible to the single sentence `∀x (x ∈ ℕ → x ∈ ℂ)` plus UI: ℕ and ℂ are
+  sets, so nothing schematic is required — Metamath only *states* it with a class
+  variable for convenience (you can drop in `(A/B)` without first proving it a set
+  and doing an explicit ∀-elim). Edifyce's ND ZFC already supports this path
+  (∀-introduction via the eigenvariable subproof, ∀-elimination as a rule), so for
+  set-level facts like `nncn` the object-level idiom is the *better* surface and
+  A1 is unnecessary.
 
-**The promotion, concretely.** Take the closure lemma
+- **Formula variables** (Metamath `wff`), and rule/proof schemes. FOL **cannot
+  quantify over these** — there is no `∀φ`. A theorem whose reuse substitutes a
+  *formula* is irreducibly a scheme, a statement in the *metalanguage*, and **no
+  object rule can instantiate it.** This is the case A1 exists for. Canonical
+  irreducible examples: the propositional axiom `(φ → (ψ → φ))` (the language has
+  no quantifier to internalise it); first-order PA induction; and ZFC's own
+  **Separation** and **Replacement** — schemes over formulas that provably cannot
+  be replaced by finitely many object sentences (ZFC is not finitely
+  axiomatisable). In `set.mm` these are `ax-1`, `ax-rep`, `ax-sep`, stated with
+  `wff` metavariables.
+
+**Why the import needs A1 regardless.** Metamath's metalogic is *uniform direct
+substitution*: applying **any** theorem — reducible `nncn` included — is
+metavariable substitution in the verifier, never a routed-through-`∀` UI step. So
+to replay an imported proof faithfully against the same kernel, Edifyce needs
+schematic application as a general mechanism. And independently, Edifyce targets
+*any* formal system — including quantifier-free ones (propositional Hilbert
+systems, term-rewriting) where metasubstitution is the *only* reuse mechanism. So
+A1 is required; it just shouldn't crowd out object-level UI where that's cleaner.
+
+**What Edifyce does today — measured, not assumed.** Tested against the Hilbert
+system in `tests/test_engine_neutrality.py` (axiom schemes K, S + MP, no
+substitution rule):
+
+- **Axiom *schemes* re-instantiate at arbitrary compound formulas** — they are
+  `InferenceRule`s with metavariables, and the written instance is unified against
+  the scheme. `((a→a) → (a→a))` is derivable from S/K/MP by instantiating the
+  schemes at the compound formula `(a→a)`. So the schematic-application
+  *mechanism already exists and is load-bearing.*
+- **A proved *theorem* is a concrete line with no re-instantiation.** After
+  proving `(a → a)`, there is **no** way to cite it and obtain `((y→y) → (y→y))`:
+  bare citation `[5]` is not even reiteration here, the `mapsto` explicit-
+  substitution syntax is retired (`proof.py:411`), and there is no substitution
+  rule. The only way to get the instance is to *re-derive it from the schemes* at
+  `(y→y)`. **So today, reusing a proved theorem as a template is not possible.**
+
+**A1 is therefore a small, precise bridge, not a new subsystem: promote a proved
+theorem into an `InferenceRule` so it joins the mechanism the axiom schemes
+already use.** Demonstrated: adding the proved `(x→x)` as a zero-premise rule
+
+```
+InferenceRule self_imp:      # promoted from the theorem ⊢ (p → p)
+    label: I
+    deduction:
+        (p → p)
+```
+
+makes `((y → y) → (y → y)) [I]` check as valid (and `(z→z) [I]` valid, `(a→b) [I]`
+correctly invalid) — verified against the live engine. Promotion *is* A1: the
+antecedents are the theorem's hypotheses, the deduction is its statement, and any
+`$d` becomes `side_conditions:`.
+
+**The promotion for a lemma with premises.** The closure lemma
 
 ```
 nncn $p |- ( A e. NN -> A e. CC )
 ```
 
-Its variable `A` ranges over classes; there are no `$e` hypotheses and no `$d`.
-Promotion turns it into a rule whose antecedent is the (only) essential premise
-and whose deduction is the consequent:
+promotes to a one-antecedent rule (note: for `set.mm` fidelity we promote it, even
+though ZFC *could* instead use the object-level `∀x(x∈ℕ→x∈ℂ)` + UI):
 
 ```
 with A as class:
@@ -77,10 +129,8 @@ with A as class:
             A ∈ ℂ
 ```
 
-Now at a use site, unification binds `A` to *your* term. If line 3 established
-`( B / 2 ) ∈ ℕ`, then citing `[nncn, 3]` binds `A := ( B / 2 )` and yields
-`( B / 2 ) ∈ ℂ` — the same lemma, freshly instantiated. That is precisely how
-Metamath reuses `nncn` thousands of times.
+At a use site unification binds `A` to *your* term: if line 3 established
+`(B / 2) ∈ ℕ`, then `[nncn, 3]` binds `A := (B / 2)` and yields `(B / 2) ∈ ℂ`.
 
 A lemma **with** hypotheses and `$d` maps just as directly. From `sqrt2irrlem`:
 
@@ -108,10 +158,14 @@ The three `$e` become the three antecedents; the `$p` statement becomes the
 deduction; any `$d` becomes `side_conditions:` (see A3). The rule is now citable
 as `[sqrt2irrlem, i, j, k]` with `ph, A, B` bound afresh each time.
 
-**Recommended first move:** hand-promote a dozen theorems like this (`nncn`,
-`zcn`, `2cnd`, `oveq1d`, `sqrt2irrlem`) and check a hand-built proof that cites
-them. If citing an imported lemma already instantiates correctly, A1 is *done* and
-this just confirms it; if not, this exposes the exact gap to close. Cheapest
+**Recommended first move:** the mechanism is confirmed present (schemes
+instantiate) and the gap is confirmed real (proved theorems don't). So the first
+build task is the *promotion* itself: a function that takes a proved theorem's
+statement + hypotheses + `$d` and registers it as an `InferenceRule`, then a
+hand-promoted dozen (`nncn`, `zcn`, `2cnd`, `oveq1d`, `sqrt2irrlem`) checked in a
+hand-built proof that cites them. The open design choice is *where* promoted rules
+live (a per-system rule namespace that the reference/import path feeds) and
+whether promotion happens eagerly on import or lazily on first citation. Cheapest
 possible de-risking of the entire project.
 
 ---
