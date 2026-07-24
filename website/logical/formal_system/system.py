@@ -3,6 +3,7 @@
 from copy import copy
 
 from ..matching import Context, Match, Pattern, StringPattern, UnionPattern
+from .promotion import PromotedTheorem
 from .proof import Proof
 
 
@@ -28,6 +29,12 @@ class FormalSystem:
 
         # A list of valid inference rules for the system
         self.inference_rules = inference_rules if inference_rules is not None else []
+
+        # Proved/imported theorems registered for schematic reuse, keyed by label.
+        # Kept out of `inference_rules` so the system's *primitive* rules stay
+        # distinguishable from its (potentially very many) derived theorems; the
+        # reference resolver builds an ephemeral rule per citation. See promotion.
+        self.promoted_theorems: dict[str, PromotedTheorem] = {}
 
         # The build context from compiler
         self.build_context = build_context
@@ -233,6 +240,14 @@ class FormalSystem:
 
         # Add the new rule
         self.inference_rules.append(rule)
+
+    def promote(self, theorem: PromotedTheorem) -> None:
+        # Register a proved/imported theorem for schematic reuse under its label.
+        # Deliberately separate from `inference_rules`: a citation of this label
+        # resolves to an ephemeral rule built from the theorem (see
+        # Proof.get_reference), so no per-theorem rule is persisted among the
+        # system's primitives.
+        self.promoted_theorems[theorem.label] = theorem
 
     def add_line_type(self, line_type):
         # Add a line type

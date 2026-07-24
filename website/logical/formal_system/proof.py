@@ -310,6 +310,40 @@ class Proof:
             if (not line.empty) and (line.line_type is not None) and line.line_type.behaviour == "logical"
         ])
 
+    def _resolve_antecedents(
+        self, refs: list[str], context: Context
+    ) -> tuple[list[ProofLine], dict]:
+        # Resolve the cited-line refs following a rule/theorem label into the
+        # antecedent lines (and any reference mapping). Shared by the inference-
+        # rule and promoted-theorem branches of get_reference. A ref that does not
+        # resolve to a proof line (nor a mapping on the previous one) is an error.
+        antecedents: list[ProofLine] = []
+        mapping: dict = {}
+        last_proof_line: ProofLine | None = None
+        for r in refs:
+            try:
+                item = self.get_reference(r, context)
+
+                if isinstance(item, ProofLine):
+                    antecedents.append(item)
+                    last_proof_line = item
+                    continue
+
+            except Exception:
+                # Not a line reference; it may be a mapping on the previous line.
+                try:
+                    if last_proof_line is not None:
+                        mapping.update(self.get_reference_mapping(r, last_proof_line, context))
+                        continue
+
+                except Exception:
+                    pass
+
+            # Otherwise this is not a proof line
+            raise Exception(f"{r} is not a proof line.")
+
+        return antecedents, mapping
+
     def get_reference(self, ref, context):
         # Get the referenced line from a ref string
 
@@ -322,6 +356,13 @@ class Proof:
             if ref == ir.label or ref == self.formal_system.format_string(ir.label):
                 return InferenceReference(inference_rule=ir, key=ref)
 
+        # A zero-premise proved/imported theorem cited by its label alone. The
+        # ephemeral rule is built per citation (see promotion) rather than kept
+        # among the system's primitive rules.
+        promoted = self.formal_system.promoted_theorems.get(ref)
+        if promoted is not None:
+            return InferenceReference(inference_rule=promoted.as_rule(), key=ref)
+
         if ", " in ref:
             # Split the ref into parts
             ref_parts = ref.split(", ")
@@ -330,37 +371,21 @@ class Proof:
             for ir in self.formal_system.inference_rules:
                 if key == ir.label:
                     # It's an inference rule
-
-                    # Get the antecedent lines
-                    antecedents = []
-                    mapping = {}
-                    last_proof_line = None
-                    for r in ref_parts[1:]:
-                        try:
-                            item = self.get_reference(r, context)
-
-                            if isinstance(item, ProofLine):
-                                antecedents.append(item)
-                                last_proof_line = item
-                                continue
-
-                        except Exception:
-                            # if item is None and last_proof_line is not None:
-                            # Probably a mapping
-                            try:
-                                if last_proof_line is not None:
-                                    mapping.update(self.get_reference_mapping(r, last_proof_line, context))
-                                    continue
-
-                            except Exception:
-                                pass
-
-                        # Otherwise this is not a proof line
-                        raise Exception(f"{r} is not a proof line.")
-
+                    antecedents, mapping = self._resolve_antecedents(ref_parts[1:], context)
                     return InferenceReference(
                         inference_rule=ir, key=key, antecedents=antecedents, mapping=mapping
                     )
+
+            # A proved/imported theorem applied to cited premises, `[<Thm>, i, ...]`.
+            # Resolved exactly like a rule - its schematic statement is
+            # re-instantiated against the premises and goal by unification, and its
+            # `$d` provisos (now `disjoint` side-conditions) are enforced.
+            promoted = self.formal_system.promoted_theorems.get(key)
+            if promoted is not None:
+                antecedents, mapping = self._resolve_antecedents(ref_parts[1:], context)
+                return InferenceReference(
+                    inference_rule=promoted.as_rule(), key=key, antecedents=antecedents, mapping=mapping
+                )
 
             # A definitional step: `[<name>, <line>]` cites a named definition,
             # or `[Def, <line>]` leaves the applicable definition to be searched
