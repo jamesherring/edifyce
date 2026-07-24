@@ -78,9 +78,11 @@
 			deduction: deduction.trim(),
 			matching,
 			antecedents: antecedents.map((a) => a.value.trim()).filter(Boolean),
-			// A discharge rule cites one subproof opener, so the discharge check never
-			// consults extra antecedents; the API rejects the pairing. Force it off.
-			allow_extra_antecedents: hasSubproof ? false : allowExtraAntecedents,
+			// Sent as-is even for a discharge rule, where the flag is inert (that check
+			// cites one subproof opener and never reads it). The editor hides the toggle
+			// there rather than forcing a value, so the setting survives if the subproof
+			// is later removed.
+			allow_extra_antecedents: allowExtraAntecedents,
 			side_conditions: sideConditions.map((sc) => sc.value.trim()).filter(Boolean),
 			bindings: bindings.filter((b) => b.var.trim() && b.sort.trim()),
 			subproof: hasSubproof
@@ -166,7 +168,8 @@
 			</div>
 			<p class="text-xs text-muted-foreground">
 				Lets a citation name more lines than there are premises. The surplus is
-				recorded but left unconstrained, so it justifies nothing.
+				recorded but left unconstrained, so it justifies nothing. Has no effect on
+				a discharge rule, which cites a single subproof.
 			</p>
 		</div>
 	{/if}

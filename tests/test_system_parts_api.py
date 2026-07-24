@@ -409,31 +409,35 @@ def test_rule_allow_extra_antecedents_round_trips_through_the_api(client):
     ).json()["allow_extra_antecedents"] is False
 
 
-def test_discharge_rule_cannot_allow_extra_antecedents_via_api(client):
+def test_discharge_rule_may_allow_extra_antecedents_inertly_via_api(client):
     # A discharge rule cites exactly one subproof opener, so the discharge check
-    # never consults extra antecedents; the API rejects the pairing rather than
-    # store a flag that would be silently ignored.
+    # never consults `allow_extra_antecedents`. Unlike antecedents/side-conditions
+    # (whose loss would drop a soundness constraint, hence the 422 above), an
+    # ignored allowance is only ever stricter, so the pairing is stored as-is
+    # rather than rejected.
     _login(client, "ada@example.com")
     sid = _new_system(client)
     _post(client, f"/api/formal-systems/{sid}/sorts", {"name": "formula"})
     binds = [{"var": "p", "sort": "formula"}, {"var": "q", "sort": "formula"}]
 
-    both = client.post(f"/api/formal-systems/{sid}/rules", json={
+    both = _post(client, f"/api/formal-systems/{sid}/rules", {
         "label": "CP", "name": "cp", "deduction": "(p → q)", "bindings": binds,
         "subproof": {"derive": "q", "assume": "p"}, "allow_extra_antecedents": True,
     })
-    assert both.status_code == 422
+    assert both["allow_extra_antecedents"] is True
+    assert both["subproof"] == {"derive": "q", "assume": "p", "fresh": None}
 
-    # An extra-antecedent rule later PATCHed into a discharge rule is caught too.
+    # An extra-antecedent rule later PATCHed into a discharge rule keeps the flag.
     plain = _post(client, f"/api/formal-systems/{sid}/rules", {
         "label": "MPX", "name": "mpx", "deduction": "q", "bindings": binds,
         "allow_extra_antecedents": True,
     })
-    conflicted = client.patch(
+    patched = client.patch(
         f"/api/formal-systems/{sid}/rules/{plain['id']}",
         json={"subproof": {"derive": "q", "assume": "p"}},
     )
-    assert conflicted.status_code == 422
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["allow_extra_antecedents"] is True
 
 
 def test_string_rule_cannot_carry_side_conditions_via_api(client):

@@ -319,23 +319,28 @@ _DISCHARGE_SYSTEM = """FormalSystem Discharge:
     [
         "\n            antecedents:\n                p",
         "\n            side_conditions:\n                equal(p, q)",
-        "\n            allow_extra_antecedents:\n                True",
     ],
-    ids=["antecedents", "side_conditions", "allow_extra_antecedents"],
+    ids=["antecedents", "side_conditions"],
 )
 def test_discharge_rule_cannot_carry_antecedents_or_side_conditions(extra):
     # The discharge check consumes the subproof and never evaluates line
-    # antecedents or side-conditions; it cites exactly one subproof opener, so
-    # extra antecedents are ignored too. Keeping any of them would leave a
-    # constraint the author wrote but the checker never applies, so `.edi`
-    # rejects the pairing exactly as declarative.build_system and the API do.
+    # antecedents or side-conditions, so keeping either would leave a soundness
+    # constraint the author wrote but the checker never applies. `.edi` rejects
+    # the pairing exactly as declarative.build_system and the API do.
     result = compile_formal_system(_DISCHARGE_SYSTEM % {"EXTRA": extra})
     assert "errors" in result
     assert any("discharges a subproof" in e for e in result["errors"]), result["errors"]
 
 
-def test_discharge_rule_without_extras_still_compiles():
-    # The guard is scoped to the conflicting pairing: a plain discharge rule
-    # (subproof + deduction only) compiles cleanly.
-    result = compile_formal_system(_DISCHARGE_SYSTEM % {"EXTRA": ""})
+@pytest.mark.parametrize(
+    "extra",
+    ["", "\n            allow_extra_antecedents:\n                True"],
+    ids=["plain", "allow_extra_antecedents"],
+)
+def test_discharge_rule_without_a_dropped_constraint_compiles(extra):
+    # The guard is scoped to constraints whose loss would be unsound. A plain
+    # discharge rule compiles, and so does one carrying `allow_extra_antecedents`:
+    # the discharge check ignores that flag too, but an ignored *allowance* is
+    # only ever stricter, so it is inert rather than rejected.
+    result = compile_formal_system(_DISCHARGE_SYSTEM % {"EXTRA": extra})
     assert "errors" not in result, result.get("errors")
