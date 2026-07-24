@@ -59,7 +59,13 @@ describe('RulesSection allow_extra_antecedents', () => {
 	});
 
 	it('is hidden and forced off for a discharge rule', async () => {
-		renderSection({ subproof: { derive: 'q', assume: 'p', fresh: null }, antecedents: [] });
+		// A discharge rule carries no antecedents or side-conditions either — the API
+		// rejects those pairings too, so the fixture must be a state the API accepts.
+		renderSection({
+			subproof: { derive: 'q', assume: 'p', fresh: null },
+			antecedents: [],
+			side_conditions: []
+		});
 		await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
 
 		// The discharge check cites one subproof opener, so the option is not offered.

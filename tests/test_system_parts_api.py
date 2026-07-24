@@ -398,6 +398,11 @@ def test_rule_allow_extra_antecedents_round_trips_through_the_api(client):
         "MPX": True, "MP": False
     }
 
+    # A metadata-only PATCH (model_fields_set excludes the flag) preserves it.
+    assert client.patch(
+        f"/api/formal-systems/{sid}/rules/{extra['id']}", json={"name": "renamed"}
+    ).json()["allow_extra_antecedents"] is True
+
     assert client.patch(
         f"/api/formal-systems/{sid}/rules/{extra['id']}",
         json={"allow_extra_antecedents": False},

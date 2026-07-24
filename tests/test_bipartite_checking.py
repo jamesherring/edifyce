@@ -21,14 +21,18 @@ from website.logical.formal_system import Proof
 from tests.spec_helpers import brackets, hyp_rule, regex_prod, rule, statement_line, template_prod
 
 
-_PQ = [("p", "formula"), ("q", "formula")]
+def _pq():
+    # A fresh binding list per call: specs must never alias a shared mutable list
+    # (see tests/spec_helpers.py) — these module-level specs back module-scoped
+    # fixtures, so an alias would outlive any single test.
+    return [("p", "formula"), ("q", "formula")]
 
 
 def _prop_productions():
     # An atom leaf plus `(p -> q)`; the ASCII arrow is what these proofs cite.
     return [
         regex_prod("formula", "atom", "[a-z]"),
-        template_prod("formula", "implication", "(p -> q)", _PQ),
+        template_prod("formula", "implication", "(p -> q)", _pq()),
     ]
 
 
@@ -42,7 +46,7 @@ MP_SYSTEM = SystemSpec(
     lines=[statement_line()],
     rules=[
         hyp_rule(),
-        rule("MP", "modus_ponens", ["p", "(p -> q)"], "q", _PQ),
+        rule("MP", "modus_ponens", ["p", "(p -> q)"], "q", _pq()),
         rule("TRIP", "triple", ["p", "p", "p"], "p", [("p", "formula")]),
     ],
 )
@@ -62,7 +66,7 @@ EXTRA_SYSTEM = SystemSpec(
             name="modus_ponens_extra",
             antecedents=["p", "(p -> q)"],
             deduction="q",
-            bindings=_PQ,
+            bindings=_pq(),
             allow_extra_antecedents=True,
         ),
     ],

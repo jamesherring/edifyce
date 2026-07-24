@@ -256,3 +256,86 @@ def test_compile_unknown_top_level_line_is_lenient():
     result = compile_formal_system("NotAKeyword ???:\n  broken")
     assert "errors" not in result
     assert result["system"].name == ""
+
+
+# ---------------------------------------------------------------------------
+# Discharge-rule guard: `.edi` rejects what the declarative model rejects
+# ---------------------------------------------------------------------------
+
+_DISCHARGE_SYSTEM = """FormalSystem Discharge:
+
+    Regex atom:
+        ^[a-z]$
+
+    Regex reference:
+        ^[A-Za-z 0-9,]+$
+
+    UnionPattern formula:
+        atom
+
+    Pattern implication:
+        with p as formula, q as formula:
+            (p -> q)
+
+    formula:
+        implication
+
+    Pattern statement_pattern:
+        with f as formula, r as reference:
+            f [r]
+
+    Pattern assumption_pattern:
+        with phi as formula:
+            assume phi
+
+    LineType claim:
+        pattern: statement_pattern
+        behaviour: logical
+        formula: f
+        reference: r
+
+    LineType assume:
+        pattern: assumption_pattern
+        behaviour: logical
+        scope: assumption
+        formula: phi
+
+    with p as formula, q as formula:
+        InferenceRule conditional_proof:
+            label:
+                CP
+            subproof:
+                assume:
+                    p
+                derive:
+                    q
+            deduction:
+                (p -> q)%(EXTRA)s
+"""
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "\n            antecedents:\n                p",
+        "\n            side_conditions:\n                equal(p, q)",
+        "\n            allow_extra_antecedents:\n                True",
+    ],
+    ids=["antecedents", "side_conditions", "allow_extra_antecedents"],
+)
+def test_discharge_rule_cannot_carry_antecedents_or_side_conditions(extra):
+    # The discharge check consumes the subproof and never evaluates line
+    # antecedents or side-conditions; it cites exactly one subproof opener, so
+    # extra antecedents are ignored too. Keeping any of them would leave a
+    # constraint the author wrote but the checker never applies, so `.edi`
+    # rejects the pairing exactly as declarative.build_system and the API do.
+    result = compile_formal_system(_DISCHARGE_SYSTEM % {"EXTRA": extra})
+    assert "errors" in result
+    assert any("discharges a subproof" in e for e in result["errors"]), result["errors"]
+
+
+def test_discharge_rule_without_extras_still_compiles():
+    # The guard is scoped to the conflicting pairing: a plain discharge rule
+    # (subproof + deduction only) compiles cleanly.
+    result = compile_formal_system(_DISCHARGE_SYSTEM % {"EXTRA": ""})
+    assert "errors" not in result, result.get("errors")
