@@ -17,9 +17,10 @@ pytest.importorskip("regex")
 
 from copy import copy
 
-# `compile_formal_system` is still used by the two tests below that pin
-# compiler-specific behaviour (definition staging during compilation, and the
-# scope/subproof SCOPED_ZFC system the declarative model cannot yet express).
+# `compile_formal_system` is still used by the one test below that pins a
+# genuinely compiler-specific behaviour: definition *staging during compilation*
+# (a schema recognised only via a PendingDefinition). The scope/subproof
+# SCOPED_ZFC system is now built declaratively (see zfc_systems.scoped_zfc_spec).
 from website.logical.compiler import compile as compile_formal_system
 from website.logical.declarative import SystemSpec, build_system
 from website.logical.kernel import from_match
@@ -193,9 +194,9 @@ def test_regex_sorted_metavariable_is_kept_schematic():
     # leaf and must be re-marked as a Var - otherwise the ∀I deduction `∀x p`
     # would fix its bound variable to the literal token "x", silently breaking
     # the eigenvariable/quantifier tie. Pin that the `x` stays schematic.
-    from zfc_systems import SCOPED_ZFC
+    from zfc_systems import scoped_zfc_spec
 
-    system = compile_formal_system(SCOPED_ZFC)["system"]
+    system = build_system(scoped_zfc_spec())
     ug = rule(system, "UG")  # deduction: ∀x p, with x a setvar
     term = ug._schema_term(ug.deduction, 0, copy(system.context))
     assert set(term.free_vars()) == {"x", "p"}

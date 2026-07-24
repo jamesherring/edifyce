@@ -18,16 +18,30 @@ import pytest
 
 pytest.importorskip("regex")
 
+# The compiler is retained ONLY for the malformed-`.edi` error-path tests at the
+# bottom, which inject bad `if`/`where`/`fresh` syntax into FRESH_SYSTEM to assert
+# structured compile errors. Every *system fixture* is now built declaratively via
+# `build_spec`, the same path the database and API use.
 from website.logical.compiler import compile as compile_formal_system
+from website.logical.declarative import SystemSpec, build_spec
 from website.logical.formal_system.definitions import (
     follows_by_definition,
     kernel_definition_for,
 )
 from website.logical.matching.definitions import Definition
 
+from tests.spec_helpers import (
+    brackets,
+    defn,
+    regex_prod,
+    rule,
+    statement_line,
+    template_prod,
+)
 
-def build(code):
-    result = compile_formal_system(code)
+
+def build_declarative(spec: SystemSpec):
+    result = build_spec(spec)
     assert "errors" not in result, result.get("errors")
     return result["system"]
 
@@ -46,110 +60,65 @@ def only_definition(system):
     return definitions[0]
 
 
+# `setvar` is a single-letter leaf sort used only as a binding sort; its member
+# name must differ from the sort name (else build_system's union step recurses).
+def _setvar_prod():
+    return regex_prod("setvar", "setvar_atom", "[a-z]")
+
+
+def _hyp_rule():
+    # `with f as formula: deduction f` - a bare formula metavariable. Named `f`
+    # (not `p`) to stay clear of the single-letter `setvar` tokens.
+    return rule("HYP", "hypothesis", [], "f", [("f", "formula")])
+
+
 # A binder-free alias: `x sub y` abbreviates the membership `(x ∈ y)`. Both
 # forms are ordinary grammatical formulae over the parameters x, y, so this is
 # exactly the case the kernel definition can represent.
-ALIAS_SYSTEM = """FormalSystem AliasSys:
-
-    Regex setvar:
-        ^[a-z]$
-
-    Regex reference:
-        ^[A-Za-z0-9, ]+$
-
-    Pattern membership:
-        with x as setvar, y as setvar:
-            (x ∈ y)
-            Define x sub y as (x ∈ y)
-
-    UnionPattern formula:
-        membership
-
-    Pattern statement_pattern:
-        with f as formula, r as reference:
-            f [r]
-
-    LineType statement:
-        pattern: statement_pattern
-        behaviour: logical
-        formula: f
-        reference: r
-
-    with f as formula:
-        InferenceRule hypothesis:
-            label:
-                HYP
-            deduction:
-                f
-"""
+def alias_spec() -> SystemSpec:
+    return SystemSpec(
+        name="AliasSys",
+        brackets=brackets(),
+        productions=[
+            _setvar_prod(),
+            template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+        ],
+        lines=[statement_line()],
+        definitions=[
+            defn("formula", "sub", "x sub y", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+        ],
+        rules=[_hyp_rule()],
+    )
 
 
-# A definition whose defining form binds a fresh variable `z`. The legacy
-# `Define` DSL cannot declare `z` as bound, so a capture-blind kernel unfold
-# would be unsound - the bridge must refuse it and keep the string path.
-BINDER_SYSTEM = """FormalSystem BinderSys:
-
-    Regex setvar:
-        ^[a-z]$
-
-    Regex reference:
-        ^[A-Za-z0-9, ]+$
-
-    Pattern membership:
-        with x as setvar, y as setvar:
-            (x ∈ y)
-
-    UnionPattern formula:
-        membership
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p → q)
-
-    formula:
-        implication
-
-    Pattern forall:
-        with x as setvar, phi as formula:
-            ∀x.phi
-
-    formula:
-        forall
-
-    Pattern subset:
-        with x as setvar, y as setvar:
-            (x ⊆ y)
-
-    formula:
-        subset
-
-    Pattern statement_pattern:
-        with f as formula, r as reference:
-            f [r]
-
-    LineType statement:
-        pattern: statement_pattern
-        behaviour: logical
-        formula: f
-        reference: r
-
-    with f as formula:
-        InferenceRule hypothesis:
-            label:
-                HYP
-            deduction:
-                f
-"""
+# A grammar whose defining form (built in-test, see `binder_definition`) binds a
+# fresh variable `z` the legacy `Define` DSL cannot declare, so a capture-blind
+# kernel unfold would be unsound - the bridge must refuse it and keep the string
+# path. The system itself carries no `Define`; it only supplies the grammar.
+def binder_spec() -> SystemSpec:
+    return SystemSpec(
+        name="BinderSys",
+        brackets=brackets(),
+        productions=[
+            _setvar_prod(),
+            template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+            template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
+            template_prod("formula", "forall", "∀x.phi", [("x", "setvar"), ("phi", "formula")]),
+            template_prod("formula", "subset", "(x ⊆ y)", [("x", "setvar"), ("y", "setvar")]),
+        ],
+        lines=[statement_line()],
+        rules=[_hyp_rule()],
+    )
 
 
 @pytest.fixture(scope="module")
 def alias_system():
-    return build(ALIAS_SYSTEM)
+    return build_declarative(alias_spec())
 
 
 @pytest.fixture(scope="module")
 def binder_system():
-    return build(BINDER_SYSTEM)
+    return build_declarative(binder_spec())
 
 
 def binder_definition(system):
@@ -251,10 +220,36 @@ def test_binder_definition_falls_back_to_string_path(binder_system):
     )
 
 
-# A definition authored through the extended DSL: `fresh z as setvar` declares
-# the defining form's bound variable, so the term checker can unfold df-subset
-# capture-avoidingly. The Define attaches to the `formula` union (its lower form,
-# a `forall`, is not a `subset` instance) by re-opening the union with a `with`.
+# The declarative form of the same df-subset system, built for the happy-path
+# fixtures below. `fresh z as setvar` declares the defining form's bound variable
+# so the term checker can unfold df-subset capture-avoidingly; `where` adds an
+# optional kernel-vocabulary proviso.
+def fresh_spec(where: str | None = None) -> SystemSpec:
+    return SystemSpec(
+        name="SetTheory",
+        brackets=brackets(),
+        productions=[
+            _setvar_prod(),
+            template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+            template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
+            template_prod("formula", "forall", "∀x.phi", [("x", "setvar"), ("phi", "formula")]),
+            template_prod("formula", "subset", "(x ⊆ y)", [("x", "setvar"), ("y", "setvar")]),
+        ],
+        lines=[statement_line()],
+        definitions=[
+            defn(
+                "formula", "df_subset", "(x ⊆ y)", "∀z.((z ∈ x) → (z ∈ y))",
+                [("x", "setvar"), ("y", "setvar")], condition=where, fresh=[("z", "setvar")],
+            ),
+        ],
+    )
+
+
+# The `.edi` form of the same system, kept ONLY as the harness for the
+# malformed-clause compile-error tests at the bottom: they interpolate bad
+# `if`/`where`/`fresh` syntax into `%(WHERE)s` / the `fresh` clause and assert the
+# compiler rejects it. `Define` attaches to the `formula` union (its lower form, a
+# `forall`, is not a `subset` instance) by re-opening the union with a `with`.
 FRESH_SYSTEM = """FormalSystem SetTheory:
 
     Regex setvar:
@@ -309,14 +304,14 @@ FRESH_SYSTEM = """FormalSystem SetTheory:
 
 @pytest.fixture(scope="module")
 def fresh_system():
-    return build(FRESH_SYSTEM % {"WHERE": ""})
+    return build_declarative(fresh_spec())
 
 
 @pytest.fixture(scope="module")
 def guarded_system():
     # Same definition, with an extra kernel-vocabulary proviso: the two subset
     # arguments must be disjoint setvar leaves.
-    return build(FRESH_SYSTEM % {"WHERE": " where disjoint(x, y, setvar)"})
+    return build_declarative(fresh_spec(where="disjoint(x, y, setvar)"))
 
 
 # ---------------------------------------------------------------------------
