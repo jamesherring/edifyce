@@ -53,12 +53,16 @@
 		requestError?: string | null;
 		/** Shown before the first verify, in place of the "verify to see results" hint. */
 		idleMessage?: string;
+		/** When set, each line row becomes a button that reports its 0-based index —
+		 *  lets the caller jump the editor to the matching line. */
+		onLineClick?: (index: number) => void;
 	};
 
 	let {
 		result,
 		requestError = null,
-		idleMessage = 'Verify the proof to see line-by-line results here.'
+		idleMessage = 'Verify the proof to see line-by-line results here.',
+		onLineClick
 	}: Props = $props();
 </script>
 
@@ -110,7 +114,18 @@
 					{@const meta = TONE[tone]}
 					{@const Icon = meta.icon}
 					<li class={['rounded-md border px-3 py-2', meta.row]}>
-						<div class="flex items-start gap-3">
+						<svelte:element
+							this={onLineClick ? 'button' : 'div'}
+							type={onLineClick ? 'button' : undefined}
+							role={onLineClick ? 'button' : undefined}
+							class={[
+								'flex w-full items-start gap-3',
+								onLineClick &&
+									'focus-visible:ring-ring -mx-1 cursor-pointer rounded px-1 text-left hover:bg-black/[0.03] focus-visible:ring-2 focus-visible:outline-none dark:hover:bg-white/[0.04]'
+							]}
+							aria-label={onLineClick ? `Go to line ${i + 1} in the editor` : undefined}
+							onclick={onLineClick ? () => onLineClick(i) : undefined}
+						>
 							<span class="w-5 pt-0.5 text-right text-xs text-muted-foreground tabular-nums">
 								{i + 1}
 							</span>
@@ -149,7 +164,7 @@
 									<p class="mt-1 text-xs text-warning">{line.warning_message}</p>
 								{/if}
 							</div>
-						</div>
+						</svelte:element>
 					</li>
 				{/each}
 			</ol>

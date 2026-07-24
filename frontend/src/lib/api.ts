@@ -109,6 +109,9 @@ export interface Definition {
 	 * from the same tree as `provisos`; prefer `provisos`. */
 	condition: string | null;
 	bindings: Binding[];
+	/** The defining form's bound variables (the `fresh` clause). Declaring them
+	 * lets a quantified definition take the kernel path so its proviso is enforced. */
+	fresh: Binding[];
 }
 
 export interface Axiom {
@@ -255,6 +258,8 @@ export interface DefinitionCreate {
 	 * supplied; kept so pre-D0 clients keep working. */
 	condition?: string | null;
 	bindings?: Binding[];
+	/** The defining form's bound variables (the `fresh` clause). */
+	fresh?: Binding[];
 }
 export type DefinitionUpdate = Partial<DefinitionCreate>;
 
@@ -414,7 +419,9 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	let response: Response;
 	try {
-		response = await fetch(`${API_BASE_URL}${path}`, {
+		// Every JSON endpoint lives under `/api` so the API can never collide with a
+		// client-side SPA route (e.g. the `/proofs` page vs the proofs resource).
+		response = await fetch(`${API_BASE_URL}/api${path}`, {
 			// `credentials: 'include'` sends the httponly auth cookie on same- and
 			// cross-origin API calls (the backend sets allow_credentials to match).
 			credentials: 'include',

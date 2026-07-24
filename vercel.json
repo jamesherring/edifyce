@@ -9,11 +9,7 @@
     }
   },
   "rewrites": [
-    { "source": "/health", "destination": "/api/index" },
-    { "source": "/formal-systems/:path*", "destination": "/api/index" },
-    { "source": "/proofs/:path*", "destination": "/api/index" },
-    { "source": "/auth/:path*", "destination": "/api/index" },
-    { "source": "/users/:path*", "destination": "/api/index" },
+    { "source": "/api/:path*", "destination": "/api/index" },
     { "source": "/openapi.json", "destination": "/api/index" },
     { "source": "/docs", "destination": "/api/index" },
     { "source": "/docs/:path*", "destination": "/api/index" },

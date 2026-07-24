@@ -38,3 +38,6 @@ node_modules/
 # SvelteKit sync output if a command is ever run from the repo root instead of
 # frontend/ (the real one is ignored by frontend/.gitignore).
 .svelte-kit/
+
+# edifyce-dev runtime (logs, pids, seed ids)
+.edifyce-dev/

@@ -4,20 +4,19 @@
 	import * as Card from '$lib/components/ui/card';
 	import * as Alert from '$lib/components/ui/alert';
 	import { Label } from '$lib/components/ui/label';
-	import CodeEditor from '$lib/components/code-editor.svelte';
+	import CodeEditor, { type LineStatus } from '$lib/components/code-editor.svelte';
 	import PageContainer from '$lib/components/PageContainer.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import BackLink from '$lib/components/BackLink.svelte';
 	import LoadingSpinner from '$lib/components/LoadingSpinner.svelte';
-	import ProofResults from '$lib/components/ProofResults.svelte';
+	import ProofResults, { lineTone } from '$lib/components/ProofResults.svelte';
 	import { api, ApiError, type VerifyResponse } from '$lib/api';
-	import Play from '@lucide/svelte/icons/play';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
-	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
+	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 
 	// The system is fixed; only its name is needed here — proofs are checked
-	// server-side by id, not against any client-held source.
+	// server-side against the stored rows, not against any client-held source.
 	let systemName = $state<string | null>(null);
 	let loadingSystem = $state(true);
 	let loadError = $state<string | null>(null);
@@ -30,6 +29,14 @@
 	// Drop late responses from a previous system id (see PR3's detail page).
 	let loadSeq = 0;
 	let verifySeq = 0;
+	let editor = $state<{ focusLine: (index: number) => void } | undefined>(undefined);
+
+	const lineStatuses = $derived.by<LineStatus[]>(() => {
+		const parsed = result?.proof;
+		const lines = proofText.split('\n');
+		if (!parsed || parsed.lines.length !== lines.length) return [];
+		return parsed.lines.map(lineTone);
+	});
 
 	async function loadSystem(id: string) {
 		const seq = ++loadSeq;
@@ -59,15 +66,12 @@
 		}
 	}
 
-	async function verify() {
-		const id = page.params.id;
-		if (!systemName || !id) return;
+	async function verify(id: string, text: string) {
 		const seq = ++verifySeq;
 		verifying = true;
-		result = null;
 		requestError = null;
 		try {
-			const res = await api.systems.verify(id, proofText);
+			const res = await api.systems.verify(id, text);
 			if (seq !== verifySeq) return;
 			result = res;
 		} catch (err) {
@@ -75,11 +79,11 @@
 			if (err instanceof ApiError) {
 				// A 400 means the stored system no longer compiles; the backend
 				// returns the compile errors as detail, already formatted.
-				requestError =
-					err.status === 400 ? `System did not compile:\n${err.message}` : err.message;
+				requestError = err.status === 400 ? `System did not compile:\n${err.message}` : err.message;
 			} else {
 				requestError = String(err);
 			}
+			result = null;
 		} finally {
 			if (seq === verifySeq) verifying = false;
 		}
@@ -88,6 +92,25 @@
 	$effect(() => {
 		const id = page.params.id;
 		if (id) loadSystem(id);
+	});
+
+	// Debounced live verify: re-checks a beat after typing stops, so results track
+	// the editor without a button. Empty input clears back to the idle hint.
+	// Bumping verifySeq on every edit invalidates any in-flight response so a slow
+	// reply can't repopulate diagnostics for newer (or cleared) text.
+	$effect(() => {
+		const text = proofText;
+		const id = page.params.id;
+		if (!id || systemName === null) return;
+		verifySeq++;
+		verifying = false;
+		if (!text.trim()) {
+			result = null;
+			requestError = null;
+			return;
+		}
+		const timer = setTimeout(() => verify(id, text), 450);
+		return () => clearTimeout(timer);
 	});
 </script>
 
@@ -108,35 +131,45 @@
 			description={systemName ? `Checked against ${systemName}, line by line.` : undefined}
 		/>
 
-		<div class="grid gap-6 lg:grid-cols-2">
-			<div class="flex flex-col gap-6">
-				<Card.Root>
-					<Card.Header>
-						<div class="flex items-center justify-between gap-2">
-							<Card.Title>Proof</Card.Title>
+		<div class="grid items-start gap-6 lg:grid-cols-2">
+			<Card.Root>
+				<Card.Header>
+					<div class="flex items-center justify-between gap-2">
+						<Card.Title>Proof</Card.Title>
+						<div class="flex items-center gap-2">
+							{#if verifying}
+								<span class="inline-flex items-center gap-1 text-xs text-muted-foreground">
+									<LoaderCircle class="size-3 animate-spin" /> Checking…
+								</span>
+							{/if}
 							<Button variant="ghost" size="sm" onclick={() => (proofText = '')}>
 								<RotateCcw class="size-3.5" /> Clear
 							</Button>
 						</div>
-						<Card.Description>One statement per line, in {systemName ?? 'this system'}.</Card.Description>
-					</Card.Header>
-					<Card.Content class="flex flex-col gap-4">
-						<div class="flex flex-col gap-2">
-							<Label for="proof-text">Proof text</Label>
-							<CodeEditor id="proof-text" bind:value={proofText} rows={10} />
-						</div>
-						<Button onclick={verify} disabled={verifying}>
-							{#if verifying}
-								<LoaderCircle class="size-4 animate-spin" /> Verifying…
-							{:else}
-								<Play class="size-4" /> Verify proof
-							{/if}
-						</Button>
-					</Card.Content>
-				</Card.Root>
-			</div>
+					</div>
+					<Card.Description>
+						One statement per line, in {systemName ?? 'this system'} — checked live as you type.
+					</Card.Description>
+				</Card.Header>
+				<Card.Content class="flex flex-col gap-2">
+					<Label for="proof-text" class="sr-only">Proof text</Label>
+					<CodeEditor
+						id="proof-text"
+						bind:value={proofText}
+						bind:this={editor}
+						rows={14}
+						showLineNumbers
+						{lineStatuses}
+					/>
+				</Card.Content>
+			</Card.Root>
 
-			<ProofResults {result} {requestError} idleMessage="Verify a proof to see line-by-line results here." />
+			<ProofResults
+				{result}
+				{requestError}
+				idleMessage="Start typing a proof to see line-by-line results here."
+				onLineClick={(i) => editor?.focusLine(i)}
+			/>
 		</div>
 	{/if}
 </PageContainer>

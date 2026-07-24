@@ -54,35 +54,35 @@ def restore_modules():
 def test_oauth_providers_empty_by_default():
     # The default test environment sets no OAuth credentials.
     client = TestClient(app.main.app)
-    assert client.get("/auth/providers").json() == {"providers": []}
+    assert client.get("/api/auth/providers").json() == {"providers": []}
 
 
 def test_oauth_routers_mount_when_configured(monkeypatch, restore_modules):
     main = _reload_with_env(monkeypatch, _CREDS)
     client = TestClient(main.app)
 
-    assert set(client.get("/auth/providers").json()["providers"]) == {"google", "github"}
+    assert set(client.get("/api/auth/providers").json()["providers"]) == {"google", "github"}
 
     spec = client.get("/openapi.json").json()["paths"]
     for path in (
-        "/auth/google/authorize",
-        "/auth/google/callback",
-        "/auth/github/authorize",
-        "/auth/github/callback",
+        "/api/auth/google/authorize",
+        "/api/auth/google/callback",
+        "/api/auth/github/authorize",
+        "/api/auth/github/callback",
     ):
         assert path in spec, path
 
     # The SPA fallback's API-path guard must cover the new authorize/callback
     # paths, or a wrong-method browser GET would be masked by the SPA shell.
     guard = main._mounted_api_paths()
-    assert {"auth/google/authorize", "auth/github/authorize"} <= guard
+    assert {"api/auth/google/authorize", "api/auth/github/authorize"} <= guard
 
 
 def test_authorize_returns_provider_url(monkeypatch, restore_modules):
     main = _reload_with_env(monkeypatch, _CREDS)
     client = TestClient(main.app)
 
-    response = client.get("/auth/google/authorize")
+    response = client.get("/api/auth/google/authorize")
     assert response.status_code == 200
     assert response.json()["authorization_url"].startswith(
         "https://accounts.google.com/"
@@ -98,8 +98,8 @@ def test_only_configured_providers_mount(monkeypatch, restore_modules):
     )
     client = TestClient(main.app)
 
-    assert client.get("/auth/providers").json()["providers"] == ["github"]
-    assert "/auth/google/authorize" not in client.get("/openapi.json").json()["paths"]
+    assert client.get("/api/auth/providers").json()["providers"] == ["github"]
+    assert "/api/auth/google/authorize" not in client.get("/openapi.json").json()["paths"]
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +225,7 @@ def test_oauth_callback_error_redirects_browser_to_login():
 
     exc = SE(status_code=400, detail="OAUTH_USER_ALREADY_EXISTS")
     resp = asyncio.run(
-        _http_exception_handler(_request("/auth/google/callback", "text/html"), exc)
+        _http_exception_handler(_request("/api/auth/google/callback", "text/html"), exc)
     )
     assert resp.status_code == 302
     assert resp.headers["location"] == "/login?error=OAUTH_USER_ALREADY_EXISTS"
@@ -239,7 +239,7 @@ def test_oauth_callback_error_stays_json_for_api_clients():
     exc = SE(status_code=400, detail="OAUTH_INVALID_STATE")
     resp = asyncio.run(
         _http_exception_handler(
-            _request("/auth/google/callback", "application/json"), exc
+            _request("/api/auth/google/callback", "application/json"), exc
         )
     )
     # No Accept: text/html → the API contract's JSON error is preserved.
@@ -253,7 +253,7 @@ def test_non_oauth_http_error_keeps_default_response():
 
     exc = SE(status_code=404, detail="Not Found")
     resp = asyncio.run(
-        _http_exception_handler(_request("/users/me", "text/html"), exc)
+        _http_exception_handler(_request("/api/users/me", "text/html"), exc)
     )
     assert resp.status_code == 404
 
@@ -266,7 +266,7 @@ def test_redirect_url_for_uses_env_base(monkeypatch):
     try:
         assert (
             oauth.redirect_url_for("google")
-            == "https://edifyce.example.com/auth/google/callback"
+            == "https://edifyce.example.com/api/auth/google/callback"
         )
         # Without the base set, the redirect is derived from the request instead.
         monkeypatch.delenv("EDIFYCE_OAUTH_REDIRECT_URL_BASE", raising=False)

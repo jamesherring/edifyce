@@ -60,6 +60,7 @@ def defn(
     lower: str,
     bindings: Iterable[Binding],
     condition: str | None = None,
+    fresh: Iterable[Binding] = (),
 ) -> Definition:
     return Definition(
         sort=sort,
@@ -68,6 +69,7 @@ def defn(
         lower=lower,
         bindings=list(bindings),
         condition=condition,
+        fresh=list(fresh),
     )
 
 

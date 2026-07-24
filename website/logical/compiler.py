@@ -1,5 +1,5 @@
 from website.logical.matching import *
-from website.logical.matching import Pattern, constant
+from website.logical.matching import Pattern
 from website.logical.formal_system import FormalSystem, LineType, InferenceRule, ProofLine, SubproofSchema
 from website.logical.formal_system.side_condition_syntax import parse_side_condition
 from website.logical.kernel import And, Node, Var, from_match, intern
@@ -195,10 +195,8 @@ def _combine_side_conditions(where_strings: list, context):
 @dataclass(eq=False)
 class FormalSystemContext:
 
-    # Variables in the code (the system condition pattern is included by default)
-    variables: dict = field(
-        default_factory=lambda: {"_system_condition_": SystemConditionPattern(name="System Condition")}
-    )
+    # Variables in the code
+    variables: dict = field(default_factory=dict)
 
     # String variables for inside patterns
     string_variables: dict = field(default_factory=dict)
@@ -1058,12 +1056,6 @@ class AbstractSyntaxTree:
                     value_string = value_string[1:-1]
 
                 current_object[key] = value_string
-
-            elif type(current_object) is Condition:
-                # Apply condition text
-
-                current_object.string = stripped
-                current_object.parse()
 
             else:
                 # Can't parse line

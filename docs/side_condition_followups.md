@@ -152,24 +152,39 @@ value rendering and match-tree computation — none of it in the trusted core.
   narrowed away. Removing the *awkward string layer* must not remove the
   *generality it currently delivers*.
 
-### Design north star
+### Design north star — revised by the PR 3 finding
 
-Replace the re-parsed string interpreter with a **typed, closed, total
-expression layer**, parsed **once at compile time** into typed dataclass nodes
-with an exhaustive evaluator — mirroring what `kernel/side_conditions.py` did for
-provisos. Same operation vocabulary, but analyzable, IDE-navigable, fail-loud
-(no `try/except: pass` swallowing typos), and total (no re-parse per evaluation).
-The pivotal design fork, which the empty DB leaves open:
+The plan above assumed the interpreter still ran a rich author-facing DSL that a
+typed expression layer would have to *replay*, and framed a fork over whether to
+keep or redesign that DSL's surface syntax. **The PR 3 investigation showed the
+fork is moot: there is no live DSL to replay.** Instrumenting `parse_path` (the
+chokepoint every `get_by_path` variant hits before any operation dispatch) across
+the full suite — propositional, FOL/ZFC, MIU string-rewriting, definitional steps
+— found **636 of 640 calls were `Match.get_by_path("f")`/`("r")`**: projecting a
+line type's `formula_field`/`reference_field` off a match, a bare `sub_matches`
+lookup. The other four were synthetic unit-test strings. **Zero** DSL operations
+(`instances`, `has_parent`, `replace`, `Condition`, `SystemConditionPattern`, …)
+fired in real checking. The ~830-line interpreter had decayed to a single live
+function: project a named sub-field off a match.
 
-- **Keep the surface syntax** authors already write (`instances(P; cond)` inside
-  `formula()`/`label()`/condition blocks) and only replace the *internal*
-  evaluator — lower risk, smaller author-facing change; **or**
-- **Redesign the surface syntax** too, now that no stored systems constrain it —
-  more work, but a chance to remove the string-embedded-in-string awkwardness at
-  the source level.
+So the north star is **deletion, not a typed re-implementation**. Everything real
+is already checked by the modern typed stack, and generality for the target
+systems is carried by three typed pillars that stay:
 
-Decide this fork against the generality checklist above (encode a nontrivial
-slice of one game system in each candidate syntax before committing).
+- **Grammar / productions** express any notation — board syntax, chess FEN, go
+  positions.
+- **Structural unification** matches state and binds metavariables.
+- **The closed side-condition algebra** expresses move legality / provisos.
+
+The string DSL never contributed to that generality — it was untyped, unsound,
+non-total (`while` loops) debt. New expressive needs for games/code are met by a
+**typed extension driven by a worked example**, not by preserving the interpreter:
+encode tic-tac-toe on today's engine and see what genuinely cannot be said. The
+one credible gap is that the algebra is a flat conjunction-of-disjunctions (CNF),
+while a win predicate ("three in a row") is naturally DNF — so the likely concrete
+output is a small, typed extension to the algebra (nested boolean structure, or a
+`line`/`count` predicate), designed with the algebra's existing discipline. That
+spike is separate from, and unblocked by, the deletion.
 
 ### The PRs
 
@@ -222,28 +237,53 @@ already folded into this document. The shippable work:
    was inert); the `AGENTS.md` `getattr` guidance that cited `edit_context` as its
    example was reworded. *After this, no engine-internal caller uses the
    interpreter; only `Condition` and the author-facing DSL remain.*
-3. **Design spike + decision.** Land the surface-syntax fork decision and a typed
-   AST sketch (node per operation, exhaustive evaluator, how `instances` /
-   `has_parent` / `replace` / `SystemConditionPattern` map onto it) as a short
-   design note. Validate it by hand-encoding a slice of a game system per the
-   generality checklist. Cheap to write, expensive to get wrong.
-4. **Typed expression layer, compiled once.** Introduce the typed AST + total
-   evaluator; translate pattern-function bodies and `instances(...; condition)`
-   filters into it. Run old and new in parallel and differential-test against the
-   full system corpus before flipping the default.
-5. **Reimplement `Condition` on the typed layer.** Rebuild `check_condition` and
-   `maps_to`/`path_maps_to` on typed nodes (or fold into PR 4). Retire the string
-   `Condition` and `SystemConditionPattern`'s string probe.
-6. **Delete.** Remove `get_by_path`, `constant`, `parse_arguments`, `parse_path`,
-   `path_maps_to` from `paths.py`; drop every per-class `get_by_path` override;
-   remove the re-exports from `matching/__init__.py` (respecting that file's
-   deliberate flat-API contract until this final step); update this doc and the
-   `kernel/side_conditions.py` reference.
+3. **Retire the interpreter — *done*, as a deletion (see the revised north star).**
+   The instrumentation reduced the whole apparatus to one live use, so PRs 4–6 of
+   the old plan (design a typed AST, build a typed expression layer, differentially
+   port `Condition`) collapsed into a straight deletion:
+   - Added `Match.field(name)` — the direct `sub_matches` lookup the interpreter
+     always resolved to for a `formula_field`/`reference_field` — and rerouted the
+     one live caller (`FormalSystem._line_field`) to it.
+   - Deleted `matching/paths.py` (`get_by_path`, `parse_path`, `parse_arguments`,
+     `constant`, `path_maps_to`) and `matching/conditions.py` (`Condition`) as
+     whole modules; the per-class `get_by_path` overrides on `Match`/`MatchSet`/
+     `ProofLine`/`Definition`; the DSL-only `Match` methods (`check_condition`,
+     `contains`, `instances`, `has_parent`, `equal_any`, `is_descendant_of`) and
+     `MatchSet.each`; `SystemConditionPattern` and its `_system_condition_`
+     default; and the `matching/__init__.py` re-exports of all the above.
+   - Trimmed the vestiges the interpreter left in kept code: `Match.replace`'s
+     dead `condition` parameter, the compiler's dead `type(current_object) is
+     Condition` branch, and the unsupported `mapsto` reference-mapping (which
+     resolved its source through the interpreter — it now raises, and the
+     caller's reference-resolution fallback leaves such a reference unresolved so
+     the citing line fails to justify).
+   - Methods the definitional-step / kernel path calls directly — `Match.replace`,
+     `equivalent`, `equivalent_under_definitions`, `maps_to_up_to_definition`,
+     `MatchSet.contains`/`union`/… — were **kept**; only the string-dispatch layer
+     over them went. Behaviour-preserving: the 590 remaining tests pass; the ~33
+     removed were unit tests of the deleted DSL itself.
 
-Sequencing logic: engine-authored fixed strings (1–2) first — mechanical and
-low-risk, and they clear the interpreter out of value rendering. The
-author-facing DSL (3–5) last, because it is the only part needing a real
-replacement *language* and its scope depends on the generality checklist.
-Deletion (6) only once nothing calls the interpreter; `uv run pytest` stays green
-at every step, and each PR ships independently without leaving the tree
-half-migrated.
+   *After this, the `get_by_path` interpreter no longer exists.* Proof checking
+   runs entirely on kernel term unification, the closed side-condition algebra,
+   and the scope/subproof mechanism.
+
+**Deferred (typed, driven by a worked example — not the string DSL):**
+
+- **Generality spike for games/code.** Encode tic-tac-toe on the current typed
+  engine; if a win/legality predicate can't be expressed, add a small typed
+  extension to the side-condition algebra (see the revised north star). Chess/go
+  then stress it incrementally.
+- **`label`/`display` per-line overrides** (from PR 1) and the
+  **references/definitions feature** (`behaviour: definition`/`import`, from
+  PR 1) — both to return as typed declarations when needed, never via a revived
+  interpreter.
+
+Sequencing logic: steps 1–2 removed the interpreter's dead engine-internal
+callers (value rendering, definition/import accessors, context editing); step 3
+then rerouted the single surviving use to a typed accessor and deleted the
+apparatus outright — the empirical finding that no live DSL remained is what
+collapsed the original "design a typed layer" PRs 4–6 into that deletion. The
+interpreter is now gone. `uv run pytest` stayed green at every step (each removal
+behaviour-preserving), and each step shipped independently without leaving the
+tree half-migrated. What remains is forward work — the generality spike and the
+typed reintroductions above — not further retirement.

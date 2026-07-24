@@ -193,17 +193,22 @@
 					<Table.Body>
 						{#each system.definitions as def (def.id)}
 							<Table.Row>
-								<Table.Cell class="font-medium">{def.name}</Table.Cell>
+								<Table.Cell class="font-medium">
+									<a class="underline" href={`/systems/${system.id}/definitions/${def.id}`}>{def.name}</a>
+								</Table.Cell>
 								<Table.Cell class="font-mono">{def.higher}</Table.Cell>
 								<Table.Cell class="font-mono">{def.lower}</Table.Cell>
 								<Table.Cell class="hidden font-mono text-xs text-muted-foreground sm:table-cell">
 									{#if def.provisos.length > 0}
 										<div>{def.provisos.join(' ; ')}</div>
 									{/if}
+									{#if def.fresh.length > 0}
+										<div class="opacity-70">fresh {bindingsText(def.fresh)}</div>
+									{/if}
 									{#if def.bindings.length > 0}
 										<div class="opacity-70">{bindingsText(def.bindings)}</div>
 									{/if}
-									{#if def.provisos.length === 0 && def.bindings.length === 0}
+									{#if def.provisos.length === 0 && def.fresh.length === 0 && def.bindings.length === 0}
 										—
 									{/if}
 								</Table.Cell>

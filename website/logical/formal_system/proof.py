@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from ..graphs import find_cycle, saturating_matching, topological_order
 from ..kernel.side_conditions import Not, Occurs
 from ..kernel.terms import from_match
-from ..matching import Match, MatchSet, get_by_path, parse_arguments, parse_path
+from ..matching import Match, MatchSet
 from .definitions import follows_by_definition, kernel_definition_for
 
 if TYPE_CHECKING:
@@ -411,18 +411,15 @@ class Proof:
         if " mapsto " not in ref:
             return {}
 
-        source, target = ref.split(" mapsto ")
-
-        # Get the source pattern using the source line context
-        pattern = get_by_path(None, source, source_proof_line.context)
-
-        # Use the same pattern with the current context to get a target match
-        target_match = pattern.match(target, context)
-
-        if target_match is None:
-            raise Exception(f"Cannot map {source} to {target}.")
-
-        return {source: target_match}
+        # The `<source> mapsto <target>` reference-mapping syntax resolved
+        # `source` to a pattern through the get_by_path interpreter, now retired.
+        # It was unused (no proof in the corpus contains `mapsto`). Raising here
+        # is caught by the reference-resolution fallback in the caller, so the
+        # net effect is that a `mapsto` reference no longer resolves - the citing
+        # line's reference stays unresolved and the line fails to justify. That
+        # is the right outcome for an unsupported syntax; a typed reference
+        # mechanism would reintroduce it deliberately.
+        raise Exception("Reference mapping ('<source> mapsto <target>') is no longer supported.")
 
     def check_logical_line(self, proof_line, context):
         # Check if the given proof line is valid.
@@ -1120,91 +1117,6 @@ class ProofLine:
     def index(self):
         # Get the index of this line in the proof
         return self.proof.proof_lines.index(self)
-
-    def get_by_path(self, path, context, recurse=True):
-        # Get an attribute of the proof line given a path s
-
-        if context.reference_object is None:
-            context = copy(context)
-            context.reference_object = self
-
-        initial, remainder = parse_path(path)
-
-        if remainder:
-            # Use generic get by path
-            return get_by_path(self, path, context)
-
-        # Otherwise, only one part
-        if path == "text()":
-            return self.text
-
-        if path == "match()":
-            # Get the match
-            return self.match
-
-        if path == "pattern()":
-            return self.line_type.pattern
-
-        if path == "formula()":
-            return self.formula
-
-        if path == "label()":
-            return self.label
-
-        if path == "definition()":
-            return self.definition
-
-        if path == "conditions()":
-            return self.context.conditions
-
-        if path == "reference_mapping()":
-            return copy(self.reference_mapping)
-
-        if path == "previous_formulae()":
-            return self.previous_formulae()
-
-        if path.startswith("check_condition(") and path[-1] == ")":
-            inner = path[16:-1]
-            kwargs = parse_arguments(inner, self, context, arg_names=("condition", "mapping"))[1]
-
-            return self.check_condition(kwargs["condition"], context, kwargs["mapping"])
-
-        if path.startswith("follows_from_definition(") and path[-1] == ")":
-            # Follows from definition
-            inner = path[24:-1]
-            kwargs = parse_arguments(inner, self, context, arg_names=("other", "definition", "mapping"))[1]
-
-            return self.follows_from_definition(kwargs["other"], kwargs["definition"], kwargs["mapping"], context)
-
-        # Try to get path using the frozen context
-        if path in self.context.logical:
-            return self.context.logical[path]
-
-        if recurse:
-            # Try generic get_by_path
-            return get_by_path(self, path, context, recurse=False)
-
-        raise Exception(f"Could not find value from path '{path}'.")
-
-    def check_condition(self, condition, context, mapping=None):
-        # Check a condition using the given context. Optionally specify a string variable mapping
-
-        # Work with a copy of context
-        context = copy(context)
-
-        if mapping is not None:
-            # Set context mapping
-            if not isinstance(mapping, dict):
-                raise ValueError(f"Mapping dictionary must be a dictionary, not {type(mapping)!s}.")
-            context.mapping = mapping
-
-        # Set string variable matches
-        context.set_string_variable_matches()
-
-        try:
-            return condition.check_condition(self, context)
-        except Exception:
-            return False
 
     def follows_from_definition(self, other, definition, mapping, context):
         # Check if this proof line follows from the other by means of a definition.
