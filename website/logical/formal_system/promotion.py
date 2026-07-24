@@ -47,6 +47,11 @@ class PromotedTheorem:
     antecedents: tuple[Pattern, ...] = ()
     side_conditions: tuple[SideCondition, ...] = ()
     variables: dict[str, Pattern] = field(default_factory=dict)
+    # How a citation of this theorem is checked, mirroring InferenceRule.matching:
+    # "structural" (term unification) or "string" (associative matching, for a
+    # semi-Thue system like MIU). A theorem carries the regime of the system it was
+    # proved in - a string-rewriting theorem stays string-checked after promotion.
+    matching: str = "structural"
 
     def as_rule(self) -> InferenceRule:
         """Build the ephemeral rule a citation of this theorem is checked against."""
@@ -57,4 +62,5 @@ class PromotedTheorem:
             deduction=self.deduction,
             side_conditions=list(self.side_conditions),
             variables=dict(self.variables),
+            matching=self.matching,
         )

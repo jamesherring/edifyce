@@ -231,6 +231,7 @@ def promote_from_source(
     metavariables: Mapping[str, str],
     premises: Sequence[str] = (),
     distinct: Sequence[str] = (),
+    matching: str = "structural",
 ) -> PromotedTheorem:
     """Build a :class:`PromotedTheorem` from a proved/imported theorem's source.
 
@@ -246,6 +247,11 @@ def promote_from_source(
     Unlike generalising a concrete proof line by renaming leaves, this parses the
     statement against the grammar with the metavariables held schematic, so a
     formula metavariable may stand for a *compound* (the usual case).
+
+    ``matching`` sets how a citation is checked, mirroring ``InferenceRule``:
+    ``"structural"`` (term unification, the default) or ``"string"`` for a theorem
+    proved in a semi-Thue / string-rewriting system (e.g. MIU), which must stay
+    string-checked to remain applicable.
 
     Register the result with :meth:`FormalSystem.promote` to make it citable. The
     theorem is not added to the system's primitive ``inference_rules``.
@@ -288,6 +294,7 @@ def promote_from_source(
         antecedents=antecedents,
         side_conditions=side_conditions,
         variables=dict(string_variables),
+        matching=matching,
     )
 
 

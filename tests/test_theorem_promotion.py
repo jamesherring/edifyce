@@ -32,11 +32,13 @@ import pytest
 
 pytest.importorskip("regex")
 
+from tests.miu_system import miu_spec
 from tests.test_definitional_step_proofs import ALIAS_SYSTEM
 from tests.test_engine_neutrality import HILBERT
 from website.logical.compiler import _revariabilise
 from website.logical.compiler import compile as compile_formal_system
 from website.logical.compiler import promote_from_source
+from website.logical.declarative import build_system
 from website.logical.formal_system.promotion import PromotedTheorem
 from website.logical.kernel.terms import from_match
 from website.logical.matching.patterns import StringPattern
@@ -127,7 +129,7 @@ def promote_proved_leaf(system, proof, generalise: str, sort_name: str) -> Promo
 # 1. Mechanism: promotion is a graph generalisation; the ephemeral rule checks.
 # ---------------------------------------------------------------------------
 def test_promotion_is_a_graph_generalisation():
-    system = compiled(HILBERT)
+    system = build_system(HILBERT)
     proof = system.parse(SELF_IMPLICATION_PROOF)
     assert proof.valid is True
 
@@ -141,7 +143,7 @@ def test_promotion_is_a_graph_generalisation():
 
 
 def test_promoted_theorem_checks_at_compound_and_rejects_non_instance():
-    system = compiled(HILBERT)
+    system = build_system(HILBERT)
     proof = system.parse(SELF_IMPLICATION_PROOF)
     rule = promote_proved_leaf(system, proof, generalise="a", sort_name="formula").as_rule()
     context = copy(system.context)
@@ -157,7 +159,7 @@ def test_promoted_theorem_checks_at_compound_and_rejects_non_instance():
 # 2. The wired citation path: cite a promoted theorem with no shim.
 # ---------------------------------------------------------------------------
 def test_zero_premise_theorem_is_citable_without_registering_a_rule():
-    system = compiled(HILBERT)
+    system = build_system(HILBERT)
     proof = system.parse(SELF_IMPLICATION_PROOF)
     system.promote(promote_proved_leaf(system, proof, generalise="a", sort_name="formula"))
 
@@ -174,7 +176,7 @@ def test_zero_premise_theorem_is_citable_without_registering_a_rule():
 def test_promoted_theorem_with_a_premise_is_cited_like_a_rule():
     # `w`: from `p` derive `(q -> p)` (weakening; provable via K + MP). Promoted
     # from its schematic statement and cited `[w, <premise line>]`.
-    system = compiled(HILBERT)
+    system = build_system(HILBERT)
     system.promote(
         promote_from_source(
             system, "w", "(q → p)", {"p": "formula", "q": "formula"}, premises=("p",)
@@ -228,7 +230,7 @@ def test_distinct_variable_proviso_is_carried_and_enforced():
 # 4. The engine-level promote_from_source API: what it builds and what it rejects.
 # ---------------------------------------------------------------------------
 def test_promote_from_source_builds_the_expected_schema():
-    system = compiled(HILBERT)
+    system = build_system(HILBERT)
     theorem = promote_from_source(system, "I", "(p → p)", {"p": "formula"})
 
     # A formula metavariable, schematic, at the widened sort.
@@ -242,7 +244,7 @@ def test_promote_from_source_builds_the_expected_schema():
 
 
 def test_promote_from_source_rejects_an_unknown_sort():
-    system = compiled(HILBERT)
+    system = build_system(HILBERT)
     with pytest.raises(ValueError, match="not a declared pattern"):
         promote_from_source(system, "T", "(p → p)", {"p": "nonsense"})
 
@@ -251,7 +253,7 @@ def test_promote_from_source_rejects_a_ground_compound():
     # A compound with no metavariables composes no schema term and its flat
     # projection cannot match a nested proof formula — a theorem that never
     # applies, so it is rejected rather than silently built.
-    system = compiled(HILBERT)
+    system = build_system(HILBERT)
     with pytest.raises(ValueError, match="no metavariables"):
         promote_from_source(system, "T", "(a → a)", {})
 
@@ -266,3 +268,26 @@ def test_promote_from_source_accepts_defined_notation():
         promote_from_source(system, "T", "x sub y", {"x": "setvar", "y": "setvar"})
     )
     assert system.parse("a sub b [T]").valid is True
+
+
+# ---------------------------------------------------------------------------
+# 5. A theorem promoted from a string-rewriting (semi-Thue) system stays
+#    string-checked, so associative rewrites remain applicable after promotion.
+# ---------------------------------------------------------------------------
+def test_promoted_theorem_keeps_string_matching():
+    system = build_system(miu_spec())
+    # MIU's doubling step `Mx -> Mxx`, promoted as a string-checked theorem.
+    system.promote(
+        promote_from_source(system, "DBL", "Mxx", {"x": "miustr"}, premises=("Mx",), matching="string")
+    )
+    # From the axiom MI, cite it to double: MI -> MII. This needs associative
+    # (string) matching — x binds to "I" and is concatenated with itself, which
+    # term unification cannot express.
+    assert system.parse("MI\nMII [DBL, 1]").valid is True
+
+    # Control: promoted with the default structural matching, the same rewrite is
+    # rejected — confirming the matching mode is what carries it through promotion.
+    system.promote(
+        promote_from_source(system, "DBLS", "Mxx", {"x": "miustr"}, premises=("Mx",))
+    )
+    assert system.parse("MI\nMII [DBLS, 1]").proof_lines[1].valid is False
