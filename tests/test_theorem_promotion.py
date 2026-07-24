@@ -32,6 +32,7 @@ import pytest
 
 pytest.importorskip("regex")
 
+from tests.test_definitional_step_proofs import ALIAS_SYSTEM
 from tests.test_engine_neutrality import HILBERT
 from website.logical.compiler import _revariabilise
 from website.logical.compiler import compile as compile_formal_system
@@ -246,9 +247,22 @@ def test_promote_from_source_rejects_an_unknown_sort():
         promote_from_source(system, "T", "(p → p)", {"p": "nonsense"})
 
 
-def test_promote_from_source_rejects_an_unparseable_statement():
-    # `∧` is not in HILBERT's grammar, so the template has literal-and-variable
-    # structure but composes to nothing — a malformed statement, not a bare var.
+def test_promote_from_source_rejects_a_ground_compound():
+    # A compound with no metavariables composes no schema term and its flat
+    # projection cannot match a nested proof formula — a theorem that never
+    # applies, so it is rejected rather than silently built.
     system = compiled(HILBERT)
-    with pytest.raises(ValueError, match="does not parse"):
-        promote_from_source(system, "T", "(p ∧ q)", {"p": "formula", "q": "formula"})
+    with pytest.raises(ValueError, match="no metavariables"):
+        promote_from_source(system, "T", "(a → a)", {})
+
+
+def test_promote_from_source_accepts_defined_notation():
+    # A statement in *defined* notation composes no schema term (definitions are
+    # excluded from schema composition) but, having metavariables, still projects
+    # structurally and applies — so it must be accepted, not mistaken for garbage.
+    # `sub` is the alias `x sub y := (x ∈ y)` from ALIAS_SYSTEM.
+    system = compiled(ALIAS_SYSTEM)
+    system.promote(
+        promote_from_source(system, "T", "x sub y", {"x": "setvar", "y": "setvar"})
+    )
+    assert system.parse("a sub b [T]").valid is True

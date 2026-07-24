@@ -202,21 +202,25 @@ def _combine_side_conditions(where_strings: list, context):
 
 def _theorem_schema(text: str, context: "FormalSystemContext", name: str) -> Pattern:
     # Build one schema pattern for a promoted theorem's statement or premise, and
-    # insist a *structured* formula actually parsed. build_schema_pattern falls
-    # back to a flat projection (schema_term None) both for a bare metavariable -
-    # legitimate - and for a template no production matched - a silent
-    # mis-promotion that would yield a theorem which never applies. A pattern with
-    # both literal and variable structure but no composed term is the latter, so
-    # reject it: an importer should hear about a malformed statement, not get a
-    # dead theorem.
+    # reject a *ground* compound - literal structure but no metavariables.
+    # compose_schema_term keys on a metavariable, so such a statement composes no
+    # nested term, and its flat projection cannot match a nested proof formula: it
+    # would be a theorem that never applies. A statement *with* metavariables
+    # projects structurally even when nothing is composed - notably defined
+    # notation, whose flat projection does apply (a `sub` alias matches an
+    # `a sub b` line) - so those are kept. Supporting ground compound conclusions
+    # (Metamath closed theorems like `2 e. RR`) is future work.
     pattern = build_schema_pattern(text, context, name)
     if (
         isinstance(pattern, StringPattern)
         and pattern.schema_term is None
-        and pattern.variable_locations
         and pattern.non_variable_locations
+        and not pattern.variable_locations
     ):
-        raise ValueError(f"Theorem schema {text!r} does not parse against the system grammar.")
+        raise ValueError(
+            f"Statement {text!r} has no metavariables and composes no schema term "
+            "(a ground/atomic compound); it is not yet supported - promote it as a rule."
+        )
     return pattern
 
 
@@ -247,13 +251,18 @@ def promote_from_source(
     theorem is not added to the system's primitive ``inference_rules``.
 
     Raises :class:`ValueError` if the system has no build context, if a sort name
-    is not a declared pattern of the system, or if a structured statement or
-    premise does not parse against the grammar. A fully ground (metavariable-free)
-    compound statement is not yet supported and should be promoted as a rule.
+    is not a declared pattern of the system, or if a conclusion/premise is a
+    ground compound (literal structure but no metavariables) - a closed theorem
+    such as Metamath's ``2 e. RR``, not yet supported here; promote it as a rule.
+    As with an authored rule schema, a statement naming an *undefined* symbol is
+    not rejected here - it simply yields a theorem that never applies - so
+    validate imported statements upstream.
     """
     if system.build_context is None:
         raise ValueError("Cannot promote a theorem against a system with no build context.")
 
+    # Copy the context so the theorem's metavariables can be set in
+    # string_variables without mutating the system's own build context.
     context = copy(system.build_context)
     string_variables: dict[str, Pattern] = {}
     for name, sort_name in metavariables.items():
