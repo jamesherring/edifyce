@@ -200,29 +200,60 @@ def _combine_side_conditions(where_strings: list, context):
     return conditions[0] if len(conditions) == 1 else And(tuple(conditions))
 
 
-def _ground_schema_term(text: str, context: "FormalSystemContext") -> "Term | None":
+def _logical_sorts(system: FormalSystem) -> list[Pattern]:
+    # The sorts a proof line's formula is actually parsed at: each logical line
+    # type's declared formula field (or the whole line pattern, for `formula:
+    # self`). Composing a ground statement against *these* - rather than whichever
+    # sort in the grammar happens to match first - keeps promotion in step with how
+    # the system parses a line, so a theorem cannot be built against an unrelated
+    # sort that no proof line would ever be read at.
+    sorts: list[Pattern] = []
+    for line_type in system.line_types:
+        if line_type.behaviour != "logical" or line_type.formula_field is None:
+            continue
+
+        if line_type.formula_field == "self":
+            sort = line_type.pattern
+        elif isinstance(line_type.pattern, StringPattern):
+            sort = line_type.pattern.variables.get(line_type.formula_field)
+        else:
+            continue
+
+        if isinstance(sort, Pattern) and not any(sort is seen for seen in sorts):
+            sorts.append(sort)
+    return sorts
+
+
+def _ground_schema_term(
+    text: str, system: FormalSystem, context: "FormalSystemContext"
+) -> "Term | None":
     # Compose the nested kernel term of a *ground* statement - one with literal
     # structure but no metavariables, like a closed theorem `2 ∈ ℝ`.
     #
     # compose_schema_term deliberately declines these (it keys on a metavariable),
     # so promotion composes them here instead. Two differences from that path: the
-    # parse may use the system's *resolved* definitions - a promoted theorem is
-    # built against an already-compiled system, unlike a rule schema composed mid
-    # compilation where definitions are still pending - and there is nothing to
-    # re-variabilise, since a ground statement binds nothing. Returns None when
-    # nothing in the grammar parses the text.
+    # parse runs at the system's logical sorts (see _logical_sorts) and may use its
+    # *resolved* definitions, which live on the built system's proof context - a
+    # promoted theorem is built against an already-compiled system, unlike a rule
+    # schema composed mid-compilation, where the build context still holds pending
+    # records. There is nothing to re-variabilise: a ground statement binds no
+    # metavariable. Returns None when no logical sort parses the text.
     parse_context = copy(context)
-    parse_context.definitions = [d for d in context.definitions if hasattr(d, "match")]
-    for candidate in context.variables.values():
-        if not isinstance(candidate, UnionPattern):
-            continue
-        matched = candidate.match(text, parse_context)
+    parse_context.definitions = list(system.context.definitions)
+    for sort in _logical_sorts(system):
+        matched = sort.match(text, parse_context)
         if matched is not None:
             return from_match(matched, parse_context)
     return None
 
 
-def _theorem_schema(text: str, context: "FormalSystemContext", name: str) -> Pattern:
+def _theorem_schema(
+    text: str,
+    system: FormalSystem,
+    context: "FormalSystemContext",
+    name: str,
+    matching: str,
+) -> Pattern:
     # Build one schema pattern for a promoted theorem's statement or premise.
     #
     # A *ground* compound - literal structure but no metavariables - composes no
@@ -234,19 +265,28 @@ def _theorem_schema(text: str, context: "FormalSystemContext", name: str) -> Pat
     # nothing else). A statement *with* metavariables is left alone: it projects
     # structurally even when nothing is composed, notably defined notation, whose
     # flat projection does apply (a `sub` alias matches an `a sub b` line).
+    #
+    # Only for structural matching: the string checker matches surface strings and
+    # never reads `schema_term` (see InferenceRule.check), so composing a term for
+    # it - let alone failing when none composes - would be meaningless.
     pattern = build_schema_pattern(text, context, name)
     if (
-        isinstance(pattern, StringPattern)
+        matching != "string"
+        and isinstance(pattern, StringPattern)
         and pattern.schema_term is None
         and pattern.non_variable_locations
         and not pattern.variable_locations
     ):
-        ground = _ground_schema_term(text, context)
+        ground = _ground_schema_term(text, system, context)
         if ground is None:
             raise ValueError(
-                f"Statement {text!r} has no metavariables and does not parse "
-                "against the system grammar."
+                f"Statement {text!r} has no metavariables and does not parse at any "
+                "of the system's logical sorts."
             )
+        # A fresh shell, never the pattern build_schema_pattern returned: that can
+        # be a system-owned pattern out of the grammar, which must not be given a
+        # theorem's schema term.
+        pattern = StringPattern(name=name, pattern=text, pre_format=context.pre_format)
         pattern.schema_term = ground
     return pattern
 
@@ -288,10 +328,11 @@ def promote_from_source(
     exactly its own statement and nothing else.
 
     Raises :class:`ValueError` if the system has no build context, if a sort name
-    is not a declared pattern of the system, or if a ground conclusion/premise does
-    not parse against the grammar. A statement *with* metavariables that names an
-    undefined symbol is not rejected here - as with an authored rule schema it
-    simply yields a theorem that never applies - so validate imports upstream.
+    is not a declared pattern of the system, or if a structurally-matched ground
+    conclusion/premise parses at none of the system's logical sorts. A statement
+    *with* metavariables that names an undefined symbol is not rejected here - as
+    with an authored rule schema it simply yields a theorem that never applies - so
+    validate imports upstream.
     """
     if system.build_context is None:
         raise ValueError("Cannot promote a theorem against a system with no build context.")
@@ -310,9 +351,9 @@ def promote_from_source(
         string_variables[name] = sort
     context.string_variables = string_variables
 
-    deduction = _theorem_schema(statement, context, label)
+    deduction = _theorem_schema(statement, system, context, label, matching)
     antecedents = tuple(
-        _theorem_schema(text, context, f"{label}.premise{index}")
+        _theorem_schema(text, system, context, f"{label}.premise{index}", matching)
         for index, text in enumerate(premises)
     )
     side_conditions = tuple(parse_side_condition(line, context) for line in distinct)

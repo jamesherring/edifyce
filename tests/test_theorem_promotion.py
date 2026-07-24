@@ -357,6 +357,49 @@ def test_closed_theorem_justifies_exactly_its_own_statement():
     assert system.parse("2 ∈ ℕ [2re]").proof_lines[0].valid is False
 
 
+def test_closed_theorem_in_defined_notation():
+    # The ground parse uses the system's *resolved* definitions (which live on the
+    # built system's proof context, not the build context), so a closed statement
+    # written in defined notation composes. Metamath's closed theorems are stated
+    # over defined symbols, so this is the shape that matters for an import.
+    system = build_system(alias_spec())
+    system.promote(promote_from_source(system, "G", "a sub b", {}))
+    assert system.parse("a sub b [G]").valid is True
+
+
+def test_closed_theorem_at_a_non_union_logical_sort():
+    # A system whose logical sort is a bare regex (no union wrapper) parses lines
+    # fine, so promoting a ground statement must compose there too rather than
+    # claiming the grammar cannot parse it.
+    system = build_system(miu_spec())
+    system.promote(promote_from_source(system, "T", "MII", {}))
+    assert system.parse("MII [T]").valid is True
+
+
+def test_ground_statement_is_not_composed_for_string_matching():
+    # The string checker matches surface strings and never reads `schema_term`, so
+    # a string-matched theorem must not be put through ground composition (nor
+    # rejected when nothing composes).
+    system = build_system(miu_spec())
+    system.promote(promote_from_source(system, "TS", "MII", {}, matching="string"))
+    assert system.parse("MII [TS]").valid is True
+
+
+def test_ground_composition_uses_the_logical_sort_not_the_first_match():
+    # A broad unrelated sort declared *before* the logical one must not capture the
+    # parse: composing at it would build a term no proof line is ever read at,
+    # yielding a theorem that silently never applies.
+    ambiguous = CLOSED_SYSTEM.replace(
+        "    UnionPattern num:",
+        "    Regex rawtext:\n        ^[0-9∈ℝℕ ]+$\n\n"
+        "    UnionPattern raw:\n        rawtext\n\n"
+        "    UnionPattern num:",
+    )
+    system = compiled(ambiguous)
+    system.promote(promote_from_source(system, "2re", "2 ∈ ℝ", {}))
+    assert system.parse("2 ∈ ℝ [2re]").valid is True
+
+
 def test_closed_statement_is_usable_as_a_premise():
     # A ground *premise* composes the same way, so a mixed theorem — ground
     # premise, ground conclusion — is citable with the premise line.
