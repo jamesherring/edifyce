@@ -132,6 +132,9 @@ class Definition(BaseModel):
     # The defining form's bound variables (the `fresh` clause). Declaring them lets
     # a quantified definition take the kernel path, so a proviso on it is enforced.
     fresh: list[Binding] = Field(default_factory=list)
+    # Optional name a proof cites this definition by (`[<label>, <line>]`); null
+    # when unnamed. Unique within a system.
+    label: str | None = None
 
 
 class Axiom(BaseModel):
@@ -317,6 +320,8 @@ class DefinitionCreate(BaseModel):
     bindings: list[Binding] = Field(default_factory=list)
     # The defining form's bound variables (the `fresh` clause).
     fresh: list[Binding] = Field(default_factory=list)
+    # Optional citation name (`[<label>, <line>]`); must be unique within a system.
+    label: str | None = Field(None, max_length=64)
 
 
 class DefinitionUpdate(BaseModel):
@@ -330,6 +335,7 @@ class DefinitionUpdate(BaseModel):
     condition: str | None = Field(None, max_length=512)
     bindings: list[Binding] | None = None
     fresh: list[Binding] | None = None
+    label: str | None = Field(None, max_length=64)
 
 
 class AxiomCreate(BaseModel):

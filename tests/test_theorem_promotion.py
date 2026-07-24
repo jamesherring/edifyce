@@ -33,7 +33,7 @@ import pytest
 pytest.importorskip("regex")
 
 from tests.miu_system import miu_spec
-from tests.test_definitional_step_proofs import ALIAS_SYSTEM
+from tests.test_definitional_step_proofs import alias_spec
 from tests.test_engine_neutrality import HILBERT
 from website.logical.compiler import _revariabilise
 from website.logical.compiler import compile as compile_formal_system
@@ -262,8 +262,8 @@ def test_promote_from_source_accepts_defined_notation():
     # A statement in *defined* notation composes no schema term (definitions are
     # excluded from schema composition) but, having metavariables, still projects
     # structurally and applies — so it must be accepted, not mistaken for garbage.
-    # `sub` is the alias `x sub y := (x ∈ y)` from ALIAS_SYSTEM.
-    system = compiled(ALIAS_SYSTEM)
+    # `sub` is the alias `x sub y := (x ∈ y)` from alias_spec().
+    system = build_system(alias_spec())
     system.promote(
         promote_from_source(system, "T", "x sub y", {"x": "setvar", "y": "setvar"})
     )

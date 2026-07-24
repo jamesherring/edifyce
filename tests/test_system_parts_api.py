@@ -660,6 +660,34 @@ def test_definition_patch_omitting_fresh_leaves_it_unchanged(client):
     assert renamed.json()["fresh"] == [{"var": "z", "sort": "term"}]
 
 
+def test_definition_label_round_trips_through_the_api(client):
+    # The citation `label` persists on the write response and the aggregate detail,
+    # PATCH changes it, a metadata-only PATCH leaves it alone, and a null PATCH
+    # clears it (an unnamed definition, cited only via the generic `[Def, line]`).
+    _login(client, "ada@example.com")
+    sid = _defn_system(client)
+    defn = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "term", "name": "subset", "higher": "x sub y", "lower": "x in y",
+        "label": "sub",
+    })
+    assert defn["label"] == "sub"
+    assert client.get(f"/api/formal-systems/{sid}").json()["definitions"][0]["label"] == "sub"
+
+    assert client.patch(
+        f"/api/formal-systems/{sid}/definitions/{defn['id']}", json={"label": "subseteq"}
+    ).json()["label"] == "subseteq"
+
+    # A metadata-only PATCH (model_fields_set excludes `label`) preserves it.
+    assert client.patch(
+        f"/api/formal-systems/{sid}/definitions/{defn['id']}", json={"name": "renamed"}
+    ).json()["label"] == "subseteq"
+
+    # An explicit null clears the label back to unnamed.
+    assert client.patch(
+        f"/api/formal-systems/{sid}/definitions/{defn['id']}", json={"label": None}
+    ).json()["label"] is None
+
+
 def test_definition_fresh_over_unknown_sort_is_rejected(client):
     # A fresh var naming a sort the system doesn't declare is rejected at write
     # time (400, the same _resolve_symbol path as bindings), not a 500 or a

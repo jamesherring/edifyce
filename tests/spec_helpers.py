@@ -61,6 +61,7 @@ def defn(
     bindings: Iterable[Binding],
     condition: str | None = None,
     fresh: Iterable[Binding] = (),
+    label: str | None = None,
 ) -> Definition:
     return Definition(
         sort=sort,
@@ -70,6 +71,7 @@ def defn(
         bindings=list(bindings),
         condition=condition,
         fresh=list(fresh),
+        label=label,
     )
 
 

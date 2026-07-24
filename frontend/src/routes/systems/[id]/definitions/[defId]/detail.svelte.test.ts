@@ -24,6 +24,7 @@ function definition(over: Partial<Definition> = {}): Definition {
 		condition: 'disjoint(x, y)',
 		bindings: [{ var: 'x', sort: 'variable' }],
 		fresh: [{ var: 'z', sort: 'variable' }],
+		label: null,
 		...over
 	};
 }

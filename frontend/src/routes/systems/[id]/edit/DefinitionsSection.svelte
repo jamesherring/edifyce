@@ -29,6 +29,7 @@
 
 	let sortName = $state('');
 	let name = $state('');
+	let label = $state('');
 	let higher = $state('');
 	let lower = $state('');
 	let provisos = $state<StringRow[]>([]);
@@ -48,6 +49,7 @@
 		fill: (item) => {
 			sortName = item ? item.sort : (sortNames[0] ?? '');
 			name = item?.name ?? '';
+			label = item?.label ?? '';
 			higher = item?.higher ?? '';
 			lower = item?.lower ?? '';
 			provisos = item?.provisos.map((v) => ({ value: v })) ?? [];
@@ -62,6 +64,9 @@
 		return {
 			sort: sortName,
 			name: name.trim(),
+			// Empty clears the citation label (null): the definition is then reachable
+			// only via the generic [Def, line] keyword, not a named citation.
+			label: label.trim() || null,
 			higher: higher.trim(),
 			lower: lower.trim(),
 			provisos: provisos.map((p) => p.value.trim()).filter(Boolean),
@@ -140,6 +145,13 @@
 		</select>
 	</div>
 	<FormField label="Name" id="def-name" bind:value={name} placeholder="e.g. subset" maxlength={128} />
+	<div class="space-y-2">
+		<Label for="def-label">Citation label <span class="text-xs text-muted-foreground">(optional)</span></Label>
+		<Input id="def-label" bind:value={label} class="font-mono" placeholder="e.g. df-subset" maxlength={64} />
+		<p class="text-xs text-muted-foreground">
+			Cited in a proof as [label, line]. Must be unique in the system; leave blank to cite only via [Def, line].
+		</p>
+	</div>
 	<div class="space-y-2">
 		<Label for="def-higher">Defined form</Label>
 		<Input id="def-higher" bind:value={higher} class="font-mono" placeholder="e.g. x ⊆ y" maxlength={512} />

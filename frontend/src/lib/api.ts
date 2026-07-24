@@ -112,6 +112,9 @@ export interface Definition {
 	/** The defining form's bound variables (the `fresh` clause). Declaring them
 	 * lets a quantified definition take the kernel path so its proviso is enforced. */
 	fresh: Binding[];
+	/** Optional name a proof cites this definition by (`[<label>, <line>]`); null
+	 * when unnamed. Unique within a system. */
+	label: string | null;
 }
 
 export interface Axiom {
@@ -260,6 +263,8 @@ export interface DefinitionCreate {
 	bindings?: Binding[];
 	/** The defining form's bound variables (the `fresh` clause). */
 	fresh?: Binding[];
+	/** Optional citation name (`[<label>, <line>]`); must be unique within a system. */
+	label?: string | null;
 }
 export type DefinitionUpdate = Partial<DefinitionCreate>;
 

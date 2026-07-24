@@ -14,166 +14,110 @@ import pytest
 
 pytest.importorskip("regex")
 
-from website.logical.compiler import compile as compile_formal_system
+from website.logical.declarative import LinePart, LineSpec, Rule, SystemSpec, build_spec
+
+from tests.spec_helpers import brackets, defn, regex_prod, rule, template_prod
 
 
-def compiled(code):
-    result = compile_formal_system(code)
+def build_declarative(spec: SystemSpec):
+    result = build_spec(spec)
     assert "errors" not in result, result.get("errors")
     return result["system"]
 
 
+def _statement_line() -> LineSpec:
+    # The reference part allows the hyphen in labels like `df-subset` and the
+    # comma/space in `Def, 1` (a wider set than the shared statement_line helper).
+    return LineSpec(
+        name="statement",
+        shape="<formula> [<reference>]",
+        parts=[LinePart(name="reference", regex="[A-Za-z0-9, -]+")],
+        logical_sort="formula",
+    )
+
+
+def _setvar_prod():
+    return regex_prod("setvar", "setvar_atom", "[a-z]")
+
+
+def _hyp_rule() -> Rule:
+    # `with f as formula: deduction f` - introduce any formula from nothing so
+    # either the folded or unfolded form can open a proof.
+    return rule("HYP", "hypothesis", [], "f", [("f", "formula")])
+
+
 # An alias definition (string path): `x sub y` abbreviates the membership
-# `(x ∈ y)`. HYP introduces any formula so either form can open a proof.
-ALIAS_SYSTEM = """FormalSystem AliasSys:
-
-    Regex setvar:
-        ^[a-z]$
-
-    Regex reference:
-        ^[A-Za-z0-9, -]+$
-
-    Pattern membership:
-        with x as setvar, y as setvar:
-            (x ∈ y)
-            Define x sub y as (x ∈ y) label sub
-
-    UnionPattern formula:
-        membership
-
-    Pattern statement_pattern:
-        with f as formula, r as reference:
-            f [r]
-
-    LineType statement:
-        pattern: statement_pattern
-        behaviour: logical
-        formula: f
-        reference: r
-
-    with f as formula:
-        InferenceRule hypothesis:
-            label:
-                HYP
-            deduction:
-                f
-"""
+# `(x ∈ y)`, named `sub` so a proof can cite it as `[sub, <line>]`. Extra labelled
+# definitions can be appended for the distinct/duplicate-label cases.
+def alias_spec(extra_definitions: tuple = ()) -> SystemSpec:
+    return SystemSpec(
+        name="AliasSys",
+        brackets=brackets(),
+        productions=[
+            _setvar_prod(),
+            template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+        ],
+        lines=[_statement_line()],
+        definitions=[
+            defn("formula", "sub", "x sub y", "(x ∈ y)",
+                 [("x", "setvar"), ("y", "setvar")], label="sub"),
+            *extra_definitions,
+        ],
+        rules=[_hyp_rule()],
+    )
 
 
 # A binder definition (kernel path): df-subset, whose defining form binds a fresh
-# z, declared with the `fresh` clause so the unfold is capture-avoiding.
-SUBSET_SYSTEM = """FormalSystem SetTheory:
-
-    Regex setvar:
-        ^[a-z]$
-
-    Regex reference:
-        ^[A-Za-z0-9, -]+$
-
-    Pattern membership:
-        with x as setvar, y as setvar:
-            (x ∈ y)
-
-    UnionPattern formula:
-        membership
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p → q)
-
-    formula:
-        implication
-
-    Pattern forall:
-        with x as setvar, phi as formula:
-            ∀x.phi
-
-    formula:
-        forall
-
-    Pattern subset:
-        with x as setvar, y as setvar:
-            (x ⊆ y)
-
-    formula:
-        subset
-
-    formula:
-        with x as setvar, y as setvar:
-            Define (x ⊆ y) as ∀z.((z ∈ x) → (z ∈ y)) fresh z as setvar label df-subset
-
-    Pattern statement_pattern:
-        with f as formula, r as reference:
-            f [r]
-
-    LineType statement:
-        pattern: statement_pattern
-        behaviour: logical
-        formula: f
-        reference: r
-
-    with f as formula:
-        InferenceRule hypothesis:
-            label:
-                HYP
-            deduction:
-                f
-"""
+# z, declared with the `fresh` clause so the unfold is capture-avoiding. Named
+# `df-subset` (a hyphen in the label, hence the wider reference part).
+def subset_spec() -> SystemSpec:
+    return SystemSpec(
+        name="SetTheory",
+        brackets=brackets(),
+        productions=[
+            _setvar_prod(),
+            template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+            template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
+            template_prod("formula", "forall", "∀x.phi", [("x", "setvar"), ("phi", "formula")]),
+            template_prod("formula", "subset", "(x ⊆ y)", [("x", "setvar"), ("y", "setvar")]),
+        ],
+        lines=[_statement_line()],
+        definitions=[
+            defn("formula", "df_subset", "(x ⊆ y)", "∀z.((z ∈ x) → (z ∈ y))",
+                 [("x", "setvar"), ("y", "setvar")], fresh=[("z", "setvar")], label="df-subset"),
+        ],
+        rules=[_hyp_rule()],
+    )
 
 
 # A system whose inference-rule label collides with the definitional-step
-# keyword, to confirm rules win.
-COLLIDING_SYSTEM = """FormalSystem Collide:
-
-    Regex atom:
-        ^[a-z]$
-
-    Regex reference:
-        ^[A-Za-z0-9, -]+$
-
-    UnionPattern formula:
-        atom
-
-    Pattern statement_pattern:
-        with f as formula, r as reference:
-            f [r]
-
-    LineType statement:
-        pattern: statement_pattern
-        behaviour: logical
-        formula: f
-        reference: r
-
-    with p as formula:
-        InferenceRule hypothesis:
-            label:
-                HYP
-            deduction:
-                p
-
-        InferenceRule repetition:
-            label:
-                Def
-            antecedents:
-                p
-            deduction:
-                p
-"""
+# keyword `Def`, to confirm the rule wins.
+def colliding_spec() -> SystemSpec:
+    return SystemSpec(
+        name="Collide",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]")],
+        lines=[_statement_line()],
+        rules=[
+            rule("HYP", "hypothesis", [], "p", [("p", "formula")]),
+            rule("Def", "repetition", ["p"], "p", [("p", "formula")]),
+        ],
+    )
 
 
 @pytest.fixture(scope="module")
 def alias_system():
-    return compiled(ALIAS_SYSTEM)
+    return build_declarative(alias_spec())
 
 
 @pytest.fixture(scope="module")
 def subset_system():
-    return compiled(SUBSET_SYSTEM)
+    return build_declarative(subset_spec())
 
 
 @pytest.fixture(scope="module")
 def colliding_system():
-    return compiled(COLLIDING_SYSTEM)
+    return build_declarative(colliding_spec())
 
 
 # ---------------------------------------------------------------------------
@@ -242,26 +186,22 @@ def test_named_binder_definition_unfold_is_valid(subset_system):
 def test_equivalent_definitions_keep_their_distinct_labels():
     # The same forms declared under two labels must stay separately citable -
     # equivalence-based dedup must not collapse them and drop a label.
-    code = ALIAS_SYSTEM.replace(
-        "Define x sub y as (x ∈ y) label sub",
-        "Define x sub y as (x ∈ y) label sub\n"
-        "            Define x sub y as (x ∈ y) label subseteq",
-    )
-    system = compiled(code)
+    system = build_declarative(alias_spec(extra_definitions=(
+        defn("formula", "sub2", "x sub y", "(x ∈ y)",
+             [("x", "setvar"), ("y", "setvar")], label="subseteq"),
+    )))
     for label in ("sub", "subseteq"):
         proof = system.parse(f"a sub b [HYP]\n(a ∈ b) [{label}, 1]")
         assert proof.proof_lines[1].valid is True, label
 
 
-def test_duplicate_definition_labels_are_a_compile_error():
+def test_duplicate_definition_labels_are_a_build_error():
     # A cited name must resolve to one definition, so two definitions sharing a
-    # label is rejected at compile time.
-    code = ALIAS_SYSTEM.replace(
-        "Define x sub y as (x ∈ y) label sub",
-        "Define x sub y as (x ∈ y) label sub\n"
-        "            Define y has x as (x ∈ y) label sub",
-    )
-    result = compile_formal_system(code)
+    # label is rejected at build time.
+    result = build_spec(alias_spec(extra_definitions=(
+        defn("formula", "has", "y has x", "(x ∈ y)",
+             [("x", "setvar"), ("y", "setvar")], label="sub"),
+    )))
     assert "errors" in result
     assert any("Duplicate definition label" in e for e in result["errors"])
 

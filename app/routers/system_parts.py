@@ -521,6 +521,10 @@ async def _assign_definition(session: AsyncSession, system_id: uuid.UUID, row: D
         row.higher = payload.higher
     if "lower" in fields and payload.lower is not None:
         row.lower = payload.lower
+    # `label` is nullable (an unnamed definition is cited only via `[Def, ...]`), so
+    # a client may clear it by sending null — assign whenever the field is present.
+    if "label" in fields:
+        row.label = payload.label
     # Bindings first: a proviso's metavariables are validated against them, so a
     # same-request binding change must land before the provisos are rebuilt.
     bindings_changed = "bindings" in fields and payload.bindings is not None
