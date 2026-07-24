@@ -11,19 +11,30 @@ engine:
    expresses negation-introduction (reductio), whose conclusion is a negation,
    purely from source. What a discharge rule concludes lives in the system, not
    the engine.
+
+Both systems are assembled declaratively (`SystemSpec` + `build_system`), the
+same build path the database and API use.
 """
 
 import pytest
 
 pytest.importorskip("regex")
 
-from website.logical.compiler import compile as compile_formal_system
+from website.logical.declarative import Rule, Subproof, SystemSpec, build_system
 
-
-def compiled(code):
-    result = compile_formal_system(code)
-    assert "errors" not in result, result.get("errors")
-    return result["system"]
+from tests.spec_helpers import (
+    assumption_line,
+    atom_const_prod,
+    brackets,
+    cp_rule,
+    implication_prod,
+    mp_rule,
+    negation_prod,
+    regex_prod,
+    reiteration_rule,
+    rule,
+    statement_line,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -31,62 +42,26 @@ def compiled(code):
 #    No assumptions, no `scope:` lines - the deduction theorem is a metatheorem
 #    here, not an object-level rule, and the scope machinery stays inert.
 # ---------------------------------------------------------------------------
-HILBERT = r"""FormalSystem Hilbert:
-
-    Regex atom:
-        ^[a-z][a-z0-9]*$
-
-    UnionPattern formula:
-        atom
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p → q)
-
-    formula:
-        implication
-
-    Regex reference:
-        ^[A-Za-z0-9, ]+$
-
-    Pattern statement:
-        with f as formula, r as reference:
-            f [r]
-
-    LineType claim:
-        pattern: statement
-        behaviour: logical
-        formula: f
-        reference: r
-
-    with p as formula, q as formula, r as formula:
-
-        InferenceRule axiom_k:
-            label:
-                K
-            deduction:
-                (p → (q → p))
-
-        InferenceRule axiom_s:
-            label:
-                S
-            deduction:
-                ((p → (q → r)) → ((p → q) → (p → r)))
-
-        InferenceRule modus_ponens:
-            label:
-                MP
-            antecedents:
-                p
-                (p → q)
-            deduction:
-                q
-"""
+_HILBERT_BINDINGS = [("p", "formula"), ("q", "formula"), ("r", "formula")]
+HILBERT = SystemSpec(
+    name="Hilbert",
+    brackets=brackets(),
+    productions=[
+        regex_prod("formula", "atom", "[a-z][a-z0-9]*"),
+        implication_prod(),
+    ],
+    lines=[statement_line()],
+    rules=[
+        rule("K", "axiom_k", [], "(p → (q → p))", _HILBERT_BINDINGS),
+        rule("S", "axiom_s", [], "((p → (q → r)) → ((p → q) → (p → r)))", _HILBERT_BINDINGS),
+        mp_rule(),
+    ],
+)
 
 
 @pytest.fixture(scope="module")
 def hilbert():
-    return compiled(HILBERT)
+    return build_system(HILBERT)
 
 
 def test_hilbert_proves_self_implication_without_assumptions(hilbert):
@@ -113,98 +88,35 @@ def test_scope_machinery_is_inert_without_scope_lines(hilbert):
 # 2. The same discharge mechanism, a different conclusion: negation
 #    introduction (reductio). Its deduction is a negation, not an implication.
 # ---------------------------------------------------------------------------
-NEG = r"""FormalSystem Neg:
-
-    Regex atom:
-        ^[a-z][a-z0-9]*$
-
-    Atom falsum: ⊥
-
-    UnionPattern formula:
-        atom
-        falsum
-
-    Pattern negation:
-        with p as formula:
-            ¬p
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p → q)
-
-    formula:
-        negation
-        implication
-
-    Regex reference:
-        ^[A-Za-z0-9, ]+$
-
-    Pattern statement:
-        with f as formula, r as reference:
-            f [r]
-
-    Pattern assumption_pattern:
-        with phi as formula:
-            assume phi
-
-    LineType claim:
-        pattern: statement
-        behaviour: logical
-        formula: f
-        reference: r
-
-    LineType assume:
-        pattern: assumption_pattern
-        behaviour: logical
-        scope: assumption
-        formula: phi
-
-    with p as formula, q as formula:
-
-        InferenceRule reiteration:
-            label:
-                R
-            antecedents:
-                p
-            deduction:
-                p
-
-        InferenceRule contradiction:
-            label:
-                X
-            antecedents:
-                p
-                ¬p
-            deduction:
-                ⊥
-
-        InferenceRule negation_intro:
-            label:
-                NI
-            subproof:
-                assume:
-                    p
-                derive:
-                    ⊥
-            deduction:
-                ¬p
-
-        InferenceRule conditional_proof:
-            label:
-                CP
-            subproof:
-                assume:
-                    p
-                derive:
-                    q
-            deduction:
-                (p → q)
-"""
+NEG = SystemSpec(
+    name="Neg",
+    brackets=brackets(),
+    productions=[
+        regex_prod("formula", "atom", "[a-z][a-z0-9]*"),
+        atom_const_prod("formula", "falsum", "⊥"),
+        negation_prod(),
+        implication_prod(),
+    ],
+    lines=[statement_line(), assumption_line()],
+    rules=[
+        reiteration_rule(),  # R
+        rule("X", "contradiction", ["p", "¬p"], "⊥", [("p", "formula")]),
+        Rule(
+            label="NI",
+            name="negation introduction",
+            antecedents=[],
+            deduction="¬p",
+            bindings=[("p", "formula")],
+            subproof=Subproof(assume="p", derive="⊥"),
+        ),
+        cp_rule(),  # CP
+    ],
+)
 
 
 @pytest.fixture(scope="module")
 def neg():
-    return compiled(NEG)
+    return build_system(NEG)
 
 
 def test_negation_introduction_is_a_discharge_rule(neg):

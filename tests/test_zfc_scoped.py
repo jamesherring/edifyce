@@ -1,22 +1,25 @@
 """The scoped-subproof engine: the same ZFC theorems, checked soundly.
 
-This is the target behaviour for the rework. Written before the engine
-changes (TDD): assumptions open first-class subproofs, references are
-scope-checked, and discharge rules (`CP`/`UG`) consume a whole subproof.
+Assumptions open first-class subproofs, references are scope-checked, and
+discharge rules (`CP`/`UG`) consume a whole subproof. The system is assembled
+declaratively (`zfc_systems.scoped_zfc_spec` + `build_spec`) rather than parsed
+from `.edi`: scope line types and subproof rules are now first-class in the
+`SystemSpec` model, so the checks below run against the same build path the
+database and API use.
 """
 
 import pytest
 
 pytest.importorskip("regex")
 
-from website.logical.compiler import compile as compile_formal_system
+from website.logical.declarative import build_spec
 
-from zfc_systems import SCOPED_ZFC
+from zfc_systems import scoped_zfc_spec
 
 
 @pytest.fixture(scope="module")
 def scoped():
-    result = compile_formal_system(SCOPED_ZFC)
+    result = build_spec(scoped_zfc_spec())
     assert "errors" not in result, result.get("errors")
     return result["system"]
 
