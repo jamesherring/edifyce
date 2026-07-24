@@ -28,8 +28,21 @@
 	let antecedents = $state<StringRow[]>([]);
 	let sideConditions = $state<StringRow[]>([]);
 	let bindings = $state<Binding[]>([]);
+
+	// A discharge rule (→I, RAA, ∀I) consumes a subproof instead of citing lines:
+	// a `derive` conclusion, opened by exactly one of `assume` (a hypothesis) or
+	// `fresh` (an eigenvariable).
+	type Opener = 'assume' | 'fresh';
+	let hasSubproof = $state(false);
+	let subproofDerive = $state('');
+	let subproofOpener = $state<Opener>('assume');
+	let subproofOpenerValue = $state('');
+
 	const canSave = $derived(
-		label.trim().length > 0 && name.trim().length > 0 && deduction.trim().length > 0
+		label.trim().length > 0 &&
+			name.trim().length > 0 &&
+			deduction.trim().length > 0 &&
+			(!hasSubproof || (subproofDerive.trim().length > 0 && subproofOpenerValue.trim().length > 0))
 	);
 
 	const s = createSectionController<Rule, ReturnType<typeof payload>>({
@@ -46,11 +59,17 @@
 			antecedents = item?.antecedents.map((v) => ({ value: v })) ?? [];
 			sideConditions = item?.side_conditions.map((v) => ({ value: v })) ?? [];
 			bindings = item?.bindings.map((b) => ({ ...b })) ?? [];
+			const sub = item?.subproof ?? null;
+			hasSubproof = sub !== null;
+			subproofDerive = sub?.derive ?? '';
+			subproofOpener = sub?.fresh != null ? 'fresh' : 'assume';
+			subproofOpenerValue = (sub?.fresh ?? sub?.assume) ?? '';
 		},
 		payload
 	});
 
 	function payload() {
+		const opener = subproofOpenerValue.trim();
 		return {
 			label: label.trim(),
 			name: name.trim(),
@@ -58,7 +77,14 @@
 			matching,
 			antecedents: antecedents.map((a) => a.value.trim()).filter(Boolean),
 			side_conditions: sideConditions.map((sc) => sc.value.trim()).filter(Boolean),
-			bindings: bindings.filter((b) => b.var.trim() && b.sort.trim())
+			bindings: bindings.filter((b) => b.var.trim() && b.sort.trim()),
+			subproof: hasSubproof
+				? {
+						derive: subproofDerive.trim(),
+						assume: subproofOpener === 'assume' ? opener : null,
+						fresh: subproofOpener === 'fresh' ? opener : null
+					}
+				: null
 		};
 	}
 
@@ -84,6 +110,11 @@
 			<span class="ml-2 font-medium">{r.name}</span>
 			{#if r.matching === 'string'}
 				<span class="ml-2 text-xs text-muted-foreground">· string rewriting</span>
+			{/if}
+			{#if r.subproof}
+				<span class="ml-2 text-xs text-muted-foreground"
+					>· discharges {r.subproof.fresh != null ? 'variable' : 'assumption'} subproof</span
+				>
 			{/if}
 			<span class="ml-2 font-mono text-xs text-muted-foreground">
 				{r.antecedents.join(' ; ') || '—'} ⊢ {r.deduction}
@@ -157,4 +188,52 @@
 			<Input bind:value={proviso.value} class="font-mono" placeholder="e.g. not occurs(x, p)" maxlength={512} />
 		{/snippet}
 	</RepeatableRows>
+	<div class="space-y-2">
+		<div class="flex items-center justify-between">
+			<Label>Discharge subproof</Label>
+			<Button
+				type="button"
+				size="sm"
+				variant={hasSubproof ? 'default' : 'outline'}
+				onclick={() => (hasSubproof = !hasSubproof)}
+			>
+				{hasSubproof ? 'Enabled' : 'Off'}
+			</Button>
+		</div>
+		<p class="text-xs text-muted-foreground">
+			A discharge rule (→I, RAA, ∀I) consumes a whole subproof instead of citing lines.
+		</p>
+		{#if hasSubproof}
+			<div class="flex gap-2">
+				<Button
+					type="button"
+					size="sm"
+					variant={subproofOpener === 'assume' ? 'default' : 'outline'}
+					onclick={() => (subproofOpener = 'assume')}
+				>
+					Assume (hypothesis)
+				</Button>
+				<Button
+					type="button"
+					size="sm"
+					variant={subproofOpener === 'fresh' ? 'default' : 'outline'}
+					onclick={() => (subproofOpener = 'fresh')}
+				>
+					Fresh (variable)
+				</Button>
+			</div>
+			<Input
+				bind:value={subproofOpenerValue}
+				class="font-mono"
+				placeholder={subproofOpener === 'assume' ? 'opening hypothesis, e.g. p' : 'fresh variable, e.g. x'}
+				maxlength={512}
+			/>
+			<Input
+				bind:value={subproofDerive}
+				class="font-mono"
+				placeholder="derived conclusion, e.g. q"
+				maxlength={512}
+			/>
+		{/if}
+	</div>
 </EditSheet>

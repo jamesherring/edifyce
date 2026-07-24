@@ -39,6 +39,7 @@ from tests.spec_helpers import (
     biconditional_prod,
     brackets,
     conjunction_prod,
+    cp_rule,
     defn,
     equality_prod,
     hyp_rule,
@@ -217,6 +218,37 @@ def test_scoped_line_types_round_trip_through_the_database(session):
         "assume a\n    a [R, 1]\nassume b\n    a [R, 2]"
     )
     assert out_of_scope.proof_lines[3].valid is False
+
+
+def discharge_spec() -> SystemSpec:
+    # A scope-opening `assume` line plus a conditional-proof discharge rule.
+    return SystemSpec(
+        name="Discharge",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        lines=[statement_line(), assumption_line()],
+        rules=[reiteration_rule(), cp_rule()],
+    )
+
+
+def test_discharge_rules_round_trip_through_the_database(session):
+    # The subproof a discharge rule consumes persists on the rule row (three
+    # schema lines) and rebuilds into an equal spec whose →I discharge still
+    # checks.
+    session.add(spec_to_system(discharge_spec()))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Discharge"))
+
+    cp_row = next(r for r in stored.rules if r.label == "CP")
+    assert (cp_row.subproof_derive, cp_row.subproof_assume, cp_row.subproof_fresh) == ("q", "p", None)
+    # A non-discharge rule stores no subproof.
+    r_row = next(r for r in stored.rules if r.label == "R")
+    assert r_row.subproof_derive is None
+    assert system_to_spec(stored) == discharge_spec()
+
+    system = build_spec(system_to_spec(stored))["system"]
+    assert system.parse("assume a\n    a [R, 1]\n(a → a) [CP, 1]").valid is True
 
 
 def test_decomposition_has_no_source_or_json_blob():
