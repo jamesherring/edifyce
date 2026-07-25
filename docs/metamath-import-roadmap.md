@@ -1,14 +1,15 @@
-# Metamath import: roadmap
+# Metamath import: analysis and roadmap
 
-**Status:** the import exists as a working vertical slice; this note records where
-it stands, the design decisions taken (so they are not relitigated), and what
-remains before a bulk `set.mm` import.
+**Status:** working vertical slice; bulk import not yet attempted.
 
-Companions: [`setmm-import-and-proof-altitude.md`](setmm-import-and-proof-altitude.md)
-(why Metamath proofs are verbose, and the A1–A5 / B1–B6 recommendations) and
-[`setmm-import-recommendations-detail.md`](setmm-import-recommendations-detail.md)
-(each recommendation with worked examples). This file is the forward-looking plan;
-those two are the analysis behind it.
+Goal: import Metamath's `set.mm` while keeping **full verifiability** and **full
+generality** (Edifyce stays a general proof assistant — any formal system, not a
+hard-wired ZFC), *and* let humans read and write proofs at the altitude
+mathematicians actually use.
+
+This note is the single reference for that work: where the import stands, why
+imported proofs look the way they do, the design decisions taken (recorded so they
+are not relitigated), and what remains.
 
 ---
 
@@ -22,15 +23,16 @@ those two are the analysis behind it.
 | Mandatory-hypothesis computation (declaration order) | done |
 | Compressed-proof decoder (base-20/5 letters, `Z` saves, three bands) | done |
 | Grammar built from syntax `$a` statements | done |
-| Logical assertions promoted as citable theorems | done, but see §2.2 |
+| Schematic theorem application (§5, A1) | done |
+| Logical assertions promoted as citable theorems | done, but see §3.2 |
 | Proof emission + kernel check | done |
-| `$t` typesetting / notation | **§3 — next** |
-| Axiom-vs-theorem split | **§2.2 — blocker** |
-| Definition classification (`df-*`) | **§4.2 — not a blocker, but front-load** |
-| Scale | **§4.3 — unmeasured** |
+| `$t` typesetting / notation (§4) | **next** |
+| Axiom-vs-theorem split (§3.2) | **blocker** |
+| Definition classification (§5, A4) | not a blocker; front-load |
+| Scale (§5, A5) | unmeasured |
 
 `tests/test_metamath_import.py` imports `sqrt2re` from its verbatim `set.mm` proof
-string and has Edifyce's kernel check the result:
+and has Edifyce's kernel check the result:
 
 ```
 2 e. RR [2re]
@@ -38,15 +40,86 @@ string and has Edifyce's kernel check the result:
 ( sqrt ` 2 ) e. RR [sqrtpclii, 1, 2]
 ```
 
-Four stored steps become three lines — `c2` is a *syntax* step, and Edifyce parses
-well-formedness rather than proving it. A tampered conclusion is rejected, so a
-green import is evidence rather than assumption.
+A tampered conclusion is rejected, so a green import is evidence, not assumption.
 
 ---
 
-## 2. What formal system an import produces
+## 2. Why imported proofs look the way they do
 
-### 2.1 Not a pre-built ZFC — and not Edifyce's ND ZFC
+Context for everything below: the shape of the import, the persistence of
+deduction-form plumbing in imported proofs, and the entire Tier B programme all
+follow from this diagnosis.
+
+### 2.1 The specimen
+
+A mathematician's proof that √2 is irrational is about six lines. `set.mm`'s
+`sqrt2irr` (plus its core lemma `sqrt2irrlem`) is a few hundred primitive steps
+citing roughly **ninety distinct prior theorems** — `syl`, `zcn`, `nncn`,
+`ad2antrr`, `2cnd`, `oveq1d`, `eqtr4d`, `simpl`, `jca`, `ralrimdva`, …
+
+That gap is not sloppiness. It is the direct consequence of a few deliberate
+design decisions.
+
+### 2.2 The cost centres
+
+| # | Source | Machinery it produces |
+|---|---|---|
+| 1 | **Foundational depth** — everything reduces to ZFC+FOL | `df-2`: `2 = ( 1 + 1 )`; `df-div`, `df-sqrt` as `iota` descriptors; `df-q`. Mostly amortised into the library, but nothing is free |
+| 2 | **Untyped → closure plumbing** *(biggest visible cost)* | "A ∈ ℤ", "B ≠ 0" are propositions to prove and carry: `nncn`, `zcn`, `2cnd`, `nnne0`, … A typed system discharges these invisibly |
+| 3 | **Deduction form by hand** | Every line is `( ph → … )`, the antecedent threaded manually: `syl`, `adantr`, `ad2antrr`, `simpl`/`simpr`, `jca` — pure context bookkeeping |
+| 4 | **Congruence spelled out** | Rewriting inside a term needs a position-specific lemma: `oveq1d`, `oveq2d`, `fveq2d`, `breq2`, `eleq1d`, plus `eqtr*` glue |
+| 5 | **Substitution-only kernel** | Even modus ponens is a theorem (`ax-mp`) invoked as a step; no native natural deduction |
+| 6 | **No automation in the stored object** | What `ring`/`simp`/`norm_num` hide elsewhere, Metamath spells out |
+| 7 | **No structural abstraction** | No "similarly", "WLOG", "by symmetry"; infinite descent is re-encoded as strong induction |
+| 8 | **Variable bookkeeping** | Dummy variables, `$d` constraints, binders via schematic metavariables |
+| 9 | **Presentation** | Even the web renderer is one primitive step per row. Reading is scrolling |
+
+### 2.3 The one root cause
+
+Almost all of it collapses to a single decision:
+
+> **Metamath has no elaboration gap.** The proof a human authors, the proof the
+> kernel checks, and the proof a reader sees are *the same maximally-expanded
+> object.* That buys a tiny trusted verifier and total generality — at the price
+> of forcing every human to work at kernel altitude.
+
+So the design question is not "how do we make the kernel cleverer" (that costs
+verifiability) but **"how do we open an elaboration gap without giving up
+generality"** — a high-level surface that elaborates down to primitive,
+kernel-checkable steps, with abstractions defined *relative to the user's formal
+system* rather than baked in.
+
+### 2.4 What Edifyce already solves
+
+Several of those costs are not structural in Edifyce the way they are in `set.mm`:
+
+| Cost | Edifyce today | Verdict |
+|---|---|---|
+| 1 definitional depth | first-class layered, capture-avoiding definitions with provisos; `[Def, n]` steps checked over kernel terms | **covered** — `df-*` map to definitions |
+| 2 typing/closure | the engine is **sorted**; `member`/`atom` provisos test sort membership structurally | structure present, **automation absent** (B2) |
+| 3 deduction form | **native scoped subproofs with discharge**, reiteration restriction and eigenvariable freshness enforced | **covered for new proofs** — no `syl`/`adantr` needed |
+| 5 substitution-only | rules are schematic; substitution is *derived by unification*, not written | **covered** |
+| 7 lemma reuse | cross-proof citation with transitive cycle-checking | partly (see A1) |
+| 8 `$d` / freshness | `disjoint(x, φ, …)` **is** `$d`; `fresh` atoms are eigenvariables | **covered** — direct mapping |
+
+The headline: Edifyce is **natural-deduction-native and sorted**, so the two
+largest Metamath cost centres are not forced on newly authored proofs. What is
+missing is the automation and presentation layers (Tier B).
+
+### 2.5 One thing that vanishes for free
+
+Roughly half the labels in a `sqrt2irr`-scale proof are `c*`/`w*`/`cv` — Metamath
+*proving that the formula is well-formed*, because it has no parser. Edifyce has a
+grammar, so **every one of those steps disappears on import**: well-formedness
+becomes parsing, not a proof line. This is why the decoder must classify each
+cited label as syntax-vs-logic, and why an imported proof is already meaningfully
+shorter than the stored one before any Tier B work.
+
+---
+
+## 3. What an import produces
+
+### 3.1 Not a pre-built ZFC — and not Edifyce's ND ZFC
 
 The importer **synthesises the system from the `.mm` file itself**: the grammar
 comes from the syntax `$a` statements, nothing is pre-supplied. For the `sqrt2re`
@@ -57,13 +130,12 @@ A full `set.mm` import yields ZFC+FOL **as set.mm axiomatises it — Hilbert-sty
 `ax-rep`, `ax-pow`, `ax-un`, `ax-reg`, `ax-inf`, `ax-ac`.
 
 That is **a different system from `tests/zfc_systems.py`'s `SCOPED_ZFC`**, which is
-natural deduction with real subproofs and discharge. The consequence matters and
-should not be forgotten: imported proofs *keep* their deduction-form plumbing
-(`syl`, `adantr`, `simp*`), because in a Hilbert system that plumbing is load
-bearing. Moving them to ND form is a separate translation — essentially the B5
-idiom re-abstraction work, not something the importer does for free.
+natural deduction with real subproofs and discharge. The consequence matters:
+imported proofs *keep* their deduction-form plumbing (§2.2 item 3), because in a
+Hilbert system that plumbing is load-bearing. Moving them to ND form is a separate
+translation — essentially B5, not something the importer gets for free.
 
-### 2.2 The axiom-vs-theorem split (blocker)
+### 3.2 The axiom-vs-theorem split (blocker)
 
 `promote_assertions` currently promotes **every** logical assertion, including the
 `$a` axioms. That erases exactly the distinction `promoted_theorems` was built to
@@ -81,9 +153,9 @@ cannot answer "what are your axioms?", and the namespace separation does no work
 
 ---
 
-## 3. Notation and typesetting
+## 4. Notation and typesetting
 
-### 3.1 Decision: separate source from display
+### 4.1 Decision: separate source from display
 
 **Source and display are separate layers**, as in Metamath — *not* LaTeX stored as
 the logical source.
@@ -109,7 +181,7 @@ Two further reasons:
 Edifyce already models this: `StringPattern` carries `display_pattern` /
 `display_variables` beside its matching pattern.
 
-### 3.2 Decision: Unicode as the imported source
+### 4.2 Decision: Unicode as the imported source
 
 Metamath's ASCII (`e.`, `A.`, `->`) is a 1990s constraint and is *less* readable
 than Edifyce's existing idiom, which already writes `(p → q)`, `x ∈ y`, `∀x p` as
@@ -124,9 +196,9 @@ learn" workflow starts from the authoritative source rather than from scratch.
 
 Unicode-as-source also *shrinks* the collision surface, since Unicode symbols are
 near-1:1 with Metamath tokens whereas LaTeX's `\mathrm{…}` wrappers collide
-readily. A collision/unmapped-token report is still wanted (§3.4).
+readily. A collision/unmapped-token report is still wanted (§4.4).
 
-### 3.3 Decision: render by folding kernel terms, not `Match` trees
+### 4.3 Decision: render by folding kernel terms, not `Match` trees
 
 The renderer walks the **kernel `Term` graph**, not the matching layer's `Match`
 tree. The mechanism already exists: `Node.to_string()` walks a production's
@@ -142,11 +214,11 @@ Why the term graph:
 - **Terms are canonical.** `from_match` collapses union-coercion wrappers, so a
   formula has one term however many union layers parsed it. Folding a `Match`
   means walking scaffolding with no mathematical content.
-- **Terms exist where matches do not** — and this is decisive. A rule schema
-  (`schema_term`), a promoted theorem's statement, a definition's higher/lower
-  forms: all are terms with no `Match`. Match-based rendering would cover proof
-  lines and nothing else, leaving no way to display a rule, an imported theorem's
-  statement, or an instantiated schema. The frontend will want all of those.
+- **Terms exist where matches do not** — decisive. A rule schema (`schema_term`),
+  a promoted theorem's statement, a definition's higher/lower forms: all are terms
+  with no `Match`. Match-based rendering would cover proof lines and nothing else,
+  leaving no way to display a rule, an imported theorem's statement, or an
+  instantiated schema. The frontend will want all of those.
 - Interning means shared subterms are physically shared, so rendering memoises.
 
 **Constraints to respect when building it:**
@@ -166,7 +238,7 @@ Why the term graph:
   guidance discourages that idiom; the new renderer should dispatch on pattern
   type rather than copy it.
 
-### 3.4 Beyond per-token substitution
+### 4.4 Beyond per-token substitution
 
 A per-token map yields token-soup LaTeX (`( \surd \` 2 ) \in \mathbb{R}`). Because
 Edifyce has the parse tree, each production can instead carry its own display
@@ -185,61 +257,154 @@ driven by a list rather than by discovering breakage.
 
 ---
 
-## 4. Remaining work before bulk import
+## 5. The plan
 
-### 4.1 A3 — statement mapping (blocker)
+Tier A is what a faithful import requires; Tier B is the human-altitude layer —
+the actual goal — which can land after, but should be designed for now so the
+import does not foreclose it. A guardrail runs through both: **every abstraction is
+parameterised by the user's declared system**, never hard-coded, and everything
+either produces primitive steps the existing kernel checks (the de Bruijn
+criterion) or only re-renders an already-checked proof.
 
-Mostly done in the parser. What remains:
+### Tier A — prerequisites
 
-- **the axiom-vs-theorem split** (§2.2) — the real gap;
-- the `$t` block (§3);
-- typecodes beyond `wff`/`class`/`setvar`;
-- `$[ … $]` file inclusion — low priority, `set.mm` is self-contained.
+**A1. Schematic theorem application — *done*.**
+A `set.mm` proof is ~90 applications of previously proved theorems, each
+re-instantiated at the call site; Metamath makes no distinction between citing a
+`$a` and a `$p`. What shipped: `PromotedTheorem` records a theorem's schematic
+statement (conclusion, premises, metavariables, `$d` provisos, matching regime)
+and `as_rule()` builds the *ephemeral* `InferenceRule` a citation is checked
+against. `FormalSystem.promoted_theorems` keeps derived theorems out of
+`inference_rules`, and `Proof.get_reference` resolves `[Thm]` / `[Thm, i, …]` per
+citation — nothing per-theorem is persisted as a rule.
+`compiler.promote_from_source` is the import-facing builder (`$e`→premises,
+`$f`→metavariables, `$d`→distinct). Closed theorems (`2re`) and string-matching
+regimes are supported, and `$d` is demonstrably load-bearing: an `ax-5`-shaped
+theorem rejects the capturing instance with the proviso and *accepts* it without.
 
-### 4.2 A4 — definition classification (not a blocker; front-load anyway)
+Two findings worth keeping, both of which contradicted a reasonable guess:
+promotion is a **graph** operation (`from_match` → re-variabilise → schema shell;
+the string-layer `create_pattern` is not on the path), and a schema with no
+composed term is **not** automatically broken — defined notation composes none yet
+applies fine, while only a *ground* compound needs its term composed explicitly,
+at the system's declared **logical sorts**.
 
-Importing every logical `$a` as an axiom still yields **fully verifiable** results
-— that is exactly what Metamath does, relying on an *external* definitional
-soundness checker. What is given up:
+*Still open:* promoting a **natively-authored** Edifyce proof needs a
+generalisation policy the importer gets free from `$f`/`$d` — which leaves are
+general, what sort to widen to, and (the part with real soundness surface)
+deriving `$d` from the proof's ∀I freshness steps. Deferred; imports never hit it.
 
-- conservativity-by-construction, which Edifyce's `Define` supplies for free;
-- definitional steps `[Def, n]`. Without them a proof cites the biconditional as
-  an axiom and reasons propositionally — sound, but longer.
+**A2. Compressed-proof decoder — *done as a vertical slice*.**
+The whole proof of `sqrt2re`:
 
-So it does not block a bulk import. **But do it early**: reclassifying afterwards
-means re-importing everything, so it is far cheaper before than after. Default on
-"does not reduce to fold/unfold" must be *axiom + flag*, never a silent `Define`,
-or conservativity is lost quietly.
+```
+sqrt2re $p |- ( sqrt ` 2 ) e. RR $=
+  ( c2 2re 2pos sqrtpclii ) ABCD $.
+```
 
-### 4.3 A5 — scale (unmeasured)
+Label table `[c2, 2re, 2pos, sqrtpclii]`; `ABCD` selects entries 1–4. Executed on a
+stack: `c2` builds the class `2` (**syntax** — no line emitted), `2re` and `2pos`
+push `|- 2 e. RR` and `|- 0 < 2`, then `sqrtpclii` pops **three** entries — its
+mandatory hypotheses are the floating `$f class A` *then* the two essentials, in
+declaration order. The floating slot supplies the substitution (`A := 2`); the
+essential slots become the cited lines. Wrong order or count silently misaligns
+every application, so it is computed at parse time (`Assertion.mandatory`).
 
-~40 000 theorems, 51 MB, proofs hundreds of steps deep. Two risks, neither yet
-measured:
+Four stored steps → three proof lines (§1). Imported notation stays Metamath's own
+(`e.`, `` ` ``) until §4 lands, since the grammar is built from set.mm's syntax
+axioms and its tokens *are* the surface syntax.
 
-- the notation matcher is a hand-written backtracking string matcher with a
-  `certainty` heuristic — validate at `set.mm` grammar size, and prefer the
-  declarative/precompiled build path for bulk import;
-- 40 000 promoted theorems must resolve fast — index by conclusion head symbol so
-  a citation resolves against a handful of candidates, and exercise the
-  antecedent-assignment and unification paths at library scale.
+**A3. Statement mapping — *partly done; blocker***.
+`$c`→terminals, `$v`→metavariable names, `$f`→sort bindings, `$e`→antecedents,
+`$a`→axiom or definition, `$p`→proof + promoted theorem, `$d`→`disjoint` provisos,
+`${ $}`→scope. The reader handles all of these. Remaining: **the axiom-vs-theorem
+split (§3.2)** — the real gap; the `$t` block (§4); typecodes beyond
+`wff`/`class`/`setvar`; `$[ … $]` inclusion (low priority, set.mm is
+self-contained). Import faithfully as Metamath's own sorts first; a richer type
+discipline risks needing to re-prove things and is best deferred.
 
+**A4. Definition classification — *not a blocker; front-load anyway*.**
+Not every `$a` is fold/unfold-shaped, and Metamath relies on an *external*
+definitional-soundness checker. Importing every logical `$a` as an axiom is still
+**fully verifiable** — it is exactly what Metamath does. What is given up:
+conservativity-by-construction, which Edifyce's `Define` supplies for free, and
+definitional steps `[Def, n]` (without them a proof cites the biconditional and
+reasons propositionally — sound, but longer). Clean cases map directly
+(`df-nel`: `A e/ B ↔ ¬(A ∈ B)`; `df-2`: `2 = (1+1)`); `df-div`/`df-sqrt` define via
+`iota`, so route them through the `fresh`-aware path and keep their existence
+lemmas as cited premises. Default on "does not reduce to fold/unfold" must be
+*axiom + flag*, never a silent `Define`. Do it early: reclassifying after a bulk
+import means re-importing everything.
+
+**A5. Scale — *unmeasured*.**
+~40 000 theorems, 51 MB, proofs hundreds of steps deep. Two risks: the notation
+matcher is a hand-written backtracking string matcher with a `certainty` heuristic
+— validate at `set.mm` grammar size, and prefer the declarative/precompiled build
+path for bulk import; and 40 000 promoted theorems must resolve fast — index by
+conclusion head symbol so a citation resolves against a handful of candidates, and
+exercise the antecedent-assignment and unification paths at library scale.
 Correctness on a dozen theorems says nothing about wall-clock on forty thousand.
+
+### Tier B — the human-altitude layer
+
+**B1. Tactic / elaboration framework.** A tactic takes a goal + context and **emits
+primitive proof lines**, which the kernel re-checks exactly as if hand-written. A
+buggy tactic can fail to find a proof but cannot certify a false one. This is the
+layer Metamath omits (§2.2 item 6); everything below plugs into it. Record the
+elaboration tree (which surface step produced which substeps) for B4.
+
+**B2. Closure / typing solver** — removes the largest visible cost (§2.2 item 2).
+Backward-chain a goal like `(B / 2) ∈ ℂ` against a *declared* set of closure rules,
+emitting the primitive steps. General because it is driven by declarations, not by
+ℂ. Before/after:
+
+```
+12.  B ∈ ℂ           [nncn, 4]          →   12.  (B / 2) ∈ ℂ     by closure
+13.  2 ∈ ℂ           [2cnd, …]
+14.  2 ≠ 0           [2ne0]
+15.  (B / 2) ∈ ℂ     [divcl, 12, 13, 14]
+```
+
+Same four checked lines underneath; one line to write and read.
+
+**B3. `calc` chains + congruence tactic** — removes §2.2 item 4. The author writes
+an equality/`↔` chain with one justification per step; the elaborator synthesises
+the congruence lemma from *which argument position changed* (data the grammar
+already has), plus the transitivity glue. Parameterised on a user-declared
+congruence, so it generalises past `=`.
+
+**B4. Zoomable presentation** — removes §2.2 item 9 and makes imports readable.
+Store the elaboration/subproof tree; let the frontend fold to a sketch and drill
+down to primitives. `sqrt2irr` as six foldable rows, full rigour one click away.
+The subproof tree already provides the scaffolding.
+
+**B5. Idiom re-abstraction** (stretch; biggest presentation win). Imported proofs
+have no authored structure, only Metamath idioms — so *recognise* them and fold to
+human altitude: `syl` chains → transitivity/"hence"; `ad*ant*`/`simp*` clusters →
+"in this context"; `oveqNd` runs ending in `eqtr*` → one `calc` step; closure
+lemmas → hidden typing obligations; `nnind` → "by induction on n". Feeds B4's
+tree, and applies to all 40 000 imported proofs rather than only new ones.
+
+**B6. Structural macros** — WLOG / by-symmetry / case-split (§2.2 item 7). Expand
+to *real* subproofs, discharging "similarly" by instantiating a proved symmetry
+lemma, so the author writes the human phrase and the kernel still sees the full
+argument. General because the justification is always a cited lemma.
 
 ---
 
-## 5. Sequencing
+## 6. Sequencing
 
-1. **`$t` + Unicode source + term-fold renderer** (§3) — wanted now, and it is
-   also part of A3.
-2. **Axiom-vs-theorem split** (§2.2) — the modelling blocker.
+1. **`$t` + Unicode source + term-fold renderer** (§4) — wanted now, and part of A3.
+2. **Axiom-vs-theorem split** (§3.2) — the modelling blocker.
 3. **A4 definition classification** — cheaper before bulk than after.
 4. **A5 benchmarks**, in parallel from step 2 onward.
 5. **Widen the slice**: `sqrt2irr` and its dependency closure — the first target
    large enough to hurt.
-6. Then the altitude work (B1–B6) from the companion notes: the tactic framework
-   and closure solver first, since they shorten *new* proofs as well as imported
-   ones.
+6. **B1 + B2**, then **B4** and **B3**; then the stretch items **B5 / B6**. The
+   tactic framework and closure solver come first because they shorten *new*
+   Edifyce proofs as well as imported ones.
 
-The throughline is unchanged from the analysis: keep the property that makes
-Metamath trustworthy — a small kernel checking a fully primitive object — and add
-the elaboration and presentation layers Metamath deliberately omitted.
+The throughline: keep the property that makes Metamath trustworthy — **a small
+kernel checking a fully primitive object** — and add the **elaboration gap** it
+deliberately omitted. Verifiability and generality are preserved by construction;
+altitude is what we add.

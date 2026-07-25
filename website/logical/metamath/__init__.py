@@ -12,7 +12,7 @@ The contract is that an import produces *primitive* Edifyce proofs which the
 existing kernel checks. Nothing here re-verifies a Metamath proof; the import is
 only a translation, and Edifyce's own checker is what makes the result trusted.
 
-See ``docs/setmm-import-and-proof-altitude.md`` for the design this implements.
+See ``docs/metamath-import-roadmap.md`` for the design this implements.
 """
 
 from .compressed import Step, decode, split_proof

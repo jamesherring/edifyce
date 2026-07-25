@@ -1,6 +1,6 @@
 """Promoting a proved/imported theorem to a reusable schematic rule.
 
-This exercises the "A1" bridge from ``docs/setmm-import-recommendations-detail.md``:
+This exercises the "A1" bridge from ``docs/metamath-import-roadmap.md``:
 a proved theorem should be reusable like an inference rule — its metavariables
 re-instantiated at each citation by unification, subject to its distinct-variable
 provisos — *without* being minted as a persisted rule per theorem.
