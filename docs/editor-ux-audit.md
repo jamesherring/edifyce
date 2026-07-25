@@ -181,12 +181,16 @@ the read-only detail page; authors can't see the lowered source as they build.
 Ordered by leverage. Phase 0 is a bug fix; the rest is the "best-in-class"
 push and can land incrementally.
 
-### Phase 0 — Resolve the `/proofs` collision *(correctness; small, self-contained)*
+Phases 0–2 have since landed; 3–5 are still open. The audit above describes the
+state *before* those changes, so read it as the reasoning behind them rather
+than as a description of the app today.
+
+### Phase 0 — Resolve the `/proofs` collision *(correctness; small, self-contained)* — **done**
 Namespace the JSON API under `/api` (§0). Fix dev proxy + `serve_spa` at the same
 time; add the SPA-shell regression test. Unblocks the proofs feature in dev and
 fixes hard-navigation in production.
 
-### Phase 1 — One unified proof workbench *(highest UX leverage)*
+### Phase 1 — One unified proof workbench *(highest UX leverage)* — **done**
 Merge the ad-hoc verifier (`/systems/[id]/verify`) and the persistent editor
 (`/proofs/[id]/edit`) into a single **two-pane, live-verify** component:
 - Left: the code editor with a **line-number gutter**; right: verification that
@@ -197,18 +201,23 @@ Merge the ad-hoc verifier (`/systems/[id]/verify`) and the persistent editor
 - Demote **Details / Lemmas / Visibility / Danger zone** into a collapsible
   sidebar or a secondary tab so editor + results own the screen.
 
-### Phase 2 — Symbol input *(unblocks authoring everywhere)*
+### Phase 2 — Symbol input *(unblocks authoring everywhere)* — **done**
 A symbol palette / insert-at-caret toolbar driven by the system's own brackets +
-production notation (the app already knows every symbol the system defines), plus
-optional shortcut expansion (`\in → ∈`). Reuse it in the proof editor **and** the
-rule/axiom/definition formula fields. (Complements — doesn't overlap — the
-`symbols-model-design.md` data-model work; that's storage, this is input.)
+production notation (the app already knows every symbol the system defines).
+Reused in the proof editor **and** the rule/axiom/definition formula fields.
+(Complements — doesn't overlap — the `symbols-model-design.md` data-model work;
+that's storage, this is input.)
+
+The `\in → ∈` shortcut expansion sketched here was deliberately **not** built: a
+production's Regex mode is full of literal backslashes (`\d`, `\s`), so
+expanding them on the way in would corrupt exactly the field that needs them
+most. If it's wanted later it has to be opt-in per field, not global.
 
 ### Phase 3 — Formal-system editor layout
 - Two-column on wide screens: a sticky **section outline** (Sorts, Grammar,
   Rules, …) with the **compile status pinned** in view; content on the right.
-- Show a **notation reference** (and the symbol palette) inside the part-editing
-  sheet so authors see the grammar they're referencing.
+- Show a **notation reference** inside the part-editing sheet so authors see the
+  grammar they're referencing (the symbol palette itself landed in Phase 2).
 - **Drag-and-drop reordering** (with a keyboard fallback); disable end-cap
   chevrons. Optional live `.edi` **source preview** pane.
 

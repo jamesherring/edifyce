@@ -26,6 +26,7 @@
 		type FormalSystemDetail,
 		type SystemValidation
 	} from '$lib/api';
+	import { systemSymbols } from '$lib/symbols';
 	import { auth } from '$lib/auth.svelte';
 	import { toastSuccess, toastError } from '$lib/toast';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
@@ -54,6 +55,8 @@
 
 	const isOwner = $derived(!!auth.user && !!system && system.owner?.id === auth.user.id);
 	const sortNames = $derived(system ? system.sorts.map((s) => s.name) : []);
+	// The system's own notation, offered by each edit sheet's symbol palette.
+	const symbols = $derived(systemSymbols(system));
 
 	// hydrateForm is only true on the initial load / route change, so refetching
 	// after a part edit can't clobber unsaved name/description edits. All state
@@ -327,11 +330,11 @@
 		<div class="space-y-4">
 			<SortsSection systemId={system.id} sorts={system.sorts} onChanged={refresh} />
 			<BracketsSection systemId={system.id} brackets={system.brackets} onChanged={refresh} />
-			<ProductionsSection systemId={system.id} productions={system.productions} {sortNames} onChanged={refresh} />
+			<ProductionsSection systemId={system.id} productions={system.productions} {sortNames} {symbols} onChanged={refresh} />
 			<LineTypesSection systemId={system.id} lines={system.lines} {sortNames} onChanged={refresh} />
-			<AxiomsSection systemId={system.id} axioms={system.axioms} onChanged={refresh} />
-			<RulesSection systemId={system.id} rules={system.rules} onChanged={refresh} />
-			<DefinitionsSection systemId={system.id} definitions={system.definitions} {sortNames} onChanged={refresh} />
+			<AxiomsSection systemId={system.id} axioms={system.axioms} {symbols} onChanged={refresh} />
+			<RulesSection systemId={system.id} rules={system.rules} {symbols} onChanged={refresh} />
+			<DefinitionsSection systemId={system.id} definitions={system.definitions} {sortNames} {symbols} onChanged={refresh} />
 		</div>
 
 		<Card.Root>

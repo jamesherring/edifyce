@@ -1,6 +1,8 @@
 <script lang="ts">
   import * as Sheet from '$lib/components/ui/sheet';
   import { Button } from '$lib/components/ui/button';
+  import SymbolPalette from '$lib/components/SymbolPalette.svelte';
+  import type { SymbolEntry } from '$lib/symbols';
   import { cn } from '$lib/utils';
   import type { Snippet } from 'svelte';
 
@@ -16,6 +18,9 @@
     saving?: boolean;
     /** When false, Save is disabled and submitting is a no-op (invalid form). */
     canSave?: boolean;
+    /** Set (even to `[]`) to show a symbol palette above the form, typing into
+     *  whichever `data-symbol-field` input was last focused. */
+    symbols?: SymbolEntry[];
   };
 
   let {
@@ -28,8 +33,11 @@
     onSave,
     onDelete,
     saving = false,
-    canSave = true
+    canSave = true,
+    symbols
   }: Props = $props();
+
+  let form = $state<HTMLFormElement | null>(null);
 </script>
 
 <Sheet.Root {open} {onOpenChange}>
@@ -40,7 +48,14 @@
         <Sheet.Description>{description}</Sheet.Description>
       {/if}
     </Sheet.Header>
+    {#if symbols}
+      <!-- Outside the scrolling form so it stays put while the fields scroll. -->
+      <div class="border-b px-6 pb-3">
+        <SymbolPalette root={form} {symbols} />
+      </div>
+    {/if}
     <form
+      bind:this={form}
       onsubmit={(e) => {
         e.preventDefault();
         if (canSave && !saving) onSave();

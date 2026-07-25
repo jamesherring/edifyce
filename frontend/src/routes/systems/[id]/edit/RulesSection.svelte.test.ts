@@ -40,7 +40,7 @@ const rule: Rule = {
 
 function renderSection(over: Partial<Rule> = {}) {
 	const onChanged = vi.fn();
-	render(RulesSection, { systemId: 'sys1', rules: [{ ...rule, ...over }], onChanged });
+	render(RulesSection, { systemId: 'sys1', rules: [{ ...rule, ...over }], symbols: [], onChanged });
 	return { onChanged };
 }
 
