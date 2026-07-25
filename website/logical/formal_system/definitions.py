@@ -270,11 +270,15 @@ def build_kernel_definition(legacy: MatchingDefinition, context: Context) -> Def
         raise _introduced_name_error(legacy, unbound)
 
     bindable = _reachable_patterns(legacy.pattern)
-    conjured = [
-        leaf.literal
-        for leaf in introduced_leaves(kernel_def)
-        if not _is_capture_safe_constant(leaf, bindable, context)
-    ]
+    # Deduplicated by *name* only here: two constructors spelling the same token
+    # are two problems to the kernel but one thing for the author to fix.
+    conjured = sorted(
+        {
+            leaf.literal
+            for leaf in introduced_leaves(kernel_def)
+            if not _is_capture_safe_constant(leaf, bindable, context)
+        }
+    )
     if conjured:
         raise _introduced_name_error(legacy, conjured)
 

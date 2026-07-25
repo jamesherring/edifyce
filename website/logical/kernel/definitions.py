@@ -216,13 +216,23 @@ def introduced_leaves(definition: Definition) -> tuple[Node, ...]:
     A binder declared ``fresh`` is stored abstractly (a
     :class:`~website.logical.kernel.terms.Bound`, a variable rather than a ground
     leaf) and so is never reported - being declared is exactly what makes it safe.
+
+    Leaves are matched by **constructor and literal**, the same pair
+    :meth:`Term.equal` compares a ground leaf by - not by surface spelling alone.
+    One token can be built by two different productions (a nullary notation ``S``
+    of ``formula``, and ``S`` as a ``setvar``), and those are different terms: the
+    defined form mentioning one must not excuse the defining form introducing the
+    other, or a variable slips through as though it were already accounted for.
     """
-    defined = {leaf.literal for leaf in _ground_leaves(definition.higher)}
-    introduced: dict[str, Node] = {}
+    def key(leaf: Node) -> tuple[tuple[str, ...], str | None]:
+        return (_signature(leaf.pattern), leaf.literal)
+
+    defined = {key(leaf) for leaf in _ground_leaves(definition.higher)}
+    introduced: dict[tuple[tuple[str, ...], str | None], Node] = {}
     for leaf in _ground_leaves(definition.lower):
-        if leaf.literal not in defined:
-            introduced.setdefault(leaf.literal, leaf)
-    return tuple(introduced[literal] for literal in sorted(introduced))
+        if key(leaf) not in defined:
+            introduced.setdefault(key(leaf), leaf)
+    return tuple(sorted(introduced.values(), key=lambda leaf: leaf.literal or ""))
 
 
 def unfold(

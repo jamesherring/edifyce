@@ -13,7 +13,8 @@ import pytest
 
 pytest.importorskip("regex")
 
-from website.logical.declarative import SystemSpec, build_system
+from website.logical.declarative import Definition as Definition_
+from website.logical.declarative import SystemSpec, build_spec, build_system
 from website.logical.kernel import (
     Definition,
     DisjointLeaves,
@@ -26,7 +27,13 @@ from website.logical.kernel import (
     unfold,
 )
 from website.logical.matching import Context, RegexPattern, StringPattern, UnionPattern
-from tests.spec_helpers import brackets, regex_prod, statement_line, template_prod
+from tests.spec_helpers import (
+    atom_const_prod,
+    brackets,
+    regex_prod,
+    statement_line,
+    template_prod,
+)
 
 
 def build(spec):
@@ -713,3 +720,55 @@ def test_introduced_leaves_are_deduplicated_and_ordered(theory, setvar):
         formula, "(x ⊆ y)", "∀q.((z ∈ z) → (q ∈ y))", {"x": setvar, "y": setvar}, context
     )
     assert [leaf.literal for leaf in introduced_leaves(d)] == ["q", "z"]
+
+
+# A grammar where one token is built by two different productions: `S` is both a
+# nullary `formula` notation and a `setvar` (the regex is uppercase-only, so the
+# constant `c` is not variable-like). Introduced leaves must be tracked by
+# constructor, not spelling — otherwise the defined form's `formula` S excuses the
+# defining form's `setvar` S, and `∀S.S ⟶ ∀S.(S ∈ c)` captures.
+MASKED = SystemSpec(
+    name="Masked",
+    brackets=brackets(),
+    productions=[
+        regex_prod("setvar", "setvar_atom", "[A-Z]"),
+        atom_const_prod("setvar", "cee", "c"),
+        template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+        template_prod("formula", "forall", "∀x.phi", [("x", "setvar"), ("phi", "formula")]),
+        template_prod("formula", "ess", "S", []),
+    ],
+    lines=[statement_line()],
+)
+
+
+def test_a_leaf_is_not_excused_by_a_same_spelled_other_constructor():
+    system, context = build(MASKED)
+    formula = system.build_context.variables["formula"]
+    d = Definition.parse(formula, "S", "(S ∈ c)", {}, context)
+
+    # The `S` of `higher` is the nullary formula notation; the `S` of `lower` is a
+    # setvar. Same token, different constructors, so the second is still
+    # introduced — matching how `Term.equal` compares a ground leaf. `c` is
+    # reported too: the kernel names every unaccounted leaf and leaves it to the
+    # grammar layer to excuse the constants.
+    assert [leaf.literal for leaf in introduced_leaves(d)] == ["S", "c"]
+    reported = {leaf.literal: leaf for leaf in introduced_leaves(d)}
+    assert reported["S"].pattern is not d.higher.pattern
+
+
+def test_a_masked_leaf_still_fails_the_system_build():
+    # End to end: `c` is a constant and excused, `S` is not — so the definition is
+    # refused, and the step `∀S.S ⟶ ∀S.(S ∈ c)` it would license never arises.
+    spec = SystemSpec(
+        name="MaskedBuild",
+        brackets=MASKED.brackets,
+        productions=list(MASKED.productions),
+        lines=list(MASKED.lines),
+        definitions=[
+            Definition_(sort="formula", name="d", higher="S", lower="(S ∈ c)", bindings=[])
+        ],
+    )
+    result = build_spec(spec)
+    assert "errors" in result
+    (message,) = result["errors"]
+    assert "'S'" in message and "'c'" not in message
