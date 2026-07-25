@@ -25,7 +25,14 @@ class Context:
             variables=copy(self.variables),
             string_variables=copy(self.string_variables),
 
-            definitions={copy(defn) for defn in self.definitions},
+            # The *set* is copied, its members are not. A notation is a piece of
+            # grammar, shared like the patterns it is built from, and nothing
+            # scopes it per copy. Cloning each member used to matter when a
+            # definition carried mutable state (the kernel counterpart, filled in
+            # after construction); now it only breaks identity, so a notation
+            # registered here would no longer de-duplicate against the one the
+            # system holds.
+            definitions=set(self.definitions),
 
             # Logical is a dict of dicts
             logical={key: copy(self.logical[key]) for key in self.logical},

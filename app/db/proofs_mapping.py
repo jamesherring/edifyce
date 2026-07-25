@@ -169,11 +169,19 @@ def _definition_id(
 ) -> uuid.UUID | None:
     """The row id of the definition this line applied, or ``None`` if it applied
     none. A miss means the system's rows no longer describe the definition the
-    check used — the attribution is dropped rather than guessed at."""
+    check used — the attribution is dropped rather than guessed at.
+
+    An applied definition is a kernel one, so its defined form is a *term*: its
+    surface string is the stored ``higher`` template (rendering a schema spells
+    each parameter by name, which is how the template was written), and the sort
+    it inhabits is the stored symbol."""
     definition = line.applied_definition
     if definition is None:
         return None
-    return definition_ids.get((definition.higher.pattern, definition.pattern.name))
+
+    higher = definition.higher
+    sort = higher.sort if higher.sort is not None else higher.pattern
+    return definition_ids.get((higher.to_string(), sort.name))
 
 
 def _line_term(

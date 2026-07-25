@@ -194,6 +194,13 @@ def test_equivalent_definitions_keep_their_distinct_labels():
         proof = system.parse(f"a sub b [HYP]\n(a ∈ b) [{label}, 1]")
         assert proof.proof_lines[1].valid is True, label
 
+    # Two axioms, but one production: a shared defined form is one way to build a
+    # formula however many definitions declare it. The notation must de-duplicate
+    # against the registry the *system* holds, not against a scoped copy of it -
+    # a second entry would make every failed parse redo the same matcher work.
+    assert len(system.definitions) == 2
+    assert len(system.context.definitions) == 1
+
 
 def test_duplicate_definition_labels_are_a_build_error():
     # A cited name must resolve to one definition, so two definitions sharing a
