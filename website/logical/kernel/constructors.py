@@ -105,13 +105,42 @@ class Constructor:
         # having slots: a declared variable that never appears in the template
         # occupies no slot. Schema projection distinguishes the two.
         self.has_declared_variables: bool = has_declared_variables
-        # Memo for this production *used as a sort*: which other sorts it admits
-        # (see unify._sort_admits). Answering that means walking the pattern
-        # lattice - structural equivalence, then nested union membership - which
-        # is the same walk for the same pair every time a variable binds. Keyed by
-        # the sort pattern itself, and living on this constructor, so it shares the
-        # grammar's lifetime and is reclaimed with it.
-        self.admits: dict[Pattern, bool] = {}
+        # Lazily filled by `admits`.
+        self._admits: frozenset[Constructor] | None = None
+
+    @property
+    def admits(self) -> frozenset[Constructor]:
+        """The sorts this production admits when it is *used as a sort*: itself,
+        plus - if it is a union - every branch reachable through nested unions.
+
+        This is the whole of sort admission (see ``unify.sort_admits``), which
+        used to ask the pattern lattice the same question pair by pair: first
+        structural equivalence, then nested union membership. Both collapse to a
+        set lookup because **a built system's productions are canonical** - one
+        object per production, shared by every context copy - so two productions
+        are structurally equivalent exactly when they are the same object.
+
+        That invariant used to be false. ``FormalSystemContext.inherit`` gave each
+        union a ``deepcopy`` of itself as an ``inherits`` chain, which is why
+        equivalence had to be structural and why ``can_map_to`` existed to walk
+        the chain. Nothing ever called it, so the copies were never made; the dead
+        machinery is gone and ``tests/test_pattern_canonicity.py`` holds the line.
+
+        Computed on demand rather than in ``_build``, so it cannot be read before
+        ``declarative.build_system`` has finished filling the sort unions.
+        """
+        if self._admits is None:
+            found: dict[int, Constructor] = {}
+            stack: list[Pattern] = [self.source]
+            while stack:
+                pattern = stack.pop()
+                if id(pattern) in found:
+                    continue
+                found[id(pattern)] = constructor_for(pattern)
+                if isinstance(pattern, UnionPattern):
+                    stack.extend(pattern.patterns)
+            self._admits = frozenset(found.values())
+        return self._admits
 
     @property
     def denotes_constant(self) -> bool:

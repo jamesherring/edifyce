@@ -74,7 +74,7 @@ from typing import TYPE_CHECKING
 from .terms import Node, Var
 # Reuse the unifier's sort test, so "is this leaf of sort S" means exactly what
 # it means when a variable of sort S binds during matching.
-from .unify import _sort_admits
+from .unify import sort_admits
 
 if TYPE_CHECKING:
     from ..matching.context import Context
@@ -173,7 +173,7 @@ class IsAtom(SideCondition):
         term = _resolve(self.name, binding, context)
         if not _is_atom(term):
             return False
-        return self.sort is None or _sort_admits(self.sort, term, context)
+        return self.sort is None or sort_admits(self.sort, term)
 
 
 @dataclass(frozen=True)
@@ -181,7 +181,7 @@ class IsMember(SideCondition):
     """The term bound to ``name`` belongs to sort ``sort``.
 
     Generic: the same sort test the unifier applies when a metavariable binds
-    (:func:`_sort_admits`), *without* :class:`IsAtom`'s extra atomicity guard — so
+    (:func:`~website.logical.kernel.unify.sort_admits`), *without* :class:`IsAtom`'s extra atomicity guard — so
     a compound term of the sort qualifies. It earns its keep only when a slot's
     declared binding is broader than the guard needs: e.g. a metavariable bound to
     a union sort that a rule must pin to one member sort, where ``atom`` would
@@ -195,7 +195,7 @@ class IsMember(SideCondition):
     sort: Pattern
 
     def check(self, binding: Binding, context: Context) -> bool:
-        return _sort_admits(self.sort, _resolve(self.name, binding, context), context)
+        return sort_admits(self.sort, _resolve(self.name, binding, context))
 
 
 @dataclass(frozen=True)
@@ -324,11 +324,11 @@ def _leaves(term: Term, context: Context, sort: Pattern | None) -> set[str]:
 
     def walk(node: Term) -> None:
         if isinstance(node, Var):
-            if sort is None or _sort_admits(sort, node, context):
+            if sort is None or sort_admits(sort, node):
                 found.add(node.name)
             return
         if isinstance(node, Node) and not node.children:
-            if sort is None or _sort_admits(sort, node, context):
+            if sort is None or sort_admits(sort, node):
                 found.add(node.literal if node.literal is not None else node.to_string())
             return
         if isinstance(node, Node):

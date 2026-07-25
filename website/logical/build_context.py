@@ -15,7 +15,7 @@ AGENTS.md) — but nothing here may import ``declarative``.
 
 from __future__ import annotations
 
-from copy import copy, deepcopy
+from copy import copy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -52,24 +52,6 @@ class FormalSystemContext:
 
     # Error log
     error_log: list = field(default_factory=list)
-
-    def inherit(self, parent: FormalSystemContext) -> None:
-        # Inherit from parent context
-
-        self.variables.update(parent.variables)
-        self.definitions.extend(parent.definitions)
-        self.proof_context.update(parent.proof_context)
-        self.system_dict.update(parent.system_dict)
-
-        # Don't inherit string_variables or current_object
-
-        # Inherit union patterns
-        for pattern in self.variables.values():
-            if not isinstance(pattern, UnionPattern):
-                continue
-
-            # Pattern is a union pattern. Set the inheritance
-            pattern.inherits = deepcopy(pattern)
 
     def __copy__(self) -> FormalSystemContext:
         new_context = FormalSystemContext()
