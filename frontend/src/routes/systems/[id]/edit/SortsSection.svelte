@@ -9,7 +9,11 @@
 		systemId,
 		sorts,
 		onChanged
-	}: { systemId: string; sorts: Sort[]; onChanged: () => Promise<void> | void } = $props();
+	}: {
+		systemId: string;
+		sorts: Sort[];
+		onChanged: () => Promise<void> | void;
+	} = $props();
 
 	let name = $state('');
 	const canSave = $derived(name.trim().length > 0);
@@ -27,6 +31,7 @@
 
 <PartSection
 	title="Sorts"
+	id="sorts"
 	addLabel="Add sort"
 	items={sorts}
 	emptyMessage="No sorts yet — a sort is a syntactic category like “term” or “formula”."

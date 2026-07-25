@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
-import { createRawSnippet } from 'svelte';
+import { createRawSnippet, tick } from 'svelte';
 import PartSection from './PartSection.svelte';
 
 // PartSection is generic over `T extends { id: string }`; render() resolves T to
@@ -71,5 +71,61 @@ describe('PartSection', () => {
 		const { onAdd } = renderSection({ addLabel: 'Add sort' });
 		await userEvent.click(screen.getByRole('button', { name: 'Add sort' }));
 		expect(onAdd).toHaveBeenCalledOnce();
+	});
+});
+
+/** The grip only arms the drag; jsdom has no drag machinery, so the events the
+ *  browser would fire are dispatched directly. */
+function drag(from: number, to: number) {
+	const rows = screen.getAllByRole('listitem');
+	const grip = rows[from].querySelector('[title="Drag to reorder"]')!;
+	grip.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+	rows[from].dispatchEvent(new Event('dragstart', { bubbles: true }));
+	rows[to].dispatchEvent(new Event('dragover', { bubbles: true, cancelable: true }));
+	rows[to].dispatchEvent(new Event('drop', { bubbles: true, cancelable: true }));
+}
+
+describe('PartSection drag-and-drop reordering', () => {
+	it('moves the dragged item to the drop position, shifting the rest', () => {
+		const { onReorder } = renderSection();
+		drag(0, 2);
+		expect(onReorder).toHaveBeenCalledWith(['b', 'c', 'a']);
+	});
+
+	it('moves an item upwards the same way', () => {
+		const { onReorder } = renderSection();
+		drag(2, 0);
+		expect(onReorder).toHaveBeenCalledWith(['c', 'a', 'b']);
+	});
+
+	it('does nothing when a row is dropped on itself', () => {
+		const { onReorder } = renderSection();
+		drag(1, 1);
+		expect(onReorder).not.toHaveBeenCalled();
+	});
+
+	it('does not reorder while a previous reorder is still in flight', () => {
+		const { onReorder } = renderSection({ busy: true });
+		drag(0, 2);
+		expect(onReorder).not.toHaveBeenCalled();
+	});
+
+	it('only becomes draggable once the grip is pressed', async () => {
+		renderSection();
+		const row = screen.getAllByRole('listitem')[0];
+		// Rows carry formulas worth selecting, so they aren't draggable by default.
+		expect(row.getAttribute('draggable')).toBe('false');
+		row
+			.querySelector('[title="Drag to reorder"]')!
+			.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+		await tick();
+		expect(row.getAttribute('draggable')).toBe('true');
+	});
+
+	it('keeps the grip out of the accessibility tree, leaving the chevrons as the keyboard path', () => {
+		renderSection();
+		const grip = screen.getAllByRole('listitem')[0].querySelector('[title="Drag to reorder"]')!;
+		expect(grip).toHaveAttribute('aria-hidden', 'true');
+		expect(grip.tagName.toLowerCase()).toBe('span');
 	});
 });

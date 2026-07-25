@@ -15,7 +15,7 @@
 <a
 	href={resolve(href as '/')}
 	class={cn(
-		'inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground',
+		'text-muted-foreground hover:text-foreground -my-2 inline-flex min-h-11 items-center gap-1 py-2 text-sm transition-colors',
 		className
 	)}
 >

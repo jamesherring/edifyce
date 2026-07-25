@@ -4,18 +4,22 @@
 	import FormField from '$lib/components/FormField.svelte';
 	import { api, type BracketPair } from '$lib/api';
 	import type { SymbolEntry } from '$lib/symbols';
+	import type { NotationGroup } from '$lib/notation';
 	import { createSectionController } from './section.svelte';
 
 	let {
 		systemId,
 		brackets,
 		symbols,
-		onChanged
+		onChanged,
+		notation = []
 	}: {
 		systemId: string;
 		brackets: BracketPair[];
 		symbols: SymbolEntry[];
 		onChanged: () => Promise<void> | void;
+		/** Optional: the grammar reference shown in the edit sheet. */
+		notation?: NotationGroup[];
 	} = $props();
 
 	let opening = $state('');
@@ -38,6 +42,7 @@
 
 <PartSection
 	title="Brackets"
+	id="brackets"
 	addLabel="Add brackets"
 	items={brackets}
 	emptyMessage="No bracket pairs yet."
@@ -59,6 +64,7 @@
 	onDelete={s.editing ? s.del : undefined}
 	saving={s.saving}
 	{canSave}
+	{notation}
 	{symbols}
 >
 	<FormField label="Opening" id="bracket-open" bind:value={opening} placeholder="(" maxlength={16} notation />
