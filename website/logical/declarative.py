@@ -672,6 +672,19 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
     notation = union.add_notation(defn.higher, context_copy)
     system.context.definitions.add(notation)
 
+    # A nullary defined form is a new ground leaf of the grammar that no production
+    # declared a role for, so the build settles its role here: the leaf abbreviates
+    # one fixed term, and a *later* definition may introduce it exactly as it may a
+    # declared constant (`T ≝ S` layers on `S ≝ ⊥`).
+    #
+    # Settled *before* the kernel definition is built, not after, because building
+    # it projects this template to a constructor and a constructor snapshots the
+    # declaration. Safe in both directions: the definition's own leaf is always
+    # among its defined form's, so `introduced_leaves` never puts it to the
+    # constants check during this build, and a build that goes on to fail discards
+    # the notation with the rest of the half-built system.
+    notation.template.denotes_constant = denotes_a_constant(notation)
+
     # Build the kernel counterpart now, against the context the notation has just
     # entered — a definition's *defined* form is grammatical only because its
     # notation is registered, so this must follow the add. `system.context` is
@@ -694,12 +707,6 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
         raise DeclarativeError(str(exc)) from exc
 
     system.add_definition(kernel_definition)
-
-    # A nullary defined form is a new ground leaf of the grammar that no
-    # production declared a role for. The build has just settled it: the leaf
-    # abbreviates one fixed term, so a *later* definition may introduce it exactly
-    # as it may a declared constant, and `T ≝ S` layers on `S ≝ ⊥`.
-    notation.template.denotes_constant = denotes_a_constant(kernel_definition)
 
     # A freshly added definition or one that de-duplicated into an existing
     # equivalent — either way its form was recognised, so the definition layers.

@@ -16,18 +16,23 @@ This module is the *only* place in the kernel that reads a ``Pattern``. Keeping
 the projection here is what lets ``terms``, ``unify`` and ``definitions`` be
 written against kernel data alone.
 
-The one thing not projected
+What is still a ``Pattern``
 ---------------------------
-``denotes_constant`` stays a property delegating to the source production, not a
-snapshot, because the build *mutates* it: a nullary defined form's role is
-settled only once its kernel definition exists (see
-``declarative._finalise_definition``), which is after terms built from that
-production may already exist. Snapshotting would freeze the pre-decision value.
+``denotes_constant`` used to be a property reading the production back, because
+the build *mutated* it: a nullary defined form's role was settled after its
+kernel definition was built, by which time terms carrying that constructor
+existed. That is resequenced - the role is now settled from the notation alone,
+before the definition is built (``declarative._finalise_definition``) - so it is
+an ordinary snapshot like every other field.
 
-That delegation, and the ``source`` field it reads, are the remaining thread back
-to the matching layer. It stays until a production's declared role is kernel data
-in its own right - at which point ``source`` goes and this module's import of
-``Pattern`` goes with it.
+Two threads back to the matching layer remain, and they are the same thread:
+a **sort** is still a ``Pattern``. ``slot_sorts`` holds the sorts a schema's
+variables take, and ``source`` is what ``admits`` walks to find a union's
+branches. Both go when a sort is kernel data in its own right - which also means
+``Term.sort``, ``Var.sort`` and the sort arguments of the side conditions. Until
+then this module stays the only place in the kernel that reads a ``Pattern``,
+which is what lets ``terms``, ``unify`` and ``definitions`` be written against
+kernel data alone.
 """
 
 from __future__ import annotations
@@ -86,6 +91,7 @@ class Constructor:
         atom_value: str | None = None,
         atom_base: str | None = None,
         has_declared_variables: bool = False,
+        denotes_constant: bool = False,
     ) -> None:
         self.source: Pattern = source
         self.kind: str = kind
@@ -105,6 +111,11 @@ class Constructor:
         # having slots: a declared variable that never appears in the template
         # occupies no slot. Schema projection distinguishes the two.
         self.has_declared_variables: bool = has_declared_variables
+        # Whether this production's tokens name constants of the object language
+        # (Metamath's `$c`) rather than variables a binder may bind. Read by the
+        # kernel's definition builder to decide which leaves a defining form may
+        # introduce from nowhere.
+        self.denotes_constant: bool = denotes_constant
         # Lazily filled by `admits`.
         self._admits: frozenset[Constructor] | None = None
 
@@ -141,12 +152,6 @@ class Constructor:
                     stack.extend(pattern.patterns)
             self._admits = frozenset(found.values())
         return self._admits
-
-    @property
-    def denotes_constant(self) -> bool:
-        # Delegated, never snapshotted - the build settles this after the fact for
-        # a nullary defined form. See the module docstring.
-        return self.source.denotes_constant
 
     def __repr__(self) -> str:
         return f"Constructor({self.name!r}, {self.signature!r})"
@@ -208,6 +213,7 @@ def _build(pattern: Pattern) -> Constructor:
         )
         return Constructor(
             source=pattern,
+            denotes_constant=pattern.denotes_constant,
             kind="string",
             name=pattern.name,
             signature=("string", skeleton),
@@ -229,6 +235,7 @@ def _build(pattern: Pattern) -> Constructor:
         )
         return Constructor(
             source=pattern,
+            denotes_constant=pattern.denotes_constant,
             kind="atom",
             name=pattern.name,
             signature=signature,
@@ -243,6 +250,7 @@ def _build(pattern: Pattern) -> Constructor:
     if isinstance(pattern, RegexPattern):
         return Constructor(
             source=pattern,
+            denotes_constant=pattern.denotes_constant,
             kind="regex",
             name=pattern.name,
             signature=("regex", pattern.pattern),
@@ -257,6 +265,7 @@ def _build(pattern: Pattern) -> Constructor:
     # one is a *coercion wrapper* the term layer collapses (see from_match).
     return Constructor(
         source=pattern,
+        denotes_constant=pattern.denotes_constant,
         kind="union" if isinstance(pattern, UnionPattern) else "named",
         name=pattern.name,
         signature=("named", pattern.name),

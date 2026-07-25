@@ -180,8 +180,11 @@ def _definition_id(
         return None
 
     higher = definition.higher
-    sort = higher.sort if higher.sort is not None else higher.constructor.source
-    return definition_ids.get((higher.to_string(), sort.name))
+    # A node records a `sort` only when its constructor is not itself a member of
+    # the sort it inhabits — which is exactly what a defined form is — so falling
+    # back to the constructor's own name covers the rest.
+    sort_name = higher.sort.name if higher.sort is not None else higher.constructor.name
+    return definition_ids.get((higher.to_string(), sort_name))
 
 
 def _line_term(

@@ -82,7 +82,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..kernel import Definition, introduced_leaves, unbound_parameters
-from ..kernel.terms import Node
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -214,22 +213,29 @@ def build_kernel_definition(
     return kernel_def
 
 
-def denotes_a_constant(kernel_def: Definition) -> bool:
-    """Whether a built definition's *defined* form is itself a constant of the
-    object language - true exactly when that form is a ground leaf.
+def denotes_a_constant(notation: DefinedNotation) -> bool:
+    """Whether a definition's *defined* form is itself a constant of the object
+    language - true exactly when the notation is nullary, so that form parses to
+    a ground leaf.
 
     A nullary definition (``S ≝ (⊥ → ⊥)``) puts a new leaf into the grammar that
-    no production declared a role for. It needs no declaration: reaching here
-    means every leaf of its defining form was accounted for, so ``S`` abbreviates
-    one fixed term and denotes one fixed thing. Nor can it be captured - its
+    no production declared a role for. It needs no declaration: ``S`` abbreviates
+    one fixed term and so denotes one fixed thing. Nor can it be captured - its
     constructor is the definition's own, distinct from any variable sort that
     happens to spell the same token, which is the same reason
     :func:`~website.logical.kernel.definitions.introduced_leaves` keys on
     constructor rather than spelling. So a later definition may introduce it
     exactly as it may introduce ``⊥``, and ``T ≝ S`` layers on ``S ≝ ⊥``.
 
-    Derived rather than declared: the builder has just established the fact, and
-    there is nothing here for an author to know that the engine does not.
+    Derived rather than declared: there is nothing here for an author to know
+    that the engine does not.
+
+    Asked of the *notation* rather than the built definition, so the answer is
+    available before the definition is built - which is what lets a constructor
+    snapshot the declaration instead of reading it back through the production
+    for the rest of the system's life. The two agree by construction: a
+    definition's parameters are exactly its notation's slots (see
+    :func:`build_kernel_definition`), so the defined form is a ground leaf
+    exactly when the notation takes none.
     """
-    higher = kernel_def.higher
-    return isinstance(higher, Node) and not higher.children and higher.literal is not None
+    return not notation.variables
