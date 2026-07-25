@@ -417,6 +417,9 @@ export interface ProofStructureLine {
 	 * when nothing justified the line: a scope opener, axiom, or definitional step). */
 	reference: string | null;
 	rule: string | null;
+	/** The definition a definitional step applied. A generic `[Def, n]` citation
+	 * names none, so this is the only record of which one it was. */
+	definition_id: string | null;
 	valid: boolean;
 	invalid_message: string | null;
 	warning_message: string | null;
@@ -430,8 +433,10 @@ export interface ProofStructureLine {
 
 export interface ProofStructure {
 	proof_id: string;
-	/** False only when the proof has not been checked since its last edit — even
-	 * an empty proof stores its one blank line. */
+	/** Whether a structure is materialised. Never "derived nothing" (an empty
+	 * proof still stores its one blank line), but not quite "unchecked" either: a
+	 * proof checked before this store existed materialises on its next verify.
+	 * Read `ProofSummary.valid` for whether it was checked. */
 	stored: boolean;
 	lines: ProofStructureLine[];
 }

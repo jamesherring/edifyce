@@ -86,7 +86,11 @@ Modernised from the original Django app (`website/models.py` on `main`):
   into a cited lemma is recorded by that proof's id and citation number, since the
   lemma owns its own line rows. Written by `proofs_mapping.store_proof_lines` when
   a proof is verified or published, and **dropped whenever `proofs.valid` is** —
-  the snapshot is derived from a check, so it never outlives one. Read back at
+  the snapshot is derived from a check, so it never outlives one. That includes
+  editing the *system*: a part edit changes the grammar a proof was checked
+  against, so it invalidates every proof in the system
+  (`proofs_mapping.discard_system_checks`, called from every part route; a
+  published system is frozen, so this only ever runs for a draft). Read back at
   `GET /api/proofs/{id}/structure`.
 - **`terms`** / **`term_children`** — the **term graph** (`terms.py`): kernel
   term DAGs stored as shared rows, interned per system by a structural

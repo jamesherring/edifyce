@@ -886,6 +886,7 @@ def _line_out(row: ProofLineRow) -> ProofLineOut:
         label=row.label,
         reference=row.reference,
         rule=row.rule,
+        definition_id=row.definition_id,
         valid=row.valid,
         invalid_message=row.invalid_message,
         warning_message=row.warning_message,
@@ -926,8 +927,9 @@ async def get_proof_structure(
             .options(selectinload(ProofLineRow.term), selectinload(ProofLineRow.antecedents))
         )
     ).all()
-    # No rows means unchecked, not "checked and empty": an empty *source* still
-    # stores its one blank line, so the two cases stay distinguishable.
+    # No rows means no structure, not "checked and empty": an empty *source*
+    # still stores its one blank line. A proof checked before this store existed
+    # also lands here, and materialises on its next verify.
     return ProofStructure(
         proof_id=proof.id,
         stored=bool(rows),

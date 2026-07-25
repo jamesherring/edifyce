@@ -753,6 +753,7 @@ class Proof:
             if proof_line.follows_from_definition(source, definition, context):
                 proof_line.valid = True
                 proof_line.antecedents = (source,)
+                proof_line.applied_definition = definition
                 source.dependent_lines.add(proof_line)
                 return True
 
@@ -869,6 +870,12 @@ class ProofLine:
         # The inference rule that justified this line, once one has (None while
         # unchecked, for an unjustified line, and for a definitional step).
         self.inference_rule = None
+
+        # The definition a definitional step unfolded or folded, once one has.
+        # Recorded because a generic `[Def, n]` citation names none: the checker
+        # searches the definitions in scope, so which one applied is knowable
+        # only here, and a reader cannot recover it from the citation text.
+        self.applied_definition: Definition | None = None
 
         # The cited lines this line was justified from: those filling the rule's
         # declared antecedent slots, and any surplus lines an

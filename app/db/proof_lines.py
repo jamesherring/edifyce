@@ -100,6 +100,14 @@ class ProofLineRow(Base):
     # from `reference` — a promoted theorem resolves to an ephemeral rule that
     # appears in no system's rule list.
     rule: Mapped[str | None] = mapped_column(String(256))
+    # The definition a definitional step applied, for the same reason: a generic
+    # `[Def, n]` citation names no definition at all — the checker searches those
+    # in scope — so which one was used is recoverable from nowhere else. SET NULL
+    # rather than CASCADE: losing the attribution must not delete the line. (A
+    # part edit invalidates the whole snapshot anyway; this is the backstop.)
+    definition_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("definitions.id", ondelete="SET NULL"), index=True
+    )
 
     # The line's formula as a kernel term, interned into the system's shared term
     # graph. Null for a line that bears no formula (blank, commentary, or a line

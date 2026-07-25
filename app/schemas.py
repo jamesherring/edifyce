@@ -547,6 +547,10 @@ class ProofLineOut(BaseModel):
     # step, or an unjustified one).
     reference: str | None = None
     rule: str | None = None
+    # The definition a definitional step applied. A generic `[Def, n]` citation
+    # names none — the checker searches those in scope — so this is the only
+    # record of which one it was.
+    definition_id: uuid.UUID | None = None
     valid: bool
     invalid_message: str | None = None
     warning_message: str | None = None
@@ -561,9 +565,11 @@ class ProofLineOut(BaseModel):
 class ProofStructure(BaseModel):
     """A proof's stored structure, or an empty one when none is stored.
 
-    ``stored`` is false only when the proof has not been checked since its last
-    edit: even an empty proof stores its one blank line, so "no lines" always
-    means "nothing was derived", never "derived nothing"."""
+    ``stored`` says only that: a structure is on hand. It is never "derived
+    nothing" — even an empty proof stores its one blank line — but nor is it
+    quite "unchecked", since a proof last checked before this store existed
+    carries a verdict without a structure until its next verify. Read it as
+    *materialised*, and ``ProofSummary.valid`` as *checked*."""
 
     proof_id: uuid.UUID
     stored: bool

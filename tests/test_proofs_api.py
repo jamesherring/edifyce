@@ -1036,3 +1036,48 @@ def test_subproofs_and_discharge_are_stored_as_scope_and_edges(client, db):
     assert [(a["role"], a["line_id"]) for a in discharge["antecedents"]] == [
         ("subproof", opener["id"])
     ]
+
+
+def test_a_generic_definitional_step_records_which_definition_applied(client, db):
+    # `[Def, 1]` names no definition — the checker searches those in scope — so
+    # the edge to the source line is not on its own a complete justification.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    pid = _create_proof(client, sid, "Unfold", source="x ⊆ y [HYP]\n(x = y → x = y) [Def, 1]")
+    assert client.post(f"/api/proofs/{pid}/verify").json()["success"] is True
+
+    hypothesis, unfolded = _structure(client, pid)["lines"]
+    # A rule justified the hypothesis; a definition justified the unfolding.
+    assert (hypothesis["rule"], hypothesis["definition_id"]) == ("HYP", None)
+    assert unfolded["rule"] is None
+    assert unfolded["definition_id"] == _definition_id(client, sid, "subset")
+    # The cited line is still recorded as the antecedent it is.
+    assert [a["line_id"] for a in unfolded["antecedents"]] == [hypothesis["id"]]
+
+
+def _definition_id(client: TestClient, system_id: str, name: str) -> str:
+    definitions = client.get(f"/api/formal-systems/{system_id}").json()["definitions"]
+    return next(d["id"] for d in definitions if d["name"] == name)
+
+
+def test_editing_the_system_discards_its_proofs_checks(client, db):
+    # A proof means nothing apart from the system it was checked against, so a
+    # part edit invalidates both the verdict and the structure — whose terms name
+    # productions the system may no longer have.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    pid = _create_proof(client, sid, "MP", source=_MP_SRC)
+    client.post(f"/api/proofs/{pid}/verify")
+    assert client.get(f"/api/proofs/{pid}").json()["valid"] is True
+    assert _structure(client, pid)["stored"] is True
+
+    resp = client.post(
+        f"/api/formal-systems/{sid}/rules",
+        json={"label": "DS", "name": "disjunctive syllogism", "deduction": "q",
+              "antecedents": ["p"], "bindings": [{"var": "p", "sort": "formula"},
+                                                 {"var": "q", "sort": "formula"}]},
+    )
+    assert resp.status_code == 201, resp.text
+
+    assert client.get(f"/api/proofs/{pid}").json()["valid"] is None
+    assert _structure(client, pid)["stored"] is False

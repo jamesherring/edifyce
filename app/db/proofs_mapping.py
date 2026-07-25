@@ -23,8 +23,11 @@ import uuid
 from typing import TYPE_CHECKING
 
 from sqlalchemy import delete as sa_delete
+from sqlalchemy import select
+from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
+from app.db.models import Proof as ProofRow
 from app.db.terms import TermRow
 
 from app.db.proof_lines import (
@@ -63,6 +66,27 @@ def clear_proof_lines(session: Session, proof_ids: list[uuid.UUID]) -> None:
     session.execute(sa_delete(ProofLineRow).where(ProofLineRow.proof_id.in_(proof_ids)))
 
 
+def discard_system_checks(session: Session, system_id: uuid.UUID) -> None:
+    """Drop every check derived from ``system_id``'s current definition.
+
+    A proof means nothing apart from the system it was checked against, so
+    editing that system's grammar, definitions or rules invalidates every proof
+    in it — the cached verdict *and* the structure, whose terms and rule labels
+    name productions the system may no longer have. A **published** system is
+    frozen (`systems.require_editable_system`), so this only ever runs for a
+    draft, whose proofs re-verify on demand.
+    """
+    proof_ids = list(
+        session.scalars(select(ProofRow.id).where(ProofRow.formal_system_id == system_id))
+    )
+    if not proof_ids:
+        return
+    session.execute(
+        sa_update(ProofRow).where(ProofRow.id.in_(proof_ids)).values(valid=None, result=None)
+    )
+    clear_proof_lines(session, proof_ids)
+
+
 def store_proof_lines(
     session: Session,
     proof: Proof,
@@ -87,6 +111,13 @@ def store_proof_lines(
     # Safe to key by identity: `cited_proofs` holds every proof it names for the
     # duration of the call, so no entry can outlive its object.
     cited = {id(engine): pid for engine, pid in cited_proofs}
+    # A compiled definition carries no row id (it is built from the spec), so an
+    # applied one is matched back by the pair that identifies it in the term
+    # graph too: its higher template and the sort it inhabits. Template alone
+    # would not do — two definitions may share one across different sorts.
+    definition_ids = {
+        (row.higher, row.symbol.name): row.id for row in system.definitions
+    }
     rows: list[ProofLineRow] = []
     # Engine lines are identified by object id: `ProofLine` has no natural key,
     # and `list.index` on `proof_lines` would be quadratic (and wrong for two
@@ -107,6 +138,7 @@ def store_proof_lines(
             label=line.label,
             reference=line.reference_string_display,
             rule=line.inference_rule.label if line.inference_rule is not None else None,
+            definition_id=_definition_id(line, definition_ids),
             term=_line_term(session, system, line),
             valid=bool(line.valid),
             invalid_message=line.invalid_message,
@@ -132,6 +164,18 @@ def store_proof_lines(
         row.antecedents = list(_antecedent_rows(line, row_of, cited))
 
     return rows
+
+
+def _definition_id(
+    line: ProofLine, definition_ids: dict[tuple[str, str], uuid.UUID]
+) -> uuid.UUID | None:
+    """The row id of the definition this line applied, or ``None`` if it applied
+    none. A miss means the system's rows no longer describe the definition the
+    check used — the attribution is dropped rather than guessed at."""
+    definition = line.applied_definition
+    if definition is None:
+        return None
+    return definition_ids.get((definition.higher.pattern, definition.pattern.name))
 
 
 def _line_term(
