@@ -7,6 +7,8 @@ tests check both that sharing happens and that equality is unchanged, including
 for hand-built (un-interned) terms.
 """
 
+import gc
+import weakref
 from copy import copy
 
 import pytest
@@ -16,7 +18,7 @@ pytest.importorskip("regex")
 from website.logical.declarative import SystemSpec, build_spec, build_system
 from website.logical.kernel import Node, Var, constructor_for, from_match, intern, match
 from website.logical.kernel.terms import _node
-from website.logical.matching import StringPattern
+from website.logical.matching import RegexPattern, StringPattern
 from tests.spec_helpers import brackets, regex_prod, statement_line, template_prod
 from tests.test_definition_step_bridge import alias_spec
 
@@ -191,3 +193,19 @@ def test_defined_notation_interns_like_a_production():
 
     assert first is second
     assert all(first.children[label] is second.children[label] for label in first.children)
+
+
+def test_a_constructor_is_reclaimed_with_its_production():
+    # The projection memo lives on the production, not in a module-level cache.
+    # It cannot live in one: a grammar is mutually recursive — `implication`'s
+    # slot sort is the `formula` union that contains it — so a cache entry's
+    # value reaches back to its own key and keeps itself alive. A system rebuilt
+    # per request would then grow the process without bound.
+    def build_and_drop() -> weakref.ref:
+        pattern = RegexPattern("throwaway", "^x$")
+        assert constructor_for(pattern) is constructor_for(pattern)  # memoised
+        return weakref.ref(pattern)
+
+    refs = [build_and_drop() for _ in range(20)]
+    gc.collect()
+    assert all(ref() is None for ref in refs)

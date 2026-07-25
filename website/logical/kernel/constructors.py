@@ -33,7 +33,6 @@ in its own right - at which point ``source`` goes and this module's import of
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from weakref import WeakKeyDictionary
 
 from ..matching.patterns import AtomPattern, RegexPattern, StringPattern, UnionPattern
 
@@ -117,19 +116,24 @@ class Constructor:
         return f"Constructor({self.name!r}, {self.signature!r})"
 
 
-# One constructor per production, keyed weakly by the production's identity so an
-# entry cannot outlive the pattern it projects. Identity, not value: two
-# same-shaped productions must stay distinct (see the class docstring).
-_CONSTRUCTORS: WeakKeyDictionary = WeakKeyDictionary()
-
-
 def constructor_for(pattern: Pattern) -> Constructor:
-    """The constructor ``pattern`` denotes, built on first sight and reused after."""
-    existing = _CONSTRUCTORS.get(pattern)
+    """The constructor ``pattern`` denotes, built on first sight and reused after.
+
+    The memo lives *on the production*, not in a table here, so it is reclaimed
+    with it. A module-level cache - even a weak-keyed one - cannot be: a grammar
+    is mutually recursive (``implication``'s slot sort is the ``formula`` union
+    that contains it), so a constructor's ``slot_sorts`` reach back to its own
+    key, and the entry keeps itself alive. Rebuilding a system per request would
+    then grow the process without bound.
+
+    The pattern/constructor reference cycle this creates is ordinary garbage once
+    the system is dropped, and the cyclic collector reclaims it.
+    """
+    existing = pattern.kernel_constructor
     if existing is not None:
         return existing
     built = _build(pattern)
-    _CONSTRUCTORS[pattern] = built
+    pattern.kernel_constructor = built
     return built
 
 
