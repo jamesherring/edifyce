@@ -34,6 +34,7 @@ function production(template: string): Production {
 		regex: null,
 		atom_value: null,
 		atom_base: null,
+		denotes_constant: false,
 		bindings: []
 	};
 }

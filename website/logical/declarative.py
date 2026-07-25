@@ -41,7 +41,11 @@ from .build_context import (
     combine_side_conditions,
 )
 from .formal_system import FormalSystem, InferenceRule, LineType, SubproofSchema
-from .formal_system.definitions import DefinitionError, build_kernel_definition
+from .formal_system.definitions import (
+    DefinitionError,
+    build_kernel_definition,
+    denotes_a_constant,
+)
 from .formal_system.side_condition_syntax import parse_side_condition
 from .matching import AtomPattern, Pattern, RegexPattern, StringPattern, UnionPattern
 
@@ -74,6 +78,19 @@ class Production:
     atom_value: str | None = None      # atom constant: the single literal token it matches
     atom_base: str | None = None       # atom family: base of the `p_#` indexed family
     bindings: list[tuple[str, str]] = field(default_factory=list)  # (var, sort)
+    # Whether this production's tokens are *constants* of the object language —
+    # one fixed denotation, never standing for a bound variable — as opposed to
+    # variables of it. This is Metamath's `$c` vs `$v`, and like Metamath's it is
+    # declared, not inferred: no property of a production's shape decides it. A
+    # single-token atom is a constant in `formula ::= ⊥` and a variable in
+    # `setvar ::= a | b | c`, and only the author knows which was meant.
+    #
+    # Consulted for one purpose: whether a definition's defining form may
+    # introduce this token without the defined form supplying it (see
+    # `formal_system.definitions.build_kernel_definition`). Defaults to False —
+    # variable-like — so omitting it costs a refused definition, never a
+    # capturing one.
+    denotes_constant: bool = False
 
 
 @dataclass
@@ -384,21 +401,31 @@ def build_system(spec: SystemSpec) -> FormalSystem:
         # Bracket parity deliberately not applied — see its uses.
         return pattern
 
+    def declare(pattern: Pattern, prod: Production) -> Pattern:
+        # Carry the author's object-language role onto the built pattern. Only a
+        # *leaf* production can ever be the term this decides about, but setting
+        # it uniformly keeps one path and costs nothing.
+        pattern.denotes_constant = prod.denotes_constant
+        return pattern
+
     # 1. Atomic productions: regex leaves, atom constants, and atom families.
     for prod in spec.productions:
         if prod.regex is not None:
-            ctx.variables[prod.name] = register(
-                RegexPattern(name=prod.name, pattern=_anchor(prod.regex))
+            ctx.variables[prod.name] = declare(
+                register(RegexPattern(name=prod.name, pattern=_anchor(prod.regex))), prod
             )
         elif prod.atom_value is not None or prod.atom_base is not None:
             # An atom constant (`value`, one literal token) or indexed family
             # (`base`, the infinite `p_#` -> p_0, p_1, ...). A single token needs
             # no bracket parity, so it is not `register`ed — its `respect_brackets`
             # stays None.
-            ctx.variables[prod.name] = AtomPattern(
-                name=prod.name,
-                value=prod.atom_value,
-                base=prod.atom_base,
+            ctx.variables[prod.name] = declare(
+                AtomPattern(
+                    name=prod.name,
+                    value=prod.atom_value,
+                    base=prod.atom_base,
+                ),
+                prod,
             )
     # (Inline line parts are registered per-line in step 5, immediately before
     # the line that uses them, so two lines may reuse a part name with different
@@ -416,7 +443,9 @@ def build_system(spec: SystemSpec) -> FormalSystem:
             continue
         pattern = StringPattern(name=prod.name, pattern=prod.template)
         pattern.add_variables(_binding_patterns(prod.bindings, ctx))
-        ctx.variables[prod.name] = register(pattern)
+        # A nullary template (`S`, `∅`) parses to a ground leaf, so it too can be
+        # the leaf a definition introduces and carries the declaration.
+        ctx.variables[prod.name] = declare(register(pattern), prod)
 
     # 4. Fill each sort union with its members, in declared order.
     for sort in spec.sort_names():
@@ -646,6 +675,12 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
         result.kernel = build_kernel_definition(result, system.context)
     except DefinitionError as exc:
         raise DeclarativeError(str(exc)) from exc
+
+    # A nullary defined form is a new ground leaf of the grammar that no
+    # production declared a role for. The build has just settled it: the leaf
+    # abbreviates one fixed term, so a *later* definition may introduce it exactly
+    # as it may a declared constant, and `T ≝ S` layers on `S ≝ ⊥`.
+    result.higher.denotes_constant = denotes_a_constant(result.kernel)
 
     # A freshly added definition or one that de-duplicated into an existing
     # equivalent — either way its form was recognised, so the definition layers.

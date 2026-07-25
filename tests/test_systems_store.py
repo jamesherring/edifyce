@@ -53,6 +53,7 @@ from tests.spec_helpers import (
     rule,
     statement_line,
     subset_def,
+    template_prod,
     universal_prod,
     variable_prod,
 )
@@ -187,6 +188,33 @@ def test_atom_productions_round_trip_through_the_database(session):
     system = build_spec(system_to_spec(stored))["system"]
     assert system.parse("p_7 [HYP]").valid is True
     assert system.parse("p_0 [HYP]\n¬p_0 [HYP]\n⊥ [X, 1, 2]").valid is True
+
+
+def test_object_language_role_round_trips_through_the_database(session):
+    # `denotes_constant` persists per production. Two atoms of identical shape and
+    # opposite roles, so a round trip that dropped or defaulted the column would
+    # collapse them and show up here.
+    spec = SystemSpec(
+        name="Roles",
+        brackets=brackets(),
+        productions=[
+            regex_prod("setvar", "setvar_atom", "[A-Z]"),
+            atom_const_prod("setvar", "cee", "c"),
+            atom_const_prod("formula", "falsum", "⊥", denotes_constant=True),
+            template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+        ],
+        lines=[statement_line()],
+    )
+    session.add(spec_to_system(spec))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Roles"))
+
+    roles = {s.name: s.denotes_constant for s in stored.symbols if s.kind != "union"}
+    assert roles == {
+        "setvar_atom": False, "cee": False, "falsum": True, "membership": False
+    }
+    assert system_to_spec(stored) == spec
 
 
 def scoped_spec() -> SystemSpec:

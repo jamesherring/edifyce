@@ -81,6 +81,12 @@ export interface Production {
 	atom_value: string | null;
 	/** kind==="atom": the indexed family's base (e.g. `p` for the `p_#` family). */
 	atom_base: string | null;
+	/** Whether this production's tokens are constants of the object language
+	 * (`⊥`, `∅`) rather than variables of it. Declared, not inferred — `⊥` in
+	 * `formula ::= ⊥` and `a` in `setvar ::= a | b | c` are the same shape and
+	 * opposite answers. Only a constant may appear in a definition's defining
+	 * form without the defined form supplying it. */
+	denotes_constant: boolean;
 	bindings: Binding[];
 }
 
@@ -244,6 +250,8 @@ export interface ProductionCreate {
 	regex?: string | null;
 	atom_value?: string | null;
 	atom_base?: string | null;
+	/** See `Production.denotes_constant`. Omitted means variable-like. */
+	denotes_constant?: boolean;
 	bindings?: Binding[];
 }
 export type ProductionUpdate = Partial<ProductionCreate>;

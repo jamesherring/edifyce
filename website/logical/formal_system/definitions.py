@@ -44,9 +44,31 @@ because deciding which of those are *benign* - a constant of the object language
 like ``⊥`` denotes one fixed thing and can be neither renamed nor captured - is a
 question about the grammar, not about the graph.
 
-So this module supplies only that grammar predicate
-(:func:`_is_capture_safe_constant` and friends), and the matching layer below it
-does neither: patterns parse, and nothing else.
+So this module supplies only that grammar predicate, and the matching layer below
+it does neither: patterns parse, and nothing else.
+
+Why the predicate is a *declaration*, not a deduction
+-----------------------------------------------------
+This module used to infer the answer from the leaf's constructor - a constant
+atom or a slotless production was read as constant - cross-checked against every
+variable-like sort reachable from the definition's own. Each part of that was a
+guess, and the guesses had holes: an atom constant declared a *member of the
+variable sort* (``setvar ::= [A-Z] | c``) is a variable the author spelled with
+an atom, but the constructor says "constant", so ``T ≝ (c ∈ c)`` was admitted and
+``∀c.T ⟶ ∀c.(c ∈ c)`` captured ``c``.
+
+No property of a production's shape settles it, because the same shape means
+different things in different grammars: a one-token atom is a constant in
+``formula ::= ⊥`` and a variable in ``setvar ::= a | b | c``. Metamath faces the
+same question and answers it the same way - every token is declared ``$c`` or
+``$v`` - so the author declares it here too, via
+``Production.denotes_constant``, and this module reads the declaration.
+
+The default is variable-like, which is the safe direction: an undeclared leaf is
+refused, so a forgotten declaration costs a rejected definition. The unsafe
+direction - declaring a bindable token constant - takes a positive act, and stays
+confined to the system it is made in (a proof is only ever checked against its
+own system, and cross-proof citation is same-system-only).
 """
 
 from __future__ import annotations
@@ -62,7 +84,6 @@ from ..kernel import (
     unbound_parameters,
 )
 from ..kernel.terms import Node
-from ..matching import AtomPattern, RegexPattern, StringPattern, UnionPattern
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -70,7 +91,6 @@ if TYPE_CHECKING:
     from ..matching.context import Context
     from ..matching.definitions import Definition as MatchingDefinition
     from ..matching.matches import Match
-    from ..matching.patterns import Pattern
 
 
 # `Match.create_pattern` renames a colliding variable by appending `_<n>`; this
@@ -86,117 +106,33 @@ class DefinitionError(Exception):
     """
 
 
-def _is_constant_constructor(pattern: Pattern) -> bool:
-    """Whether ``pattern`` builds a fixed symbol rather than a variable: a
-    constant atom (``⊥``), or a production with no slots to fill (``0``, ``∅``).
-
-    A regex sort is variable-like by construction, and a family atom is freshable,
-    so neither qualifies.
-    """
-    if isinstance(pattern, AtomPattern):
-        return pattern.is_constant
-    if isinstance(pattern, StringPattern):
-        return not pattern.variables
-    return False
-
-
-def _reachable_patterns(sort: Pattern) -> set[Pattern]:
-    """``sort`` and every pattern that can occur inside one of its instances.
-
-    Scoping the capture check to these is what keeps it about the *term* language:
-    a binder in a defining form binds a variable occurring inside a term of the
-    definition's sort, so only these sorts can name one. Patterns registered for
-    other purposes - notably a line type's citation-reference field, whose regex
-    happily matches ordinary tokens - are not part of that language and must not
-    decide whether a leaf is a constant.
-    """
-    found: set[Pattern] = set()
-
-    def walk(pattern: Pattern) -> None:
-        if pattern in found:
-            return
-        found.add(pattern)
-        if isinstance(pattern, UnionPattern):
-            children: tuple[Pattern, ...] = tuple(pattern.patterns)
-        elif isinstance(pattern, StringPattern):
-            children = tuple(pattern.variables.values())
-        else:
-            return
-        for child in children:
-            walk(child)
-
-    walk(sort)
-    return found
-
-
-def _is_capture_safe_constant(
-    leaf: Node, patterns: set[Pattern], context: Context
-) -> bool:
-    """Whether ``leaf`` is a grammar *constant* — a symbol that can never stand in
-    for a bound variable, so a lower-only occurrence of it in a defining form is
-    safe to unfold without risk of capture.
-
-    Two conditions, and both are needed. The leaf's own constructor must be a
-    constant one (positive evidence, from the parse itself, that this position
-    holds a fixed symbol), **and** nothing bindable in ``patterns`` - the sorts
-    reachable from the definition's own sort - may also claim the token: not a
-    family atom, not a declared metavariable, not any regex-token sort. The second
-    covers an ambiguous grammar, where the same token reads as a declared constant
-    *and* as a variable in the same slot.
-    """
-    if not _is_constant_constructor(leaf.pattern):
-        return False
-
-    literal = leaf.literal
-    if literal in context.string_variables:
-        return False
-    if any(
-        isinstance(p, AtomPattern) and not p.is_constant and p.is_member(literal)
-        for p in patterns
-    ):
-        return False
-    return not any(
-        isinstance(p, RegexPattern) and _matches(p, literal, context) for p in patterns
-    )
-
-
-def _matches(pattern: RegexPattern, literal: str, context: Context) -> bool:
-    """Whether ``pattern`` claims ``literal``, treating a pattern that cannot be
-    evaluated as claiming nothing.
-
-    A regex sort compiles lazily, on its first match, so an unrelated malformed
-    one in the same grammar would otherwise raise here and take a well-formed
-    definition down with it. Reading it as "claims nothing" costs no soundness: a
-    regex that cannot compile cannot match a token in a proof line either, so it
-    can never be the sort a bound variable is drawn from.
-    """
-    try:
-        return pattern.match(literal, context) is not None
-    except Exception:  # noqa: BLE001 - any matcher failure means "no claim"
-        return False
-
-
 def _introduced_name_error(
     legacy: MatchingDefinition, names: Sequence[str]
 ) -> DefinitionError:
     """The build error for a defining form that introduces ``names`` out of
-    nowhere - written for the author, and naming both remedies.
+    nowhere - written for the author, and naming every remedy.
 
     One message covers every spelling of the mistake (an undeclared binder, a
-    parameter the defined form omits, a variable left free), because they are the
-    same defect and the author's two ways out are the same.
+    parameter the defined form omits, a variable left free, a constant the author
+    has not declared as one), because they are the same defect and the ways out
+    are the same three.
     """
     listed = ", ".join(repr(name) for name in names)
-    them = "them" if len(names) > 1 else "it"
+    plural = len(names) > 1
+    them = "them" if plural else "it"
     return DefinitionError(
         f"Definition '{legacy.higher.pattern}' introduces {listed} in its defining "
         f"form '{legacy.lower_source}', but the defined form does not mention "
         f"{them}. An unfold would then conjure {them} wherever the definition is "
         f"used, and under a binder of the same name that silently rebinds "
         f"{them} — so the step would not mean the same thing everywhere it is "
-        f"taken. Either make {listed} parameters the defined form supplies, or, if "
+        f"taken. Either make {listed} parameters the defined form supplies; or, if "
         f"the defining form binds {them}, declare {them} with a `fresh` clause "
-        f"giving the sort."
+        f"giving the sort; or, if {'they are' if plural else 'it is'} in fact "
+        f"{'constants' if plural else 'a constant'} of the object language that no "
+        f"binder can ever bind, mark the "
+        f"{'productions that build' if plural else 'production that builds'} "
+        f"{them} as denoting a constant."
     )
 
 
@@ -269,20 +205,40 @@ def build_kernel_definition(legacy: MatchingDefinition, context: Context) -> Def
     if unbound:
         raise _introduced_name_error(legacy, unbound)
 
-    bindable = _reachable_patterns(legacy.pattern)
     # Deduplicated by *name* only here: two constructors spelling the same token
     # are two problems to the kernel but one thing for the author to fix.
     conjured = sorted(
         {
             leaf.literal
             for leaf in introduced_leaves(kernel_def)
-            if not _is_capture_safe_constant(leaf, bindable, context)
+            if not leaf.pattern.denotes_constant
         }
     )
     if conjured:
         raise _introduced_name_error(legacy, conjured)
 
     return kernel_def
+
+
+def denotes_a_constant(kernel_def: Definition) -> bool:
+    """Whether a built definition's *defined* form is itself a constant of the
+    object language - true exactly when that form is a ground leaf.
+
+    A nullary definition (``S ≝ (⊥ → ⊥)``) puts a new leaf into the grammar that
+    no production declared a role for. It needs no declaration: reaching here
+    means every leaf of its defining form was accounted for, so ``S`` abbreviates
+    one fixed term and denotes one fixed thing. Nor can it be captured - its
+    constructor is the definition's own, distinct from any variable sort that
+    happens to spell the same token, which is the same reason
+    :func:`~website.logical.kernel.definitions.introduced_leaves` keys on
+    constructor rather than spelling. So a later definition may introduce it
+    exactly as it may introduce ``⊥``, and ``T ≝ S`` layers on ``S ≝ ⊥``.
+
+    Derived rather than declared: the builder has just established the fact, and
+    there is nothing here for an author to know that the engine does not.
+    """
+    higher = kernel_def.higher
+    return isinstance(higher, Node) and not higher.children and higher.literal is not None
 
 
 def follows_by_definition(
