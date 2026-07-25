@@ -3,10 +3,10 @@
 The counterpart to :mod:`app.db.systems_mapping` on the proof side, and the
 consumer of :mod:`app.db.terms_mapping` on the storage side: where a system is
 rebuilt *from* rows, a proof's structure is written *to* them once the engine has
-checked it. Each formula-bearing line is projected to a kernel term
-(:func:`~website.logical.kernel.terms.from_match`) and interned into the system's
-shared term graph, so a proof's statements land in the same DAG the theorem
-search indexes.
+checked it. Each formula-bearing line already carries its kernel term — the
+parser hands the parse to the kernel as it goes — so storing a proof is interning
+those terms into the system's shared term graph, landing a proof's statements in
+the same DAG the theorem search indexes.
 
 The snapshot is derived from ``proofs.source``, never authoritative:
 :func:`clear_proof_lines` drops it wherever the cached verdict is invalidated,
@@ -28,8 +28,6 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
 from app.db.models import Proof as ProofRow
-from app.db.terms import TermRow
-
 from app.db.proof_lines import (
     ANTECEDENT_ROLE_ANTECEDENT,
     ANTECEDENT_ROLE_EXTRA,
@@ -37,8 +35,8 @@ from app.db.proof_lines import (
     ProofLineAntecedentRow,
     ProofLineRow,
 )
+from app.db.terms import TermRow
 from app.db.terms_mapping import store_term
-from website.logical.kernel.terms import from_match
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -186,10 +184,13 @@ def _line_term(
     A blank line, commentary, and a line that matched no line type all have no
     formula — those are stored with a null term rather than skipped, so the rows
     still reconstruct the source line for line.
+
+    The line already holds its kernel term: the parser hands the parse to the
+    kernel as it goes, so there is no ``Match`` left here to project.
     """
-    if line.formula is None:
+    if line.formula_term is None:
         return None
-    return store_term(session, system, from_match(line.formula, line.context))
+    return store_term(session, system, line.formula_term)
 
 
 def _antecedent_rows(
