@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.auth import current_active_user
-from app.db import Base, get_session, system_to_spec
+from app.db import Base, discard_system_checks, get_session, system_to_spec
 from app.db.models import User
 from app.db.side_conditions import SideConditionRow
 from app.db.side_conditions_mapping import (
@@ -126,6 +126,13 @@ async def _owned(session: AsyncSession, system_id: uuid.UUID, user: User) -> Non
     # compiled behaviour is what its published proofs were verified against, so a
     # part edit could silently invalidate them. Editing one is a 409.
     await require_editable_system(session, system_id, user.id)
+
+    # A draft's parts *are* editable, and every one of them can change how its
+    # proofs check — so the edit invalidates them. Done here rather than after
+    # each mutation because this is the single point every part route passes
+    # through; the two land in one transaction, so a failed edit rolls the
+    # invalidation back with it.
+    await session.run_sync(lambda sync: discard_system_checks(sync, system_id))
 
 
 async def _commit(session: AsyncSession) -> None:

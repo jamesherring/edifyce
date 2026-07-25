@@ -3,9 +3,10 @@
 SQLAlchemy 2.0 (async / asyncpg) models plus the schema-as-code migration setup.
 This layer lives *beside* the engine: `website/logical/` stays a pure function of
 its input, and these models are how the application tier remembers systems,
-proofs, and (in future) searchable theorems. The `users` table is wired into the
-auth routes (`app/auth/`); the system/proof/theorem tables are not yet used by
-any route — they are the schema and the tooling to evolve it.
+proofs, and (in future) searchable theorems. The `users`, system-decomposition,
+proof, term and proof-line tables are all wired into routes (`app/auth/`,
+`app/routers/`); `theorems` is not yet — it is the schema and the tooling to
+evolve it.
 
 ## Layout
 
@@ -19,6 +20,8 @@ any route — they are the schema and the tooling to evolve it.
 | `app/db/side_conditions_mapping.py` | Parse/render a `where` proviso ↔ side-condition rows |
 | `app/db/terms.py` | Term graph: kernel-term DAGs as shared `terms` / `term_children` rows |
 | `app/db/terms_mapping.py` | `store_term` / `load_term` round trip between kernel `Term`s and the rows |
+| `app/db/proof_lines.py` | Proof structure: a checked proof's lines + the justification edges between them |
+| `app/db/proofs_mapping.py` | `store_proof_lines`: project a checked engine `Proof` into those rows |
 | `app/db/session.py` | Lazy async engine + `get_session` FastAPI dependency |
 | `tools/atlas/schema.py` | Single-file schema entrypoint Atlas loads the models through |
 | `atlas.hcl` | Atlas config (env `local`) |
@@ -69,6 +72,26 @@ Modernised from the original Django app (`website/models.py` on `main`):
   display `position`. The graph is kept acyclic; the API rejects an edge that
   would close a cycle. This is the only place the dependency graph lives — the
   engine tracks no proof-to-proof edges of its own.
+- **`proof_lines`** / **`proof_line_antecedents`** — the **proof decomposition**
+  (`proof_lines.py`): what `proofs.source` says, as structure. One row per source
+  line carrying what the checker determined about it (line type, behaviour,
+  citation `number`, verdict, the scope it opens or sits in) and, for a
+  formula-bearing line, a `term_id` into the `terms` graph below — so a proof's
+  statements are the *same* interned kernel-term DAG the theorem search indexes,
+  and "which proofs state a membership formula" is one query rather than a
+  recompile. `proof_line_antecedents` is the justification graph: the lines a line
+  was actually derived from, as edges rather than as a reference string to
+  re-parse (a bare `[MP]` records the two lines the checker *inferred*). Finer
+  than `proof_references`, which is the proof-to-proof edge; a citation reaching
+  into a cited lemma is recorded by that proof's id and citation number, since the
+  lemma owns its own line rows. Written by `proofs_mapping.store_proof_lines` when
+  a proof is verified or published, and **dropped whenever `proofs.valid` is** —
+  the snapshot is derived from a check, so it never outlives one. That includes
+  editing the *system*: a part edit changes the grammar a proof was checked
+  against, so it invalidates every proof in the system
+  (`proofs_mapping.discard_system_checks`, called from every part route; a
+  published system is frozen, so this only ever runs for a draft). Read back at
+  `GET /api/proofs/{id}/structure`.
 - **`terms`** / **`term_children`** — the **term graph** (`terms.py`): kernel
   term DAGs stored as shared rows, interned per system by a structural
   `digest` so equal subterms are stored once. This is the structural-search
@@ -97,8 +120,10 @@ Deliberate departure from the Django schema (and from #13's first draft): a
 formal system is stored as **normalised rows**, not an opaque `source` text +
 `compiled` JSONB blob — so it is queryable without recompiling. The engine, which
 still treats a system as source it recompiles, is fed by rebuilding the source
-from the rows on demand (`systems_mapping`). Proofs keep their `source`/`result`
-(the latter a cached JSON snapshot of the checker output).
+from the rows on demand (`systems_mapping`). Proofs keep their `source` — a proof
+*is* the text its author wrote — and their `result`, a cached JSON snapshot of the
+checker output for the editor to render; the structure behind that check lives in
+`proof_lines` (above), where it is queryable.
 
 The embedding dimension is `EMBEDDING_DIMENSIONS` in `models.py` (default 1536).
 Match it to the embedding model you deploy (e.g. Voyage voyage-3 = 1024, OpenAI

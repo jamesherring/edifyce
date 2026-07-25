@@ -25,7 +25,7 @@ adapter over it, and the frontend is a thin client over the API.
 |---|---|
 | `app/` | FastAPI application. `main.py` = routes (and static-SPA serving); `schemas.py` = Pydantic request/response models. Thin — it delegates to the engine. |
 | `app/auth/` | Authentication (fastapi-users): httponly-cookie + JWT backend, user manager, register/login/logout/`users` routers, and GitHub/Google social login (`oauth.py`, enabled per provider by env). Mounted in `main.py`; needs `DATABASE_URL`. |
-| `app/db/` | Persistence layer: SQLAlchemy 2.0 (async) models + session wiring. Beside the engine, not inside it. The `users` table is wired into `app/auth/`; the rest is not yet used by routes. See `app/db/README.md`. |
+| `app/db/` | Persistence layer: SQLAlchemy 2.0 (async) models + session wiring. Beside the engine, not inside it. A system is normalised rows (`systems.py`), and a verified proof's lines are rows too — each formula interned into the shared term graph (`proof_lines.py` + `terms.py`). Only `theorems` is unused by routes. See `app/db/README.md`. |
 | `migrations/` | Atlas versioned SQL migrations (`atlas.sum`). Config in `atlas.hcl`; models loaded via `tools/atlas/schema.py`. |
 | `website/logical/` | The proof engine. This is where the real logic is. |
 | `website/logical/declarative.py` | The `SystemSpec` dataclasses (grammar productions, lines, definitions, axioms, rules) and `build_spec`/`build_system`, which construct a `FormalSystem` straight from one. **This is how systems are built in production.** |

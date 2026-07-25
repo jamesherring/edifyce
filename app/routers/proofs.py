@@ -8,7 +8,11 @@ system from its stored rows and hands the proof to the engine (no proof-checking
 logic lives here).
 
 Like systems, writes persist freely (a draft proof need not verify) and
-`POST /{id}/verify` reports validity on demand, caching the result. Publishing
+`POST /{id}/verify` reports validity on demand, caching the result. A check also
+records the proof *as structure* — one row per line, each formula interned into
+the system's term graph, each justification an edge (`app/db/proof_lines.py`),
+readable at `GET /{id}/structure`. That snapshot is derived from the check, so
+every path that invalidates a verdict drops it too. Publishing
 makes a proof world-readable, so it is gated: the proof must verify **and** its
 formal system must itself be published (a published proof exposes its
 `formal_system_id`, and `GET` of a draft system 404s for anonymous viewers).
@@ -34,6 +38,7 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from graphlib import CycleError
 
@@ -45,7 +50,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.auth import current_active_user, current_active_user_optional
-from app.db import FormalSystem, Proof, ProofReference, get_session, system_to_spec
+from app.db import (
+    FormalSystem,
+    Proof,
+    ProofLineRow,
+    ProofReference,
+    clear_proof_lines,
+    get_session,
+    store_proof_lines,
+    system_to_spec,
+)
 from app.db.models import User
 from app.routers._common import PageParams, page_params, paginate_summaries, unique_slug
 from app.routers.systems import load_system
@@ -54,12 +68,16 @@ from app.schemas import (
     Page,
     ProofCreate,
     ProofDetail,
+    ProofLineAntecedentOut,
+    ProofLineOut,
     ProofReferenceOut,
     ProofReferencesUpdate,
     ProofReferrerOut,
+    ProofStructure,
     ProofSummary,
     ProofUpdate,
     SystemOwner,
+    TermSummary,
     VerifyProofResponse,
 )
 from website.logical.declarative import build_spec
@@ -222,9 +240,30 @@ def _is_usable_lemma(engine_proof: EngineProof) -> bool:
     return bool(engine_proof.valid) and not engine_proof.has_warnings
 
 
+@dataclass
+class _Verification:
+    """The outcome of checking a stored proof, plus the inputs a snapshot needs.
+
+    ``valid`` is ``None`` when the proof could not be checked *at all* — its
+    system no longer builds, or its source does not parse — which is a different
+    thing from a checked proof that came out false. The remaining fields are
+    populated only on the checked path, and are exactly what
+    :func:`~app.db.proofs_mapping.store_proof_lines` projects into rows.
+    """
+
+    response: VerifyProofResponse
+    valid: bool | None
+    engine_proof: EngineProof | None = None
+    system: FormalSystem | None = None
+    # Every lemma this proof may cite, paired with its stored id. Holding the
+    # compiled proofs (not just their ids) is what lets the snapshot match a
+    # cited line to its proof by identity — see store_proof_lines.
+    cited_proofs: list[tuple[EngineProof, uuid.UUID]] = field(default_factory=list)
+
+
 async def _verify_with_references(
     session: AsyncSession, proof: Proof, system: FormalSystem | None = None
-) -> tuple[VerifyProofResponse, bool | None]:
+) -> _Verification:
     """Verify a stored proof, resolving the lemmas it cites from other proofs.
 
     Compiles the system once and parses the whole transitive reference closure in
@@ -235,18 +274,22 @@ async def _verify_with_references(
     a proof leaning on an unproven lemma fails rather than borrowing an unsound
     line. Pass ``system`` to reuse an already-loaded system (a publish gate has
     one in hand); otherwise it is loaded here.
-
-    Returns the response payload plus validity (None when the proof couldn't be
-    checked at all — the system doesn't build, or its source doesn't parse).
     """
     if system is None:
         system = await load_system(session, proof.formal_system_id)
     if system is None:
-        return VerifyProofResponse(success=False, errors=["The proof's system no longer exists."]), None
+        return _Verification(
+            VerifyProofResponse(
+                success=False, errors=["The proof's system no longer exists."]
+            ),
+            None,
+        )
 
     build = build_spec(system_to_spec(system))
     if "errors" in build:
-        return VerifyProofResponse(success=False, errors=build["errors"]), None
+        return _Verification(
+            VerifyProofResponse(success=False, errors=build["errors"]), None
+        )
     compiled_system = build["system"]
 
     closure, edges = await _reference_closure(session, proof.id)
@@ -254,7 +297,9 @@ async def _verify_with_references(
         order = _dependency_order(list(closure), edges)
     except CycleError:
         # The stored graph is kept acyclic (enforced on write); a defensive guard.
-        return VerifyProofResponse(success=False, errors=["Circular proof reference."]), None
+        return _Verification(
+            VerifyProofResponse(success=False, errors=["Circular proof reference."]), None
+        )
 
     compiled: dict[uuid.UUID, EngineProof] = {}
     for pid in order:
@@ -272,7 +317,9 @@ async def _verify_with_references(
             compiled_system.parse(closure[pid].source, proof=engine_proof)
         except Exception as exc:  # noqa: BLE001
             if pid == proof.id:
-                return VerifyProofResponse(success=False, errors=[str(exc)]), None
+                return _Verification(
+                    VerifyProofResponse(success=False, errors=[str(exc)]), None
+                )
             engine_proof.valid = False
         compiled[pid] = engine_proof
 
@@ -280,14 +327,76 @@ async def _verify_with_references(
     # caller's load and the closure query — a structured failure, not a 500.
     root = compiled.get(proof.id)
     if root is None:
-        return VerifyProofResponse(success=False, errors=["Proof not found."]), None
-    return VerifyProofResponse(success=root.valid, proof=root.data()), root.valid
+        return _Verification(
+            VerifyProofResponse(success=False, errors=["Proof not found."]), None
+        )
+    return _Verification(
+        response=VerifyProofResponse(success=root.valid, proof=root.data()),
+        valid=root.valid,
+        engine_proof=root,
+        system=system,
+        # The root's lines may cite lines of any lemma in the closure, and this
+        # is how the snapshot names the proof they belong to.
+        cited_proofs=[
+            (engine, pid) for pid, engine in compiled.items() if pid != proof.id
+        ],
+    )
+
+
+async def _record_verdict(
+    session: AsyncSession, proof: Proof, verification: _Verification
+) -> None:
+    """Cache a fresh verdict on the proof row, and store the structure behind it.
+
+    The two belong together: ``valid``/``result`` are what the editor renders,
+    the ``proof_lines`` rows are the same check as structure (each formula a term
+    in the system's graph, each citation an edge). Writing one without the other
+    would leave the snapshot describing a different check than the verdict does.
+
+    ``store_proof_lines`` is synchronous, like the rest of ``terms_mapping``, so
+    it runs through ``run_sync`` on this session's connection — inside the
+    caller's transaction, committed with it.
+    """
+    proof.valid = verification.valid
+    proof.result = verification.response.proof
+
+    engine_proof = verification.engine_proof
+    if engine_proof is None or verification.system is None:
+        # The proof could not be checked at all, so there is no structure to
+        # record — and the stale snapshot from a previous check must not survive
+        # a check that failed outright.
+        await session.run_sync(lambda sync: clear_proof_lines(sync, [proof.id]))
+        return
+
+    system = verification.system
+    cited = verification.cited_proofs
+    # Term rows are interned per system by a unique digest, and interning is a
+    # read-then-insert: two proofs in one system verified concurrently can both
+    # miss the same new subterm and both insert it, and the loser of that race
+    # gets a unique violation rather than a stored proof. Serialize the write on
+    # the system, as the reference-graph edit does for its own read-then-write.
+    await _lock_system(session, system.id)
+    await session.run_sync(
+        lambda sync: store_proof_lines(sync, proof, system, engine_proof, cited)
+    )
+
+
+async def _discard_check(session: AsyncSession, proof: Proof) -> None:
+    """Drop everything derived from the last check of ``proof``.
+
+    The cached verdict and the stored structure are one artefact of one check, so
+    they are discarded together — a snapshot describing a source that has since
+    changed is worse than no snapshot at all. Both are rebuilt on the next verify.
+    """
+    proof.valid = None
+    proof.result = None
+    await session.run_sync(lambda sync: clear_proof_lines(sync, [proof.id]))
 
 
 async def _invalidate_dependents(session: AsyncSession, proof_id: uuid.UUID) -> None:
-    """Clear the cached verdict of every proof that transitively references
-    ``proof_id``, so a stale ``valid`` can't survive a change to a lemma it leans
-    on (a source edit, or the proof's deletion). Those proofs re-verify on demand.
+    """Invalidate every proof that transitively references ``proof_id``, so a
+    stale verdict can't survive a change to a lemma it leans on (a source edit,
+    or the proof's deletion). Those proofs re-verify on demand.
     """
     dependents: set[uuid.UUID] = set()
     frontier = [proof_id]
@@ -302,9 +411,11 @@ async def _invalidate_dependents(session: AsyncSession, proof_id: uuid.UUID) -> 
         frontier = [pid for pid in rows if pid not in dependents]
         dependents.update(frontier)
     if dependents:
+        ids = list(dependents)
         await session.execute(
-            sa_update(Proof).where(Proof.id.in_(dependents)).values(valid=None, result=None)
+            sa_update(Proof).where(Proof.id.in_(ids)).values(valid=None, result=None)
         )
+        await session.run_sync(lambda sync: clear_proof_lines(sync, ids))
 
 
 async def _has_published_dependents(session: AsyncSession, proof_id: uuid.UUID) -> bool:
@@ -362,18 +473,18 @@ async def _require_publishable(session: AsyncSession, proof: Proof) -> None:
 
     # Verify with references resolved, so a proof that leans on a lemma is gated
     # on the lemma actually proving it. Reuse the system already loaded above.
-    response, valid = await _verify_with_references(session, proof, system=system)
-    if not response.success:
+    verification = await _verify_with_references(session, proof, system=system)
+    if not verification.response.success:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=response.errors or ["Proof does not verify against its system."],
+            detail=verification.response.errors
+            or ["Proof does not verify against its system."],
         )
 
-    # All gates passed. The proof was just verified as part of gating, so cache
+    # All gates passed. The proof was just verified as part of gating, so record
     # that verdict — otherwise a published proof that was never hit by /verify
     # would render as "unchecked" despite publishing having proved it valid.
-    proof.valid = valid
-    proof.result = response.proof
+    await _record_verdict(session, proof, verification)
 
 
 def _owner_out(proof: Proof) -> SystemOwner | None:
@@ -542,10 +653,10 @@ async def update_proof(
     source_changed = "source" in changes and changes["source"] is not None
     if source_changed:
         proof.source = changes["source"]
-        # The stored source changed, so this proof's verdict — and the cached
-        # verdict of anything that cites it as a lemma — is stale.
-        proof.valid = None
-        proof.result = None
+        # The stored source changed, so everything derived from checking this
+        # proof — and the cached verdict of anything that cites it as a lemma —
+        # is stale.
+        await _discard_check(session, proof)
         await _invalidate_dependents(session, proof.id)
 
     # Publishing is the write that makes a proof world-readable, so gate it —
@@ -572,13 +683,15 @@ async def update_proof(
     return _detail(await _get_owned_or_404(session, proof_id, user.id), user)
 
 
-async def _lock_reference_graph(session: AsyncSession, system_id: uuid.UUID) -> None:
-    """Serialize concurrent reference-graph edits within one system.
+async def _lock_system(session: AsyncSession, system_id: uuid.UUID) -> None:
+    """Serialize this transaction's read-then-write against one system.
 
-    The cycle check is read-then-write, so two concurrent PUTs (A→B and B→A)
-    could each pass against the committed graph and commit a cycle. A
-    transaction-scoped advisory lock keyed by the system makes those edits
-    serialize, so each sees the other's edge. Postgres only; a no-op on SQLite
+    Two writes in this router are read-then-write and race: the reference-graph
+    cycle check (two concurrent PUTs of A→B and B→A each pass against the
+    committed graph and together commit a cycle) and term interning when a proof
+    is checked (two proofs in one system both miss the same new subterm and both
+    insert it). A transaction-scoped advisory lock keyed by the system makes both
+    serialize, so each sees the other's rows. Postgres only; a no-op on SQLite
     (the test DB, where requests don't run concurrently anyway). Verification
     re-checks for cycles as a defensive backstop (``_dependency_order``).
     """
@@ -651,7 +764,7 @@ async def set_proof_references(
 
     # Serialize concurrent reference edits in this system so the cycle check
     # below can't be raced into committing a cycle.
-    await _lock_reference_graph(session, proof.formal_system_id)
+    await _lock_system(session, proof.formal_system_id)
 
     target_ids = [r.referenced_proof_id for r in payload.references]
     aliases = [r.alias for r in payload.references]
@@ -709,10 +822,9 @@ async def set_proof_references(
         ProofReference(references_id=tid, alias=alias, position=i)
         for i, (tid, alias) in enumerate(zip(target_ids, aliases))
     ]
-    # References feed verification now, so this proof's verdict and every
+    # References feed verification now, so this proof's check and every
     # dependent's are stale.
-    proof.valid = None
-    proof.result = None
+    await _discard_check(session, proof)
     await _invalidate_dependents(session, proof.id)
     await session.commit()
     return _detail(await _get_owned_or_404(session, proof_id, user.id), user)
@@ -747,6 +859,85 @@ async def delete_proof(
     await session.commit()
 
 
+def _term_out(row: ProofLineRow) -> TermSummary | None:
+    term = row.term
+    if term is None:
+        return None
+    return TermSummary(
+        id=term.id,
+        kind=term.kind,
+        constructor=term.constructor,
+        literal=term.literal,
+        sort=term.sort,
+        digest=term.digest,
+        alpha_digest=term.alpha_digest,
+    )
+
+
+def _line_out(row: ProofLineRow) -> ProofLineOut:
+    return ProofLineOut(
+        id=row.id,
+        position=row.position,
+        number=row.number,
+        indent=row.indent,
+        display=row.display,
+        line_type=row.line_type,
+        behaviour=row.behaviour,
+        label=row.label,
+        reference=row.reference,
+        rule=row.rule,
+        definition_id=row.definition_id,
+        valid=row.valid,
+        invalid_message=row.invalid_message,
+        warning_message=row.warning_message,
+        opens_scope=row.opens_scope,
+        scope_id=row.scope_id,
+        term=_term_out(row),
+        antecedents=[
+            ProofLineAntecedentOut(
+                role=edge.role,
+                position=edge.position,
+                line_id=edge.antecedent_line_id,
+                proof_id=edge.antecedent_proof_id,
+                number=edge.antecedent_number,
+            )
+            for edge in row.antecedents
+        ],
+    )
+
+
+@router.get("/{proof_id}/structure", response_model=ProofStructure)
+async def get_proof_structure(
+    proof_id: uuid.UUID,
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> ProofStructure:
+    """The proof as the checker decomposed it: lines, terms, justification edges.
+
+    Read-only and never computed on demand — it reports what the last
+    verification stored rather than quietly re-running the engine, so ``stored``
+    answers "is a structure materialised", not "was this proof checked" (which is
+    ``valid``). Visibility follows the proof itself.
+    """
+    proof = await _get_readable_or_404(session, proof_id, user)
+    rows = (
+        await session.scalars(
+            select(ProofLineRow)
+            .where(ProofLineRow.proof_id == proof.id)
+            .order_by(ProofLineRow.position)
+            .options(selectinload(ProofLineRow.term), selectinload(ProofLineRow.antecedents))
+        )
+    ).all()
+    # No rows means no structure, not "checked and empty": an empty *source*
+    # still stores its one blank line. A proof checked before this store existed
+    # also lands here, and materialises on its next verify.
+    return ProofStructure(
+        proof_id=proof.id,
+        stored=bool(rows),
+        lines=[_line_out(row) for row in rows],
+    )
+
+
 @router.post("/{proof_id}/verify", response_model=VerifyProofResponse)
 async def verify_stored_proof(
     proof_id: uuid.UUID,
@@ -755,14 +946,14 @@ async def verify_stored_proof(
 ) -> VerifyProofResponse:
     proof = await _get_readable_or_404(session, proof_id, user)
 
-    response, valid = await _verify_with_references(session, proof)
+    verification = await _verify_with_references(session, proof)
 
-    # Cache the verdict on the row so a client can render it without re-checking.
-    # Only the owner may write it back (an anonymous viewer of a published proof
-    # gets the result but leaves the stored snapshot untouched).
+    # Record the verdict and the structure behind it, so a client can render the
+    # proof without re-checking and the lines are searchable as terms. Only the
+    # owner may write it back (an anonymous viewer of a published proof gets the
+    # result but leaves the stored snapshot untouched).
     if user is not None and proof.owner_id == user.id:
-        proof.valid = valid
-        proof.result = response.proof
+        await _record_verdict(session, proof, verification)
         await session.commit()
 
-    return response
+    return verification.response

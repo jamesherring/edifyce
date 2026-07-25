@@ -23,6 +23,9 @@ def test_expected_tables_present():
         "proofs",
         "proof_references",
         "theorems",
+        # Proof structure (a checked proof's lines + justification edges).
+        "proof_lines",
+        "proof_line_antecedents",
         # Normalised system decomposition (canonical grammar/rules/definitions).
         "notation_brackets",
         "symbols",
