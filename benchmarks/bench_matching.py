@@ -13,8 +13,11 @@ become the number. ``--compare`` re-runs everything and prints the ratio against
 a saved run, which is the only form of these numbers worth quoting: they are
 wall-clock on whatever machine ran them.
 
-Scenarios that would not finish are declared with a ``budget`` instead of being
-left to hang; a scenario over budget is reported and does not stop the run.
+Scenarios that would not finish in reasonable time are declared with a ``budget``
+instead of being left to hang: a scenario whose *first* parse exceeds it is
+reported as over budget and abandoned, and the rest of the run continues. The
+budget is checked between parses, never inside one, so it bounds a scenario at
+roughly one parse rather than interrupting a pathological single match.
 """
 
 from __future__ import annotations
@@ -39,9 +42,10 @@ class Scenario:
     setup: Callable[[], tuple[object, str, Context]]
     iterations: int = 100
 
-    # Wall-clock ceiling for a single iteration, in seconds. A scenario that
-    # exceeds it is abandoned mid-run and reported as over budget, so a
-    # pathological case can be *stated* here rather than hanging the benchmark.
+    # Wall-clock ceiling for a single parse, in seconds. Checked after the
+    # warm-up and again between iterations - a scenario over it is abandoned and
+    # reported rather than run `iterations` more times, so a pathological case
+    # can be *stated* here and cost the benchmark one parse.
     budget: float = 5.0
 
     # Whether the parse runs with a fresh memo, as `LineType.parse_line` gives a
@@ -240,9 +244,19 @@ def run(scenario: Scenario) -> Result:
     # One warm-up, outside the timing: the first parse fills the union's
     # flattening and leaf-index memos, which are a build-time cost, not a
     # per-parse one, and would otherwise be charged entirely to iteration one.
+    # Timed all the same, so a scenario that blows its budget costs one parse
+    # rather than `iterations` of them.
     context.parse_memo = {} if scenario.memo else None
-    if pattern.match(text, context) is None and not scenario.name.startswith("reject-"):
+
+    started = time.perf_counter()
+    warmed = pattern.match(text, context)
+    warm_up = time.perf_counter() - started
+
+    if warmed is None and not scenario.name.startswith("reject-"):
         raise AssertionError(f"scenario {scenario.name} does not parse its own input")
+
+    if warm_up > scenario.budget:
+        return Result(scenario.name, None, 0)
 
     best = None
     deadline = time.perf_counter() + scenario.budget
@@ -294,6 +308,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.compare:
         with open(args.compare) as handle:
             baseline = json.load(handle)
+
+    if not selected:
+        print(f"no scenario matches {args.only}", file=sys.stderr)
+        return 1
 
     width = max(len(scenario.name) for scenario in selected)
     results = {}

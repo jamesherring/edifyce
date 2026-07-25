@@ -138,6 +138,16 @@ class Pattern:
         # Default certainty of 0
         self.certainty = 0
 
+        # Whether some union lists this pattern as a member (see
+        # `UnionPattern.add_pattern`). A union memoises what its members look
+        # like — their flattening, their order, the character each may open with
+        # — so a member that changes shape afterwards has to say so, and one that
+        # belongs to no union has nothing to tell. That distinction is worth
+        # keeping: a rule schema builds a template and parses with it
+        # immediately (see `build_context.build_schema_pattern`), so invalidating
+        # unconditionally would re-flatten the whole grammar once per schema.
+        self.union_member = False
+
         # Arbitrary id for use in URLs
         self.url_id = "".join(random.SystemRandom().choice("0123456789abcdef") for _ in range(8))
 
@@ -662,6 +672,16 @@ class StringPattern(Pattern):
         self.last_variable_location = max(self.variable_locations, default=-1)
 
         self.build_segments()
+
+        # Adding a variable rewrites the template's literals and its certainty,
+        # which is exactly what a union's leaf order and leading-character index
+        # are built from - so a member reshaped after it joined must discard
+        # them, or the production stops being offered for strings it now reads.
+        # (`declarative` fills a template before the union takes it, so this
+        # normally never fires; the primitive is public and the ordering is not
+        # something a caller should have to know.)
+        if self.union_member:
+            invalidate_union_memos()
 
     def build_segments(self):
         """Decompose the template into the slots and literals ``match`` walks.
@@ -1292,6 +1312,9 @@ class UnionPattern(Pattern):
         self._leaf_index: dict = {}
         self._leaf_index_revision: int | None = None
 
+        for pattern in self.patterns:
+            pattern.union_member = True
+
         # A union built from members that already exist elsewhere can appear
         # inside a flattening taken a moment ago.
         invalidate_union_memos()
@@ -1427,6 +1450,7 @@ class UnionPattern(Pattern):
     def add_pattern(self, pattern):
         """Add ``pattern`` to the union, invalidating any memoised flattening."""
         self.patterns.append(pattern)
+        pattern.union_member = True
         invalidate_union_memos()
 
     def add_variables(self, variable_dict):

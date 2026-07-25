@@ -18,7 +18,14 @@ from website.logical.matching import (
     UnionPattern,
 )
 
+# One table per shape, shared by every pattern that declares it. Sharing is not
+# cosmetic: the search only skips a split it would have to parse when the slot's
+# sort respects *this same* table, and it compares the tables by identity (see
+# `StringPattern._sort_refuses_unbalanced`). Two equal-but-distinct dicts leave
+# the prune switched off, and the benchmark then times a path no built system
+# takes.
 BRACKETS = {"(": ")"}
+SQUARE = {"[": "]"}
 
 
 def propositional(connectives: int = 4, atoms: int = 3) -> UnionPattern:
@@ -87,7 +94,7 @@ def juxtaposition() -> UnionPattern:
     Two slots separated by a single space, which is also the separator inside
     every operand, so the split search has an occurrence to try per subterm.
     """
-    term = UnionPattern(name="term", patterns=[])
+    term = UnionPattern(name="term", patterns=[], respect_brackets=BRACKETS)
 
     application = StringPattern(name="application", pattern="(a b)", respect_brackets=BRACKETS)
     term.add_pattern(application)
@@ -107,9 +114,9 @@ def adjacent() -> UnionPattern:
     narrow it. Rare in a real grammar, which is why it is worth having here —
     it is the case the search must not fall over on.
     """
-    term = UnionPattern(name="term", patterns=[], respect_brackets={"[": "]"})
+    term = UnionPattern(name="term", patterns=[], respect_brackets=SQUARE)
 
-    pair = StringPattern(name="pair", pattern="[ab]", respect_brackets={"[": "]"})
+    pair = StringPattern(name="pair", pattern="[ab]", respect_brackets=SQUARE)
     term.add_pattern(pair)
 
     for base in "xyz":
