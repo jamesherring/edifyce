@@ -9,7 +9,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { api, type Rule, type Binding, type RuleMatching } from '$lib/api';
 	import type { SymbolEntry } from '$lib/symbols';
-	import type { NotationGroup } from '$lib/notation';
+	import { ruleShape, type NotationGroup } from '$lib/notation';
 	import { createSectionController } from './section.svelte';
 
 	let {
@@ -135,9 +135,7 @@
 					>· discharges {r.subproof.fresh != null ? 'variable' : 'assumption'} subproof</span
 				>
 			{/if}
-			<span class="ml-2 font-mono text-xs text-muted-foreground">
-				{r.antecedents.join(' ; ') || '—'} ⊢ {r.deduction}
-			</span>
+			<span class="ml-2 font-mono text-xs text-muted-foreground">{ruleShape(r)}</span>
 		</div>
 	{/snippet}
 </PartSection>

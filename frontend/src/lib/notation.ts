@@ -1,4 +1,4 @@
-import type { FormalSystemDetail } from '$lib/api';
+import type { FormalSystemDetail, Rule } from '$lib/api';
 
 /** One line of the notation reference: what to write, and what it stands for. */
 export interface NotationEntry {
@@ -17,6 +17,29 @@ function productionForm(production: FormalSystemDetail['productions'][number]): 
 	if (production.atom_value !== null) return production.atom_value;
 	if (production.atom_base !== null) return `${production.atom_base}_#`;
 	return `/${production.regex ?? ''}/`;
+}
+
+/**
+ * A rule written as `premises ⊢ conclusion`.
+ *
+ * A discharge rule (→I, RAA, ∀I) cites no lines — the subproof it consumes *is*
+ * its premise — so writing only its (empty) antecedents would render it as a
+ * zero-premise rule. Its subproof is shown instead, in the engine's own
+ * `assume`/`fresh` vocabulary: `[assume p ⊢ q] ⊢ (p → q)`.
+ */
+export function ruleShape(rule: Rule): string {
+	const sub = rule.subproof;
+	let premises: string;
+	if (sub) {
+		// The backend sets exactly one of `assume`/`fresh`; the type allows both to
+		// be null, so fall back to the bare subproof rather than print "assume null".
+		const opener =
+			sub.fresh !== null ? `fresh ${sub.fresh}` : sub.assume !== null ? `assume ${sub.assume}` : '';
+		premises = `[${opener ? `${opener} ⊢ ` : ''}${sub.derive}]`;
+	} else {
+		premises = rule.antecedents.join(' ; ') || '—';
+	}
+	return `${premises} ⊢ ${rule.deduction}`;
 }
 
 /**
@@ -48,10 +71,7 @@ export function notationReference(system: FormalSystemDetail | null | undefined)
 		},
 		{
 			title: 'Rules',
-			entries: system.rules.map((r) => ({
-				form: `${r.antecedents.join(' ; ') || '—'} ⊢ ${r.deduction}`,
-				detail: r.label
-			}))
+			entries: system.rules.map((r) => ({ form: ruleShape(r), detail: r.label }))
 		}
 	];
 	return groups.filter((group) => group.entries.length > 0);

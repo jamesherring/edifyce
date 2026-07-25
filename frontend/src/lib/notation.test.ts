@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { notationReference } from './notation';
-import type { FormalSystemDetail, Production } from './api';
+import { notationReference, ruleShape } from './notation';
+import type { FormalSystemDetail, Production, Rule } from './api';
 
 function system(parts: Partial<FormalSystemDetail> = {}): FormalSystemDetail {
 	return {
@@ -38,6 +38,51 @@ function production(over: Partial<Production> = {}): Production {
 		...over
 	};
 }
+
+function rule(over: Partial<Rule> = {}): Rule {
+	return {
+		id: 'r-1',
+		label: 'MP',
+		name: 'modus ponens',
+		deduction: 'q',
+		antecedents: [],
+		bindings: [],
+		side_conditions: [],
+		matching: 'structural',
+		subproof: null,
+		allow_extra_antecedents: false,
+		...over
+	};
+}
+
+describe('ruleShape', () => {
+	it('writes a line-antecedent rule as premises ⊢ conclusion', () => {
+		expect(ruleShape(rule({ antecedents: ['p', '(p → q)'] }))).toBe('p ; (p → q) ⊢ q');
+	});
+
+	it('marks a rule with no premises rather than leaving the left side blank', () => {
+		expect(ruleShape(rule({ deduction: 'p' }))).toBe('— ⊢ p');
+	});
+
+	it('shows the subproof a discharge rule consumes — it is the premise', () => {
+		// Without this, →I renders as "— ⊢ (p → q)" and reads as a zero-premise rule.
+		const impliesIntro = rule({
+			label: '→I',
+			deduction: '(p → q)',
+			subproof: { derive: 'q', assume: 'p', fresh: null }
+		});
+		expect(ruleShape(impliesIntro)).toBe('[assume p ⊢ q] ⊢ (p → q)');
+	});
+
+	it('names an eigenvariable subproof by its fresh variable', () => {
+		const forallIntro = rule({
+			label: '∀I',
+			deduction: '∀x φ',
+			subproof: { derive: 'φ', assume: null, fresh: 'x' }
+		});
+		expect(ruleShape(forallIntro)).toBe('[fresh x ⊢ φ] ⊢ ∀x φ');
+	});
+});
 
 function titles(system: FormalSystemDetail) {
 	return notationReference(system).map((g) => g.title);
@@ -104,30 +149,14 @@ describe('notationReference', () => {
 					}
 				],
 				rules: [
-					{
-						id: 'r1',
-						label: 'MP',
-						name: 'modus ponens',
-						deduction: 'q',
-						antecedents: ['p', '(p → q)'],
-						bindings: [],
-						side_conditions: [],
-						matching: 'structural',
-						subproof: null,
-						allow_extra_antecedents: false
-					},
-					{
-						id: 'r2',
-						label: 'HYP',
-						name: 'hypothesis',
-						deduction: 'p',
-						antecedents: [],
-						bindings: [],
-						side_conditions: [],
-						matching: 'structural',
-						subproof: null,
-						allow_extra_antecedents: false
-					}
+					rule({ id: 'r1', antecedents: ['p', '(p → q)'] }),
+					rule({ id: 'r2', label: 'HYP', deduction: 'p' }),
+					rule({
+						id: 'r3',
+						label: '→I',
+						deduction: '(p → q)',
+						subproof: { derive: 'q', assume: 'p', fresh: null }
+					})
 				]
 			})
 		);
@@ -138,7 +167,9 @@ describe('notationReference', () => {
 				entries: [
 					{ form: 'p ; (p → q) ⊢ q', detail: 'MP' },
 					// A rule with no premises still needs a left-hand side to read.
-					{ form: '— ⊢ p', detail: 'HYP' }
+					{ form: '— ⊢ p', detail: 'HYP' },
+					// A discharge rule's premise is its subproof, not an empty list.
+					{ form: '[assume p ⊢ q] ⊢ (p → q)', detail: '→I' }
 				]
 			}
 		]);
