@@ -389,8 +389,9 @@ class ReorderRequest(BaseModel):
 # Proofs (CRUD)
 #
 # Mirror the formal-system CRUD models: a proof is an owner-scoped object that
-# belongs to a formal system, carries its `.edi` source text, and is verified
-# against that system on demand. Like systems, publishing makes it
+# belongs to a formal system, carries its proof text (lines written in that
+# system's own grammar), and is verified against it on demand. Like systems,
+# publishing makes it
 # world-readable. The read models carry the cached `valid`/`result` snapshot so
 # a client can render the last check without re-running it. `folder_id` is
 # surfaced read-only — folder CRUD (like formal-system child parts) is a later

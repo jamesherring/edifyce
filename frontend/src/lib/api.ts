@@ -300,8 +300,9 @@ export type RuleUpdate = Partial<RuleCreate>;
 
 // ---------------------------------------------------------------------------
 // Proofs (stored CRUD) — mirror the read/write models in app/schemas.py. A proof
-// belongs to a formal system, carries its `.edi` source, and is verified against
-// that system on demand (the verdict is cached in `valid` / `result`).
+// belongs to a formal system, carries its proof text (lines written in that
+// system's own grammar), and is verified against it on demand (the verdict is
+// cached in `valid` / `result`).
 // ---------------------------------------------------------------------------
 
 /** List-row view of a proof. `published_at` non-null ⇒ public/published. */

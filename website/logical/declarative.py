@@ -41,7 +41,7 @@ from .compiler import (
 )
 from .formal_system import FormalSystem, InferenceRule, LineType, SubproofSchema
 from .formal_system.side_condition_syntax import parse_side_condition
-from .matching import AtomPattern, MatchSet, Pattern, RegexPattern, StringPattern, UnionPattern
+from .matching import AtomPattern, Pattern, RegexPattern, StringPattern, UnionPattern
 
 
 class DeclarativeError(Exception):
@@ -387,7 +387,6 @@ def build_system(spec: SystemSpec) -> FormalSystem:
     # 5. Lines: a statement pattern + logical line type per declared line. Each
     # line's inline parts are registered just before it is built (see step 1).
     if spec.lines:
-        system.context.logical["given"] = MatchSet()
         sorts = set(spec.sort_names())
         for line in spec.lines:
             for part in line.parts:

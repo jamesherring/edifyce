@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from ..graphs import find_cycle, saturating_matching, topological_order
 from ..kernel.side_conditions import Not, Occurs
 from ..kernel.terms import from_match
-from ..matching import Match, MatchSet
+from ..matching import Match
 from .definitions import follows_by_definition, kernel_definition_for
 
 if TYPE_CHECKING:
@@ -1093,7 +1093,6 @@ class ProofLine:
 
         # This line may be an axiom
         self.is_axiom = False
-        self.axiom_pattern = None
 
         # The axiom this line uses (if any)
         self.axiom = None
@@ -1137,12 +1136,13 @@ class ProofLine:
                 self.proof.check_logical_line(self, context)
 
         elif line_type.behaviour == "axiom":
-            # Introduce an axiom to the system
-
+            # An axiom line asserts its own formula, so it needs no justification:
+            # `check_logical_line` short-circuits on `is_axiom`. It used to also
+            # generalise the formula into a reusable schema
+            # (`Match.create_pattern`), but nothing ever read the result - a
+            # promoted theorem is the typed mechanism for that now (see
+            # `promotion.PromotedTheorem`).
             self.is_axiom = True
-
-            self.axiom_pattern = self.formula.create_pattern(context.string_variables)
-            self.axiom_pattern.name = self.label
 
         elif line_type.behaviour in ("definition", "import"):
             # Not currently supported. These line types derived their payload
@@ -1222,36 +1222,6 @@ class ProofLine:
             "display": self.display,
             "indent": self.indent
         }
-
-    def previous_formulae(self):
-        # Return a matchset of formulae that have been proven before this statement in the proof and share the same
-        # logical context.
-
-        # N.B. we don't require that the previous proof lines are valid
-        formulae = MatchSet(allow_multiple=False)
-        indent = self.indent
-
-        # Loop through the previous lines and select only those that are parents/siblings of this line context
-        for i in range(self.index() - 1, -1, -1):
-            line = self.proof.proof_lines[i]
-
-            if line.indent > indent:
-                # This line is more indented - ignore
-                continue
-
-            if line.indent < indent:
-                # This line is less indented - ie. it's a parent line in the abstract syntax tree.
-                indent = line.indent
-                continue
-
-            if line.line_type is None or not line.line_type.behaviour == "logical":
-                # It's not a logical line
-                continue
-
-            # Otherwise, it's a relevant logical line
-            formulae.add(line.formula, self.context)
-
-        return formulae
 
     def __str__(self):
         return f"ProofLine: {self.text}"

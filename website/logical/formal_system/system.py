@@ -262,48 +262,5 @@ class FormalSystem:
         # Add the new line type
         self.line_types.append(line_type)
 
-    def equivalent(self, other, context, memo=None):
-        # Check if two formal systems are equivalent
-
-        if memo is None:
-            memo = {}
-
-        if (self, other) in memo:
-            return memo[(self, other)]
-
-        memo[(self, other)] = False
-
-        if not type(other) is FormalSystem:
-            return False
-
-        if not self.name == other.name:
-            return False
-
-        if not len(self.line_types) == len(other.line_types):
-            return False
-
-        if not len(self.inference_rules) == len(other.inference_rules):
-            return False
-
-        # Assume equivalent while checking recursively
-        memo[(self, other)] = True
-
-        for self_line, other_line in zip(self.line_types, other.line_types):
-            if not self_line.equivalent(other_line, context, memo):
-                memo[(self, other)] = False
-                return False
-
-        for self_rule, other_rule in zip(self.inference_rules, other.inference_rules):
-            if not self_rule.equivalent(other_rule, context, memo):
-                memo[(self, other)] = False
-                return False
-
-        if not self.context.equivalent(other.context, context, memo):
-            memo[(self, other)] = False
-            return False
-
-        # Otherwise ok
-        return True
-
     def __str__(self):
         return self.name
