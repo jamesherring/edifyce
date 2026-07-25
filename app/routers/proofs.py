@@ -2,7 +2,7 @@
 
 Mirrors the formal-system CRUD (`app/routers/systems.py`): a proof is an
 owner-scoped object stored as a single row (`app.db.models.Proof`) whose `source`
-is `.edi` proof text written against a formal system. This router is the thin
+is proof text — lines written in a formal system's own grammar. This router is the thin
 HTTP layer over that row — reads serialize it, `verify` rebuilds the parent
 system from its stored rows and hands the proof to the engine (no proof-checking
 logic lives here).
