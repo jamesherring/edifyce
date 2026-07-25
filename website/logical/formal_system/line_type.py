@@ -62,9 +62,9 @@ class LineType:
         # string variables it is answered against are whatever they are when the
         # line is read, and none of them move while it is being read - so the
         # substring parses can be memoised. Without that, a line whose formula
-        # nests deeply costs exponentially (see UnionPattern.match). The memo is
-        # per line, not per proof, so a definition a proof introduces between
-        # lines is still seen by the lines after it.
+        # nests deeply costs exponentially (see UnionPattern.match). Scoped to the
+        # one line rather than the proof: a line is the largest stretch over which
+        # the context is known not to move, and nothing is gained by assuming more.
         # Set and restore rather than copy the context: copying one is not cheap,
         # and this runs per line per candidate line type.
         previous = context.parse_memo

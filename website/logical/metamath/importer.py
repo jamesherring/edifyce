@@ -70,8 +70,10 @@ def build_spec(
     productions: list[Production] = []
 
     for assertion in _syntax_before(database, before):
-        bindings = [(h.variable, h.typecode) for h in assertion.floatings]
-        text = " ".join(assertion.tokens)
+        tokens, bindings = _uncollide(
+            assertion.tokens, [(h.variable, h.typecode) for h in assertion.floatings]
+        )
+        text = " ".join(tokens)
 
         if bindings:
             productions.append(
@@ -103,6 +105,54 @@ def build_spec(
                 logical_sort=logical_sort,
             )
         ],
+    )
+
+
+def _uncollide(
+    tokens: tuple[str, ...], bindings: list[tuple[str, str]]
+) -> tuple[tuple[str, ...], list[tuple[str, str]]]:
+    # Rename a production's variable when its name also occurs *inside* one of the
+    # template's constants, and give back the rewritten tokens and bindings.
+    #
+    # A production template is a string, and its variables are located by scanning
+    # for their names at every character offset - so a variable whose name is a
+    # prefix of a constant is found inside that constant too. Metamath's set.mm
+    # does this the moment it quantifies: `wral` is `A. x e. A ph`, where `A.` is
+    # the universal quantifier and `A` a class variable. Scanned as text, `A` is
+    # found at offset 0 as well, and the production then demands the *same* class
+    # in both places - so `A. x e. A ph` parses and `A. y e. B ph` does not. On a
+    # set.mm import that silently invalidates every restricted quantification.
+    #
+    # Metamath is tokenised on whitespace, so the two readings are tellable apart
+    # here even though the string matcher cannot tell them apart later: a variable
+    # occurring more often as a substring than as a token is colliding. The
+    # variable's *name* is private to the production - a formula binds it by
+    # position, not by name - so renaming it changes no surface syntax. This is
+    # the same remedy `Match.create_pattern` applies to a definition's defined
+    # form, which reaches it by comparing string against tree occurrences.
+    renamed: dict[str, str] = {}
+    for variable, _sort in bindings:
+        occurrences = sum(1 for token in tokens if token == variable)
+        if sum(token.count(variable) for token in tokens) == occurrences:
+            continue
+
+        index = 0
+        while True:
+            candidate = f"{variable}_{index}"
+            taken = any(candidate in token for token in tokens) or any(
+                candidate == name for name, _ in bindings
+            )
+            if not taken and candidate not in renamed.values():
+                renamed[variable] = candidate
+                break
+            index += 1
+
+    if not renamed:
+        return tokens, bindings
+
+    return (
+        tuple(renamed.get(token, token) for token in tokens),
+        [(renamed.get(name, name), sort) for name, sort in bindings],
     )
 
 
