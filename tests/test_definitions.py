@@ -277,9 +277,7 @@ def test_definition_backed_subject_admits_its_sort():
     formula = UnionPattern("formula", [membership])
 
     context.string_variables = {"x": setvar, "y": setvar}
-    formula.add_definition(
-        "x in y", "x is a member of y", context, require_lower_match=False
-    )
+    formula.add_notation("x is a member of y", context)
 
     subject = from_match(formula.match("a is a member of b", context), context)
     # Its recorded sort is the union it belongs to, not its higher constructor.

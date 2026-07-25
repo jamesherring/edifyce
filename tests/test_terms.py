@@ -266,9 +266,7 @@ def test_definition_backed_union_match_keeps_structure():
     formula = UnionPattern("formula", [membership])
 
     context.string_variables = {"x": setvar, "y": setvar}
-    formula.add_definition(
-        "x in y", "x is a member of y", context, require_lower_match=False
-    )
+    formula.add_notation("x is a member of y", context)
 
     match = formula.match("a is a member of b", context)
     assert match.sort is not None  # matched via defined notation

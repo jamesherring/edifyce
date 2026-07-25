@@ -12,7 +12,7 @@ What replaced it is a structured, order-independent description of a system --
 the :class:`SystemSpec` dataclasses (grammar productions, a logical line,
 definitions, axioms, rules). :func:`build_spec` / :func:`build_system` turn one
 into a ``FormalSystem`` **directly**, by calling the engine's own construction
-primitives (``build_schema_pattern``, ``add_variables``, ``add_definition``,
+primitives (``build_schema_pattern``, ``add_variables``, ``add_notation``,
 ``parse_side_condition``, the ``Pattern`` constructors) -- no text pass. Nothing
 here re-implements matching or proof checking; it only wires the declarative
 model into engine objects. Because there is no text pass, ``respect_brackets``
@@ -336,7 +336,7 @@ def _fresh_var(placeholder: str, used: set[str]) -> str:
 #
 # This constructs the engine objects straight from the SystemSpec by calling the
 # engine's own low-level primitives (build_schema_pattern, add_variables,
-# add_definition, parse_side_condition, the Pattern constructors), driven from
+# add_notation, parse_side_condition, the Pattern constructors), driven from
 # the spec fields directly. There is no text pass, so respect_brackets is set on
 # each pattern at construction rather than patched on afterwards.
 # ---------------------------------------------------------------------------
@@ -496,7 +496,7 @@ def build_system(spec: SystemSpec) -> FormalSystem:
         system.add_inference_rule(_build_rule(rule, ctx))
 
     # 8. Publish the build variables into the proof context, then finalise
-    # definitions against that (now complete) context, so `add_definition` can
+    # definitions against that (now complete) context, so `add_notation` can
     # match the lower form against the productions.
     system.context.variables.update(ctx.variables)
     # Per position, whether the definition layered — kept in spec order so a
@@ -663,25 +663,18 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
     # stray ground leaves that would force the string path.
     fresh_patterns = _binding_patterns(defn.fresh, ctx)
 
-    result = union.add_definition(
-        defn.lower,
-        defn.higher,
-        context_copy,
-        fresh=fresh_patterns or None,
-        kernel_condition=kernel_condition,
-        label=defn.label,
-    )
-    if result is None:
-        # The lower form matched nothing: the definition did not layer. Nothing
-        # was added to the proof context, so there is no kernel counterpart to
-        # build either.
+    # Whether the defining form is recognised *given the definitions before it* is
+    # what "layering" means, and it is settled before anything is registered: a
+    # definition that does not layer must leave the grammar untouched.
+    if union.match(defn.lower, context_copy) is None:
         return False
 
-    system.context.definitions.add(result)
+    notation = union.add_notation(defn.higher, context_copy)
+    system.context.definitions.add(notation)
 
-    # Build the kernel counterpart now, against the context the definition has
-    # just entered — a definition's *defined* form is grammatical only because the
-    # definition is in scope, so this must follow the add. `system.context` is
+    # Build the kernel counterpart now, against the context the notation has just
+    # entered — a definition's *defined* form is grammatical only because its
+    # notation is registered, so this must follow the add. `system.context` is
     # deliberately the one used (not `context_copy`): it is what a proof is
     # checked in, and the definition's own binding metavariables in `context_copy`
     # would parse the parameters differently.
@@ -689,15 +682,24 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
     # A definition with no sound kernel reading is rejected here rather than
     # silently accepted and refused per-step later.
     try:
-        result.kernel = build_kernel_definition(result, system.context)
+        kernel_definition = build_kernel_definition(
+            notation,
+            defn.lower,
+            system.context,
+            condition=kernel_condition,
+            fresh=fresh_patterns or None,
+            label=defn.label,
+        )
     except DefinitionError as exc:
         raise DeclarativeError(str(exc)) from exc
+
+    system.add_definition(kernel_definition)
 
     # A nullary defined form is a new ground leaf of the grammar that no
     # production declared a role for. The build has just settled it: the leaf
     # abbreviates one fixed term, so a *later* definition may introduce it exactly
     # as it may a declared constant, and `T ≝ S` layers on `S ≝ ⊥`.
-    result.higher.denotes_constant = denotes_a_constant(result.kernel)
+    notation.template.denotes_constant = denotes_a_constant(kernel_definition)
 
     # A freshly added definition or one that de-duplicated into an existing
     # equivalent — either way its form was recognised, so the definition layers.
@@ -746,7 +748,7 @@ def registered_definition_layering(spec: SystemSpec) -> list[bool]:
     Keyed by **position**, not by defined form, so a caller can tell whether a
     *specific* definition would be dropped even when two definitions share a
     higher form (a set of forms would collapse them) or are structurally
-    equivalent up to renaming (which ``add_definition`` de-duplicates).
+    equivalent up to renaming (which ``add_notation`` de-duplicates).
 
     Layering depends only on the grammar (productions, in their sort unions) and
     the definitions themselves; axioms, rules and lines contribute nothing to it.

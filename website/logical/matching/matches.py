@@ -48,7 +48,7 @@ class Match:
         # The sort this match *inhabits*, when that is not its own constructor.
         # Normally None: a production is already a member of whatever union it
         # belongs to. It is set for defined notation, whose template is an ad-hoc
-        # constructor no union declares (see Definition.match) - the term layer
+        # constructor no union declares (see DefinedNotation.match) - the term layer
         # carries the same distinction on `Node.sort`, and reads this straight
         # across, which is why it need not know definitions exist.
         self.sort: Pattern | None = sort
@@ -71,7 +71,7 @@ class Match:
         about the *parse* rather than about the formula: which of the ambient
         string variables this text actually filled a slot with. A definition reads
         it to learn its defining form's parameters (see
-        :class:`~website.logical.matching.definitions.Definition`).
+        :class:`~website.logical.matching.definitions.DefinedNotation`).
         """
         if not self.sub_matches:
             return [self] if self.is_variable else []

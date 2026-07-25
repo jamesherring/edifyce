@@ -10,7 +10,7 @@ class Context:
     variables: dict = field(default_factory=dict)
     string_variables: dict = field(default_factory=dict)
 
-    # Definitions
+    # Defined notations in scope (see matching.DefinedNotation)
     definitions: set = field(default_factory=set)
 
     # Logical context for inside proofs

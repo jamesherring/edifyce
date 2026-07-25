@@ -7,7 +7,7 @@ Module layout (in dependency order)::
     context     - the Context object
     matches     - Match, the parse record
     patterns    - Pattern and its subclasses
-    definitions - Definition
+    definitions - DefinedNotation
     rewriting   - all-solutions associative matching for string-rewriting rules
 
 ``matches``, ``patterns`` and ``definitions`` are mutually recursive; they
@@ -32,14 +32,14 @@ from .patterns import (
     StringPattern,
     UnionPattern,
 )
-from .definitions import Definition
+from .definitions import DefinedNotation
 from .rewriting import iter_bindings, iter_joint, joint_binding_exists
 
 __all__ = [
     "AbstractPattern",
     "AtomPattern",
     "Context",
-    "Definition",
+    "DefinedNotation",
     "Match",
     "Pattern",
     "RegexPattern",

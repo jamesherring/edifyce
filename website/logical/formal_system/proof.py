@@ -8,12 +8,12 @@ from typing import TYPE_CHECKING
 
 from ..graphs import saturating_matching
 from ..kernel.side_conditions import Not, Occurs
-from .definitions import follows_by_definition
+from ..kernel.definitions import check_definitional_step
 
 if TYPE_CHECKING:
+    from ..kernel.definitions import Definition
     from ..kernel.terms import Term
     from ..matching.context import Context
-    from ..matching.definitions import Definition
     from .rules import InferenceRule
 
 
@@ -400,7 +400,7 @@ class Proof:
             # A definitional step: `[<name>, <line>]` cites a named definition,
             # or `[Def, <line>]` leaves the applicable definition to be searched
             # for. Either way it cites exactly one source line.
-            named = self._definition_by_label(key, context)
+            named = self._definition_by_label(key)
             if named is not None or key == DEFINITION_KEY:
                 sources = [
                     item for r in ref_parts[1:]
@@ -699,11 +699,10 @@ class Proof:
         proof_line.invalid_message = f"{key} does not apply."
         return False
 
-    @staticmethod
-    def _definition_by_label(label: str, context: Context) -> "Definition | None":
-        # The definition in scope cited by this label, or None. Used to resolve a
+    def _definition_by_label(self, label: str) -> Definition | None:
+        # The system's definition cited by this label, or None. Used to resolve a
         # `[<name>, <line>]` citation to the specific named definition.
-        for definition in context.definitions:
+        for definition in self.formal_system.definitions:
             if definition.label == label:
                 return definition
         return None
@@ -745,7 +744,7 @@ class Proof:
             return False
 
         candidates = [reference.definition] if reference.definition is not None \
-            else list(context.definitions)
+            else list(self.formal_system.definitions)
 
         for definition in candidates:
             if proof_line.follows_from_definition(source, definition, context):
@@ -939,7 +938,9 @@ class ProofLine:
         if self.formula_term is None or other.formula_term is None:
             return False
 
-        return follows_by_definition(self.formula_term, other.formula_term, definition, context)
+        return check_definitional_step(
+            self.formula_term, other.formula_term, definition, context
+        )
 
     def data(self):
         # Get data for this proof line
