@@ -15,6 +15,7 @@ AGENTS.md) — but nothing here may import ``declarative``.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from copy import copy, deepcopy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -53,6 +54,19 @@ class FormalSystemContext:
     # Error log
     error_log: list = field(default_factory=list)
 
+    # Memo for one top-level parse: {(id(pattern), string): Match | None}. None
+    # disables memoisation, which is the default - a context is long-lived and
+    # what a string parses to depends on `definitions` and `string_variables`, so
+    # only a caller that knows those are fixed for the duration may switch it on
+    # (see compose_schema_term). Shared, not copied, by `__copy__`, so it
+    # survives the context copies taken during a parse.
+    parse_memo: dict | None = None
+
+    # Lookups derived from `variables` (see _GrammarIndex). Shared, not rebuilt,
+    # by `__copy__`: promotion copies a context per theorem, and the grammar it
+    # indexes is the same one throughout.
+    grammar_index: object = None
+
     def inherit(self, parent: FormalSystemContext) -> None:
         # Inherit from parent context
 
@@ -81,11 +95,18 @@ class FormalSystemContext:
         new_context.proof_context = copy(self.proof_context)
         new_context.system_dict = copy(self.system_dict)
         new_context.error_log = copy(self.error_log)
+        new_context.parse_memo = self.parse_memo
+        new_context.grammar_index = self.grammar_index
 
         return new_context
 
 
-def build_schema_pattern(text: str, context: FormalSystemContext, name: str) -> Pattern:
+def build_schema_pattern(
+    text: str,
+    context: FormalSystemContext,
+    name: str,
+    prefer: Sequence[Pattern] = (),
+) -> Pattern:
     # Build a rule-schema pattern from a source token. A bare constant atom
     # (e.g. a falsum `⊥`) resolves to its *declared* AtomPattern, so the rule's
     # literal and the proof line's atom are the same constructor on the term
@@ -96,9 +117,9 @@ def build_schema_pattern(text: str, context: FormalSystemContext, name: str) -> 
     if text in context.variables:
         return context.variables[text]
 
-    for candidate in context.variables.values():
-        if isinstance(candidate, AtomPattern) and candidate.is_constant and candidate.is_member(text):
-            return candidate
+    constant = _grammar_index(context).constant_atoms.get(text)
+    if constant is not None:
+        return constant
 
     pattern = StringPattern(name=name, pattern=text)
     pattern.add_variables(context.string_variables)
@@ -113,11 +134,13 @@ def build_schema_pattern(text: str, context: FormalSystemContext, name: str) -> 
     # metavariables) once, here, and stash the resulting term; _schema_term uses
     # it. None when the template is a bare variable (from_pattern already nests
     # trivially) or nothing parses it (fall back to the flat projection).
-    pattern.schema_term = compose_schema_term(pattern, context)
+    pattern.schema_term = compose_schema_term(pattern, context, prefer)
     return pattern
 
 
-def compose_schema_term(pattern: Pattern, context: FormalSystemContext) -> Term | None:
+def compose_schema_term(
+    pattern: Pattern, context: FormalSystemContext, prefer: Sequence[Pattern] = ()
+) -> Term | None:
     # Project a compound rule-schema template into its nested kernel term by
     # parsing it against the system's productions. See build_schema_pattern.
     if not pattern.variable_locations or not pattern.non_variable_locations:
@@ -132,14 +155,88 @@ def compose_schema_term(pattern: Pattern, context: FormalSystemContext) -> Term 
     # definition simply falls back to the flat projection.
     parse_context = copy(context)
     parse_context.definitions = []
+    # Fixed grammar, fixed definitions, fixed metavariables for the whole of this
+    # parse, so the same substring always parses the same way - memoise it. The
+    # candidate sorts below re-parse overlapping substrings heavily, and nesting
+    # multiplies that: set.mm's 16-binder `cbvral8vw` does not finish without it.
+    parse_context.parse_memo = {}
 
-    for candidate in context.variables.values():
-        if isinstance(candidate, UnionPattern):
-            match = candidate.match(pattern.pattern, parse_context)
-            if match is not None:
-                return revariabilise(from_match(match), context.string_variables)
+    for candidate in _composition_sorts(context, prefer):
+        match = candidate.match(pattern.pattern, parse_context)
+        if match is not None:
+            return revariabilise(from_match(match), context.string_variables)
 
     return None
+
+
+@dataclass(frozen=True)
+class _GrammarIndex:
+    """Two lookups over a context's declared patterns, keyed by how many there are.
+
+    Both answer questions about the *grammar*, which is fixed once a system is
+    built - but the two callers below ask them per schema built, and promotion
+    builds one per theorem statement and premise. Scanning every declared pattern
+    each time is what made those scans, rather than the parse they set up, a third
+    of an import. `size` is the guard: a context's `variables` only ever grows,
+    while a system is being assembled, so a differing count means rebuild.
+    """
+
+    size: int
+    constant_atoms: dict[str, Pattern]
+    unions: list[Pattern]
+
+
+def warm_grammar_index(context: FormalSystemContext) -> None:
+    """Build the grammar index on `context` itself, before it is copied.
+
+    `__copy__` hands the index on by reference, but a copy that has to *build* one
+    stores it only on itself and is then thrown away - so promotion, which copies
+    the build context per theorem, rebuilt the index for every theorem. Warming
+    the original once means every later copy inherits a hit.
+    """
+    _grammar_index(context)
+
+
+def _grammar_index(context: FormalSystemContext) -> _GrammarIndex:
+    index = context.grammar_index
+    if index is not None and index.size == len(context.variables):
+        return index
+
+    constant_atoms: dict[str, Pattern] = {}
+    unions: list[Pattern] = []
+    for candidate in context.variables.values():
+        if isinstance(candidate, UnionPattern):
+            unions.append(candidate)
+        elif isinstance(candidate, AtomPattern) and candidate.is_constant:
+            # First declaration wins, as the scan this replaces did.
+            constant_atoms.setdefault(candidate.value, candidate)
+
+    index = _GrammarIndex(len(context.variables), constant_atoms, unions)
+    context.grammar_index = index
+    return index
+
+
+def _composition_sorts(
+    context: FormalSystemContext, prefer: Sequence[Pattern]
+) -> list[Pattern]:
+    # The sorts to try composing a schema at, `prefer` first. Which sort a schema
+    # is read at matters: a template that parses at several sorts composes to a
+    # different term at each, and only one of them is the sort a proof line's
+    # formula is actually parsed at. Callers that know it (promotion does - see
+    # _logical_sorts) pass it, so the answer no longer depends on where in the
+    # grammar's declaration order the right sort happens to sit. It is also the
+    # faster order where the two differ: on a set.mm import the logical sort
+    # matches nearly every time, and the sorts otherwise tried first are large
+    # unions whose failing parse costs as much as the succeeding one.
+    sorts = [pattern for pattern in prefer if isinstance(pattern, UnionPattern)]
+    if not sorts:
+        return _grammar_index(context).unions
+
+    seen = {id(pattern) for pattern in sorts}
+    sorts.extend(
+        union for union in _grammar_index(context).unions if id(union) not in seen
+    )
+    return sorts
 
 
 def revariabilise(term: Term, metavariables: dict) -> Term:

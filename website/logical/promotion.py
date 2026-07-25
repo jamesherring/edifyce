@@ -16,7 +16,11 @@ from collections.abc import Mapping, Sequence
 from copy import copy
 from typing import TYPE_CHECKING
 
-from website.logical.build_context import FormalSystemContext, build_schema_pattern
+from website.logical.build_context import (
+    FormalSystemContext,
+    build_schema_pattern,
+    warm_grammar_index,
+)
 from website.logical.formal_system import FormalSystem, PromotedTheorem
 from website.logical.formal_system.side_condition_syntax import parse_side_condition
 from website.logical.kernel import from_match
@@ -51,22 +55,29 @@ def _logical_sorts(system: FormalSystem) -> list[Pattern]:
 
 
 def _ground_schema_term(
-    text: str, system: FormalSystem, context: FormalSystemContext
+    text: str,
+    system: FormalSystem,
+    context: FormalSystemContext,
+    sorts: Sequence[Pattern],
 ) -> Term | None:
     # Compose the nested kernel term of a *ground* statement - one with literal
     # structure but no metavariables, like a closed theorem `2 ∈ ℝ`.
     #
     # compose_schema_term deliberately declines these (it keys on a metavariable),
     # so promotion composes them here instead. Two differences from that path: the
-    # parse runs at the system's logical sorts (see _logical_sorts) and may use its
-    # *resolved* definitions, which live on the built system's proof context - a
+    # parse runs only at the system's logical `sorts` (see _logical_sorts), never
+    # falling back to the rest of the grammar, and may use the system's *resolved*
+    # definitions, which live on the built system's proof context - a
     # promoted theorem is built against an already-compiled system, unlike a rule
     # schema composed mid-compilation, where the build context still holds pending
     # records. There is nothing to re-variabilise: a ground statement binds no
     # metavariable. Returns None when no logical sort parses the text.
     parse_context = copy(context)
     parse_context.definitions = list(system.context.definitions)
-    for sort in _logical_sorts(system):
+    # Same reasoning as compose_schema_term: nothing this parse depends on moves
+    # while it runs, so the substring parses can be memoised.
+    parse_context.parse_memo = {}
+    for sort in sorts:
         matched = sort.match(text, parse_context)
         if matched is not None:
             return from_match(matched)
@@ -95,7 +106,11 @@ def _theorem_schema(
     # Only for structural matching: the string checker matches surface strings and
     # never reads `schema_term` (see InferenceRule.check), so composing a term for
     # it - let alone failing when none composes - would be meaningless.
-    pattern = build_schema_pattern(text, context, name)
+    # A promoted theorem's statement is a proof line's formula, so it is read at
+    # the sorts a line is read at - not at whichever sort of the grammar happens
+    # to come first. Both composition paths take the same list.
+    sorts = _logical_sorts(system)
+    pattern = build_schema_pattern(text, context, name, prefer=sorts)
     if (
         matching != "string"
         and isinstance(pattern, StringPattern)
@@ -103,7 +118,7 @@ def _theorem_schema(
         and pattern.non_variable_locations
         and not pattern.variable_locations
     ):
-        ground = _ground_schema_term(text, system, context)
+        ground = _ground_schema_term(text, system, context, sorts)
         if ground is None:
             raise ValueError(
                 f"Statement {text!r} has no metavariables and does not parse at any "
@@ -164,7 +179,10 @@ def promote_from_source(
         raise ValueError("Cannot promote a theorem against a system with no build context.")
 
     # Copy the context so the theorem's metavariables can be set in
-    # string_variables without mutating the system's own build context.
+    # string_variables without mutating the system's own build context. Warm the
+    # grammar index on the original first, so the copy inherits it rather than
+    # rebuilding it per theorem.
+    warm_grammar_index(system.build_context)
     context = copy(system.build_context)
     string_variables: dict[str, Pattern] = {}
     for name, sort_name in metavariables.items():

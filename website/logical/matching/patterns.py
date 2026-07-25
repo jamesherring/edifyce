@@ -55,12 +55,46 @@ class Pattern:
         # Arbitrary id for use in URLs
         self.url_id = "".join(random.SystemRandom().choice("0123456789abcdef") for _ in range(8))
 
+    @property
+    def respect_brackets(self):
+        return self._respect_brackets
+
+    @respect_brackets.setter
+    def respect_brackets(self, pairs):
+        # A property only so that assigning the pairs - which the declarative
+        # builder does after construction - keeps the reverse map below in step.
+        self._respect_brackets = pairs
+
+        # Closing -> opening, when every delimiter is a single character; None
+        # otherwise, leaving check_brackets its general scan. Derived here because
+        # check_brackets runs on every candidate parse of every formula, where
+        # even measuring the delimiters costs as much as the scan itself.
+        self._opening_of = None
+        if pairs and all(len(opening) == 1 and len(closing) == 1 for opening, closing in pairs.items()):
+            self._opening_of = {closing: opening for opening, closing in pairs.items()}
+
     def check_brackets(self, s):
         # Return a boolean indicating if the string s respects brackets
 
-        if self.respect_brackets is None:
+        pairs = self._respect_brackets
+        if pairs is None:
             # Vacuously true
             return True
+
+        # Single-character delimiters: walk the characters and look each one up,
+        # rather than re-slicing the string once per bracket pair per character.
+        opening_of = self._opening_of
+        if opening_of is not None:
+            stack = []
+            for character in s:
+                if character in pairs:
+                    stack.append(character)
+                elif character in opening_of:
+                    if not stack or stack[-1] != opening_of[character]:
+                        # No corresponding opening bracket
+                        return False
+                    stack.pop()
+            return not stack
 
         i = 0
         stack = []
@@ -341,8 +375,11 @@ class StringPattern(Pattern):
         # actual match
         self.certainty = 0
 
-        # Build the non-variable locations
+        # Build the non-variable locations, and the two orderings over them that
+        # `match` walks on every attempt (see get_non_variable_locations).
         self.non_variable_locations = None
+        self.non_variable_order = []
+        self.last_variable_location = -1
 
         # Artificially infinite certainty
         self.certainty = 10000
@@ -378,12 +415,36 @@ class StringPattern(Pattern):
         # Update the certainty - the number of non-variable characters
         self.certainty = sum(len(self.non_variable_locations[i]) for i in self.non_variable_locations)
 
+        # The literal parts in positional order, and the last position a variable
+        # occupies. Both follow from the locations just built and `match` needs
+        # them on every attempt, so derive them here instead of re-sorting the
+        # pattern a million times over a run.
+        self.non_variable_order = sorted(self.non_variable_locations)
+        self.last_variable_location = max(self.variable_locations, default=-1)
+
     def match(self, s, context, pattern_offset=0, non_variable_mapping=None, debug=None):
         # Match a string s against this pattern with the given context.
         # Optionally offset the pattern string, to start at an index > 0. This is used recursively.
 
         # Optionally specify non variable mapping.
+        #
+        # Only whole-pattern calls are memoised (see UnionPattern.match for why
+        # there is a memo at all): a partial call carries a `non_variable_mapping`
+        # already shifted for its caller, so its result is not a function of
+        # `(self, s)` alone.
+        memo = context.parse_memo
+        if memo is None or pattern_offset != 0 or non_variable_mapping is not None:
+            return self._match(s, context, pattern_offset, non_variable_mapping, debug)
 
+        key = (id(self), s)
+        if key in memo:
+            return memo[key]
+
+        result = self._match(s, context, pattern_offset, non_variable_mapping, debug)
+        memo[key] = result
+        return result
+
+    def _match(self, s, context, pattern_offset=0, non_variable_mapping=None, debug=None):
         next_debug = None
         if debug is not None:
             # Debugging
@@ -428,14 +489,14 @@ class StringPattern(Pattern):
                 return result
 
             # Check the non-variable parts all appear in order
-            indices = sorted(index for index in self.non_variable_locations)
+            indices = self.non_variable_order
 
             i = 0
             for index in indices:
                 part = self.non_variable_locations[index]
 
                 # Find the next occurrence of the part
-                j = s[i:].find(part)
+                j = s.find(part, i)
 
                 if j == -1:
                     # No match
@@ -445,13 +506,13 @@ class StringPattern(Pattern):
                     # Also no match
                     return None
 
-                i += j + len(part)
+                i = j + len(part)
 
             # Check the end of the pattern
             if len(indices) > 0:
                 last_non_variable = indices[-1]
 
-                if len(self.variable_locations) == 0 or last_non_variable > max(i for i in self.variable_locations):
+                if last_non_variable > self.last_variable_location:
                     # Pattern ends with a non-variable
                     part = self.non_variable_locations[last_non_variable]
 
@@ -495,15 +556,15 @@ class StringPattern(Pattern):
             for part_index, pattern_part in self.non_variable_locations.items():
 
                 # Find the next occurrence of s_part in s, starting from the previous index
-                next_index = s[index:].find(pattern_part)
+                next_index = s.find(pattern_part, index)
 
                 # Add to non variable mapping
-                non_variable_mapping.append([part_index, [index + next_index]])
+                non_variable_mapping.append([part_index, [next_index]])
 
                 if next_index == -1:
                     return None
 
-                index = index + next_index + 1
+                index = next_index + 1
 
             # Add any other legal non variable mappings
             for i in range(len(non_variable_mapping) - 1, -1, -1):
@@ -846,6 +907,12 @@ class StringPattern(Pattern):
     def equivalent(self, other, context, memo=None, allow_mapping_to=False):
         # Check if two patterns are the same
 
+        if self is other:
+            # A pattern is equivalent to itself. Worth saying up front: grammars
+            # share pattern objects heavily, so this is the common case, and the
+            # structural walk below would descend the whole tree to agree.
+            return True
+
         if memo is None:
             memo = {}
 
@@ -896,6 +963,45 @@ class StringPattern(Pattern):
         return f"StringPattern: {self.name}"
 
 
+# Bumped whenever any union's membership or shape changes. Flattening a union is
+# memoised per union, and a memo is trusted only while this has not moved since
+# it was taken - so a *nested* union growing invalidates its containers too,
+# without anyone having to track who contains whom. Deliberately global and
+# deliberately blunt: unions only change while a system is being assembled, so on
+# the hot path of checking proofs the count simply never moves.
+_union_revision = 0
+
+
+def invalidate_union_memos() -> None:
+    """Discard every memoised union flattening. Call after reshaping a union."""
+    global _union_revision
+    _union_revision += 1
+
+
+def _may_open_with(pattern, character):
+    # Whether `pattern` could match a string beginning with `character`.
+    #
+    # A StringPattern whose template opens with a literal must find that literal
+    # at position 0 (see StringPattern.match, which rejects when its leading
+    # non-variable part is found anywhere else). An AtomPattern matches only the
+    # whole token it denotes - its constant, or its family's base, optionally
+    # `_<n>` - so that token's first character decides. This second case carries
+    # most of the pruning on a set.mm import, where all but a hundred or so of the
+    # 1,346 `class` productions are nullary constants (`RR`, `sin`, `2`).
+    #
+    # Anything else - a template opening with a variable, a RegexPattern - could
+    # open with anything and stays a candidate.
+    if type(pattern) is StringPattern:
+        literal = pattern.non_variable_locations.get(0)
+        return literal is None or literal[0] == character
+
+    if type(pattern) is AtomPattern:
+        token = pattern.value if pattern.is_constant else pattern.base
+        return not token or token[0] == character
+
+    return True
+
+
 class UnionPattern(Pattern):
     """A union of patterns."""
 
@@ -911,9 +1017,44 @@ class UnionPattern(Pattern):
         # Inherits from a previous unionpattern
         self.inherits = inherits
 
+        # Memos for the flattening of this union, each paired with the revision it
+        # was computed at. Flattening is quadratic in the union's size and was
+        # re-run on *every* match, so a grammar of any real size paid it thousands
+        # of times over. See `nested_options` and `match_options`.
+        self._nested_options_cache: dict = {}
+        self._match_options_cache: tuple | None = None
+
+        # Leaves grouped by the first character they can match, filled per
+        # character as strings arrive. See `leaf_candidates`.
+        self._leaf_index: dict = {}
+        self._leaf_index_revision: int | None = None
+
+        # A union built from members that already exist elsewhere can appear
+        # inside a flattening taken a moment ago.
+        invalidate_union_memos()
+
     def match(self, s, context, debug=None):
         # Match s against one of the patterns.
+        #
+        # Parsing a compound formula tries every way of splitting it across a
+        # production's variable slots, and re-parses the same substring under each
+        # - so a deeply nested formula costs exponentially without a memo. The
+        # caller opts in by setting `context.parse_memo`, which asserts that
+        # nothing the result depends on (the grammar, `definitions`,
+        # `string_variables`) changes for the duration of that parse.
+        memo = context.parse_memo
+        if memo is None:
+            return self._match(s, context, debug)
 
+        key = (id(self), s)
+        if key in memo:
+            return memo[key]
+
+        result = self._match(s, context, debug)
+        memo[key] = result
+        return result
+
+    def _match(self, s, context, debug=None):
         next_debug = None
         if debug is not None:
             # Debugging
@@ -921,13 +1062,8 @@ class UnionPattern(Pattern):
             print(spaces, "Attempting to match", s, " in ", self.name, ", a UnionPattern.")
             next_debug = debug + 1
 
-        # Get the nested options
-        nested_options = self.nested_options(context, path_dict=True)
-
-        pattern_options = [p for p in nested_options if not isinstance(p, UnionPattern)]
-
-        # Sort the patterns by decreasing certainty
-        pattern_options.sort(key=lambda x: x.certainty, reverse=True)
+        # Get the nested options, the leaves in certainty order, and the sub-unions
+        nested_options, pattern_options, union_options = self.match_options(context)
 
         string_variables = context.string_variables
 
@@ -971,7 +1107,7 @@ class UnionPattern(Pattern):
             # Brackets don't match
             return None
 
-        for pattern in pattern_options:
+        for pattern in self.leaf_candidates(s, context, pattern_options):
 
             # Try to match the pattern
             result = pattern.match(s, context, debug=next_debug)
@@ -1002,8 +1138,6 @@ class UnionPattern(Pattern):
             return result
 
         # Try union patterns - they may have definitions on lower union patterns
-        union_options = [p for p in nested_options if isinstance(p, UnionPattern)]
-
         for pattern in union_options:
             result = pattern.try_definitions(s, context)
 
@@ -1027,8 +1161,19 @@ class UnionPattern(Pattern):
         # No match
         return None
 
+    def add_pattern(self, pattern):
+        """Add ``pattern`` to the union, invalidating any memoised flattening."""
+        self.patterns.append(pattern)
+        invalidate_union_memos()
+
     def add_variables(self, variable_dict):
         # Add variables to all patterns in the union
+
+        # Members are about to change shape, and a flattening dedupes them by
+        # structural equivalence, so every memo taken so far is suspect - not only
+        # this union's. (Systems are fully assembled before any proof is checked,
+        # so this costs nothing on the hot path.)
+        invalidate_union_memos()
 
         for pattern in self.patterns:
             if type(pattern) is UnionPattern:
@@ -1040,6 +1185,17 @@ class UnionPattern(Pattern):
     def nested_options(self, context, path_dict=False):
         # Get a set of all patterns in this union - and any sub-unions
         # Optionally return as a dictionary including the paths to each option
+        #
+        # Flattening compares every candidate against everything already found
+        # using structural `equivalent`, so it is quadratic in the size of the
+        # union - and `match` calls it for every formula it parses. Memoise it,
+        # against the revision that says no union has changed since (see
+        # `invalidate_union_memos`). The result is handed out live: every caller
+        # in the codebase only reads it, and copying a flattened grammar per parse
+        # was itself a measurable cost. Treat it as read-only.
+        cached = self._nested_options_cache.get(path_dict)
+        if cached is not None and cached[0] == _union_revision:
+            return cached[1]
 
         # Start with an empty set
         found = set()
@@ -1117,7 +1273,59 @@ class UnionPattern(Pattern):
             else:
                 add_pattern_to_set(p, found)
 
+        self._nested_options_cache[path_dict] = (_union_revision, found)
         return found
+
+    def match_options(self, context):
+        """The flattening `match` reads: paths, then leaves by certainty, then unions.
+
+        Splitting the flattening into the two lists `match` walks, and ordering the
+        leaves, depends only on the union's shape - but `match` did it per formula
+        parsed, filtering and sorting the whole grammar each time. Memoised
+        alongside `nested_options`, and read-only for the same reason.
+        """
+        cached = self._match_options_cache
+        if cached is not None and cached[0] == _union_revision:
+            return cached[1]
+
+        options = self.nested_options(context, path_dict=True)
+        leaves = [p for p in options if not isinstance(p, UnionPattern)]
+        leaves.sort(key=lambda pattern: pattern.certainty, reverse=True)
+        unions = [p for p in options if isinstance(p, UnionPattern)]
+
+        self._match_options_cache = (_union_revision, (options, leaves, unions))
+        return options, leaves, unions
+
+    def leaf_candidates(self, s, context, leaves):
+        """Those of `leaves` that could match a string starting as `s` does.
+
+        A production that opens with a literal can only read a string opening
+        with that literal, so one character rules most of a large grammar out -
+        and `match` was trying every leaf for every formula, which is what made
+        the cost of a parse grow with the size of the grammar rather than with
+        the formula. Grouped per first character, on demand, and rebuilt when a
+        union changes (see `invalidate_union_memos`).
+
+        Falls back to every leaf wherever that reasoning does not hold: when
+        definitions are in scope, since a leaf can match through an unfold its
+        template does not predict; and when `s` is itself a string variable,
+        which any leaf matches whatever its template says. Both are decided here
+        rather than inside `_may_open_with`, because they are properties of the
+        string and the context, not of the leaf.
+        """
+        if not s or context.definitions or s in context.string_variables:
+            return leaves
+
+        if self._leaf_index_revision != _union_revision:
+            self._leaf_index = {}
+            self._leaf_index_revision = _union_revision
+
+        candidates = self._leaf_index.get(s[0])
+        if candidates is None:
+            # Filtering preserves the certainty order `match_options` established.
+            candidates = [leaf for leaf in leaves if _may_open_with(leaf, s[0])]
+            self._leaf_index[s[0]] = candidates
+        return candidates
 
     def inherits_from(self, other, context):
         # Check if this pattern inherits from another
@@ -1133,6 +1341,12 @@ class UnionPattern(Pattern):
 
     def equivalent(self, other, context, memo=None, allow_mapping_to=False):
         # Check if two patterns are the same
+
+        if self is other:
+            # A pattern is equivalent to itself. Worth saying up front: grammars
+            # share pattern objects heavily, so this is the common case, and the
+            # structural walk below would descend the whole tree to agree.
+            return True
 
         if memo is None:
             memo = {}
@@ -1173,15 +1387,16 @@ class UnionPattern(Pattern):
     def contains_pattern(self, other, context, allow_nested=False):
         # Check if the union pattern includes a pattern equivalent to other
 
-        if not allow_nested:
-            for pattern in self.patterns:
-                if pattern.equivalent(other, context):
-                    return True
+        options = self.patterns if not allow_nested else self.nested_options(context)
 
-            return False
+        # A pattern is nearly always asked about by the very object the union
+        # holds - a sort checked against a term built from that sort - and a
+        # pattern is trivially equivalent to itself. Patterns hash by identity, so
+        # this settles the common case without a structural walk per member.
+        if other in options:
+            return True
 
-        # Otherwise check all nested options
-        for pattern in self.nested_options(context):
+        for pattern in options:
             if pattern.equivalent(other, context):
                 return True
 
