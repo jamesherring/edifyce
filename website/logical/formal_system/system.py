@@ -156,7 +156,7 @@ class FormalSystem:
                     # The citation reference is the declared sub-field.
                     try:
                         reference_match = _line_field(result, line_type.reference_field)
-                        proof_line.reference_string = reference_match.formatted_string()
+                        proof_line.reference_string = reference_match.string
                         proof_line.reference_string_display = reference_match.string
                     except Exception:
                         pass

@@ -224,7 +224,7 @@ def test_a_definition_with_no_defining_form_is_refused(alias_system):
     open_definition = formula.add_definition(
         "not a formula at all", "x beside y", context, require_lower_match=False
     )
-    assert open_definition is not None and open_definition.lower is None
+    assert open_definition is not None and open_definition.lower_source is None
 
     with pytest.raises(DefinitionError, match="no defining form"):
         build_kernel_definition(open_definition, context)

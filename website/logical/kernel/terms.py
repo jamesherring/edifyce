@@ -1,15 +1,16 @@
 """Term trees: a parse-once representation of formulae.
 
-Today a formula only ever exists as a *string*. The matcher recovers its
-structure by backtracking over that string every time structure is needed
-(``StringPattern.match``), and serialises trees back to strings to compare
-them (``Match.reset_string`` / ``formatted_string``). Structure is therefore
-re-derived, over and over, from text.
+A formula reaches the engine as a *string*, and recovering its structure means
+backtracking over that string (``StringPattern.match``). Doing that every time
+structure is needed - which is what the matching layer used to do, comparing
+formulae by re-serialising trees back to text - re-derives the same structure
+over and over.
 
 A :class:`Term` is that structure captured once. You parse a string with the
-existing engine, project the resulting :class:`~website.logical.matching.Match`
-into a :class:`Term` with :func:`from_match`, and from then on every operation
-- equality, substitution, rendering - walks the tree. No string is re-parsed.
+matcher, project the resulting :class:`~website.logical.matching.Match` into a
+:class:`Term` with :func:`from_match`, and from then on every operation -
+equality, substitution, rendering - walks the tree. No string is re-parsed, and
+the ``Match`` has done its job.
 
 Worked example
 --------------
@@ -558,7 +559,7 @@ def from_match(match: Match, context: Context) -> Term:
     # A variable leaf: the string is itself a declared schematic variable, e.g.
     # a formula written "phi" where phi was declared `with phi as formula`.
     if match.is_variable:
-        return _var(name=match.formatted_string(), sort=pattern)
+        return _var(name=match.string, sort=pattern)
 
     # A definition-backed match: the matched sort (often a UnionPattern) is not
     # itself a template, and its sub-matches are the definition's variables. The
@@ -575,7 +576,7 @@ def from_match(match: Match, context: Context) -> Term:
         sort = match.definition.pattern
         if match.sub_matches:
             return _node(pattern=higher, children=child_terms(match), sort=sort)
-        return _node(pattern=higher, literal=match.formatted_string(), sort=sort)
+        return _node(pattern=higher, literal=match.string, sort=sort)
 
     # A union match is a coercion wrapper around a single chosen branch: e.g.
     # `formula` wrapping the `implication` that matched "(a -> b)". Collapse it.
@@ -584,12 +585,12 @@ def from_match(match: Match, context: Context) -> Term:
         if len(subs) == 1:
             return from_match(subs[0], context)
         # No single branch (nothing to collapse to): treat as a ground leaf.
-        return _node(pattern=pattern, literal=match.formatted_string())
+        return _node(pattern=pattern, literal=match.string)
 
     # A ground leaf: regex/atomic token or a literal pattern with no slots, e.g.
     # the atom "a" -> Node(atom, literal="a").
     if not match.sub_matches:
-        return _node(pattern=pattern, literal=match.formatted_string())
+        return _node(pattern=pattern, literal=match.string)
 
     # A compound: recurse into the named sub-matches, e.g. "(a -> b)" ->
     # Node(implication, {"p": <term a>, "q": <term b>}).

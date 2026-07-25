@@ -41,12 +41,14 @@ class Definition:
         # bridge passes it to the kernel definition.
         self.kernel_condition = kernel_condition
 
-        self.lower = None
-
-        # The defining form exactly as it was written. `self.lower` is a *pattern*
-        # derived from it, whose template renames a variable used in two roles
-        # (`create_pattern`'s collision rename), so it is not always a form the
-        # author would recognise. Keep the original for error messages.
+        # The defining form exactly as it was written - the only form of it kept.
+        # A StringPattern used to be derived from the parse alongside it, but a
+        # template marks *every* occurrence of a name as a slot, so a name used
+        # both as a binder token and as a parameter had its later occurrences
+        # renamed apart (`z` -> `z_0`) - leaving a defining form the author would
+        # not recognise, and a rename the caller then had to undo. Nothing needed
+        # the template: the kernel definition parses this text itself (see
+        # formal_system/definitions.build_kernel_definition).
         self.lower_source = lower
 
         # Create a higher pattern
@@ -56,21 +58,23 @@ class Definition:
             variables=copy(context.string_variables),
         )
 
+        # The definition's parameters: those of the defined form, plus any the
+        # defining form fills a slot with. A parameter only the *defining* form
+        # uses is a defect (an unfold would conjure it), caught when the kernel
+        # definition is built; carrying it here is what lets that check name it.
         self.variables = copy(self.higher.variables)
 
-        # We might not know what the lower pattern is
+        # We might not know what the lower form is
         if lower is not None:
 
-            # Get the match for variables
+            # Parsing it is also the check that it is an instance of the pattern.
             match = self.pattern.match(lower, context)
             if match is None:
                 raise ValueError(f"Lower pattern for definition must match the pattern. '{lower}' is not an instance of {pattern.name}.")
 
-            # Create a lower pattern
-            self.lower = match.create_pattern(context)
-
-            # Store the variables in a common dictionary.
-            self.variables = self.lower.variables
+            self.variables = {
+                leaf.string: leaf.pattern for leaf in match.variable_leaves()
+            }
             self.variables.update(self.higher.variables)
 
         # The term-based (kernel) counterpart this definition denotes - what a
@@ -126,13 +130,13 @@ class Definition:
         # Assume True when checking nested patterns - so recursive patterns can compare equal
         memo[(self, other)] = True
 
-        if (self.lower is None and other.lower is not None) or (self.lower is not None and other.lower is None):
+        # Defining forms are compared as the text they were written as: the two
+        # are the same definition when they unfold the same notation to the same
+        # form, and the sorts of the parameters that text uses are settled by
+        # comparing `higher` and `pattern` below.
+        if self.lower_source != other.lower_source:
+            memo[(self, other)] = False
             return False
-
-        if self.lower is not None and other.lower is not None:
-            if not self.lower.equivalent(other.lower, context, memo, allow_mapping_to):
-                memo[(self, other)] = False
-                return False
 
         if not self.higher.equivalent(other.higher, context, memo, allow_mapping_to):
             memo[(self, other)] = False
@@ -147,7 +151,7 @@ class Definition:
         return True
 
     def __str__(self):
-        if self.lower is None:
+        if self.lower_source is None:
             return f"Definition: '{self.higher.pattern}' is unknown for {self.pattern.name}"
 
-        return f"Definition: '{self.higher.pattern}' is defined as '{self.lower.pattern}' for {self.pattern.name}"
+        return f"Definition: '{self.higher.pattern}' is defined as '{self.lower_source}' for {self.pattern.name}"

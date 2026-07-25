@@ -5,7 +5,7 @@ This package was split out of a single large ``matching.py`` module.
 Module layout (in dependency order)::
 
     context     - the Context object
-    matches     - Match and MatchSet
+    matches     - Match, the parse record
     patterns    - Pattern and its subclasses
     definitions - Definition
     rewriting   - all-solutions associative matching for string-rewriting rules
@@ -17,11 +17,13 @@ qualified names so that the import cycle resolves cleanly at runtime.
 The string ``get_by_path`` interpreter and its ``Condition`` expression tree
 (formerly the ``paths`` and ``conditions`` modules) have been retired; proof
 checking runs on kernel term unification, the closed side-condition algebra,
-and the scope/subproof mechanism instead.
+and the scope/subproof mechanism instead. ``MatchSet`` went the same way, along
+with the tree-walks on ``Match`` that duplicated the kernel's own operations —
+this layer parses, and hands the parse straight over (see ``matches``).
 """
 
 from .context import Context
-from .matches import Match, MatchSet
+from .matches import Match
 from .patterns import (
     AbstractPattern,
     AtomPattern,
@@ -39,7 +41,6 @@ __all__ = [
     "Context",
     "Definition",
     "Match",
-    "MatchSet",
     "Pattern",
     "RegexPattern",
     "StringPattern",

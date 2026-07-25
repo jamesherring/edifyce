@@ -900,8 +900,8 @@ class ProofLine:
         elif line_type.behaviour == "axiom":
             # An axiom line asserts its own formula, so it needs no justification:
             # `check_logical_line` short-circuits on `is_axiom`. It used to also
-            # generalise the formula into a reusable schema
-            # (`Match.create_pattern`), but nothing ever read the result - a
+            # generalise the formula into a reusable schema by round-tripping the
+            # match back into a pattern, but nothing ever read the result - a
             # promoted theorem is the typed mechanism for that now (see
             # `promotion.PromotedTheorem`).
             self.is_axiom = True

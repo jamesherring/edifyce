@@ -10,8 +10,8 @@ The tests cover three things:
 1. **Mechanism (graph, not string).** Promotion is a kernel-term operation:
    ``from_match`` the proved conclusion to a ground term, ``revariabilise`` the
    named leaves to sort-widened ``Var``s, and hang the term on a schema shell. No
-   ``Match.create_pattern`` string round-trip. The ephemeral rule checks through
-   the real ``InferenceRule.check`` → ``_term_binding`` → ``match_all`` path.
+   match-to-pattern string round-trip. The ephemeral rule checks through the real
+   ``InferenceRule.check`` → ``_term_binding`` → ``match_all`` path.
 
 2. **The wired citation path.** ``FormalSystem.promote`` registers a theorem in
    its own namespace (not ``inference_rules``); ``Proof.get_reference`` resolves a
