@@ -1,10 +1,18 @@
 """Pattern classes: the base :class:`Pattern` and its concrete subclasses."""
 
+from __future__ import annotations
+
 import random
+from typing import TYPE_CHECKING
 
 import regex as re
 
 from . import definitions, matches
+
+if TYPE_CHECKING:
+    from .context import Context
+    from .definitions import DefinedNotation
+    from .matches import Match
 
 
 class Pattern:
@@ -81,7 +89,7 @@ class Pattern:
         # All ok
         return True
 
-    def add_notation(self, defined, context):
+    def add_notation(self, defined: str, context: Context) -> DefinedNotation:
         # Register `defined` as a production of this sort - the grammatical half
         # of a definition, and all of it the matching layer needs (see
         # DefinedNotation). What the notation unfolds to is the kernel's
@@ -101,7 +109,7 @@ class Pattern:
 
         return notation
 
-    def try_definitions(self, s, context):
+    def try_definitions(self, s: str, context: Context) -> Match | None:
         # Try the defined notations in scope to see if one gives a match for s.
         # Called after this pattern's own productions, so defined notation can
         # never shadow a primitive one.

@@ -133,7 +133,7 @@ def _introduced_name_error(
 
 def build_kernel_definition(
     notation: DefinedNotation,
-    lower: str,
+    lower: str | None,
     context: Context,
     condition: SideCondition | None = None,
     fresh: FreeVars | None = None,
@@ -144,7 +144,8 @@ def build_kernel_definition(
     ``notation`` supplies the grammatical half — the sort, the defined form, and
     the parameters that form takes; ``lower`` is the defining form as written,
     with ``condition`` and ``fresh`` its declared provisos and ``label`` the name
-    a proof cites it by.
+    a proof cites it by. ``lower`` may be ``None``: notation can be registered
+    without a defining form, and this is where that is refused.
 
     ``context`` must already hold ``notation``: a defined form is grammatical
     only because its notation is registered, so that is what lets ``higher``
@@ -159,19 +160,13 @@ def build_kernel_definition(
             f"Definition '{notation.template.pattern}' has no defining form to unfold to."
         )
 
-    # The parameters both forms share. Read off the *parse* of each form rather
-    # than declared up front, because only the parse settles which occurrences of
-    # a name actually fill a slot. A parameter the defining form uses and the
-    # defined form does not is a defect, but not one to pre-empt here: it is
-    # abstracted like any other and then reported by `unbound_parameters` below,
-    # with the same message, so there is one place that decides.
-    lower_match = notation.sort.match(lower, context)
-    if lower_match is None:
-        raise DefinitionError(
-            f"Defining form '{lower}' is not an instance of {notation.sort.name}."
-        )
-    variables = {leaf.string: leaf.pattern for leaf in lower_match.variable_leaves()}
-    variables.update(notation.variables)
+    # The definition's parameters are the slots its *defined* form declares -
+    # exactly what a use of the notation supplies. A name the defining form uses
+    # and the defined form does not is therefore left unabstracted, which is the
+    # point: it stays a ground leaf and `introduced_leaves` below reports it as a
+    # name the unfold would conjure. Only that check, and `unbound_parameters`
+    # beside it, decide what a defining form may introduce.
+    variables = dict(notation.variables)
 
     try:
         kernel_def = Definition.parse(

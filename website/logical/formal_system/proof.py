@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from ..graphs import saturating_matching
-from ..kernel.side_conditions import Not, Occurs
 from ..kernel.definitions import check_definitional_step
+from ..kernel.side_conditions import Not, Occurs
 
 if TYPE_CHECKING:
     from ..kernel.definitions import Definition

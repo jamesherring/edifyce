@@ -25,6 +25,7 @@ pytest.importorskip("regex")
 # database and API use.
 from website.logical.declarative import SystemSpec, build_spec
 from website.logical.kernel import check_definitional_step
+from website.logical.kernel.definitions import Definition as KernelDefinition
 from website.logical.formal_system.definitions import (
     DefinitionError,
     build_kernel_definition,
@@ -164,6 +165,36 @@ def alias_system():
 @pytest.fixture(scope="module")
 def const_system():
     return build_declarative(const_spec())
+
+
+# ---------------------------------------------------------------------------
+# The split: a notation parses, a definition means something
+# ---------------------------------------------------------------------------
+
+
+def test_notation_carries_no_definitional_payload(guarded_system):
+    # The parser half is a production and nothing else. It used to carry the
+    # defining form, the provisos and the kernel definition itself, each "held
+    # opaquely" so this layer could avoid importing the kernel - which is the
+    # shape of a courier, not of a parser.
+    notation = only_notation(guarded_system)
+    assert set(vars(notation)) == {"sort", "template"}
+
+    # And it cannot apply anything: there is one way to check a step.
+    assert not hasattr(notation, "kernel")
+    assert not hasattr(notation, "check_application")
+
+
+def test_the_definition_is_a_kernel_axiom_held_by_the_system(guarded_system):
+    # The meaning half is the kernel's own Definition, and the system holds it -
+    # definitions are fixed once a system is built, so the per-line context copy
+    # carries only the notations that let a defined form parse.
+    (definition,) = guarded_system.definitions
+    assert isinstance(definition, KernelDefinition)
+    assert all(
+        not isinstance(entry, KernelDefinition)
+        for entry in context_of(guarded_system).definitions
+    )
 
 
 # ---------------------------------------------------------------------------
