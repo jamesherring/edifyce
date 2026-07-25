@@ -128,13 +128,39 @@ class Database:
     # Assertion labels in file order - the order an import must follow, since a
     # theorem may only cite what precedes it.
     order: list[str] = field(default_factory=list)
+    # Views derived from the fields above, built on first use. `parse` populates
+    # a database and hands it over; nothing mutates one afterwards, so these stay
+    # valid for its lifetime. They are cached because an import asks for them per
+    # *theorem* while they are facts about the whole file - on set.mm, scanning
+    # 50k assertions or 68k hypotheses again for each of them dominated the run.
+    _syntax: list[Assertion] | None = field(default=None, repr=False, compare=False)
+    _positions: dict[str, int] | None = field(default=None, repr=False, compare=False)
+    _floating_typecodes: list[str] | None = field(default=None, repr=False, compare=False)
 
     def logical_assertions(self) -> list[Assertion]:
         return [a for a in self.iter_assertions() if a.is_logical]
 
     def syntax_assertions(self) -> list[Assertion]:
         """The statements that *declare* notation, in file order."""
-        return [a for a in self.iter_assertions() if a.declares_notation]
+        if self._syntax is None:
+            self._syntax = [a for a in self.iter_assertions() if a.declares_notation]
+        return self._syntax
+
+    def floating_typecodes(self) -> list[str]:
+        """Every typecode some ``$f`` declares a variable at, in declaration order."""
+        if self._floating_typecodes is None:
+            seen: list[str] = []
+            for hypothesis in self.hypotheses.values():
+                if hypothesis.floating and hypothesis.typecode not in seen:
+                    seen.append(hypothesis.typecode)
+            self._floating_typecodes = seen
+        return self._floating_typecodes
+
+    def position(self, label: str) -> int:
+        """Index of assertion ``label`` in file order."""
+        if self._positions is None:
+            self._positions = {name: index for index, name in enumerate(self.order)}
+        return self._positions[label]
 
     def iter_assertions(self) -> Iterator[Assertion]:
         return (self.assertions[label] for label in self.order)

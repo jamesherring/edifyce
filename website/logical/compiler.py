@@ -80,7 +80,7 @@ def compile(code: str, system_dict: dict | None = None) -> dict:
     return {"system": FormalSystem(name="")}
 
 
-def build_schema_pattern(text: str, context, name: str):
+def build_schema_pattern(text: str, context, name: str, prefer: Sequence[Pattern] = ()):
     # Build a rule-schema pattern from a source token. A bare constant atom
     # (e.g. a falsum `⊥`) resolves to its *declared* AtomPattern, so the rule's
     # literal and the proof line's atom are the same constructor on the term
@@ -108,11 +108,13 @@ def build_schema_pattern(text: str, context, name: str):
     # metavariables) once, here, and stash the resulting term; _schema_term uses
     # it. None when the template is a bare variable (from_pattern already nests
     # trivially) or nothing parses it (fall back to the flat projection).
-    pattern.schema_term = compose_schema_term(pattern, context)
+    pattern.schema_term = compose_schema_term(pattern, context, prefer)
     return pattern
 
 
-def compose_schema_term(pattern: Pattern, context) -> "Term | None":
+def compose_schema_term(
+    pattern: Pattern, context, prefer: Sequence[Pattern] = ()
+) -> "Term | None":
     # Project a compound rule-schema template into its nested kernel term by
     # parsing it against the system's productions. See build_schema_pattern.
     if not pattern.variable_locations or not pattern.non_variable_locations:
@@ -129,13 +131,31 @@ def compose_schema_term(pattern: Pattern, context) -> "Term | None":
     parse_context = copy(context)
     parse_context.definitions = []
 
-    for candidate in context.variables.values():
-        if isinstance(candidate, UnionPattern):
-            match = candidate.match(pattern.pattern, parse_context)
-            if match is not None:
-                return _revariabilise(from_match(match, parse_context), context.string_variables)
+    for candidate in _composition_sorts(context, prefer):
+        match = candidate.match(pattern.pattern, parse_context)
+        if match is not None:
+            return _revariabilise(from_match(match, parse_context), context.string_variables)
 
     return None
+
+
+def _composition_sorts(context, prefer: Sequence[Pattern]) -> list[Pattern]:
+    # The sorts to try composing a schema at, `prefer` first. Which sort a schema
+    # is read at matters: a template that parses at several sorts composes to a
+    # different term at each, and only one of them is the sort a proof line's
+    # formula is actually parsed at. Callers that know it (promotion does - see
+    # _logical_sorts) pass it, so the answer no longer depends on where in the
+    # grammar's declaration order the right sort happens to sit. It is also much
+    # the faster order: on a set.mm import the logical sort matches nearly every
+    # time, and the sorts it would otherwise have tried first are large unions
+    # whose failing parse costs as much as the succeeding one.
+    sorts = [pattern for pattern in prefer if isinstance(pattern, UnionPattern)]
+    seen = {id(pattern) for pattern in sorts}
+    for candidate in context.variables.values():
+        if isinstance(candidate, UnionPattern) and id(candidate) not in seen:
+            sorts.append(candidate)
+            seen.add(id(candidate))
+    return sorts
 
 
 def _revariabilise(term: "Term", metavariables: dict) -> "Term":
@@ -225,22 +245,26 @@ def _logical_sorts(system: FormalSystem) -> list[Pattern]:
 
 
 def _ground_schema_term(
-    text: str, system: FormalSystem, context: "FormalSystemContext"
+    text: str,
+    system: FormalSystem,
+    context: "FormalSystemContext",
+    sorts: Sequence[Pattern],
 ) -> "Term | None":
     # Compose the nested kernel term of a *ground* statement - one with literal
     # structure but no metavariables, like a closed theorem `2 ∈ ℝ`.
     #
     # compose_schema_term deliberately declines these (it keys on a metavariable),
     # so promotion composes them here instead. Two differences from that path: the
-    # parse runs at the system's logical sorts (see _logical_sorts) and may use its
-    # *resolved* definitions, which live on the built system's proof context - a
+    # parse runs only at the system's logical `sorts` (see _logical_sorts), never
+    # falling back to the rest of the grammar, and may use the system's *resolved*
+    # definitions, which live on the built system's proof context - a
     # promoted theorem is built against an already-compiled system, unlike a rule
     # schema composed mid-compilation, where the build context still holds pending
     # records. There is nothing to re-variabilise: a ground statement binds no
     # metavariable. Returns None when no logical sort parses the text.
     parse_context = copy(context)
     parse_context.definitions = list(system.context.definitions)
-    for sort in _logical_sorts(system):
+    for sort in sorts:
         matched = sort.match(text, parse_context)
         if matched is not None:
             return from_match(matched, parse_context)
@@ -269,7 +293,11 @@ def _theorem_schema(
     # Only for structural matching: the string checker matches surface strings and
     # never reads `schema_term` (see InferenceRule.check), so composing a term for
     # it - let alone failing when none composes - would be meaningless.
-    pattern = build_schema_pattern(text, context, name)
+    # A promoted theorem's statement is a proof line's formula, so it is read at
+    # the sorts a line is read at - not at whichever sort of the grammar happens
+    # to come first. Both composition paths take the same list.
+    sorts = _logical_sorts(system)
+    pattern = build_schema_pattern(text, context, name, prefer=sorts)
     if (
         matching != "string"
         and isinstance(pattern, StringPattern)
@@ -277,7 +305,7 @@ def _theorem_schema(
         and pattern.non_variable_locations
         and not pattern.variable_locations
     ):
-        ground = _ground_schema_term(text, system, context)
+        ground = _ground_schema_term(text, system, context, sorts)
         if ground is None:
             raise ValueError(
                 f"Statement {text!r} has no metavariables and does not parse at any "
@@ -833,7 +861,7 @@ class AbstractSyntaxTree:
                     return
 
                 # Append the pattern
-                current_object.patterns.append(obj)
+                current_object.add_pattern(obj)
 
             elif stripped[-1] == ":" and stripped[:-1] in context.variables:
                 # Continue definition of an already defined pattern
@@ -927,7 +955,7 @@ class AbstractSyntaxTree:
                     # Add any relevant string variables
                     pattern.add_variables(context.string_variables)
 
-                current_object.patterns.append(pattern)
+                current_object.add_pattern(pattern)
 
             elif type(current_object) is RegexPattern:
                 # Define the regex pattern

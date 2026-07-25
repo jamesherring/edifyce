@@ -382,7 +382,7 @@ def build_system(spec: SystemSpec) -> FormalSystem:
         union = ctx.variables[sort]
         for prod in spec.productions:
             if prod.sort == sort:
-                union.patterns.append(ctx.variables[prod.name])
+                union.add_pattern(ctx.variables[prod.name])
 
     # 5. Lines: a statement pattern + logical line type per declared line. Each
     # line's inline parts are registered just before it is built (see step 1).

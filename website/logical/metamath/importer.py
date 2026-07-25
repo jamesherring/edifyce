@@ -110,10 +110,9 @@ def _syntax_before(database: Database, before: str | None) -> list[Assertion]:
     # The notation-declaring statements available to `before`, in file order.
     syntax = database.syntax_assertions()
     if before is None:
-        return syntax
-    limit = database.order.index(before)
-    positions = {label: index for index, label in enumerate(database.order)}
-    return [a for a in syntax if positions[a.label] < limit]
+        return list(syntax)
+    limit = database.position(before)
+    return [a for a in syntax if database.position(a.label) < limit]
 
 
 def _mentioned_variables(database: Database, before: str | None) -> set[str]:
@@ -122,7 +121,7 @@ def _mentioned_variables(database: Database, before: str | None) -> set[str]:
     # declares 355 variables, and enumerating all of them in every sort's leaf
     # pattern makes a regex too large to store, while only a handful are ever
     # reachable from a given theorem.
-    limit = len(database.order) if before is None else database.order.index(before) + 1
+    limit = len(database.order) if before is None else database.position(before) + 1
     mentioned: set[str] = set()
     for label in database.order[:limit]:
         assertion = database.assertions[label]
@@ -155,7 +154,7 @@ def _binder_sorts(database: Database) -> list[str]:
     # only members *are* the declared variables. These are the individual-variable
     # sorts, which is what a `$d` constrains (see _distinct_provisos).
     built = {a.typecode for a in database.syntax_assertions()}
-    return [t for t in _declared_variables(database) if t not in built]
+    return [t for t in database.floating_typecodes() if t not in built]
 
 
 def _variable_sort_productions(
