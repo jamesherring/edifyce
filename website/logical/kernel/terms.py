@@ -440,7 +440,7 @@ def intern(term: Term) -> Term:
     return _canonical(term)
 
 
-def from_match(match: Match, context: Context) -> Term:
+def from_match(match: Match) -> Term:
     r"""Project a :class:`Match` tree into a :class:`Term` (the parse-once bridge).
 
     The engine's ``Match`` tree carries scaffolding the term layer does not
@@ -448,6 +448,10 @@ def from_match(match: Match, context: Context) -> Term:
     that actually matched (a ``formula`` union around the ``implication`` that
     parsed ``"(a -> b)"``). Those are collapsed, so a formula is the same term
     however many union layers happened to parse it.
+
+    Takes no context: projection reads only the match's own structure, so where
+    it runs cannot change what it returns. That is what makes it safe to do once,
+    at parse time (see ``FormalSystem.parse``), rather than per check.
 
     Nothing here knows definitions exist. Defined notation arrives already
     shaped like any other production - its template *is* the constructor, and
@@ -471,7 +475,7 @@ def from_match(match: Match, context: Context) -> Term:
             if isinstance(sub, list):
                 # Rare shape seen in a few matcher paths; take the representative.
                 sub = sub[0]
-            children[label] = from_match(sub, context)
+            children[label] = from_match(sub)
         return children
 
     # A variable leaf: the string is itself a declared schematic variable, e.g.
@@ -484,7 +488,7 @@ def from_match(match: Match, context: Context) -> Term:
     if constructor.kind == "union":
         subs = list(match.sub_matches.values())
         if len(subs) == 1:
-            return from_match(subs[0], context)
+            return from_match(subs[0])
         # No single branch (nothing to collapse to): treat as a ground leaf.
         return _node(constructor=constructor, literal=match.string, sort=match.sort)
 

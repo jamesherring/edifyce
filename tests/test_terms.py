@@ -107,7 +107,7 @@ def test_fopl_roundtrips(fopl, formula_string):
     match = formula.match(formula_string, context)
     assert match is not None
 
-    term = from_match(match, context)
+    term = from_match(match)
     assert term.to_string() == match.string == formula_string
 
 
@@ -121,7 +121,7 @@ def test_near_english_roundtrips(set_theory, formula_string):
     match = formula.match(formula_string, context)
     assert match is not None
 
-    term = from_match(match, context)
+    term = from_match(match)
     # Arbitrary near-English surface syntax reconstructs exactly.
     assert term.to_string() == match.string == formula_string
 
@@ -131,7 +131,7 @@ def test_union_coercion_is_collapsed(fopl):
     # not a chain of union wrappers.
     _system, context, formula = fopl
 
-    term = from_match(formula.match("a", context), context)
+    term = from_match(formula.match("a", context))
     assert isinstance(term, Node)
     assert term.constructor.name == "atom"
     assert term.literal == "a"
@@ -145,9 +145,9 @@ def test_union_coercion_is_collapsed(fopl):
 def test_structural_equality_ground(fopl):
     _system, context, formula = fopl
 
-    a = from_match(formula.match("(a -> (b -> a))", context), context)
-    b = from_match(formula.match("(a -> (b -> a))", context), context)
-    c = from_match(formula.match("(a -> (b -> b))", context), context)
+    a = from_match(formula.match("(a -> (b -> a))", context))
+    b = from_match(formula.match("(a -> (b -> a))", context))
+    c = from_match(formula.match("(a -> (b -> b))", context))
 
     assert a.equal(b, context)
     assert not a.equal(c, context)
@@ -155,7 +155,7 @@ def test_structural_equality_ground(fopl):
 
 def test_ground_term_has_no_free_vars(fopl):
     _system, context, formula = fopl
-    term = from_match(formula.match("(a -> b)", context), context)
+    term = from_match(formula.match("(a -> b)", context))
     assert term.free_vars() == {}
 
 
@@ -178,8 +178,8 @@ def test_substitution_applies_binding(fopl):
 
     schema = from_pattern(mp.antecedents[1], context)  # (p -> q)
     binding = {
-        "p": from_match(formula.match("a", context), context),
-        "q": from_match(formula.match("(b -> a)", context), context),
+        "p": from_match(formula.match("a", context)),
+        "q": from_match(formula.match("(b -> a)", context)),
     }
 
     result = schema.substitute(binding, context)
@@ -199,20 +199,20 @@ def test_modus_ponens_checks_over_terms(fopl):
     deduction = from_pattern(mp.deduction, context)         # q
 
     binding = {
-        "p": from_match(formula.match("a", context), context),
-        "q": from_match(formula.match("b", context), context),
+        "p": from_match(formula.match("a", context)),
+        "q": from_match(formula.match("b", context)),
     }
 
-    line1 = from_match(formula.match("a", context), context)
-    line2 = from_match(formula.match("(a -> b)", context), context)
-    line3 = from_match(formula.match("b", context), context)
+    line1 = from_match(formula.match("a", context))
+    line2 = from_match(formula.match("(a -> b)", context))
+    line3 = from_match(formula.match("b", context))
 
     assert antecedent1.substitute(binding, context).equal(line1, context)
     assert antecedent2.substitute(binding, context).equal(line2, context)
     assert deduction.substitute(binding, context).equal(line3, context)
 
     # Negative control: the wrong conclusion does not check out.
-    wrong = from_match(formula.match("c", context), context)
+    wrong = from_match(formula.match("c", context))
     assert not deduction.substitute(binding, context).equal(wrong, context)
 
 
@@ -241,17 +241,17 @@ def test_equality_aligns_slots_by_position_not_label():
     (mp,) = [r for r in system.inference_rules if r.label == "MP"]
 
     schema = from_pattern(mp.antecedents[1], context)  # children keyed p, q
-    ground = from_match(formula.match("(a -> b)", context), context)  # keyed lhs, rhs
+    ground = from_match(formula.match("(a -> b)", context))  # keyed lhs, rhs
     assert set(schema.free_vars()) == {"p", "q"}
 
     binding = {
-        "p": from_match(formula.match("a", context), context),
-        "q": from_match(formula.match("b", context), context),
+        "p": from_match(formula.match("a", context)),
+        "q": from_match(formula.match("b", context)),
     }
     assert schema.substitute(binding, context).equal(ground, context)
 
     # And a genuinely different instance still compares unequal.
-    other = from_match(formula.match("(a -> c)", context), context)
+    other = from_match(formula.match("(a -> c)", context))
     assert not schema.substitute(binding, context).equal(other, context)
 
 
@@ -271,7 +271,7 @@ def test_definition_backed_union_match_keeps_structure():
     match = formula.match("a is a member of b", context)
     assert match.sort is not None  # matched via defined notation
 
-    term = from_match(match, context)
+    term = from_match(match)
     # Structure preserved and it still round-trips, with no stored definition.
     assert isinstance(term, Node)
     assert not hasattr(term, "definition")
@@ -330,17 +330,17 @@ def test_rich_system_roundtrips(rich, formula_string):
     match = formula.match(formula_string, context)
     assert match is not None, formula_string
 
-    term = from_match(match, context)
+    term = from_match(match)
     assert term.to_string() == match.string == formula_string
 
 
 def test_equality_distinguishes_constructors(rich):
     _system, context, formula = rich
 
-    conjunction = from_match(formula.match("(a ∧ b)", context), context)
-    implication = from_match(formula.match("(a → b)", context), context)
-    negation = from_match(formula.match("¬a", context), context)
-    atom = from_match(formula.match("a", context), context)
+    conjunction = from_match(formula.match("(a ∧ b)", context))
+    implication = from_match(formula.match("(a → b)", context))
+    negation = from_match(formula.match("¬a", context))
+    atom = from_match(formula.match("a", context))
 
     # Same children, different constructor -> not equal.
     assert not conjunction.equal(implication, context)
@@ -351,10 +351,10 @@ def test_equality_distinguishes_constructors(rich):
 def test_equality_is_deep(rich):
     _system, context, formula = rich
 
-    a = from_match(formula.match("¬(a → (b ∧ ¬c))", context), context)
-    b = from_match(formula.match("¬(a → (b ∧ ¬c))", context), context)
+    a = from_match(formula.match("¬(a → (b ∧ ¬c))", context))
+    b = from_match(formula.match("¬(a → (b ∧ ¬c))", context))
     # Differs only at the deepest leaf (c -> d).
-    c = from_match(formula.match("¬(a → (b ∧ ¬d))", context), context)
+    c = from_match(formula.match("¬(a → (b ∧ ¬d))", context))
 
     assert a.equal(b, context)
     assert not a.equal(c, context)
@@ -362,8 +362,8 @@ def test_equality_is_deep(rich):
 
 def test_repeated_subterm_is_not_confused_with_distinct(rich):
     _system, context, formula = rich
-    same = from_match(formula.match("(a → a)", context), context)
-    different = from_match(formula.match("(a → b)", context), context)
+    same = from_match(formula.match("(a → a)", context))
+    different = from_match(formula.match("(a → b)", context))
     assert not same.equal(different, context)
 
 
@@ -386,8 +386,8 @@ def test_parse_term_string_parse_is_idempotent(rich, formula_string):
     # exercises from_match, to_string, and equal together on deep trees.
     _system, context, formula = rich
 
-    first = from_match(formula.match(formula_string, context), context)
-    second = from_match(formula.match(first.to_string(), context), context)
+    first = from_match(formula.match(formula_string, context))
+    second = from_match(formula.match(first.to_string(), context))
     assert first.equal(second, context)
 
 
@@ -404,8 +404,8 @@ def test_nested_substitution_and_free_var_dedup(fopl):
     assert set(schema.free_vars()) == {"p", "q"}
 
     binding = {
-        "p": from_match(formula.match("a", context), context),
-        "q": from_match(formula.match("b", context), context),
+        "p": from_match(formula.match("a", context)),
+        "q": from_match(formula.match("b", context)),
     }
     result = schema.substitute(binding, context)
     assert result.to_string() == "(a -> (b -> a))"
@@ -418,7 +418,7 @@ def test_partial_substitution_leaves_unbound_variables(fopl):
 
     schema = from_pattern(mp.antecedents[1], context)  # (p -> q)
     partial = schema.substitute(
-        {"p": from_match(formula.match("a", context), context)}, context
+        {"p": from_match(formula.match("a", context))}, context
     )
 
     assert partial.to_string() == "(a -> q)"
@@ -434,15 +434,15 @@ def test_alpha_renaming_holds_at_depth():
 
     schema = from_pattern(mp.antecedents[1], context)  # (p -> q), keyed p/q
     binding = {
-        "p": from_match(formula.match("a", context), context),
-        "q": from_match(formula.match("(a -> b)", context), context),  # nested, keyed lhs/rhs
+        "p": from_match(formula.match("a", context)),
+        "q": from_match(formula.match("(a -> b)", context)),  # nested, keyed lhs/rhs
     }
     substituted = schema.substitute(binding, context)  # -> (a -> (a -> b))
 
-    ground = from_match(formula.match("(a -> (a -> b))", context), context)  # keyed lhs/rhs throughout
+    ground = from_match(formula.match("(a -> (a -> b))", context))  # keyed lhs/rhs throughout
     assert substituted.equal(ground, context)
 
-    other = from_match(formula.match("(a -> (a -> c))", context), context)
+    other = from_match(formula.match("(a -> (a -> c))", context))
     assert not substituted.equal(other, context)
 
 
@@ -457,7 +457,7 @@ def test_from_match_maps_variable_leaf_to_var():
     match = formula.match("phi", context)
     assert match is not None and match.is_variable
 
-    term = from_match(match, context)
+    term = from_match(match)
     assert isinstance(term, Var)
     assert term.name == "phi"
     assert term.sort.name == "formula"
@@ -467,8 +467,7 @@ def test_deeply_nested_terms_do_not_reparse(rich, monkeypatch):
     # The no-reparse guarantee holds for a deep tree, not just a shallow one.
     _system, context, formula = rich
     term = from_match(
-        formula.match("(((a → b) ∧ (b → c)) → (a → c))", context), context
-    )
+        formula.match("(((a → b) ∧ (b → c)) → (a → c))", context))
 
     calls = {"n": 0}
     for cls in (patterns.StringPattern, patterns.UnionPattern, patterns.RegexPattern):
@@ -503,7 +502,7 @@ def test_term_operations_never_reinvoke_the_matcher(set_theory, monkeypatch):
         monkeypatch.setattr(cls, "match", counting_match)
 
     # Parsing once naturally calls match().
-    term = from_match(formula.match("a is an element of b", context), context)
+    term = from_match(formula.match("a is an element of b", context))
     assert calls["n"] > 0
 
     # Every subsequent term operation walks the tree - zero re-parses.
@@ -525,7 +524,7 @@ def test_term_operations_never_reinvoke_the_matcher(set_theory, monkeypatch):
 def test_abstract_lifts_parameter_leaves_to_vars(fopl):
     # `(a -> b)` parsed ground, then abstract `a` into a variable p (leaving b).
     _system, context, formula = fopl
-    ground = from_match(formula.match("(a -> b)", context), context)
+    ground = from_match(formula.match("(a -> b)", context))
     assert ground.free_vars() == {}
 
     atom = formula.patterns[0]  # the `atom` regex sort
@@ -537,7 +536,7 @@ def test_abstract_lifts_parameter_leaves_to_vars(fopl):
     # And it now behaves as a schema: matching binds the lifted variable.
     from website.logical.kernel import match
 
-    binding = match(schema, from_match(formula.match("(c -> b)", context), context), context)
+    binding = match(schema, from_match(formula.match("(c -> b)", context)), context)
     assert binding is not None and binding["a"].to_string() == "c"
 
 
@@ -546,15 +545,15 @@ def test_abstract_preserves_nested_structure(fopl):
     _system, context, formula = fopl
     atom = formula.patterns[0]
     schema = abstract(
-        from_match(formula.match("(a -> (b -> a))", context), context),
+        from_match(formula.match("(a -> (b -> a))", context)),
         {"a": atom, "b": atom},
     )
     assert set(schema.free_vars()) == {"a", "b"}
     # Substituting the variables back reproduces a concrete nested formula.
     reified = schema.substitute(
         {
-            "a": from_match(formula.match("x", context), context),
-            "b": from_match(formula.match("y", context), context),
+            "a": from_match(formula.match("x", context)),
+            "b": from_match(formula.match("y", context)),
         },
         context,
     )
@@ -568,7 +567,7 @@ def test_bind_lifts_named_leaves_to_abstract_bound_nodes(fopl):
     atom = formula.patterns[0]
     b0 = Bound(0, atom)
 
-    schema = bind(from_match(formula.match("(a -> a)", context), context), {"a": b0})
+    schema = bind(from_match(formula.match("(a -> a)", context)), {"a": b0})
 
     # Both occurrences of `a` collapse to the *same* abstract node.
     children = list(schema.children.values())
@@ -587,10 +586,10 @@ def test_bound_instantiates_via_substitution(fopl):
     _system, context, formula = fopl
     atom = formula.patterns[0]
     b0 = Bound(0, atom)
-    schema = bind(from_match(formula.match("(a -> a)", context), context), {"a": b0})
+    schema = bind(from_match(formula.match("(a -> a)", context)), {"a": b0})
 
     # Recover the binder's concrete name by matching against a ground formula...
-    binding = match(schema, from_match(formula.match("(c -> c)", context), context), context)
+    binding = match(schema, from_match(formula.match("(c -> c)", context)), context)
     assert binding is not None
     # ...then substituting that binding instantiates every occurrence uniformly.
     assert schema.substitute(binding, context).to_string() == "(c -> c)"

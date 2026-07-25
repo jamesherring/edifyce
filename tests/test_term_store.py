@@ -87,7 +87,7 @@ def system_row(session):
 
 def term_of(context, formula_string):
     formula = context.variables["formula"]
-    return from_match(formula.match(formula_string, context), context)
+    return from_match(formula.match(formula_string, context))
 
 
 # ---------------------------------------------------------------------------
@@ -300,8 +300,8 @@ def test_defined_nodes_reload_with_their_stored_sort(session):
     context.variables.update(engine_system.build_context.variables)
     formula = context.variables["formula"]
 
-    as_formula = from_match(formula.match("x ⋈ y", context), context)
-    as_term = from_match(formula.match("x ⋈ y ∈ z", context), context).children["s"]
+    as_formula = from_match(formula.match("x ⋈ y", context))
+    as_term = from_match(formula.match("x ⋈ y ∈ z", context)).children["s"]
     assert (as_formula.sort.name, as_term.sort.name) == ("formula", "term")
 
     system = FormalSystem(name="DUP", slug="dup")

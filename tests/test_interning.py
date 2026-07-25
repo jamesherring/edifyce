@@ -53,7 +53,7 @@ def term(fopl, string):
     _system, context, formula = fopl
     matched = formula.match(string, context)
     assert matched is not None, string
-    return from_match(matched, context)
+    return from_match(matched)
 
 
 # ---------------------------------------------------------------------------

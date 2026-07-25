@@ -166,7 +166,7 @@ class Definition:
             matched = sort.match(text, context)
             if matched is None:
                 raise ValueError(f"Definition form {text!r} does not parse as '{sort.name}'.")
-            term = abstract(from_match(matched, context), variables)
+            term = abstract(from_match(matched), variables)
             if abstract_binders and bound_nodes:
                 term = bind(term, bound_nodes)
             return term
@@ -296,7 +296,7 @@ def _resolve_bound_names(
         matched = sort.match(chosen, context)
         if matched is None:
             return None
-        resolved[_bound_label(index)] = from_match(matched, context)
+        resolved[_bound_label(index)] = from_match(matched)
     return resolved
 
 

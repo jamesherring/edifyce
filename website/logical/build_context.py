@@ -137,7 +137,7 @@ def compose_schema_term(pattern: Pattern, context: FormalSystemContext) -> Term 
         if isinstance(candidate, UnionPattern):
             match = candidate.match(pattern.pattern, parse_context)
             if match is not None:
-                return revariabilise(from_match(match, parse_context), context.string_variables)
+                return revariabilise(from_match(match), context.string_variables)
 
     return None
 

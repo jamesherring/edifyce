@@ -55,6 +55,7 @@ from ..matching.patterns import UnionPattern
 # Reuse the *same* constructor identity and slot alignment that Term.equal uses,
 # so matching and equality stay defined against one source of truth. Both are now
 # fields on the constructor rather than walks over a template (see constructors).
+from .constructors import constructor_for
 from .terms import Var
 
 if TYPE_CHECKING:
@@ -161,15 +162,25 @@ def _sort_admits(sort: Pattern, term: Term, context: Context) -> bool:
     sort (an ``atom``-sorted variable must not capture an ``implication``).
     """
     term_sort = _term_sort(term)
-    if sort.equivalent(term_sort, context, allow_mapping_to=True):
-        return True
-    if isinstance(sort, UnionPattern) and sort.contains_pattern(
-        term_sort, context, allow_nested=True
-    ):
+
+    # Memoised per (sort, term sort): the answer is a property of the grammar,
+    # which does not change once the system is built, but deriving it walks the
+    # pattern lattice twice over - and a variable binds against the same pair on
+    # every rule check. The memo lives on the sort's constructor, so it is
+    # reclaimed with the grammar (see constructors.Constructor.admits).
+    memo = constructor_for(sort).admits
+    cached = memo.get(term_sort)
+    if cached is not None:
+        return cached
+
+    admitted = sort.equivalent(term_sort, context, allow_mapping_to=True) or (
         # `term_sort` is one of the union's (possibly nested) branches, e.g. an
         # `implication` is admitted where a `formula` is expected.
-        return True
-    return False
+        isinstance(sort, UnionPattern)
+        and sort.contains_pattern(term_sort, context, allow_nested=True)
+    )
+    memo[term_sort] = admitted
+    return admitted
 
 
 def _term_sort(term: Term) -> Pattern:

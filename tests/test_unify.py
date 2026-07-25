@@ -97,7 +97,7 @@ def term(formula, context, string):
     """Parse a formula string into a ground term."""
     matched = formula.match(string, context)
     assert matched is not None, string
-    return from_match(matched, context)
+    return from_match(matched)
 
 
 # ---------------------------------------------------------------------------

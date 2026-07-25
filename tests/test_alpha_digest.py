@@ -67,7 +67,7 @@ def context():
 
 def term_of(context, formula_string):
     formula = context.variables["formula"]
-    return from_match(formula.match(formula_string, context), context)
+    return from_match(formula.match(formula_string, context))
 
 
 def alpha_of(context, formula_string):

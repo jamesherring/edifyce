@@ -105,6 +105,13 @@ class Constructor:
         # having slots: a declared variable that never appears in the template
         # occupies no slot. Schema projection distinguishes the two.
         self.has_declared_variables: bool = has_declared_variables
+        # Memo for this production *used as a sort*: which other sorts it admits
+        # (see unify._sort_admits). Answering that means walking the pattern
+        # lattice - structural equivalence, then nested union membership - which
+        # is the same walk for the same pair every time a variable binds. Keyed by
+        # the sort pattern itself, and living on this constructor, so it shares the
+        # grammar's lifetime and is reclaimed with it.
+        self.admits: dict[Pattern, bool] = {}
 
     @property
     def denotes_constant(self) -> bool:
