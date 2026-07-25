@@ -102,6 +102,6 @@ def test_topological_order_of_independent_nodes_contains_them_all():
 # `app/routers/proofs.py` catches CycleError to reject a circular reference
 # closure, so the raise is contract, not incidental.
 @pytest.mark.parametrize("cyclic", [{"a": ["b"], "b": ["a"]}, {"a": ["a"]}])
-def test_topological_order_raises_on_a_cycle(cyclic):
+def test_topological_order_raises_on_a_cycle(cyclic: dict[str, list[str]]) -> None:
     with pytest.raises(CycleError):
         topological_order(cyclic)

@@ -8,9 +8,12 @@ from pydantic import ValidationError
 
 from app.schemas import (
     HealthResponse,
+    LineBehaviour,
+    LineScope,
     ProofVerifyRequest,
     VerifyProofResponse,
 )
+from website.logical.declarative import _LINE_BEHAVIOURS, _LINE_SCOPES
 
 
 # ---------------------------------------------------------------------------
@@ -62,19 +65,11 @@ def test_verify_response_holds_proof_data():
 # API's must move with it rather than silently drift.
 
 
-def test_line_behaviour_matches_the_declarative_vocabulary():
-    from website.logical.declarative import _LINE_BEHAVIOURS
-
-    from app.schemas import LineBehaviour
-
+def test_line_behaviour_matches_the_declarative_vocabulary() -> None:
     assert set(get_args(LineBehaviour)) == set(_LINE_BEHAVIOURS)
 
 
-def test_line_scope_matches_the_declarative_vocabulary():
-    from website.logical.declarative import _LINE_SCOPES
-
-    from app.schemas import LineScope
-
+def test_line_scope_matches_the_declarative_vocabulary() -> None:
     # `_LINE_SCOPES` carries None for "opens no scope"; the API expresses that as
     # an absent/null field rather than a member of the literal.
     assert set(get_args(LineScope)) == {s for s in _LINE_SCOPES if s is not None}
