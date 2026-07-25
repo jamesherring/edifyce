@@ -23,7 +23,13 @@ near-English surface syntax are all representable without the kernel knowing
 about any of them.
 """
 
-from .definitions import Definition, check_definitional_step, unfold
+from .definitions import (
+    Definition,
+    check_definitional_step,
+    introduced_leaves,
+    unbound_parameters,
+    unfold,
+)
 from .side_conditions import (
     And,
     DisjointLeaves,
@@ -59,7 +65,9 @@ __all__ = [
     "from_match",
     "from_pattern",
     "intern",
+    "introduced_leaves",
     "match",
     "match_all",
+    "unbound_parameters",
     "unfold",
 ]
