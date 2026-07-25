@@ -338,8 +338,10 @@ def test_unrelated_malformed_regex_sort_does_not_reach_the_gate():
 
 
 def formulae(system, *lines):
+    # The parsed lines' kernel terms - what `follows_by_definition` takes, and
+    # what a proof line carries: the projection happens during parsing.
     proof = system.parse("\n".join(f"{line} [HYP]" for line in lines))
-    return proof, [pl.formula for pl in proof.proof_lines]
+    return proof, [pl.formula_term for pl in proof.proof_lines]
 
 
 def test_alias_unfold_accepted_both_directions(alias_system):

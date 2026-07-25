@@ -8,11 +8,10 @@ from typing import TYPE_CHECKING
 
 from ..graphs import saturating_matching
 from ..kernel.side_conditions import Not, Occurs
-from ..kernel.terms import from_match
-from ..matching import Match
 from .definitions import follows_by_definition
 
 if TYPE_CHECKING:
+    from ..kernel.terms import Term
     from ..matching.context import Context
     from ..matching.definitions import Definition
     from .rules import InferenceRule
@@ -78,17 +77,17 @@ class Subproof:
         # The subproof's result: its last formula-bearing logical line.
         for line in reversed(self.lines):
             if line.line_type is not None and line.line_type.behaviour == "logical" \
-                    and line.formula is not None:
+                    and line.formula_term is not None:
                 return line
         return None
 
     @property
-    def eigenvariable(self) -> Match | None:
+    def eigenvariable(self) -> Term | None:
         # The fresh variable a "variable" subproof introduces (its opener's
-        # formula match), or None for other kinds.
+        # formula term), or None for other kinds.
         if self.kind != "variable" or self.assumption is None:
             return None
-        return self.assumption.formula
+        return self.assumption.formula_term
 
     def is_ancestor_of(self, other: Subproof | None) -> bool:
         # Whether this subproof encloses `other` (reflexively).
@@ -117,20 +116,19 @@ class Subproof:
         # structurally on kernel terms via the closed side-condition algebra
         # (kernel.side_conditions) - the graph representation, not strings. This
         # is the algebra's own worked example: Not(Occurs("x", "phi")).
-        eigenvariable = self.eigenvariable
-        if eigenvariable is None:
+        eigenvariable_term = self.eigenvariable
+        if eigenvariable_term is None:
             return False
 
-        eigenvariable_term = from_match(eigenvariable, context)
         fresh = Not(Occurs("eigenvariable", "hypothesis"))
 
         for assumption in self.enclosing_assumptions():
-            if assumption.formula is None:
+            if assumption.formula_term is None:
                 continue
 
             binding = {
                 "eigenvariable": eigenvariable_term,
-                "hypothesis": from_match(assumption.formula, context),
+                "hypothesis": assumption.formula_term,
             }
             if not fresh.check(binding, context):
                 return False
@@ -469,10 +467,14 @@ class Proof:
             # Easy case
             return True
 
-        if proof_line.formula is None:
-            # No formula
+        if proof_line.formula_term is None:
+            # No formula. Parsing may already have said something more specific -
+            # that the formula was there but could not be projected into a term
+            # (see FormalSystem.parse) - so don't flatten that to the generic
+            # message.
             proof_line.valid = False
-            proof_line.invalid_message = "No formula defined for logical line."
+            if proof_line.invalid_message is None:
+                proof_line.invalid_message = "No formula defined for logical line."
             return False
 
         # Get the reference
@@ -737,7 +739,7 @@ class Proof:
         # non-logical citation is a clean invalid line, not an AttributeError
         # inside follows_from_definition (which dereferences line_type.behaviour).
         if source.line_type is None or source.line_type.behaviour != "logical" \
-                or source.formula is None:
+                or source.formula_term is None:
             proof_line.valid = False
             proof_line.invalid_message = f"Line {source.number} is not a formula line."
             return False
@@ -834,14 +836,19 @@ class ProofLine:
         # None for a line no citation can reach: a blank line or commentary.
         self.number = None
 
-        # The formula match (if any) on this line
-        self.formula = None
+        # The line's formula as a kernel term, projected during parsing (see
+        # FormalSystem.parse). This is what every check runs on: rule
+        # unification, side-conditions, definitional steps. None for a line that
+        # declares no formula field, or whose field is absent from the parse.
+        self.formula_term = None
+
+        # The formula's surface string, kept beside the term because the
+        # string-rewriting rule path (semi-Thue systems like MIU) matches on
+        # flat text rather than structure - see InferenceRule._string_pairs.
+        self.formula_string = None
 
         # The LineType used for this line
         self.line_type = None
-
-        # The match with the line type pattern
-        self.match = None
 
         # The indentation of this line
         self.indent = len(self.text) - len(self.text.lstrip())
@@ -892,7 +899,13 @@ class ProofLine:
                 # the duration of its subproof, a fresh variable is simply
                 # introduced. Neither asserts anything until a discharge rule
                 # consumes the subproof, so there is nothing to justify here.
-                self.valid = True
+                #
+                # "Nothing to justify" is not "nothing can be wrong", though: if
+                # parsing already rejected the line (its formula would not
+                # project), granting it anyway would hide the fault here and
+                # surface it as an unexplained discharge failure further down.
+                if self.invalid_message is None:
+                    self.valid = True
             else:
                 # Logical lines for parsing
                 self.proof.check_logical_line(self, context)
@@ -923,10 +936,10 @@ class ProofLine:
             # Must be logical lines
             return False
 
-        if self.formula is None or other.formula is None:
+        if self.formula_term is None or other.formula_term is None:
             return False
 
-        return follows_by_definition(self.formula, other.formula, definition, context)
+        return follows_by_definition(self.formula_term, other.formula_term, definition, context)
 
     def data(self):
         # Get data for this proof line

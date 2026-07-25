@@ -18,7 +18,6 @@ pytest.importorskip("regex")
 from copy import copy
 
 from website.logical.declarative import SystemSpec, build_system
-from website.logical.kernel import from_match
 from website.logical.kernel.terms import _signature
 from tests.spec_helpers import brackets, regex_prod, rule as rule_spec, statement_line, template_prod
 
@@ -83,10 +82,7 @@ def test_schema_term_matches_a_parsed_formula_of_the_same_shape(hilbert):
     # unification can even begin (the old flat projection differed here).
     k = rule(hilbert, "K")
     schema = k._schema_term(k.deduction, 0, copy(hilbert.context))
-    instance = from_match(
-        hilbert.parse("(a → ((a → a) → a)) [K]").proof_lines[0].formula,
-        copy(hilbert.context),
-    )
+    instance = hilbert.parse("(a → ((a → a) → a)) [K]").proof_lines[0].formula_term
     assert _signature(schema.pattern) == _signature(instance.pattern)
 
 

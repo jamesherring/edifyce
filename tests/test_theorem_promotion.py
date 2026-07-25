@@ -7,11 +7,12 @@ provisos — *without* being minted as a persisted rule per theorem.
 
 The tests cover three things:
 
-1. **Mechanism (graph, not string).** Promotion is a kernel-term operation:
-   ``from_match`` the proved conclusion to a ground term, ``revariabilise`` the
-   named leaves to sort-widened ``Var``s, and hang the term on a schema shell. No
-   match-to-pattern string round-trip. The ephemeral rule checks through the real
-   ``InferenceRule.check`` → ``_term_binding`` → ``match_all`` path.
+1. **Mechanism (graph, not string).** Promotion is a kernel-term operation: take
+   the proved conclusion's ground term (a proof line carries one, projected when
+   it was parsed), ``revariabilise`` the named leaves to sort-widened ``Var``s,
+   and hang the term on a schema shell. No match-to-pattern string round-trip. The
+   ephemeral rule checks through the real ``InferenceRule.check`` →
+   ``_term_binding`` → ``match_all`` path.
 
 2. **The wired citation path.** ``FormalSystem.promote`` registers a theorem in
    its own namespace (not ``inference_rules``); ``Proof.get_reference`` resolves a
@@ -53,7 +54,6 @@ from website.logical.build_context import revariabilise
 from website.logical.promotion import promote_from_source
 from website.logical.declarative import LinePart, LineSpec, SystemSpec, build_system
 from website.logical.formal_system.promotion import PromotedTheorem
-from website.logical.kernel.terms import from_match
 from website.logical.matching.patterns import StringPattern
 
 
@@ -123,8 +123,7 @@ def closed_spec(leading_productions=()) -> SystemSpec:
 def promote_proved_leaf(system, proof, generalise: str, sort_name: str) -> PromotedTheorem:
     """Graph route: build a zero-premise theorem from a *proved* line by
     generalising a named leaf to a sort-widened Var. No string round-trip."""
-    context = copy(system.context)
-    ground_term = from_match(proof.proof_lines[-1].formula, context)
+    ground_term = proof.proof_lines[-1].formula_term
 
     sort = system.build_context.variables[sort_name]
     schema_term = revariabilise(ground_term, {generalise: sort})
@@ -148,7 +147,7 @@ def test_promotion_is_a_graph_generalisation():
     proof = system.parse(SELF_IMPLICATION_PROOF)
     assert proof.valid is True
 
-    ground = from_match(proof.proof_lines[-1].formula, copy(system.context))
+    ground = proof.proof_lines[-1].formula_term
     assert ground.free_vars() == {}, "proved conclusion starts fully ground"
 
     theorem = promote_proved_leaf(system, proof, generalise="a", sort_name="formula")

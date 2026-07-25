@@ -84,7 +84,6 @@ from typing import TYPE_CHECKING
 from ..kernel import (
     Definition,
     check_definitional_step,
-    from_match,
     introduced_leaves,
     unbound_parameters,
 )
@@ -93,9 +92,9 @@ from ..kernel.terms import Node
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from ..kernel.terms import Term
     from ..matching.context import Context
     from ..matching.definitions import Definition as MatchingDefinition
-    from ..matching.matches import Match
 
 
 class DefinitionError(Exception):
@@ -235,7 +234,7 @@ def denotes_a_constant(kernel_def: Definition) -> bool:
 
 
 def follows_by_definition(
-    before: Match, after: Match, legacy: MatchingDefinition, context: Context
+    before: Term, after: Term, legacy: MatchingDefinition, context: Context
 ) -> bool:
     """Whether ``before`` and ``after`` are one definitional unfold apart under
     ``legacy``, checked over kernel terms in either direction.
@@ -257,6 +256,4 @@ def follows_by_definition(
             f"reached a proof without it."
         )
 
-    return check_definitional_step(
-        from_match(before, context), from_match(after, context), legacy.kernel, context
-    )
+    return check_definitional_step(before, after, legacy.kernel, context)

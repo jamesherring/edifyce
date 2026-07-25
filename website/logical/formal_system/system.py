@@ -2,6 +2,7 @@
 
 from copy import copy
 
+from ..kernel.terms import from_match
 from ..matching import Context, Match, Pattern, StringPattern, UnionPattern
 from .promotion import PromotedTheorem
 from .proof import Proof
@@ -134,7 +135,6 @@ class FormalSystem:
 
                 # Record the line_type of this line
                 proof_line.line_type = line_type
-                proof_line.match = result
 
                 # Project the line type's declared formula/reference fields off
                 # the match. (`label`, `display` and axiom-marking are handled by
@@ -143,23 +143,40 @@ class FormalSystem:
                 # defined since the accessor-function syntax was removed.)
                 if line_type.formula_field is not None:
                     # The logical formula is the sub-field the line type declares
-                    # (or the whole match, for `formula: self`).
+                    # (or the whole match, for `formula: self`). Project it into a
+                    # kernel term *here*, while the match is still in hand: the
+                    # term is what every later check runs on, and the match itself
+                    # does not outlive this loop body.
                     try:
                         formula = _line_field(result, line_type.formula_field)
-                        # It has to be a match
-                        if type(formula) is Match:
-                            proof_line.formula = formula
-                    except Exception:
-                        pass
+                    except KeyError:
+                        # The line type names a field this line has no sub-match
+                        # for: the line simply carries no formula.
+                        formula = None
+
+                    if formula is not None:
+                        proof_line.formula_string = formula.string
+                        try:
+                            proof_line.formula_term = from_match(formula, context)
+                        except Exception as exc:
+                            # The parse produced a shape the term layer cannot
+                            # read. That used to surface as a raise out of the
+                            # whole parse, from whichever rule check projected it
+                            # first; failing the one line names where the problem
+                            # is and lets the rest of the proof still report.
+                            proof_line.valid = False
+                            proof_line.invalid_message = f"Could not read the formula on this line: {exc}"
 
                 if line_type.reference_field is not None:
                     # The citation reference is the declared sub-field.
                     try:
                         reference_match = _line_field(result, line_type.reference_field)
+                    except KeyError:
+                        reference_match = None
+
+                    if reference_match is not None:
                         proof_line.reference_string = reference_match.string
                         proof_line.reference_string_display = reference_match.string
-                    except Exception:
-                        pass
 
                 # No need to check other line types
                 break
