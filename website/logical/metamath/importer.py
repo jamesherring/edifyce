@@ -312,8 +312,7 @@ def _reject_forward_citations(
     # translate to a line the kernel happily checks against a grammar that was
     # built from the whole database. Enforce the ordering on the proof table
     # itself, where it covers syntax and logic alike.
-    position = {label: index for index, label in enumerate(database.order)}
-    limit = position[assertion.label]
+    limit = database.position(assertion.label)
 
     for label in labels:
         if label in database.hypotheses:
@@ -324,12 +323,11 @@ def _reject_forward_citations(
                 )
             continue
 
-        cited = position.get(label)
-        if cited is None:
+        if label not in database.assertions:
             raise MetamathError(
                 f"{assertion.label}: proof cites unknown label {label!r}."
             )
-        if cited >= limit:
+        if database.position(label) >= limit:
             raise MetamathError(
                 f"{assertion.label}: proof cites {label!r}, which is declared later "
                 "- a proof may only use what precedes it."
