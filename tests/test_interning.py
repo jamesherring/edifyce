@@ -126,7 +126,7 @@ def test_equal_still_holds_for_uninterned_terms(fopl):
 def test_substitution_result_is_interned(fopl):
     system, context, formula = fopl
     implication = system.build_context.variables["implication"]
-    schema = Node(constructor_for(implication), {"p": Var("p", formula), "q": Var("q", formula)})
+    schema = Node(constructor_for(implication), {"p": Var("p", constructor_for(formula)), "q": Var("q", constructor_for(formula))})
 
     reified = schema.substitute(
         {"p": term(fopl, "a"), "q": term(fopl, "b")}, context
@@ -178,7 +178,7 @@ def test_different_constructors_are_not_merged(fopl):
     # ...and equal ignores the constructor identity, still calling them equal.
     assert node_schema.equal(node_production, context)
     # A formula variable therefore still binds to the parsed production node.
-    assert match(Var("phi", formula), node_production, context) is not None
+    assert match(Var("phi", constructor_for(formula)), node_production, context) is not None
 
 
 def test_defined_notation_interns_like_a_production():

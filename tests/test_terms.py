@@ -163,7 +163,7 @@ def test_schema_exposes_free_vars(fopl):
     system, context, _formula = fopl
     (mp,) = [r for r in system.inference_rules if r.label == "MP"]
 
-    schema = from_pattern(mp.antecedents[1], context)  # (p -> q)
+    schema = from_pattern(mp.antecedents[1])  # (p -> q)
     assert set(schema.free_vars()) == {"p", "q"}
 
 
@@ -176,7 +176,7 @@ def test_substitution_applies_binding(fopl):
     system, context, formula = fopl
     (mp,) = [r for r in system.inference_rules if r.label == "MP"]
 
-    schema = from_pattern(mp.antecedents[1], context)  # (p -> q)
+    schema = from_pattern(mp.antecedents[1])  # (p -> q)
     binding = {
         "p": from_match(formula.match("a", context)),
         "q": from_match(formula.match("(b -> a)", context)),
@@ -194,9 +194,9 @@ def test_modus_ponens_checks_over_terms(fopl):
     system, context, formula = fopl
     (mp,) = [r for r in system.inference_rules if r.label == "MP"]
 
-    antecedent1 = from_pattern(mp.antecedents[0], context)  # p
-    antecedent2 = from_pattern(mp.antecedents[1], context)  # (p -> q)
-    deduction = from_pattern(mp.deduction, context)         # q
+    antecedent1 = from_pattern(mp.antecedents[0])  # p
+    antecedent2 = from_pattern(mp.antecedents[1])  # (p -> q)
+    deduction = from_pattern(mp.deduction)         # q
 
     binding = {
         "p": from_match(formula.match("a", context)),
@@ -240,7 +240,7 @@ def test_equality_aligns_slots_by_position_not_label():
     formula = system.build_context.variables["formula"]
     (mp,) = [r for r in system.inference_rules if r.label == "MP"]
 
-    schema = from_pattern(mp.antecedents[1], context)  # children keyed p, q
+    schema = from_pattern(mp.antecedents[1])  # children keyed p, q
     ground = from_match(formula.match("(a -> b)", context))  # keyed lhs, rhs
     assert set(schema.free_vars()) == {"p", "q"}
 
@@ -372,7 +372,7 @@ def test_from_pattern_bare_sort_antecedent_is_var(rich):
     (rule,) = [r for r in system.inference_rules if r.label == "ANY"]
 
     # The antecedent is written as the bare sort `formula` - i.e. "any formula".
-    antecedent = from_pattern(rule.antecedents[0], context)
+    antecedent = from_pattern(rule.antecedents[0])
     assert isinstance(antecedent, Var)
     assert antecedent.sort.name == "formula"
 
@@ -398,8 +398,8 @@ def test_nested_substitution_and_free_var_dedup(fopl):
     _system, context, formula = fopl
     implication = formula.patterns[-1]  # the `implication` production
 
-    inner = Node(constructor_for(implication), {"p": Var("q", formula), "q": Var("p", formula)})
-    schema = Node(constructor_for(implication), {"p": Var("p", formula), "q": inner})
+    inner = Node(constructor_for(implication), {"p": Var("q", constructor_for(formula)), "q": Var("p", constructor_for(formula))})
+    schema = Node(constructor_for(implication), {"p": Var("p", constructor_for(formula)), "q": inner})
 
     assert set(schema.free_vars()) == {"p", "q"}
 
@@ -416,7 +416,7 @@ def test_partial_substitution_leaves_unbound_variables(fopl):
     system, context, formula = fopl
     (mp,) = [r for r in system.inference_rules if r.label == "MP"]
 
-    schema = from_pattern(mp.antecedents[1], context)  # (p -> q)
+    schema = from_pattern(mp.antecedents[1])  # (p -> q)
     partial = schema.substitute(
         {"p": from_match(formula.match("a", context))}, context
     )
@@ -432,7 +432,7 @@ def test_alpha_renaming_holds_at_depth():
     formula = system.build_context.variables["formula"]
     (mp,) = [r for r in system.inference_rules if r.label == "MP"]
 
-    schema = from_pattern(mp.antecedents[1], context)  # (p -> q), keyed p/q
+    schema = from_pattern(mp.antecedents[1])  # (p -> q), keyed p/q
     binding = {
         "p": from_match(formula.match("a", context)),
         "q": from_match(formula.match("(a -> b)", context)),  # nested, keyed lhs/rhs
@@ -527,7 +527,7 @@ def test_abstract_lifts_parameter_leaves_to_vars(fopl):
     ground = from_match(formula.match("(a -> b)", context))
     assert ground.free_vars() == {}
 
-    atom = formula.patterns[0]  # the `atom` regex sort
+    atom = constructor_for(formula.patterns[0])  # the `atom` regex sort
     schema = abstract(ground, {"a": atom})
 
     assert set(schema.free_vars()) == {"a"}
@@ -543,7 +543,7 @@ def test_abstract_lifts_parameter_leaves_to_vars(fopl):
 def test_abstract_preserves_nested_structure(fopl):
     # Unlike from_pattern (one production level), abstract keeps a nested tree.
     _system, context, formula = fopl
-    atom = formula.patterns[0]
+    atom = constructor_for(formula.patterns[0])
     schema = abstract(
         from_match(formula.match("(a -> (b -> a))", context)),
         {"a": atom, "b": atom},
@@ -565,7 +565,7 @@ def test_bind_lifts_named_leaves_to_abstract_bound_nodes(fopl):
     # indexed Bound node - and a Bound is bound, not free.
     _system, context, formula = fopl
     atom = formula.patterns[0]
-    b0 = Bound(0, atom)
+    b0 = Bound(0, constructor_for(atom))
 
     schema = bind(from_match(formula.match("(a -> a)", context)), {"a": b0})
 
@@ -585,7 +585,7 @@ def test_bound_instantiates_via_substitution(fopl):
 
     _system, context, formula = fopl
     atom = formula.patterns[0]
-    b0 = Bound(0, atom)
+    b0 = Bound(0, constructor_for(atom))
     schema = bind(from_match(formula.match("(a -> a)", context)), {"a": b0})
 
     # Recover the binder's concrete name by matching against a ground formula...

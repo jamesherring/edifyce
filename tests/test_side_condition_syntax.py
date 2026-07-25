@@ -8,7 +8,16 @@ pytest.importorskip("regex")
 
 from website.logical.declarative import LineSpec, SystemSpec, build_spec, build_system
 from website.logical.formal_system.side_condition_syntax import parse_side_condition
-from website.logical.kernel import DisjointLeaves, Equal, IsAtom, IsMember, Not, Occurs, Or
+from website.logical.kernel import (
+    DisjointLeaves,
+    Equal,
+    IsAtom,
+    IsMember,
+    Not,
+    Occurs,
+    Or,
+    constructor_for,
+)
 from tests.spec_helpers import regex_prod, rule
 
 
@@ -55,7 +64,7 @@ def test_not_negates(context):
 
 
 def test_disjoint_without_and_with_sort(context):
-    setvar = context.variables["setvar"]
+    setvar = constructor_for(context.variables["setvar"])
     assert parse_side_condition("disjoint(x, y)", context) == DisjointLeaves("x", "y", None)
     assert parse_side_condition("disjoint(x, phi, setvar)", context) == DisjointLeaves(
         "x", "phi", setvar
@@ -63,13 +72,13 @@ def test_disjoint_without_and_with_sort(context):
 
 
 def test_atom_without_and_with_sort(context):
-    setvar = context.variables["setvar"]
+    setvar = constructor_for(context.variables["setvar"])
     assert parse_side_condition("atom(x)", context) == IsAtom("x", None)
     assert parse_side_condition("atom(x, setvar)", context) == IsAtom("x", setvar)
 
 
 def test_member_requires_a_sort(context):
-    setvar = context.variables["setvar"]
+    setvar = constructor_for(context.variables["setvar"])
     assert parse_side_condition("member(x, setvar)", context) == IsMember("x", setvar)
 
 

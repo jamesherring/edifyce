@@ -47,6 +47,7 @@ from .formal_system.definitions import (
     denotes_a_constant,
 )
 from .formal_system.side_condition_syntax import parse_side_condition
+from .kernel.constructors import project_grammar
 from .matching import AtomPattern, Pattern, RegexPattern, StringPattern, UnionPattern
 
 
@@ -471,6 +472,16 @@ def build_system(spec: SystemSpec) -> FormalSystem:
             if prod.sort == sort:
                 union.patterns.append(ctx.variables[prod.name])
 
+    # 4a. Project the grammar to its kernel constructors, now that the unions are
+    # complete. Everything from here on builds terms, and a term's sort is a
+    # constructor: a union projected while still empty would be linked with no
+    # branches and would admit nothing but itself thereafter. Done explicitly so
+    # the moment is chosen, rather than falling out of whichever term is built
+    # first (see kernel.constructors.project_grammar).
+    # `ctx.variables` is the whole build namespace, which also holds referenced
+    # systems; only the productions are projectable.
+    project_grammar(p for p in ctx.variables.values() if isinstance(p, Pattern))
+
     # 5. Lines: a statement pattern + logical line type per declared line. Each
     # line's inline parts are registered just before it is built (see step 1).
     if spec.lines:
@@ -482,9 +493,24 @@ def build_system(spec: SystemSpec) -> FormalSystem:
             # atom constant is left unregistered in step 1.
             line_register = unregistered if line.behaviour == "comment" else register
             for part in line.parts:
-                ctx.variables[part.name] = line_register(
+                built = line_register(
                     RegexPattern(name=part.name, pattern=_anchor(part.regex))
                 )
+                # Two lines may declare the same part name with *different*
+                # regexes, and each must keep its own — that is what the rebind
+                # is for. Declaring the identical part twice is not that case,
+                # and must not mint a second object: productions are canonical
+                # (one object per production, so sort identity decides sort
+                # equality — see kernel.constructors.Constructor.admits), and two
+                # equivalent-but-distinct patterns would break it.
+                previous = ctx.variables.get(part.name)
+                if (
+                    isinstance(previous, RegexPattern)
+                    and previous.pattern == built.pattern
+                    and previous.respect_brackets == built.respect_brackets
+                ):
+                    built = previous
+                ctx.variables[part.name] = built
             _build_line(line, sorts, ctx, system, line_register)
 
     # 6. Axioms -> axiom-behaviour line types.
@@ -672,6 +698,29 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
     notation = union.add_notation(defn.higher, context_copy)
     system.context.definitions.add(notation)
 
+    # Whether the sort actually parses the defined form through *this* notation.
+    # A sort tries its own productions before its notations, so a form the grammar
+    # already spells (`Define x ∈ y as ...`) parses to a declared production and
+    # never reaches here. Asked of the registered notation rather than of the
+    # grammar-before-it, because two definitions may share one defined form: the
+    # second finds the first's notation, which is the same production and still
+    # its own leaf.
+    matched = union.match(defn.higher, system.context)
+    parses_to_its_own_leaf = matched is not None and matched.pattern is notation.template
+
+    # A nullary defined form is a new ground leaf of the grammar that no production
+    # declared a role for, so the build settles its role here: the leaf abbreviates
+    # one fixed term, and a *later* definition may introduce it exactly as it may a
+    # declared constant (`T ≝ S` layers on `S ≝ ⊥`).
+    #
+    # Settled *before* the kernel definition is built, not after, because building
+    # it projects this template to a constructor and a constructor snapshots the
+    # declaration. Safe in both directions: the definition's own leaf is always
+    # among its defined form's, so `introduced_leaves` never puts it to the
+    # constants check during this build, and a build that goes on to fail discards
+    # the notation with the rest of the half-built system.
+    notation.template.denotes_constant = denotes_a_constant(notation, parses_to_its_own_leaf)
+
     # Build the kernel counterpart now, against the context the notation has just
     # entered — a definition's *defined* form is grammatical only because its
     # notation is registered, so this must follow the add. `system.context` is
@@ -694,12 +743,6 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
         raise DeclarativeError(str(exc)) from exc
 
     system.add_definition(kernel_definition)
-
-    # A nullary defined form is a new ground leaf of the grammar that no
-    # production declared a role for. The build has just settled it: the leaf
-    # abbreviates one fixed term, so a *later* definition may introduce it exactly
-    # as it may a declared constant, and `T ≝ S` layers on `S ≝ ⊥`.
-    notation.template.denotes_constant = denotes_a_constant(kernel_definition)
 
     # A freshly added definition or one that de-duplicated into an existing
     # equivalent — either way its form was recognised, so the definition layers.

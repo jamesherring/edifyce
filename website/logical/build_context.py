@@ -15,15 +15,17 @@ AGENTS.md) — but nothing here may import ``declarative``.
 
 from __future__ import annotations
 
-from copy import copy, deepcopy
+from copy import copy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from website.logical.formal_system.side_condition_syntax import parse_side_condition
 from website.logical.kernel import And, Node, Var, from_match, intern
+from website.logical.kernel.constructors import project_sorts
 from website.logical.matching import AtomPattern, Pattern, StringPattern, UnionPattern
 
 if TYPE_CHECKING:
+    from website.logical.kernel.constructors import Constructor
     from website.logical.kernel.side_conditions import SideCondition
     from website.logical.kernel.terms import Term
 
@@ -52,24 +54,6 @@ class FormalSystemContext:
 
     # Error log
     error_log: list = field(default_factory=list)
-
-    def inherit(self, parent: FormalSystemContext) -> None:
-        # Inherit from parent context
-
-        self.variables.update(parent.variables)
-        self.definitions.extend(parent.definitions)
-        self.proof_context.update(parent.proof_context)
-        self.system_dict.update(parent.system_dict)
-
-        # Don't inherit string_variables or current_object
-
-        # Inherit union patterns
-        for pattern in self.variables.values():
-            if not isinstance(pattern, UnionPattern):
-                continue
-
-            # Pattern is a union pattern. Set the inheritance
-            pattern.inherits = deepcopy(pattern)
 
     def __copy__(self) -> FormalSystemContext:
         new_context = FormalSystemContext()
@@ -137,12 +121,12 @@ def compose_schema_term(pattern: Pattern, context: FormalSystemContext) -> Term 
         if isinstance(candidate, UnionPattern):
             match = candidate.match(pattern.pattern, parse_context)
             if match is not None:
-                return revariabilise(from_match(match), context.string_variables)
+                return revariabilise(from_match(match), project_sorts(context.string_variables))
 
     return None
 
 
-def revariabilise(term: Term, metavariables: dict) -> Term:
+def revariabilise(term: Term, metavariables: dict[str, Constructor]) -> Term:
     # Re-mark the rule's metavariables in a compositionally-parsed schema term.
     # Some slots - notably a setvar matched by a RegexPattern, which (unlike a
     # UnionPattern) does not consult string_variables - come back from the parse

@@ -60,12 +60,14 @@ from ..kernel import (
     abstract,
     from_match,
 )
+from ..kernel.constructors import constructor_for, project_sorts
 from ..matching.definitions import DefinedNotation
 from ..matching.patterns import Pattern, UnionPattern
 
 if TYPE_CHECKING:
     from ..matching.context import Context
     from ..kernel import Term
+    from ..kernel.constructors import Constructor
 
 
 def parse_side_condition(text: str, context: Context) -> SideCondition:
@@ -178,11 +180,13 @@ def _build(name: str, args: list[str], text: str, context: Context) -> SideCondi
     raise ValueError(f"Unknown or misapplied side-condition: '{text}'.")
 
 
-def _sort(sort_name: str, context: Context) -> Pattern:
+def _sort(sort_name: str, context: Context) -> Constructor:
     pattern = context.variables.get(sort_name)
     if not isinstance(pattern, Pattern):
         raise ValueError(f"Side-condition sort '{sort_name}' is not a pattern.")
-    return pattern
+    # A proviso's sort is kernel data; the name is resolved through the grammar
+    # here and projected, so nothing downstream carries the production.
+    return constructor_for(pattern)
 
 
 def _arg(text: str, context: Context) -> str | Term:
@@ -228,5 +232,5 @@ def _parse_term(text: str, context: Context) -> Term | None:
             continue
         matched = candidate.match(text, parse_context)
         if matched is not None:
-            return abstract(from_match(matched), context.string_variables)
+            return abstract(from_match(matched), project_sorts(context.string_variables))
     return None

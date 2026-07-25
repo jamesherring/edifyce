@@ -22,7 +22,6 @@ from website.logical.declarative import (
     Production,
     Rule,
     Subproof,
-    SystemSpec,
 )
 
 Binding = tuple[str, str]

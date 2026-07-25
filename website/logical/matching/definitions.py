@@ -83,8 +83,8 @@ class DefinedNotation:
 
         return m
 
-    def equivalent(self, other: object, context: Context, memo: dict | None = None,
-                   allow_mapping_to: bool = False) -> bool:
+    def equivalent(self, other: object, context: Context,
+                   memo: dict | None = None) -> bool:
         # Two notations are the same production when they build the same sort
         # from the same template. What each one *unfolds to* is not consulted:
         # that is the definition's business, and two definitions sharing a
@@ -102,11 +102,11 @@ class DefinedNotation:
         # grammar terminates.
         memo[(self, other)] = True
 
-        if not self.template.equivalent(other.template, context, memo, allow_mapping_to):
+        if not self.template.equivalent(other.template, context, memo):
             memo[(self, other)] = False
             return False
 
-        if not self.sort.equivalent(other.sort, context, memo, allow_mapping_to):
+        if not self.sort.equivalent(other.sort, context, memo):
             memo[(self, other)] = False
             return False
 
