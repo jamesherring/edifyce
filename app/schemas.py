@@ -30,6 +30,10 @@ RuleMatching = Literal["structural", "string"]
 # "variable" (a fresh variable); None opens no scope. Mirrors LineRow.scope /
 # LineType.scope / declarative LineSpec.scope.
 LineScope = Literal["assumption", "variable"]
+# What the checker does with a line type. The engine's `LineType` accepts more,
+# but only these two are authorable: see declarative._LINE_BEHAVIOURS for why the
+# rest are refused rather than offered.
+LineBehaviour = Literal["logical", "comment"]
 
 # Free-text fields map to length-bounded DB columns (see app/db/systems.py). The
 # caps below mirror those `String(N)` widths so oversized input is rejected as a
@@ -113,6 +117,8 @@ class LineType(BaseModel):
     logical_sort: str | None = None
     # The subproof scope this line opens: None, "assumption" or "variable".
     scope: str | None = None
+    # "logical" (asserts a formula, must be justified) or "comment" (prose).
+    behaviour: str = "logical"
     parts: list[LinePart] = Field(default_factory=list)
 
 
@@ -299,6 +305,7 @@ class LineTypeCreate(BaseModel):
     # The subproof scope the line opens; the engine accepts only these two
     # openers (or none), so an invalid value is a 422 rather than a build error.
     scope: LineScope | None = None
+    behaviour: LineBehaviour = "logical"
     parts: list[LinePartInput] = Field(default_factory=list)
 
 
@@ -307,6 +314,7 @@ class LineTypeUpdate(BaseModel):
     shape: str | None = Field(None, max_length=256)
     logical_sort: str | None = Field(None, max_length=128)
     scope: LineScope | None = None
+    behaviour: LineBehaviour | None = None
     parts: list[LinePartInput] | None = None
 
 
@@ -389,8 +397,9 @@ class ReorderRequest(BaseModel):
 # Proofs (CRUD)
 #
 # Mirror the formal-system CRUD models: a proof is an owner-scoped object that
-# belongs to a formal system, carries its `.edi` source text, and is verified
-# against that system on demand. Like systems, publishing makes it
+# belongs to a formal system, carries its proof text (lines written in that
+# system's own grammar), and is verified against it on demand. Like systems,
+# publishing makes it
 # world-readable. The read models carry the cached `valid`/`result` snapshot so
 # a client can render the last check without re-running it. `folder_id` is
 # surfaced read-only — folder CRUD (like formal-system child parts) is a later

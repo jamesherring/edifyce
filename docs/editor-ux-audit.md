@@ -152,9 +152,6 @@ last-row down) appear enabled but are no-ops.
 part (sorts, rules, …) saves immediately from its sheet. Two persistence models on
 one page invite "did that save?" confusion.
 
-**2f. No source preview while authoring.** The compiled `.edi` source is only on
-the read-only detail page; authors can't see the lowered source as they build.
-
 ---
 
 ## 3. Cross-cutting
@@ -181,7 +178,7 @@ the read-only detail page; authors can't see the lowered source as they build.
 Ordered by leverage. Phase 0 is a bug fix; the rest is the "best-in-class"
 push and can land incrementally.
 
-Phases 0–2 have since landed; 3–5 are still open. The audit above describes the
+Phases 0–4 have since landed; only Phase 5 is still open. The audit above describes the
 state *before* those changes, so read it as the reasoning behind them rather
 than as a description of the app today.
 
@@ -213,19 +210,23 @@ production's Regex mode is full of literal backslashes (`\d`, `\s`), so
 expanding them on the way in would corrupt exactly the field that needs them
 most. If it's wanted later it has to be opt-in per field, not global.
 
-### Phase 3 — Formal-system editor layout
+### Phase 3 — Formal-system editor layout — **done**
 - Two-column on wide screens: a sticky **section outline** (Sorts, Grammar,
   Rules, …) with the **compile status pinned** in view; content on the right.
 - Show a **notation reference** inside the part-editing sheet so authors see the
   grammar they're referencing (the symbol palette itself landed in Phase 2).
 - **Drag-and-drop reordering** (with a keyboard fallback); disable end-cap
-  chevrons. Optional live `.edi` **source preview** pane.
+  chevrons.
 
-### Phase 4 — Lists, entry points, safety
+### Phase 4 — Lists, entry points, safety — **done**
 - Default authenticated users to **mine**; keep Published for discovery.
 - Richer empty states with a primary CTA.
-- **Unsaved-changes guard** (`beforeNavigate`) on both editors; consider autosave
-  of drafts.
+- **Unsaved-changes guard** (`beforeNavigate`) on both editors.
+
+Draft autosave was considered and not built: with live verification already
+running on every keystroke, autosaving would also record a verdict for
+half-written text, and the explicit save is what makes "saved and checked" mean
+something. Worth revisiting only alongside a draft/committed split.
 
 ### Phase 5 — Polish & a11y
 - `aria-label`s on icon buttons, focus management for sheets, consistent button

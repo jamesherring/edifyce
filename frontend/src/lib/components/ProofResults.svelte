@@ -126,8 +126,13 @@
 							aria-label={onLineClick ? `Go to line ${i + 1} in the editor` : undefined}
 							onclick={onLineClick ? () => onLineClick(i) : undefined}
 						>
+							<!-- The citation number, not the text position: blank lines and
+							     commentary carry none, so the gutter agrees with what a
+							     reference like `[MP, 1, 2]` actually names. A payload cached
+							     before numbering existed omits the field entirely, and was
+							     numbered by position — render those as they were. -->
 							<span class="w-5 pt-0.5 text-right text-xs text-muted-foreground tabular-nums">
-								{i + 1}
+								{line.number === undefined ? i + 1 : (line.number ?? '')}
 							</span>
 							<div class="min-w-0 flex-1">
 								<div

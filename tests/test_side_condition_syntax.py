@@ -6,32 +6,30 @@ import pytest
 
 pytest.importorskip("regex")
 
-from website.logical.compiler import compile as compile_formal_system
+from website.logical.declarative import LineSpec, SystemSpec, build_spec, build_system
 from website.logical.formal_system.side_condition_syntax import parse_side_condition
 from website.logical.kernel import DisjointLeaves, Equal, IsAtom, IsMember, Not, Occurs, Or
+from tests.spec_helpers import regex_prod, rule
 
-SYSTEM = """FormalSystem Sorts:
 
-    Regex setvar:
-        ^[a-z]$
-
-    Regex formula:
-        ^[A-Z]$
-
-    ProofContext:
-        given: MatchSet()
-
-    LineType statement:
-        pattern: formula
-        behaviour: none
-"""
+def sorts_spec() -> SystemSpec:
+    # Two leaf sorts and a statement line — just enough grammar to hand the
+    # proviso parser a context with `setvar` and `formula` in it. Each leaf's
+    # member name differs from its sort name, or step 4 of build_system appends
+    # the sort union to itself.
+    return SystemSpec(
+        name="Sorts",
+        productions=[
+            regex_prod("setvar", "var", "[a-z]"),
+            regex_prod("formula", "atom", "[A-Z]"),
+        ],
+        lines=[LineSpec(name="statement", shape="<formula>", logical_sort="formula")],
+    )
 
 
 @pytest.fixture(scope="module")
 def context():
-    result = compile_formal_system(SYSTEM)
-    assert "errors" not in result, result.get("errors")
-    system = result["system"]
+    system = build_system(sorts_spec())
     ctx = copy(system.context)
     ctx.variables.update(system.build_context.variables)
     # Declare the metavariables these tests use, as a real rule's `with ... as`
@@ -146,53 +144,42 @@ def test_unknown_sort_raises(context):
         parse_side_condition("disjoint(x, y, nope)", context)
 
 
-# A rule system whose single side-condition line is substituted per test, to
-# check that a malformed proviso fails compilation rather than silently building
-# an unconstrained rule.
-RULE_SYSTEM = """FormalSystem R:
+# A rule system whose single proviso is substituted per test, to check that a
+# malformed one fails the build rather than silently leaving the rule
+# unconstrained.
+def rule_spec(proviso: str) -> SystemSpec:
+    return SystemSpec(
+        name="R",
+        productions=[regex_prod("atom", "a", "[a-z]")],
+        lines=[LineSpec(name="statement", shape="<atom>", logical_sort="atom")],
+        rules=[rule("R", "r", (), "p", [("p", "atom"), ("q", "atom")], [proviso])],
+    )
 
-    Regex atom:
-        ^[a-z]$
 
-    ProofContext:
-        given: MatchSet()
-
-    LineType statement:
-        pattern: atom
-        behaviour: logical
-
-    with p as atom, q as atom:
-        InferenceRule r:
-            label:
-                R
-            deduction:
-                p
-            side_conditions:
-                {LINE}
-"""
+def _built_rule(proviso: str):
+    (built,) = [
+        r for r in build_system(rule_spec(proviso)).inference_rules if r.label == "R"
+    ]
+    return built
 
 
 @pytest.mark.parametrize(
-    "line",
+    "proviso",
     ["equal(p)", "equal(p, q, r)", "disjoint(p, q, nope)", "bogus(p, q)"],
 )
-def test_malformed_side_condition_fails_compilation(line):
-    # A soundness guard: a bad proviso must surface as a compile error (which
+def test_malformed_side_condition_fails_the_build(proviso):
+    # A soundness guard: a bad proviso must surface as a build error (which
     # yields no system), never quietly leave the rule with empty side_conditions.
-    result = compile_formal_system(RULE_SYSTEM.replace("{LINE}", line))
+    result = build_spec(rule_spec(proviso))
     assert "errors" in result, result
     assert "system" not in result
 
 
-def test_valid_side_condition_compiles():
-    result = compile_formal_system(RULE_SYSTEM.replace("{LINE}", "equal(p, q)"))
-    assert "errors" not in result, result.get("errors")
-    (rule,) = [r for r in result["system"].inference_rules if r.label == "R"]
-    assert rule.side_conditions == [Equal("p", "q")]
+def test_valid_side_condition_builds():
+    assert _built_rule("equal(p, q)").side_conditions == [Equal("p", "q")]
 
 
-def test_or_side_condition_compiles():
-    result = compile_formal_system(RULE_SYSTEM.replace("{LINE}", "atom(p) or equal(p, q)"))
-    assert "errors" not in result, result.get("errors")
-    (rule,) = [r for r in result["system"].inference_rules if r.label == "R"]
-    assert rule.side_conditions == [Or((IsAtom("p", None), Equal("p", "q")))]
+def test_or_side_condition_builds():
+    assert _built_rule("atom(p) or equal(p, q)").side_conditions == [
+        Or((IsAtom("p", None), Equal("p", "q")))
+    ]

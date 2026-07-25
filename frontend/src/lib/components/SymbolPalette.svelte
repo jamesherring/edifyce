@@ -15,10 +15,18 @@
 		root?: HTMLElement | null;
 		/** Symbols to lead with — normally the ones the system's own notation uses. */
 		symbols?: SymbolEntry[];
+		/** Whether the full catalogue is showing. Bindable so a host with limited
+		 *  room (an edit sheet) can keep only one authoring aid open at a time. */
+		expanded?: boolean;
 		class?: string;
 	};
 
-	let { root = null, symbols = [], class: className }: Props = $props();
+	let {
+		root = null,
+		symbols = [],
+		expanded = $bindable(false),
+		class: className
+	}: Props = $props();
 
 	// A system with no notation of its own yet still needs somewhere to start.
 	const STARTER = SYMBOL_GROUPS[0].symbols.slice(0, 8);
@@ -29,7 +37,6 @@
 	let catalogueStrip = $state<HTMLDivElement | null>(null);
 	let quickIndex = $state(0);
 	let catalogueIndex = $state(0);
-	let expanded = $state(false);
 	let query = $state('');
 
 	// Track the last-focused target rather than the currently-focused one: clicking
@@ -193,7 +200,7 @@
 				role="toolbar"
 				tabindex="-1"
 				aria-label="Symbol catalogue"
-				class="flex max-h-56 flex-col gap-3 overflow-y-auto"
+				class="flex max-h-40 flex-col gap-3 overflow-y-auto sm:max-h-56"
 				onkeydown={(e) => rove(e, catalogueStrip, (i) => (catalogueIndex = i))}
 			>
 				{#if filtered.length === 0}

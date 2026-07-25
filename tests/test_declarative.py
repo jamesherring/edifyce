@@ -7,6 +7,9 @@ silent forward-declaration trap), and -- the headline requirement -- definitions
 that remain first-class from the grammar down into inference checking.
 """
 
+import ast
+from pathlib import Path
+
 import pytest
 
 pytest.importorskip("regex")
@@ -19,6 +22,7 @@ from tests.spec_helpers import (
     biconditional_prod,
     brackets,
     conjunction_prod,
+    comment_line,
     cp_rule,
     defn,
     disjunction_prod,
@@ -38,7 +42,6 @@ from tests.spec_helpers import (
     universal_prod,
     variable_prod,
 )
-from website.logical.compiler import compile as compile_edi
 from website.logical.declarative import (
     DeclarativeError,
     LinePart,
@@ -291,28 +294,6 @@ def test_line_types_declare_formula_and_reference_fields(zfc):
     assert extensionality.formula_field == "self"
 
 
-def test_legacy_accessor_function_syntax_is_rejected():
-    # The interpreted `pattern.formula(): ...` accessor syntax has been removed;
-    # declaring one is now a parse error (use a `formula:` field on the line
-    # type instead).
-    source = (
-        "FormalSystem Legacy:\n"
-        "\n"
-        "    Regex atom:\n"
-        "        ^[a-z]+$\n"
-        "\n"
-        "    Pattern statement_pattern:\n"
-        "        with f as atom:\n"
-        "            f\n"
-        "\n"
-        "    statement_pattern.formula():\n"
-        "        return self.f\n"
-    )
-    result = compile_edi(source)
-    assert "errors" in result
-    assert any("statement_pattern.formula()" in e for e in result["errors"])
-
-
 # ---------------------------------------------------------------------------
 # Rule side-conditions: soundness provisos attached to a rule, lowered into the
 # engine's per-rule `side_conditions` block and enforced during checking.
@@ -536,6 +517,127 @@ def scoped_spec() -> SystemSpec:
     )
 
 
+def test_the_engine_carries_no_edi_compiler():
+    """The `.edi` compiler is gone; nothing may reintroduce a dependency on it.
+
+    Kept as a guard rather than deleted with the module: `compiler.py` is still
+    in the history, and an import of it (or a resurrected copy) would fail
+    somewhere far from the cause. Cheap to keep, and it states the invariant.
+    """
+    engine = Path(__file__).resolve().parent.parent / "website" / "logical"
+    assert not (engine / "compiler.py").exists()
+
+    offenders = []
+    for path in sorted(engine.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                # Both halves matter. `from .compiler import compile` puts it in
+                # the module, `from website.logical import compiler` in the
+                # names — the same dependency, written two ways.
+                names = [node.module or "", *(alias.name for alias in node.names)]
+            else:
+                continue
+            offenders += [f"{path.name} -> {n}" for n in names if "compiler" in n]
+
+    assert offenders == []
+
+
+def commented_spec() -> SystemSpec:
+    spec = scoped_spec()
+    spec.lines.append(comment_line())
+    return spec
+
+
+def test_comment_line_builds_an_unchecked_line_type():
+    system = build_system(commented_spec())
+    note = {lt.name: lt for lt in system.line_types}["note"]
+    assert note.behaviour == "comment"
+    # No formula to project — the field is left unset rather than pointed at
+    # prose, so nothing harvesting line formulae picks it up.
+    assert note.formula_field is None
+
+
+def test_comment_line_is_valid_unnumbered_and_uncitable():
+    system = build_system(commented_spec())
+    proof = system.parse("-- a header\na [R, 1]\n-- trailing note")
+    notes = [line for line in proof.proof_lines if line.display.startswith("--")]
+
+    # Prose passes without justification and takes no citation number, so the
+    # step between the two notes is still line 1.
+    assert all(line.valid for line in notes)
+    assert [line.number for line in proof.proof_lines] == [None, 1, None]
+
+
+def test_comment_line_does_not_close_the_subproof_it_sits_in():
+    # An unindented note dedents past the opener. If commentary took part in
+    # scoping it would close the subproof and the next step would be rejected as
+    # out of scope — a failure on a line the author never touched.
+    system = build_system(commented_spec())
+    proof = system.parse("assume a\n-- granted for the subproof\n    a [R, 1]")
+    assert proof.valid is True
+
+
+def test_comment_line_carries_no_citation_reference():
+    # Projecting the prose as the line's reference would surface it in the UI as
+    # the rule that justified the line ("by a header").
+    system = build_system(commented_spec())
+    note = {lt.name: lt for lt in system.line_types}["note"]
+    assert note.reference_field is None
+    assert system.parse("-- a header").data()["lines"][0]["reference"] is None
+
+
+def test_comment_line_is_exempt_from_bracket_parity():
+    # Prose is not a term, so an unbalanced bracket in a note must not stop the
+    # line matching — which would fail the whole proof, not just the note.
+    system = build_system(commented_spec())
+    note = {lt.name: lt for lt in system.line_types}["note"]
+    assert note.pattern.respect_brackets is None
+    # The logical line still respects them.
+    assert {lt.name: lt for lt in system.line_types}["statement"].pattern.respect_brackets
+
+    line = system.parse("-- discharge ( here").proof_lines[0]
+    assert line.valid is True
+    assert line.line_type.name == "note"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        LineSpec(name="n", shape="-- <undeclared>", behaviour="comment"),
+        LineSpec(name="n", shape="<formula> [<undeclared>]", logical_sort="formula"),
+    ],
+    ids=["comment", "logical"],
+)
+def test_undeclared_shape_placeholder_names_itself(line):
+    # It has to resolve to a pattern later either way; without this the failure
+    # is a bare KeyError whose message is just the token.
+    spec = scoped_spec()
+    spec.lines.append(line)
+    with pytest.raises(DeclarativeError, match="naming no grammar sort or part"):
+        build_system(spec)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"behaviour": "indent"}, "invalid behaviour"),
+        ({"behaviour": "comment", "scope": "assumption"}, "cannot open a"),
+        ({"behaviour": "comment", "logical_sort": "formula"}, "carries no formula"),
+    ],
+)
+def test_unauthorable_line_behaviours_are_build_errors(overrides, expected):
+    spec = scoped_spec()
+    line = comment_line()
+    for field, value in overrides.items():
+        setattr(line, field, value)
+    spec.lines.append(line)
+
+    with pytest.raises(DeclarativeError, match=expected):
+        build_system(spec)
+
+
 def test_scope_line_builds_a_scope_opening_line_type():
     system = build_system(scoped_spec())
     by_name = {lt.name: lt for lt in system.line_types}
@@ -567,6 +669,23 @@ def test_scope_line_opens_a_subproof_and_scopes_references():
     )
     assert proof.proof_lines[3].valid is False
     assert "scope" in (proof.proof_lines[3].invalid_message or "").lower()
+
+
+def test_scope_error_names_the_citation_number_not_the_text_position():
+    # The message has to agree with what the author typed. The leading blank
+    # shifts every text position by one but no citation number, so the rejected
+    # `[R, 2]` must be reported as line 2 — not line 3, where it sits in the file.
+    system = build_system(scoped_spec())
+    proof = system.parse(
+        "\n"
+        "assume a\n"
+        "    a [R, 1]\n"
+        "assume b\n"
+        "    a [R, 2]"
+    )
+    bad = proof.proof_lines[4]
+    assert bad.valid is False
+    assert "Line 2 is out of scope" in (bad.invalid_message or "")
 
 
 def test_invalid_line_scope_is_rejected():

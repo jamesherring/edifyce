@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from ..graphs import find_cycle, saturating_matching, topological_order
 from ..kernel.side_conditions import Not, Occurs
 from ..kernel.terms import from_match
-from ..matching import Match, MatchSet
+from ..matching import Match
 from .definitions import follows_by_definition, kernel_definition_for
 
 if TYPE_CHECKING:
@@ -222,6 +222,12 @@ class Proof:
         # The proof lines leading to the result
         self.proof_lines = []
 
+        # The subset of `proof_lines` a citation can name, in citation order, so
+        # `numbered_lines[n - 1]` is the line written `n`. Kept separate from
+        # `proof_lines` (which holds every physical line, blanks included) so
+        # that adding a blank line or a comment never renumbers the steps below.
+        self.numbered_lines = []
+
         # A dictionary of references to other proofs - given on proof creation
         self.reference_proofs = reference_proofs
 
@@ -245,6 +251,16 @@ class Proof:
         # opener. Called in source order, so by the time a discharge line is
         # reached the subproofs it cites are already built and closed.
 
+        line_type = proof_line.line_type
+
+        # Commentary takes no part in the proof's structure. Skipping it here is
+        # what stops an unindented note from dedenting out of the subproof it
+        # sits in and silently closing it — the author would then get an
+        # out-of-scope error on a line they never touched. Blank lines are
+        # skipped before this point for the same reason.
+        if line_type is not None and line_type.behaviour == "comment":
+            return
+
         if self.root_scope is None:
             self.root_scope = Subproof(kind=None, open_indent=-1)
             self._scope_stack = [self.root_scope]
@@ -254,8 +270,6 @@ class Proof:
         # Dedenting past a subproof's opener closes it.
         while len(stack) > 1 and proof_line.indent <= stack[-1].open_indent:
             stack.pop()
-
-        line_type = proof_line.line_type
 
         if line_type is not None and line_type.scope in ("assumption", "variable"):
             sub = Subproof(
@@ -274,12 +288,27 @@ class Proof:
             stack[-1].lines.append(proof_line)
 
     def get_proof_line(self, line_number):
-        # Get a proof line by line number
-        # Line numbers are 1-based, matching how references are written in proofs.
-        if not 1 <= line_number <= len(self.proof_lines):
+        # Get a proof line by citation number (1-based, as written in proofs).
+        # Not a text-line index: blank lines and commentary carry no number.
+        if not 1 <= line_number <= len(self.numbered_lines):
             return None
 
-        return self.proof_lines[line_number - 1]
+        return self.numbered_lines[line_number - 1]
+
+    def assign_line_number(self, proof_line: ProofLine) -> None:
+        # Give the line the number a citation names it by. Called in source
+        # order once the line's type is known.
+        #
+        # Commentary is skipped: it asserts nothing, so nothing can cite it, and
+        # leaving it unnumbered is what makes prose free to insert. A line that
+        # matched no line type is still numbered - the author meant it as a step,
+        # and renumbering everything below a typo would be worse than the typo.
+        line_type = proof_line.line_type
+        if line_type is not None and line_type.behaviour == "comment":
+            return
+
+        self.numbered_lines.append(proof_line)
+        proof_line.number = len(self.numbered_lines)
 
     def add_proof_line(self, text, context):
         proof_line = ProofLine(self, text, context=copy(context))
@@ -502,7 +531,7 @@ class Proof:
             if isinstance(ant, ProofLine) and not line_is_accessible(proof_line, ant):
                 proof_line.valid = False
                 proof_line.invalid_message = (
-                    f"Line {ant.index() + 1} is out of scope "
+                    f"Line {ant.number} is out of scope "
                     "(it is inside a closed subproof)."
                 )
                 return False
@@ -663,7 +692,7 @@ class Proof:
 
         if subproof is None:
             proof_line.valid = False
-            proof_line.invalid_message = f"Line {opener.index() + 1} does not open a subproof."
+            proof_line.invalid_message = f"Line {opener.number} does not open a subproof."
             return False
 
         # The subproof must be a *completed* one, in scope to discharge from
@@ -673,7 +702,7 @@ class Proof:
                 or subproof.is_ancestor_of(proof_line.scope):
             proof_line.valid = False
             proof_line.invalid_message = (
-                f"Subproof at line {opener.index() + 1} is out of scope to discharge here."
+                f"Subproof at line {opener.number} is out of scope to discharge here."
             )
             return False
 
@@ -710,7 +739,7 @@ class Proof:
         if not line_is_accessible(proof_line, source):
             proof_line.valid = False
             proof_line.invalid_message = (
-                f"Line {source.index() + 1} is out of scope (it is inside a closed subproof)."
+                f"Line {source.number} is out of scope (it is inside a closed subproof)."
             )
             return False
 
@@ -727,7 +756,7 @@ class Proof:
         if source.line_type is None or source.line_type.behaviour != "logical" \
                 or source.formula is None:
             proof_line.valid = False
-            proof_line.invalid_message = f"Line {source.index() + 1} is not a formula line."
+            proof_line.invalid_message = f"Line {source.number} is not a formula line."
             return False
 
         candidates = [reference.definition] if reference.definition is not None \
@@ -764,12 +793,12 @@ class Proof:
             else:
                 proof_line.invalid_message = (
                     f"{reference.key} does not apply between this line and line "
-                    f"{source.index() + 1}."
+                    f"{source.number}."
                 )
         else:
             proof_line.invalid_message = (
                 f"{reference.key} does not apply: no definition in scope relates this line "
-                f"to line {source.index() + 1}."
+                f"to line {source.number}."
             )
         return False
 
@@ -1044,6 +1073,10 @@ class ProofLine:
         # The label for this line (if any)
         self.label = label
 
+        # The number a citation names this line by, assigned during parsing.
+        # None for a line no citation can reach: a blank line or commentary.
+        self.number = None
+
         # The formula match (if any) on this line
         self.formula = None
 
@@ -1068,7 +1101,6 @@ class ProofLine:
 
         # This line may be an axiom
         self.is_axiom = False
-        self.axiom_pattern = None
 
         # The axiom this line uses (if any)
         self.axiom = None
@@ -1112,12 +1144,13 @@ class ProofLine:
                 self.proof.check_logical_line(self, context)
 
         elif line_type.behaviour == "axiom":
-            # Introduce an axiom to the system
-
+            # An axiom line asserts its own formula, so it needs no justification:
+            # `check_logical_line` short-circuits on `is_axiom`. It used to also
+            # generalise the formula into a reusable schema
+            # (`Match.create_pattern`), but nothing ever read the result - a
+            # promoted theorem is the typed mechanism for that now (see
+            # `promotion.PromotedTheorem`).
             self.is_axiom = True
-
-            self.axiom_pattern = self.formula.create_pattern(context.string_variables)
-            self.axiom_pattern.name = self.label
 
         elif line_type.behaviour in ("definition", "import"):
             # Not currently supported. These line types derived their payload
@@ -1187,6 +1220,7 @@ class ProofLine:
         # Get data for this proof line
         return {
             "valid": self.valid,
+            "number": self.number,
             "behaviour": self.line_type.behaviour if self.line_type is not None else None,
             "name": self.line_type.name if self.line_type is not None else None,
             "invalid_message": self.invalid_message,
@@ -1196,36 +1230,6 @@ class ProofLine:
             "display": self.display,
             "indent": self.indent
         }
-
-    def previous_formulae(self):
-        # Return a matchset of formulae that have been proven before this statement in the proof and share the same
-        # logical context.
-
-        # N.B. we don't require that the previous proof lines are valid
-        formulae = MatchSet(allow_multiple=False)
-        indent = self.indent
-
-        # Loop through the previous lines and select only those that are parents/siblings of this line context
-        for i in range(self.index() - 1, -1, -1):
-            line = self.proof.proof_lines[i]
-
-            if line.indent > indent:
-                # This line is more indented - ignore
-                continue
-
-            if line.indent < indent:
-                # This line is less indented - ie. it's a parent line in the abstract syntax tree.
-                indent = line.indent
-                continue
-
-            if line.line_type is None or not line.line_type.behaviour == "logical":
-                # It's not a logical line
-                continue
-
-            # Otherwise, it's a relevant logical line
-            formulae.add(line.formula, self.context)
-
-        return formulae
 
     def __str__(self):
         return f"ProofLine: {self.text}"

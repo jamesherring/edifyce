@@ -5,20 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ..kernel import (
-    And,
-    DisjointLeaves,
-    Equal,
-    IsAtom,
-    IsMember,
-    Not,
-    Occurs,
-    Or,
-    Var,
-    from_match,
-    from_pattern,
-    match_all,
-)
+from ..kernel import Var, from_match, from_pattern, match_all
 from ..matching import StringPattern
 from ..matching.rewriting import joint_binding_exists
 from .proof import ProofLine, Subproof
@@ -63,47 +50,6 @@ class SubproofSchema:
         return "variable" if self.fresh is not None else "assumption"
 
 
-def _normalise_arg(arg: str | Term) -> tuple[str, str]:
-    """A stable, uniformly-typed key for a predicate argument.
-
-    An argument is a metavariable name (``str``) or a literal term. Both map to a
-    2-tuple of strings so nested normal forms stay mutually comparable when
-    ``And``/``Or`` parts are ``sorted`` (a bare name vs a tuple would raise).
-    """
-    if isinstance(arg, str):
-        return ("var", arg)
-    return ("term", arg.to_string())
-
-
-def _normalise_side_condition(condition: SideCondition) -> tuple:
-    """A structural normal form for comparing side-conditions across rules.
-
-    Sorts compare by name (not object identity) so two systems that re-parse the
-    same proviso agree, and boolean combinators fold to their parts. Used only
-    by :meth:`InferenceRule.equivalent`.
-    """
-    if isinstance(condition, (And, Or)):
-        return (
-            type(condition).__name__,
-            tuple(sorted(_normalise_side_condition(part) for part in condition.parts)),
-        )
-    if isinstance(condition, Not):
-        return ("Not", _normalise_side_condition(condition.inner))
-    if isinstance(condition, Occurs):
-        return ("Occurs", _normalise_arg(condition.needle), _normalise_arg(condition.haystack))
-    if isinstance(condition, Equal):
-        return ("Equal", _normalise_arg(condition.left), _normalise_arg(condition.right))
-    if isinstance(condition, DisjointLeaves):
-        sort = None if condition.sort is None else condition.sort.name
-        return ("DisjointLeaves", _normalise_arg(condition.left), _normalise_arg(condition.right), sort)
-    if isinstance(condition, IsAtom):
-        sort = None if condition.sort is None else condition.sort.name
-        return ("IsAtom", _normalise_arg(condition.name), sort)
-    if isinstance(condition, IsMember):
-        return ("IsMember", _normalise_arg(condition.name), condition.sort.name)
-    return (type(condition).__name__,)
-
-
 class InferenceRule:
     """Inference rules for deduction."""
 
@@ -138,10 +84,10 @@ class InferenceRule:
             side_conditions if side_conditions is not None else []
         )
 
-        # Raw proviso lines awaiting a parse. The compiler defers parsing to its
+        # Raw proviso lines awaiting a parse. The build defers parsing to its
         # finalisation pass — once the system's definitions have resolved, so a
         # proviso argument may use defined notation — then fills `side_conditions`
-        # and clears this. Empty except transiently during compilation.
+        # and clears this. Empty except transiently mid-build.
         self.pending_side_conditions: list[str] = []
 
         # Optionally allow extra antecedents
@@ -437,14 +383,14 @@ class InferenceRule:
         variable is renamed apart rather than collapsed into one binding.
 
         A compound template (e.g. a Hilbert axiom ``(p -> (q -> p))``) carries a
-        precomputed *nested* term from the compiler (``schema_term``), because a
+        precomputed *nested* term from the build (``schema_term``), because a
         flat ``from_pattern`` projection would be one production while the proof
         formula it must match is a nested tree of the system's productions. Its
         named metavariables are shared, so it needs no per-occurrence renaming.
         """
         if isinstance(pattern, StringPattern):
             # A compound template carries a precomputed *nested* term from the
-            # compiler; a flat from_pattern projection would be one production
+            # build; a flat from_pattern projection would be one production
             # while the proof formula it must match is a nested tree. Either way
             # its named metavariables are shared, so no per-occurrence renaming.
             if pattern.schema_term is not None:
@@ -475,60 +421,6 @@ class InferenceRule:
             )
         except Exception:
             return False
-
-    def equivalent(
-        self, other: object, context: Context, memo: dict[tuple, bool] | None = None
-    ) -> bool:
-        # Check equivalent. `memo` is shared with Pattern.equivalent during the
-        # recursion, so its keys are heterogeneous (rule pairs and pattern pairs).
-
-        if memo is None:
-            memo = {}
-
-        if (self, other) in memo:
-            return memo[(self, other)]
-
-        # Assume false
-        memo[(self, other)] = False
-
-        if type(other) is not InferenceRule:
-            return False
-
-        if not self.name == other.name:
-            return False
-
-        if not self.label == other.label:
-            return False
-
-        if not self.matching == other.matching:
-            return False
-
-        if not len(self.antecedents) == len(other.antecedents):
-            return False
-
-        if not self.allow_extra_antecedents == other.allow_extra_antecedents:
-            return False
-
-        # Assume true
-        memo[(self, other)] = True
-
-        for ant, other_ant in zip(self.antecedents, other.antecedents):
-            if not ant.equivalent(other_ant, context, memo):
-                memo[(self, other)] = False
-                return False
-
-        if not self.deduction.equivalent(other.deduction, context, memo):
-            memo[(self, other)] = False
-            return False
-
-        if [_normalise_side_condition(c) for c in self.side_conditions] != [
-            _normalise_side_condition(c) for c in other.side_conditions
-        ]:
-            memo[(self, other)] = False
-            return False
-
-        # Otherwise ok
-        return True
 
 
 @dataclass(eq=False)

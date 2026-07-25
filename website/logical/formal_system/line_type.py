@@ -23,8 +23,19 @@ class LineType:
 
         # The behaviour of these lines
         self.behaviour = behaviour
-        if self.behaviour not in ("none", "import", "logical", "axiom", "indent", "definition", "comment"):
+        if self.behaviour not in ("none", "import", "logical", "axiom", "definition", "comment"):
             raise ValueError(f"'{self.behaviour}' is not a valid LineType behaviour.")
+
+        # A logical line is checked against its formula, so one it cannot project
+        # is inert: every instance would be rejected with "No formula defined for
+        # logical line." Refuse it at construction instead, where the author can
+        # still act on it. Only the retired `.edi` compiler could build one.
+        if self.behaviour == "logical" and self.formula_field is None:
+            raise ValueError(
+                f"Logical line type '{self.name}' declares no formula field, so no "
+                f"line of it could ever be checked; give it one, or make it a "
+                f"comment."
+            )
 
         # The scope this line opens, orthogonal to behaviour. A scope opener
         # starts a subproof that a discharge rule can later consume as a unit:
@@ -32,7 +43,7 @@ class LineType:
         #   "variable"   - opens a subproof under a fresh variable (for e.g. VI).
         # None means the line opens no scope. Keeping this separate from
         # `behaviour` lets one line be *both* a formula-bearing logical line and
-        # a scope opener - the thing the old `indent` behaviour could not be.
+        # a scope opener - which the retired `indent` behaviour could not be.
         self.scope = scope
         if self.scope not in (None, "assumption", "variable"):
             raise ValueError(f"'{self.scope}' is not a valid LineType scope.")
@@ -40,46 +51,6 @@ class LineType:
     def parse_line(self, line, context):
         # Check if the given line string is of this type
         return self.pattern.match(line, context)
-
-    def equivalent(self, other, context, memo=None):
-        # Check equivalence
-
-        if memo is None:
-            memo = {}
-
-        if (self, other) in memo:
-            return memo[(self, other)]
-
-        memo[(self, other)] = False
-
-        if type(other) is not LineType:
-            return False
-
-        if not self.name == other.name:
-            return False
-
-        if not self.behaviour == other.behaviour:
-            return False
-
-        if not self.scope == other.scope:
-            return False
-
-        if not self.formula_field == other.formula_field:
-            return False
-
-        if not self.reference_field == other.reference_field:
-            return False
-
-        # Assume true for recursive checks
-        memo[(self, other)] = True
-
-        if not self.pattern.equivalent(other.pattern, context, memo):
-            memo[(self, other)] = False
-            return False
-
-        # Otherwise ok
-        memo[(self, other)] = True
-        return True
 
     def __str__(self):
         return self.name

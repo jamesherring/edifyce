@@ -1,13 +1,14 @@
 """A declarative model of a formal system, built directly into the engine.
 
-The proof engine is powerful but its source language forces three unrelated
-jobs -- describing the *grammar*, the *inference rules*, and *side conditions*
--- through one whitespace-sensitive mechanism (``Pattern`` / ``UnionPattern`` /
-``with ... as ...``). Recursive grammars only work if the author performs a
-non-obvious ordering dance (forward-declare an empty ``UnionPattern`` *then*
-fill it), and a wrong guess compiles cleanly yet silently matches nothing.
+This is the only way a formal system is built. It replaced a bespoke source
+language (``.edi``, since deleted) that forced three unrelated jobs -- the
+*grammar*, the *inference rules*, and *side conditions* -- through one
+whitespace-sensitive mechanism, and in which a recursive grammar only worked if
+the author performed a non-obvious ordering dance (forward-declare an empty
+``UnionPattern`` *then* fill it); a wrong guess compiled cleanly and silently
+matched nothing.
 
-This module offers a structured, order-independent description of a system --
+What replaced it is a structured, order-independent description of a system --
 the :class:`SystemSpec` dataclasses (grammar productions, a logical line,
 definitions, axioms, rules). :func:`build_spec` / :func:`build_system` turn one
 into a ``FormalSystem`` **directly**, by calling the engine's own construction
@@ -34,14 +35,14 @@ from collections.abc import Callable
 from copy import copy
 from dataclasses import InitVar, dataclass, field
 
-from .compiler import (
+from .build_context import (
     FormalSystemContext,
-    _combine_side_conditions,
     build_schema_pattern,
+    combine_side_conditions,
 )
 from .formal_system import FormalSystem, InferenceRule, LineType, SubproofSchema
 from .formal_system.side_condition_syntax import parse_side_condition
-from .matching import AtomPattern, MatchSet, Pattern, RegexPattern, StringPattern, UnionPattern
+from .matching import AtomPattern, Pattern, RegexPattern, StringPattern, UnionPattern
 
 
 class DeclarativeError(Exception):
@@ -50,6 +51,14 @@ class DeclarativeError(Exception):
 
 # The scopes a line type may open (mirrors LineType.scope's accepted values).
 _LINE_SCOPES = (None, "assumption", "variable")
+
+# The line behaviours a declarative system may author. `LineType` accepts more,
+# but the rest are not offered here: `axiom` is emitted from `spec.axioms` rather
+# than declared, and `definition`/`import` fail closed in the checker (their
+# payload came from an accessor mechanism that was removed). A value the engine
+# ignores or refuses is worse than no value at all, so building one is an error,
+# not a silent no-op.
+_LINE_BEHAVIOURS = ("logical", "comment")
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +159,12 @@ class LineSpec:
     # →I) or "variable" (opens one under a fresh variable, for e.g. ∀I). A scope
     # opener may still bear a formula, so this is separate from the line's shape.
     scope: str | None = None
+    # What the checker does with lines of this type: "logical" (the default — the
+    # line asserts a formula and must be justified) or "comment" (prose, never
+    # checked and never numbered, so no citation can name it). A comment line
+    # carries no formula, so it needs no `logical_sort` and its shape need not
+    # name a grammar sort — the one line kind that may be pure text.
+    behaviour: str = "logical"
 
 
 @dataclass
@@ -183,7 +198,7 @@ class SystemSpec:
 
 
 # ---------------------------------------------------------------------------
-# Lowering a SystemSpec to ``.edi`` source
+# Shared helpers for turning spec fields into engine objects
 # ---------------------------------------------------------------------------
 
 
@@ -204,18 +219,42 @@ def _anchor(regex: str) -> str:
 
 def _line_layout(
     line: LineSpec, sorts: set[str],
-) -> tuple[str, list[tuple[str, str]], tuple[str, str], tuple[str, str] | None]:
+) -> tuple[str, list[tuple[str, str]], tuple[str, str] | None, tuple[str, str] | None]:
     """Resolve a line's template and its formula/reference placeholders.
 
     Returns ``(template, placeholders, logical_ph, reference_ph)`` where each
-    ``_ph`` is a ``(placeholder_name, variable)`` pair (``reference_ph`` may be
-    ``None``), given the system's grammar ``sorts`` so the logical placeholder
-    can be resolved.
+    ``_ph`` is a ``(placeholder_name, variable)`` pair (either may be ``None``),
+    given the system's grammar ``sorts`` so the logical placeholder can be
+    resolved. ``logical_ph`` is ``None`` only for a comment line, which carries
+    no formula.
     """
     part_names = {p.name for p in line.parts}
 
     # Tokenise the shape into (placeholder | literal) fragments.
     template, placeholders = _shape_to_template(line.shape)
+
+    # Every placeholder has to resolve to something later (`ctx.variables[ph]`),
+    # so name the undeclared one here rather than letting it surface as a bare
+    # KeyError whose message is just the token.
+    undeclared = [ph for ph, _ in placeholders if ph not in part_names and ph not in sorts]
+    if undeclared:
+        raise DeclarativeError(
+            f"Line {line.name!r} has placeholder(s) "
+            f"{', '.join(repr(ph) for ph in undeclared)} in its shape naming no "
+            f"grammar sort or part; declare each as a part of the line."
+        )
+
+    # A comment line asserts nothing, so it has no formula to project — and its
+    # shape is free to be prose, naming no grammar sort at all.
+    if line.behaviour == "comment":
+        if line.logical_sort is not None:
+            raise DeclarativeError(
+                f"Line {line.name!r} is commentary, so it carries no formula; "
+                f"remove its logical sort {line.logical_sort!r}."
+            )
+        # Nor a citation. Projecting the prose as the line's `reference` would
+        # surface it in the UI as the rule that justified the line.
+        return template, placeholders, None, None
 
     # Choose the logical placeholder: explicit 'logical <sort>' or first sort.
     logical_ph = None
@@ -280,7 +319,7 @@ def _fresh_var(placeholder: str, used: set[str]) -> str:
 # Direct builder: SystemSpec -> FormalSystem.
 #
 # This constructs the engine objects straight from the SystemSpec by calling the
-# same low-level primitives compile() uses (build_schema_pattern, add_variables,
+# engine's own low-level primitives (build_schema_pattern, add_variables,
 # add_definition, parse_side_condition, the Pattern constructors), driven from
 # the spec fields directly. There is no text pass, so respect_brackets is set on
 # each pattern at construction rather than patched on afterwards.
@@ -311,8 +350,7 @@ def build_system(spec: SystemSpec) -> FormalSystem:
     """
     # A string-rewriting rule is justified by associative matching over surface
     # strings, with no term binding to evaluate side-conditions against; refuse
-    # the pairing rather than silently ignoring a proviso the author wrote (same
-    # guard `lower` applies before emitting `.edi`).
+    # the pairing rather than silently ignoring a proviso the author wrote.
     for rule in spec.rules:
         if rule.matching == "string" and rule.side_conditions:
             raise DeclarativeError(
@@ -343,6 +381,10 @@ def build_system(spec: SystemSpec) -> FormalSystem:
         pattern.respect_brackets = brackets
         return pattern
 
+    def unregistered(pattern: Pattern) -> Pattern:
+        # Bracket parity deliberately not applied — see its uses.
+        return pattern
+
     # 1. Atomic productions: regex leaves, atom constants, and atom families.
     for prod in spec.productions:
         if prod.regex is not None:
@@ -353,7 +395,7 @@ def build_system(spec: SystemSpec) -> FormalSystem:
             # An atom constant (`value`, one literal token) or indexed family
             # (`base`, the infinite `p_#` -> p_0, p_1, ...). A single token needs
             # no bracket parity, so it is not `register`ed — its `respect_brackets`
-            # stays None, matching what the compiler produces.
+            # stays None.
             ctx.variables[prod.name] = AtomPattern(
                 name=prod.name,
                 value=prod.atom_value,
@@ -387,14 +429,18 @@ def build_system(spec: SystemSpec) -> FormalSystem:
     # 5. Lines: a statement pattern + logical line type per declared line. Each
     # line's inline parts are registered just before it is built (see step 1).
     if spec.lines:
-        system.context.logical["given"] = MatchSet()
         sorts = set(spec.sort_names())
         for line in spec.lines:
+            # Commentary is prose, not a term: bracket parity must not apply to
+            # it, or an unbalanced bracket in a note ("-- discharge ( here")
+            # stops the line matching at all and fails the proof. Same reason an
+            # atom constant is left unregistered in step 1.
+            line_register = unregistered if line.behaviour == "comment" else register
             for part in line.parts:
-                ctx.variables[part.name] = register(
+                ctx.variables[part.name] = line_register(
                     RegexPattern(name=part.name, pattern=_anchor(part.regex))
                 )
-            _build_line(line, sorts, ctx, system, register)
+            _build_line(line, sorts, ctx, system, line_register)
 
     # 6. Axioms -> axiom-behaviour line types.
     for ax in spec.axioms:
@@ -405,14 +451,14 @@ def build_system(spec: SystemSpec) -> FormalSystem:
         system.add_inference_rule(_build_rule(rule, ctx))
 
     # 8. Publish the build variables into the proof context, then finalise
-    # definitions against that (now complete) context -- the order compile()
-    # uses so `add_definition` can match the lower form against the productions.
+    # definitions against that (now complete) context, so `add_definition` can
+    # match the lower form against the productions.
     system.context.variables.update(ctx.variables)
     # Per position, whether the definition layered — kept in spec order so a
     # caller can map it back to a specific definition even when two share a
     # defined form (see registered_definition_layering). A cited definition name
-    # must be unambiguous, so a duplicate label is rejected here (mirroring
-    # compile()) rather than silently letting `[<name>, <line>]` pick one.
+    # must be unambiguous, so a duplicate label is rejected here rather than
+    # silently letting `[<name>, <line>]` pick one.
     seen_labels: set[str] = set()
     layering: list[bool] = []
     for defn in spec.definitions:
@@ -425,7 +471,7 @@ def build_system(spec: SystemSpec) -> FormalSystem:
 
     # 9. Parse each rule's provisos now that definitions have resolved, so a
     # proviso's term argument may use defined notation (e.g. `equal(t, ∅)`). Each
-    # rule brings its own metavariables. Mirrors compile()'s finalisation pass.
+    # rule brings its own metavariables.
     for inference_rule in system.inference_rules:
         if not inference_rule.pending_side_conditions:
             continue
@@ -452,6 +498,18 @@ def _build_line(line: LineSpec, sorts: set[str], ctx: FormalSystemContext,
             f"Line {line.name!r} has invalid scope {line.scope!r}; "
             f"expected one of {', '.join(repr(s) for s in _LINE_SCOPES)}."
         )
+    if line.behaviour not in _LINE_BEHAVIOURS:
+        raise DeclarativeError(
+            f"Line {line.name!r} has invalid behaviour {line.behaviour!r}; "
+            f"expected one of {', '.join(repr(b) for b in _LINE_BEHAVIOURS)}."
+        )
+    if line.behaviour == "comment" and line.scope is not None:
+        # A subproof has to be opened by a line the discharge rule can cite, and
+        # commentary is unnumbered — so the subproof could never be discharged.
+        raise DeclarativeError(
+            f"Line {line.name!r} is commentary, so it cannot open a "
+            f"{line.scope} scope; no rule could discharge it."
+        )
     template, placeholders, logical_ph, reference_ph = _line_layout(line, sorts)
 
     # Each line gets a distinctly-named pattern (a single line named "statement"
@@ -464,9 +522,12 @@ def _build_line(line: LineSpec, sorts: set[str], ctx: FormalSystemContext,
     line_type = LineType(
         name=line.name,
         pattern=pattern,
-        behaviour="logical",
+        behaviour=line.behaviour,
         scope=line.scope,
-        formula_field=logical_ph[1],
+        # Declared, not merely absent: a comment line has no formula to project,
+        # so leaving the field unset keeps prose out of anything that harvests
+        # line formulae (the term graph, definitional steps).
+        formula_field=logical_ph[1] if logical_ph is not None else None,
         reference_field=reference_ph[1] if reference_ph is not None else None,
     )
     ctx.variables[line.name] = line_type
@@ -490,8 +551,8 @@ def _build_axiom(axiom: Rule, ctx: FormalSystemContext, system: FormalSystem,
 
 def _build_rule(rule: Rule, ctx: FormalSystemContext) -> InferenceRule:
     # The rule's bindings are its metavariables; put them in a scoped copy of the
-    # build context so `build_schema_pattern` treats them as variables (exactly
-    # the string-variable scope compile() gets from a `with ... as ...` block).
+    # build context so `build_schema_pattern` treats them as variables — the
+    # scope is per-rule, never the system's own.
     string_variables = _binding_patterns(rule.bindings, ctx)
     rule_ctx = copy(ctx)
     rule_ctx.string_variables = dict(string_variables)
@@ -544,14 +605,13 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
     context_copy = copy(system.context)
     context_copy.string_variables.update(_binding_patterns(defn.bindings, ctx))
 
-    # A `;` inside a `where` proviso conjoins several kernel conditions, matching
-    # how the compiler splits the lowered `where` clause.
+    # A `;` inside a `where` proviso conjoins several kernel conditions.
     where_strings = (
         [part.strip() for part in defn.condition.split(";") if part.strip()]
         if defn.condition
         else []
     )
-    kernel_condition = _combine_side_conditions(where_strings, context_copy)
+    kernel_condition = combine_side_conditions(where_strings, context_copy)
 
     # The defining form's bound variables, resolved to their sort patterns, so the
     # term checker treats them as binders (capture-avoiding unfold) rather than as

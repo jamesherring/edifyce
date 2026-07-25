@@ -9,18 +9,22 @@
 	import { Button } from '$lib/components/ui/button';
 	import { api, type Rule, type Binding, type RuleMatching } from '$lib/api';
 	import type { SymbolEntry } from '$lib/symbols';
+	import { ruleShape, type NotationGroup } from '$lib/notation';
 	import { createSectionController } from './section.svelte';
 
 	let {
 		systemId,
 		rules,
 		symbols,
-		onChanged
+		onChanged,
+		notation = []
 	}: {
 		systemId: string;
 		rules: Rule[];
 		symbols: SymbolEntry[];
 		onChanged: () => Promise<void> | void;
+		/** Optional: the grammar reference shown in the edit sheet. */
+		notation?: NotationGroup[];
 	} = $props();
 
 	// Antecedents and provisos are plain strings in the API; wrap each in a row so
@@ -110,6 +114,7 @@
 
 <PartSection
 	title="Inference rules"
+	id="rules"
 	addLabel="Add rule"
 	items={rules}
 	emptyMessage="No inference rules yet."
@@ -130,9 +135,7 @@
 					>· discharges {r.subproof.fresh != null ? 'variable' : 'assumption'} subproof</span
 				>
 			{/if}
-			<span class="ml-2 font-mono text-xs text-muted-foreground">
-				{r.antecedents.join(' ; ') || '—'} ⊢ {r.deduction}
-			</span>
+			<span class="ml-2 font-mono text-xs text-muted-foreground">{ruleShape(r)}</span>
 		</div>
 	{/snippet}
 </PartSection>
@@ -145,6 +148,7 @@
 	onDelete={s.editing ? s.del : undefined}
 	saving={s.saving}
 	{canSave}
+	{notation}
 	{symbols}
 >
 	<FormField label="Label" id="rule-label" bind:value={label} placeholder="e.g. MP" maxlength={64} />

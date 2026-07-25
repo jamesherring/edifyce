@@ -39,6 +39,30 @@ describe('CodeEditor line-number gutter', () => {
 		expect(numbers[1].className).toContain('text-destructive');
 	});
 
+	it('shows citation numbers when given, blanking lines that have none', () => {
+		// The blank line is uncitable, so the step after it stays line 2 — the row
+		// position (3) is exactly what a reference must not be written against.
+		const { container } = render(CodeEditor, {
+			value: 'a [HYP]\n\nb [MP, 1]',
+			showLineNumbers: true,
+			lineNumbers: [1, null, 2]
+		});
+		const numbers = container.querySelectorAll('[aria-hidden="true"] > div');
+		expect(Array.from(numbers).map((n) => n.textContent?.trim())).toEqual(['1', '', '2']);
+	});
+
+	it('falls back to row positions when citation numbers are unknown', () => {
+		// An empty array means the last result no longer lines up with the text
+		// (mid-edit); plain positions beat stale numbers.
+		const { container } = render(CodeEditor, {
+			value: 'a\n\nb',
+			showLineNumbers: true,
+			lineNumbers: []
+		});
+		const numbers = container.querySelectorAll('[aria-hidden="true"] > div');
+		expect(Array.from(numbers).map((n) => n.textContent?.trim())).toEqual(['1', '2', '3']);
+	});
+
 	it('exposes focusLine to select a given line', () => {
 		const { container, component } = render(CodeEditor, {
 			value: 'alpha\nbravo\ncharlie',

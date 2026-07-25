@@ -137,6 +137,20 @@ def assumption_line() -> LineSpec:
     )
 
 
+def comment_line() -> LineSpec:
+    """A ``-- <text>`` prose line the checker ignores.
+
+    Free text: unlike a logical line its shape names no grammar sort at all, so
+    it is also the case that pins ``_line_layout``'s relaxation.
+    """
+    return LineSpec(
+        name="note",
+        shape="-- <text>",
+        parts=[LinePart(name="text", regex=".+")],
+        behaviour="comment",
+    )
+
+
 def reiteration_rule() -> Rule:
     """Reiteration (R): restate an in-scope formula. Exercises scope checking."""
     return rule("R", "reiteration", ["p"], "p", [("p", "formula")])

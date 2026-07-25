@@ -212,11 +212,11 @@ def _parse_term(text: str, context: Context) -> Term | None:
     so it stays schematic. Returns ``None`` when nothing parses.
 
     Defined notation is allowed: the parse may unfold the system's *resolved*
-    definitions. Any still-unresolved ``PendingDefinition`` records are dropped
-    first, though — during a system's own compilation ``context.definitions`` can
-    hold pending records (they lack ``.match`` and would crash the unfold). Rule
-    and definition provisos are parsed once definitions have resolved (see the
-    compiler's finalisation pass), so a proviso there sees real definitions.
+    definitions. Any record that is not yet resolved is dropped
+    first, though — mid-build ``context.definitions`` can hold records that are
+    not yet resolved (they lack ``.match`` and would crash the unfold). Rule and
+    definition provisos are parsed once definitions have resolved (step 9 of
+    ``build_system``), so a proviso there sees real definitions.
     """
     parse_context = copy(context)
     parse_context.definitions = [d for d in context.definitions if hasattr(d, "match")]

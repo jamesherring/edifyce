@@ -31,7 +31,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ..compiler import promote_from_source
+from ..promotion import promote_from_source
 from ..declarative import LinePart, LineSpec, Production, SystemSpec, build_system
 from ..formal_system import FormalSystem
 from . import compressed

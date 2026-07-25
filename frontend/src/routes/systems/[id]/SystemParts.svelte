@@ -4,6 +4,7 @@
 	import SectionCard from '$lib/components/SectionCard.svelte';
 	import InlineEmpty from '$lib/components/InlineEmpty.svelte';
 	import type { Binding, FormalSystemDetail } from '$lib/api';
+	import { rulePremises } from '$lib/notation';
 
 	let { system }: { system: FormalSystemDetail } = $props();
 
@@ -87,6 +88,11 @@
 							<div class="flex flex-wrap items-baseline gap-2">
 								<span class="font-medium">{line.name}</span>
 								<span class="font-mono text-muted-foreground">{line.shape}</span>
+								{#if line.behaviour === 'comment'}
+									<span class="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
+										>commentary — never checked</span
+									>
+								{/if}
 								{#if line.logical_sort}
 									<span class="text-xs text-muted-foreground"
 										>logical: <span class="font-mono">{line.logical_sort}</span></span
@@ -158,7 +164,7 @@
 									{/if}
 								</Table.Cell>
 								<Table.Cell class="font-mono text-muted-foreground">
-									{rule.antecedents.join(' ; ') || '—'}
+									{rulePremises(rule)}
 								</Table.Cell>
 								<Table.Cell class="font-mono">{rule.deduction}</Table.Cell>
 								<Table.Cell class="hidden font-mono text-xs text-muted-foreground sm:table-cell">

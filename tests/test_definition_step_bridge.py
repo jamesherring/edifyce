@@ -18,11 +18,8 @@ import pytest
 
 pytest.importorskip("regex")
 
-# The compiler is retained ONLY for the malformed-`.edi` error-path tests at the
-# bottom, which inject bad `if`/`where`/`fresh` syntax into FRESH_SYSTEM to assert
-# structured compile errors. Every *system fixture* is now built declaratively via
-# `build_spec`, the same path the database and API use.
-from website.logical.compiler import compile as compile_formal_system
+# Every system fixture is built declaratively via `build_spec`, the same path the
+# database and API use.
 from website.logical.declarative import SystemSpec, build_spec
 from website.logical.formal_system.definitions import (
     follows_by_definition,
@@ -152,8 +149,8 @@ def const_system():
 def binder_definition(system):
     # (x ⊆ y) := ∀z.((z ∈ x) → (z ∈ y)) with z's binder status *not* declared.
     # Built directly so z is an undeclared bound variable of the defining form;
-    # the soundness gate must refuse it (contrast the FRESH_SYSTEM tests below,
-    # where `fresh z as setvar` declares it and the kernel path is taken).
+    # the soundness gate must refuse it (contrast `fresh_system`, whose `fresh`
+    # binding declares z, so the kernel path is taken).
     context = context_of(system)
     setvar = system.build_context.variables["setvar"]
     context.string_variables = {"x": setvar, "y": setvar}
@@ -316,63 +313,6 @@ def fresh_spec(where: str | None = None) -> SystemSpec:
     )
 
 
-# The `.edi` form of the same system, kept ONLY as the harness for the
-# malformed-clause compile-error tests at the bottom: they interpolate bad
-# `if`/`where`/`fresh` syntax into `%(WHERE)s` / the `fresh` clause and assert the
-# compiler rejects it. `Define` attaches to the `formula` union (its lower form, a
-# `forall`, is not a `subset` instance) by re-opening the union with a `with`.
-FRESH_SYSTEM = """FormalSystem SetTheory:
-
-    Regex setvar:
-        ^[a-z]$
-
-    Regex reference:
-        ^[A-Za-z0-9, ]+$
-
-    Pattern membership:
-        with x as setvar, y as setvar:
-            (x ∈ y)
-
-    UnionPattern formula:
-        membership
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p → q)
-
-    formula:
-        implication
-
-    Pattern forall:
-        with x as setvar, phi as formula:
-            ∀x.phi
-
-    formula:
-        forall
-
-    Pattern subset:
-        with x as setvar, y as setvar:
-            (x ⊆ y)
-
-    formula:
-        subset
-
-    formula:
-        with x as setvar, y as setvar:
-            Define (x ⊆ y) as ∀z.((z ∈ x) → (z ∈ y)) fresh z as setvar%(WHERE)s
-
-    Pattern statement_pattern:
-        with f as formula, r as reference:
-            f [r]
-
-    LineType statement:
-        pattern: statement_pattern
-        behaviour: logical
-        formula: f
-        reference: r
-"""
-
-
 @pytest.fixture(scope="module")
 def fresh_system():
     return build_declarative(fresh_spec())
@@ -473,38 +413,6 @@ def test_where_definition_is_refused_by_the_string_path(guarded_system):
     assert higher is not None
     assert definition.get_lower(higher, context) is False
     assert definition.check_application(higher, higher, context) is False
-
-
-# ---------------------------------------------------------------------------
-# legacy `if` rejection and malformed-clause compile errors
-# ---------------------------------------------------------------------------
-
-
-def test_legacy_if_proviso_is_a_compile_error():
-    # The legacy pseudo-python `if` proviso has been retired; a definition that
-    # uses it is a compile error directing the author to `where`.
-    result = compile_formal_system(
-        FRESH_SYSTEM % {"WHERE": " if x == x"}
-    )
-    assert "errors" in result
-    assert any("if" in e and "where" in e for e in result["errors"])
-
-
-def test_malformed_where_sort_is_a_compile_error_not_a_crash():
-    # An unknown sort in a `where` proviso is resolved outside run()'s
-    # try/except; it must surface as a structured compile error, not a 500.
-    result = compile_formal_system(
-        FRESH_SYSTEM % {"WHERE": " where disjoint(x, y, no_such_sort)"}
-    )
-    assert "errors" in result
-
-
-def test_malformed_fresh_sort_is_a_compile_error_not_a_crash():
-    result = compile_formal_system(
-        FRESH_SYSTEM.replace("fresh z as setvar", "fresh z as no_such_sort")
-        % {"WHERE": ""}
-    )
-    assert "errors" in result
 
 
 def test_where_definition_refuses_when_the_kernel_path_is_unavailable(binder_system):

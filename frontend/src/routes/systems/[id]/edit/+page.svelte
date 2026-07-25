@@ -20,6 +20,8 @@
 	import DefinitionsSection from './DefinitionsSection.svelte';
 	import AxiomsSection from './AxiomsSection.svelte';
 	import RulesSection from './RulesSection.svelte';
+	import CompileStatus from './CompileStatus.svelte';
+	import SystemOutline, { type OutlineSection } from './SystemOutline.svelte';
 	import {
 		api,
 		ApiError,
@@ -27,11 +29,11 @@
 		type SystemValidation
 	} from '$lib/api';
 	import { systemSymbols } from '$lib/symbols';
+	import { notationReference } from '$lib/notation';
+	import { createUnsavedGuard } from '$lib/unsaved-guard.svelte';
 	import { auth } from '$lib/auth.svelte';
 	import { toastSuccess, toastError } from '$lib/toast';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
-	import CircleCheck from '@lucide/svelte/icons/circle-check-big';
-	import CircleX from '@lucide/svelte/icons/circle-x';
 	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import Lock from '@lucide/svelte/icons/lock';
@@ -55,8 +57,34 @@
 
 	const isOwner = $derived(!!auth.user && !!system && system.owner?.id === auth.user.id);
 	const sortNames = $derived(system ? system.sorts.map((s) => s.name) : []);
-	// The system's own notation, offered by each edit sheet's symbol palette.
+	// The system's own notation, offered by each edit sheet's symbol palette, and
+	// the grammar reference shown beside it.
 	const symbols = $derived(systemSymbols(system));
+	const notation = $derived(notationReference(system));
+
+	// Only the details form defers its save — every part saves from its own sheet
+	// the moment you confirm it — so that's all this guards.
+	const detailsDirty = $derived(
+		!!system &&
+			(name.trim() !== system.name ||
+				(description.trim() || null) !== (system.description ?? null))
+	);
+	const guard = createUnsavedGuard(() => detailsDirty);
+
+	// The outline's table of contents. Ids double as the sections' scroll anchors.
+	const outline = $derived<OutlineSection[]>(
+		system
+			? [
+					{ id: 'sorts', title: 'Sorts', count: system.sorts.length },
+					{ id: 'brackets', title: 'Brackets', count: system.brackets.length },
+					{ id: 'grammar', title: 'Grammar', count: system.productions.length },
+					{ id: 'line-types', title: 'Line types', count: system.lines.length },
+					{ id: 'axioms', title: 'Axioms', count: system.axioms.length },
+					{ id: 'rules', title: 'Inference rules', count: system.rules.length },
+					{ id: 'definitions', title: 'Definitions', count: system.definitions.length }
+				]
+			: []
+	);
 
 	// hydrateForm is only true on the initial load / route change, so refetching
 	// after a part edit can't clobber unsaved name/description edits. All state
@@ -183,6 +211,7 @@
 			// bumps loadSeq but leaves page.params.id unchanged.
 			if (page.params.id !== id) return;
 			toastSuccess('System deleted.');
+			guard.allow();
 			goto('/systems');
 		} catch (err) {
 			if (page.params.id === id) {
@@ -210,7 +239,7 @@
 	});
 </script>
 
-<PageContainer maxWidth="3xl" gap>
+<PageContainer maxWidth="5xl" gap>
 	<BackLink href={`/systems/${page.params.id}`} label="Back to system" />
 
 	{#if loadError}
@@ -297,44 +326,28 @@
 			</Card.Content>
 		</Card.Root>
 
-		<!-- Live compile status; refreshed after every part change. -->
-		{#if validating && !validation}
-			<div class="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">Checking…</div>
-		{:else if validation}
-			{#if validation.success}
-				<Alert.Root variant="success">
-					<CircleCheck class="size-4" />
-					<Alert.Title>Compiles cleanly</Alert.Title>
-					<Alert.Description>
-						{validation.line_type_count ?? 0} line type(s), {validation.inference_rule_count ?? 0} inference rule(s).
-					</Alert.Description>
-				</Alert.Root>
-			{:else}
-				<Alert.Root variant="destructive">
-					<CircleX class="size-4" />
-					<Alert.Title>Does not compile ({validation.errors.length})</Alert.Title>
-					<Alert.Description>
-						<ul class="mt-1 space-y-1">
-							{#each validation.errors as err (err)}
-								<li class="rounded border border-destructive/30 bg-destructive/5 px-2 py-1 font-mono text-xs">
-									{err}
-								</li>
-							{/each}
-						</ul>
-					</Alert.Description>
-				</Alert.Root>
-			{/if}
-		{/if}
+		<!-- Wide screens get the outline and the compile status pinned beside the
+		     contents, so neither scrolls out of reach while editing a long system. -->
+		<div class="lg:grid lg:grid-cols-[13rem_minmax(0,1fr)] lg:items-start lg:gap-8">
+			<aside class="hidden lg:sticky lg:top-20 lg:block">
+				<SystemOutline sections={outline} {validation} {validating} />
+			</aside>
 
-		<!-- Contents: the notation, grammar, rules and definitions. -->
-		<div class="space-y-4">
-			<SortsSection systemId={system.id} sorts={system.sorts} onChanged={refresh} />
-			<BracketsSection systemId={system.id} brackets={system.brackets} {symbols} onChanged={refresh} />
-			<ProductionsSection systemId={system.id} productions={system.productions} {sortNames} {symbols} onChanged={refresh} />
-			<LineTypesSection systemId={system.id} lines={system.lines} {sortNames} {symbols} onChanged={refresh} />
-			<AxiomsSection systemId={system.id} axioms={system.axioms} {symbols} onChanged={refresh} />
-			<RulesSection systemId={system.id} rules={system.rules} {symbols} onChanged={refresh} />
-			<DefinitionsSection systemId={system.id} definitions={system.definitions} {sortNames} {symbols} onChanged={refresh} />
+			<div class="space-y-4">
+				<!-- Live compile status; refreshed after every part change. Narrow
+				     screens have no sidebar to pin it in, so it leads the contents. -->
+				<div class="lg:hidden">
+					<CompileStatus {validation} {validating} />
+				</div>
+
+				<SortsSection systemId={system.id} sorts={system.sorts} onChanged={refresh} />
+				<BracketsSection systemId={system.id} brackets={system.brackets} {symbols} {notation} onChanged={refresh} />
+				<ProductionsSection systemId={system.id} productions={system.productions} {sortNames} {symbols} {notation} onChanged={refresh} />
+				<LineTypesSection systemId={system.id} lines={system.lines} {sortNames} {symbols} {notation} onChanged={refresh} />
+				<AxiomsSection systemId={system.id} axioms={system.axioms} {symbols} {notation} onChanged={refresh} />
+				<RulesSection systemId={system.id} rules={system.rules} {symbols} {notation} onChanged={refresh} />
+				<DefinitionsSection systemId={system.id} definitions={system.definitions} {sortNames} {symbols} {notation} onChanged={refresh} />
+			</div>
 		</div>
 
 		<Card.Root>
@@ -367,6 +380,16 @@
 				</Button>
 			</Card.Content>
 		</Card.Root>
+
+		<ConfirmDialog
+			open={guard.prompting}
+			title="Leave without saving?"
+			description="The system details have changes you haven't saved. They'll be lost if you leave now."
+			confirmLabel="Leave"
+			variant="destructive"
+			onConfirm={guard.leave}
+			onCancel={guard.stay}
+		/>
 
 		<ConfirmDialog
 			bind:open={confirmOpen}

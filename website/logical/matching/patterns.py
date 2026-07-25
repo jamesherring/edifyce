@@ -355,7 +355,7 @@ class StringPattern(Pattern):
         self.pattern = pattern
 
         # An optional precomputed nested kernel Term for a rule-schema template,
-        # set by the compiler (compose_schema_term) and consumed by the checker;
+        # set at build time (build_context.compose_schema_term) and consumed by the checker;
         # opaque to the matching layer, which never reads it (matching must not
         # depend on the kernel). None for any pattern that is not a compound
         # rule schema. Declared here so consumers use `pattern.schema_term`
@@ -902,48 +902,6 @@ class StringPattern(Pattern):
 
         # Reset variables
         self.reset_variables()
-
-    def reverse_variables(self):
-        # Get the reverse dictionary for variables
-
-        reverse = {}
-        for var, subpattern in self.variables.items():
-            if subpattern not in reverse:
-                reverse[subpattern] = [var]
-
-            else:
-                reverse[subpattern].append(var)
-
-        return reverse
-
-    def reverse_display_variables(self):
-        # Get the reverse dictionary for display variables
-
-        reverse = {}
-        for var, subpattern in self.display_variables.items():
-            if subpattern not in reverse:
-                reverse[subpattern] = [var]
-
-            else:
-                reverse[subpattern].append(var)
-
-        return reverse
-
-    def create_match_with_variable_map(self, variable_map):
-        # Create a match using this pattern with the given variable map ({String: String})
-
-        s = self.pattern
-
-        # Go through variable locations in reverse order
-        indices = sorted(list(self.variable_locations), reverse=True)
-
-        for i in indices:
-            var_label = self.variable_locations[i]["label"]
-
-            if var_label in variable_map:
-                s = s[:i] + variable_map[var_label] + s[i + len(var_label):]
-
-        return matches.Match(string=s, pattern=self)
 
     def equivalent(self, other, context, memo=None, allow_mapping_to=False):
         # Check if two patterns are the same

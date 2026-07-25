@@ -34,10 +34,10 @@ and surface* existing engine capability rather than reinvent it.
 
 **Definitions — grammar, layering, and proviso storage are done.**
 - Definitions **already layer**: a later definition's `lower` form may use notation
-  from an earlier one. Realised at compile time — definitions finalise in
+  from an earlier one. Realised at build time — definitions finalise in
   `position` order and each resolved one is added back to `context.definitions`
-  (`compiler.py:1136-1180`), so the next one's match sees it. The dependence is
-  positional and not recorded relationally.
+  (`declarative.build_system` step 8), so the next one's match sees it. The
+  dependence is positional and not recorded relationally.
 - Definition provisos use the **same `SideConditionRow` algebra as rules** — same
   closed vocabulary (`occurs`/`equal`/`disjoint`/`atom`/`member` + `not`/`and`/
   `or`), same `_materialise`, same either-or owner table (`app/db/side_conditions.py`).

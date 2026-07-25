@@ -10,6 +10,12 @@ export interface HealthResponse {
 
 export interface ProofLine {
 	valid: boolean;
+	// The number a citation names this line by. Null for a line no citation can
+	// reach (a blank line, or commentary), so it is not a text-line index.
+	// Optional only because a proof verified before citation numbering existed
+	// has a cached payload without the field — the viewer renders those at the
+	// row position they were numbered by until the proof is checked again.
+	number?: number | null;
 	behaviour: string | null;
 	name: string | null;
 	invalid_message: string | null;
@@ -86,6 +92,8 @@ export interface LinePart {
 
 /** The subproof scope a line type opens, or null for a plain line. */
 export type LineScope = 'assumption' | 'variable';
+/** What the checker does with a line: assert-and-justify, or prose it ignores. */
+export type LineBehaviour = 'logical' | 'comment';
 
 export interface LineType {
 	id: string;
@@ -93,6 +101,7 @@ export interface LineType {
 	shape: string;
 	logical_sort: string | null;
 	scope: LineScope | null;
+	behaviour: LineBehaviour;
 	parts: LinePart[];
 }
 
@@ -249,6 +258,7 @@ export interface LineTypeCreate {
 	shape: string;
 	logical_sort?: string | null;
 	scope?: LineScope | null;
+	behaviour?: LineBehaviour;
 	parts?: LinePartInput[];
 }
 export type LineTypeUpdate = Partial<LineTypeCreate>;
@@ -294,8 +304,9 @@ export type RuleUpdate = Partial<RuleCreate>;
 
 // ---------------------------------------------------------------------------
 // Proofs (stored CRUD) — mirror the read/write models in app/schemas.py. A proof
-// belongs to a formal system, carries its `.edi` source, and is verified against
-// that system on demand (the verdict is cached in `valid` / `result`).
+// belongs to a formal system, carries its proof text (lines written in that
+// system's own grammar), and is verified against it on demand (the verdict is
+// cached in `valid` / `result`).
 // ---------------------------------------------------------------------------
 
 /** List-row view of a proof. `published_at` non-null ⇒ public/published. */

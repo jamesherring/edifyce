@@ -6,8 +6,9 @@ this repository. For end-user setup and API usage, see [README.md](README.md).
 ## What Edifyce is
 
 Edifyce is a **formal proof assistant**. Users define a *formal system* — its
-line types, notation, and inference rules — in Edifyce source code, then write
-*proofs* in that system and have them mechanically verified, line by line.
+grammar, notation, and inference rules — as structured, individually-editable
+parts, then write *proofs* in that system and have them mechanically verified,
+line by line.
 
 The project began as a server-rendered Django site and has been rebuilt as:
 
@@ -27,15 +28,25 @@ adapter over it, and the frontend is a thin client over the API.
 | `app/db/` | Persistence layer: SQLAlchemy 2.0 (async) models + session wiring. Beside the engine, not inside it. The `users` table is wired into `app/auth/`; the rest is not yet used by routes. See `app/db/README.md`. |
 | `migrations/` | Atlas versioned SQL migrations (`atlas.sum`). Config in `atlas.hcl`; models loaded via `tools/atlas/schema.py`. |
 | `website/logical/` | The proof engine. This is where the real logic is. |
-| `website/logical/compiler.py` | Parses Edifyce source into a `FormalSystem` (AST → system). |
-| `website/logical/formal_system/` | `FormalSystem`, `Proof`, `ProofLine`, line types, inference rules — the compiled system and proof-checking. |
-| `website/logical/matching/` | Pattern-matching engine (patterns, contexts, matches) that inference rules are checked against. |
+| `website/logical/declarative.py` | The `SystemSpec` dataclasses (grammar productions, lines, definitions, axioms, rules) and `build_spec`/`build_system`, which construct a `FormalSystem` straight from one. **This is how systems are built in production.** |
+| `website/logical/kernel/` | The trusted checking core: `terms` (interned, shared-DAG formula trees), `unify` (first-order matching), `side_conditions` (the closed proviso vocabulary), `definitions` (a definitional unfold as a cited step). Hard-codes no logic. |
+| `website/logical/formal_system/` | `FormalSystem`, `Proof`, `ProofLine`, line types, inference rules — the built system and proof-checking. |
+| `website/logical/matching/` | Pattern-matching engine (patterns, contexts, matches). Now mainly the **parser**: it turns proof-line text into a `Match`, which `kernel.from_match` projects into a term for checking. Also `rewriting`, the associative matcher for string-rewriting (semi-Thue) rules. |
+| `website/logical/build_context.py` | The build context (`FormalSystemContext`) and the constructions needing it — `build_schema_pattern`, `combine_side_conditions`. Driven from `SystemSpec` fields by `declarative`; the sole way a system is assembled. |
+| `website/logical/promotion.py` | `promote_from_source`: builds a citable `PromotedTheorem` from a proved or imported theorem's statement, written in *the system's own* grammar (a Metamath `$p` maps here directly). |
+| `website/logical/graphs.py` | Leaf graph utilities: bipartite matching for antecedent-slot assignment, topological order for proof dependencies. |
 | `frontend/` | SvelteKit (Svelte 5) SPA styled with Tailwind CSS v4 + shadcn-svelte. Static build talks to the API. `src/routes/` = pages, `src/lib/api.ts` = the API client. See `frontend/README.md`. |
-| `tests/` | pytest suite covering the API, compiler, engine, and matching. |
-| `deprecated/` | Legacy Django frontend, kept **only** as reference. Superseded by `frontend/`. Not imported or served. Don't wire it back in. |
+| `tests/` | pytest suite covering the API, engine, kernel, and matching. |
 
-The two public entry points into the engine are `compiler.compile(code)` and
-`FormalSystem.parse(text)` — start there when tracing behaviour.
+The two public entry points into the engine are `declarative.build_spec(spec)` —
+which the API reaches via `app.db.system_to_spec`, so the relational rows are the
+source of truth, not any source blob — and `FormalSystem.parse(text)` for a
+proof. Start there when tracing behaviour.
+
+The bespoke `.edi` source language and its compiler are **gone**. A system is a
+`SystemSpec` and nothing else; there is no text form to round-trip through, and
+`LineType` behaviours the compiler alone could author (`indent`, a logical line
+with no formula field) are refused at construction.
 
 ## Working in this repo
 
