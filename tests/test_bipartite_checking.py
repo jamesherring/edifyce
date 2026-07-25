@@ -1,11 +1,10 @@
-"""Engine-level tests for the graph-backed proof checker:
+"""Engine-level tests for the graph-backed proof checker: antecedent assignment
+via bipartite matching (InferenceRule.slot_admits + Proof._first_valid_assignment)
+- a rule applies regardless of the order its antecedents are cited, an impossible
+citation is rejected without raising, and extra antecedents are handled.
 
-* antecedent assignment via bipartite matching (InferenceRule.slot_admits +
-  Proof._first_valid_assignment) - a rule applies regardless of the order its
-  antecedents are cited, an impossible citation is rejected without raising, and
-  extra antecedents are handled; and
-* the graphlib-backed import/theorem dependency helpers on Proof
-  (dependency_order / circular_dependency).
+Proof-to-proof dependency ordering is not an engine concern; it is covered by
+tests/test_proofs_api.py.
 
 Both systems are assembled declaratively (`SystemSpec` + `build_system`), the
 same build path the database and API use.
@@ -16,7 +15,6 @@ import pytest
 pytest.importorskip("regex")
 
 from website.logical.declarative import Rule, SystemSpec, build_system
-from website.logical.formal_system import Proof
 
 from tests.spec_helpers import brackets, hyp_rule, regex_prod, rule, statement_line, template_prod
 
@@ -149,97 +147,6 @@ def test_auto_justification_finds_antecedents_without_citation(mp_system):
     # accessible prior lines to discover a valid application.
     proof = mp_system.parse("a [HYP]\n(a -> b) [HYP]\nb [MP]")
     assert last_line(proof).valid is True
-
-
-# ---------------------------------------------------------------------------
-# Import / theorem dependency graph (graphlib)
-# ---------------------------------------------------------------------------
-
-
-def make_proof(system):
-    return Proof(system)
-
-
-def test_dependency_order_places_used_proofs_first(mp_system):
-    base = make_proof(mp_system)
-    middle = make_proof(mp_system)
-    top = make_proof(mp_system)
-    middle.proofs_used = {base}
-    top.proofs_used = {middle}
-
-    order = top.dependency_order()
-    assert order.index(base) < order.index(middle) < order.index(top)
-
-
-def test_no_circular_dependency_in_a_dag(mp_system):
-    base = make_proof(mp_system)
-    top = make_proof(mp_system)
-    top.proofs_used = {base}
-    assert top.circular_dependency() is None
-
-
-def test_circular_dependency_is_detected(mp_system):
-    a = make_proof(mp_system)
-    b = make_proof(mp_system)
-    a.proofs_used = {b}
-    b.proofs_used = {a}
-
-    cycle = a.circular_dependency()
-    assert cycle is not None
-    assert set(cycle) <= {a, b}
-    assert cycle[0] == cycle[-1]
-
-
-# ---------------------------------------------------------------------------
-# import_path enforces the dependency check (FU4)
-# ---------------------------------------------------------------------------
-
-
-def importable_proof(system, reference):
-    # A proof set up to import `reference` under the label "R".
-    proof = Proof(system, reference_proofs={})
-    proof.reference_context["R"] = reference
-    return proof
-
-
-def test_import_of_an_independent_result_succeeds(mp_system):
-    dependency = make_proof(mp_system)
-    proof = importable_proof(mp_system, dependency)
-
-    result = proof.import_path("R", "imported", mp_system.context)
-    assert result.success is True
-    assert dependency in proof.proofs_used
-
-
-def test_import_that_closes_a_cycle_is_rejected(mp_system):
-    # The imported proof already (transitively) depends on the importer, so
-    # importing it would make the proof justify itself.
-    dependency = make_proof(mp_system)
-    proof = importable_proof(mp_system, dependency)
-    dependency.proofs_used = {proof}
-
-    result = proof.import_path("R", "imported", mp_system.context)
-    assert result.success is False
-    assert "circular" in result.error_message.lower()
-    # The dependency edge and label binding are backed out on rejection.
-    assert dependency not in proof.proofs_used
-    assert "imported" not in proof.reference_context
-
-
-def test_cycle_rejection_restores_a_shadowed_label(mp_system):
-    # A failed circular import that reuses an existing label must restore the
-    # prior binding, not erase it (else earlier valid references would break).
-    dependency = make_proof(mp_system)
-    proof = importable_proof(mp_system, dependency)
-    dependency.proofs_used = {proof}
-
-    existing = make_proof(mp_system)
-    proof.reference_context["dup"] = existing
-
-    result = proof.import_path("R", "dup", mp_system.context)
-    assert result.success is False
-    # The pre-existing binding under "dup" survives the rejected import.
-    assert proof.reference_context["dup"] is existing
 
 
 # ---------------------------------------------------------------------------

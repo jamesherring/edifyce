@@ -209,14 +209,13 @@ already folded into this document. The shippable work:
      (like `formula`/`reference`), not via the interpreter — tracked for a later
      PR.
    - `get_references` (dead, no callers) removed, and the `behaviour: definition`
-     / `behaviour: import` branches in `ProofLine.execute` now **fail closed** —
-     a proof line with one of these behaviours is rejected as unsupported rather
-     than silently accepted (their `lower/higher/for/path` derivation was the
-     dead accessor; passing the line as a valid no-op would let unsupported
-     syntax through, against the "fail loudly" rule). To be lifted **when the
-     references/definitions feature is reimplemented with a typed mechanism**
-     (see `docs/proof-references-and-definitions-plan.md`); `Proof.import_path` —
-     the tested method — stays for that rewire.
+     / `behaviour: import` branches in `ProofLine.execute` made to **fail closed**
+     rather than silently accept a line whose payload derivation was the dead
+     accessor. Both behaviours have since been **deleted outright**: a
+     `LineType` now accepts only `logical`, `axiom` and `comment`, which is
+     exactly what a `SystemSpec` can build. Neither feature needed one — a
+     definitional step is a `logical` line citing a definition, and a lemma from
+     another proof arrives through the pre-seeded `reference_context`.
 
    Net: seven engine → interpreter call sites gone, all behaviour-preserving
    (suite unchanged at 629 passed). Interpreter stays in place for the DSL.
