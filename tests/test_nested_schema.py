@@ -119,6 +119,9 @@ def test_full_self_implication_derivation(hilbert):
     assert proof.valid is True, [(l.display, l.valid) for l in proof.proof_lines]
 
 
+# ---------------------------------------------------------------------------
+# Soundness preserved: non-instances still rejected
+# ---------------------------------------------------------------------------
 
 
 def test_non_instance_of_axiom_is_rejected(hilbert):

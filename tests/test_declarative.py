@@ -533,7 +533,10 @@ def test_the_engine_carries_no_edi_compiler():
             if isinstance(node, ast.Import):
                 names = [alias.name for alias in node.names]
             elif isinstance(node, ast.ImportFrom):
-                names = [node.module or ""]
+                # Both halves matter. `from .compiler import compile` puts it in
+                # the module, `from website.logical import compiler` in the
+                # names — the same dependency, written two ways.
+                names = [node.module or "", *(alias.name for alias in node.names)]
             else:
                 continue
             offenders += [f"{path.name} -> {n}" for n in names if "compiler" in n]
