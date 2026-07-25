@@ -22,7 +22,16 @@ from sqlalchemy import NullPool, create_engine, event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import app.auth.backend as backend
-from app.db import Base, FormalSystem, SideConditionRow
+from app.db import (
+    Base,
+    FormalSystem,
+    Proof,
+    ProofLineAntecedentRow,
+    ProofLineRow,
+    SideConditionRow,
+    TermChildRow,
+    TermRow,
+)
 from app.db.models import OAuthAccount, User
 from app.db.session import get_session
 from app.db.systems import (
@@ -50,6 +59,10 @@ _TABLES = [
         DefinitionBindingRow, DefinitionFreshRow, AxiomRow, AxiomBindingRow, RuleRow,
         RuleAntecedentRow, RuleBindingRow,
         SideConditionRow,
+        # A part edit invalidates the system's proofs and their stored structure
+        # (app/db/proofs_mapping.discard_system_checks), so those tables must
+        # exist even though this module authors no proofs.
+        Proof, ProofLineRow, ProofLineAntecedentRow, TermRow, TermChildRow,
     )
 ]
 
