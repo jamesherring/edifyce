@@ -11,9 +11,21 @@ import regex as re
 from . import definitions, matches
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable, Iterator
+
     from .context import Context
     from .definitions import DefinedNotation
     from .matches import Match
+
+    # A template segment: `(kind, text, sort, length)`. For a literal, `text` is
+    # the literal itself and `sort` is None; for a slot, `text` is the slot's
+    # label and `sort` the pattern that fills it. A tuple rather than a dataclass
+    # because the walk unpacks one per step of every attempt.
+    Segment = tuple[int, str, "Pattern | None", int]
+
+    # Where a string's bracket delimiters sit, and the nesting depth each leaves
+    # it at: two lists of the same length (see `Pattern.bracket_profile`).
+    BracketProfile = tuple[list[int], list[int]]
 
 
 # A template segment's kind (see StringPattern.segments).
@@ -31,7 +43,7 @@ _METAVARIABLES = "metavariables"
 _NO_BRACKETS = ()
 
 
-def _occurrences(s, text, start, limit):
+def _occurrences(s: str, text: str, start: int, limit: int) -> Iterator[int]:
     # Every position in `s[start:limit]` where `text` occurs, in increasing order.
     # A generator, because a slot's first candidate usually parses and the rest of
     # the scan is then never paid for.
@@ -42,7 +54,9 @@ def _occurrences(s, text, start, limit):
         at = s.find(text, at + 1)
 
 
-def _balanced_ends(candidates, profile, start):
+def _balanced_ends(
+    candidates: Iterable[int], profile: BracketProfile, start: int
+) -> Iterator[int]:
     # Those of `candidates` - which must increase - that leave the slot holding a
     # bracket-balanced substring of `s`, given `s`'s bracket profile.
     #
@@ -70,7 +84,7 @@ def _balanced_ends(candidates, profile, start):
             yield end
 
 
-def _metavariable_spelt_with_brackets(pattern, context):
+def _metavariable_spelt_with_brackets(pattern: Pattern, context: Context) -> bool:
     # Whether any metavariable in scope is spelled with a bracket delimiter in it.
     # Practically never - but a union answers a metavariable by *name* before it
     # checks brackets, so one would be the counterexample to the reasoning in
@@ -180,11 +194,11 @@ class Pattern:
         if self._opening_of is not None and len(pairs) == 1:
             self._one_pair = next(iter(pairs.items()))
 
-    def brackets_respected(self, s, context):
+    def brackets_respected(self, s: str, context: Context) -> bool:
         # `check_brackets`, memoised for the length of one parse.
         return self.bracket_profile(s, context) is not None
 
-    def bracket_profile(self, s, context):
+    def bracket_profile(self, s: str, context: Context) -> BracketProfile | None:
         """Where ``s``'s brackets are and how deep each leaves it, or None.
 
         A pair of lists — the index of each delimiter, and the nesting depth
@@ -231,7 +245,7 @@ class Pattern:
 
         return profile
 
-    def _bracket_profile(self, s):
+    def _bracket_profile(self, s: str) -> BracketProfile | None:
         # Multi-character delimiters fall back to the general scan, which yields a
         # verdict but no profile.
         opening_of = self._opening_of
@@ -272,7 +286,7 @@ class Pattern:
         return positions, levels
 
     @staticmethod
-    def _one_pair_profile(s, opener, closer):
+    def _one_pair_profile(s: str, opener: str, closer: str) -> BracketProfile | None:
         # One grouping pair - which is what every bracketed system here declares -
         # so the delimiters can be *found* rather than the string walked. The two
         # `find` scans run in C and the loop turns once per bracket instead of once
@@ -609,10 +623,10 @@ class StringPattern(Pattern):
         self.non_variable_locations = None
         self.non_variable_order = []
         self.last_variable_location = -1
-        self.segments = ()
-        self.segment_at_offset = {}
-        self.literal_tail = (0,)
-        self.first_literal_after = (-1,)
+        self.segments: tuple[Segment, ...] = ()
+        self.segment_at_offset: dict[int, int] = {}
+        self.literal_tail: tuple[int, ...] = (0,)
+        self.first_literal_after: tuple[int, ...] = (-1,)
         self.has_repeated_variables = False
 
         # Artificially infinite certainty
@@ -668,7 +682,7 @@ class StringPattern(Pattern):
         if self.union_member:
             invalidate_union_memos()
 
-    def build_segments(self):
+    def build_segments(self) -> None:
         """Decompose the template into the slots and literals ``match`` walks.
 
         A ``StringPattern`` is a template with named slots — ``(a → b)`` — and
@@ -681,7 +695,7 @@ class StringPattern(Pattern):
         template exactly (``rewriting`` walks the same partition), so this is a
         total walk of it.
         """
-        segments = []
+        segments: list[Segment] = []
 
         i = 0
         while i < len(self.pattern):
@@ -736,7 +750,9 @@ class StringPattern(Pattern):
         labels = [segment[1] for segment in segments if segment[0] == _VARIABLE]
         self.has_repeated_variables = len(labels) != len(set(labels))
 
-    def match(self, s, context, pattern_offset=0, debug=None):
+    def match(
+        self, s: str, context: Context, pattern_offset: int = 0, debug: int | None = None
+    ) -> Match | None:
         # Match a string s against this pattern with the given context.
         # Optionally offset the pattern string, to start at an index > 0 - that
         # is, match `s` against the template's tail from that offset on.
@@ -756,7 +772,9 @@ class StringPattern(Pattern):
         memo[key] = result
         return result
 
-    def _match(self, s, context, pattern_offset=0, debug=None):
+    def _match(
+        self, s: str, context: Context, pattern_offset: int = 0, debug: int | None = None
+    ) -> Match | None:
         next_debug = None
         if debug is not None:
             # Debugging
@@ -839,7 +857,7 @@ class StringPattern(Pattern):
 
         return m
 
-    def _literals_appear_in_order(self, s):
+    def _literals_appear_in_order(self, s: str) -> bool:
         # Whether `s` could match this template, judged on its literal parts alone
         # - a necessary condition, and a cheap one. Every literal part must occur,
         # in template order; a template opening with a literal must find it at
@@ -871,7 +889,17 @@ class StringPattern(Pattern):
 
         return True
 
-    def _walk(self, s, start, segment, context, bindings, debug, failed, profile):
+    def _walk(
+        self,
+        s: str,
+        start: int,
+        segment: int,
+        context: Context,
+        bindings: dict[str, Match],
+        debug: int | None,
+        failed: set[tuple[int, int]] | None,
+        profile: BracketProfile | None,
+    ) -> bool:
         # Match `s[start:]` against this template from `segment` on, recording a
         # sub-match per slot filled in `bindings` and returning whether it
         # matched; on failure `bindings` is left as it was found.
@@ -951,7 +979,18 @@ class StringPattern(Pattern):
 
         return False
 
-    def _bind(self, s, end, segment, context, bindings, debug, failed, profile, sub):
+    def _bind(
+        self,
+        s: str,
+        end: int,
+        segment: int,
+        context: Context,
+        bindings: dict[str, Match],
+        debug: int | None,
+        failed: set[tuple[int, int]] | None,
+        profile: BracketProfile | None,
+        sub: Match,
+    ) -> bool:
         # Fill the slot at `segment` with `sub`, then match on from `end`. Undoes
         # the binding if what follows does not match. Returns whether it did.
         label = self.segments[segment][1]
@@ -975,7 +1014,14 @@ class StringPattern(Pattern):
 
         return False
 
-    def _slot_candidates(self, s, start, segment, context, profile):
+    def _slot_candidates(
+        self,
+        s: str,
+        start: int,
+        segment: int,
+        context: Context,
+        profile: BracketProfile | None,
+    ) -> Iterable[int]:
         # The end positions worth trying for the slot at `segment`, in increasing
         # order - so an ambiguous template still resolves to the shortest binding,
         # as it did when this enumerated candidate positions up front.
@@ -1047,7 +1093,7 @@ class StringPattern(Pattern):
 
         return _balanced_ends(candidates, profile, start)
 
-    def _sort_refuses_unbalanced(self, sort, context):
+    def _sort_refuses_unbalanced(self, sort: Pattern, context: Context) -> bool:
         # Whether `sort` is certain to refuse a string that does not respect this
         # pattern's brackets - which is what licenses skipping such a split rather
         # than parsing it to find out.
@@ -1243,7 +1289,7 @@ def invalidate_union_memos() -> None:
     _union_revision += 1
 
 
-def _may_open_with(pattern, character):
+def _may_open_with(pattern: Pattern, character: str) -> bool:
     # Whether `pattern` could match a string beginning with `character`.
     #
     # A StringPattern whose template opens with a literal must find that literal
@@ -1420,7 +1466,7 @@ class UnionPattern(Pattern):
         # No match
         return None
 
-    def add_pattern(self, pattern):
+    def add_pattern(self, pattern: Pattern) -> None:
         """Add ``pattern`` to the union, invalidating any memoised flattening."""
         self.patterns.append(pattern)
         pattern.union_member = True
@@ -1536,7 +1582,9 @@ class UnionPattern(Pattern):
         self._nested_options_cache[path_dict] = (_union_revision, found)
         return found
 
-    def match_options(self, context):
+    def match_options(
+        self, context: Context
+    ) -> tuple[dict, list[Pattern], list[Pattern]]:
         """The flattening `match` reads: paths, then leaves by certainty, then unions.
 
         Splitting the flattening into the two lists `match` walks, and ordering the
@@ -1556,7 +1604,9 @@ class UnionPattern(Pattern):
         self._match_options_cache = (_union_revision, (options, leaves, unions))
         return options, leaves, unions
 
-    def leaf_candidates(self, s, context, leaves):
+    def leaf_candidates(
+        self, s: str, context: Context, leaves: list[Pattern]
+    ) -> list[Pattern]:
         """Those of `leaves` that could match a string starting as `s` does.
 
         A production that opens with a literal can only read a string opening
