@@ -1058,6 +1058,63 @@ def test_invalid_line_type_scope_is_rejected_as_422(client):
     assert response.status_code == 422
 
 
+def test_line_type_behaviour_is_stored_and_read_back(client):
+    # A comment line persists its behaviour and surfaces it on read; a logical
+    # line keeps the default without the client having to send it.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    created = _post(
+        client,
+        f"/api/formal-systems/{sid}/line-types",
+        {"name": "note", "shape": "-- <text>", "behaviour": "comment"},
+    )
+    assert created["behaviour"] == "comment"
+
+    plain = _post(client, f"/api/formal-systems/{sid}/line-types", {"name": "claim", "shape": "<x>"})
+    assert plain["behaviour"] == "logical"
+
+    behaviours = {
+        line["name"]: line["behaviour"]
+        for line in client.get(f"/api/formal-systems/{sid}").json()["lines"]
+    }
+    assert behaviours == {"note": "comment", "claim": "logical"}
+
+    # A metadata-only PATCH must not silently reset the behaviour.
+    patched = client.patch(
+        f"/api/formal-systems/{sid}/line-types/{created['id']}", json={"shape": "// <text>"}
+    )
+    assert patched.status_code == 200
+    assert patched.json()["behaviour"] == "comment"
+
+
+def test_invalid_line_type_behaviour_is_rejected_as_422(client):
+    # The engine has more behaviours, but only these two are authorable — an
+    # unsupported one is a validation error, not a build-time surprise.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    response = client.post(
+        f"/api/formal-systems/{sid}/line-types",
+        json={"name": "block", "shape": "<x>", "behaviour": "indent"},
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "extra", [{"scope": "assumption"}, {"logical_sort": "formula"}]
+)
+def test_comment_line_cannot_carry_a_formula_or_a_scope_via_api(client, extra):
+    # Both pairings fail the build, so the API refuses them up front rather than
+    # storing a system that will not compile.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/api/formal-systems/{sid}/sorts", {"name": "formula"})
+    response = client.post(
+        f"/api/formal-systems/{sid}/line-types",
+        json={"name": "note", "shape": "-- <text>", "behaviour": "comment", **extra},
+    )
+    assert response.status_code == 422
+
+
 def test_oversized_fields_are_rejected_as_422(client):
     # Free-text fields are capped to their DB column width, so an oversized value
     # is a validation error, not a Postgres truncation 500.

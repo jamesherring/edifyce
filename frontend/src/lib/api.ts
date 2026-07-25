@@ -92,6 +92,8 @@ export interface LinePart {
 
 /** The subproof scope a line type opens, or null for a plain line. */
 export type LineScope = 'assumption' | 'variable';
+/** What the checker does with a line: assert-and-justify, or prose it ignores. */
+export type LineBehaviour = 'logical' | 'comment';
 
 export interface LineType {
 	id: string;
@@ -99,6 +101,7 @@ export interface LineType {
 	shape: string;
 	logical_sort: string | null;
 	scope: LineScope | null;
+	behaviour: LineBehaviour;
 	parts: LinePart[];
 }
 
@@ -255,6 +258,7 @@ export interface LineTypeCreate {
 	shape: string;
 	logical_sort?: string | null;
 	scope?: LineScope | null;
+	behaviour?: LineBehaviour;
 	parts?: LinePartInput[];
 }
 export type LineTypeUpdate = Partial<LineTypeCreate>;

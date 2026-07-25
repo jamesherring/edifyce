@@ -143,6 +143,39 @@ describe('LemmasPanel', () => {
 		expect(await screen.findByText(/won't parse/)).toBeInTheDocument();
 	});
 
+	it('still warns when a separate comment line type could mask the check', async () => {
+		// A comment line carries no citation, and its part is typically free text
+		// that full-matches `a.1`. Treating it as a reference field would suppress
+		// the warning the restrictive logical line genuinely needs.
+		apiMock.systems.get.mockResolvedValue({
+			id: 'sys1',
+			lines: [
+				{
+					id: 'l1',
+					name: 'statement',
+					shape: '<formula> [<reference>]',
+					logical_sort: 'formula',
+					behaviour: 'logical',
+					parts: [{ id: 'p1', name: 'reference', regex: '[A-Za-z0-9 ,]+' }]
+				},
+				{
+					id: 'l2',
+					name: 'note',
+					shape: '-- <text>',
+					logical_sort: null,
+					behaviour: 'comment',
+					parts: [{ id: 'p2', name: 'text', regex: '.+' }]
+				}
+			]
+		});
+		render(LemmasPanel, {
+			proof: detail([
+				{ referenced_proof_id: 'lemA', alias: 'A', name: 'Lemma A', slug: 'lemma-a', published: false }
+			])
+		});
+		expect(await screen.findByText(/won't parse/)).toBeInTheDocument();
+	});
+
 	it('still warns when a permissive non-reference part could mask the check', async () => {
 		// The reference field forbids `.`, but a later free-text `note` part accepts
 		// anything. The warning must key off the reference field (the first

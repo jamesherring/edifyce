@@ -251,6 +251,16 @@ class Proof:
         # opener. Called in source order, so by the time a discharge line is
         # reached the subproofs it cites are already built and closed.
 
+        line_type = proof_line.line_type
+
+        # Commentary takes no part in the proof's structure. Skipping it here is
+        # what stops an unindented note from dedenting out of the subproof it
+        # sits in and silently closing it — the author would then get an
+        # out-of-scope error on a line they never touched. Blank lines are
+        # skipped before this point for the same reason.
+        if line_type is not None and line_type.behaviour == "comment":
+            return
+
         if self.root_scope is None:
             self.root_scope = Subproof(kind=None, open_indent=-1)
             self._scope_stack = [self.root_scope]
@@ -260,8 +270,6 @@ class Proof:
         # Dedenting past a subproof's opener closes it.
         while len(stack) > 1 and proof_line.indent <= stack[-1].open_indent:
             stack.pop()
-
-        line_type = proof_line.line_type
 
         if line_type is not None and line_type.scope in ("assumption", "variable"):
             sub = Subproof(

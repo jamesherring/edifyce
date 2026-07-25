@@ -101,7 +101,8 @@ def spec_to_system(spec: SystemSpec) -> FormalSystem:
     for i, line_spec in enumerate(spec.lines):
         logical = symbols[line_spec.logical_sort] if line_spec.logical_sort else None
         line = LineRow(position=i, name=line_spec.name, shape=line_spec.shape,
-                       scope=line_spec.scope, logical_symbol=logical)
+                       scope=line_spec.scope, behaviour=line_spec.behaviour,
+                       logical_symbol=logical)
         for j, part in enumerate(line_spec.parts):
             line.parts.append(LinePartRow(position=j, name=part.name, regex=part.regex))
         system.lines.append(line)
@@ -171,6 +172,7 @@ def system_to_spec(system: FormalSystem) -> SystemSpec:
             parts=[LinePart(name=part.name, regex=part.regex) for part in line.parts],
             logical_sort=line.logical_symbol.name if line.logical_symbol is not None else None,
             scope=line.scope,
+            behaviour=line.behaviour,
         )
         for line in system.lines
     ]

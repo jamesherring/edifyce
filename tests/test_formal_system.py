@@ -1,8 +1,26 @@
+"""Engine-level tests for proof parsing, line types, inference, and numbering.
+
+Systems are assembled declaratively (`SystemSpec` + `build_system`) — the build
+path the database and API use — apart from the two `.edi` fixtures below, which
+pin engine behaviours no declarative system can express. Both are annotated with
+why; both die with the compiler.
+"""
+
 import pytest
 
 pytest.importorskip("regex")
 
 from website.logical.compiler import compile as compile_formal_system
+from website.logical.declarative import LinePart, LineSpec, SystemSpec, build_system
+
+from tests.spec_helpers import (
+    brackets,
+    hyp_rule,
+    regex_prod,
+    rule,
+    statement_line,
+    template_prod,
+)
 
 
 def compiled(code):
@@ -11,8 +29,75 @@ def compiled(code):
     return result["system"]
 
 
-# A system with plain (behaviour: none) statements and an indent block.
-SIMPLE_SYSTEM = """FormalSystem Simple:
+def simple_spec() -> SystemSpec:
+    """Prose the checker accepts without justification.
+
+    The `.edi` original used `behaviour: none`; `comment` is the surviving
+    unchecked behaviour, and it is what these tests need — a line that parses,
+    is recorded, and is never asked to justify itself.
+    """
+    return SystemSpec(
+        name="Simple",
+        lines=[
+            LineSpec(
+                name="statement",
+                shape="<text>",
+                parts=[LinePart(name="text", regex="[a-z ]+")],
+                behaviour="comment",
+            )
+        ],
+    )
+
+
+def logical_spec() -> SystemSpec:
+    """Statements carry a formula and a justification reference.
+
+    HYP introduces a formula from nothing; REP repeats a previously proven one.
+    """
+    return SystemSpec(
+        name="Logic",
+        productions=[regex_prod("formula", "word", "[a-z]+")],
+        lines=[statement_line()],
+        rules=[
+            rule("HYP", "hypothesis", (), "s", [("s", "formula")]),
+            rule("REP", "repetition", ("s",), "s", [("s", "formula")]),
+        ],
+    )
+
+
+def prop_logic_spec() -> SystemSpec:
+    """A propositional system with the compound production ``(p -> q)``.
+
+    MP shares the metavariable p across its antecedents and conclusion; PAIR uses
+    the bare sort `formula` twice, so its two premises are independent
+    "any formula" slots.
+    """
+    def pq() -> list[tuple[str, str]]:
+        # Fresh per call: a spec must never alias a shared mutable list.
+        return [("p", "formula"), ("q", "formula")]
+
+    return SystemSpec(
+        name="PropLogic",
+        brackets=brackets(),
+        productions=[
+            regex_prod("formula", "atom", "[a-z]"),
+            template_prod("formula", "implication", "(p -> q)", pq()),
+        ],
+        lines=[statement_line()],
+        rules=[
+            hyp_rule(),
+            rule("MP", "modus_ponens", ["p", "(p -> q)"], "q", pq()),
+            rule("RImp", "reflexive", (), "(p -> q)", pq(), ["equal(p, q)"]),
+            rule("NOcc", "non_occurring", (), "(p -> q)", pq(), ["not occurs(p, q)"]),
+            rule("PAIR", "pair", ["formula", "formula"], "formula", ()),
+        ],
+    )
+
+
+# The one behaviour left that only `.edi` can author: `indent` block nesting,
+# superseded by `LineSpec.scope` and deliberately not offered declaratively (see
+# declarative._LINE_BEHAVIOURS). It dies with the compiler.
+INDENT_SYSTEM = """FormalSystem Indented:
 
     Regex word:
         ^[a-z ]+$
@@ -33,137 +118,36 @@ SIMPLE_SYSTEM = """FormalSystem Simple:
         behaviour: indent
 """
 
-# A full logical system: statements carry a formula and a justification
-# reference, HYP introduces a formula from nothing, and REP repeats a
-# previously proven formula.
-LOGICAL_SYSTEM = """FormalSystem Logic:
 
-    Regex formula:
+# Likewise compiler-bound: a *logical* line with no formula field at all.
+# `build_system` always projects one, so this guard is unreachable declaratively.
+NO_FORMULA_SYSTEM = """FormalSystem NoFormula:
+
+    Regex word:
         ^[a-z]+$
 
-    Regex reference:
-        ^[A-Za-z ]+$
-
     ProofContext:
         given: MatchSet()
 
-    Pattern statement_pattern:
-        with f as formula, r as reference:
-            f [r]
-
     LineType statement:
-        pattern: statement_pattern
+        pattern: word
         behaviour: logical
-        formula: f
-        reference: r
-
-    with s as formula:
-        InferenceRule hypothesis:
-            label:
-                HYP
-            deduction:
-                s
-
-        InferenceRule repetition:
-            label:
-                REP
-            antecedents:
-                s
-            deduction:
-                s
-"""
-
-
-# A propositional system with a compound production (p -> q). MP has a named
-# metavariable shared across its antecedents and conclusion; PAIR uses the bare
-# sort `formula` twice, so its two premises are independent "any formula" slots.
-PROP_LOGIC_SYSTEM = """FormalSystem PropLogic:
-
-    Regex atom:
-        ^[a-z]$
-
-    Regex reference:
-        ^[A-Za-z 0-9,]+$
-
-    ProofContext:
-        given: MatchSet()
-
-    UnionPattern formula:
-        atom
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p -> q)
-
-    formula:
-        implication
-
-    Pattern statement_pattern:
-        with f as formula, r as reference:
-            f [r]
-
-    LineType statement:
-        pattern: statement_pattern
-        behaviour: logical
-        formula: f
-        reference: r
-
-    with p as formula, q as formula:
-        InferenceRule hypothesis:
-            label:
-                HYP
-            deduction:
-                p
-
-        InferenceRule modus_ponens:
-            label:
-                MP
-            antecedents:
-                p
-                (p -> q)
-            deduction:
-                q
-
-        InferenceRule reflexive:
-            label:
-                RImp
-            deduction:
-                (p -> q)
-            side_conditions:
-                equal(p, q)
-
-        InferenceRule non_occurring:
-            label:
-                NOcc
-            deduction:
-                (p -> q)
-            side_conditions:
-                not occurs(p, q)
-
-    InferenceRule pair:
-        label:
-            PAIR
-        antecedents:
-            formula
-            formula
-        deduction:
-            formula
 """
 
 
 @pytest.fixture(scope="module")
 def simple_system():
-    return compiled(SIMPLE_SYSTEM)
+    return build_system(simple_spec())
 
 
 @pytest.fixture(scope="module")
 def logical_system():
-    return compiled(LOGICAL_SYSTEM)
+    return build_system(logical_spec())
 
 
 @pytest.fixture(scope="module")
 def prop_logic_system():
-    return compiled(PROP_LOGIC_SYSTEM)
+    return build_system(prop_logic_spec())
 
 
 # ---------------------------------------------------------------------------
@@ -201,8 +185,8 @@ def test_blank_lines_are_ignored(simple_system):
     assert displays == ["hello", "world"]
 
 
-def test_indent_block_parses_nested_lines(simple_system):
-    proof = simple_system.parse("if abc:\n    abc")
+def test_indent_block_parses_nested_lines():
+    proof = compiled(INDENT_SYSTEM).parse("if abc:\n    abc")
     lines = proof.data()["lines"]
     assert [l["display"] for l in lines] == ["if abc:", "abc"]
     assert [l["indent"] for l in lines] == [0, 4]
@@ -311,24 +295,9 @@ def test_unknown_reference_is_invalid(logical_system):
 
 
 def test_logical_line_without_formula_is_invalid():
-    # The statement pattern has no formula() function, so logical lines
-    # cannot be checked.
-    system = compiled(
-        """FormalSystem NoFormula:
-
-    Regex word:
-        ^[a-z]+$
-
-    ProofContext:
-        given: MatchSet()
-
-    LineType statement:
-        pattern: word
-        behaviour: logical
-"""
-    )
-
-    proof = system.parse("abc")
+    # The statement pattern declares no formula field, so logical lines cannot
+    # be checked.
+    proof = compiled(NO_FORMULA_SYSTEM).parse("abc")
     assert proof.valid is False
     line = proof.data()["lines"][0]
     assert line["invalid_message"] == "No formula defined for logical line."

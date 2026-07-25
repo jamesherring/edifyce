@@ -38,6 +38,7 @@ from tests.spec_helpers import (
     axiom,
     biconditional_prod,
     brackets,
+    comment_line,
     conjunction_prod,
     cp_rule,
     defn,
@@ -218,6 +219,37 @@ def test_scoped_line_types_round_trip_through_the_database(session):
         "assume a\n    a [R, 1]\nassume b\n    a [R, 2]"
     )
     assert out_of_scope.proof_lines[3].valid is False
+
+
+def commented_spec() -> SystemSpec:
+    # A prose line alongside the logical one. Its shape names no grammar sort, so
+    # it also pins that a formula-less line survives the round trip.
+    return SystemSpec(
+        name="Commented",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        lines=[statement_line(), comment_line()],
+        rules=[reiteration_rule()],
+    )
+
+
+def test_comment_line_types_round_trip_through_the_database(session):
+    session.add(spec_to_system(commented_spec()))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Commented"))
+
+    behaviours = {line.name: line.behaviour for line in stored.lines}
+    assert behaviours == {"statement": "logical", "note": "comment"}
+    # A comment carries no formula, so it holds no logical-sort reference either.
+    assert {line.name: line.logical_symbol for line in stored.lines}["note"] is None
+    assert system_to_spec(stored) == commented_spec()
+
+    system = build_spec(system_to_spec(stored))["system"]
+    proof = system.parse("-- a header\na [R, 1]")
+    # Prose passes unchecked and takes no number, so the step below is line 1.
+    assert proof.proof_lines[0].valid is True
+    assert [line.number for line in proof.proof_lines] == [None, 1]
 
 
 def discharge_spec() -> SystemSpec:
