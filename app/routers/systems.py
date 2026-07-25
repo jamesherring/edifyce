@@ -559,7 +559,7 @@ async def verify_proof(
     """Check a proof against a stored system, assembled server-side from rows.
 
     Replaces the raw-source verify: the client sends only the proof text and the
-    system id, never the system's `.edi`. Readable systems are published ones
+    system id, never a serialised copy of the system itself. Readable systems are published ones
     (any viewer) or the owner's own drafts. Inheritance is not resolved yet (see
     the note on `validate_system`).
     """

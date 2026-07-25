@@ -152,9 +152,6 @@ last-row down) appear enabled but are no-ops.
 part (sorts, rules, …) saves immediately from its sheet. Two persistence models on
 one page invite "did that save?" confusion.
 
-**2f. No source preview while authoring.** The compiled `.edi` source is only on
-the read-only detail page; authors can't see the lowered source as they build.
-
 ---
 
 ## 3. Cross-cutting
@@ -213,13 +210,13 @@ production's Regex mode is full of literal backslashes (`\d`, `\s`), so
 expanding them on the way in would corrupt exactly the field that needs them
 most. If it's wanted later it has to be opt-in per field, not global.
 
-### Phase 3 — Formal-system editor layout
+### Phase 3 — Formal-system editor layout — **done**
 - Two-column on wide screens: a sticky **section outline** (Sorts, Grammar,
   Rules, …) with the **compile status pinned** in view; content on the right.
 - Show a **notation reference** inside the part-editing sheet so authors see the
   grammar they're referencing (the symbol palette itself landed in Phase 2).
 - **Drag-and-drop reordering** (with a keyboard fallback); disable end-cap
-  chevrons. Optional live `.edi` **source preview** pane.
+  chevrons.
 
 ### Phase 4 — Lists, entry points, safety
 - Default authenticated users to **mine**; keep Published for discovery.

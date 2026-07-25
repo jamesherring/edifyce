@@ -9,6 +9,7 @@
 	import { Combobox, type ComboboxOption } from '$lib/components/ui/combobox';
 	import { api, type Definition, type Binding } from '$lib/api';
 	import type { SymbolEntry } from '$lib/symbols';
+	import type { NotationGroup } from '$lib/notation';
 	import { createSectionController } from './section.svelte';
 
 	let {
@@ -16,13 +17,16 @@
 		definitions,
 		sortNames,
 		symbols,
-		onChanged
+		onChanged,
+		notation = []
 	}: {
 		systemId: string;
 		definitions: Definition[];
 		sortNames: string[];
 		symbols: SymbolEntry[];
 		onChanged: () => Promise<void> | void;
+		/** Optional: the grammar reference shown in the edit sheet. */
+		notation?: NotationGroup[];
 	} = $props();
 
 	// Provisos are plain strings in the API; wrap each in a row so it has a stable
@@ -105,6 +109,7 @@
 
 <PartSection
 	title="Definitions"
+	id="definitions"
 	addLabel="Add definition"
 	canAdd={sortNames.length > 0}
 	items={definitions}
@@ -134,6 +139,7 @@
 	onDelete={s.editing ? s.del : undefined}
 	saving={s.saving}
 	{canSave}
+	{notation}
 	{symbols}
 >
 	<div class="space-y-2">

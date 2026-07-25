@@ -4,15 +4,18 @@
 
   type Props = {
     title?: string;
+    /** Anchor target, for in-page links to this card. */
+    id?: string;
     variant?: 'default' | 'muted';
     children: Snippet;
     class?: string;
   };
 
-  let { title, variant = 'default', children, class: className }: Props = $props();
+  let { title, id, variant = 'default', children, class: className }: Props = $props();
 </script>
 
 <div
+  {id}
   class={cn('rounded-lg border p-4', variant === 'muted' && 'border-muted bg-muted/30', className)}
 >
   {#if title}

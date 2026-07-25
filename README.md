@@ -1,23 +1,24 @@
 # Edifyce
 
-A web-based formal proof assistant. Edifyce lets you compile formal systems,
+A web-based formal proof assistant. Edifyce lets you define formal systems,
 write proofs, and have them mechanically verified — through a FastAPI backend and
 a Svelte frontend.
 
 ## Features
 
-- Compile custom formal systems from Edifyce source code
+- Define custom formal systems as structured parts — grammar productions, line
+  types, definitions, axioms and rules — each individually editable and stored
 - Verify formal proofs step-by-step and return structured line-level diagnostics
 - Email/password user accounts (register, log in, manage profile)
 - OpenAPI schema + interactive docs via Swagger UI
-- A Svelte + shadcn-svelte web UI for compiling systems and verifying proofs
+- A Svelte + shadcn-svelte web UI for building systems and verifying proofs
 
 ## Tech Stack
 
 - **Backend:** FastAPI
 - **ASGI Server:** Uvicorn
 - **Validation:** Pydantic v2
-- **Core Logic Engine:** Existing Edifyce formal-system compiler/proof checker
+- **Core Logic Engine:** The Edifyce formal-system builder and term-based proof kernel
 - **Frontend:** SvelteKit (Svelte 5), Tailwind CSS v4, shadcn-svelte
 
 ## Setup
@@ -108,7 +109,7 @@ is rejected rather than linked.
 ## Frontend
 
 The web UI lives in [`frontend/`](frontend/) — a SvelteKit single-page app built
-with Tailwind CSS and shadcn-svelte. It provides pages to compile a formal system
+with Tailwind CSS and shadcn-svelte. It provides pages to build a formal system
 and to verify a proof line by line against the API above.
 
 ```bash

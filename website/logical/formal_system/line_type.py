@@ -41,45 +41,5 @@ class LineType:
         # Check if the given line string is of this type
         return self.pattern.match(line, context)
 
-    def equivalent(self, other, context, memo=None):
-        # Check equivalence
-
-        if memo is None:
-            memo = {}
-
-        if (self, other) in memo:
-            return memo[(self, other)]
-
-        memo[(self, other)] = False
-
-        if type(other) is not LineType:
-            return False
-
-        if not self.name == other.name:
-            return False
-
-        if not self.behaviour == other.behaviour:
-            return False
-
-        if not self.scope == other.scope:
-            return False
-
-        if not self.formula_field == other.formula_field:
-            return False
-
-        if not self.reference_field == other.reference_field:
-            return False
-
-        # Assume true for recursive checks
-        memo[(self, other)] = True
-
-        if not self.pattern.equivalent(other.pattern, context, memo):
-            memo[(self, other)] = False
-            return False
-
-        # Otherwise ok
-        memo[(self, other)] = True
-        return True
-
     def __str__(self):
         return self.name
