@@ -232,6 +232,17 @@ def _line_layout(
     # Tokenise the shape into (placeholder | literal) fragments.
     template, placeholders = _shape_to_template(line.shape)
 
+    # Every placeholder has to resolve to something later (`ctx.variables[ph]`),
+    # so name the undeclared one here rather than letting it surface as a bare
+    # KeyError whose message is just the token.
+    undeclared = [ph for ph, _ in placeholders if ph not in part_names and ph not in sorts]
+    if undeclared:
+        raise DeclarativeError(
+            f"Line {line.name!r} has placeholder(s) "
+            f"{', '.join(repr(ph) for ph in undeclared)} in its shape naming no "
+            f"grammar sort or part; declare each as a part of the line."
+        )
+
     # A comment line asserts nothing, so it has no formula to project — and its
     # shape is free to be prose, naming no grammar sort at all.
     if line.behaviour == "comment":
@@ -240,22 +251,24 @@ def _line_layout(
                 f"Line {line.name!r} is commentary, so it carries no formula; "
                 f"remove its logical sort {line.logical_sort!r}."
             )
-        logical_ph = None
-    else:
-        # Choose the logical placeholder: explicit 'logical <sort>' or first sort.
-        logical_ph = None
-        if line.logical_sort:
-            for ph, var in placeholders:
-                if ph == line.logical_sort:
-                    logical_ph = (ph, var)
-                    break
-        if logical_ph is None:
-            for ph, var in placeholders:
-                if ph in sorts:
-                    logical_ph = (ph, var)
-                    break
-        if logical_ph is None:
-            raise DeclarativeError("Line shape must contain a placeholder naming a grammar sort.")
+        # Nor a citation. Projecting the prose as the line's `reference` would
+        # surface it in the UI as the rule that justified the line.
+        return template, placeholders, None, None
+
+    # Choose the logical placeholder: explicit 'logical <sort>' or first sort.
+    logical_ph = None
+    if line.logical_sort:
+        for ph, var in placeholders:
+            if ph == line.logical_sort:
+                logical_ph = (ph, var)
+                break
+    if logical_ph is None:
+        for ph, var in placeholders:
+            if ph in sorts:
+                logical_ph = (ph, var)
+                break
+    if logical_ph is None:
+        raise DeclarativeError("Line shape must contain a placeholder naming a grammar sort.")
 
     # The reference placeholder (if any inline part is used).
     reference_ph = None
@@ -368,6 +381,10 @@ def build_system(spec: SystemSpec) -> FormalSystem:
         pattern.respect_brackets = brackets
         return pattern
 
+    def unregistered(pattern: Pattern) -> Pattern:
+        # Bracket parity deliberately not applied — see its uses.
+        return pattern
+
     # 1. Atomic productions: regex leaves, atom constants, and atom families.
     for prod in spec.productions:
         if prod.regex is not None:
@@ -415,11 +432,16 @@ def build_system(spec: SystemSpec) -> FormalSystem:
         system.context.logical["given"] = MatchSet()
         sorts = set(spec.sort_names())
         for line in spec.lines:
+            # Commentary is prose, not a term: bracket parity must not apply to
+            # it, or an unbalanced bracket in a note ("-- discharge ( here")
+            # stops the line matching at all and fails the proof. Same reason an
+            # atom constant is left unregistered in step 1.
+            line_register = unregistered if line.behaviour == "comment" else register
             for part in line.parts:
-                ctx.variables[part.name] = register(
+                ctx.variables[part.name] = line_register(
                     RegexPattern(name=part.name, pattern=_anchor(part.regex))
                 )
-            _build_line(line, sorts, ctx, system, register)
+            _build_line(line, sorts, ctx, system, line_register)
 
     # 6. Axioms -> axiom-behaviour line types.
     for ax in spec.axioms:

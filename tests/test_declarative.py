@@ -572,6 +572,46 @@ def test_comment_line_does_not_close_the_subproof_it_sits_in():
     assert proof.valid is True
 
 
+def test_comment_line_carries_no_citation_reference():
+    # Projecting the prose as the line's reference would surface it in the UI as
+    # the rule that justified the line ("by a header").
+    system = build_system(commented_spec())
+    note = {lt.name: lt for lt in system.line_types}["note"]
+    assert note.reference_field is None
+    assert system.parse("-- a header").data()["lines"][0]["reference"] is None
+
+
+def test_comment_line_is_exempt_from_bracket_parity():
+    # Prose is not a term, so an unbalanced bracket in a note must not stop the
+    # line matching — which would fail the whole proof, not just the note.
+    system = build_system(commented_spec())
+    note = {lt.name: lt for lt in system.line_types}["note"]
+    assert note.pattern.respect_brackets is None
+    # The logical line still respects them.
+    assert {lt.name: lt for lt in system.line_types}["statement"].pattern.respect_brackets
+
+    line = system.parse("-- discharge ( here").proof_lines[0]
+    assert line.valid is True
+    assert line.line_type.name == "note"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        LineSpec(name="n", shape="-- <undeclared>", behaviour="comment"),
+        LineSpec(name="n", shape="<formula> [<undeclared>]", logical_sort="formula"),
+    ],
+    ids=["comment", "logical"],
+)
+def test_undeclared_shape_placeholder_names_itself(line):
+    # It has to resolve to a pattern later either way; without this the failure
+    # is a bare KeyError whose message is just the token.
+    spec = scoped_spec()
+    spec.lines.append(line)
+    with pytest.raises(DeclarativeError, match="naming no grammar sort or part"):
+        build_system(spec)
+
+
 @pytest.mark.parametrize(
     ("overrides", "expected"),
     [

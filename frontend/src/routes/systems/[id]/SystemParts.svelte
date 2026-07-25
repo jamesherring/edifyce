@@ -87,6 +87,11 @@
 							<div class="flex flex-wrap items-baseline gap-2">
 								<span class="font-medium">{line.name}</span>
 								<span class="font-mono text-muted-foreground">{line.shape}</span>
+								{#if line.behaviour === 'comment'}
+									<span class="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
+										>commentary — never checked</span
+									>
+								{/if}
 								{#if line.logical_sort}
 									<span class="text-xs text-muted-foreground"
 										>logical: <span class="font-mono">{line.logical_sort}</span></span

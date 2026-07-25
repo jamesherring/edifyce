@@ -109,6 +109,11 @@
 				if (cancelled) return;
 				let anyTested = false;
 				for (const line of system.lines) {
+					// Commentary carries no citation at all, and its part is typically
+					// free text that would full-match `a.1` — treating it as a reference
+					// field would mask a restrictive one on the real logical line, the
+					// same masking the note above guards against within a line.
+					if (line.behaviour === 'comment') continue;
 					const regex = referenceFieldRegex(line);
 					if (regex === null) continue; // this line type carries no citation field
 					try {
