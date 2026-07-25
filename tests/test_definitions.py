@@ -29,6 +29,7 @@ from website.logical.kernel import (
 from website.logical.matching import Context, RegexPattern, StringPattern, UnionPattern
 from tests.spec_helpers import (
     atom_const_prod,
+    atom_family_prod,
     brackets,
     regex_prod,
     statement_line,
@@ -756,19 +757,121 @@ def test_a_leaf_is_not_excused_by_a_same_spelled_other_constructor():
     assert reported["S"].pattern is not d.higher.pattern
 
 
-def test_a_masked_leaf_still_fails_the_system_build():
-    # End to end: `c` is a constant and excused, `S` is not — so the definition is
-    # refused, and the step `∀S.S ⟶ ∀S.(S ∈ c)` it would license never arises.
-    spec = SystemSpec(
+def _masked_build_spec(productions):
+    return SystemSpec(
         name="MaskedBuild",
         brackets=MASKED.brackets,
-        productions=list(MASKED.productions),
+        productions=list(productions),
         lines=list(MASKED.lines),
         definitions=[
             Definition_(sort="formula", name="d", higher="S", lower="(S ∈ c)", bindings=[])
         ],
     )
-    result = build_spec(spec)
+
+
+def test_a_masked_leaf_still_fails_the_system_build():
+    # End to end: neither `S` nor `c` is declared a constant, so both are refused
+    # and the step `∀S.S ⟶ ∀S.(S ∈ c)` the definition would license never arises.
+    result = build_spec(_masked_build_spec(MASKED.productions))
+    assert "errors" in result
+    (message,) = result["errors"]
+    assert "'S'" in message and "'c'" in message
+
+
+def test_an_atom_declared_constant_is_excused_but_a_masked_variable_is_not():
+    # `c` declared a constant is excused; the `setvar` S is a variable however it
+    # is spelled, so the definition is still refused — and named for the leaf that
+    # actually endangers it.
+    declared = [
+        atom_const_prod("setvar", "cee", "c", denotes_constant=True)
+        if prod.name == "cee"
+        else prod
+        for prod in MASKED.productions
+    ]
+    result = build_spec(_masked_build_spec(declared))
     assert "errors" in result
     (message,) = result["errors"]
     assert "'S'" in message and "'c'" not in message
+
+
+# `c` is a member of `setvar`, so `∀c.` binds it — the author said as much by
+# putting it in that union. Its *constructor* is an atom constant, which is what
+# the retired shape heuristic read, so `T ≝ (c ∈ c)` was admitted and the step
+# below captured `c`. Nothing about the production's shape distinguishes this
+# from `formula ::= ⊥`; only the declaration does.
+ATOM_VARIABLE = SystemSpec(
+    name="AtomVariable",
+    brackets=brackets(),
+    productions=[
+        regex_prod("setvar", "setvar_atom", "[A-Z]"),
+        atom_const_prod("setvar", "cee", "c"),
+        template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+        template_prod("formula", "forall", "∀x.phi", [("x", "setvar"), ("phi", "formula")]),
+        template_prod("formula", "tee", "T", []),
+    ],
+    lines=[statement_line()],
+    definitions=[Definition_(sort="formula", name="d", higher="T", lower="(c ∈ c)", bindings=[])],
+)
+
+
+def test_an_atom_constant_in_the_variable_sort_is_not_excused():
+    result = build_spec(ATOM_VARIABLE)
+    assert "errors" in result
+    (message,) = result["errors"]
+    assert "'c'" in message
+
+
+def test_an_atom_family_cannot_be_declared_a_constant():
+    # A family is a supply of interchangeable tokens — `AtomPattern.fresh` mints
+    # new ones, which is what eigenvariable selection draws on. So this is not a
+    # judgement the author could get right, and the build refuses it rather than
+    # letting it excuse `S ≝ (p_0 ∈ p_1)` and admit `∀p_0.S ⟶ ∀p_0.(p_0 ∈ p_1)`.
+    spec = SystemSpec(
+        name="FamilyConstant",
+        brackets=brackets(),
+        productions=[
+            atom_family_prod("setvar", "prop", "p"),
+            template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+            template_prod("formula", "forall", "∀x.phi", [("x", "setvar"), ("phi", "formula")]),
+            template_prod("formula", "ess", "S", []),
+        ],
+        lines=[statement_line()],
+        definitions=[
+            Definition_(sort="formula", name="d", higher="S", lower="(p_0 ∈ p_1)", bindings=[])
+        ],
+    )
+    spec.productions[0].denotes_constant = True
+
+    result = build_spec(spec)
+    assert "errors" in result
+    (message,) = result["errors"]
+    assert "'prop'" in message and "p_#" in message
+
+    # Left undeclared the family is variable-like, so the definition is refused
+    # for the ordinary reason and the system still does not build.
+    spec.productions[0].denotes_constant = False
+    assert "errors" in build_spec(spec)
+
+
+def test_declaring_a_bindable_atom_constant_is_the_author_s_to_get_wrong():
+    # The declaration is authoritative: tick the box on a token a binder can bind
+    # and the definition builds, and `∀c.T ⟶ ∀c.(c ∈ c)` captures `c`. Pinned so
+    # the trust boundary is visible in the suite rather than only in prose — this
+    # is the one direction that costs soundness, and it takes a positive act.
+    #
+    # Detecting it needs to know which sorts a binder ranges over, which no
+    # production declares yet (see the binding-slots follow-up in AGENTS.md).
+    spec = SystemSpec(
+        name="AtomVariableDeclared",
+        brackets=ATOM_VARIABLE.brackets,
+        productions=[
+            atom_const_prod("setvar", "cee", "c", denotes_constant=True)
+            if prod.name == "cee"
+            else prod
+            for prod in ATOM_VARIABLE.productions
+        ],
+        lines=list(ATOM_VARIABLE.lines),
+        definitions=list(ATOM_VARIABLE.definitions),
+    )
+    result = build_spec(spec)
+    assert "errors" not in result

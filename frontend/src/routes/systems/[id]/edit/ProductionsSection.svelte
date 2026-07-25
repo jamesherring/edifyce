@@ -5,6 +5,7 @@
 	import BindingsEditor from './BindingsEditor.svelte';
 	import { Label } from '$lib/components/ui/label';
 	import { Input } from '$lib/components/ui/input';
+	import { Button } from '$lib/components/ui/button';
 	import { api, type Production, type Binding } from '$lib/api';
 	import type { SymbolEntry } from '$lib/symbols';
 	import type { NotationGroup } from '$lib/notation';
@@ -39,7 +40,16 @@
 	let sortName = $state('');
 	let mode = $state<Mode>('template');
 	let value = $state('');
+	let denotesConstant = $state(false);
 	let bindings = $state<Binding[]>([]);
+
+	// A composite with slots is never a leaf, so the question cannot arise for it;
+	// a nullary template (`S`, `∅`) *is* a leaf, so it keeps the toggle. An indexed
+	// family is a supply of interchangeable tokens and can never be a constant —
+	// the engine refuses that declaration outright, so don't offer it.
+	const canDeclareConstant = $derived(
+		mode !== 'atom_base' && (mode !== 'template' || bindings.length === 0)
+	);
 
 	const placeholder = $derived(MODES.find((m) => m.key === mode)!.placeholder);
 
@@ -71,6 +81,7 @@
 			value = item
 				? (item.template ?? item.regex ?? item.atom_value ?? item.atom_base ?? '')
 				: '';
+			denotesConstant = item?.denotes_constant ?? false;
 			bindings = item?.bindings.map((b) => ({ ...b })) ?? [];
 		},
 		payload
@@ -88,6 +99,12 @@
 			regex: mode === 'regex' ? v : null,
 			atom_value: mode === 'atom_value' ? v : null,
 			atom_base: mode === 'atom_base' ? v : null,
+			// Sent as-is for a composite with slots, where the flag is inert (it is
+			// only ever read of a ground leaf) — the editor hides the toggle rather
+			// than forcing a value, so the setting survives if the slots go. Forced
+			// off for a family, where it is not inert but a build error, so switching
+			// a declared constant to Family mode can't store an unbuildable row.
+			denotes_constant: mode === 'atom_base' ? false : denotesConstant,
 			bindings: mode === 'template' ? bindings.filter((b) => b.var.trim() && b.sort.trim()) : []
 		};
 	}
@@ -166,5 +183,33 @@
 	</div>
 	{#if mode === 'template'}
 		<BindingsEditor bind:bindings />
+	{/if}
+	{#if canDeclareConstant}
+		<div class="space-y-2">
+			<div class="flex items-center justify-between">
+				<Label>Constant of the object language</Label>
+				<Button
+					type="button"
+					size="sm"
+					aria-pressed={denotesConstant}
+					variant={denotesConstant ? 'default' : 'outline'}
+					onclick={() => (denotesConstant = !denotesConstant)}
+				>
+					<!-- Prefix rather than aria-label: an aria-label would replace the
+					     visible word, leaving "Off" unspeakable to voice control. -->
+					<span class="sr-only">Constant of the object language:</span>
+					{denotesConstant ? 'Constant' : 'Variable'}
+				</Button>
+			</div>
+			<p class="text-xs text-muted-foreground">
+				Whether these tokens name one fixed thing (<span class="font-mono">⊥</span>,
+				<span class="font-mono">∅</span>) or stand for variables a quantifier can
+				bind. Nothing about the production's shape decides this — a single token is
+				a constant in <span class="font-mono">formula ::= ⊥</span> and a variable in
+				<span class="font-mono">setvar ::= a | b | c</span>. Only a constant may
+				appear in a definition's defining form without the defined form supplying
+				it; marking a bindable token constant lets a definition capture it.
+			</p>
+		</div>
 	{/if}
 </EditSheet>

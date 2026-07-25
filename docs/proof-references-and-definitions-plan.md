@@ -181,6 +181,17 @@ is now one.
   (`∀a. S → ∀a. a` for a nullary `S ≝ a`), by refusing such a definition at build
   time. What remains untreated is conservativity — that a defined symbol is fresh
   and the definition non-circular.
+- **Follow-up, done:** that grammar predicate was a heuristic reading the leaf's
+  constructor, and it had a third hole — an atom constant declared a *member of
+  the variable sort* (`setvar ::= [A-Z] | c`) was excused, so `T ≝ (c ∈ c)` built
+  and `∀c.T ⟶ ∀c.(c ∈ c)` captured. Nothing about a production's shape decides
+  the question, so productions now **declare** it (`denotes_constant`), as
+  Metamath declares `$c` vs `$v`. The heuristic and its reachability probe are
+  gone. The declaration is authoritative and its default (variable-like) is the
+  safe one. An indexed atom family is refused the declaration outright (it is a
+  supply of interchangeable tokens, never a constant); validating any *other*
+  wrong declaration needs binding slots on productions, which would also let
+  `fresh` be inferred and open abbreviations return. See AGENTS.md.
 
 ### D3 — definitions as a top-level surface (backend + frontend)
 - `api.definitions` namespace and a **per-system definitions page** (list +

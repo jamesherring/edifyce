@@ -974,6 +974,37 @@ def test_atom_productions_round_trip_through_the_api(client):
     assert by_name["prop"]["atom_base"] == "p"
 
 
+def test_object_language_role_round_trips_and_defaults_off(client):
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/api/formal-systems/{sid}/sorts", {"name": "formula"})
+
+    # Omitted on create: variable-like, the safe reading of an undeclared leaf.
+    undeclared = _post(
+        client, f"/api/formal-systems/{sid}/productions",
+        {"name": "setvar", "sort": "formula", "atom_value": "c"},
+    )
+    assert undeclared["denotes_constant"] is False
+
+    declared = _post(
+        client, f"/api/formal-systems/{sid}/productions",
+        {"name": "falsum", "sort": "formula", "atom_value": "⊥", "denotes_constant": True},
+    )
+    assert declared["denotes_constant"] is True
+
+    # A patch flips it without disturbing the discriminator fields.
+    patched = client.patch(
+        f"/api/formal-systems/{sid}/productions/{undeclared['id']}",
+        json={"denotes_constant": True},
+    ).json()
+    assert patched["denotes_constant"] is True
+    assert patched["atom_value"] == "c" and patched["kind"] == "atom"
+
+    by_name = {p["name"]: p for p in client.get(f"/api/formal-systems/{sid}").json()["productions"]}
+    assert by_name["falsum"]["denotes_constant"] is True
+    assert by_name["setvar"]["denotes_constant"] is True
+
+
 def test_production_rejects_mixing_atom_with_another_kind(client):
     _login(client, "ada@example.com")
     sid = _new_system(client)
@@ -1293,13 +1324,16 @@ def _defs_grammar(client: TestClient) -> str:
     # so a definition's higher form is new notation and its lower form is either
     # an atom or an earlier definition's higher form.
     #
-    # The atom is a *constant*, not a regex leaf. These definitions are nullary
-    # (`S ≝ a` takes no arguments), so a variable-like `a` would be free in the
-    # defining form — a name the unfold conjures, which the build refuses. A
-    # constant denotes one fixed thing and can be neither renamed nor captured.
+    # The atom is *declared* a constant of the object language. These definitions
+    # are nullary (`S ≝ a` takes no arguments), so a variable-like `a` would be
+    # free in the defining form — a name the unfold conjures, which the build
+    # refuses. A constant denotes one fixed thing and can be neither renamed nor
+    # captured, but only the declaration says so: `atom_value` alone would leave
+    # it variable-like, exactly as `setvar ::= a | b | c` intends.
     sid = _new_system(client)
     _post(client, f"/api/formal-systems/{sid}/sorts", {"name": "f"})
-    _post(client, f"/api/formal-systems/{sid}/productions", {"name": "atom", "sort": "f", "atom_value": "a"})
+    _post(client, f"/api/formal-systems/{sid}/productions",
+          {"name": "atom", "sort": "f", "atom_value": "a", "denotes_constant": True})
     return sid
 
 

@@ -125,10 +125,11 @@ def binder_spec(
     )
 
 
-# A defining form that mentions a grammar *constant* (`⊥`, a nullary atom) which
-# the defined form does not. The constant is a lower-only ground leaf like an
-# undeclared binder would be, but it can never be captured, so the bridge must
-# still take the kernel path rather than refuse it.
+# A defining form that mentions a grammar *constant* (`⊥`, a nullary atom
+# declared as denoting one) which the defined form does not. The constant is a
+# lower-only ground leaf like an undeclared binder would be, but the declaration
+# says it can never be captured, so the bridge must take the kernel path rather
+# than refuse it.
 def const_spec() -> SystemSpec:
     return SystemSpec(
         name="ConstSys",
@@ -137,7 +138,7 @@ def const_spec() -> SystemSpec:
             _setvar_prod(),
             template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
             template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
-            atom_const_prod("formula", "falsum", "⊥"),
+            atom_const_prod("formula", "falsum", "⊥", denotes_constant=True),
         ],
         lines=[statement_line()],
         definitions=[
@@ -249,7 +250,7 @@ def nullary_spec(*, closed: bool) -> SystemSpec:
             template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
             template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
             template_prod("formula", "forall", "∀x.phi", [("x", "setvar"), ("phi", "formula")]),
-            atom_const_prod("formula", "falsum", "⊥"),
+            atom_const_prod("formula", "falsum", "⊥", denotes_constant=True),
         ],
         lines=[statement_line()],
         definitions=[
@@ -288,17 +289,45 @@ def test_open_nullary_abbreviation_fails_the_build():
     assert "'a'" in message and "'b'" in message
 
 
-# A constant grammar plus an unused sort whose regex is malformed. The bad regex
-# is never exercised at build time (its sort is referenced by nothing), so it
-# compiles lazily — only when the constant probe matches a leaf against it. An
-# unrelated broken sort must not decide whether a definition is capture-safe.
+def test_a_nullary_definition_may_be_layered_on_by_a_later_one():
+    # `S ≝ (⊥ → ⊥)` adds a ground leaf no production declared a role for, so
+    # `T ≝ S` would introduce an undeclared token. The build derives the role
+    # instead of asking: S abbreviates a fixed term, so it denotes a constant.
+    spec = nullary_spec(closed=True)
+    spec.definitions.append(defn("formula", "t", "T", "S", []))
+    system = build_declarative(spec)
+    assert system.definition_layering == [True, True]
+
+    # `context.definitions` is a set, so pick each out by its defined form.
+    by_form = {d.higher.pattern: d for d in system.context.definitions}
+    assert by_form["S"].higher.denotes_constant is True
+    sup = by_form["T"]
+    assert sup.kernel is not None
+
+    context = context_of(system)
+    _proof, (abbreviated, spelled) = formulae(system, "T", "S")
+    assert follows_by_definition(abbreviated, spelled, sup, context) is True
+
+
+def test_layering_on_a_definition_with_parameters_introduces_nothing():
+    # The counterpart: `(x ∉ y)` is compound, never a ground leaf, so the derived
+    # role is False and nothing is excused by it — there was nothing to excuse.
+    system = build_declarative(const_spec())
+    assert only_definition(system).higher.denotes_constant is False
+
+
+# A constant grammar plus an unused sort whose regex is malformed. The gate once
+# probed every reachable sort for the leaf's token, which compiled this regex
+# lazily and took a well-formed definition down with it. The gate now reads the
+# leaf's own declaration and consults no other sort at all, so no unrelated
+# production — broken or otherwise — can reach the decision.
 def const_bad_regex_spec() -> SystemSpec:
     spec = const_spec()
     spec.productions.append(regex_prod("junk", "junk_atom", "[unclosed"))
     return spec
 
 
-def test_malformed_unused_regex_sort_does_not_abort_the_gate():
+def test_unrelated_malformed_regex_sort_does_not_reach_the_gate():
     system = build_declarative(const_bad_regex_spec())
     assert only_definition(system).kernel is not None
 
