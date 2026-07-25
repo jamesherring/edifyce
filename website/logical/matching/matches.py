@@ -90,15 +90,6 @@ class Match:
 
         return m
 
-    def replace_variables(self, variable_dict, context):
-        # Replace variables according the matches in the dictionary. This should be a match: match dictionary
-
-        result = copy(self)
-        for key, value in variable_dict.items():
-            result = result.replace(key, value, context, allow_variables=True)
-
-        return result
-
     def reset_string(self):
         # Reset the match string according to the patterns
 
@@ -549,23 +540,6 @@ class Match:
             print(f"{spaces}Failed: no options passed.")
         return False
 
-    def apply_mapping(self, mapping, context):
-        # Apply the given string: match dictionary to get a mapped version of this match.
-
-        # First build a match: match variable dictionary
-        variable_dict = {}
-
-        # Loop through the variables and map them
-        for var in self.variables(context).instances:
-            if var.string not in mapping:
-                # This contains a variable not in the mapping and so can't be mapped.
-                return False
-
-            variable_dict[var] = mapping[var.string]
-
-        # Replace the variables
-        return self.replace_variables(variable_dict, context)
-
     def duplicate(self, parent_match=None):
         # Create a copy of this match and assign it to the parent
         m = copy(self)
@@ -638,22 +612,6 @@ class MatchSet:
 
         # Uncertain
         return None
-
-    def is_subset(self, other, context):
-        # Check if this match set is a subset of the other
-
-        if not self.complete:
-            # There are other items we can't test
-            return False
-
-        for item in self.instances:
-            # Check membership of each item
-            if not other.contains(item, context):
-                # Not a subset
-                return False
-
-        # All members of self are members of other
-        return True
 
     def add(self, match, context):
         # Add a match to the set, if it's not equivalent to one of the members
