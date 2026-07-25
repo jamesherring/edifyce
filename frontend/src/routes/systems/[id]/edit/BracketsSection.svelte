@@ -3,14 +3,20 @@
 	import EditSheet from '$lib/components/EditSheet.svelte';
 	import FormField from '$lib/components/FormField.svelte';
 	import { api, type BracketPair } from '$lib/api';
+	import type { SymbolEntry } from '$lib/symbols';
 	import { createSectionController } from './section.svelte';
 
 	let {
 		systemId,
 		brackets,
+		symbols,
 		onChanged
-	}: { systemId: string; brackets: BracketPair[]; onChanged: () => Promise<void> | void } =
-		$props();
+	}: {
+		systemId: string;
+		brackets: BracketPair[];
+		symbols: SymbolEntry[];
+		onChanged: () => Promise<void> | void;
+	} = $props();
 
 	let opening = $state('');
 	let closing = $state('');
@@ -53,7 +59,8 @@
 	onDelete={s.editing ? s.del : undefined}
 	saving={s.saving}
 	{canSave}
+	{symbols}
 >
-	<FormField label="Opening" id="bracket-open" bind:value={opening} placeholder="(" maxlength={16} />
-	<FormField label="Closing" id="bracket-close" bind:value={closing} placeholder=")" maxlength={16} />
+	<FormField label="Opening" id="bracket-open" bind:value={opening} placeholder="(" maxlength={16} notation />
+	<FormField label="Closing" id="bracket-close" bind:value={closing} placeholder=")" maxlength={16} notation />
 </EditSheet>

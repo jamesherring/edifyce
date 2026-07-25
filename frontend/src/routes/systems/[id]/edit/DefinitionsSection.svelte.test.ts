@@ -43,7 +43,7 @@ function defn(over: Partial<Definition> = {}): Definition {
 
 function renderSection(definitions: Definition[]) {
 	const onChanged = vi.fn();
-	render(DefinitionsSection, { systemId: 'sys1', definitions, sortNames: ['formula'], onChanged });
+	render(DefinitionsSection, { systemId: 'sys1', definitions, sortNames: ['formula'], symbols: [], onChanged });
 	return { onChanged };
 }
 

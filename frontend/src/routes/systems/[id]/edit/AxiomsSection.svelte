@@ -6,13 +6,20 @@
 	import { Label } from '$lib/components/ui/label';
 	import { Input } from '$lib/components/ui/input';
 	import { api, type Axiom, type Binding } from '$lib/api';
+	import type { SymbolEntry } from '$lib/symbols';
 	import { createSectionController } from './section.svelte';
 
 	let {
 		systemId,
 		axioms,
+		symbols,
 		onChanged
-	}: { systemId: string; axioms: Axiom[]; onChanged: () => Promise<void> | void } = $props();
+	}: {
+		systemId: string;
+		axioms: Axiom[];
+		symbols: SymbolEntry[];
+		onChanged: () => Promise<void> | void;
+	} = $props();
 
 	let label = $state('');
 	let name = $state('');
@@ -74,12 +81,13 @@
 	onDelete={s.editing ? s.del : undefined}
 	saving={s.saving}
 	{canSave}
+	{symbols}
 >
 	<FormField label="Label" id="axiom-label" bind:value={label} placeholder="e.g. EXT" maxlength={64} />
 	<FormField label="Name" id="axiom-name" bind:value={name} placeholder="e.g. extensionality" maxlength={128} />
 	<div class="space-y-2">
 		<Label for="axiom-formula">Formula</Label>
-		<Input id="axiom-formula" bind:value={formula} class="font-mono" placeholder="e.g. ∀x x = x" maxlength={512} />
+		<Input id="axiom-formula" bind:value={formula} class="font-mono" data-symbol-field placeholder="e.g. ∀x x = x" maxlength={512} />
 	</div>
 	<BindingsEditor bind:bindings />
 </EditSheet>
