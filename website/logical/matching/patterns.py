@@ -994,6 +994,30 @@ def invalidate_union_memos() -> None:
     _union_revision += 1
 
 
+def _may_open_with(pattern, character):
+    # Whether `pattern` could match a string beginning with `character`.
+    #
+    # A StringPattern whose template opens with a literal must find that literal
+    # at position 0 (see StringPattern.match, which rejects when its leading
+    # non-variable part is found anywhere else). An AtomPattern matches only the
+    # whole token it denotes - its constant, or its family's base, optionally
+    # `_<n>` - so that token's first character decides. This second case carries
+    # most of the pruning on a set.mm import, where all but a hundred or so of the
+    # 1,346 `class` productions are nullary constants (`RR`, `sin`, `2`).
+    #
+    # Anything else - a template opening with a variable, a RegexPattern - could
+    # open with anything and stays a candidate.
+    if type(pattern) is StringPattern:
+        literal = pattern.non_variable_locations.get(0)
+        return literal is None or literal[0] == character
+
+    if type(pattern) is AtomPattern:
+        token = pattern.value if pattern.is_constant else pattern.base
+        return not token or token[0] == character
+
+    return True
+
+
 class UnionPattern(Pattern):
     """A union of patterns."""
 
@@ -1015,6 +1039,11 @@ class UnionPattern(Pattern):
         # of times over. See `nested_options` and `match_options`.
         self._nested_options_cache: dict = {}
         self._match_options_cache: tuple | None = None
+
+        # Leaves grouped by the first character they can match, filled per
+        # character as strings arrive. See `leaf_candidates`.
+        self._leaf_index: dict = {}
+        self._leaf_index_revision: int | None = None
 
         # A union built from members that already exist elsewhere can appear
         # inside a flattening taken a moment ago.
@@ -1094,7 +1123,7 @@ class UnionPattern(Pattern):
             # Brackets don't match
             return None
 
-        for pattern in pattern_options:
+        for pattern in self.leaf_candidates(s, context, pattern_options):
 
             # Try to match the pattern
             result = pattern.match(s, context, debug=next_debug)
@@ -1282,6 +1311,37 @@ class UnionPattern(Pattern):
 
         self._match_options_cache = (_union_revision, (options, leaves, unions))
         return options, leaves, unions
+
+    def leaf_candidates(self, s, context, leaves):
+        """Those of `leaves` that could match a string starting as `s` does.
+
+        A production that opens with a literal can only read a string opening
+        with that literal, so one character rules most of a large grammar out -
+        and `match` was trying every leaf for every formula, which is what made
+        the cost of a parse grow with the size of the grammar rather than with
+        the formula. Grouped per first character, on demand, and rebuilt when a
+        union changes (see `invalidate_union_memos`).
+
+        Falls back to every leaf wherever that reasoning does not hold: when
+        definitions are in scope, since a leaf can match through an unfold its
+        template does not predict; and when `s` is itself a string variable,
+        which any leaf matches whatever its template says. Both are decided here
+        rather than inside `_may_open_with`, because they are properties of the
+        string and the context, not of the leaf.
+        """
+        if not s or context.definitions or s in context.string_variables:
+            return leaves
+
+        if self._leaf_index_revision != _union_revision:
+            self._leaf_index = {}
+            self._leaf_index_revision = _union_revision
+
+        candidates = self._leaf_index.get(s[0])
+        if candidates is None:
+            # Filtering preserves the certainty order `match_options` established.
+            candidates = [leaf for leaf in leaves if _may_open_with(leaf, s[0])]
+            self._leaf_index[s[0]] = candidates
+        return candidates
 
     def inherits_from(self, other, context):
         # Check if this pattern inherits from another
