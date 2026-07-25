@@ -16,15 +16,17 @@ AGENTS.md) — but nothing here may import ``declarative``.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from copy import copy, deepcopy
+from copy import copy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from website.logical.formal_system.side_condition_syntax import parse_side_condition
 from website.logical.kernel import And, Node, Var, from_match, intern
+from website.logical.kernel.constructors import project_sorts
 from website.logical.matching import AtomPattern, Pattern, StringPattern, UnionPattern
 
 if TYPE_CHECKING:
+    from website.logical.kernel.constructors import Constructor
     from website.logical.kernel.side_conditions import SideCondition
     from website.logical.kernel.terms import Term
 
@@ -66,24 +68,6 @@ class FormalSystemContext:
     # by `__copy__`: promotion copies a context per theorem, and the grammar it
     # indexes is the same one throughout.
     grammar_index: object = None
-
-    def inherit(self, parent: FormalSystemContext) -> None:
-        # Inherit from parent context
-
-        self.variables.update(parent.variables)
-        self.definitions.extend(parent.definitions)
-        self.proof_context.update(parent.proof_context)
-        self.system_dict.update(parent.system_dict)
-
-        # Don't inherit string_variables or current_object
-
-        # Inherit union patterns
-        for pattern in self.variables.values():
-            if not isinstance(pattern, UnionPattern):
-                continue
-
-            # Pattern is a union pattern. Set the inheritance
-            pattern.inherits = deepcopy(pattern)
 
     def __copy__(self) -> FormalSystemContext:
         new_context = FormalSystemContext()
@@ -158,13 +142,13 @@ def compose_schema_term(
     # Fixed grammar, fixed definitions, fixed metavariables for the whole of this
     # parse, so the same substring always parses the same way - memoise it. The
     # candidate sorts below re-parse overlapping substrings heavily, and nesting
-    # multiplies that: set.mm's 16-binder `cbvral8vw` does not finish without it.
+    # multiplies that: a deeply nested template does not finish without it.
     parse_context.parse_memo = {}
 
     for candidate in _composition_sorts(context, prefer):
         match = candidate.match(pattern.pattern, parse_context)
         if match is not None:
-            return revariabilise(from_match(match), context.string_variables)
+            return revariabilise(from_match(match), project_sorts(context.string_variables))
 
     return None
 
@@ -174,11 +158,12 @@ class _GrammarIndex:
     """Two lookups over a context's declared patterns, keyed by how many there are.
 
     Both answer questions about the *grammar*, which is fixed once a system is
-    built - but the two callers below ask them per schema built, and promotion
+    built - but the two callers above ask them per schema built, and promotion
     builds one per theorem statement and premise. Scanning every declared pattern
-    each time is what made those scans, rather than the parse they set up, a third
-    of an import. `size` is the guard: a context's `variables` only ever grows,
-    while a system is being assembled, so a differing count means rebuild.
+    each time is what made those scans, rather than the parse they set up, the
+    bulk of building a system with a large grammar. `size` is the guard: a
+    context's `variables` only ever grows, while a system is being assembled, so
+    a differing count means rebuild.
     """
 
     size: int
@@ -225,9 +210,9 @@ def _composition_sorts(
     # formula is actually parsed at. Callers that know it (promotion does - see
     # _logical_sorts) pass it, so the answer no longer depends on where in the
     # grammar's declaration order the right sort happens to sit. It is also the
-    # faster order where the two differ: on a set.mm import the logical sort
-    # matches nearly every time, and the sorts otherwise tried first are large
-    # unions whose failing parse costs as much as the succeeding one.
+    # faster order where the two differ: the logical sort matches nearly every
+    # time, and the sorts otherwise tried first are large unions whose failing
+    # parse costs as much as the succeeding one.
     sorts = [pattern for pattern in prefer if isinstance(pattern, UnionPattern)]
     if not sorts:
         return _grammar_index(context).unions
@@ -239,7 +224,7 @@ def _composition_sorts(
     return sorts
 
 
-def revariabilise(term: Term, metavariables: dict) -> Term:
+def revariabilise(term: Term, metavariables: dict[str, Constructor]) -> Term:
     # Re-mark the rule's metavariables in a compositionally-parsed schema term.
     # Some slots - notably a setvar matched by a RegexPattern, which (unlike a
     # UnionPattern) does not consult string_variables - come back from the parse

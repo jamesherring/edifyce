@@ -17,6 +17,7 @@ from website.logical.declarative import Definition as Definition_
 from website.logical.declarative import SystemSpec, build_spec, build_system
 from website.logical.kernel import (
     Definition,
+    constructor_for,
     DisjointLeaves,
     Var,
     check_definitional_step,
@@ -243,7 +244,9 @@ def test_side_condition_gates_the_unfold(theory, formula, setvar):
     # capture-avoidance generated from `fresh`); here it requires the two
     # arguments to be distinct variables. The unfold only fires when it holds.
     _system, context = theory
-    d = df_subset(theory, setvar, condition=DisjointLeaves("x", "y", sort=setvar))
+    d = df_subset(
+        theory, setvar, condition=DisjointLeaves("x", "y", sort=constructor_for(setvar))
+    )
 
     # Distinct arguments: proviso holds, unfold applies.
     assert check_definitional_step(
@@ -281,9 +284,9 @@ def test_definition_backed_subject_admits_its_sort():
 
     subject = from_match(formula.match("a is a member of b", context))
     # Its recorded sort is the union it belongs to, not its higher constructor.
-    assert subject.sort is formula
+    assert subject.sort is constructor_for(formula)
 
-    binding = match(Var("phi", formula), subject, context)
+    binding = match(Var("phi", constructor_for(formula)), subject, context)
     assert binding is not None
     assert binding["phi"].to_string() == "a is a member of b"
 

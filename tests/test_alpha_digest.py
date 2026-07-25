@@ -126,17 +126,17 @@ def test_alpha_digest_is_deterministic(context):
 def test_alpha_digest_renames_schematic_vars(context):
     impl = context.variables["implication"]
     formula = context.variables["formula"]
-    t1 = intern(Node(constructor_for(impl), {"p": Var("p", formula), "q": Var("q", formula)}))
-    t2 = intern(Node(constructor_for(impl), {"p": Var("m", formula), "q": Var("n", formula)}))
+    t1 = intern(Node(constructor_for(impl), {"p": Var("p", constructor_for(formula)), "q": Var("q", constructor_for(formula))}))
+    t2 = intern(Node(constructor_for(impl), {"p": Var("m", constructor_for(formula)), "q": Var("n", constructor_for(formula))}))
     assert alpha_digest(t1) == alpha_digest(t2)                      # renamed → same
-    shared = intern(Node(constructor_for(impl), {"p": Var("p", formula), "q": Var("p", formula)}))
+    shared = intern(Node(constructor_for(impl), {"p": Var("p", constructor_for(formula)), "q": Var("p", constructor_for(formula))}))
     assert alpha_digest(shared) != alpha_digest(t1)                  # (p → p) differs
 
 
 def test_alpha_digest_treats_bound_by_index(context):
     membership = context.variables["membership"]
     term_sort = context.variables["term"]
-    b0, b1 = Bound(0, term_sort), Bound(1, term_sort)
+    b0, b1 = Bound(0, constructor_for(term_sort)), Bound(1, constructor_for(term_sort))
     same = intern(Node(constructor_for(membership), {"s": b0, "t": b0}))              # [0] ∈ [0]
     diff = intern(Node(constructor_for(membership), {"s": b0, "t": b1}))              # [0] ∈ [1]
     assert alpha_digest(same) != alpha_digest(diff)

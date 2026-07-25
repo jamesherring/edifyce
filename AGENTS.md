@@ -29,7 +29,7 @@ adapter over it, and the frontend is a thin client over the API.
 | `migrations/` | Atlas versioned SQL migrations (`atlas.sum`). Config in `atlas.hcl`; models loaded via `tools/atlas/schema.py`. |
 | `website/logical/` | The proof engine. This is where the real logic is. |
 | `website/logical/declarative.py` | The `SystemSpec` dataclasses (grammar productions, lines, definitions, axioms, rules) and `build_spec`/`build_system`, which construct a `FormalSystem` straight from one. **This is how systems are built in production.** |
-| `website/logical/kernel/` | The trusted checking core: `terms` (interned, shared-DAG formula trees), `unify` (first-order matching), `side_conditions` (the closed proviso vocabulary), `definitions` (a definitional unfold as a cited step, and the capture half of a definition's admissibility). Hard-codes no logic. |
+| `website/logical/kernel/` | The trusted checking core: `constructors` (a production projected to kernel data), `terms` (interned, shared-DAG formula trees), `unify` (first-order matching), `side_conditions` (the closed proviso vocabulary), `definitions` (a definitional unfold as a cited step, and the capture half of a definition's admissibility). Hard-codes no logic. |
 | `website/logical/formal_system/` | `FormalSystem`, `Proof`, `ProofLine`, line types, inference rules — the built system and proof-checking. |
 | `website/logical/matching/` | Pattern-matching engine (patterns, contexts, matches). Now **only** the parser: it turns proof-line text into a `Match`, which `kernel.from_match` projects into a term for checking. A `Definition` here makes defined notation grammatical; *applying* one is the kernel's job. Also `rewriting`, the associative matcher for string-rewriting (semi-Thue) rules. |
 | `website/logical/build_context.py` | The build context (`FormalSystemContext`) and the constructions needing it — `build_schema_pattern`, `combine_side_conditions`. Driven from `SystemSpec` fields by `declarative`; the sole way a system is assembled. |
@@ -179,6 +179,15 @@ wherever you run it:
   a comment. The kernel depends on `matching`, and `formal_system`/`compiler`
   depend on the kernel, so those directions import freely at the top; `matching`
   must never import the kernel or `formal_system`.
+- **Keep the kernel's dependency on `matching` inside `kernel/constructors.py`.**
+  It is the only module there that reads a `Pattern`, and nothing it returns
+  contains one: a production is projected once to a `Constructor`, and a term,
+  its constructor, that constructor's slot sorts and a sort union's branches are
+  all kernel data. That is what lets `terms`, `unify`, `side_conditions` and
+  `definitions` be written against the kernel alone — so resolve a production at
+  the projection rather than importing `matching` into another kernel module.
+  (Two parse handles are deliberate exceptions, both because they read a
+  *string* at check time: `Definition.fresh` and `promotion`.)
 
 ## On comments
 

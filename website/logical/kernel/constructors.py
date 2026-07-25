@@ -12,22 +12,21 @@ A :class:`Constructor` is that identity captured once, at build time. Everything
 the kernel asks of a constructor - is this the same shape, what slots does it
 have, how does it render - becomes a field read.
 
-This module is the *only* place in the kernel that reads a ``Pattern``. Keeping
-the projection here is what lets ``terms``, ``unify`` and ``definitions`` be
-written against kernel data alone.
+No ``Pattern`` survives the projection
+-------------------------------------
+A constructor holds no reference to the production it came from. Its slot sorts
+and, for a sort union, its branches are *other constructors*, so a term, a
+schema, a side condition's sort argument and the sort a variable ranges over are
+all kernel data. This module reads a ``Pattern``; nothing it returns contains
+one, which is what lets ``terms``, ``unify``, ``definitions`` and
+``side_conditions`` be written against kernel data alone.
 
-The one thing not projected
----------------------------
-``denotes_constant`` stays a property delegating to the source production, not a
-snapshot, because the build *mutates* it: a nullary defined form's role is
-settled only once its kernel definition exists (see
-``declarative._finalise_definition``), which is after terms built from that
-production may already exist. Snapshotting would freeze the pre-decision value.
-
-That delegation, and the ``source`` field it reads, are the remaining thread back
-to the matching layer. It stays until a production's declared role is kernel data
-in its own right - at which point ``source`` goes and this module's import of
-``Pattern`` goes with it.
+That closes the last thread. ``denotes_constant`` was a property reading the
+production back, because the build *mutated* it; the role is now settled from the
+notation before the definition is built (``declarative._finalise_definition``),
+so it is an ordinary snapshot. A sort was a ``Pattern`` because resolving one to
+a constructor is mutually recursive; that is handled by registering before
+linking (see :func:`constructor_for`).
 """
 
 from __future__ import annotations
@@ -37,6 +36,8 @@ from typing import TYPE_CHECKING
 from ..matching.patterns import AtomPattern, RegexPattern, StringPattern, UnionPattern
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
+
     from ..matching.patterns import Pattern
 
     # A rendering step: ("lit", text) emits text verbatim, ("slot", label)
@@ -75,19 +76,17 @@ class Constructor:
 
     def __init__(
         self,
-        source: Pattern,
         kind: str,
         name: str,
         signature: tuple[str, ...],
         slots: tuple[str, ...],
         pieces: tuple[Piece, ...],
         template: str | None,
-        slot_sorts: dict[str, Pattern],
         atom_value: str | None = None,
         atom_base: str | None = None,
         has_declared_variables: bool = False,
+        denotes_constant: bool = False,
     ) -> None:
-        self.source: Pattern = source
         self.kind: str = kind
         self.name: str = name
         self.signature: tuple[str, ...] = signature
@@ -96,8 +95,11 @@ class Constructor:
         # The surface template, for a production that has one. Storage records it
         # for a defined form, whose constructor has no name in the namespace.
         self.template: str | None = template
-        # Each slot's declared sort, for projecting a schema (see from_pattern).
-        self.slot_sorts: dict[str, Pattern] = slot_sorts
+        # Each slot's declared sort, and - for a union - its branches. Both are
+        # filled by `_link` immediately after this constructor is registered, not
+        # here: they reach back into the grammar, which is mutually recursive.
+        self.slot_sorts: dict[str, Constructor] = {}
+        self.members: tuple[Constructor, ...] = ()
         # Set for an atom: exactly one of these, mirroring AtomPattern.
         self.atom_value: str | None = atom_value
         self.atom_base: str | None = atom_base
@@ -105,26 +107,55 @@ class Constructor:
         # having slots: a declared variable that never appears in the template
         # occupies no slot. Schema projection distinguishes the two.
         self.has_declared_variables: bool = has_declared_variables
-        # Memo for this production *used as a sort*: which other sorts it admits
-        # (see unify._sort_admits). Answering that means walking the pattern
-        # lattice - structural equivalence, then nested union membership - which
-        # is the same walk for the same pair every time a variable binds. Keyed by
-        # the sort pattern itself, and living on this constructor, so it shares the
-        # grammar's lifetime and is reclaimed with it.
-        self.admits: dict[Pattern, bool] = {}
+        # Whether this production's tokens name constants of the object language
+        # (Metamath's `$c`) rather than variables a binder may bind. Read by the
+        # kernel's definition builder to decide which leaves a defining form may
+        # introduce from nowhere.
+        self.denotes_constant: bool = denotes_constant
+        # Lazily filled by `admits`.
+        self._admits: frozenset[Constructor] | None = None
 
     @property
-    def denotes_constant(self) -> bool:
-        # Delegated, never snapshotted - the build settles this after the fact for
-        # a nullary defined form. See the module docstring.
-        return self.source.denotes_constant
+    def admits(self) -> frozenset[Constructor]:
+        """The sorts this production admits when it is *used as a sort*: itself,
+        plus - if it is a union - every branch reachable through nested unions.
+
+        This is the whole of sort admission (see ``unify.sort_admits``), which
+        used to ask the pattern lattice the same question pair by pair: first
+        structural equivalence, then nested union membership. Both collapse to a
+        set lookup because **a built system's productions are canonical** - one
+        object per production, shared by every context copy - so two productions
+        are structurally equivalent exactly when they are the same object.
+
+        That invariant used to be false. ``FormalSystemContext.inherit`` gave each
+        union a ``deepcopy`` of itself as an ``inherits`` chain, which is why
+        equivalence had to be structural and why ``can_map_to`` existed to walk
+        the chain. Nothing ever called it, so the copies were never made; the dead
+        machinery is gone and ``tests/test_pattern_canonicity.py`` holds the line.
+
+        Derived from ``members``, which the projection fills - so a sort must be
+        projected only once its branches are known. ``declarative.build_system``
+        projects the grammar explicitly for that reason.
+        """
+        if self._admits is None:
+            found: set[Constructor] = set()
+            stack: list[Constructor] = [self]
+            while stack:
+                constructor = stack.pop()
+                if constructor in found:
+                    continue
+                found.add(constructor)
+                stack.extend(constructor.members)
+            self._admits = frozenset(found)
+        return self._admits
 
     def __repr__(self) -> str:
         return f"Constructor({self.name!r}, {self.signature!r})"
 
 
 def constructor_for(pattern: Pattern) -> Constructor:
-    """The constructor ``pattern`` denotes, built on first sight and reused after.
+    """The constructor ``pattern`` denotes, projected on first sight and reused
+    after.
 
     The memo lives *on the production*, not in a table here, so it is reclaimed
     with it. A module-level cache - even a weak-keyed one - cannot be: a grammar
@@ -132,6 +163,13 @@ def constructor_for(pattern: Pattern) -> Constructor:
     that contains it), so a constructor's ``slot_sorts`` reach back to its own
     key, and the entry keeps itself alive. Rebuilding a system per request would
     then grow the process without bound.
+
+    That same recursion is why projection is two-phase. ``_build`` reads only what
+    a production says about *itself*; the constructor is registered on the pattern
+    **before** ``_link`` resolves its slot sorts and branches, so a cycle back to
+    this production finds the registered constructor and stops. A partially linked
+    constructor is only ever observed by ``_link`` itself, which reads no linked
+    field.
 
     The pattern/constructor reference cycle this creates is ordinary garbage once
     the system is dropped, and the cyclic collector reclaims it.
@@ -141,7 +179,59 @@ def constructor_for(pattern: Pattern) -> Constructor:
         return existing
     built = _build(pattern)
     pattern.kernel_constructor = built
+    _link(built, pattern)
     return built
+
+
+def project_grammar(patterns: Iterable[Pattern]) -> None:
+    """Project every production in ``patterns`` to its constructor.
+
+    Called by ``declarative.build_system`` once the sort unions are filled, and
+    that timing is the point: a union projected while still empty would be linked
+    with no branches, and would then admit nothing but itself for the rest of the
+    system's life. Doing it explicitly means the moment is chosen rather than
+    falling out of whichever term happens to be built first.
+    """
+    for pattern in patterns:
+        constructor_for(pattern)
+
+
+def project_sorts(sorts: Mapping[str, Pattern]) -> dict[str, Constructor]:
+    """Project a ``name -> production`` mapping to ``name -> constructor``.
+
+    The shape a caller has when it holds declared sorts by name - a rule's
+    metavariables, a definition's parameters - and the shape the term layer wants.
+    """
+    return {name: constructor_for(pattern) for name, pattern in sorts.items()}
+
+
+def _link(constructor: Constructor, pattern: Pattern) -> None:
+    """Resolve the parts of a constructor that point back into the grammar.
+
+    Split from ``_build`` so the constructor can be registered first; see
+    :func:`constructor_for`.
+    """
+    if isinstance(pattern, StringPattern):
+        constructor.slot_sorts = {
+            info["label"]: constructor_for(info["pattern"])
+            for info in pattern.variable_locations.values()
+        }
+    if isinstance(pattern, UnionPattern):
+        if not pattern.patterns:
+            # Branches are resolved once, here, so an empty union would be sealed
+            # admitting nothing but itself and every later variable of that sort
+            # would silently refuse to bind. A sort with no productions cannot be
+            # declared (`SystemSpec.sort_names` reads them off the productions),
+            # so this only ever means the union has not been filled yet - the
+            # ordering `declarative.build_system` exists to get right. Loud, since
+            # the alternative is a system that builds and then rejects valid proofs.
+            raise ValueError(
+                f"Sort {pattern.name!r} was projected before its productions were "
+                "added; fill the union first (see declarative.build_system step 4)."
+            )
+        constructor.members = tuple(
+            constructor_for(member) for member in pattern.patterns
+        )
 
 
 def _template_parts(pattern: StringPattern) -> tuple[tuple[str, ...], tuple[Piece, ...]]:
@@ -178,17 +268,13 @@ def _build(pattern: Pattern) -> Constructor:
             text if kind == "lit" else "\x00" for kind, text in pieces
         )
         return Constructor(
-            source=pattern,
+            denotes_constant=pattern.denotes_constant,
             kind="string",
             name=pattern.name,
             signature=("string", skeleton),
             slots=slots,
             pieces=pieces,
             template=pattern.pattern,
-            slot_sorts={
-                info["label"]: info["pattern"]
-                for info in pattern.variable_locations.values()
-            },
             has_declared_variables=bool(pattern.variables),
         )
 
@@ -199,40 +285,37 @@ def _build(pattern: Pattern) -> Constructor:
             else ("atom", "family", pattern.base)
         )
         return Constructor(
-            source=pattern,
+            denotes_constant=pattern.denotes_constant,
             kind="atom",
             name=pattern.name,
             signature=signature,
             slots=(),
             pieces=(),
             template=None,
-            slot_sorts={},
             atom_value=pattern.value,
             atom_base=pattern.base,
         )
 
     if isinstance(pattern, RegexPattern):
         return Constructor(
-            source=pattern,
+            denotes_constant=pattern.denotes_constant,
             kind="regex",
             name=pattern.name,
             signature=("regex", pattern.pattern),
             slots=(),
             pieces=(),
             template=None,
-            slot_sorts={},
         )
 
     # A union or abstract sort used as a constructor: nothing structural to read,
     # so its name is its identity. A union is told apart because a match against
     # one is a *coercion wrapper* the term layer collapses (see from_match).
     return Constructor(
-        source=pattern,
+        denotes_constant=pattern.denotes_constant,
         kind="union" if isinstance(pattern, UnionPattern) else "named",
         name=pattern.name,
         signature=("named", pattern.name),
         slots=(),
         pieces=(),
         template=None,
-        slot_sorts={},
     )

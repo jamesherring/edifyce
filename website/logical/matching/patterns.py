@@ -402,7 +402,7 @@ class Pattern:
         # never shadow a primitive one.
 
         for notation in context.definitions:
-            if not notation.sort.can_map_to(self, context):
+            if not notation.sort.equivalent(self, context):
                 continue
 
             result = notation.match(s, context)
@@ -412,21 +412,6 @@ class Pattern:
 
         # No notation works
         return None
-
-    def can_map_to(self, other, context, check_equivalent=True):
-        # Check if this pattern can map to the other pattern, taking into account pattern inheritance.
-
-        if check_equivalent and self.equivalent(other, context, allow_mapping_to=True):
-            # Easy case. Use check_equivalent to avoid infinite recursion
-            return True
-
-        # More fundamental patterns can map to inherited patterns, but not the other way around
-
-        if hasattr(other, "inherits"):
-            return self.can_map_to(other.inherits, context)
-
-        # Otherwise false
-        return False
 
 
 class RegexPattern(Pattern):
@@ -458,7 +443,7 @@ class RegexPattern(Pattern):
         # No matches
         return None
 
-    def equivalent(self, other, context, memo=None, allow_mapping_to=False):
+    def equivalent(self, other, context, memo=None):
         # Check equivalence
 
         if memo is None:
@@ -559,7 +544,7 @@ class AtomPattern(Pattern):
             index += 1
         return f"{self.base}_{index}"
 
-    def equivalent(self, other, context, memo=None, allow_mapping_to=False) -> bool:
+    def equivalent(self, other, context, memo=None) -> bool:
         # Two atoms are equivalent when they are the same constant or the same
         # family. Name is deliberately not compared: identity is what the atom
         # denotes, so a rule's inline literal and the system's declared atom of
@@ -808,7 +793,7 @@ class StringPattern(Pattern):
             # production can stand in for.
             spelled = context.string_variables.get(s)
 
-            if spelled is not None and self.can_map_to(spelled, context):
+            if spelled is not None and self.equivalent(spelled, context):
                 return matches.Match(pattern=self, string=s, is_variable=True)
 
             # Try definitions
@@ -1187,7 +1172,7 @@ class StringPattern(Pattern):
         # Reset variables
         self.reset_variables()
 
-    def equivalent(self, other, context, memo=None, allow_mapping_to=False):
+    def equivalent(self, other, context, memo=None):
         # Check if two patterns are the same
 
         if self is other:
@@ -1201,9 +1186,6 @@ class StringPattern(Pattern):
 
         if (self, other) in memo:
             return memo[(self, other)]
-
-        if allow_mapping_to and self.can_map_to(other, context, check_equivalent=False):
-            return True
 
         # Assume False to save lines
         memo[(self, other)] = False
@@ -1234,7 +1216,7 @@ class StringPattern(Pattern):
                 memo[(self, other)] = False
                 return False
 
-            if not self.variables[key].equivalent(other.variables[key], context, memo, allow_mapping_to):
+            if not self.variables[key].equivalent(other.variables[key], context, memo):
                 memo[(self, other)] = False
                 return False
 
@@ -1288,7 +1270,7 @@ def _may_open_with(pattern, character):
 class UnionPattern(Pattern):
     """A union of patterns."""
 
-    def __init__(self, name, patterns, respect_brackets=None, inherits=None):
+    def __init__(self, name, patterns, respect_brackets=None):
 
         Pattern.__init__(self, name, respect_brackets)
 
@@ -1296,9 +1278,6 @@ class UnionPattern(Pattern):
         self.patterns = patterns
 
         self.pattern_type = "UnionPattern"
-
-        # Inherits from a previous unionpattern
-        self.inherits = inherits
 
         # Memos for the flattening of this union, each paired with the revision it
         # was computed at. Flattening is quadratic in the union's size and was
@@ -1356,21 +1335,15 @@ class UnionPattern(Pattern):
         if s in string_variables:
             pattern = string_variables[s]
 
-            if self.can_map_to(pattern, context):
+            if self.equivalent(pattern, context):
                 return matches.Match(
                     pattern=self,
                     string=s,
                     is_variable=True
                 )
 
-            # Also check for match against inherited patterns
-            if self.inherits is not None:
-                result = self.inherits.match(s, context, debug)
-                if result is not None:
-                    return result
-
             for p in nested_options:
-                if p.equivalent(pattern, context, allow_mapping_to=True):
+                if p.equivalent(pattern, context):
 
                     m = matches.Match(
                         pattern=pattern,
@@ -1614,19 +1587,7 @@ class UnionPattern(Pattern):
             self._leaf_index[s[0]] = candidates
         return candidates
 
-    def inherits_from(self, other, context):
-        # Check if this pattern inherits from another
-
-        if self.inherits is None:
-            return False
-
-        if self.inherits.equivalent(other, context):
-            return True
-
-        # Could be nested inheritance
-        return self.inherits.inherits_from(other, context)
-
-    def equivalent(self, other, context, memo=None, allow_mapping_to=False):
+    def equivalent(self, other, context, memo=None):
         # Check if two patterns are the same
 
         if self is other:
@@ -1640,9 +1601,6 @@ class UnionPattern(Pattern):
 
         if (self, other) in memo:
             return memo[(self, other)]
-
-        if allow_mapping_to and self.can_map_to(other, context, check_equivalent=False):
-            return True
 
         # Assume False to save lines
         memo[(self, other)] = False
@@ -1664,7 +1622,7 @@ class UnionPattern(Pattern):
 
         # Patterns must be in the same order
         for pattern, other_pattern in zip(self.patterns, other.patterns):
-            if not pattern.equivalent(other_pattern, context, memo, allow_mapping_to):
+            if not pattern.equivalent(other_pattern, context, memo):
                 memo[(self, other)] = False
                 return False
 
@@ -1718,7 +1676,7 @@ class AbstractPattern(Pattern):
 
         return None
 
-    def equivalent(self, other, context, memo=None, allow_mapping_to=False):
+    def equivalent(self, other, context, memo=None):
         # Check equivalence - depends only on name
 
         if memo is None:
