@@ -8,7 +8,7 @@ provisos — *without* being minted as a persisted rule per theorem.
 The tests cover three things:
 
 1. **Mechanism (graph, not string).** Promotion is a kernel-term operation:
-   ``from_match`` the proved conclusion to a ground term, ``_revariabilise`` the
+   ``from_match`` the proved conclusion to a ground term, ``revariabilise`` the
    named leaves to sort-widened ``Var``s, and hang the term on a schema shell. No
    ``Match.create_pattern`` string round-trip. The ephemeral rule checks through
    the real ``InferenceRule.check`` → ``_term_binding`` → ``match_all`` path.
@@ -43,7 +43,7 @@ pytest.importorskip("regex")
 from tests.miu_system import miu_spec
 from tests.test_definitional_step_proofs import alias_spec
 from tests.test_engine_neutrality import HILBERT
-from website.logical.compiler import _revariabilise
+from website.logical.build_context import revariabilise
 from website.logical.compiler import compile as compile_formal_system
 from website.logical.compiler import promote_from_source
 from website.logical.declarative import build_system
@@ -159,7 +159,7 @@ def promote_proved_leaf(system, proof, generalise: str, sort_name: str) -> Promo
     ground_term = from_match(proof.proof_lines[-1].formula, context)
 
     sort = system.build_context.variables[sort_name]
-    schema_term = _revariabilise(ground_term, {generalise: sort})
+    schema_term = revariabilise(ground_term, {generalise: sort})
 
     deduction = StringPattern(name=generalise, pattern=generalise)
     deduction.schema_term = schema_term

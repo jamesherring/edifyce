@@ -7,6 +7,9 @@ silent forward-declaration trap), and -- the headline requirement -- definitions
 that remain first-class from the grammar down into inference checking.
 """
 
+import ast
+from pathlib import Path
+
 import pytest
 
 pytest.importorskip("regex")
@@ -535,6 +538,29 @@ def scoped_spec() -> SystemSpec:
         lines=[statement_line(), assumption_line()],
         rules=[reiteration_rule()],
     )
+
+
+def test_the_build_path_does_not_import_the_compiler():
+    """No module the production build path reaches may import `.edi`.
+
+    The shared construction primitives live in `build_context`, so the compiler
+    is now leaf: deletable without touching the build path. An import added back
+    here would re-couple them silently, and only surface as a mystery when the
+    deletion is attempted.
+    """
+    engine = Path(__file__).resolve().parent.parent / "website" / "logical"
+    offenders = []
+    for path in [engine / "declarative.py", engine / "build_context.py"]:
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [node.module or ""]
+            else:
+                continue
+            offenders += [f"{path.name} -> {n}" for n in names if "compiler" in n]
+
+    assert offenders == []
 
 
 def commented_spec() -> SystemSpec:

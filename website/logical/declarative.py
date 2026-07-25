@@ -34,10 +34,10 @@ from collections.abc import Callable
 from copy import copy
 from dataclasses import InitVar, dataclass, field
 
-from .compiler import (
+from .build_context import (
     FormalSystemContext,
-    _combine_side_conditions,
     build_schema_pattern,
+    combine_side_conditions,
 )
 from .formal_system import FormalSystem, InferenceRule, LineType, SubproofSchema
 from .formal_system.side_condition_syntax import parse_side_condition
@@ -612,7 +612,7 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
         if defn.condition
         else []
     )
-    kernel_condition = _combine_side_conditions(where_strings, context_copy)
+    kernel_condition = combine_side_conditions(where_strings, context_copy)
 
     # The defining form's bound variables, resolved to their sort patterns, so the
     # term checker treats them as binders (capture-avoiding unfold) rather than as

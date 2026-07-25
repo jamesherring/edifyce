@@ -8,8 +8,15 @@ from website.logical.formal_system import (
     PromotedTheorem,
     SubproofSchema,
 )
+from website.logical.build_context import (
+    FormalSystemContext,
+    build_schema_pattern,
+    combine_side_conditions,
+    compose_schema_term,
+    revariabilise,
+)
 from website.logical.formal_system.side_condition_syntax import parse_side_condition
-from website.logical.kernel import And, Node, Var, from_match, intern
+from website.logical.kernel import from_match
 from collections.abc import Mapping, Sequence
 from copy import copy, deepcopy
 from collections import OrderedDict
@@ -80,88 +87,6 @@ def compile(code: str, system_dict: dict | None = None) -> dict:
     return {"system": FormalSystem(name="")}
 
 
-def build_schema_pattern(text: str, context, name: str):
-    # Build a rule-schema pattern from a source token. A bare constant atom
-    # (e.g. a falsum `⊥`) resolves to its *declared* AtomPattern, so the rule's
-    # literal and the proof line's atom are the same constructor on the term
-    # representation - otherwise a StringPattern literal and the atom would be
-    # different constructors and the (now term-based) checker would reject the
-    # step. A referenced pattern name is used directly; anything else becomes a
-    # StringPattern template with the ambient string variables applied.
-    if text in context.variables:
-        return context.variables[text]
-
-    for candidate in context.variables.values():
-        if isinstance(candidate, AtomPattern) and candidate.is_constant and candidate.is_member(text):
-            return candidate
-
-    pattern = StringPattern(name=name, pattern=text)
-    pattern.add_variables(context.string_variables)
-
-    # Precompute the schema's nested kernel term. A template like a Hilbert axiom
-    # `(p → (q → p))` denotes an implication whose right side is itself an
-    # implication, but the StringPattern is a single flat production. The
-    # term-based checker matches a schema against a proof formula by comparing
-    # term trees, and a proof formula is built compositionally from the system's
-    # productions, so the schema must project to the *same* nested tree. Parse
-    # the template against the productions (with the rule's variables treated as
-    # metavariables) once, here, and stash the resulting term; _schema_term uses
-    # it. None when the template is a bare variable (from_pattern already nests
-    # trivially) or nothing parses it (fall back to the flat projection).
-    pattern.schema_term = compose_schema_term(pattern, context)
-    return pattern
-
-
-def compose_schema_term(pattern: Pattern, context) -> "Term | None":
-    # Project a compound rule-schema template into its nested kernel term by
-    # parsing it against the system's productions. See build_schema_pattern.
-    if not pattern.variable_locations or not pattern.non_variable_locations:
-        # A bare variable/sort (no literal structure) needs no compositional
-        # parse - from_pattern projects it correctly already.
-        return None
-
-    # Match against the system's productions only, never its staged definitions.
-    # During compilation `context.definitions` holds unresolved PendingDefinition
-    # records (finalised at the end of the formal-system block), so letting the
-    # parse fall through to a definition-unfold would call `.match` on one and
-    # crash. Composition is about productions; a schema recognisable only via a
-    # definition simply falls back to the flat projection.
-    parse_context = copy(context)
-    parse_context.definitions = []
-
-    for candidate in context.variables.values():
-        if isinstance(candidate, UnionPattern):
-            match = candidate.match(pattern.pattern, parse_context)
-            if match is not None:
-                return _revariabilise(from_match(match, parse_context), context.string_variables)
-
-    return None
-
-
-def _revariabilise(term: "Term", metavariables: dict) -> "Term":
-    # Re-mark the rule's metavariables in a compositionally-parsed schema term.
-    # Some slots - notably a setvar matched by a RegexPattern, which (unlike a
-    # UnionPattern) does not consult string_variables - come back from the parse
-    # as ground leaves rather than variables. Turn any leaf whose literal is a
-    # declared metavariable into the corresponding Var, so a schema like the ∀I
-    # deduction `∀x p` keeps `x` schematic (able to bind, and to be tied to the
-    # subproof's eigenvariable) instead of fixing it to the literal token "x".
-    def walk(node):
-        if isinstance(node, Node):
-            if node.literal is not None and node.literal in metavariables:
-                return Var(node.literal, metavariables[node.literal])
-            if node.children:
-                return Node(
-                    pattern=node.pattern,
-                    children={label: walk(child) for label, child in node.children.items()},
-                    literal=node.literal,
-                    sort=node.sort,
-                )
-        return node
-
-    return intern(walk(term))
-
-
 def _parse_fresh_bindings(text: str) -> list[tuple[str, str]]:
     # Parse a `fresh` clause into (name, sort-name) pairs, same shape as a `with`
     # clause: comma-separated names, each group ending in `as <sort>` applies that
@@ -188,16 +113,6 @@ def _resolve_sort(sort_name: str, context) -> Pattern:
     if not isinstance(pattern, Pattern):
         raise Exception(f"Definition `fresh` sort '{sort_name}' is not a pattern.")
     return pattern
-
-
-def _combine_side_conditions(where_strings: list, context):
-    # Parse a definition's `where` provisos into a single kernel side-condition
-    # (their conjunction), or None when there are none. Each line uses the same
-    # closed vocabulary as a rule's side_conditions (see side_condition_syntax).
-    if not where_strings:
-        return None
-    conditions = [parse_side_condition(text, context) for text in where_strings]
-    return conditions[0] if len(conditions) == 1 else And(tuple(conditions))
 
 
 def _logical_sorts(system: FormalSystem) -> list[Pattern]:
@@ -366,62 +281,6 @@ def promote_from_source(
         variables=dict(string_variables),
         matching=matching,
     )
-
-
-@dataclass(eq=False)
-class FormalSystemContext:
-
-    # Variables in the code
-    variables: dict = field(default_factory=dict)
-
-    # String variables for inside patterns
-    string_variables: dict = field(default_factory=dict)
-
-    # Definitions created along the way
-    definitions: list = field(default_factory=list)
-
-    # Current object at a point in the code
-    current_object: object = None
-
-    # Proof context
-    proof_context: dict = field(default_factory=dict)
-
-    # External systems for reference
-    system_dict: dict = field(default_factory=dict)
-
-    # Error log
-    error_log: list = field(default_factory=list)
-
-    def inherit(self, parent):
-        # Inherit from parent context
-
-        self.variables.update(parent.variables)
-        self.definitions.extend(parent.definitions)
-        self.proof_context.update(parent.proof_context)
-        self.system_dict.update(parent.system_dict)
-
-        # Don't inherit string_variables or current_object
-
-        # Inherit union patterns
-        for pattern in self.variables.values():
-            if not isinstance(pattern, UnionPattern):
-                continue
-
-            # Pattern is a union pattern. Set the inheritance
-            pattern.inherits = deepcopy(pattern)
-
-    def __copy__(self):
-        new_context = FormalSystemContext()
-
-        new_context.variables = copy(self.variables)
-        new_context.string_variables = copy(self.string_variables)
-        new_context.definitions = copy(self.definitions)
-        new_context.current_object = self.current_object
-        new_context.proof_context = copy(self.proof_context)
-        new_context.system_dict = copy(self.system_dict)
-        new_context.error_log = copy(self.error_log)
-
-        return new_context
 
 
 class AbstractSyntaxTree:
@@ -1226,7 +1085,7 @@ class AbstractSyntaxTree:
                         name: _resolve_sort(sort, context_copy)
                         for name, sort in defn.fresh
                     }
-                    kernel_condition = _combine_side_conditions(defn.where_strings, context_copy)
+                    kernel_condition = combine_side_conditions(defn.where_strings, context_copy)
                 except Exception as e:
                     context.error_log.append(f"Definition '{defn.higher}': {e}")
                     continue
