@@ -32,7 +32,8 @@ adapter over it, and the frontend is a thin client over the API.
 | `website/logical/kernel/` | The trusted checking core: `terms` (interned, shared-DAG formula trees), `unify` (first-order matching), `side_conditions` (the closed proviso vocabulary), `definitions` (a definitional unfold as a cited step). Hard-codes no logic. |
 | `website/logical/formal_system/` | `FormalSystem`, `Proof`, `ProofLine`, line types, inference rules — the built system and proof-checking. |
 | `website/logical/matching/` | Pattern-matching engine (patterns, contexts, matches). Now mainly the **parser**: it turns proof-line text into a `Match`, which `kernel.from_match` projects into a term for checking. Also `rewriting`, the associative matcher for string-rewriting (semi-Thue) rules. |
-| `website/logical/compiler.py` | **Legacy.** The `.edi` source-language compiler (`AbstractSyntaxTree`). No production code path reaches it — it is retained only for the tests still being migrated off it, and for the schema/context helpers `declarative.py` shares with it. Don't build anything new on it. |
+| `website/logical/build_context.py` | The build context (`FormalSystemContext`) and the constructions needing it — `build_schema_pattern`, `combine_side_conditions`. Driven from `SystemSpec` fields by `declarative`; the sole way a system is assembled. |
+| `website/logical/promotion.py` | `promote_from_source`: builds a citable `PromotedTheorem` from a proved or imported theorem's statement, written in *the system's own* grammar (a Metamath `$p` maps here directly). |
 | `website/logical/graphs.py` | Leaf graph utilities: bipartite matching for antecedent-slot assignment, topological order for proof dependencies. |
 | `frontend/` | SvelteKit (Svelte 5) SPA styled with Tailwind CSS v4 + shadcn-svelte. Static build talks to the API. `src/routes/` = pages, `src/lib/api.ts` = the API client. See `frontend/README.md`. |
 | `tests/` | pytest suite covering the API, engine, kernel, and matching. |
@@ -41,6 +42,11 @@ The two public entry points into the engine are `declarative.build_spec(spec)` �
 which the API reaches via `app.db.system_to_spec`, so the relational rows are the
 source of truth, not any source blob — and `FormalSystem.parse(text)` for a
 proof. Start there when tracing behaviour.
+
+The bespoke `.edi` source language and its compiler are **gone**. A system is a
+`SystemSpec` and nothing else; there is no text form to round-trip through, and
+`LineType` behaviours the compiler alone could author (`indent`, a logical line
+with no formula field) are refused at construction.
 
 ## Working in this repo
 

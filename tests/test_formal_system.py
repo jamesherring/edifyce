@@ -1,16 +1,13 @@
 """Engine-level tests for proof parsing, line types, inference, and numbering.
 
 Systems are assembled declaratively (`SystemSpec` + `build_system`) — the build
-path the database and API use — apart from the two `.edi` fixtures below, which
-pin engine behaviours no declarative system can express. Both are annotated with
-why; both die with the compiler.
+path the database and API use, and now the only one.
 """
 
 import pytest
 
 pytest.importorskip("regex")
 
-from website.logical.compiler import compile as compile_formal_system
 from website.logical.declarative import LinePart, LineSpec, SystemSpec, build_system
 
 from tests.spec_helpers import (
@@ -21,12 +18,6 @@ from tests.spec_helpers import (
     statement_line,
     template_prod,
 )
-
-
-def compiled(code):
-    result = compile_formal_system(code)
-    assert "errors" not in result, result.get("errors")
-    return result["system"]
 
 
 def simple_spec() -> SystemSpec:
@@ -94,47 +85,6 @@ def prop_logic_spec() -> SystemSpec:
     )
 
 
-# The one behaviour left that only `.edi` can author: `indent` block nesting,
-# superseded by `LineSpec.scope` and deliberately not offered declaratively (see
-# declarative._LINE_BEHAVIOURS). It dies with the compiler.
-INDENT_SYSTEM = """FormalSystem Indented:
-
-    Regex word:
-        ^[a-z ]+$
-
-    ProofContext:
-        given: MatchSet()
-
-    Pattern if_pattern:
-        with s as word:
-            if s:
-
-    LineType statement:
-        pattern: word
-        behaviour: none
-
-    LineType if:
-        pattern: if_pattern
-        behaviour: indent
-"""
-
-
-# Likewise compiler-bound: a *logical* line with no formula field at all.
-# `build_system` always projects one, so this guard is unreachable declaratively.
-NO_FORMULA_SYSTEM = """FormalSystem NoFormula:
-
-    Regex word:
-        ^[a-z]+$
-
-    ProofContext:
-        given: MatchSet()
-
-    LineType statement:
-        pattern: word
-        behaviour: logical
-"""
-
-
 @pytest.fixture(scope="module")
 def simple_system():
     return build_system(simple_spec())
@@ -183,14 +133,6 @@ def test_blank_lines_are_ignored(simple_system):
     assert proof.valid is True
     displays = [l["display"] for l in proof.data()["lines"] if l["display"]]
     assert displays == ["hello", "world"]
-
-
-def test_indent_block_parses_nested_lines():
-    proof = compiled(INDENT_SYSTEM).parse("if abc:\n    abc")
-    lines = proof.data()["lines"]
-    assert [l["display"] for l in lines] == ["if abc:", "abc"]
-    assert [l["indent"] for l in lines] == [0, 4]
-    assert all(l["valid"] for l in lines)
 
 
 def test_proof_data_structure(simple_system):
@@ -294,15 +236,6 @@ def test_unknown_reference_is_invalid(logical_system):
     assert line["invalid_message"] == "Invalid reference: NOPE"
 
 
-def test_logical_line_without_formula_is_invalid():
-    # The statement pattern declares no formula field, so logical lines cannot
-    # be checked.
-    proof = compiled(NO_FORMULA_SYSTEM).parse("abc")
-    assert proof.valid is False
-    line = proof.data()["lines"][0]
-    assert line["invalid_message"] == "No formula defined for logical line."
-
-
 # ---------------------------------------------------------------------------
 # Inference over compound terms (the kernel term path)
 # ---------------------------------------------------------------------------
@@ -367,3 +300,31 @@ def test_line_types_expose_behaviour(logical_system):
 def test_indicator_reflects_validity(simple_system):
     assert simple_system.parse("hello").indicator() == "ok"
     assert simple_system.parse("BAD 1").indicator() == "error"
+
+
+# ---------------------------------------------------------------------------
+# LineType construction guards
+# ---------------------------------------------------------------------------
+
+
+def test_indent_is_no_longer_a_line_behaviour():
+    # Block nesting by indentation was superseded by `LineSpec.scope`, and only
+    # the retired `.edi` compiler could author it. Rejecting it at construction
+    # keeps it from being resurrected as a silent no-op.
+    from website.logical.formal_system import LineType
+
+    with pytest.raises(ValueError, match="not a valid LineType behaviour"):
+        LineType(name="block", behaviour="indent")
+
+
+def test_logical_line_must_declare_a_formula_field():
+    # Every instance of such a line was rejected with "No formula defined for
+    # logical line." — an inert line type. It is refused where the author can
+    # still act on it, rather than once per proof line.
+    from website.logical.formal_system import LineType
+
+    with pytest.raises(ValueError, match="declares no formula field"):
+        LineType(name="statement", behaviour="logical")
+
+    # A comment carries no formula by design, so it is unaffected.
+    assert LineType(name="note", behaviour="comment").formula_field is None

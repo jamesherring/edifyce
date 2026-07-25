@@ -26,7 +26,7 @@ from website.logical.matching.rewriting import iter_bindings
 
 def _pattern(template: str, *variables: str) -> tuple[StringPattern, Context]:
     # A StringPattern over variables whose sort is the [MIU]* regex leaf, with a
-    # context that knows those variables (mirrors what the compiler wires up).
+    # context that knows those variables (mirrors what the build wires up).
     context = Context()
     var_pattern = RegexPattern(name="miustr", pattern="^[MIU]*$")
     for v in variables:

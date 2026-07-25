@@ -36,7 +36,7 @@ class FormalSystem:
         # reference resolver builds an ephemeral rule per citation. See promotion.
         self.promoted_theorems: dict[str, PromotedTheorem] = {}
 
-        # The build context from compiler
+        # The context the system was assembled in (see build_context)
         self.build_context = build_context
 
         # Per declared definition, in spec order, whether it layered: i.e. its
@@ -86,7 +86,10 @@ class FormalSystem:
             # Add the pattern
             add_pattern(self.pattern_dictionary, item)
 
-    def parse(self, text, proof=None, proof_model_id=None, reference_proofs=None, context=None, line_number_offset=0):
+    # `line_number_offset` is gone with the `indent` behaviour: it was only ever
+    # a "am I the recursive block call?" flag, set by the block parse that
+    # `LineSpec.scope` replaced. Nothing offset any line number.
+    def parse(self, text, proof=None, proof_model_id=None, reference_proofs=None, context=None):
         # Parse the text into a proof.
 
         lines = text.split("\n")
@@ -178,61 +181,23 @@ class FormalSystem:
             proof.assign_scope(proof_line)
 
             if found:
-                # Follow indent/non-indent line rules
-
-                if proof_line.line_type.behaviour == "indent":
-                    # This is an indent line.
-                    # Parse the block with a copied context
-
-                    new_context = copy(context)
-
-                    # Find the next line with this indent
-                    j = i + 1
-                    while j < len(lines):
-                        block_line = lines[j]
-
-                        if len(block_line) - len(block_line.lstrip()) <= proof_line.indent and \
-                                len(block_line.lstrip()) > 0:
-                            # This is the out-denting line
-                            break
-
-                        j += 1
-
-                    # Compile the block
-                    block = "\n".join(lines[i + 1:j])
-
-                    self.parse(
-                        text=block,
-                        proof=proof,
-                        context=new_context,
-                        line_number_offset=i + 1
-                    )
-
-                    # Update context with definitions created in the block
-                    context.definitions = new_context.definitions
-
-                    # Continue from after the block
-                    i = j - 1
-                    continue
-
                 # Execute the proof line
                 proof_line.execute(context)
 
-        if line_number_offset == 0:
-            # Check if the proof is valid or has warnings
+        # Check if the proof is valid or has warnings
 
-            proof.valid = True
-            proof.has_warnings = False
+        proof.valid = True
+        proof.has_warnings = False
 
-            for line in proof.proof_lines:
-                if not line.valid:
-                    proof.valid = False
-                    break
+        for line in proof.proof_lines:
+            if not line.valid:
+                proof.valid = False
+                break
 
-            for line in proof.proof_lines:
-                if line.warning_message is not None:
-                    proof.has_warnings = True
-                    break
+        for line in proof.proof_lines:
+            if line.warning_message is not None:
+                proof.has_warnings = True
+                break
 
         return proof
 

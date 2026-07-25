@@ -84,10 +84,10 @@ class InferenceRule:
             side_conditions if side_conditions is not None else []
         )
 
-        # Raw proviso lines awaiting a parse. The compiler defers parsing to its
+        # Raw proviso lines awaiting a parse. The build defers parsing to its
         # finalisation pass — once the system's definitions have resolved, so a
         # proviso argument may use defined notation — then fills `side_conditions`
-        # and clears this. Empty except transiently during compilation.
+        # and clears this. Empty except transiently mid-build.
         self.pending_side_conditions: list[str] = []
 
         # Optionally allow extra antecedents
@@ -383,14 +383,14 @@ class InferenceRule:
         variable is renamed apart rather than collapsed into one binding.
 
         A compound template (e.g. a Hilbert axiom ``(p -> (q -> p))``) carries a
-        precomputed *nested* term from the compiler (``schema_term``), because a
+        precomputed *nested* term from the build (``schema_term``), because a
         flat ``from_pattern`` projection would be one production while the proof
         formula it must match is a nested tree of the system's productions. Its
         named metavariables are shared, so it needs no per-occurrence renaming.
         """
         if isinstance(pattern, StringPattern):
             # A compound template carries a precomputed *nested* term from the
-            # compiler; a flat from_pattern projection would be one production
+            # build; a flat from_pattern projection would be one production
             # while the proof formula it must match is a nested tree. Either way
             # its named metavariables are shared, so no per-occurrence renaming.
             if pattern.schema_term is not None:

@@ -321,7 +321,7 @@ class StringPattern(Pattern):
         self.pattern = pattern
 
         # An optional precomputed nested kernel Term for a rule-schema template,
-        # set by the compiler (compose_schema_term) and consumed by the checker;
+        # set at build time (build_context.compose_schema_term) and consumed by the checker;
         # opaque to the matching layer, which never reads it (matching must not
         # depend on the kernel). None for any pattern that is not a compound
         # rule schema. Declared here so consumers use `pattern.schema_term`
