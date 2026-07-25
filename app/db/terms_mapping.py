@@ -356,7 +356,7 @@ def load_term(row: TermRow, context: Context) -> Term:
 
     Constructor names resolve against ``context`` (a compiled system's proof
     context): productions and sorts by name in ``context.variables``, defined
-    constructors by higher-template string among ``context.definitions``. An
+    defined constructors by template string among ``context.definitions``. An
     unresolvable name raises — a stored term that no longer matches its system
     is data corruption, not something to paper over.
     """
@@ -383,30 +383,30 @@ def _load(row: TermRow, context: Context, memo: dict[object, Term]) -> Term:
             literal=row.literal,
         )
     elif row.kind == TERM_KIND_DEFINED:
-        # Match on the stored sort too: two definitions may share a higher
-        # template across different sorts, and context.definitions is a set,
-        # so template alone would pick one arbitrarily.
-        definition = next(
+        # Match on the stored sort too: two notations may share a template
+        # across different sorts, and context.definitions is a set, so the
+        # template alone would pick one arbitrarily.
+        notation = next(
             (
-                defn
-                for defn in context.definitions
-                if defn.higher.pattern == row.constructor
-                and defn.pattern.name == row.sort
+                candidate
+                for candidate in context.definitions
+                if candidate.template.pattern == row.constructor
+                and candidate.sort.name == row.sort
             ),
             None,
         )
-        if definition is None:
+        if notation is None:
             raise LookupError(
-                f"No definition of {row.sort!r} with higher form "
+                f"No defined notation of {row.sort!r} with form "
                 f"{row.constructor!r} in context"
             )
         term = Node(
-            pattern=definition.higher,
+            pattern=notation.template,
             children={
                 edge.slot: _load(edge.child, context, memo) for edge in row.children
             },
             literal=row.literal,
-            sort=definition.pattern,
+            sort=notation.sort,
         )
     else:
         raise ValueError(f"Unknown term row kind: {row.kind!r}")

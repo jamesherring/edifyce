@@ -22,7 +22,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .definitions import Definition
     from .patterns import Pattern
 
 
@@ -34,7 +33,7 @@ class Match:
         pattern: Pattern,
         string: str,
         is_variable: bool = False,
-        definition: Definition | None = None,
+        sort: Pattern | None = None,
     ) -> None:
 
         self.pattern: Pattern = pattern
@@ -46,9 +45,13 @@ class Match:
         # Sub-matches, keyed by the template slot they filled
         self.sub_matches: dict[str, Match] = {}
 
-        # The definition that licensed this match, for one made through defined
-        # notation (see Definition.match). None for an ordinary production.
-        self.definition: Definition | None = definition
+        # The sort this match *inhabits*, when that is not its own constructor.
+        # Normally None: a production is already a member of whatever union it
+        # belongs to. It is set for defined notation, whose template is an ad-hoc
+        # constructor no union declares (see DefinedNotation.match) - the term layer
+        # carries the same distinction on `Node.sort`, and reads this straight
+        # across, which is why it need not know definitions exist.
+        self.sort: Pattern | None = sort
 
     def add_submatch(self, var: str, m: Match) -> None:
         self.sub_matches[var] = m
@@ -68,7 +71,7 @@ class Match:
         about the *parse* rather than about the formula: which of the ambient
         string variables this text actually filled a slot with. A definition reads
         it to learn its defining form's parameters (see
-        :class:`~website.logical.matching.definitions.Definition`).
+        :class:`~website.logical.matching.definitions.DefinedNotation`).
         """
         if not self.sub_matches:
             return [self] if self.is_variable else []

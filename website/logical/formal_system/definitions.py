@@ -1,23 +1,23 @@
-"""Building a :class:`~website.logical.kernel.definitions.Definition` from a
-:class:`~website.logical.matching.definitions.Definition`, and checking a
-definitional step against it.
+"""Building a :class:`~website.logical.kernel.definitions.Definition` -- the
+build-time gate a declared definition has to pass.
 
-The two definition objects play different roles and both are needed:
+A definition splits cleanly into two, and only one of them is a *definition*:
 
-* the **matching** ``Definition`` is *parser* state - it is what lets
-  ``a sub b`` be recognised as a formula at all (``Pattern.try_definitions``);
-* the **kernel** ``Definition`` is a definitional *axiom* whose defining form
-  stores its binders abstractly (so an unfold is capture-avoiding) and whose
-  proviso is drawn from the kernel's closed, structural side-condition
-  vocabulary. It is what a proof step is *checked* against.
+* its **defined form** is a production the grammar gains
+  (:class:`~website.logical.matching.definitions.DefinedNotation`), which is what
+  lets ``a sub b`` be recognised as a formula at all. It parses, and nothing more;
+* the definition itself is a **kernel** axiom - defining form stored with its
+  binders abstract, so an unfold is capture-avoiding, and its proviso drawn from
+  the kernel's closed structural vocabulary. It is what a step is checked against,
+  and it lives on the system (``FormalSystem.definitions``), cited by label.
 
-:func:`build_kernel_definition` derives the second from the first, and the system
-builder calls it once per definition at build time (see
-``declarative._finalise_definition``), storing the result on the matching
-definition's ``kernel`` slot. Every definition reaching a proof therefore already
-carries its kernel counterpart: :func:`follows_by_definition` reads it rather
-than deriving anything, and there is no second, string-based way to apply a
-definition.
+:func:`build_kernel_definition` pairs the two: given a registered notation and the
+defining form as written, it produces the axiom or refuses. The system builder
+calls it once per definition (see ``declarative._finalise_definition``), so a
+definition that cannot be expressed soundly never reaches a proof -- and a proof
+step is checked by handing the axiom straight to
+:func:`~website.logical.kernel.definitions.check_definitional_step`, with nothing
+in between to become a second, string-based way to apply a definition.
 
 Why this is a build-time step, not a check-time one
 ---------------------------------------------------
@@ -81,20 +81,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..kernel import (
-    Definition,
-    check_definitional_step,
-    introduced_leaves,
-    unbound_parameters,
-)
+from ..kernel import Definition, introduced_leaves, unbound_parameters
 from ..kernel.terms import Node
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from ..kernel.terms import Term
+    from ..kernel.side_conditions import SideCondition
+    from ..kernel.terms import FreeVars
     from ..matching.context import Context
-    from ..matching.definitions import Definition as MatchingDefinition
+    from ..matching.definitions import DefinedNotation
 
 
 class DefinitionError(Exception):
@@ -106,7 +102,7 @@ class DefinitionError(Exception):
 
 
 def _introduced_name_error(
-    legacy: MatchingDefinition, names: Sequence[str]
+    notation: DefinedNotation, lower: str, names: Sequence[str]
 ) -> DefinitionError:
     """The build error for a defining form that introduces ``names`` out of
     nowhere - written for the author, and naming every remedy.
@@ -120,8 +116,8 @@ def _introduced_name_error(
     plural = len(names) > 1
     them = "them" if plural else "it"
     return DefinitionError(
-        f"Definition '{legacy.higher.pattern}' introduces {listed} in its defining "
-        f"form '{legacy.lower_source}', but the defined form does not mention "
+        f"Definition '{notation.template.pattern}' introduces {listed} in its defining "
+        f"form '{lower}', but the defined form does not mention "
         f"{them}. An unfold would then conjure {them} wherever the definition is "
         f"used, and under a binder of the same name that silently rebinds "
         f"{them} — so the step would not mean the same thing everywhere it is "
@@ -135,67 +131,73 @@ def _introduced_name_error(
     )
 
 
-def _lower_only_parameters(legacy: MatchingDefinition) -> list[str]:
-    """The declared parameters the *defining* form uses that the defined form does
-    not - a binder written as an ordinary parameter.
+def build_kernel_definition(
+    notation: DefinedNotation,
+    lower: str | None,
+    context: Context,
+    condition: SideCondition | None = None,
+    fresh: FreeVars | None = None,
+    label: str | None = None,
+) -> Definition:
+    """The kernel definition that unfolds ``notation`` to ``lower``.
 
-    Checked before parsing so the author is told which name is the problem. The
-    kernel would catch it too (the leaf is introduced from nowhere either way),
-    but only after the defining form has been parsed and abstracted.
+    ``notation`` supplies the grammatical half — the sort, the defined form, and
+    the parameters that form takes; ``lower`` is the defining form as written,
+    with ``condition`` and ``fresh`` its declared provisos and ``label`` the name
+    a proof cites it by. ``lower`` may be ``None``: notation can be registered
+    without a defining form, and this is where that is refused.
+
+    ``context`` must already hold ``notation``: a defined form is grammatical
+    only because its notation is registered, so that is what lets ``higher``
+    parse at all.
+
+    Raises :class:`DefinitionError` when the pair cannot be expressed as a kernel
+    definition — because a form does not parse, or because the defining form
+    introduces a name out of nowhere.
     """
-    return sorted(set(legacy.variables) - set(legacy.higher.variables))
-
-
-def build_kernel_definition(legacy: MatchingDefinition, context: Context) -> Definition:
-    """The kernel definition ``legacy`` denotes.
-
-    ``context`` must already hold ``legacy`` itself: an alias definition's
-    *defined* form is grammatical only because the definition is in scope, so the
-    definition is what lets ``higher`` parse at all.
-
-    Raises :class:`DefinitionError` when the definition cannot be expressed as a
-    kernel one - because a form does not parse, or because the defining form
-    introduces a binder the author has not declared.
-    """
-    if legacy.lower_source is None:
+    if lower is None:
         raise DefinitionError(
-            f"Definition '{legacy.higher.pattern}' has no defining form to unfold to."
+            f"Definition '{notation.template.pattern}' has no defining form to unfold to."
         )
 
-    undeclared = _lower_only_parameters(legacy)
-    if undeclared:
-        raise _introduced_name_error(legacy, undeclared)
+    # The definition's parameters are the slots its *defined* form declares -
+    # exactly what a use of the notation supplies. A name the defining form uses
+    # and the defined form does not is therefore left unabstracted, which is the
+    # point: it stays a ground leaf and `introduced_leaves` below reports it as a
+    # name the unfold would conjure. Only that check, and `unbound_parameters`
+    # beside it, decide what a defining form may introduce.
+    variables = dict(notation.variables)
 
     try:
         kernel_def = Definition.parse(
-            sort=legacy.pattern,
-            higher=legacy.higher.pattern,
-            lower=legacy.lower_source,
-            variables=dict(legacy.variables),
+            sort=notation.sort,
+            higher=notation.template.pattern,
+            lower=lower,
+            variables=variables,
             context=context,
-            condition=legacy.kernel_condition,
-            fresh=dict(legacy.fresh) or None,
+            condition=condition,
+            fresh=dict(fresh) if fresh else None,
+            label=label,
         )
     except Exception as exc:
-        # A surface form the grammar cannot recognise on its own, a deeper matcher
-        # error, or the constant probe tripping over a regex sort that only
-        # compiles when matched. Reshaped rather than propagated so the author
-        # gets a message naming the definition, not a matcher-internal traceback.
+        # A surface form the grammar cannot recognise on its own, or a deeper
+        # matcher error. Reshaped rather than propagated so the author gets a
+        # message naming the definition, not a matcher-internal traceback.
         raise DefinitionError(
-            f"Definition '{legacy.higher.pattern}' could not be read as a "
-            f"definition of {legacy.pattern.name}: {exc}"
+            f"Definition '{notation.template.pattern}' could not be read as a "
+            f"definition of {notation.sort.name}: {exc}"
         ) from exc
 
     # The kernel settles which leaves the defining form introduces from nowhere -
     # the structural question, over the two term schemas. All that is left here is
-    # the grammar question it deliberately leaves open: which of them are constants
-    # of the object language (`⊥`, `∅`), which denote one fixed thing and so can be
-    # neither renamed nor captured. Everything else is a name the unfold would
-    # conjure - an undeclared binder, or a variable free in the defining form - and
-    # either makes the unfold depend on where it is taken.
+    # the grammar question it deliberately leaves open: which of them are
+    # constants of the object language, declared as such by the production that
+    # builds them. Everything else is a name the unfold would conjure - an
+    # undeclared binder, or a variable free in the defining form - and either
+    # makes the unfold depend on where it is taken.
     unbound = unbound_parameters(kernel_def)
     if unbound:
-        raise _introduced_name_error(legacy, unbound)
+        raise _introduced_name_error(notation, lower, unbound)
 
     # Deduplicated by *name* only here: two constructors spelling the same token
     # are two problems to the kernel but one thing for the author to fix.
@@ -207,7 +209,7 @@ def build_kernel_definition(legacy: MatchingDefinition, context: Context) -> Def
         }
     )
     if conjured:
-        raise _introduced_name_error(legacy, conjured)
+        raise _introduced_name_error(notation, lower, conjured)
 
     return kernel_def
 
@@ -231,29 +233,3 @@ def denotes_a_constant(kernel_def: Definition) -> bool:
     """
     higher = kernel_def.higher
     return isinstance(higher, Node) and not higher.children and higher.literal is not None
-
-
-def follows_by_definition(
-    before: Term, after: Term, legacy: MatchingDefinition, context: Context
-) -> bool:
-    """Whether ``before`` and ``after`` are one definitional unfold apart under
-    ``legacy``, checked over kernel terms in either direction.
-
-    ``legacy.kernel`` is built when the system is (see
-    :func:`build_kernel_definition`), so a definition that reaches a proof always
-    carries one.
-
-    Raises :class:`DefinitionError` if one does not - which means it was built
-    outside the system builder, via :meth:`Pattern.add_definition` directly.
-    Better to say so than to hand ``None`` to the kernel and fail as an
-    ``AttributeError`` several frames in.
-    """
-    if legacy.kernel is None:
-        raise DefinitionError(
-            f"Definition '{legacy.higher.pattern}' has no kernel counterpart, so no "
-            f"step can be checked against it. Definitions are built through "
-            f"`declarative.build_system`, which constructs one for each; this one "
-            f"reached a proof without it."
-        )
-
-    return check_definitional_step(before, after, legacy.kernel, context)

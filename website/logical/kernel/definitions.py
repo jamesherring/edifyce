@@ -120,6 +120,12 @@ class Definition:
     lower: Term
     condition: SideCondition | None = None
     fresh: tuple[tuple[str, Pattern], ...] = ()
+    # The name a proof cites this definition by (`[<label>, <line>]`), or None
+    # for an unnamed one (still reachable through the generic keyword). It lives
+    # here, not on the notation that parses the defined form, because a citation
+    # names an *axiom*: two definitions may share one defined form, and each
+    # stays separately citable.
+    label: str | None = None
 
     @classmethod
     def parse(
@@ -131,6 +137,7 @@ class Definition:
         context: Context,
         condition: SideCondition | None = None,
         fresh: FreeVars | None = None,
+        label: str | None = None,
     ) -> Definition:
         """Build a definition by parsing its two surface forms.
 
@@ -169,6 +176,7 @@ class Definition:
             lower=schema(lower, abstract_binders=True),
             condition=condition,
             fresh=fresh_items,
+            label=label,
         )
 
 

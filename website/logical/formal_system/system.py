@@ -2,6 +2,7 @@
 
 from copy import copy
 
+from ..kernel.definitions import Definition as KernelDefinition
 from ..kernel.terms import from_match
 from ..matching import Context, Match, Pattern, StringPattern, UnionPattern
 from .promotion import PromotedTheorem
@@ -30,6 +31,13 @@ class FormalSystem:
 
         # A list of valid inference rules for the system
         self.inference_rules = inference_rules if inference_rules is not None else []
+
+        # The system's definitional axioms (kernel Definitions). A proof cites
+        # one by label, or lets the generic keyword search them all. Held here
+        # rather than in the proof context because they are fixed once the system
+        # is built - the context carries only the *notations* that let a defined
+        # form parse (see matching.DefinedNotation).
+        self.definitions: list[KernelDefinition] = []
 
         # Proved/imported theorems registered for schematic reuse, keyed by label.
         # Kept out of `inference_rules` so the system's *primitive* rules stay
@@ -214,6 +222,11 @@ class FormalSystem:
                 break
 
         return proof
+
+    def add_definition(self, definition: KernelDefinition) -> None:
+        # Register a definitional axiom. Labels are checked for uniqueness by the
+        # builder, so a citation resolves to exactly one.
+        self.definitions.append(definition)
 
     def add_inference_rule(self, rule):
         # Add an inference rule

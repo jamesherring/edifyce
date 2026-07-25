@@ -24,10 +24,11 @@ pytest.importorskip("regex")
 # Every system fixture is built declaratively via `build_spec`, the same path the
 # database and API use.
 from website.logical.declarative import SystemSpec, build_spec
+from website.logical.kernel import check_definitional_step
+from website.logical.kernel.definitions import Definition as KernelDefinition
 from website.logical.formal_system.definitions import (
     DefinitionError,
     build_kernel_definition,
-    follows_by_definition,
 )
 
 from tests.spec_helpers import (
@@ -56,9 +57,17 @@ def context_of(system):
 
 
 def only_definition(system):
-    definitions = list(context_of(system).definitions)
-    assert len(definitions) == 1, definitions
-    return definitions[0]
+    # The system's single kernel definition - the axiom a step is checked against.
+    assert len(system.definitions) == 1, system.definitions
+    return system.definitions[0]
+
+
+def only_notation(system):
+    # The system's single defined notation - the production that lets the defined
+    # form parse. Paired with the definition above, but a separate object.
+    notations = list(context_of(system).definitions)
+    assert len(notations) == 1, notations
+    return notations[0]
 
 
 # `setvar` is a single-letter leaf sort used only as a binding sort; its member
@@ -159,14 +168,43 @@ def const_system():
 
 
 # ---------------------------------------------------------------------------
+# The split: a notation parses, a definition means something
+# ---------------------------------------------------------------------------
+
+
+def test_notation_carries_no_definitional_payload(guarded_system):
+    # The parser half is a production and nothing else. It used to carry the
+    # defining form, the provisos and the kernel definition itself, each "held
+    # opaquely" so this layer could avoid importing the kernel - which is the
+    # shape of a courier, not of a parser.
+    notation = only_notation(guarded_system)
+    assert set(vars(notation)) == {"sort", "template"}
+
+    # And it cannot apply anything: there is one way to check a step.
+    assert not hasattr(notation, "kernel")
+    assert not hasattr(notation, "check_application")
+
+
+def test_the_definition_is_a_kernel_axiom_held_by_the_system(guarded_system):
+    # The meaning half is the kernel's own Definition, and the system holds it -
+    # definitions are fixed once a system is built, so the per-line context copy
+    # carries only the notations that let a defined form parse.
+    (definition,) = guarded_system.definitions
+    assert isinstance(definition, KernelDefinition)
+    assert all(
+        not isinstance(entry, KernelDefinition)
+        for entry in context_of(guarded_system).definitions
+    )
+
+
+# ---------------------------------------------------------------------------
 # build_kernel_definition - the build-time soundness gate
 # ---------------------------------------------------------------------------
 
 
 def test_binder_free_alias_builds_a_kernel_definition(alias_system):
     # The kernel counterpart is built with the system, not derived per step.
-    definition = only_definition(alias_system)
-    assert definition.kernel is not None
+    assert only_definition(alias_system) is not None
 
 
 def test_undeclared_binder_fails_the_build():
@@ -199,43 +237,22 @@ def test_binder_declared_as_an_ordinary_parameter_fails_the_build():
     assert "∀z.((z ∈ x) → (z ∈ y))" in message
 
 
-def test_a_definition_built_outside_the_system_builder_says_so(alias_system):
-    # `Pattern.add_definition` is public and does not build a kernel counterpart —
-    # only `declarative.build_system` does. A definition that reaches a proof that
-    # way must name the broken invariant, not fail as an AttributeError several
-    # frames inside the kernel.
-    system = alias_system
-    formula = system.build_context.variables["formula"]
-    context = context_of(system)
-    context.string_variables = {"x": system.build_context.variables["setvar"],
-                                "y": system.build_context.variables["setvar"]}
-    unbuilt = formula.add_definition("(x ∈ y)", "x below y", context)
-    assert unbuilt is not None and unbuilt.kernel is None
-
-    _proof, (alias, canonical) = formulae(system, "a sub b", "(a ∈ b)")
-    with pytest.raises(DefinitionError, match="no kernel counterpart"):
-        follows_by_definition(alias, canonical, unbuilt, context)
-
-
-def test_a_definition_with_no_defining_form_is_refused(alias_system):
-    # `require_lower_match=False` builds a definition whose lower form is unknown.
-    # It makes defined notation parse, but there is nothing to unfold *to*.
+def test_a_notation_with_no_defining_form_is_refused(alias_system):
+    # Notation can be registered without a defining form — it then makes the
+    # defined form parse, but there is nothing to unfold *to*, so no kernel
+    # definition can be built for it.
     context = context_of(alias_system)
     formula = alias_system.build_context.variables["formula"]
-    open_definition = formula.add_definition(
-        "not a formula at all", "x beside y", context, require_lower_match=False
-    )
-    assert open_definition is not None and open_definition.lower_source is None
+    notation = formula.add_notation("x beside y", context)
 
     with pytest.raises(DefinitionError, match="no defining form"):
-        build_kernel_definition(open_definition, context)
+        build_kernel_definition(notation, None, context)
 
 
 def test_constant_carrying_definition_builds_a_kernel_definition(const_system):
     # `⊥` is a lower-only ground leaf, like an undeclared binder — but it is a
     # grammar constant, which can never be captured, so the gate admits it.
-    definition = only_definition(const_system)
-    assert definition.kernel is not None
+    assert only_definition(const_system) is not None
 
 
 # A nullary abbreviation: `S` names one specific formula, taking no arguments.
@@ -265,15 +282,14 @@ def test_closed_nullary_abbreviation_builds_and_checks_a_step():
     # fixed term wherever it is taken. Nothing to determine, nothing to capture.
     system = build_declarative(nullary_spec(closed=True))
     definition = only_definition(system)
-    assert definition.kernel is not None
 
     context = context_of(system)
     _proof, (abbreviated, spelled, other) = formulae(
         system, "S", "(⊥ → ⊥)", "(⊥ → (⊥ → ⊥))"
     )
-    assert follows_by_definition(abbreviated, spelled, definition, context) is True
-    assert follows_by_definition(spelled, abbreviated, definition, context) is True
-    assert follows_by_definition(abbreviated, other, definition, context) is False
+    assert check_definitional_step(abbreviated, spelled, definition, context) is True
+    assert check_definitional_step(spelled, abbreviated, definition, context) is True
+    assert check_definitional_step(abbreviated, other, definition, context) is False
 
 
 def test_open_nullary_abbreviation_fails_the_build():
@@ -298,22 +314,22 @@ def test_a_nullary_definition_may_be_layered_on_by_a_later_one():
     system = build_declarative(spec)
     assert system.definition_layering == [True, True]
 
-    # `context.definitions` is a set, so pick each out by its defined form.
-    by_form = {d.higher.pattern: d for d in system.context.definitions}
-    assert by_form["S"].higher.denotes_constant is True
-    sup = by_form["T"]
-    assert sup.kernel is not None
+    # `context.definitions` is a set of notations, so pick each out by its form.
+    by_form = {d.template.pattern: d for d in system.context.definitions}
+    assert by_form["S"].template.denotes_constant is True
+    # The matching definition is the kernel one whose defined form is `T`.
+    (sup,) = [d for d in system.definitions if d.higher.to_string() == "T"]
 
     context = context_of(system)
     _proof, (abbreviated, spelled) = formulae(system, "T", "S")
-    assert follows_by_definition(abbreviated, spelled, sup, context) is True
+    assert check_definitional_step(abbreviated, spelled, sup, context) is True
 
 
 def test_layering_on_a_definition_with_parameters_introduces_nothing():
     # The counterpart: `(x ∉ y)` is compound, never a ground leaf, so the derived
     # role is False and nothing is excused by it — there was nothing to excuse.
     system = build_declarative(const_spec())
-    assert only_definition(system).higher.denotes_constant is False
+    assert only_notation(system).template.denotes_constant is False
 
 
 # A constant grammar plus an unused sort whose regex is malformed. The gate once
@@ -329,11 +345,11 @@ def const_bad_regex_spec() -> SystemSpec:
 
 def test_unrelated_malformed_regex_sort_does_not_reach_the_gate():
     system = build_declarative(const_bad_regex_spec())
-    assert only_definition(system).kernel is not None
+    assert only_definition(system) is not None
 
 
 # ---------------------------------------------------------------------------
-# follows_by_definition - the term-based step check (kernel path)
+# check_definitional_step - the term-based step check (kernel path)
 # ---------------------------------------------------------------------------
 
 
@@ -351,8 +367,8 @@ def test_alias_unfold_accepted_both_directions(alias_system):
 
     assert alias is not None and canonical is not None
     # Fold direction and unfold direction both hold: one definitional step apart.
-    assert follows_by_definition(alias, canonical, definition, context) is True
-    assert follows_by_definition(canonical, alias, definition, context) is True
+    assert check_definitional_step(alias, canonical, definition, context) is True
+    assert check_definitional_step(canonical, alias, definition, context) is True
 
 
 def test_alias_unfold_rejects_a_different_formula(alias_system):
@@ -360,7 +376,7 @@ def test_alias_unfold_rejects_a_different_formula(alias_system):
     context = context_of(alias_system)
     _proof, (alias, other) = formulae(alias_system, "a sub b", "(a ∈ c)")
 
-    assert follows_by_definition(alias, other, definition, context) is False
+    assert check_definitional_step(alias, other, definition, context) is False
 
 
 def test_constant_definition_unfold_checked_by_the_kernel(const_system):
@@ -373,9 +389,9 @@ def test_constant_definition_unfold_checked_by_the_kernel(const_system):
         const_system, "(a ∉ b)", "((a ∈ b) → ⊥)", "(a ∈ b)"
     )
 
-    assert follows_by_definition(folded, unfolded, definition, context) is True
-    assert follows_by_definition(unfolded, folded, definition, context) is True
-    assert follows_by_definition(folded, other, definition, context) is False
+    assert check_definitional_step(folded, unfolded, definition, context) is True
+    assert check_definitional_step(unfolded, folded, definition, context) is True
+    assert check_definitional_step(folded, other, definition, context) is False
 
 
 def test_follows_from_definition_uses_the_kernel_path(alias_system):
@@ -388,7 +404,6 @@ def test_follows_from_definition_uses_the_kernel_path(alias_system):
 
     assert alias_line.follows_from_definition(canonical_line, definition, context) is True
     assert alias_line.follows_from_definition(other_line, definition, context) is False
-    assert definition.kernel is not None
 
 
 # The declarative form of the same df-subset system, built for the happy-path
@@ -435,12 +450,12 @@ def guarded_system():
 
 def test_fresh_clause_is_captured_on_the_definition(fresh_system):
     definition = only_definition(fresh_system)
-    assert set(definition.fresh) == {"z"}
+    # `fresh` pairs each declared binder with its sort.
+    assert {name for name, _sort in definition.fresh} == {"z"}
 
 
 def test_declared_binder_builds_a_kernel_definition(fresh_system):
-    definition = only_definition(fresh_system)
-    assert definition.kernel is not None
+    assert only_definition(fresh_system) is not None
 
 
 def test_declared_binder_unfold_accepted_both_directions(fresh_system):
@@ -449,8 +464,8 @@ def test_declared_binder_unfold_accepted_both_directions(fresh_system):
     proof, (subset, unfolded) = formulae(
         fresh_system, "(a ⊆ b)", "∀z.((z ∈ a) → (z ∈ b))"
     )
-    assert follows_by_definition(subset, unfolded, definition, context) is True
-    assert follows_by_definition(unfolded, subset, definition, context) is True
+    assert check_definitional_step(subset, unfolded, definition, context) is True
+    assert check_definitional_step(unfolded, subset, definition, context) is True
 
 
 def test_declared_binder_rejects_a_wrong_unfold(fresh_system):
@@ -459,7 +474,7 @@ def test_declared_binder_rejects_a_wrong_unfold(fresh_system):
     _proof, (subset, other) = formulae(
         fresh_system, "(a ⊆ b)", "∀z.((z ∈ a) → (z ∈ c))"
     )
-    assert follows_by_definition(subset, other, definition, context) is False
+    assert check_definitional_step(subset, other, definition, context) is False
 
 
 def test_unfold_is_capture_avoiding(fresh_system):
@@ -473,8 +488,8 @@ def test_unfold_is_capture_avoiding(fresh_system):
         "∀w.((w ∈ z) → (w ∈ b))",
         "∀z.((z ∈ z) → (z ∈ b))",
     )
-    assert follows_by_definition(subset, renamed, definition, context) is True
-    assert follows_by_definition(subset, captured, definition, context) is False
+    assert check_definitional_step(subset, renamed, definition, context) is True
+    assert check_definitional_step(subset, captured, definition, context) is False
 
 
 # ---------------------------------------------------------------------------
@@ -484,8 +499,7 @@ def test_unfold_is_capture_avoiding(fresh_system):
 
 def test_where_proviso_is_parsed_into_a_kernel_condition(guarded_system):
     definition = only_definition(guarded_system)
-    assert definition.kernel_condition is not None
-    assert definition.kernel is not None
+    assert definition.condition is not None
 
 
 def test_where_proviso_gates_the_unfold(guarded_system):
@@ -495,12 +509,12 @@ def test_where_proviso_gates_the_unfold(guarded_system):
     _p1, (ok_subset, ok_unfold) = formulae(
         guarded_system, "(a ⊆ b)", "∀z.((z ∈ a) → (z ∈ b))"
     )
-    assert follows_by_definition(ok_subset, ok_unfold, definition, context) is True
+    assert check_definitional_step(ok_subset, ok_unfold, definition, context) is True
     # Equal arguments violate disjoint(x, y, setvar): the step is rejected.
     _p2, (bad_subset, bad_unfold) = formulae(
         guarded_system, "(a ⊆ a)", "∀z.((z ∈ a) → (z ∈ a))"
     )
-    assert follows_by_definition(bad_subset, bad_unfold, definition, context) is False
+    assert check_definitional_step(bad_subset, bad_unfold, definition, context) is False
 
 
 def test_a_definition_has_no_second_way_to_be_applied(guarded_system):
@@ -509,11 +523,13 @@ def test_a_definition_has_no_second_way_to_be_applied(guarded_system):
     # checked on the kernel path — two paths disagreeing by construction. Now
     # there is one, and this pins that the other cannot come back unnoticed.
     definition = only_definition(guarded_system)
-    assert definition.kernel_condition is not None
+    assert definition.condition is not None
     assert not hasattr(definition, "check_application")
     assert not hasattr(definition, "get_lower")
 
-    higher = definition.higher.match("(a ⊆ b)", context_of(guarded_system))
+    # The notation parses the defined form; it has no way to apply anything.
+    notation = only_notation(guarded_system)
+    higher = notation.template.match("(a ⊆ b)", context_of(guarded_system))
     assert higher is not None
     assert not hasattr(higher, "equivalent_under_definitions")
     assert not hasattr(higher, "maps_to_up_to_definition")
