@@ -79,13 +79,11 @@ slots on productions could check (see AGENTS.md).
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING
 
 from ..kernel import (
     Definition,
     check_definitional_step,
-    from_match,
     introduced_leaves,
     unbound_parameters,
 )
@@ -94,14 +92,9 @@ from ..kernel.terms import Node
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from ..kernel.terms import Term
     from ..matching.context import Context
     from ..matching.definitions import Definition as MatchingDefinition
-    from ..matching.matches import Match
-
-
-# `Match.create_pattern` renames a colliding variable by appending `_<n>`; this
-# folds such a rename back onto the name the author actually wrote.
-_RENAMED = re.compile(r"_\d+$")
 
 
 class DefinitionError(Exception):
@@ -146,18 +139,11 @@ def _lower_only_parameters(legacy: MatchingDefinition) -> list[str]:
     """The declared parameters the *defining* form uses that the defined form does
     not - a binder written as an ordinary parameter.
 
-    Checked before parsing, because this is also the case that leaves
-    ``legacy.lower``'s template unparseable: a name used both as a binder and free
-    in the body occupies two pattern slots, so ``create_pattern`` renames the
-    later ones (``z`` -> ``z_0``). Those renames are folded back onto the name the
-    author wrote, which is the only one they can act on.
+    Checked before parsing so the author is told which name is the problem. The
+    kernel would catch it too (the leaf is introduced from nowhere either way),
+    but only after the defining form has been parsed and abstracted.
     """
-    lower_only = set(legacy.lower.variables) - set(legacy.higher.variables)
-    return sorted(
-        name
-        for name in lower_only
-        if _RENAMED.sub("", name) == name or _RENAMED.sub("", name) not in lower_only
-    )
+    return sorted(set(legacy.variables) - set(legacy.higher.variables))
 
 
 def build_kernel_definition(legacy: MatchingDefinition, context: Context) -> Definition:
@@ -171,7 +157,7 @@ def build_kernel_definition(legacy: MatchingDefinition, context: Context) -> Def
     kernel one - because a form does not parse, or because the defining form
     introduces a binder the author has not declared.
     """
-    if legacy.lower is None:
+    if legacy.lower_source is None:
         raise DefinitionError(
             f"Definition '{legacy.higher.pattern}' has no defining form to unfold to."
         )
@@ -184,7 +170,7 @@ def build_kernel_definition(legacy: MatchingDefinition, context: Context) -> Def
         kernel_def = Definition.parse(
             sort=legacy.pattern,
             higher=legacy.higher.pattern,
-            lower=legacy.lower.pattern,
+            lower=legacy.lower_source,
             variables=dict(legacy.variables),
             context=context,
             condition=legacy.kernel_condition,
@@ -248,7 +234,7 @@ def denotes_a_constant(kernel_def: Definition) -> bool:
 
 
 def follows_by_definition(
-    before: Match, after: Match, legacy: MatchingDefinition, context: Context
+    before: Term, after: Term, legacy: MatchingDefinition, context: Context
 ) -> bool:
     """Whether ``before`` and ``after`` are one definitional unfold apart under
     ``legacy``, checked over kernel terms in either direction.
@@ -270,6 +256,4 @@ def follows_by_definition(
             f"reached a proof without it."
         )
 
-    return check_definitional_step(
-        from_match(before, context), from_match(after, context), legacy.kernel, context
-    )
+    return check_definitional_step(before, after, legacy.kernel, context)

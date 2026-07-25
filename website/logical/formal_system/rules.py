@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ..kernel import Var, from_match, from_pattern, match_all
+from ..kernel import Var, from_pattern, match_all
 from ..matching import StringPattern
 from ..matching.rewriting import joint_binding_exists
 from .proof import ProofLine, Subproof
@@ -186,7 +186,7 @@ class InferenceRule:
 
         schema = self.subproof_schema
 
-        if schema is None or deduction.formula is None:
+        if schema is None or deduction.formula_term is None:
             return False
 
         # The subproof must be opened the way the schema expects (a hypothesis
@@ -195,18 +195,19 @@ class InferenceRule:
             return False
 
         conclusion = subproof.conclusion
-        if conclusion is None or conclusion.formula is None:
+        if conclusion is None or conclusion.formula_term is None:
             # An empty subproof discharges nothing.
             return False
 
         # Derive one consistent binding across the deduction and the subproof's
         # conclusion (and assumption, for hypothesis discharge) on the term
         # representation, the same way an ordinary rule binds its antecedents
-        # (see _term_binding): schemas via _schema_term, proof-line formulae via
-        # from_match, unified under one substitution. Shared metavariables - the
-        # `p` in both a subproof's assumption and the deduction - are forced to
-        # agree by that one binding; atoms unify by what they denote, so a
-        # literal conclusion such as a falsum `⊥` matches its declared atom.
+        # (see _term_binding): schemas via _schema_term, proof-line formulae
+        # already projected at parse time, unified under one substitution. Shared
+        # metavariables - the `p` in both a subproof's assumption and the
+        # deduction - are forced to agree by that one binding; atoms unify by what
+        # they denote, so a literal conclusion such as a falsum `⊥` matches its
+        # declared atom.
         schema_pairs: list[tuple[Pattern, ProofLine]] = [
             (self.deduction, deduction),
             (schema.conclusion, conclusion),
@@ -225,10 +226,10 @@ class InferenceRule:
 
         term_pairs: list[tuple[Term, Term]] = []
         for occurrence, (pattern, line) in enumerate(schema_pairs):
-            if line is None or line.formula is None:
+            if line is None or line.formula_term is None:
                 return False
             term_pairs.append(
-                (self._schema_term(pattern, occurrence, context), from_match(line.formula, context))
+                (self._schema_term(pattern, occurrence, context), line.formula_term)
             )
 
         if match_all(term_pairs, context) is None:
@@ -251,17 +252,17 @@ class InferenceRule:
         """Derive the substitution under which the deduction and every logical
         antecedent match their schemas, or ``None`` if none is consistent.
 
-        Each ``(schema, subject)`` pair is projected into the term space -
-        schemas via :func:`from_pattern` (variable slots become ``Var`` leaves),
-        already-parsed formulae via :func:`from_match` - and unified together, so
-        a metavariable shared across antecedents and the conclusion is forced to
-        one value by a single binding rather than reconciled after the fact.
+        Both sides are already terms: a schema via :func:`from_pattern` (variable
+        slots become ``Var`` leaves), a proof line via the projection done when it
+        was parsed. They are unified together, so a metavariable shared across
+        antecedents and the conclusion is forced to one value by a single binding
+        rather than reconciled after the fact.
         """
-        if deduction.formula is None:
+        if deduction.formula_term is None:
             return None
 
         pairs = [
-            (self._schema_term(self.deduction, 0, context), from_match(deduction.formula, context))
+            (self._schema_term(self.deduction, 0, context), deduction.formula_term)
         ]
 
         for occurrence, (pattern, ant) in enumerate(zip(self.antecedents, antecedents), start=1):
@@ -275,11 +276,11 @@ class InferenceRule:
                 # type, it carries no formula variables, so it binds nothing.
                 continue
 
-            if ant.formula is None:
+            if ant.formula_term is None:
                 return None
 
             pairs.append(
-                (self._schema_term(pattern, occurrence, context), from_match(ant.formula, context))
+                (self._schema_term(pattern, occurrence, context), ant.formula_term)
             )
 
         return match_all(pairs, context)
@@ -295,14 +296,14 @@ class InferenceRule:
         aligns to whatever is supplied. Returns ``None`` — the step cannot hold —
         if a needed formula is absent or a schema is not a string template.
         """
-        if deduction.formula is None or not isinstance(self.deduction, StringPattern):
+        if deduction.formula_string is None or not isinstance(self.deduction, StringPattern):
             return None
 
-        pairs: list[tuple[StringPattern, str]] = [(self.deduction, deduction.formula.string)]
+        pairs: list[tuple[StringPattern, str]] = [(self.deduction, deduction.formula_string)]
         for pattern, ant in zip(self.antecedents, antecedents):
-            if ant.formula is None or not isinstance(pattern, StringPattern):
+            if ant.formula_string is None or not isinstance(pattern, StringPattern):
                 return None
-            pairs.append((pattern, ant.formula.string))
+            pairs.append((pattern, ant.formula_string))
         return pairs
 
     def _string_binding_exists(
@@ -334,9 +335,9 @@ class InferenceRule:
             # String rules bind by associative matching, not term unification;
             # a line is admissible for the slot if its surface string can match
             # the slot schema on its own (cross-slot sharing is settled later).
-            if line.formula is None or not isinstance(pattern, StringPattern):
+            if line.formula_string is None or not isinstance(pattern, StringPattern):
                 return False
-            return joint_binding_exists([(pattern, line.formula.string)], context)
+            return joint_binding_exists([(pattern, line.formula_string)], context)
 
         if line.line_type.behaviour != "logical" and pattern.equivalent(
             line.line_type.pattern, context
@@ -344,10 +345,10 @@ class InferenceRule:
             # An instance of a non-logical line: matched by type, binds nothing.
             return True
 
-        if line.formula is None:
+        if line.formula_term is None:
             return False
 
-        pair = (self._schema_term(pattern, slot + 1, context), from_match(line.formula, context))
+        pair = (self._schema_term(pattern, slot + 1, context), line.formula_term)
         return match_all([pair], context) is not None
 
     def prefix_binding_exists(

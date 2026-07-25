@@ -9,10 +9,10 @@ schema equal the term - or prove none exists.
 Why "unify"
 -----------
 The engine grew a family of near-duplicate tree-walks - ``Match.equivalent``,
-``maps_to``, ``equivalent_with_some_replacements``, and (until definitions became
-kernel-native) ``maps_to_up_to_definition``, ``equivalent_under_definitions`` and
-``Definition.check_application`` - each "compare two match trees, with a knob".
-On the term representation they are all the same operation with two settings:
+``maps_to``, ``equivalent_with_some_replacements``, ``maps_to_up_to_definition``,
+``equivalent_under_definitions`` and ``Definition.check_application`` - each
+"compare two match trees, with a knob". All are now deleted, because on the term
+representation they are the same operation with two settings:
 
 * do variables bind?  no  -> structural equality (:meth:`Term.equal`)
                       yes -> :func:`match` (this module)

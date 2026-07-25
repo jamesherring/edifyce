@@ -225,7 +225,7 @@ def test_a_definition_with_no_defining_form_is_refused(alias_system):
     open_definition = formula.add_definition(
         "not a formula at all", "x beside y", context, require_lower_match=False
     )
-    assert open_definition is not None and open_definition.lower is None
+    assert open_definition is not None and open_definition.lower_source is None
 
     with pytest.raises(DefinitionError, match="no defining form"):
         build_kernel_definition(open_definition, context)
@@ -338,8 +338,10 @@ def test_unrelated_malformed_regex_sort_does_not_reach_the_gate():
 
 
 def formulae(system, *lines):
+    # The parsed lines' kernel terms - what `follows_by_definition` takes, and
+    # what a proof line carries: the projection happens during parsing.
     proof = system.parse("\n".join(f"{line} [HYP]" for line in lines))
-    return proof, [pl.formula for pl in proof.proof_lines]
+    return proof, [pl.formula_term for pl in proof.proof_lines]
 
 
 def test_alias_unfold_accepted_both_directions(alias_system):

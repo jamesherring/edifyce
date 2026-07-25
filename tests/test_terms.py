@@ -108,7 +108,7 @@ def test_fopl_roundtrips(fopl, formula_string):
     assert match is not None
 
     term = from_match(match, context)
-    assert term.to_string() == match.formatted_string() == formula_string
+    assert term.to_string() == match.string == formula_string
 
 
 @pytest.mark.parametrize(
@@ -123,7 +123,7 @@ def test_near_english_roundtrips(set_theory, formula_string):
 
     term = from_match(match, context)
     # Arbitrary near-English surface syntax reconstructs exactly.
-    assert term.to_string() == match.formatted_string() == formula_string
+    assert term.to_string() == match.string == formula_string
 
 
 def test_union_coercion_is_collapsed(fopl):
@@ -277,7 +277,7 @@ def test_definition_backed_union_match_keeps_structure():
     # Structure preserved and it still round-trips, with no stored definition.
     assert isinstance(term, Node)
     assert not hasattr(term, "definition")
-    assert term.to_string() == match.formatted_string() == "a is a member of b"
+    assert term.to_string() == match.string == "a is a member of b"
     assert {v.to_string() for v in term.children.values()} == {"a", "b"}
 
 
@@ -333,7 +333,7 @@ def test_rich_system_roundtrips(rich, formula_string):
     assert match is not None, formula_string
 
     term = from_match(match, context)
-    assert term.to_string() == match.formatted_string() == formula_string
+    assert term.to_string() == match.string == formula_string
 
 
 def test_equality_distinguishes_constructors(rich):

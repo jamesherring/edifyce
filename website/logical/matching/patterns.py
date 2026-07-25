@@ -81,36 +81,6 @@ class Pattern:
         # All ok
         return True
 
-    def may_contain(self, other, context, found=None):
-        # Check if this pattern may contain the other
-
-        if found is None:
-            found = set()
-
-        if self in found:
-            return False
-
-        found.add(self)
-
-        if type(self) is UnionPattern:
-            sub_patterns = self.patterns
-
-        elif type(self) is StringPattern:
-            sub_patterns = tuple(self.variables.values())
-
-        else:
-            # AbstractPattern or RegexPattern
-            return False
-
-        for sub_pattern in sub_patterns:
-            if sub_pattern.equivalent(other, context):
-                return True
-
-            if sub_pattern.may_contain(other, context, found):
-                return True
-
-        return False
-
     def add_definition(self, lower, higher, context, require_lower_match=True,
                        fresh=None, kernel_condition=None, label=None):
         # Add a definition to this pattern

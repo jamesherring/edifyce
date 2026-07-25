@@ -4,7 +4,6 @@ pytest.importorskip("regex")
 
 from website.logical.matching import (
     Context,
-    MatchSet,
     RegexPattern,
     StringPattern,
     UnionPattern,
@@ -117,65 +116,23 @@ def test_union_pattern_no_match(word, context):
 
 
 # ---------------------------------------------------------------------------
-# Match equivalence
+# The variable-leaf walk (what a definition reads its parameters off)
 # ---------------------------------------------------------------------------
 
 
-def test_match_equivalent_same_string(word, context):
-    assert word.match("same", context).equivalent(word.match("same", context), context)
+def test_variable_leaves_finds_declared_slots(word, context):
+    # The slot's sort must be one that consults `string_variables` when it
+    # matches - a union does, a bare regex does not (see `revariabilise`).
+    sort = UnionPattern(name="term", patterns=[word])
+    context.string_variables = {"phi": sort}
+    pattern = StringPattern(name="if_pattern", pattern="if s:", variables={"s": sort})
+
+    match = pattern.match("if phi:", context)
+    assert [leaf.string for leaf in match.variable_leaves()] == ["phi"]
 
 
-def test_match_equivalent_different_string(word, context):
-    assert not word.match("same", context).equivalent(
-        word.match("diff", context), context
-    )
+def test_variable_leaves_is_empty_for_a_ground_parse(word, context):
+    pattern = StringPattern(name="if_pattern", pattern="if s:", variables={"s": word})
 
-
-def test_match_equivalent_different_pattern(word, context):
-    other = RegexPattern(name="other", pattern="^[a-z]+$")
-    assert not word.match("same", context).equivalent(
-        other.match("same", context), context
-    )
-
-
-# ---------------------------------------------------------------------------
-# MatchSet
-# ---------------------------------------------------------------------------
-
-
-def test_match_set_starts_empty_and_complete():
-    match_set = MatchSet()
-    assert len(match_set) == 0
-    assert match_set.complete is True
-
-
-def test_match_set_add_and_contains(word, context):
-    match_set = MatchSet()
-    match_set.add(word.match("aaa", context), context)
-    match_set.add(word.match("bbb", context), context)
-
-    assert len(match_set) == 2
-    assert match_set.contains(word.match("aaa", context), context)
-    assert not match_set.contains(word.match("zzz", context), context)
-
-
-def test_match_set_remove(word, context):
-    match_set = MatchSet()
-    match_set.add(word.match("aaa", context), context)
-    match_set.remove(word.match("aaa", context), context)
-
-    assert len(match_set) == 0
-    assert not match_set.contains(word.match("aaa", context), context)
-
-
-def test_match_set_union(word, context):
-    first = MatchSet()
-    first.add(word.match("aaa", context), context)
-
-    second = MatchSet()
-    second.add(word.match("bbb", context), context)
-
-    combined = first.union(second, context)
-    assert len(combined) == 2
-    assert combined.contains(word.match("aaa", context), context)
-    assert combined.contains(word.match("bbb", context), context)
+    match = pattern.match("if hello:", context)
+    assert match.variable_leaves() == []
