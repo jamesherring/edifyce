@@ -54,10 +54,10 @@ _LINE_SCOPES = (None, "assumption", "variable")
 
 # The line behaviours a declarative system may author. `LineType` accepts more,
 # but the rest are not offered here: `axiom` is emitted from `spec.axioms` rather
-# than declared, and `definition`/`import` fail closed in the checker (their
-# payload came from an accessor mechanism that was removed). A value the engine
-# ignores or refuses is worse than no value at all, so building one is an error,
-# not a silent no-op.
+# than declared, and `import` fails closed in the checker (its payload came from
+# an accessor mechanism that was removed). A value the engine ignores or refuses
+# is worse than no value at all, so building one is an error, not a silent
+# no-op.
 _LINE_BEHAVIOURS = ("logical", "comment")
 
 

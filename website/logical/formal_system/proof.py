@@ -917,65 +917,10 @@ class Proof:
                 target=ref_item,
             )
 
-        # Add any definitions we have imported
-        if isinstance(ref_item, ProofLine) and ref_item.line_type is not None and ref_item.line_type.behaviour == "definition":
-            context.definitions.add(ref_item.definition)
-            self.import_definition(ref_item.definition, context)
-
-        elif isinstance(ref_item, Proof):
-            for line in ref_item.proof_lines:
-                if isinstance(line, ProofLine) and line.line_type is not None and line.line_type.behaviour == "definition":
-                    context.definitions.add(line.definition)
-                    self.import_definition(line.definition, context)
-
+        # An import carries no definitions with it. A definition reaches a proof
+        # through its system's context, built once from the SystemSpec; there is
+        # no per-proof definition to re-register in the importing context.
         return ImportResult(success=True, target=ref_item)
-
-    def import_definition(self, definition, context):
-        # Import the given definition from one proof to another. Requires careful handling with inherited patterns
-
-        build_context = self.formal_system.build_context
-
-        # Get the pattern name
-        pattern_name = definition.pattern.name
-
-        # Get the instance of this pattern in this formal system
-        pattern = build_context.variables[pattern_name]
-
-        # Get a copy of context to add the variables needed for this pattern
-        context_copy = copy(context)
-        context_copy.string_variables.update(definition.variables)
-
-        # Use the build context pattern if it exists
-        for key, value in definition.variables.items():
-            name = value.name
-            if name in build_context.variables:
-                context_copy.string_variables[key] = build_context.variables[name]
-
-        # Carry the binder declarations and `where` proviso across the import so
-        # the proviso is still enforced (or, if it cannot be rebuilt in this
-        # context, the kernel path refuses the step - never silently drops it).
-        result = pattern.add_definition(definition.lower.pattern, definition.higher.pattern, context_copy,
-                                        require_lower_match=False,
-                                        fresh=definition.fresh or None,
-                                        kernel_condition=definition.kernel_condition)
-
-        if result is None:
-            raise Exception(f"Failed to import definition: {definition.higher.pattern}")
-
-        # Remove any existing (possibly duplicate) conditions
-        if result not in context.definitions:
-            remove_items = set()
-
-            for defn in context.definitions:
-                if defn.higher.pattern == result.higher.pattern and defn.pattern.can_map_to(pattern, context):
-                    # Can be removed
-                    remove_items.add(defn)
-
-            for item in remove_items:
-                context.definitions.remove(item)
-
-            # Add the definition to context
-            context.definitions.add(result)
 
     def _dependency_graph(self) -> dict[Proof, set[Proof]]:
         # The import/theorem dependency graph reachable from this proof: each
@@ -1015,7 +960,7 @@ class Proof:
 
             logical_lines = [
                 line for line in self.proof_lines[:deduction.index()]
-                if line.line_type is not None and line.line_type.behaviour in ("logical", "definition")
+                if line.line_type is not None and line.line_type.behaviour == "logical"
                 and line_is_accessible(deduction, line)
             ][-len(inference_rule.antecedents):]
 
@@ -1079,9 +1024,6 @@ class ProofLine:
 
         # The formula match (if any) on this line
         self.formula = None
-
-        # The definition created (if any) on this line
-        self.definition = None
 
         # The LineType used for this line
         self.line_type = None
@@ -1152,17 +1094,15 @@ class ProofLine:
             # `promotion.PromotedTheorem`).
             self.is_axiom = True
 
-        elif line_type.behaviour in ("definition", "import"):
-            # Not currently supported. These line types derived their payload
-            # through the `get_by_path` string interpreter - lower()/higher()/
-            # for() for a definition, path() for an import - and that
+        elif line_type.behaviour == "import":
+            # Not currently supported. An import line derived its target through
+            # the `get_by_path` string interpreter - path() - and that
             # accessor-function mechanism was removed, so the derivation is gone.
             # Fail *closed* rather than accept an inert line: a proof line whose
             # behaviour we can no longer honour must be rejected, not silently
-            # passed as valid. To be lifted when the references/definitions
-            # feature is reimplemented with a typed mechanism (see
-            # docs/proof-references-and-definitions-plan.md); `Proof.import_path`
-            # remains for that rewire.
+            # passed as valid. `Proof.import_path` remains, driven by the
+            # pre-seeded `reference_context` the API populates from stored proof
+            # references (see app/routers/proofs.py) rather than by a line.
             self.valid = False
             self.invalid_message = (
                 f"'{line_type.behaviour}' line types are not currently supported."
