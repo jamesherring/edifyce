@@ -37,6 +37,7 @@ adapter over it, and the frontend is a thin client over the API.
 | `website/logical/graphs.py` | Leaf graph utilities: bipartite matching for antecedent-slot assignment, topological order for proof dependencies. |
 | `frontend/` | SvelteKit (Svelte 5) SPA styled with Tailwind CSS v4 + shadcn-svelte. Static build talks to the API. `src/routes/` = pages, `src/lib/api.ts` = the API client. See `frontend/README.md`. |
 | `tests/` | pytest suite covering the API, engine, kernel, and matching. |
+| `benchmarks/` | What a parse costs. Proof checking *is* parsing, so the matching layer is where a slow system is slow; take a baseline with `uv run python -m benchmarks.bench_matching --save` before touching it and `--compare` after. See `benchmarks/README.md`. |
 
 The two public entry points into the engine are `declarative.build_spec(spec)` —
 which the API reaches via `app.db.system_to_spec`, so the relational rows are the
