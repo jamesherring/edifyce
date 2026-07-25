@@ -362,6 +362,41 @@ def test_distinct_variable_provisos_are_sort_restricted():
     assert system.parse("RR = RR [ax]").proof_lines[0].valid is True
 
 
+def test_a_proof_cannot_cite_notation_declared_later():
+    # Promoting only the *preceding* logical assertions does not cover syntax: a
+    # syntax step never reaches the kernel (`_apply` folds it into the expression
+    # it builds), so a proof using notation introduced after the theorem would
+    # translate to a line that checks against a grammar built from the whole
+    # database. The ordering is enforced on the proof table itself.
+    forward = r"""
+$c |- wff LATE EARLY $.
+early $a wff EARLY $.
+ax $a |- EARLY $.
+thm $p |- EARLY $= ( late ax ) AB $.
+late $a wff LATE $.
+"""
+    with pytest.raises(MetamathError, match="declared later"):
+        import_proof(parse(forward), "thm")
+
+
+def test_a_proof_cannot_cite_a_hypothesis_out_of_scope():
+    # The same rule for hypotheses: one from a sibling `${ … $}` block is not
+    # active for this theorem, even though it is declared earlier.
+    out_of_scope = r"""
+$c |- wff EARLY $.
+$v ph $.
+wph $f wff ph $.
+early $a wff EARLY $.
+${
+  other.1 $e |- ph $.
+  other $a |- EARLY $.
+$}
+thm $p |- EARLY $= ( other.1 ) A $.
+"""
+    with pytest.raises(MetamathError, match="not in scope"):
+        import_proof(parse(out_of_scope), "thm")
+
+
 def test_duplicate_labels_are_rejected():
     # Labels are one flat namespace. Overwriting silently would lose the first
     # statement while leaving its label in `order`, yielding the second twice.

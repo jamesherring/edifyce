@@ -29,12 +29,16 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from ..compiler import promote_from_source
 from ..declarative import LinePart, LineSpec, Production, SystemSpec, build_system
 from ..formal_system import FormalSystem
 from . import compressed
 from .parser import Assertion, Database, Hypothesis, MetamathError
+
+if TYPE_CHECKING:
+    from ..formal_system import PromotedTheorem
 
 # Metamath labels admit letters, digits, and `-_.`; a citation adds the line
 # numbers and separators Edifyce's reference syntax uses.
@@ -158,7 +162,9 @@ def promote_assertions(
         system.promote(promoted_theorem(assertion, database, system))
 
 
-def promoted_theorem(assertion: Assertion, database: Database, system: FormalSystem):
+def promoted_theorem(
+    assertion: Assertion, database: Database, system: FormalSystem
+) -> PromotedTheorem:
     """Promote one logical ``$a``/``$p`` to a citable schematic theorem."""
     return promote_from_source(
         system,
@@ -210,6 +216,7 @@ def import_proof(database: Database, label: str) -> str:
         raise MetamathError(f"{label} has no proof (is it a $a?).")
 
     labels, letters = compressed.split_proof(assertion.proof)
+    _reject_forward_citations(assertion, labels, database)
     steps = compressed.decode(letters, labels, assertion.mandatory)
 
     stack: list[_Entry] = []
@@ -252,6 +259,40 @@ def import_proof(database: Database, label: str) -> str:
         )
 
     return "\n".join(lines)
+
+
+def _reject_forward_citations(
+    assertion: Assertion, labels: list[str], database: Database
+) -> None:
+    # A Metamath proof may cite only what is *active and earlier*. Promoting just
+    # the preceding logical assertions is not enough to enforce that, because a
+    # syntax step never reaches the kernel: `_apply` folds it into the expression
+    # it builds, so a proof citing notation introduced *after* the theorem would
+    # translate to a line the kernel happily checks against a grammar that was
+    # built from the whole database. Enforce the ordering on the proof table
+    # itself, where it covers syntax and logic alike.
+    position = {label: index for index, label in enumerate(database.order)}
+    limit = position[assertion.label]
+
+    for label in labels:
+        if label in database.hypotheses:
+            if label not in assertion.active_hypotheses:
+                raise MetamathError(
+                    f"{assertion.label}: proof cites hypothesis {label!r}, "
+                    "which is not in scope for it."
+                )
+            continue
+
+        cited = position.get(label)
+        if cited is None:
+            raise MetamathError(
+                f"{assertion.label}: proof cites unknown label {label!r}."
+            )
+        if cited >= limit:
+            raise MetamathError(
+                f"{assertion.label}: proof cites {label!r}, which is declared later "
+                "- a proof may only use what precedes it."
+            )
 
 
 def _push_hypothesis(

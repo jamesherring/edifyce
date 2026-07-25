@@ -36,6 +36,7 @@ parse time rather than rediscovered later.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 # The typecode marking an assertion of truth; every other typecode introduces
@@ -79,6 +80,11 @@ class Assertion:
     distinct: tuple[frozenset[str], ...] = ()
     # The raw proof tokens of a `$p` (still compressed); empty for a `$a`.
     proof: tuple[str, ...] = ()
+    # Labels of every hypothesis active where this statement was declared - a
+    # superset of `mandatory`, since a proof may also cite *optional* hypotheses
+    # that are in scope but unmentioned by the statement. Recorded so a proof can
+    # be checked to cite only what was actually in scope for it.
+    active_hypotheses: tuple[str, ...] = ()
 
     @property
     def is_logical(self) -> bool:
@@ -112,7 +118,7 @@ class Database:
     def syntax_assertions(self) -> list[Assertion]:
         return [a for a in self.iter_assertions() if not a.is_logical]
 
-    def iter_assertions(self):
+    def iter_assertions(self) -> Iterator[Assertion]:
         return (self.assertions[label] for label in self.order)
 
 
@@ -231,6 +237,7 @@ def parse(text: str) -> Database:
                 mandatory=_mandatory(active, statement, database.variables),
                 distinct=tuple(d for scope in scopes for d in scope.distinct),
                 proof=proof,
+                active_hypotheses=tuple(h.label for h in active),
             )
             database.order.append(label)
             continue
