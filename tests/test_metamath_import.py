@@ -34,6 +34,7 @@ from website.logical.metamath import (
     decode,
     import_database,
     import_proof,
+    import_theorem,
     parse,
     split_proof,
 )
@@ -73,6 +74,48 @@ $}
 $( The theorem, with its proof exactly as set.mm stores it. $)
 sqrt2re $p |- ( sqrt ` 2 ) e. RR $=
   ( c2 2re 2pos sqrtpclii ) ABCD $.
+"""
+
+
+# A theorem proved *under* an essential hypothesis. `dup`'s mandatory hypotheses
+# are `[wph, dup.1]`, so `AABBC` pushes `ph`, `ph`, `|- ph`, `|- ph` and applies
+# `jca` — the premise is selected twice, by letter rather than by a `Z` save.
+HYPOTHESIS_FRAGMENT = r"""
+$c |- wff ( ) -> /\ $.
+$v ph ps $.
+wph $f wff ph $.
+wps $f wff ps $.
+wi $a wff ( ph -> ps ) $.
+wa $a wff ( ph /\ ps ) $.
+${
+  jca.1 $e |- ph $.
+  jca.2 $e |- ps $.
+  jca $a |- ( ph /\ ps ) $.
+$}
+${
+  dup.1 $e |- ph $.
+  dup $p |- ( ph /\ ph ) $= ( jca ) AABBC $.
+$}
+"""
+
+
+# A fragment with a binder sort (`setvar`, which no syntax axiom builds) and a
+# `$d`, for the sort-restriction and variable-membership tests.
+BINDER_FRAGMENT = r"""
+$c |- wff class setvar = RR A. e. $.
+$v x ph A B $.
+vx $f setvar x $.
+wph $f wff ph $.
+cA $f class A $.
+cB $f class B $.
+wceq $a wff A = B $.
+wcel $a wff A e. B $.
+wal $a wff A. x ph $.
+cr $a class RR $.
+${
+  $d A B $.
+  ax $a |- A = B $.
+$}
 """
 
 
@@ -241,8 +284,8 @@ def test_syntax_steps_emit_no_proof_line(database):
 def test_the_imported_proof_is_checked_by_the_kernel(database):
     # The payoff: a real Metamath proof, translated, and verified by Edifyce's
     # own checker. Nothing in the importer re-verifies anything.
-    system = import_database(database)
-    proof = system.parse(import_proof(database, "sqrt2re"))
+    system, text = import_theorem(database, "sqrt2re")
+    proof = system.parse(text)
 
     assert proof.valid is True
     assert all(line.valid for line in proof.proof_lines)
@@ -251,12 +294,79 @@ def test_the_imported_proof_is_checked_by_the_kernel(database):
 def test_a_tampered_import_is_rejected(database):
     # The check is real: swap the conclusion for one that does not follow and the
     # kernel refuses it, so a green import is evidence rather than assumption.
-    system = import_database(database)
-    tampered = import_proof(database, "sqrt2re").replace(
+    system, text = import_theorem(database, "sqrt2re")
+    tampered = text.replace(
         "( sqrt ` 2 ) e. RR [sqrtpclii, 1, 2]", "0 < 2 [sqrtpclii, 1, 2]"
     )
 
     assert system.parse(tampered).proof_lines[-1].valid is False
+
+
+# ---------------------------------------------------------------------------
+# Faithfulness: an import that checks must mean what it claims
+# ---------------------------------------------------------------------------
+def test_a_proof_that_reaches_the_wrong_statement_is_rejected():
+    # A proof terminating on *some* well-formed result would otherwise import
+    # cleanly and its lines would check - while establishing something other than
+    # the theorem, which is still promoted under its declared statement. A green
+    # import has to mean the declared statement was derived.
+    bogus = SQRT2RE_FRAGMENT.replace("( c2 2re 2pos sqrtpclii ) ABCD", "( 2pos ) A")
+
+    with pytest.raises(MetamathError, match="proof concludes"):
+        import_proof(parse(bogus), "sqrt2re")
+
+
+def test_a_theorem_cannot_justify_itself(database):
+    # Only assertions *preceding* the theorem are promoted, so its own statement
+    # is not citable while its proof is being checked.
+    system, _text = import_theorem(database, "sqrt2re")
+
+    assert "sqrt2re" not in system.promoted_theorems
+    assert system.parse("( sqrt ` 2 ) e. RR [sqrt2re]").proof_lines[0].valid is False
+
+
+def test_essential_hypotheses_are_given_and_stated_once():
+    # A theorem with `$e` hypotheses proves *under* them: they are registered as
+    # givens so the premise lines resolve. Compressed proofs re-select band-1
+    # hypotheses by letter rather than Z-saving them, so `dup` pushes its premise
+    # twice - it must still be stated once and cited twice.
+    database = parse(HYPOTHESIS_FRAGMENT)
+    system, text = import_theorem(database, "dup")
+
+    assert text == "ph [dup.1]\n( ph /\\ ph ) [jca, 1, 1]"
+
+    proof = system.parse(text)
+    assert proof.valid is True
+    assert all(line.valid for line in proof.proof_lines)
+
+
+def test_variables_are_members_of_their_sort():
+    # `wph $f wff ph` makes a bare `ph` a wff in its own right, and `vx $f setvar
+    # x` makes `setvar` a sort with no syntax axiom behind it at all. Without both,
+    # statements mentioning a variable do not parse - and a `$f`-only typecode
+    # used in a binding fails deep in the builder with a bare KeyError.
+    system = import_database(parse(HYPOTHESIS_FRAGMENT))
+    assert system.parse("ph [dup.1]").proof_lines[0].formula is not None
+
+    setvar_system = import_database(parse(BINDER_FRAGMENT))
+    assert "setvar" in setvar_system.build_context.variables
+
+
+def test_distinct_variable_provisos_are_sort_restricted():
+    # `$d` forbids the substitutions sharing a *variable*, not any leaf: sortless
+    # `disjoint(A, B)` also separates constants, so it would reject `RR = RR`,
+    # which Metamath permits under `$d A B`.
+    system = import_database(parse(BINDER_FRAGMENT))
+
+    assert system.promoted_theorems["ax"].side_conditions[0].sort is not None
+    assert system.parse("RR = RR [ax]").proof_lines[0].valid is True
+
+
+def test_duplicate_labels_are_rejected():
+    # Labels are one flat namespace. Overwriting silently would lose the first
+    # statement while leaving its label in `order`, yielding the second twice.
+    with pytest.raises(MetamathError, match="Duplicate label"):
+        parse("$c a $. $v x $. h1 $f a x $. h1 $f a x $.")
 
 
 def test_import_errors_are_reported(database):

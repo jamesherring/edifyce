@@ -20,6 +20,7 @@ from .importer import (
     build_spec,
     import_database,
     import_proof,
+    import_theorem,
     promote_assertions,
     promoted_theorem,
 )
@@ -43,6 +44,7 @@ __all__ = [
     "decode",
     "import_database",
     "import_proof",
+    "import_theorem",
     "parse",
     "promote_assertions",
     "promoted_theorem",

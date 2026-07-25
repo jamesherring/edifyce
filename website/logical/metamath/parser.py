@@ -195,6 +195,7 @@ def parse(text: str) -> Database:
         if keyword in ("$f", "$e"):
             if not body:
                 raise MetamathError(f"{label}: empty {keyword} statement.")
+            _reject_duplicate(label, database)
             hypothesis = Hypothesis(
                 label=label,
                 typecode=body[0],
@@ -219,6 +220,7 @@ def parse(text: str) -> Database:
 
             if not body:
                 raise MetamathError(f"{label}: empty {keyword} statement.")
+            _reject_duplicate(label, database)
 
             statement = tuple(body[1:])
             active = [h for scope in scopes for h in scope.hypotheses]
@@ -239,6 +241,15 @@ def parse(text: str) -> Database:
         raise MetamathError("Unbalanced ${ (scope left open at end of file).")
 
     return database
+
+
+def _reject_duplicate(label: str, database: Database) -> None:
+    # Labels are a single flat namespace in Metamath and must be unique. Silently
+    # overwriting would lose the first statement while leaving its label in
+    # `order`, so the second would be yielded twice and the first would vanish -
+    # a corrupted database that still looks well-formed.
+    if label in database.assertions or label in database.hypotheses:
+        raise MetamathError(f"Duplicate label {label!r}.")
 
 
 def _read_until(tokens: list[str], start: int, terminator: str) -> tuple[list[str], int]:

@@ -26,6 +26,7 @@ are not relitigated), and what remains.
 | Schematic theorem application (§5, A1) | done |
 | Logical assertions promoted as citable theorems | done, but see §3.2 |
 | Proof emission + kernel check | done |
+| Proofs *under* `$e` hypotheses (`import_theorem`) | done |
 | `$t` typesetting / notation (§4) | **next** |
 | Axiom-vs-theorem split (§3.2) | **blocker** |
 | Definition classification (§5, A4) | not a blocker; front-load |
@@ -41,6 +42,19 @@ and has Edifyce's kernel check the result:
 ```
 
 A tampered conclusion is rejected, so a green import is evidence, not assumption.
+Two properties make that claim hold, both enforced:
+
+- **the proof must reach the declared statement.** A proof that terminates on some
+  other well-formed result would otherwise import cleanly and check, while the
+  theorem was still promoted under what it claimed;
+- **a theorem is checked against only what precedes it.** `import_theorem` builds a
+  per-theorem system promoting earlier assertions only, and registers that
+  theorem's own `$e` hypotheses as givens — Metamath's `${ … $}` scoping. Without
+  the first half a theorem justifies itself; without the second, a proof under
+  hypotheses cannot be stated at all.
+
+`import_database` (the whole library, everything promoted) remains the right view
+for browsing, but `import_theorem` is the entry point for *checking* a proof.
 
 ---
 

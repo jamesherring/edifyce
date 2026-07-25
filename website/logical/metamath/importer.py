@@ -27,6 +27,7 @@ syntax axioms state.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from ..compiler import promote_from_source
@@ -72,6 +73,7 @@ def build_spec(database: Database, name: str = "Metamath") -> SystemSpec:
                 Production(sort=assertion.typecode, name=assertion.label, atom_value=text)
             )
 
+    productions.extend(_variable_sort_productions(database))
     logical_sort = _logical_sort(database)
 
     return SystemSpec(
@@ -89,6 +91,45 @@ def build_spec(database: Database, name: str = "Metamath") -> SystemSpec:
     )
 
 
+def _declared_variables(database: Database) -> dict[str, list[str]]:
+    # Every `$f`-declared typecode, mapped to the variables inhabiting it. A
+    # variable is a member of its sort in its own right - `wph $f wff ph` makes a
+    # bare `ph` a wff - so this holds for sorts that *also* have syntax axioms,
+    # not only for variable-only ones.
+    sorts: dict[str, list[str]] = {}
+    for hypothesis in database.hypotheses.values():
+        if not hypothesis.floating:
+            continue
+        members = sorts.setdefault(hypothesis.typecode, [])
+        if hypothesis.variable not in members:
+            members.append(hypothesis.variable)
+    return sorts
+
+
+def _binder_sorts(database: Database) -> list[str]:
+    # `$f` typecodes built by no syntax axiom at all - set.mm's `setvar`, whose
+    # only members *are* the declared variables. These are the individual-variable
+    # sorts, which is what a `$d` constrains (see _distinct_provisos).
+    built = {a.typecode for a in database.syntax_assertions()}
+    return [t for t in _declared_variables(database) if t not in built]
+
+
+def _variable_sort_productions(database: Database) -> list[Production]:
+    # A leaf production per sort carrying the variables declared for it. Anchored
+    # alternation rather than a general identifier pattern, so a sort admits the
+    # variables the database declares and nothing else. Without these a bare
+    # variable does not parse as its sort, and any statement mentioning one - every
+    # `$e` hypothesis, most schemas - fails to read.
+    return [
+        Production(
+            sort=typecode,
+            name=f"{typecode}_var",
+            regex="(?:" + "|".join(re.escape(v) for v in sorted(members)) + ")",
+        )
+        for typecode, members in _declared_variables(database).items()
+    ]
+
+
 def _logical_sort(database: Database) -> str:
     # The sort a `|-` statement is written in. Metamath does not say so directly:
     # the assertion typecode `|-` is not itself a grammar sort, so infer it from
@@ -102,13 +143,22 @@ def _logical_sort(database: Database) -> str:
     return sorts[0]
 
 
-def promote_assertions(database: Database, system: FormalSystem) -> None:
-    """Register every logical assertion of ``database`` on ``system``."""
+def promote_assertions(
+    database: Database, system: FormalSystem, before: str | None = None
+) -> None:
+    """Register ``database``'s logical assertions on ``system``.
+
+    ``before`` stops at that label, exclusive. A proof may only cite what
+    *precedes* it, so checking one theorem must not have that theorem - nor
+    anything later - already promoted, or it could justify itself.
+    """
     for assertion in database.logical_assertions():
-        system.promote(promoted_theorem(assertion, system))
+        if assertion.label == before:
+            return
+        system.promote(promoted_theorem(assertion, database, system))
 
 
-def promoted_theorem(assertion: Assertion, system: FormalSystem):
+def promoted_theorem(assertion: Assertion, database: Database, system: FormalSystem):
     """Promote one logical ``$a``/``$p`` to a citable schematic theorem."""
     return promote_from_source(
         system,
@@ -116,22 +166,32 @@ def promoted_theorem(assertion: Assertion, system: FormalSystem):
         statement=" ".join(assertion.tokens),
         metavariables={h.variable: h.typecode for h in assertion.floatings},
         premises=tuple(" ".join(h.tokens) for h in assertion.essentials),
-        distinct=_distinct_provisos(assertion),
+        distinct=_distinct_provisos(assertion, database),
     )
 
 
-def _distinct_provisos(assertion: Assertion) -> tuple[str, ...]:
+def _distinct_provisos(assertion: Assertion, database: Database) -> tuple[str, ...]:
     # A `$d x y z` constrains every *pair* among its variables, and Edifyce's
     # algebra takes one pair per proviso, so expand. Only variables the assertion
     # actually binds are kept: a $d naming something outside its metavariables
     # would fail to resolve, and constrains nothing here anyway.
+    #
+    # The proviso is *sort-restricted* to the variable sort (set.mm's `setvar`).
+    # `$d` forbids the substitutions sharing a **variable**, not any leaf at all:
+    # sortless `disjoint(A, B)` also separates constants, so it would reject
+    # `RR = RR` under `$d A B`, which Metamath permits. Where the variable sort
+    # cannot be identified the sort is omitted, which is over-strict - it can
+    # reject a legitimate proof, never accept an illegitimate one.
+    variable_sorts = _binder_sorts(database)
+    sort = f", {variable_sorts[0]}" if len(variable_sorts) == 1 else ""
+
     bound = {h.variable for h in assertion.floatings}
     provisos: list[str] = []
     for group in assertion.distinct:
         members = sorted(v for v in group if v in bound)
         for i, left in enumerate(members):
             for right in members[i + 1:]:
-                proviso = f"disjoint({left}, {right})"
+                proviso = f"disjoint({left}, {right}{sort})"
                 if proviso not in provisos:
                     provisos.append(proviso)
     return tuple(provisos)
@@ -155,6 +215,7 @@ def import_proof(database: Database, label: str) -> str:
     stack: list[_Entry] = []
     saved: list[_Entry] = []
     lines: list[str] = []
+    premises: dict[str, _Entry] = {}
 
     for step in steps:
         if step.backreference is not None:
@@ -163,10 +224,10 @@ def import_proof(database: Database, label: str) -> str:
             entry = saved[step.backreference]
 
         elif step.hypothesis is not None:
-            entry = _push_hypothesis(step.hypothesis, lines)
+            entry = _push_hypothesis(step.hypothesis, lines, premises)
 
         else:
-            entry = _apply(step.label, database, stack, lines, label)
+            entry = _apply(step.label, database, stack, lines, premises, label)
 
         stack.append(entry)
         if step.saved:
@@ -177,20 +238,44 @@ def import_proof(database: Database, label: str) -> str:
             f"{label}: proof ends with {len(stack)} stack entries, expected exactly 1."
         )
 
+    # The proof must actually reach what the theorem claims. Without this a proof
+    # that terminates on *some* well-formed result imports cleanly and its lines
+    # check - but they establish a different statement, while the theorem is still
+    # promoted under its declared one. A green import has to mean the declared
+    # statement was derived.
+    concluded = stack[0]
+    if concluded.tokens != assertion.tokens or concluded.typecode != assertion.typecode:
+        raise MetamathError(
+            f"{label}: proof concludes "
+            f"{concluded.typecode} {' '.join(concluded.tokens)!r}, "
+            f"but the statement is {assertion.typecode} {' '.join(assertion.tokens)!r}."
+        )
+
     return "\n".join(lines)
 
 
-def _push_hypothesis(hypothesis: Hypothesis, lines: list[str]) -> _Entry:
+def _push_hypothesis(
+    hypothesis: Hypothesis, lines: list[str], premises: dict[str, _Entry]
+) -> _Entry:
     # A mandatory hypothesis of the theorem being proved. A floating one stands
-    # for its variable; an essential one is a premise, which the imported proof
-    # states as a line justified by the hypothesis label itself.
+    # for its variable; an essential one is a premise of the proof, stated once as
+    # a line justified by the hypothesis label (which import_theorem registers as
+    # a given). Compressed proofs re-select band-1 hypotheses by letter rather
+    # than Z-saving them, so the same premise is pushed repeatedly - emit it once
+    # and cite that line again.
     if hypothesis.floating:
         return _Entry(typecode=hypothesis.typecode, tokens=(hypothesis.variable,))
 
+    existing = premises.get(hypothesis.label)
+    if existing is not None:
+        return existing
+
     lines.append(f"{' '.join(hypothesis.tokens)} [{hypothesis.label}]")
-    return _Entry(
+    entry = _Entry(
         typecode=hypothesis.typecode, tokens=hypothesis.tokens, line=len(lines)
     )
+    premises[hypothesis.label] = entry
+    return entry
 
 
 def _apply(
@@ -198,6 +283,7 @@ def _apply(
     database: Database,
     stack: list[_Entry],
     lines: list[str],
+    premises: dict[str, _Entry],
     proving: str,
 ) -> _Entry:
     # Apply a label from the proof's table: pop its mandatory hypotheses, read the
@@ -208,7 +294,7 @@ def _apply(
 
     hypothesis = database.hypotheses.get(step_label)
     if hypothesis is not None:
-        return _push_hypothesis(hypothesis, lines)
+        return _push_hypothesis(hypothesis, lines, premises)
 
     assertion = database.assertions.get(step_label)
     if assertion is None:
@@ -257,3 +343,38 @@ def import_database(database: Database, name: str = "Metamath") -> FormalSystem:
     system = build_system(build_spec(database, name))
     promote_assertions(database, system)
     return system
+
+
+def import_theorem(
+    database: Database, label: str, name: str = "Metamath"
+) -> tuple[FormalSystem, str]:
+    """A system for checking ``label``'s proof, and that proof's Edifyce text.
+
+    Scoped exactly as Metamath scopes a ``${ … $}`` block, which is what makes the
+    check meaningful:
+
+    * only assertions *preceding* ``label`` are promoted, so the theorem cannot
+      justify itself and cannot reach forward;
+    * ``label``'s own ``$e`` hypotheses are registered as givens, so the premise
+      lines the proof states resolve. They are assumptions of *this* proof, which
+      is why the system is built per theorem rather than shared.
+    """
+    assertion = database.assertions.get(label)
+    if assertion is None:
+        raise MetamathError(f"No assertion labelled {label!r}.")
+
+    system = build_system(build_spec(database, name))
+    promote_assertions(database, system, before=label)
+
+    metavariables = {h.variable: h.typecode for h in assertion.floatings}
+    for hypothesis in assertion.essentials:
+        system.promote(
+            promote_from_source(
+                system,
+                label=hypothesis.label,
+                statement=" ".join(hypothesis.tokens),
+                metavariables=metavariables,
+            )
+        )
+
+    return system, import_proof(database, label)
