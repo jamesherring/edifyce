@@ -85,7 +85,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .side_conditions import And, DisjointLeaves
-from .terms import Node, abstract, bind, from_match, _bound, _bound_label, _locations, _signature
+from .terms import Node, abstract, bind, from_match, _bound, _bound_label
 from .unify import match
 
 if TYPE_CHECKING:
@@ -233,7 +233,7 @@ def introduced_leaves(definition: Definition) -> tuple[Node, ...]:
     other, or a variable slips through as though it were already accounted for.
     """
     def key(leaf: Node) -> tuple[tuple[str, ...], str | None]:
-        return (_signature(leaf.pattern), leaf.literal)
+        return (leaf.constructor.signature, leaf.literal)
 
     defined = {key(leaf) for leaf in _ground_leaves(definition.higher)}
     introduced: dict[tuple[tuple[str, ...], str | None], Node] = {}
@@ -398,13 +398,13 @@ def _rewrites_once(source: Term, target: Term, definition: Definition, context: 
     # constructor and differ in exactly one child, where the rewrite recurses.
     if not (isinstance(source, Node) and isinstance(target, Node)):
         return False
-    if _signature(source.pattern) != _signature(target.pattern):
+    if source.constructor.signature != target.constructor.signature:
         return False
     if source.literal is not None or target.literal is not None:
         return False
 
-    source_locations = _locations(source.pattern)
-    target_locations = _locations(target.pattern)
+    source_locations = source.constructor.slots
+    target_locations = target.constructor.slots
     if len(source_locations) != len(target_locations):
         return False
 

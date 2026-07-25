@@ -19,7 +19,7 @@ pytest.importorskip("regex")
 
 import website.logical.matching.patterns as patterns
 from website.logical.declarative import SystemSpec, build_system
-from website.logical.kernel import Bound, Node, Var, abstract, bind, from_match, from_pattern
+from website.logical.kernel import Bound, Node, Var, abstract, bind, constructor_for, from_match, from_pattern
 from website.logical.matching import Context, RegexPattern, StringPattern, UnionPattern
 from tests.spec_helpers import (
     brackets,
@@ -133,7 +133,7 @@ def test_union_coercion_is_collapsed(fopl):
 
     term = from_match(formula.match("a", context), context)
     assert isinstance(term, Node)
-    assert term.pattern.name == "atom"
+    assert term.constructor.name == "atom"
     assert term.literal == "a"
 
 
@@ -398,8 +398,8 @@ def test_nested_substitution_and_free_var_dedup(fopl):
     _system, context, formula = fopl
     implication = formula.patterns[-1]  # the `implication` production
 
-    inner = Node(implication, {"p": Var("q", formula), "q": Var("p", formula)})
-    schema = Node(implication, {"p": Var("p", formula), "q": inner})
+    inner = Node(constructor_for(implication), {"p": Var("q", formula), "q": Var("p", formula)})
+    schema = Node(constructor_for(implication), {"p": Var("p", formula), "q": inner})
 
     assert set(schema.free_vars()) == {"p", "q"}
 

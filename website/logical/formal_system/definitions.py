@@ -205,7 +205,7 @@ def build_kernel_definition(
         {
             leaf.literal
             for leaf in introduced_leaves(kernel_def)
-            if not leaf.pattern.denotes_constant
+            if not leaf.constructor.denotes_constant
         }
     )
     if conjured:

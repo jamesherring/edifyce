@@ -40,7 +40,7 @@ from tests.spec_helpers import (
     variable_prod,
 )
 from website.logical.declarative import SystemSpec, build_spec
-from website.logical.kernel import Bound, Node, Var, from_match, intern
+from website.logical.kernel import Bound, Node, Var, constructor_for, from_match, intern
 from website.logical.matching.patterns import AtomPattern
 
 def zfc_spec() -> SystemSpec:
@@ -126,10 +126,10 @@ def test_alpha_digest_is_deterministic(context):
 def test_alpha_digest_renames_schematic_vars(context):
     impl = context.variables["implication"]
     formula = context.variables["formula"]
-    t1 = intern(Node(impl, {"p": Var("p", formula), "q": Var("q", formula)}))
-    t2 = intern(Node(impl, {"p": Var("m", formula), "q": Var("n", formula)}))
+    t1 = intern(Node(constructor_for(impl), {"p": Var("p", formula), "q": Var("q", formula)}))
+    t2 = intern(Node(constructor_for(impl), {"p": Var("m", formula), "q": Var("n", formula)}))
     assert alpha_digest(t1) == alpha_digest(t2)                      # renamed → same
-    shared = intern(Node(impl, {"p": Var("p", formula), "q": Var("p", formula)}))
+    shared = intern(Node(constructor_for(impl), {"p": Var("p", formula), "q": Var("p", formula)}))
     assert alpha_digest(shared) != alpha_digest(t1)                  # (p → p) differs
 
 
@@ -137,8 +137,8 @@ def test_alpha_digest_treats_bound_by_index(context):
     membership = context.variables["membership"]
     term_sort = context.variables["term"]
     b0, b1 = Bound(0, term_sort), Bound(1, term_sort)
-    same = intern(Node(membership, {"s": b0, "t": b0}))              # [0] ∈ [0]
-    diff = intern(Node(membership, {"s": b0, "t": b1}))              # [0] ∈ [1]
+    same = intern(Node(constructor_for(membership), {"s": b0, "t": b0}))              # [0] ∈ [0]
+    diff = intern(Node(constructor_for(membership), {"s": b0, "t": b1}))              # [0] ∈ [1]
     assert alpha_digest(same) != alpha_digest(diff)
     # A Bound is index-canonical, not a renameable free variable.
     assert _free_identity(b0) is None
@@ -146,12 +146,12 @@ def test_alpha_digest_treats_bound_by_index(context):
 
 def test_alpha_digest_does_not_rename_constant_atoms(context):
     impl = context.variables["implication"]
-    top = Node(AtomPattern(name="top", value="⊤"), literal="⊤")
-    bot = Node(AtomPattern(name="bot", value="⊥"), literal="⊥")
+    top = Node(constructor_for(AtomPattern(name="top", value="⊤")), literal="⊤")
+    bot = Node(constructor_for(AtomPattern(name="bot", value="⊥")), literal="⊥")
     # Two distinct constants are fixed structure: swapping them is a real change
     # (contrast two variables, where the swap would be α-equivalent).
-    t1 = intern(Node(impl, {"p": top, "q": bot}))
-    t2 = intern(Node(impl, {"p": bot, "q": top}))
+    t1 = intern(Node(constructor_for(impl), {"p": top, "q": bot}))
+    t2 = intern(Node(constructor_for(impl), {"p": bot, "q": top}))
     assert alpha_digest(t1) != alpha_digest(t2)
     assert _free_identity(top) is None
 
@@ -216,7 +216,7 @@ def _shared_tower(base, impl, depth):
     # rebuild exponentially) so only alpha_digest's memoisation is under test.
     node = base
     for _ in range(depth):
-        node = Node(impl, {"p": node, "q": node})
+        node = Node(constructor_for(impl), {"p": node, "q": node})
     return node
 
 

@@ -29,15 +29,14 @@ from app.db.terms import (
     TermChildRow,
     TermRow,
 )
-from website.logical.kernel import Bound, Node, Term, Var, intern
-from website.logical.matching.patterns import RegexPattern
+from website.logical.kernel import Bound, Node, Term, Var, constructor_for, intern
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from app.db.models import FormalSystem
+    from website.logical.kernel.constructors import Constructor
     from website.logical.matching.context import Context
-    from website.logical.matching.patterns import Pattern
 
     # Decides whether a leaf is a renameable free variable, and if so its
     # identity (see _free_identity). Callers pass one to alpha_digest/store_term
@@ -45,15 +44,14 @@ if TYPE_CHECKING:
     FreeIdentity = Callable[[Term], "tuple[str, ...] | None"]
 
 
-def _slot_order(pattern: Pattern, children: dict[str, Term]) -> list[str]:
+def _slot_order(constructor: Constructor, children: dict[str, Term]) -> list[str]:
     """Child slot labels in template (reading) order, deduped per label.
 
     Any child label absent from the template (not expected, but kept
     deterministic) sorts to the end.
     """
     ordered: list[str] = []
-    for offset in sorted(pattern.variable_locations):
-        label = pattern.variable_locations[offset]["label"]
+    for label in constructor.slots:
         if label in children and label not in ordered:
             ordered.append(label)
     ordered.extend(sorted(label for label in children if label not in ordered))
@@ -80,18 +78,18 @@ def _row_fields(term: Term) -> dict[str, str | int | None]:
         # definitions.higher column — and the inhabited sort's name.
         return {
             "kind": TERM_KIND_DEFINED,
-            "constructor": term.pattern.pattern,
+            "constructor": term.constructor.template,
             "literal": term.literal,
             "sort": term.sort.name,
         }
 
-    if not term.pattern.name:
+    if not term.constructor.name:
         raise ValueError(
-            f"Cannot store a term whose constructor has no name: {term.pattern!r}"
+            f"Cannot store a term whose constructor has no name: {term.constructor!r}"
         )
     return {
         "kind": TERM_KIND_NODE,
-        "constructor": term.pattern.name,
+        "constructor": term.constructor.name,
         "literal": term.literal,
     }
 
@@ -162,9 +160,9 @@ def _free_identity(term: Term) -> tuple[str, ...] | None:
         isinstance(term, Node)
         and not term.children
         and term.literal is not None
-        and isinstance(term.pattern, RegexPattern)
+        and term.constructor.kind == "regex"
     ):
-        return ("leaf", term.pattern.name, term.literal)
+        return ("leaf", term.constructor.name, term.literal)
     return None
 
 
@@ -188,7 +186,7 @@ def _assign_free_indices(
         numbering.setdefault(identity, len(numbering))
         return
     if isinstance(term, Node) and term.children:
-        for slot in _slot_order(term.pattern, term.children):
+        for slot in _slot_order(term.constructor, term.children):
             _assign_free_indices(term.children[slot], resolve, numbering, visited)
 
 
@@ -224,7 +222,7 @@ def _alpha_hash(
         child_hashes = (
             [
                 [slot, _alpha_hash(term.children[slot], resolve, numbering, memo)]
-                for slot in _slot_order(term.pattern, term.children)
+                for slot in _slot_order(term.constructor, term.children)
             ]
             if term.children
             else []
@@ -337,7 +335,7 @@ def store_term(
             **_row_fields(t),
         )
         if isinstance(t, Node) and t.children:
-            for position, slot in enumerate(_slot_order(t.pattern, t.children)):
+            for position, slot in enumerate(_slot_order(t.constructor, t.children)):
                 row.children.append(
                     TermChildRow(
                         slot=slot,
@@ -376,7 +374,7 @@ def _load(row: TermRow, context: Context, memo: dict[object, Term]) -> Term:
         term = Bound(row.bound_index, context.variables[row.sort])
     elif row.kind == TERM_KIND_NODE:
         term = Node(
-            pattern=context.variables[row.constructor],
+            constructor=constructor_for(context.variables[row.constructor]),
             children={
                 edge.slot: _load(edge.child, context, memo) for edge in row.children
             },
@@ -401,7 +399,7 @@ def _load(row: TermRow, context: Context, memo: dict[object, Term]) -> Term:
                 f"{row.constructor!r} in context"
             )
         term = Node(
-            pattern=notation.template,
+            constructor=constructor_for(notation.template),
             children={
                 edge.slot: _load(edge.child, context, memo) for edge in row.children
             },

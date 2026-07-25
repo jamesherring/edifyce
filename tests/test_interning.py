@@ -14,7 +14,7 @@ import pytest
 pytest.importorskip("regex")
 
 from website.logical.declarative import SystemSpec, build_spec, build_system
-from website.logical.kernel import Node, Var, from_match, intern, match
+from website.logical.kernel import Node, Var, constructor_for, from_match, intern, match
 from website.logical.kernel.terms import _node
 from website.logical.matching import StringPattern
 from tests.spec_helpers import brackets, regex_prod, statement_line, template_prod
@@ -93,7 +93,7 @@ def test_intern_bridges_a_hand_built_term(fopl):
     atom = system.build_context.variables["atom"]
 
     # A term assembled by hand (not through a kernel producer) is not shared...
-    hand = Node(implication, {"p": Node(atom, literal="a"), "q": Node(atom, literal="b")})
+    hand = Node(constructor_for(implication), {"p": Node(constructor_for(atom), literal="a"), "q": Node(constructor_for(atom), literal="b")})
     assert hand is not term(fopl, "(a -> b)")
 
     # ...until interned, when it becomes the canonical shared instance.
@@ -111,7 +111,7 @@ def test_equal_still_holds_for_uninterned_terms(fopl):
     atom = system.build_context.variables["atom"]
     implication = system.build_context.variables["implication"]
 
-    hand = Node(implication, {"p": Node(atom, literal="a"), "q": Node(atom, literal="b")})
+    hand = Node(constructor_for(implication), {"p": Node(constructor_for(atom), literal="a"), "q": Node(constructor_for(atom), literal="b")})
     canonical = term(fopl, "(a -> b)")
 
     # Different objects (hand is un-interned)...
@@ -124,7 +124,7 @@ def test_equal_still_holds_for_uninterned_terms(fopl):
 def test_substitution_result_is_interned(fopl):
     system, context, formula = fopl
     implication = system.build_context.variables["implication"]
-    schema = Node(implication, {"p": Var("p", formula), "q": Var("q", formula)})
+    schema = Node(constructor_for(implication), {"p": Var("p", formula), "q": Var("q", formula)})
 
     reified = schema.substitute(
         {"p": term(fopl, "a"), "q": term(fopl, "b")}, context
@@ -143,8 +143,8 @@ def test_nodes_differing_only_in_sort_are_not_merged(fopl):
     system, context, formula = fopl
     atom = system.build_context.variables["atom"]
 
-    plain = intern(Node(atom, literal="a"))
-    with_sort = intern(Node(atom, literal="a", sort=formula))
+    plain = intern(Node(constructor_for(atom), literal="a"))
+    with_sort = intern(Node(constructor_for(atom), literal="a", sort=formula))
 
     # Interning keeps them distinct (sort is part of the key)...
     assert plain is not with_sort
@@ -166,11 +166,13 @@ def test_different_constructors_are_not_merged(fopl):
         "antecedent", "(p -> q)", variables={"p": formula, "q": formula}
     )
     # Build the schema-substituted node FIRST, then the parsed production node.
-    node_schema = _node(pattern=schema_pattern, children={"p": a, "q": b})
-    node_production = _node(pattern=implication, children={"p": a, "q": b})
+    node_schema = _node(constructor_for(schema_pattern), children={"p": a, "q": b})
+    node_production = _node(constructor_for(implication), children={"p": a, "q": b})
 
     assert node_schema is not node_production
-    assert node_production.pattern is implication  # kept its production
+    # Kept its own constructor: one is built per production, so two productions
+    # of the same shape stay distinct objects even though they compare equal.
+    assert node_production.constructor is constructor_for(implication)
     # ...and equal ignores the constructor identity, still calling them equal.
     assert node_schema.equal(node_production, context)
     # A formula variable therefore still binds to the parsed production node.

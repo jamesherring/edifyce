@@ -180,7 +180,7 @@ def _definition_id(
         return None
 
     higher = definition.higher
-    sort = higher.sort if higher.sort is not None else higher.pattern
+    sort = higher.sort if higher.sort is not None else higher.constructor.source
     return definition_ids.get((higher.to_string(), sort.name))
 
 

@@ -156,7 +156,7 @@ def revariabilise(term: Term, metavariables: dict) -> Term:
                 return Var(node.literal, metavariables[node.literal])
             if node.children:
                 return Node(
-                    pattern=node.pattern,
+                    constructor=node.constructor,
                     children={label: walk(child) for label, child in node.children.items()},
                     literal=node.literal,
                     sort=node.sort,

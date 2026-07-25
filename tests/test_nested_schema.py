@@ -18,7 +18,6 @@ pytest.importorskip("regex")
 from copy import copy
 
 from website.logical.declarative import SystemSpec, build_system
-from website.logical.kernel.terms import _signature
 from tests.spec_helpers import brackets, regex_prod, rule as rule_spec, statement_line, template_prod
 
 
@@ -66,11 +65,13 @@ def test_nested_axiom_schema_projects_to_a_nested_term(hilbert):
 
     # Top constructor is a single implication (two holes), NOT the flat
     # three-hole "( _ -> ( _ -> _ ) )".
-    assert _signature(term.pattern) == ("string", "(\x00 → \x00)")
+    assert term.constructor.signature == ("string", "(\x00 → \x00)")
     # One child is itself an implication (the nesting survived), the other a
     # bare variable leaf.
     child_sigs = {
-        _signature(child.pattern) for child in term.children.values() if hasattr(child, "pattern")
+        child.constructor.signature
+        for child in term.children.values()
+        if hasattr(child, "constructor")
     }
     assert ("string", "(\x00 → \x00)") in child_sigs
     # And it round-trips to the original surface template.
@@ -83,7 +84,7 @@ def test_schema_term_matches_a_parsed_formula_of_the_same_shape(hilbert):
     k = rule(hilbert, "K")
     schema = k._schema_term(k.deduction, 0, copy(hilbert.context))
     instance = hilbert.parse("(a → ((a → a) → a)) [K]").proof_lines[0].formula_term
-    assert _signature(schema.pattern) == _signature(instance.pattern)
+    assert schema.constructor.signature == instance.constructor.signature
 
 
 # ---------------------------------------------------------------------------

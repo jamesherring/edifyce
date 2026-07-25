@@ -752,7 +752,7 @@ def test_a_leaf_is_not_excused_by_a_same_spelled_other_constructor():
     # grammar layer to excuse the constants.
     assert [leaf.literal for leaf in introduced_leaves(d)] == ["S", "c"]
     reported = {leaf.literal: leaf for leaf in introduced_leaves(d)}
-    assert reported["S"].pattern is not d.higher.pattern
+    assert reported["S"].constructor is not d.higher.constructor
 
 
 def _masked_build_spec(productions):
