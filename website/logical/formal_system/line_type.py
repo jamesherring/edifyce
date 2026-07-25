@@ -4,7 +4,9 @@
 class LineType:
     """Class for types of lines in formal proofs."""
 
-    def __init__(self, name, pattern=None, behaviour="none", scope=None,
+    # `behaviour` has no default: there is no value that is right to assume, and
+    # every construction site knows which kind of line it is building.
+    def __init__(self, name, pattern=None, *, behaviour, scope=None,
                  formula_field: str | None = None, reference_field: str | None = None):
 
         # The name of this line type
@@ -21,20 +23,14 @@ class LineType:
         self.formula_field = formula_field
         self.reference_field = reference_field
 
-        # The behaviour of these lines. The set is closed to what a SystemSpec
-        # can actually build: `logical` and `comment` from a LineSpec, `axiom`
-        # from a declared axiom. Three values were dropped once the `.edi`
-        # compiler - the only thing that could name them - went away:
-        #
-        #   "definition" - a definition belongs to the *system*, built once from
-        #                  its SystemSpec and reaching every proof through the
-        #                  shared context. A definitional *step* needs no line
-        #                  type of its own: it is a `logical` line citing a
-        #                  definition (see `proof.DEFINITION_KEY`).
-        #   "import"     - a proof cites another proof's lemma through the
-        #                  `reference_context` its caller pre-seeds, not through
-        #                  a line that names a path (see app/routers/proofs.py).
-        #   "none"       - an inert line, which `comment` already covers.
+        # The behaviour of these lines. The set is deliberately closed to what a
+        # SystemSpec can build - `logical` and `comment` from a LineSpec, `axiom`
+        # from a declared axiom - so a value here can never name a line type
+        # nothing constructs. Two things that look missing are handled elsewhere,
+        # not by a behaviour: a definitional *step* is a `logical` line citing a
+        # definition (see `proof.DEFINITION_KEY`), and a lemma from another proof
+        # arrives through the `reference_context` its caller pre-seeds (see
+        # app/routers/proofs.py).
         self.behaviour = behaviour
         if self.behaviour not in ("logical", "axiom", "comment"):
             raise ValueError(f"'{self.behaviour}' is not a valid LineType behaviour.")
@@ -42,7 +38,7 @@ class LineType:
         # A logical line is checked against its formula, so one it cannot project
         # is inert: every instance would be rejected with "No formula defined for
         # logical line." Refuse it at construction instead, where the author can
-        # still act on it. Only the retired `.edi` compiler could build one.
+        # still act on it.
         if self.behaviour == "logical" and self.formula_field is None:
             raise ValueError(
                 f"Logical line type '{self.name}' declares no formula field, so no "
@@ -54,9 +50,8 @@ class LineType:
         # starts a subproof that a discharge rule can later consume as a unit:
         #   "assumption" - opens a subproof under a hypothesis (for e.g. ->I),
         #   "variable"   - opens a subproof under a fresh variable (for e.g. VI).
-        # None means the line opens no scope. Keeping this separate from
-        # `behaviour` lets one line be *both* a formula-bearing logical line and
-        # a scope opener - which the retired `indent` behaviour could not be.
+        # None means the line opens no scope. It is separate from `behaviour` so
+        # one line can be *both* a formula-bearing logical line and a scope opener.
         self.scope = scope
         if self.scope not in (None, "assumption", "variable"):
             raise ValueError(f"'{self.scope}' is not a valid LineType scope.")
