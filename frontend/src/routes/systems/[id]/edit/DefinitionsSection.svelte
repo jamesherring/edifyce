@@ -8,17 +8,20 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Combobox, type ComboboxOption } from '$lib/components/ui/combobox';
 	import { api, type Definition, type Binding } from '$lib/api';
+	import type { SymbolEntry } from '$lib/symbols';
 	import { createSectionController } from './section.svelte';
 
 	let {
 		systemId,
 		definitions,
 		sortNames,
+		symbols,
 		onChanged
 	}: {
 		systemId: string;
 		definitions: Definition[];
 		sortNames: string[];
+		symbols: SymbolEntry[];
 		onChanged: () => Promise<void> | void;
 	} = $props();
 
@@ -131,6 +134,7 @@
 	onDelete={s.editing ? s.del : undefined}
 	saving={s.saving}
 	{canSave}
+	{symbols}
 >
 	<div class="space-y-2">
 		<Label for="def-sort">Sort</Label>
@@ -154,11 +158,11 @@
 	</div>
 	<div class="space-y-2">
 		<Label for="def-higher">Defined form</Label>
-		<Input id="def-higher" bind:value={higher} class="font-mono" placeholder="e.g. x ⊆ y" maxlength={512} />
+		<Input id="def-higher" bind:value={higher} class="font-mono" data-symbol-field placeholder="e.g. x ⊆ y" maxlength={512} />
 	</div>
 	<div class="space-y-2">
 		<Label for="def-lower">Expansion</Label>
-		<Input id="def-lower" bind:value={lower} class="font-mono" placeholder="e.g. (x = y → x = y)" maxlength={512} />
+		<Input id="def-lower" bind:value={lower} class="font-mono" data-symbol-field placeholder="e.g. (x = y → x = y)" maxlength={512} />
 		{#if layerOptions.length > 0}
 			<div class="space-y-1">
 				<Label class="text-xs text-muted-foreground">Build on an earlier definition</Label>
@@ -193,7 +197,7 @@
 		blank={() => ({ value: '' })}
 	>
 		{#snippet row(proviso)}
-			<Input bind:value={proviso.value} class="font-mono" placeholder="e.g. disjoint(x, y)" maxlength={512} />
+			<Input bind:value={proviso.value} class="font-mono" data-symbol-field placeholder="e.g. disjoint(x, y)" maxlength={512} />
 		{/snippet}
 	</RepeatableRows>
 </EditSheet>

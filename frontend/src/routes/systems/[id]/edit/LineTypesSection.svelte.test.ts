@@ -29,6 +29,7 @@ describe('LineTypesSection logical-sort validation', () => {
 			systemId: 'sys-1',
 			lines: [line('ghost')], // 'ghost' was deleted
 			sortNames: ['term', 'formula'],
+			symbols: [],
 			onChanged: vi.fn()
 		});
 		await user.click(screen.getByRole('button', { name: 'Edit' }));
@@ -47,6 +48,7 @@ describe('LineTypesSection logical-sort validation', () => {
 			systemId: 'sys-1',
 			lines: [line(null)],
 			sortNames: ['term', 'formula'],
+			symbols: [],
 			onChanged: vi.fn()
 		});
 		await user.click(screen.getByRole('button', { name: 'Edit' }));

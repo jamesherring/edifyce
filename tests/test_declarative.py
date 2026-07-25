@@ -675,20 +675,16 @@ def test_universal_generalisation_discharges_a_variable_subproof():
 
 
 @pytest.mark.parametrize(
-    "antecedents,side_conditions,allow_extra",
+    "antecedents,side_conditions",
     [
-        (["p"], [], False),             # a discharge rule with a line antecedent
-        ([], ["equal(p, q)"], False),   # a discharge rule with a proviso
-        ([], [], True),                 # a discharge rule allowing extra antecedents
+        (["p"], []),                    # a discharge rule with a line antecedent
+        ([], ["equal(p, q)"]),          # a discharge rule with a proviso
     ],
 )
-def test_discharge_rule_cannot_carry_antecedents_or_side_conditions(
-    antecedents, side_conditions, allow_extra
-):
+def test_discharge_rule_cannot_carry_antecedents_or_side_conditions(antecedents, side_conditions):
     # The discharge check consumes the subproof and never evaluates line
-    # antecedents or side-conditions (it cites exactly one subproof opener, so
-    # extra antecedents are ignored too), so accepting any of them would silently
-    # drop a soundness constraint. build_system refuses the pairing.
+    # antecedents or side-conditions, so accepting them would silently drop a
+    # soundness constraint. build_system refuses the pairing.
     spec = SystemSpec(
         name="BadDischarge",
         brackets=brackets(),
@@ -696,12 +692,40 @@ def test_discharge_rule_cannot_carry_antecedents_or_side_conditions(
         lines=[statement_line(), assumption_line()],
         rules=[Rule(label="CP", name="cp", antecedents=antecedents, deduction="(p → q)",
                     bindings=[("p", "formula"), ("q", "formula")],
-                    side_conditions=side_conditions, subproof=Subproof(assume="p", derive="q"),
-                    allow_extra_antecedents=allow_extra)],
+                    side_conditions=side_conditions, subproof=Subproof(assume="p", derive="q"))],
     )
     result = build_spec(spec)
     assert "errors" in result
     assert "discharge" in result["errors"][0].lower()
+
+
+def test_discharge_rule_may_carry_an_inert_extra_antecedents_flag():
+    # The discharge check ignores `allow_extra_antecedents` (it cites exactly one
+    # subproof opener), but an ignored *allowance* is only ever stricter -- it
+    # cannot admit anything the flag-free rule would reject. So unlike antecedents
+    # and side-conditions above, the pairing is inert rather than unsound, and is
+    # permitted: the rule builds and discharges exactly as it would without it.
+    spec = SystemSpec(
+        name="InertFlag",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        lines=[statement_line(), assumption_line()],
+        rules=[reiteration_rule(),
+               Rule(label="CP", name="cp", antecedents=[], deduction="(p → q)",
+                    bindings=[("p", "formula"), ("q", "formula")],
+                    subproof=Subproof(assume="p", derive="q"),
+                    allow_extra_antecedents=True)],
+    )
+    result = build_spec(spec)
+    assert "errors" not in result, result.get("errors")
+
+    system = result["system"]
+    # Discharge still works, and still requires exactly one subproof opener --
+    # the flag buys the citation nothing.
+    assert system.parse("assume a\n    a [R, 1]\n(a → a) [CP, 1]").valid is True
+    assert system.parse(
+        "assume a\n    a [R, 1]\nassume b\n    b [R, 3]\n(a → a) [CP, 1, 3]"
+    ).proof_lines[-1].valid is False
 
 
 def test_extra_antecedents_flag_governs_a_surplus_citation():

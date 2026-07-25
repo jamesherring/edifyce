@@ -8,13 +8,20 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Button } from '$lib/components/ui/button';
 	import { api, type Rule, type Binding, type RuleMatching } from '$lib/api';
+	import type { SymbolEntry } from '$lib/symbols';
 	import { createSectionController } from './section.svelte';
 
 	let {
 		systemId,
 		rules,
+		symbols,
 		onChanged
-	}: { systemId: string; rules: Rule[]; onChanged: () => Promise<void> | void } = $props();
+	}: {
+		systemId: string;
+		rules: Rule[];
+		symbols: SymbolEntry[];
+		onChanged: () => Promise<void> | void;
+	} = $props();
 
 	// Antecedents and provisos are plain strings in the API; wrap each in a row so
 	// it has a stable identity to key on (bare strings aren't unique and change as
@@ -78,9 +85,11 @@
 			deduction: deduction.trim(),
 			matching,
 			antecedents: antecedents.map((a) => a.value.trim()).filter(Boolean),
-			// A discharge rule cites one subproof opener, so the discharge check never
-			// consults extra antecedents; the API rejects the pairing. Force it off.
-			allow_extra_antecedents: hasSubproof ? false : allowExtraAntecedents,
+			// Sent as-is even for a discharge rule, where the flag is inert (that check
+			// cites one subproof opener and never reads it). The editor hides the toggle
+			// there rather than forcing a value, so the setting survives if the subproof
+			// is later removed.
+			allow_extra_antecedents: allowExtraAntecedents,
 			side_conditions: sideConditions.map((sc) => sc.value.trim()).filter(Boolean),
 			bindings: bindings.filter((b) => b.var.trim() && b.sort.trim()),
 			subproof: hasSubproof
@@ -136,6 +145,7 @@
 	onDelete={s.editing ? s.del : undefined}
 	saving={s.saving}
 	{canSave}
+	{symbols}
 >
 	<FormField label="Label" id="rule-label" bind:value={label} placeholder="e.g. MP" maxlength={64} />
 	<FormField label="Name" id="rule-name" bind:value={name} placeholder="e.g. modus ponens" maxlength={128} />
@@ -148,7 +158,7 @@
 		blank={() => ({ value: '' })}
 	>
 		{#snippet row(antecedent)}
-			<Input bind:value={antecedent.value} class="font-mono" placeholder="e.g. (p → q)" maxlength={512} />
+			<Input bind:value={antecedent.value} class="font-mono" data-symbol-field placeholder="e.g. (p → q)" maxlength={512} />
 		{/snippet}
 	</RepeatableRows>
 	{#if !hasSubproof}
@@ -166,13 +176,14 @@
 			</div>
 			<p class="text-xs text-muted-foreground">
 				Lets a citation name more lines than there are premises. The surplus is
-				recorded but left unconstrained, so it justifies nothing.
+				recorded but left unconstrained, so it justifies nothing. Has no effect on
+				a discharge rule, which cites a single subproof.
 			</p>
 		</div>
 	{/if}
 	<div class="space-y-2">
 		<Label for="rule-deduction">Conclusion</Label>
-		<Input id="rule-deduction" bind:value={deduction} class="font-mono" placeholder="e.g. q" maxlength={512} />
+		<Input id="rule-deduction" bind:value={deduction} class="font-mono" data-symbol-field placeholder="e.g. q" maxlength={512} />
 	</div>
 	<div class="space-y-2">
 		<Label>Checking</Label>
@@ -209,7 +220,7 @@
 		blank={() => ({ value: '' })}
 	>
 		{#snippet row(proviso)}
-			<Input bind:value={proviso.value} class="font-mono" placeholder="e.g. not occurs(x, p)" maxlength={512} />
+			<Input bind:value={proviso.value} class="font-mono" data-symbol-field placeholder="e.g. not occurs(x, p)" maxlength={512} />
 		{/snippet}
 	</RepeatableRows>
 	<div class="space-y-2">
@@ -249,12 +260,14 @@
 			<Input
 				bind:value={subproofOpenerValue}
 				class="font-mono"
+				data-symbol-field
 				placeholder={subproofOpener === 'assume' ? 'opening hypothesis, e.g. p' : 'fresh variable, e.g. x'}
 				maxlength={512}
 			/>
 			<Input
 				bind:value={subproofDerive}
 				class="font-mono"
+				data-symbol-field
 				placeholder="derived conclusion, e.g. q"
 				maxlength={512}
 			/>

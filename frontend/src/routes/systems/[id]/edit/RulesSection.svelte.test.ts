@@ -40,7 +40,7 @@ const rule: Rule = {
 
 function renderSection(over: Partial<Rule> = {}) {
 	const onChanged = vi.fn();
-	render(RulesSection, { systemId: 'sys1', rules: [{ ...rule, ...over }], onChanged });
+	render(RulesSection, { systemId: 'sys1', rules: [{ ...rule, ...over }], symbols: [], onChanged });
 	return { onChanged };
 }
 
@@ -58,22 +58,25 @@ describe('RulesSection allow_extra_antecedents', () => {
 		expect(payload).toMatchObject({ allow_extra_antecedents: false });
 	});
 
-	it('is hidden and forced off for a discharge rule', async () => {
+	it('is not offered for a discharge rule, but the stored value is preserved', async () => {
 		// A discharge rule carries no antecedents or side-conditions either — the API
-		// rejects those pairings too, so the fixture must be a state the API accepts.
+		// rejects those pairings, so the fixture must be a state the API accepts.
 		renderSection({
 			subproof: { derive: 'q', assume: 'p', fresh: null },
 			antecedents: [],
-			side_conditions: []
+			side_conditions: [],
+			allow_extra_antecedents: true
 		});
 		await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
 
-		// The discharge check cites one subproof opener, so the option is not offered.
+		// The discharge check cites one subproof opener and never reads the flag, so
+		// the option is not offered — but it is inert, not invalid, so the stored
+		// value round-trips rather than being silently cleared.
 		expect(screen.queryByText('Allow extra antecedents')).not.toBeInTheDocument();
 
 		await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
 		const [, , payload] = vi.mocked(api.parts.rules.update).mock.calls[0];
-		expect(payload.allow_extra_antecedents).toBe(false);
+		expect(payload.allow_extra_antecedents).toBe(true);
 	});
 });
 

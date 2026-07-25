@@ -17,7 +17,15 @@
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import ProofResults, { lineTone } from '$lib/components/ProofResults.svelte';
 	import LemmasPanel from '$lib/components/LemmasPanel.svelte';
-	import { api, ApiError, type ProofDetail, type VerifyResponse } from '$lib/api';
+	import SymbolPalette from '$lib/components/SymbolPalette.svelte';
+	import {
+		api,
+		ApiError,
+		type FormalSystemDetail,
+		type ProofDetail,
+		type VerifyResponse
+	} from '$lib/api';
+	import { systemSymbols } from '$lib/symbols';
 	import { auth } from '$lib/auth.svelte';
 	import { toastSuccess, toastError } from '$lib/toast';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
@@ -26,6 +34,9 @@
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 
 	let proof = $state<ProofDetail | null>(null);
+	// Fetched alongside the proof purely so the symbol palette can lead with the
+	// notation this system actually uses.
+	let system = $state<FormalSystemDetail | null>(null);
 	let loading = $state(true);
 	let loadError = $state<string | null>(null);
 
@@ -50,6 +61,9 @@
 
 	let loadSeq = 0;
 	let editor = $state<{ focusLine: (index: number) => void } | undefined>(undefined);
+	let editorPane = $state<HTMLDivElement | null>(null);
+
+	const symbols = $derived(systemSymbols(system));
 
 	const isOwner = $derived(!!auth.user && !!proof && proof.owner?.id === auth.user.id);
 	const dirty = $derived(!!proof && source !== proof.source);
@@ -71,6 +85,7 @@
 		const seq = ++loadSeq;
 		loading = true;
 		loadError = null;
+		system = null;
 		try {
 			const detail = await api.proofs.get(id);
 			if (seq !== loadSeq) return;
@@ -80,6 +95,7 @@
 			source = detail.source;
 			liveResult = null;
 			liveError = null;
+			loadSystem(detail.formal_system_id, seq);
 		} catch (err) {
 			if (seq !== loadSeq) return;
 			loadError =
@@ -91,6 +107,18 @@
 			proof = null;
 		} finally {
 			if (seq === loadSeq) loading = false;
+		}
+	}
+
+	// Not awaited by load(): the palette is an enhancement, so a slow (or failed)
+	// system fetch must not hold up — or break — the editor. Without it the
+	// palette simply falls back to its standing catalogue.
+	async function loadSystem(systemId: string, seq: number) {
+		try {
+			const detail = await api.systems.get(systemId);
+			if (seq === loadSeq) system = detail;
+		} catch {
+			if (seq === loadSeq) system = null;
 		}
 	}
 
@@ -265,14 +293,17 @@
 					<Card.Description>One statement per line — checked live as you type.</Card.Description>
 				</Card.Header>
 				<Card.Content class="flex flex-col gap-3">
-					<CodeEditor
-						id="source"
-						bind:value={source}
-						bind:this={editor}
-						rows={14}
-						showLineNumbers
-						{lineStatuses}
-					/>
+					<div bind:this={editorPane} class="flex flex-col gap-2">
+						<SymbolPalette root={editorPane} {symbols} />
+						<CodeEditor
+							id="source"
+							bind:value={source}
+							bind:this={editor}
+							rows={14}
+							showLineNumbers
+							{lineStatuses}
+						/>
+					</div>
 					<div class="flex justify-end">
 						<Button onclick={saveSource} disabled={savingSource || !dirty}>
 							{#if savingSource}
