@@ -70,6 +70,9 @@ def _ground_schema_term(
     # metavariable. Returns None when no logical sort parses the text.
     parse_context = copy(context)
     parse_context.definitions = list(system.context.definitions)
+    # Same reasoning as compose_schema_term: nothing this parse depends on moves
+    # while it runs, so the substring parses can be memoised.
+    parse_context.parse_memo = {}
     for sort in sorts:
         matched = sort.match(text, parse_context)
         if matched is not None:

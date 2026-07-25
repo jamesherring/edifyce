@@ -443,7 +443,24 @@ class StringPattern(Pattern):
         # Optionally offset the pattern string, to start at an index > 0. This is used recursively.
 
         # Optionally specify non variable mapping.
+        #
+        # Only whole-pattern calls are memoised (see UnionPattern.match for why
+        # there is a memo at all): a partial call carries a `non_variable_mapping`
+        # already shifted for its caller, so its result is not a function of
+        # `(self, s)` alone.
+        memo = context.parse_memo
+        if memo is None or pattern_offset != 0 or non_variable_mapping is not None:
+            return self._match(s, context, pattern_offset, non_variable_mapping, debug)
 
+        key = (id(self), s)
+        if key in memo:
+            return memo[key]
+
+        result = self._match(s, context, pattern_offset, non_variable_mapping, debug)
+        memo[key] = result
+        return result
+
+    def _match(self, s, context, pattern_offset=0, non_variable_mapping=None, debug=None):
         next_debug = None
         if debug is not None:
             # Debugging
@@ -1005,7 +1022,26 @@ class UnionPattern(Pattern):
 
     def match(self, s, context, debug=None):
         # Match s against one of the patterns.
+        #
+        # Parsing a compound formula tries every way of splitting it across a
+        # production's variable slots, and re-parses the same substring under each
+        # - so a deeply nested formula costs exponentially without a memo. The
+        # caller opts in by setting `context.parse_memo`, which asserts that
+        # nothing the result depends on (the grammar, `definitions`,
+        # `string_variables`) changes for the duration of that parse.
+        memo = context.parse_memo
+        if memo is None:
+            return self._match(s, context, debug)
 
+        key = (id(self), s)
+        if key in memo:
+            return memo[key]
+
+        result = self._match(s, context, debug)
+        memo[key] = result
+        return result
+
+    def _match(self, s, context, debug=None):
         next_debug = None
         if debug is not None:
             # Debugging

@@ -19,6 +19,13 @@ class Context:
     # The proof model id
     proof_model_id: object = None
 
+    # Memo for one top-level parse: {(id(pattern), string): Match | None}. None -
+    # the default - disables it. A context is long-lived and what a string parses
+    # to depends on the grammar, `definitions` and `string_variables`, so only a
+    # caller that knows all three are fixed for the duration of a parse may switch
+    # it on. See `UnionPattern.match` for why the memo exists at all.
+    parse_memo: dict | None = None
+
     def __copy__(self):
         # Return a copy of the context
         return Context(
@@ -30,5 +37,9 @@ class Context:
             # Logical is a dict of dicts
             logical={key: copy(self.logical[key]) for key in self.logical},
 
-            proof_model_id=self.proof_model_id
+            proof_model_id=self.proof_model_id,
+
+            # Shared, not copied, so the memo survives the context copies taken
+            # during a parse.
+            parse_memo=self.parse_memo,
         )

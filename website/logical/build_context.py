@@ -54,6 +54,14 @@ class FormalSystemContext:
     # Error log
     error_log: list = field(default_factory=list)
 
+    # Memo for one top-level parse: {(id(pattern), string): Match | None}. None
+    # disables memoisation, which is the default - a context is long-lived and
+    # what a string parses to depends on `definitions` and `string_variables`, so
+    # only a caller that knows those are fixed for the duration may switch it on
+    # (see compose_schema_term). Shared, not copied, by `__copy__`, so it
+    # survives the context copies taken during a parse.
+    parse_memo: dict | None = None
+
     def inherit(self, parent: FormalSystemContext) -> None:
         # Inherit from parent context
 
@@ -82,6 +90,7 @@ class FormalSystemContext:
         new_context.proof_context = copy(self.proof_context)
         new_context.system_dict = copy(self.system_dict)
         new_context.error_log = copy(self.error_log)
+        new_context.parse_memo = self.parse_memo
 
         return new_context
 
@@ -140,6 +149,11 @@ def compose_schema_term(
     # definition simply falls back to the flat projection.
     parse_context = copy(context)
     parse_context.definitions = []
+    # Fixed grammar, fixed definitions, fixed metavariables for the whole of this
+    # parse, so the same substring always parses the same way - memoise it. The
+    # candidate sorts below re-parse overlapping substrings heavily, and nesting
+    # multiplies that: set.mm's 16-binder `cbvral8vw` does not finish without it.
+    parse_context.parse_memo = {}
 
     for candidate in _composition_sorts(context, prefer):
         match = candidate.match(pattern.pattern, parse_context)
