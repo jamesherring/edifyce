@@ -222,6 +222,12 @@ class Proof:
         # The proof lines leading to the result
         self.proof_lines = []
 
+        # The subset of `proof_lines` a citation can name, in citation order, so
+        # `numbered_lines[n - 1]` is the line written `n`. Kept separate from
+        # `proof_lines` (which holds every physical line, blanks included) so
+        # that adding a blank line or a comment never renumbers the steps below.
+        self.numbered_lines = []
+
         # A dictionary of references to other proofs - given on proof creation
         self.reference_proofs = reference_proofs
 
@@ -274,12 +280,27 @@ class Proof:
             stack[-1].lines.append(proof_line)
 
     def get_proof_line(self, line_number):
-        # Get a proof line by line number
-        # Line numbers are 1-based, matching how references are written in proofs.
-        if not 1 <= line_number <= len(self.proof_lines):
+        # Get a proof line by citation number (1-based, as written in proofs).
+        # Not a text-line index: blank lines and commentary carry no number.
+        if not 1 <= line_number <= len(self.numbered_lines):
             return None
 
-        return self.proof_lines[line_number - 1]
+        return self.numbered_lines[line_number - 1]
+
+    def assign_line_number(self, proof_line: ProofLine) -> None:
+        # Give the line the number a citation names it by. Called in source
+        # order once the line's type is known.
+        #
+        # Commentary is skipped: it asserts nothing, so nothing can cite it, and
+        # leaving it unnumbered is what makes prose free to insert. A line that
+        # matched no line type is still numbered - the author meant it as a step,
+        # and renumbering everything below a typo would be worse than the typo.
+        line_type = proof_line.line_type
+        if line_type is not None and line_type.behaviour == "comment":
+            return
+
+        self.numbered_lines.append(proof_line)
+        proof_line.number = len(self.numbered_lines)
 
     def add_proof_line(self, text, context):
         proof_line = ProofLine(self, text, context=copy(context))
@@ -502,7 +523,7 @@ class Proof:
             if isinstance(ant, ProofLine) and not line_is_accessible(proof_line, ant):
                 proof_line.valid = False
                 proof_line.invalid_message = (
-                    f"Line {ant.index() + 1} is out of scope "
+                    f"Line {ant.number} is out of scope "
                     "(it is inside a closed subproof)."
                 )
                 return False
@@ -663,7 +684,7 @@ class Proof:
 
         if subproof is None:
             proof_line.valid = False
-            proof_line.invalid_message = f"Line {opener.index() + 1} does not open a subproof."
+            proof_line.invalid_message = f"Line {opener.number} does not open a subproof."
             return False
 
         # The subproof must be a *completed* one, in scope to discharge from
@@ -673,7 +694,7 @@ class Proof:
                 or subproof.is_ancestor_of(proof_line.scope):
             proof_line.valid = False
             proof_line.invalid_message = (
-                f"Subproof at line {opener.index() + 1} is out of scope to discharge here."
+                f"Subproof at line {opener.number} is out of scope to discharge here."
             )
             return False
 
@@ -710,7 +731,7 @@ class Proof:
         if not line_is_accessible(proof_line, source):
             proof_line.valid = False
             proof_line.invalid_message = (
-                f"Line {source.index() + 1} is out of scope (it is inside a closed subproof)."
+                f"Line {source.number} is out of scope (it is inside a closed subproof)."
             )
             return False
 
@@ -727,7 +748,7 @@ class Proof:
         if source.line_type is None or source.line_type.behaviour != "logical" \
                 or source.formula is None:
             proof_line.valid = False
-            proof_line.invalid_message = f"Line {source.index() + 1} is not a formula line."
+            proof_line.invalid_message = f"Line {source.number} is not a formula line."
             return False
 
         candidates = [reference.definition] if reference.definition is not None \
@@ -764,12 +785,12 @@ class Proof:
             else:
                 proof_line.invalid_message = (
                     f"{reference.key} does not apply between this line and line "
-                    f"{source.index() + 1}."
+                    f"{source.number}."
                 )
         else:
             proof_line.invalid_message = (
                 f"{reference.key} does not apply: no definition in scope relates this line "
-                f"to line {source.index() + 1}."
+                f"to line {source.number}."
             )
         return False
 
@@ -1044,6 +1065,10 @@ class ProofLine:
         # The label for this line (if any)
         self.label = label
 
+        # The number a citation names this line by, assigned during parsing.
+        # None for a line no citation can reach: a blank line or commentary.
+        self.number = None
+
         # The formula match (if any) on this line
         self.formula = None
 
@@ -1187,6 +1212,7 @@ class ProofLine:
         # Get data for this proof line
         return {
             "valid": self.valid,
+            "number": self.number,
             "behaviour": self.line_type.behaviour if self.line_type is not None else None,
             "name": self.line_type.name if self.line_type is not None else None,
             "invalid_message": self.invalid_message,

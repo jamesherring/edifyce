@@ -10,6 +10,12 @@ export interface HealthResponse {
 
 export interface ProofLine {
 	valid: boolean;
+	// The number a citation names this line by. Null for a line no citation can
+	// reach (a blank line, or commentary), so it is not a text-line index.
+	// Optional only because a proof verified before citation numbering existed
+	// has a cached payload without the field — the viewer renders those at the
+	// row position they were numbered by until the proof is checked again.
+	number?: number | null;
 	behaviour: string | null;
 	name: string | null;
 	invalid_message: string | null;
