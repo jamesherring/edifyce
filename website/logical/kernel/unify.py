@@ -168,6 +168,12 @@ def _sort_admits(sort: Pattern, term: Term, context: Context) -> bool:
     # pattern lattice twice over - and a variable binds against the same pair on
     # every rule check. The memo lives on the sort's constructor, so it is
     # reclaimed with the grammar (see constructors.Constructor.admits).
+    #
+    # Keying on the pair alone is sound because `context` does not participate in
+    # the answer: `Pattern.equivalent`, `can_map_to` and `contains_pattern` thread
+    # it through to each other and never read it (only `match` reads a context,
+    # for its string variables). Were that to change, this memo would have to key
+    # on the context too - so if you make equivalence context-sensitive, come here.
     memo = constructor_for(sort).admits
     cached = memo.get(term_sort)
     if cached is not None:
