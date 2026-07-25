@@ -47,6 +47,7 @@ from .formal_system.definitions import (
     denotes_a_constant,
 )
 from .formal_system.side_condition_syntax import parse_side_condition
+from .kernel.constructors import project_grammar
 from .matching import AtomPattern, Pattern, RegexPattern, StringPattern, UnionPattern
 
 
@@ -470,6 +471,16 @@ def build_system(spec: SystemSpec) -> FormalSystem:
         for prod in spec.productions:
             if prod.sort == sort:
                 union.patterns.append(ctx.variables[prod.name])
+
+    # 4a. Project the grammar to its kernel constructors, now that the unions are
+    # complete. Everything from here on builds terms, and a term's sort is a
+    # constructor: a union projected while still empty would be linked with no
+    # branches and would admit nothing but itself thereafter. Done explicitly so
+    # the moment is chosen, rather than falling out of whichever term is built
+    # first (see kernel.constructors.project_grammar).
+    # `ctx.variables` is the whole build namespace, which also holds referenced
+    # systems; only the productions are projectable.
+    project_grammar(p for p in ctx.variables.values() if isinstance(p, Pattern))
 
     # 5. Lines: a statement pattern + logical line type per declared line. Each
     # line's inline parts are registered just before it is built (see step 1).

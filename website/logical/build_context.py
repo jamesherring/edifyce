@@ -21,9 +21,11 @@ from typing import TYPE_CHECKING
 
 from website.logical.formal_system.side_condition_syntax import parse_side_condition
 from website.logical.kernel import And, Node, Var, from_match, intern
+from website.logical.kernel.constructors import project_sorts
 from website.logical.matching import AtomPattern, Pattern, StringPattern, UnionPattern
 
 if TYPE_CHECKING:
+    from website.logical.kernel.constructors import Constructor
     from website.logical.kernel.side_conditions import SideCondition
     from website.logical.kernel.terms import Term
 
@@ -119,12 +121,12 @@ def compose_schema_term(pattern: Pattern, context: FormalSystemContext) -> Term 
         if isinstance(candidate, UnionPattern):
             match = candidate.match(pattern.pattern, parse_context)
             if match is not None:
-                return revariabilise(from_match(match), context.string_variables)
+                return revariabilise(from_match(match), project_sorts(context.string_variables))
 
     return None
 
 
-def revariabilise(term: Term, metavariables: dict) -> Term:
+def revariabilise(term: Term, metavariables: dict[str, Constructor]) -> Term:
     # Re-mark the rule's metavariables in a compositionally-parsed schema term.
     # Some slots - notably a setvar matched by a RegexPattern, which (unlike a
     # UnionPattern) does not consult string_variables - come back from the parse

@@ -136,7 +136,7 @@ def test_match_reduces_to_equality_without_variables(rich, left, right, equal):
 def test_match_enforces_consistent_repeated_variable(rich):
     system, context, formula = rich
     implication = system.build_context.variables["implication"]
-    schema = Node(constructor_for(implication), {"p": Var("p", formula), "q": Var("p", formula)})  # (p -> p)
+    schema = Node(constructor_for(implication), {"p": Var("p", constructor_for(formula)), "q": Var("p", constructor_for(formula))})  # (p -> p)
 
     assert match(schema, term(formula, context, "(a -> a)"), context) is not None
     assert match(schema, term(formula, context, "(a -> b)"), context) is None
@@ -146,7 +146,7 @@ def test_match_respects_sorts(rich):
     system, context, formula = rich
     atom = system.build_context.variables["atom"]
 
-    atom_var = Var("z", atom)
+    atom_var = Var("z", constructor_for(atom))
     # An atom-sorted variable must not capture a compound implication.
     assert match(atom_var, term(formula, context, "(a -> b)"), context) is None
     # But it happily binds to an atom.
@@ -156,16 +156,16 @@ def test_match_respects_sorts(rich):
 def test_concrete_schema_does_not_match_opaque_variable(rich):
     _system, context, formula = rich
     implication = formula.patterns[1]  # the implication production, keyed p/q
-    schema = Node(constructor_for(implication), {"p": Var("p", formula), "q": Var("q", formula)})
+    schema = Node(constructor_for(implication), {"p": Var("p", constructor_for(formula)), "q": Var("q", constructor_for(formula))})
 
     # Subject is a bare variable (opaque): a concrete production cannot match it.
-    subject = Var("phi", formula)
+    subject = Var("phi", constructor_for(formula))
     assert match(schema, subject, context) is None
 
 
 def test_variable_binds_to_variable(rich):
     _system, context, formula = rich
-    binding = match(Var("p", formula), Var("phi", formula), context)
+    binding = match(Var("p", constructor_for(formula)), Var("phi", constructor_for(formula)), context)
     assert binding is not None and binding["p"].to_string() == "phi"
 
 
@@ -255,7 +255,7 @@ def test_match_then_substitute_round_trips(rich, schema_string, subject_string):
     system, context, formula = rich
     implication = system.build_context.variables["implication"]
     conjunction = system.build_context.variables["conjunction"]
-    p, q = Var("p", formula), Var("q", formula)
+    p, q = Var("p", constructor_for(formula)), Var("q", constructor_for(formula))
 
     if schema_string == "(p -> p)":
         schema = Node(constructor_for(implication), {"p": p, "q": p})

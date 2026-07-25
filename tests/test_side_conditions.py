@@ -15,6 +15,7 @@ pytest.importorskip("regex")
 from website.logical.declarative import SystemSpec, build_system
 from website.logical.kernel import (
     And,
+    constructor_for,
     DisjointLeaves,
     Equal,
     IsAtom,
@@ -143,7 +144,7 @@ def test_distinct_variable_sort_ignores_non_variable_symbols(fol):
     # to `setvar` makes DisjointLeaves a variable-occurrence check, so they count as
     # distinct; unrestricted, the shared "P" leaf makes them non-distinct.
     system, context = fol
-    setvar = system.build_context.variables["setvar"]
+    setvar = constructor_for(system.build_context.variables["setvar"])
     binding = {"a": formula_term(fol, "P(x)"), "b": formula_term(fol, "P(z)")}
 
     assert DisjointLeaves("a", "b", sort=setvar).check(binding, context)
@@ -153,7 +154,7 @@ def test_distinct_variable_sort_ignores_non_variable_symbols(fol):
 def test_distinct_variable_and_formula_is_freshness(fol):
     # For a variable and a formula, DisjointLeaves(setvar) is the $d-style "x not in φ".
     system, context = fol
-    setvar = system.build_context.variables["setvar"]
+    setvar = constructor_for(system.build_context.variables["setvar"])
     fresh = {"x": setvar_term(fol, "x"), "phi": formula_term(fol, "P(y)")}
     captured = {"x": setvar_term(fol, "x"), "phi": formula_term(fol, "P(x)")}
 
@@ -169,7 +170,7 @@ def test_distinct_variable_and_formula_is_freshness(fol):
 def test_is_atom(fol):
     # In FOL, IsAtom(x, setvar) asserts x stands for a variable, not a compound.
     system, context = fol
-    setvar = system.build_context.variables["setvar"]
+    setvar = constructor_for(system.build_context.variables["setvar"])
     binding = {"x": setvar_term(fol, "x"), "phi": formula_term(fol, "P(y)")}
 
     assert IsAtom("x").check(binding, context)
@@ -264,7 +265,7 @@ def test_vacuous_quantification_gated_by_freshness(fol):
 
 def test_distinct_pair_proviso(fol):
     system, _context = fol
-    setvar = system.build_context.variables["setvar"]
+    setvar = constructor_for(system.build_context.variables["setvar"])
     distinct = DisjointLeaves("x", "y", sort=setvar)
 
     assert check_step(fol, "DIST", ["R(a, b)", "R(a, b)"], distinct)

@@ -398,8 +398,8 @@ def test_nested_substitution_and_free_var_dedup(fopl):
     _system, context, formula = fopl
     implication = formula.patterns[-1]  # the `implication` production
 
-    inner = Node(constructor_for(implication), {"p": Var("q", formula), "q": Var("p", formula)})
-    schema = Node(constructor_for(implication), {"p": Var("p", formula), "q": inner})
+    inner = Node(constructor_for(implication), {"p": Var("q", constructor_for(formula)), "q": Var("p", constructor_for(formula))})
+    schema = Node(constructor_for(implication), {"p": Var("p", constructor_for(formula)), "q": inner})
 
     assert set(schema.free_vars()) == {"p", "q"}
 
@@ -527,7 +527,7 @@ def test_abstract_lifts_parameter_leaves_to_vars(fopl):
     ground = from_match(formula.match("(a -> b)", context))
     assert ground.free_vars() == {}
 
-    atom = formula.patterns[0]  # the `atom` regex sort
+    atom = constructor_for(formula.patterns[0])  # the `atom` regex sort
     schema = abstract(ground, {"a": atom})
 
     assert set(schema.free_vars()) == {"a"}
@@ -543,7 +543,7 @@ def test_abstract_lifts_parameter_leaves_to_vars(fopl):
 def test_abstract_preserves_nested_structure(fopl):
     # Unlike from_pattern (one production level), abstract keeps a nested tree.
     _system, context, formula = fopl
-    atom = formula.patterns[0]
+    atom = constructor_for(formula.patterns[0])
     schema = abstract(
         from_match(formula.match("(a -> (b -> a))", context)),
         {"a": atom, "b": atom},
@@ -565,7 +565,7 @@ def test_bind_lifts_named_leaves_to_abstract_bound_nodes(fopl):
     # indexed Bound node - and a Bound is bound, not free.
     _system, context, formula = fopl
     atom = formula.patterns[0]
-    b0 = Bound(0, atom)
+    b0 = Bound(0, constructor_for(atom))
 
     schema = bind(from_match(formula.match("(a -> a)", context)), {"a": b0})
 
@@ -585,7 +585,7 @@ def test_bound_instantiates_via_substitution(fopl):
 
     _system, context, formula = fopl
     atom = formula.patterns[0]
-    b0 = Bound(0, atom)
+    b0 = Bound(0, constructor_for(atom))
     schema = bind(from_match(formula.match("(a -> a)", context)), {"a": b0})
 
     # Recover the binder's concrete name by matching against a ground formula...

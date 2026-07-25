@@ -51,17 +51,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-# Reuse the *same* constructor identity and slot alignment that Term.equal uses,
-# so matching and equality stay defined against one source of truth. Both are now
-# fields on the constructor rather than walks over a template (see constructors).
-from .constructors import constructor_for
 from .terms import Var
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from ..matching.context import Context
-    from ..matching.patterns import Pattern
+    # Reuse the *same* constructor identity and slot alignment that Term.equal
+    # uses, so matching and equality stay defined against one source of truth.
     from .constructors import Constructor
     from .terms import Term
 
@@ -156,7 +153,7 @@ def match_all(
     return current
 
 
-def sort_admits(sort: Pattern, term: Term) -> bool:
+def sort_admits(sort: Constructor, term: Term) -> bool:
     """Whether ``term`` is an instance of ``sort`` - a purely structural check,
     no string re-parsing. Keeps a variable from binding to a term of the wrong
     sort (an ``atom``-sorted variable must not capture an ``implication``).
@@ -168,20 +165,14 @@ def sort_admits(sort: Pattern, term: Term) -> bool:
     whole set once instead, which is also what lets this module hold no reference
     to the matching layer.
     """
-    return _term_sort(term) in constructor_for(sort).admits
+    return _term_sort(term) in sort.admits
 
 
 def _term_sort(term: Term) -> Constructor:
     """The sort that ``term`` inhabits - a variable's declared sort, a node's
     recorded ``sort`` when it has one (a definition shorthand, whose constructor
     is not itself a member of its sort), or otherwise the node's own constructor
-    (already a member of whatever union it belongs to).
-
-    Returned as a ``Constructor``, so admission compares like against like: a
-    constructor is built once per production and cached on it, so constructor
-    identity *is* production identity."""
+    (already a member of whatever union it belongs to)."""
     if isinstance(term, Var):
-        return constructor_for(term.sort)
-    if term.sort is not None:
-        return constructor_for(term.sort)
-    return term.constructor
+        return term.sort
+    return term.sort if term.sort is not None else term.constructor

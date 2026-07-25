@@ -29,7 +29,8 @@ reading is one instantiation, not something the kernel hard-codes.
 
 Nothing here names a connective, a quantifier, or a specific notion of
 "variable": *which* sort counts as a variable is a per-system parameter (a
-``Pattern`` the system supplies), so the vocabulary stays logic-agnostic while
+:class:`~website.logical.kernel.constructors.Constructor` the system supplies),
+so the vocabulary stays logic-agnostic while
 still covering FOPC and ZF(C) - Metamath verifies all of ZFC on ``$d`` alone.
 A condition is checked against the *binding* a rule match produces
 (:func:`~website.logical.kernel.unify.match_all`), so it references the rule's
@@ -78,7 +79,7 @@ from .unify import sort_admits
 
 if TYPE_CHECKING:
     from ..matching.context import Context
-    from ..matching.patterns import Pattern
+    from .constructors import Constructor
     from .terms import Term
 
     # The substitution a rule match produces: metavariable name -> bound Term.
@@ -144,7 +145,7 @@ class DisjointLeaves(SideCondition):
 
     left: TermArg
     right: TermArg
-    sort: Pattern | None = None
+    sort: Constructor | None = None
 
     def check(self, binding: Binding, context: Context) -> bool:
         left = _leaves(_resolve(self.left, binding, context), context, self.sort)
@@ -167,7 +168,7 @@ class IsAtom(SideCondition):
     """
 
     name: TermArg
-    sort: Pattern | None = None
+    sort: Constructor | None = None
 
     def check(self, binding: Binding, context: Context) -> bool:
         term = _resolve(self.name, binding, context)
@@ -192,7 +193,7 @@ class IsMember(SideCondition):
     """
 
     name: TermArg
-    sort: Pattern
+    sort: Constructor
 
     def check(self, binding: Binding, context: Context) -> bool:
         return sort_admits(self.sort, _resolve(self.name, binding, context))
@@ -312,7 +313,7 @@ def _occurs(needle: Term, haystack: Term, context: Context) -> bool:
     return False
 
 
-def _leaves(term: Term, context: Context, sort: Pattern | None) -> set[str]:
+def _leaves(term: Term, context: Context, sort: Constructor | None) -> set[str]:
     """The surface strings of ``term``'s atomic leaves, optionally restricted to
     those of ``sort``.
 
