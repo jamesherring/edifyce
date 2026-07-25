@@ -1,8 +1,10 @@
 <script lang="ts">
   import * as Sheet from '$lib/components/ui/sheet';
   import { Button } from '$lib/components/ui/button';
+  import SymbolPalette from '$lib/components/SymbolPalette.svelte';
+  import type { SymbolEntry } from '$lib/symbols';
   import { cn } from '$lib/utils';
-  import type { Snippet } from 'svelte';
+  import { tick, type Snippet } from 'svelte';
 
   type Props = {
     open: boolean;
@@ -16,6 +18,9 @@
     saving?: boolean;
     /** When false, Save is disabled and submitting is a no-op (invalid form). */
     canSave?: boolean;
+    /** Set (even to `[]`) to show a symbol palette above the form, typing into
+     *  whichever `data-symbol-field` input was last focused. */
+    symbols?: SymbolEntry[];
   };
 
   let {
@@ -28,19 +33,43 @@
     onSave,
     onDelete,
     saving = false,
-    canSave = true
+    canSave = true,
+    symbols
   }: Props = $props();
+
+  let form = $state<HTMLFormElement | null>(null);
+
+  // The sheet otherwise focuses its first tabbable node on open, which the symbol
+  // palette now is — leaving the user typing into nothing (and Space inserting a
+  // symbol). Put the caret in the first field instead, which is where it landed
+  // before the palette existed.
+  async function focusFirstField(event: Event) {
+    event.preventDefault();
+    await tick();
+    form?.querySelector<HTMLElement>('input, textarea, select')?.focus();
+  }
 </script>
 
 <Sheet.Root {open} {onOpenChange}>
-  <Sheet.Content side="right" class={cn('w-full sm:max-w-lg', contentClass)}>
+  <Sheet.Content
+    side="right"
+    class={cn('w-full sm:max-w-lg', contentClass)}
+    onOpenAutoFocus={symbols ? focusFirstField : undefined}
+  >
     <Sheet.Header>
       <Sheet.Title>{title}</Sheet.Title>
       {#if description}
         <Sheet.Description>{description}</Sheet.Description>
       {/if}
     </Sheet.Header>
+    {#if symbols}
+      <!-- Outside the scrolling form so it stays put while the fields scroll. -->
+      <div class="border-b px-6 pb-3">
+        <SymbolPalette root={form} {symbols} />
+      </div>
+    {/if}
     <form
+      bind:this={form}
       onsubmit={(e) => {
         e.preventDefault();
         if (canSave && !saving) onSave();

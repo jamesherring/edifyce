@@ -6,17 +6,20 @@
 	import { Label } from '$lib/components/ui/label';
 	import { Input } from '$lib/components/ui/input';
 	import { api, type Production, type Binding } from '$lib/api';
+	import type { SymbolEntry } from '$lib/symbols';
 	import { createSectionController } from './section.svelte';
 
 	let {
 		systemId,
 		productions,
 		sortNames,
+		symbols,
 		onChanged
 	}: {
 		systemId: string;
 		productions: Production[];
 		sortNames: string[];
+		symbols: SymbolEntry[];
 		onChanged: () => Promise<void> | void;
 	} = $props();
 
@@ -120,6 +123,7 @@
 	onDelete={s.editing ? s.del : undefined}
 	saving={s.saving}
 	{canSave}
+	{symbols}
 >
 	<FormField label="Name" id="prod-name" bind:value={name} placeholder="e.g. implication" maxlength={128} />
 	<div class="space-y-2">
@@ -150,7 +154,7 @@
 				</button>
 			{/each}
 		</div>
-		<Input bind:value class="font-mono" {placeholder} maxlength={512} />
+		<Input bind:value class="font-mono" data-symbol-field {placeholder} maxlength={512} />
 	</div>
 	{#if mode === 'template'}
 		<BindingsEditor bind:bindings />

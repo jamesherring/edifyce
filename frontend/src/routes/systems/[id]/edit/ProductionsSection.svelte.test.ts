@@ -40,6 +40,7 @@ describe('ProductionsSection sort validation', () => {
 			systemId: 'sys-1',
 			productions: [prod('ghost')], // 'ghost' was deleted
 			sortNames: ['term', 'formula'],
+			symbols: [],
 			onChanged: vi.fn()
 		});
 		await user.click(screen.getByRole('button', { name: 'Edit' }));
@@ -59,6 +60,7 @@ describe('ProductionsSection sort validation', () => {
 			systemId: 'sys-1',
 			productions: [prod('formula')],
 			sortNames: ['term', 'formula'],
+			symbols: [],
 			onChanged: vi.fn()
 		});
 		await user.click(screen.getByRole('button', { name: 'Edit' }));
@@ -87,6 +89,7 @@ describe('ProductionsSection atom productions', () => {
 			systemId: 'sys-1',
 			productions: [atomFamily()],
 			sortNames: ['formula'],
+			symbols: [],
 			onChanged: vi.fn()
 		});
 		await user.click(screen.getByRole('button', { name: 'Edit' }));

@@ -9,12 +9,31 @@
     placeholder?: string;
     maxlength?: number;
     disabled?: boolean;
+    /** True when the field holds notation: renders it monospaced and makes it a
+     *  target for the enclosing sheet's symbol palette. */
+    notation?: boolean;
   };
 
-  let { label, id, value = $bindable(''), placeholder, maxlength, disabled }: Props = $props();
+  let {
+    label,
+    id,
+    value = $bindable(''),
+    placeholder,
+    maxlength,
+    disabled,
+    notation = false
+  }: Props = $props();
 </script>
 
 <div class="space-y-2">
   <Label for={id}>{label}</Label>
-  <Input {id} bind:value {placeholder} {maxlength} {disabled} />
+  <Input
+    {id}
+    bind:value
+    {placeholder}
+    {maxlength}
+    {disabled}
+    class={notation ? 'font-mono' : undefined}
+    data-symbol-field={notation ? '' : undefined}
+  />
 </div>

@@ -109,6 +109,7 @@
 			{placeholder}
 			{rows}
 			wrap="off"
+			data-symbol-field
 			spellcheck="false"
 			autocapitalize="off"
 			onkeydown={handleKeydown}
@@ -122,6 +123,7 @@
 		bind:value
 		{placeholder}
 		{rows}
+		data-symbol-field
 		spellcheck="false"
 		autocapitalize="off"
 		onkeydown={handleKeydown}

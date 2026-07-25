@@ -10,14 +10,17 @@
 	import BackLink from '$lib/components/BackLink.svelte';
 	import LoadingSpinner from '$lib/components/LoadingSpinner.svelte';
 	import ProofResults, { lineTone } from '$lib/components/ProofResults.svelte';
-	import { api, ApiError, type VerifyResponse } from '$lib/api';
+	import SymbolPalette from '$lib/components/SymbolPalette.svelte';
+	import { api, ApiError, type FormalSystemDetail, type VerifyResponse } from '$lib/api';
+	import { systemSymbols } from '$lib/symbols';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 
-	// The system is fixed; only its name is needed here — proofs are checked
-	// server-side against the stored rows, not against any client-held source.
-	let systemName = $state<string | null>(null);
+	// The system is fixed: proofs are checked server-side against the stored rows,
+	// not against any client-held source. The detail is still kept whole — its
+	// notation is what the symbol palette offers.
+	let system = $state<FormalSystemDetail | null>(null);
 	let loadingSystem = $state(true);
 	let loadError = $state<string | null>(null);
 
@@ -30,6 +33,10 @@
 	let loadSeq = 0;
 	let verifySeq = 0;
 	let editor = $state<{ focusLine: (index: number) => void } | undefined>(undefined);
+	let editorPane = $state<HTMLDivElement | null>(null);
+
+	const systemName = $derived(system?.name ?? null);
+	const symbols = $derived(systemSymbols(system));
 
 	const lineStatuses = $derived.by<LineStatus[]>(() => {
 		const parsed = result?.proof;
@@ -51,7 +58,7 @@
 		try {
 			const detail = await api.systems.get(id);
 			if (seq !== loadSeq) return;
-			systemName = detail.name;
+			system = detail;
 		} catch (err) {
 			if (seq !== loadSeq) return;
 			loadError =
@@ -60,7 +67,7 @@
 						? 'This system does not exist, or is a private draft.'
 						: err.message
 					: String(err);
-			systemName = null;
+			system = null;
 		} finally {
 			if (seq === loadSeq) loadingSystem = false;
 		}
@@ -101,7 +108,7 @@
 	$effect(() => {
 		const text = proofText;
 		const id = page.params.id;
-		if (!id || systemName === null) return;
+		if (!id || system === null) return;
 		verifySeq++;
 		verifying = false;
 		if (!text.trim()) {
@@ -123,7 +130,7 @@
 			<Alert.Title>System unavailable</Alert.Title>
 			<Alert.Description>{loadError}</Alert.Description>
 		</Alert.Root>
-	{:else if loadingSystem || systemName === null}
+	{:else if loadingSystem || system === null}
 		<LoadingSpinner message="Loading system…" />
 	{:else}
 		<PageHeader
@@ -151,16 +158,19 @@
 						One statement per line, in {systemName ?? 'this system'} — checked live as you type.
 					</Card.Description>
 				</Card.Header>
-				<Card.Content class="flex flex-col gap-2">
-					<Label for="proof-text" class="sr-only">Proof text</Label>
-					<CodeEditor
-						id="proof-text"
-						bind:value={proofText}
-						bind:this={editor}
-						rows={14}
-						showLineNumbers
-						{lineStatuses}
-					/>
+				<Card.Content>
+					<div bind:this={editorPane} class="flex flex-col gap-2">
+						<SymbolPalette root={editorPane} {symbols} />
+						<Label for="proof-text" class="sr-only">Proof text</Label>
+						<CodeEditor
+							id="proof-text"
+							bind:value={proofText}
+							bind:this={editor}
+							rows={14}
+							showLineNumbers
+							{lineStatuses}
+						/>
+					</div>
 				</Card.Content>
 			</Card.Root>
 
