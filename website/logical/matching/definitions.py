@@ -106,9 +106,13 @@ class Definition:
             definition=self
         )
 
-        # Add submatches according to the variables in the higher match
+        # Re-parent the higher match's sub-matches onto the definition match.
+        # Shared, not copied: `higher_match` is discarded here, a match is inert
+        # once built, and a copy used to give each sub-match a *copied pattern* -
+        # which silently defeated term interning, since the kernel keys a node on
+        # its constructor's identity (see kernel.terms._term_key).
         for key, sub_match in higher_match.sub_matches.items():
-            m.add_submatch(key, sub_match.duplicate())
+            m.add_submatch(key, sub_match)
 
         return m
 

@@ -17,31 +17,43 @@ nothing outside this module called them again. Keeping a match inert is what
 stops that second checker growing back.
 """
 
-from copy import copy
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .definitions import Definition
+    from .patterns import Pattern
 
 
 class Match:
     """A pattern's parse of a string."""
 
-    def __init__(self, pattern, string, is_variable=False, definition=None):
+    def __init__(
+        self,
+        pattern: Pattern,
+        string: str,
+        is_variable: bool = False,
+        definition: Definition | None = None,
+    ) -> None:
 
-        self.pattern = pattern
-        self.string = string
+        self.pattern: Pattern = pattern
+        self.string: str = string
 
         # Is this a variable match?
-        self.is_variable = is_variable
+        self.is_variable: bool = is_variable
 
         # Sub-matches, keyed by the template slot they filled
-        self.sub_matches = {}
+        self.sub_matches: dict[str, Match] = {}
 
         # The definition that licensed this match, for one made through defined
         # notation (see Definition.match). None for an ordinary production.
-        self.definition = definition
+        self.definition: Definition | None = definition
 
-    def add_submatch(self, var, m):
+    def add_submatch(self, var: str, m: Match) -> None:
         self.sub_matches[var] = m
 
-    def field(self, name):
+    def field(self, name: str) -> Match:
         # Project a declared sub-field off this match by name - a line type's
         # formula_field / reference_field. This is the sole surviving use of the
         # retired get_by_path interpreter, reduced to the direct sub-match lookup
@@ -49,7 +61,7 @@ class Match:
         # FormalSystem.parse treats that as "the line has no such field".
         return self.sub_matches[name]
 
-    def variable_leaves(self):
+    def variable_leaves(self) -> list[Match]:
         """Every variable leaf under this match, one entry per occurrence.
 
         The one structural walk a match still owns, because it answers a question
@@ -61,26 +73,10 @@ class Match:
         if not self.sub_matches:
             return [self] if self.is_variable else []
 
-        leaves = []
+        leaves: list[Match] = []
         for sub in self.sub_matches.values():
             leaves.extend(sub.variable_leaves())
         return leaves
 
-    def duplicate(self):
-        # Create a copy of this match
-        return copy(self)
-
-    def __str__(self):
+    def __str__(self) -> str:
         return f"Match for {self.pattern.name}: {self.string}"
-
-    def __copy__(self):
-        m = Match(
-            pattern=copy(self.pattern),
-            string=self.string,
-            is_variable=self.is_variable
-        )
-
-        m.sub_matches = {key: sub.duplicate() for key, sub in self.sub_matches.items()}
-        m.definition = self.definition
-
-        return m

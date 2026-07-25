@@ -13,11 +13,12 @@ import pytest
 
 pytest.importorskip("regex")
 
-from website.logical.declarative import SystemSpec, build_system
+from website.logical.declarative import SystemSpec, build_spec, build_system
 from website.logical.kernel import Node, Var, from_match, intern, match
 from website.logical.kernel.terms import _node
 from website.logical.matching import StringPattern
 from tests.spec_helpers import brackets, regex_prod, statement_line, template_prod
+from tests.test_definition_step_bridge import alias_spec
 
 
 def build(spec):
@@ -174,3 +175,17 @@ def test_different_constructors_are_not_merged(fopl):
     assert node_schema.equal(node_production, context)
     # A formula variable therefore still binds to the parsed production node.
     assert match(Var("phi", formula), node_production, context) is not None
+
+
+def test_defined_notation_interns_like_a_production():
+    # A match made through a *definition* re-parents the sub-matches of its
+    # defined form. Those must be shared, not copied: a copy used to carry a
+    # copied `Pattern`, and since a node's interning key is its constructor's
+    # identity, every definition-backed subterm then missed the table — so two
+    # parses of `a sub b` built disjoint DAGs while `(a ∈ b)` shared one.
+    system = build_spec(alias_spec())["system"]
+    lines = system.parse("a sub b [HYP]\na sub b [HYP]").proof_lines
+    first, second = (line.formula_term for line in lines)
+
+    assert first is second
+    assert all(first.children[label] is second.children[label] for label in first.children)

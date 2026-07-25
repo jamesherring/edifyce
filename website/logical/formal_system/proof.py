@@ -840,12 +840,12 @@ class ProofLine:
         # FormalSystem.parse). This is what every check runs on: rule
         # unification, side-conditions, definitional steps. None for a line that
         # declares no formula field, or whose field is absent from the parse.
-        self.formula_term = None
+        self.formula_term: Term | None = None
 
         # The formula's surface string, kept beside the term because the
         # string-rewriting rule path (semi-Thue systems like MIU) matches on
         # flat text rather than structure - see InferenceRule._string_pairs.
-        self.formula_string = None
+        self.formula_string: str | None = None
 
         # The LineType used for this line
         self.line_type = None

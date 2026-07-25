@@ -12,6 +12,7 @@ import pytest
 
 pytest.importorskip("regex")
 
+import website.logical.formal_system.system as system_module
 from website.logical.declarative import build_spec
 
 from zfc_systems import scoped_zfc_spec
@@ -264,8 +265,6 @@ def test_an_unprojectable_formula_fails_its_own_line(scoped, monkeypatch):
     # A formula the term layer cannot read used to escape as a raise out of the
     # whole parse, from whichever rule check projected it first. Now it fails the
     # one line it is on, saying so, and the rest of the proof still reports.
-    import website.logical.formal_system.system as system_module
-
     def refuse(match, context):
         raise ValueError("no term for this shape")
 

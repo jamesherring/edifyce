@@ -204,10 +204,10 @@ class InferenceRule:
         # representation, the same way an ordinary rule binds its antecedents
         # (see _term_binding): schemas via _schema_term, proof-line formulae
         # already projected at parse time, unified under one substitution. Shared
-        # metavariables - the
-        # `p` in both a subproof's assumption and the deduction - are forced to
-        # agree by that one binding; atoms unify by what they denote, so a
-        # literal conclusion such as a falsum `⊥` matches its declared atom.
+        # metavariables - the `p` in both a subproof's assumption and the
+        # deduction - are forced to agree by that one binding; atoms unify by what
+        # they denote, so a literal conclusion such as a falsum `⊥` matches its
+        # declared atom.
         schema_pairs: list[tuple[Pattern, ProofLine]] = [
             (self.deduction, deduction),
             (schema.conclusion, conclusion),
