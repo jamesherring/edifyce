@@ -25,6 +25,7 @@ pytest.importorskip("regex")
 # database and API use.
 from website.logical.declarative import SystemSpec, build_spec
 from website.logical.kernel import check_definitional_step
+from website.logical.kernel.constructors import constructor_for
 from website.logical.kernel.definitions import Definition as KernelDefinition
 from website.logical.formal_system.definitions import (
     DefinitionError,
@@ -323,6 +324,61 @@ def test_a_nullary_definition_may_be_layered_on_by_a_later_one():
     context = context_of(system)
     _proof, (abbreviated, spelled) = formulae(system, "T", "S")
     assert check_definitional_step(abbreviated, spelled, sup, context) is True
+
+
+def test_every_constructor_snapshots_its_production_s_declared_role():
+    # `Constructor.denotes_constant` is a snapshot taken when the production is
+    # first projected, not a delegation that reads the production back. That is
+    # only sound while nothing sets the flag *after* a term could carry the
+    # constructor — the one place that could is a nullary defined form, whose role
+    # the build derives, and it is settled before the kernel definition (and so
+    # before the first projection) is built.
+    #
+    # A resequencing that moved it back would leave `S` snapshotted False while
+    # its production says True, and `T ≝ S` would start failing to build for a
+    # reason with no connection to the definition.
+    spec = nullary_spec(closed=True)
+    spec.definitions.append(defn("formula", "t", "T", "S", []))
+    system = build_declarative(spec)
+
+    productions = list(system.context.variables.values()) + [
+        d.template for d in system.context.definitions
+    ]
+    stale = [
+        p.name
+        for p in productions
+        if hasattr(p, "pattern_type")
+        and constructor_for(p).denotes_constant != p.denotes_constant
+    ]
+    assert stale == []
+
+    # And the interesting one is genuinely True, so the check above is not vacuous.
+    notation = next(d for d in system.context.definitions if d.template.pattern == "S")
+    assert constructor_for(notation.template).denotes_constant is True
+
+
+def test_a_defined_form_the_grammar_already_parses_is_not_a_constant():
+    # A nullary notation whose form a declared production *already* parses. A
+    # sort tries its productions before its notations, so this notation never
+    # fires and its form parses to a compound, not to a leaf of its own — the
+    # opposite of what makes a nullary abbreviation a constant.
+    #
+    # "Nullary" alone would mark it constant, which is the unsafe direction: the
+    # flag is what excuses a later definition from accounting for a token.
+    spec = nullary_spec(closed=True)
+    spec.definitions = [defn("formula", "shadowed", "(⊥ → ⊥)", "⊥", [])]
+    system = build_declarative(spec)
+
+    notation = only_notation(system)
+    assert notation.template.pattern == "(⊥ → ⊥)"
+    assert notation.template.denotes_constant is False
+    assert constructor_for(notation.template).denotes_constant is False
+
+    # And the form really is parsed by the declared production, not the notation.
+    formula = context_of(system).variables["formula"]
+    matched = formula.match("(⊥ → ⊥)", context_of(system))
+    assert matched is not None
+    assert matched.pattern is not notation.template
 
 
 def test_layering_on_a_definition_with_parameters_introduces_nothing():

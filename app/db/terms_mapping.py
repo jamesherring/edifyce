@@ -373,6 +373,19 @@ def _constructor_named(name: str, context: Context) -> Constructor:
     return constructor_for(pattern)
 
 
+def _sort_named(name: str, context: Context) -> Constructor:
+    """The constructor a stored *sort* name denotes.
+
+    Narrower than :func:`_constructor_named`: a sort is always a declared union of
+    the grammar, never an ad-hoc defined form, so a miss is a genuine mismatch
+    between the stored rows and the system rather than something to search for.
+    """
+    pattern = context.variables.get(name)
+    if pattern is None:
+        raise LookupError(f"No sort named {name!r} in context")
+    return constructor_for(pattern)
+
+
 def _load(row: TermRow, context: Context, memo: dict[object, Term]) -> Term:
     key = row.id if row.id is not None else id(row)
     cached = memo.get(key)
@@ -381,9 +394,9 @@ def _load(row: TermRow, context: Context, memo: dict[object, Term]) -> Term:
 
     term: Term
     if row.kind == TERM_KIND_VAR:
-        term = Var(row.var_name, context.variables[row.sort])
+        term = Var(row.var_name, _sort_named(row.sort, context))
     elif row.kind == TERM_KIND_BOUND:
-        term = Bound(row.bound_index, context.variables[row.sort])
+        term = Bound(row.bound_index, _sort_named(row.sort, context))
     elif row.kind == TERM_KIND_NODE:
         term = Node(
             constructor=_constructor_named(row.constructor, context),
@@ -391,7 +404,7 @@ def _load(row: TermRow, context: Context, memo: dict[object, Term]) -> Term:
                 edge.slot: _load(edge.child, context, memo) for edge in row.children
             },
             literal=row.literal,
-            sort=context.variables[row.sort] if row.sort is not None else None,
+            sort=_sort_named(row.sort, context) if row.sort is not None else None,
         )
     else:
         raise ValueError(f"Unknown term row kind: {row.kind!r}")

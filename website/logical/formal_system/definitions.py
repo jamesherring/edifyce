@@ -82,15 +82,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..kernel import Definition, introduced_leaves, unbound_parameters
-from ..kernel.terms import Node
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from ..kernel.side_conditions import SideCondition
-    from ..kernel.terms import FreeVars
     from ..matching.context import Context
     from ..matching.definitions import DefinedNotation
+    from ..matching.patterns import Pattern
 
 
 class DefinitionError(Exception):
@@ -136,7 +135,9 @@ def build_kernel_definition(
     lower: str | None,
     context: Context,
     condition: SideCondition | None = None,
-    fresh: FreeVars | None = None,
+    # Sort *patterns*, not constructors: `fresh` becomes a parse handle on the
+    # kernel definition, which reads a chosen binder name at check time.
+    fresh: dict[str, Pattern] | None = None,
     label: str | None = None,
 ) -> Definition:
     """The kernel definition that unfolds ``notation`` to ``lower``.
@@ -214,22 +215,40 @@ def build_kernel_definition(
     return kernel_def
 
 
-def denotes_a_constant(kernel_def: Definition) -> bool:
-    """Whether a built definition's *defined* form is itself a constant of the
-    object language - true exactly when that form is a ground leaf.
+def denotes_a_constant(notation: DefinedNotation, parses_to_its_own_leaf: bool) -> bool:
+    """Whether a definition's *defined* form is itself a constant of the object
+    language: true when the notation is nullary **and** its form is new to the
+    grammar, so that form parses to this notation's own ground leaf.
 
     A nullary definition (``S ≝ (⊥ → ⊥)``) puts a new leaf into the grammar that
-    no production declared a role for. It needs no declaration: reaching here
-    means every leaf of its defining form was accounted for, so ``S`` abbreviates
-    one fixed term and denotes one fixed thing. Nor can it be captured - its
+    no production declared a role for. It needs no declaration: ``S`` abbreviates
+    one fixed term and so denotes one fixed thing. Nor can it be captured - its
     constructor is the definition's own, distinct from any variable sort that
     happens to spell the same token, which is the same reason
     :func:`~website.logical.kernel.definitions.introduced_leaves` keys on
     constructor rather than spelling. So a later definition may introduce it
     exactly as it may introduce ``⊥``, and ``T ≝ S`` layers on ``S ≝ ⊥``.
 
-    Derived rather than declared: the builder has just established the fact, and
-    there is nothing here for an author to know that the engine does not.
+    Derived rather than declared: there is nothing here for an author to know
+    that the engine does not.
+
+    ``parses_to_its_own_leaf`` is why nullary alone will not do. A sort tries its
+    own productions before its notations, so a defined form the grammar *already*
+    spells (``Define x ∈ y as ...`` with no parameters) never reaches this
+    notation: it parses through the declared production, and to a compound rather
+    than to a leaf of this notation at all. Marking that template a constant would
+    be the unsafe direction — the flag is what excuses a *later* definition from
+    accounting for a token — so a shadowed form takes the variable-like default.
+    Nothing is ever built through such a template either way, which is why this is
+    a correctness statement rather than a bug fix.
+
+    Note it is a question about *this* notation, not about the grammar before it:
+    two definitions may share one defined form, and the second finds the first's
+    notation. That is one production and still its own leaf, so both agree.
+
+    Asked of the *notation* rather than the built definition, so the answer is
+    available before the definition is built - which is what lets a constructor
+    snapshot the declaration instead of reading it back through the production
+    for the rest of the system's life.
     """
-    higher = kernel_def.higher
-    return isinstance(higher, Node) and not higher.children and higher.literal is not None
+    return not notation.variables and parses_to_its_own_leaf

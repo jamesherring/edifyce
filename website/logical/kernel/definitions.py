@@ -85,6 +85,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .side_conditions import And, DisjointLeaves
+from .constructors import constructor_for
 from .terms import Node, abstract, bind, from_match, _bound, _bound_label
 from .unify import match
 
@@ -92,7 +93,7 @@ if TYPE_CHECKING:
     from ..matching.context import Context
     from ..matching.patterns import Pattern
     from .side_conditions import SideCondition
-    from .terms import Binding, FreeVars, Term
+    from .terms import Binding, Term
 
 
 @dataclass(frozen=True)
@@ -119,6 +120,10 @@ class Definition:
     higher: Term
     lower: Term
     condition: SideCondition | None = None
+    # Each binder with the *sort pattern* it ranges over. A pattern rather than a
+    # constructor because this one is a parse handle: an unfold parses the
+    # caller's chosen binder name against it (see `_resolve_bound_names`), which
+    # is the one place a definition still reads a string at check time.
     fresh: tuple[tuple[str, Pattern], ...] = ()
     # The name a proof cites this definition by (`[<label>, <line>]`), or None
     # for an unnamed one (still reachable through the generic keyword). It lives
@@ -133,10 +138,10 @@ class Definition:
         sort: Pattern,
         higher: str,
         lower: str,
-        variables: FreeVars,
+        variables: dict[str, Pattern],
         context: Context,
         condition: SideCondition | None = None,
-        fresh: FreeVars | None = None,
+        fresh: dict[str, Pattern] | None = None,
         label: str | None = None,
     ) -> Definition:
         """Build a definition by parsing its two surface forms.
@@ -157,16 +162,24 @@ class Definition:
         legacy condition DSL is not translated: pass a step-3 ``condition``
         explicitly for any *additional* proviso.
         """
+        # Sorts arrive as productions - this is a parse entry point - and are
+        # projected here, so nothing past it holds a pattern.
+        parameter_sorts = {
+            name: constructor_for(pattern) for name, pattern in variables.items()
+        }
         fresh_items = tuple((fresh or {}).items())
         # Each declared bound variable becomes an abstract, indexed node; the
         # defining form (only) is rewritten to reference binders by index.
-        bound_nodes = {name: _bound(index, sort) for index, (name, sort) in enumerate(fresh_items)}
+        bound_nodes = {
+            name: _bound(index, constructor_for(sort))
+            for index, (name, sort) in enumerate(fresh_items)
+        }
 
         def schema(text: str, abstract_binders: bool) -> Term:
             matched = sort.match(text, context)
             if matched is None:
                 raise ValueError(f"Definition form {text!r} does not parse as '{sort.name}'.")
-            term = abstract(from_match(matched), variables)
+            term = abstract(from_match(matched), parameter_sorts)
             if abstract_binders and bound_nodes:
                 term = bind(term, bound_nodes)
             return term
@@ -324,8 +337,13 @@ def _bounds_are_fresh(
             # The step never pinned this binder's concrete name (e.g. a target
             # whose structure did not determine it): nothing to admit.
             return False
-        provisos.extend(DisjointLeaves(key, parameter, sort=sort) for parameter in parameters)
-        provisos.extend(DisjointLeaves(key, prior, sort=sort) for prior in prior_keys)
+        leaf_sort = constructor_for(sort)
+        provisos.extend(
+            DisjointLeaves(key, parameter, sort=leaf_sort) for parameter in parameters
+        )
+        provisos.extend(
+            DisjointLeaves(key, prior, sort=leaf_sort) for prior in prior_keys
+        )
         prior_keys.append(key)
 
     return And(tuple(provisos)).check(combined, context)

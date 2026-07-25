@@ -396,9 +396,9 @@ class InferenceRule:
             # its named metavariables are shared, so no per-occurrence renaming.
             if pattern.schema_term is not None:
                 return pattern.schema_term
-            return from_pattern(pattern, context)
+            return from_pattern(pattern)
 
-        term = from_pattern(pattern, context)
+        term = from_pattern(pattern)
         renames = {
             name: Var(f"{name}\x00{occurrence}", sort)
             for name, sort in term.free_vars().items()

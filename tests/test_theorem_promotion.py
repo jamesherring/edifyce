@@ -50,6 +50,7 @@ from tests.spec_helpers import (
 )
 from tests.test_definitional_step_proofs import alias_spec
 from tests.test_engine_neutrality import HILBERT
+from website.logical.kernel.constructors import constructor_for
 from website.logical.build_context import revariabilise
 from website.logical.promotion import promote_from_source
 from website.logical.declarative import LinePart, LineSpec, SystemSpec, build_system
@@ -126,7 +127,7 @@ def promote_proved_leaf(system, proof, generalise: str, sort_name: str) -> Promo
     ground_term = proof.proof_lines[-1].formula_term
 
     sort = system.build_context.variables[sort_name]
-    schema_term = revariabilise(ground_term, {generalise: sort})
+    schema_term = revariabilise(ground_term, {generalise: constructor_for(sort)})
 
     deduction = StringPattern(name=generalise, pattern=generalise)
     deduction.schema_term = schema_term
@@ -153,7 +154,7 @@ def test_promotion_is_a_graph_generalisation():
     theorem = promote_proved_leaf(system, proof, generalise="a", sort_name="formula")
     free = theorem.deduction.schema_term.free_vars()
     assert set(free) == {"a"}
-    assert free["a"] is system.build_context.variables["formula"]
+    assert free["a"] is constructor_for(system.build_context.variables["formula"])
 
 
 def test_promoted_theorem_checks_at_compound_and_rejects_non_instance():
@@ -250,7 +251,7 @@ def test_promote_from_source_builds_the_expected_schema():
     # A formula metavariable, schematic, at the widened sort.
     free = theorem.deduction.schema_term.free_vars()
     assert set(free) == {"p"}
-    assert free["p"] is system.build_context.variables["formula"]
+    assert free["p"] is constructor_for(system.build_context.variables["formula"])
 
     # ...and it is citable at a compound once registered.
     system.promote(theorem)

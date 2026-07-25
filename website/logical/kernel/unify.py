@@ -51,18 +51,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..matching.patterns import UnionPattern
-# Reuse the *same* constructor identity and slot alignment that Term.equal uses,
-# so matching and equality stay defined against one source of truth. Both are now
-# fields on the constructor rather than walks over a template (see constructors).
-from .constructors import constructor_for
 from .terms import Var
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from ..matching.context import Context
-    from ..matching.patterns import Pattern
+    # Reuse the *same* constructor identity and slot alignment that Term.equal
+    # uses, so matching and equality stay defined against one source of truth.
+    from .constructors import Constructor
     from .terms import Term
 
     # A substitution produced by matching: variable name -> the Term it binds to.
@@ -94,7 +91,7 @@ def match(
         if bound is not None:
             # Already bound: the subject must agree with the earlier binding.
             return binding if bound.equal(subject, context) else None
-        if not _sort_admits(schema.sort, subject, context):
+        if not sort_admits(schema.sort, subject):
             # Keep a variable from capturing a term of the wrong sort.
             return None
         # Extend with a copy; never mutate the caller's binding.
@@ -156,47 +153,26 @@ def match_all(
     return current
 
 
-def _sort_admits(sort: Pattern, term: Term, context: Context) -> bool:
+def sort_admits(sort: Constructor, term: Term) -> bool:
     """Whether ``term`` is an instance of ``sort`` - a purely structural check,
     no string re-parsing. Keeps a variable from binding to a term of the wrong
     sort (an ``atom``-sorted variable must not capture an ``implication``).
+
+    One set lookup, because the sorts a production admits are a property of the
+    grammar and do not change once the system is built. Deriving them used to
+    mean walking the pattern lattice - structural equivalence, then nested union
+    membership - on every variable binding; ``Constructor.admits`` derives the
+    whole set once instead, which is also what lets this module hold no reference
+    to the matching layer.
     """
-    term_sort = _term_sort(term)
-
-    # Memoised per (sort, term sort): the answer is a property of the grammar,
-    # which does not change once the system is built, but deriving it walks the
-    # pattern lattice twice over - and a variable binds against the same pair on
-    # every rule check. The memo lives on the sort's constructor, so it is
-    # reclaimed with the grammar (see constructors.Constructor.admits).
-    #
-    # Keying on the pair alone is sound because `context` does not participate in
-    # the answer: `Pattern.equivalent`, `can_map_to` and `contains_pattern` thread
-    # it through to each other and never read it (only `match` reads a context,
-    # for its string variables). Were that to change, this memo would have to key
-    # on the context too - so if you make equivalence context-sensitive, come here.
-    memo = constructor_for(sort).admits
-    cached = memo.get(term_sort)
-    if cached is not None:
-        return cached
-
-    admitted = sort.equivalent(term_sort, context, allow_mapping_to=True) or (
-        # `term_sort` is one of the union's (possibly nested) branches, e.g. an
-        # `implication` is admitted where a `formula` is expected.
-        isinstance(sort, UnionPattern)
-        and sort.contains_pattern(term_sort, context, allow_nested=True)
-    )
-    memo[term_sort] = admitted
-    return admitted
+    return _term_sort(term) in sort.admits
 
 
-def _term_sort(term: Term) -> Pattern:
-    """The sort (a ``Pattern``) that ``term`` inhabits - a variable's declared
-    sort, a node's recorded ``sort`` when it has one (a definition shorthand,
-    whose constructor is not itself a member of its sort), or otherwise the
-    node's own constructor (already a member of whatever union it belongs to).
-
-    A constructor's ``source`` is the production it was projected from - the sort
-    lattice still lives on the matching layer, so this is where the two meet."""
+def _term_sort(term: Term) -> Constructor:
+    """The sort that ``term`` inhabits - a variable's declared sort, a node's
+    recorded ``sort`` when it has one (a definition shorthand, whose constructor
+    is not itself a member of its sort), or otherwise the node's own constructor
+    (already a member of whatever union it belongs to)."""
     if isinstance(term, Var):
         return term.sort
-    return term.sort if term.sort is not None else term.constructor.source
+    return term.sort if term.sort is not None else term.constructor
