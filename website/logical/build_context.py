@@ -4,13 +4,13 @@ The build context — the namespace a system is assembled in — plus the two
 constructions that need it: turning a rule-schema token into a pattern, and
 folding a definition's provisos into one kernel side-condition.
 
-These live here rather than in ``compiler.py`` because they are not about
-parsing. ``declarative.build_system`` drives them from ``SystemSpec`` fields and
-``compiler.compile`` drives them from parsed ``.edi`` text, so neither module
-depends on the other; when the compiler goes, this stays.
+These are construction, not parsing: ``declarative.build_system`` drives them
+from ``SystemSpec`` fields. They lived in the retired ``.edi`` compiler until
+that module became deletable, which is why they are a module of their own rather
+than part of ``declarative``.
 
 Layering: free to import ``matching``, ``kernel``, and ``formal_system`` (see
-AGENTS.md) — but nothing here may import ``declarative`` or ``compiler``.
+AGENTS.md) — but nothing here may import ``declarative``.
 """
 
 from __future__ import annotations
@@ -125,11 +125,10 @@ def compose_schema_term(pattern: Pattern, context: FormalSystemContext) -> Term 
         # parse - from_pattern projects it correctly already.
         return None
 
-    # Match against the system's productions only, never its staged definitions.
-    # During compilation `context.definitions` holds unresolved PendingDefinition
-    # records (finalised at the end of the formal-system block), so letting the
-    # parse fall through to a definition-unfold would call `.match` on one and
-    # crash. Composition is about productions; a schema recognisable only via a
+    # Match against the system's productions only, never its definitions: they
+    # are finalised after this runs (step 8 of build_system), so a parse falling
+    # through to a definition-unfold could reach one that is not yet resolved.
+    # Composition is about productions anyway; a schema recognisable only via a
     # definition simply falls back to the flat projection.
     parse_context = copy(context)
     parse_context.definitions = []

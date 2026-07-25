@@ -41,21 +41,20 @@ import pytest
 pytest.importorskip("regex")
 
 from tests.miu_system import miu_spec
+from tests.spec_helpers import (
+    atom_const_prod,
+    brackets,
+    regex_prod,
+    template_prod,
+)
 from tests.test_definitional_step_proofs import alias_spec
 from tests.test_engine_neutrality import HILBERT
 from website.logical.build_context import revariabilise
-from website.logical.compiler import compile as compile_formal_system
-from website.logical.compiler import promote_from_source
-from website.logical.declarative import build_system
+from website.logical.promotion import promote_from_source
+from website.logical.declarative import LinePart, LineSpec, SystemSpec, build_system
 from website.logical.formal_system.promotion import PromotedTheorem
 from website.logical.kernel.terms import from_match
 from website.logical.matching.patterns import StringPattern
-
-
-def compiled(code):
-    result = compile_formal_system(code)
-    assert "errors" not in result, result.get("errors")
-    return result["system"]
 
 
 # The classic S/K/MP derivation of `a -> a`, no assumptions (test_engine_neutrality).
@@ -70,83 +69,52 @@ SELF_IMPLICATION_PROOF = (
 
 # A first-order fragment with a binder, for the $d test: membership, implication,
 # universal, and a claim line type so standalone formulas can be checked.
-AX_FIVE_SYSTEM = r"""FormalSystem AxFive:
+def ax_five_spec() -> SystemSpec:
+    return SystemSpec(
+        name="AxFive",
+        brackets=brackets(),
+        productions=[
+            # The leaf's member name must differ from its sort name, else step 4
+            # of build_system appends the sort union to itself (see spec_helpers).
+            regex_prod("setvar", "var", "[a-z][a-z0-9]*"),
+            template_prod("formula", "membership", "x ∈ y",
+                          [("x", "setvar"), ("y", "setvar")]),
+            template_prod("formula", "implication", "(p → q)",
+                          [("p", "formula"), ("q", "formula")]),
+            template_prod("formula", "universal", "∀x p",
+                          [("x", "setvar"), ("p", "formula")]),
+        ],
+        lines=[claim_line()],
+    )
 
-    Regex setvar:
-        ^[a-z][a-z0-9]*$
 
-    UnionPattern formula:
-        membership
-
-    Pattern membership:
-        with x as setvar, y as setvar:
-            x ∈ y
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p → q)
-
-    Pattern universal:
-        with x as setvar, p as formula:
-            ∀x p
-
-    formula:
-        membership
-        implication
-        universal
-
-    Regex reference:
-        ^[A-Za-z0-9, ]+$
-
-    Pattern statement:
-        with f as formula, r as reference:
-            f [r]
-
-    LineType claim:
-        pattern: statement
-        behaviour: logical
-        formula: f
-        reference: r
-"""
+def claim_line() -> LineSpec:
+    return LineSpec(
+        name="claim",
+        shape="<formula> [<reference>]",
+        parts=[LinePart(name="reference", regex="[A-Za-z0-9, ]+")],
+        logical_sort="formula",
+    )
 
 
 # A constants-only fragment for closed (ground) theorems: numerals and
 # collections as atoms, so a statement like `2 ∈ ℝ` has no metavariables at all.
-CLOSED_SYSTEM = r"""FormalSystem Closed:
-
-    Atom two: 2
-    Atom three: 3
-    Atom reals: ℝ
-    Atom nats: ℕ
-
-    UnionPattern num:
-        two
-        three
-
-    UnionPattern coll:
-        reals
-        nats
-
-    Pattern membership:
-        with n as num, c as coll:
-            n ∈ c
-
-    UnionPattern formula:
-        membership
-
-    Regex reference:
-        ^[A-Za-z0-9, ]+$
-
-    Pattern statement:
-        with f as formula, r as reference:
-            f [r]
-
-    LineType claim:
-        pattern: statement
-        behaviour: logical
-        formula: f
-        reference: r
-"""
+def closed_spec(leading_productions=()) -> SystemSpec:
+    # `leading_productions` go in front of the logical sort's own, for the test
+    # that a broad unrelated sort declared first must not capture the parse.
+    return SystemSpec(
+        name="Closed",
+        productions=[
+            *leading_productions,
+            atom_const_prod("num", "two", "2"),
+            atom_const_prod("num", "three", "3"),
+            atom_const_prod("coll", "reals", "ℝ"),
+            atom_const_prod("coll", "nats", "ℕ"),
+            template_prod("formula", "membership", "n ∈ c",
+                          [("n", "num"), ("c", "coll")]),
+        ],
+        lines=[claim_line()],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +136,7 @@ def promote_proved_leaf(system, proof, generalise: str, sort_name: str) -> Promo
 
 # `promote_from_source` (the import-facing route: schematic statement + premises +
 # $d, handling formula metavariables over compounds) now lives in the engine
-# (website.logical.compiler) and is exercised by the citation and $d tests below,
+# (website.logical.promotion) and is exercised by the citation and $d tests below,
 # plus its own error-handling tests.
 
 
@@ -242,7 +210,7 @@ def test_promoted_theorem_with_a_premise_is_cited_like_a_rule():
 # 3. Soundness under binders: $d -> disjoint blocks the capturing instance.
 # ---------------------------------------------------------------------------
 def test_distinct_variable_proviso_is_carried_and_enforced():
-    system = compiled(AX_FIVE_SYSTEM)
+    system = build_system(ax_five_spec())
     # ax-5:  |- ( phi -> A.x phi )   with   $d x phi
     system.promote(
         promote_from_source(
@@ -345,7 +313,7 @@ def test_promoted_theorem_keeps_string_matching():
 #    justifies exactly itself. Metamath's `2re` (|- 2 e. RR) is the shape.
 # ---------------------------------------------------------------------------
 def test_closed_theorem_justifies_exactly_its_own_statement():
-    system = compiled(CLOSED_SYSTEM)
+    system = build_system(closed_spec())
     system.promote(promote_from_source(system, "2re", "2 ∈ ℝ", {}))
 
     # The statement itself checks...
@@ -389,13 +357,9 @@ def test_ground_composition_uses_the_logical_sort_not_the_first_match():
     # A broad unrelated sort declared *before* the logical one must not capture the
     # parse: composing at it would build a term no proof line is ever read at,
     # yielding a theorem that silently never applies.
-    ambiguous = CLOSED_SYSTEM.replace(
-        "    UnionPattern num:",
-        "    Regex rawtext:\n        ^[0-9∈ℝℕ ]+$\n\n"
-        "    UnionPattern raw:\n        rawtext\n\n"
-        "    UnionPattern num:",
+    system = build_system(
+        closed_spec(leading_productions=[regex_prod("raw", "rawtext", "[0-9∈ℝℕ ]+")])
     )
-    system = compiled(ambiguous)
     system.promote(promote_from_source(system, "2re", "2 ∈ ℝ", {}))
     assert system.parse("2 ∈ ℝ [2re]").valid is True
 
@@ -403,7 +367,7 @@ def test_ground_composition_uses_the_logical_sort_not_the_first_match():
 def test_closed_statement_is_usable_as_a_premise():
     # A ground *premise* composes the same way, so a mixed theorem — ground
     # premise, ground conclusion — is citable with the premise line.
-    system = compiled(CLOSED_SYSTEM)
+    system = build_system(closed_spec())
     system.promote(
         promote_from_source(system, "up", "2 ∈ ℝ", {}, premises=("2 ∈ ℕ",))
     )

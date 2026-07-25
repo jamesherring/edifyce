@@ -17,11 +17,6 @@ pytest.importorskip("regex")
 
 from copy import copy
 
-# `compile_formal_system` is still used by the one test below that pins a
-# genuinely compiler-specific behaviour: definition *staging during compilation*
-# (a schema recognised only via a PendingDefinition). The scope/subproof
-# SCOPED_ZFC system is now built declaratively (see zfc_systems.scoped_zfc_spec).
-from website.logical.compiler import compile as compile_formal_system
 from website.logical.declarative import SystemSpec, build_system
 from website.logical.kernel import from_match
 from website.logical.kernel.terms import _signature
@@ -124,52 +119,6 @@ def test_full_self_implication_derivation(hilbert):
     assert proof.valid is True, [(l.display, l.valid) for l in proof.proof_lines]
 
 
-# ---------------------------------------------------------------------------
-# Soundness preserved: non-instances still rejected
-# ---------------------------------------------------------------------------
-
-
-def test_schema_using_defined_notation_compiles():
-    # Regression (PR #27 review): composing a schema term must not consult the
-    # system's *staged* definitions. During compilation `context.definitions`
-    # holds unresolved PendingDefinition records, so a schema recognisable only
-    # via a definition (`x is a member of y`, defined from `x in y`) used to
-    # crash the compositional parse with
-    # "'PendingDefinition' object has no attribute 'match'". It must compile.
-    code = r"""FormalSystem Defined:
-
-    Regex setvar:
-        ^[a-z]$
-
-    Pattern member:
-        with x as setvar, y as setvar:
-            x in y
-        Define x is a member of y as x in y
-
-    UnionPattern formula:
-        member
-
-    Regex reference:
-        ^[A-Za-z0-9, ]+$
-
-    Pattern statement:
-        with f as formula, r as reference:
-            f [r]
-    LineType claim:
-        pattern: statement
-        behaviour: logical
-        formula: f
-        reference: r
-
-    with x as setvar, y as setvar:
-        InferenceRule r1:
-            label:
-                R
-            deduction:
-                x is a member of y
-"""
-    result = compile_formal_system(code)
-    assert "errors" not in result, result.get("errors")
 
 
 def test_non_instance_of_axiom_is_rejected(hilbert):

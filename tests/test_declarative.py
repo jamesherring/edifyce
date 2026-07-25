@@ -42,7 +42,6 @@ from tests.spec_helpers import (
     universal_prod,
     variable_prod,
 )
-from website.logical.compiler import compile as compile_edi
 from website.logical.declarative import (
     DeclarativeError,
     LinePart,
@@ -295,28 +294,6 @@ def test_line_types_declare_formula_and_reference_fields(zfc):
     assert extensionality.formula_field == "self"
 
 
-def test_legacy_accessor_function_syntax_is_rejected():
-    # The interpreted `pattern.formula(): ...` accessor syntax has been removed;
-    # declaring one is now a parse error (use a `formula:` field on the line
-    # type instead).
-    source = (
-        "FormalSystem Legacy:\n"
-        "\n"
-        "    Regex atom:\n"
-        "        ^[a-z]+$\n"
-        "\n"
-        "    Pattern statement_pattern:\n"
-        "        with f as atom:\n"
-        "            f\n"
-        "\n"
-        "    statement_pattern.formula():\n"
-        "        return self.f\n"
-    )
-    result = compile_edi(source)
-    assert "errors" in result
-    assert any("statement_pattern.formula()" in e for e in result["errors"])
-
-
 # ---------------------------------------------------------------------------
 # Rule side-conditions: soundness provisos attached to a rule, lowered into the
 # engine's per-rule `side_conditions` block and enforced during checking.
@@ -540,17 +517,18 @@ def scoped_spec() -> SystemSpec:
     )
 
 
-def test_the_build_path_does_not_import_the_compiler():
-    """No module the production build path reaches may import `.edi`.
+def test_the_engine_carries_no_edi_compiler():
+    """The `.edi` compiler is gone; nothing may reintroduce a dependency on it.
 
-    The shared construction primitives live in `build_context`, so the compiler
-    is now leaf: deletable without touching the build path. An import added back
-    here would re-couple them silently, and only surface as a mystery when the
-    deletion is attempted.
+    Kept as a guard rather than deleted with the module: `compiler.py` is still
+    in the history, and an import of it (or a resurrected copy) would fail
+    somewhere far from the cause. Cheap to keep, and it states the invariant.
     """
     engine = Path(__file__).resolve().parent.parent / "website" / "logical"
+    assert not (engine / "compiler.py").exists()
+
     offenders = []
-    for path in [engine / "declarative.py", engine / "build_context.py"]:
+    for path in sorted(engine.rglob("*.py")):
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.Import):
                 names = [alias.name for alias in node.names]
