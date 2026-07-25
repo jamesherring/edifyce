@@ -969,6 +969,12 @@ class UnionPattern(Pattern):
         # Inherits from a previous unionpattern
         self.inherits = inherits
 
+        # Memo for `nested_options`, keyed by its `path_dict` flag and paired with
+        # the structure signature the result was computed for. Flattening a union
+        # is quadratic in its size and re-run on *every* match, so a grammar of
+        # any real size pays it thousands of times over. See `nested_options`.
+        self._nested_options_cache: dict = {}
+
     def match(self, s, context, debug=None):
         # Match s against one of the patterns.
 
@@ -1088,6 +1094,12 @@ class UnionPattern(Pattern):
     def add_variables(self, variable_dict):
         # Add variables to all patterns in the union
 
+        # Members are about to change shape, and `nested_options` dedupes them by
+        # structural equivalence, so drop the memo rather than trust a signature
+        # that only tracks membership. (Systems are fully assembled before any
+        # proof is checked, so this costs nothing on the hot path.)
+        self._nested_options_cache.clear()
+
         for pattern in self.patterns:
             if type(pattern) is UnionPattern:
                 pattern.add_variables(variable_dict)
@@ -1095,9 +1107,40 @@ class UnionPattern(Pattern):
             elif type(pattern) is StringPattern:
                 pattern.add_variables(variable_dict)
 
+    def structure_signature(self, seen=None):
+        # An identity-based signature of this union's transitive contents, cheap
+        # enough to recompute per call. Unions are only ever grown - the compiler
+        # and the declarative builder append to `patterns` while assembling a
+        # system, and nothing mutates one while proofs are being checked - so a
+        # signature over member identities is enough to notice a stale memo.
+        if seen is None:
+            seen = set()
+
+        if id(self) in seen:
+            # A union reachable from itself; its contents are covered by the
+            # outer visit, so stop rather than recursing forever.
+            return id(self)
+
+        seen.add(id(self))
+        return tuple(
+            pattern.structure_signature(seen) if type(pattern) is UnionPattern
+            else id(pattern)
+            for pattern in self.patterns
+        )
+
     def nested_options(self, context, path_dict=False):
         # Get a set of all patterns in this union - and any sub-unions
         # Optionally return as a dictionary including the paths to each option
+        #
+        # Flattening compares every candidate against everything already found
+        # using structural `equivalent`, so it is quadratic in the size of the
+        # union - and `match` calls it for every formula it parses. Memoise on the
+        # union, keyed by the shape it was computed for; a copy is handed out so a
+        # caller mutating the result cannot corrupt the memo.
+        signature = self.structure_signature()
+        cached = self._nested_options_cache.get(path_dict)
+        if cached is not None and cached[0] == signature:
+            return dict(cached[1]) if path_dict else set(cached[1])
 
         # Start with an empty set
         found = set()
@@ -1175,6 +1218,7 @@ class UnionPattern(Pattern):
             else:
                 add_pattern_to_set(p, found)
 
+        self._nested_options_cache[path_dict] = (signature, dict(found) if path_dict else set(found))
         return found
 
     def inherits_from(self, other, context):
