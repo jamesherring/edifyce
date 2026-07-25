@@ -252,13 +252,23 @@ def test_search_statements_using_defined_notation(
     )
     session.commit()
 
-    # "Which theorems use a defined shorthand?" — the `defined` kind, whose
-    # constructor is the definition's higher template (joinable against the
-    # decomposition's definitions.higher column).
+    # "Which theorems use this defined shorthand?" — defined notation is a
+    # production like any other, named `<sort>:<template>`, so it is an ordinary
+    # `node` row found by constructor name.
     rows = session.scalars(
         select(Theorem.statement)
         .join(TermRow, Theorem.statement_term_id == TermRow.id)
-        .where(TermRow.kind == "defined", TermRow.constructor == "x ⊆ y")
+        .where(TermRow.kind == "node", TermRow.constructor == "formula:x ⊆ y")
+    ).all()
+    assert rows == ["x ⊆ y"]
+
+    # And "which use *any* defined shorthand?" — a node carries a `sort` only
+    # when its constructor is not itself a member of the sort it inhabits, which
+    # is exactly what a defined form is.
+    rows = session.scalars(
+        select(Theorem.statement)
+        .join(TermRow, Theorem.statement_term_id == TermRow.id)
+        .where(TermRow.kind == "node", TermRow.sort.is_not(None))
     ).all()
     assert rows == ["x ⊆ y"]
 
@@ -290,9 +300,10 @@ def ambiguous_spec() -> SystemSpec:
 
 
 def test_defined_nodes_reload_with_their_stored_sort(session):
-    # One higher template ("x ⋈ y") defined on two sorts. Loading must pick the
-    # definition matching the stored sort — context.definitions is a set, so
-    # template alone would choose arbitrarily and corrupt later sort checks.
+    # One template ("x ⋈ y") defined on two sorts. They are two productions and
+    # carry two names, `formula:x ⋈ y` and `term:x ⋈ y`, so resolution cannot
+    # confuse them — the disambiguation the loader used to do by hand is now a
+    # property of the name.
     result = build_spec(ambiguous_spec())
     assert "errors" not in result, result.get("errors")
     engine_system = result["system"]

@@ -43,9 +43,17 @@ class DefinedNotation:
         self.sort: Pattern = sort
 
         # The defined form's surface template. This is the constructor a term
-        # built through this notation carries.
+        # built through this notation carries, and it is *named*, like any other
+        # production: a notation is identified by the pair (sort, template) - it
+        # de-duplicates on exactly that - so the pair is its name.
+        #
+        # The `:` is what keeps it out of the productions' namespace: a declared
+        # production's name is forced to `[A-Za-z0-9_]+` (see
+        # `declarative._identifier`), so no production can ever spell one of
+        # these. That is what lets storage resolve every constructor by name
+        # alone, with no separate row kind for defined forms.
         self.template: patterns.StringPattern = patterns.StringPattern(
-            name="Defined notation",
+            name=f"{sort.name}:{defined}",
             pattern=defined,
             variables=copy(context.string_variables),
         )
