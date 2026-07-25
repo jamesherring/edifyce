@@ -56,10 +56,10 @@ and surface* existing engine capability rather than reinvent it.
 - Definition provisos are surfaced in the API/UI as a **single `condition`
   string** (vs rules' structured `side_conditions: list`), and the
   `DefinitionsSection` condition field is one bare text box.
-- Definition provisos (`kernel_condition`) are enforced **only on the kernel
-  definitional-step path**; the string-application path *refuses* a
-  proviso-carrying definition (`matching/definitions.py:110-117, 246-250`). This
-  is the one real behavioural limit.
+- ~~Definition provisos (`kernel_condition`) are enforced only on the kernel
+  definitional-step path; the string-application path refuses a proviso-carrying
+  definition.~~ **Closed by D2** — the string-application path is gone, so there
+  is only the kernel path to enforce them on.
 - No frontend primitive for a searchable picker (no `Select`/`Combobox`/`Command`
   wrapper; `bits-ui` is a dep but only `dialog`/`sheet` are wrapped).
 
@@ -145,14 +145,27 @@ definitions, and use the full proviso.
 - Surface layering: an autocomplete (the R2 combobox) of existing defined
   notation, so a definition's `lower` can visibly build on earlier definitions.
 
-### D2 — honor definition provisos consistently (engine, foundational)
-- Resolve the behavioural asymmetry: today a proviso-carrying definition works
-  only on the kernel definitional-step path; the string-application path refuses
-  it. Options: (i) enforce provisos on the string path too, or (ii) route
-  proviso-carrying definitions through the kernel path by default and gate/clearly
-  error otherwise. **Recommend a short spike first** — this is the deepest unknown,
-  and D0/D1 are only fully meaningful once a full-proviso definition is usable
-  wherever definitions are used. Lean hard on the engine test suite.
+### D2 — honor definition provisos consistently (engine, foundational) — **done**
+Resolved by making definitions kernel-native rather than by teaching the string
+path about provisos. The asymmetry existed because there were two checkers; there
+is now one.
+
+- A definition's kernel counterpart is built when the **system** is built
+  (`declarative._finalise_definition` → `formal_system.build_kernel_definition`),
+  and a definition with no sound kernel reading — an undeclared binder — fails the
+  build, naming the variable and the fix. The string-application path
+  (`Definition.check_application` / `get_lower`, `Match.equivalent_under_definitions`
+  / `maps_to_up_to_definition`) is deleted, along with the lazy
+  `kernel_definition` cache and `follows_from_definition`'s `mapping` argument.
+- Measured before removing: across the whole suite the fallback was reached twice
+  and returned False both times, from two tests written to exercise it. It
+  verified no step.
+- `matching.Definition` remains as *parser* state — it is what makes defined
+  notation grammatical — but no longer applies anything.
+- The capture guard is scoped to what can actually be captured: it applies only to
+  a definition that takes parameters (capture is a substitution landing under a
+  binder), reads a nullary production as a constant, and consults only the sorts
+  reachable from the definition's own sort.
 
 ### D3 — definitions as a top-level surface (backend + frontend)
 - `api.definitions` namespace and a **per-system definitions page** (list +
@@ -165,15 +178,16 @@ definitions, and use the full proviso.
   dependency-aware ordering/validation, replacing the implicit positional
   dependence. Improves reordering safety and UX.
 
-**Order:** D2 spike early → D0 → D1; D3 is the larger elevation and can follow.
+**Order:** D2 (done) → D0 (done) → D1 (done); D3 is the larger elevation and can
+follow.
 
 ---
 
 ## Recommended overall sequencing
 
-1. **R0** and **D2 spike** (independent; start both).
-2. **R1** (references verify) and **D0** (definition proviso parity) — backend.
-3. Build the **Combobox/Command primitive**, then **R2** and **D1** — frontend.
+1. ~~**R0** and **D2 spike** (independent; start both).~~
+2. ~~**R1** (references verify) and **D0** (definition proviso parity) — backend.~~
+3. ~~Build the **Combobox/Command primitive**, then **R2** and **D1** — frontend.~~
 4. **D3** — definitions top-level surface (+ optional explicit layering).
 
 Cross-cutting principles: every PR small and additive; migrations
@@ -185,6 +199,8 @@ once (R2) and reused (D1/D3).
 - **Reference labels**: `alias` column vs cite-by-slug (recommend `alias`).
 - **Top-level definitions scope**: stay system-scoped and inherit the system's
   publication (recommend), vs. definitions with independent ownership/publishing.
-- **D2 approach**: enforce provisos on the string path vs. kernel-path-by-default.
+- ~~**D2 approach**: enforce provisos on the string path vs. kernel-path-by-default.~~
+  **Decided**: neither — definitions are kernel-native, built and validated with
+  the system, and the string path is deleted.
 - **Explicit definition-dependency modeling** (D3): worth the added schema, or keep
   the positional/implicit layering that already works?

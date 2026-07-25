@@ -1,11 +1,9 @@
 """The `fresh` clause on a declaratively-built definition.
 
 `fresh` declares the defining form's bound variables, so a quantified definition
-(e.g. ``x ⊆ y ≝ ∀z (z ∈ x → z ∈ y)``) unfolds capture-avoidingly on the kernel
-term path instead of being refused for an undeclared binder. That is what makes a
-*proviso-carrying* quantified definition usable through the declarative/API path
-(the D2 gap): without a way to declare `z`, such a definition has no kernel
-counterpart and its proviso can never be enforced.
+(e.g. ``x ⊆ y ≝ ∀z (z ∈ x → z ∈ y)``) unfolds capture-avoidingly. It is not
+optional: a defining form that introduces an undeclared binder has no sound
+reading as a kernel definition, so the system does not build at all.
 """
 
 from copy import copy
@@ -15,7 +13,7 @@ import pytest
 pytest.importorskip("regex")
 
 from website.logical.declarative import SystemSpec, build_spec
-from website.logical.formal_system.definitions import kernel_definition_for
+from website.logical.formal_system.definitions import build_kernel_definition
 
 from tests.spec_helpers import (
     axiom,
@@ -34,8 +32,8 @@ from tests.spec_helpers import (
 
 def _subset_spec(*, fresh: bool, condition: str | None) -> SystemSpec:
     # df-subset over a first-order grammar. `z` is the defining form's bound
-    # variable: declared via `fresh` (the kernel path) or, when fresh=False, not
-    # declared at all (an undeclared binder — the string-fallback / refusal path).
+    # variable: declared via `fresh`, or, when fresh=False, not declared at all —
+    # an undeclared binder, which the build rejects.
     subset = defn(
         "formula",
         "subset",
@@ -87,22 +85,26 @@ def test_fresh_lets_a_quantified_proviso_definition_verify_a_step():
     assert bad.proof_lines[1].valid is False
 
 
-def test_fresh_builds_a_kernel_definition_that_no_fresh_cannot():
-    # The same definition builds a kernel counterpart with `fresh`, and none
-    # without it (an undeclared binder) — the D2-refused case the proviso message
-    # describes. This is why `fresh` is required to make the proviso enforceable.
+def test_fresh_builds_a_kernel_definition_and_no_fresh_fails_the_build():
+    # The same definition builds a kernel counterpart with `fresh`; without it the
+    # binder is undeclared, which is not a definition the kernel can express — so
+    # the *system* is rejected, naming the variable and the fix.
     with_fresh = _subset_spec(fresh=True, condition="disjoint(x, y, term)")
     without_fresh = _subset_spec(fresh=False, condition="disjoint(x, y, term)")
 
     fresh_system = build_spec(with_fresh)["system"]
-    plain_system = build_spec(without_fresh)["system"]
-
     fresh_def = _only_definition(fresh_system)
-    plain_def = _only_definition(plain_system)
-    assert fresh_def.kernel_condition is not None and plain_def.kernel_condition is not None
+    assert fresh_def.kernel_condition is not None
+    assert fresh_def.kernel is not None
+    # Built once, at build time — not derived again per step.
+    assert build_kernel_definition(fresh_def, _context_of(fresh_system)) == fresh_def.kernel
 
-    assert kernel_definition_for(fresh_def, _context_of(fresh_system)) is not None
-    assert kernel_definition_for(plain_def, _context_of(plain_system)) is None
+    result = build_spec(without_fresh)
+    assert "errors" in result
+    (message,) = result["errors"]
+    assert "'z'" in message and "fresh" in message
+    # The message quotes the defining form as written, not the renamed template.
+    assert "∀z (z ∈ x → z ∈ y)" in message
 
 
 def test_fresh_round_trips_through_storage():

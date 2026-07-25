@@ -317,6 +317,19 @@ def test_indent_is_no_longer_a_line_behaviour():
         LineType(name="block", behaviour="indent")
 
 
+def test_definition_is_no_longer_a_line_behaviour():
+    # A definition belongs to the system, not to a proof line: it is built once
+    # from the SystemSpec and reaches every proof through the shared context.
+    # Nothing has registered a per-line definition since the accessor mechanism
+    # that supplied its payload was removed, so the value could only produce
+    # lines that fail closed. Rejecting it at construction keeps `ProofLine`
+    # free of a definition slot nothing fills.
+    from website.logical.formal_system import LineType
+
+    with pytest.raises(ValueError, match="not a valid LineType behaviour"):
+        LineType(name="defines", behaviour="definition")
+
+
 def test_logical_line_must_declare_a_formula_field():
     # Every instance of such a line was rejected with "No formula defined for
     # logical line." — an inert line type. It is refused where the author can

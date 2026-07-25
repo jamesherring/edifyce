@@ -10,7 +10,7 @@ from ..graphs import find_cycle, saturating_matching, topological_order
 from ..kernel.side_conditions import Not, Occurs
 from ..kernel.terms import from_match
 from ..matching import Match
-from .definitions import follows_by_definition, kernel_definition_for
+from .definitions import follows_by_definition
 
 if TYPE_CHECKING:
     from ..matching.context import Context
@@ -763,7 +763,7 @@ class Proof:
             else list(context.definitions)
 
         for definition in candidates:
-            if proof_line.follows_from_definition(source, definition, {}, context):
+            if proof_line.follows_from_definition(source, definition, context):
                 proof_line.valid = True
                 proof_line.antecedents = (source,)
                 source.dependent_lines.add(proof_line)
@@ -771,30 +771,10 @@ class Proof:
 
         proof_line.valid = False
         if reference.definition is not None:
-            # A proviso is enforced only on the kernel definitional-step path; the
-            # string path can't evaluate it and so refuses a proviso-carrying
-            # definition outright (see follows_from_definition). When such a
-            # definition also has no kernel counterpart, it can never apply anywhere.
-            # `kernel_definition_for` returns None for several reasons (no lower form,
-            # a defining form that doesn't parse as a kernel definition, or an
-            # undeclared binder), so name the general cause - the kernel path is
-            # unavailable - rather than asserting one specific reason, while pointing
-            # at the usual fix. Beats a bare "does not apply" that hides the proviso.
-            definition = reference.definition
-            if definition.kernel_condition is not None \
-                    and kernel_definition_for(definition, context) is None:
-                proof_line.invalid_message = (
-                    f"{reference.key} carries a proviso, but this definition has no "
-                    f"kernel counterpart to enforce it against, so the step can't be "
-                    f"verified. A proviso is enforced only on the kernel "
-                    f"definitional-step path, which needs the defining form to parse "
-                    f"as a kernel definition with any bound variable declared `fresh`."
-                )
-            else:
-                proof_line.invalid_message = (
-                    f"{reference.key} does not apply between this line and line "
-                    f"{source.number}."
-                )
+            proof_line.invalid_message = (
+                f"{reference.key} does not apply between this line and line "
+                f"{source.number}."
+            )
         else:
             proof_line.invalid_message = (
                 f"{reference.key} does not apply: no definition in scope relates this line "
@@ -917,65 +897,10 @@ class Proof:
                 target=ref_item,
             )
 
-        # Add any definitions we have imported
-        if isinstance(ref_item, ProofLine) and ref_item.line_type is not None and ref_item.line_type.behaviour == "definition":
-            context.definitions.add(ref_item.definition)
-            self.import_definition(ref_item.definition, context)
-
-        elif isinstance(ref_item, Proof):
-            for line in ref_item.proof_lines:
-                if isinstance(line, ProofLine) and line.line_type is not None and line.line_type.behaviour == "definition":
-                    context.definitions.add(line.definition)
-                    self.import_definition(line.definition, context)
-
+        # An import carries no definitions with it. A definition reaches a proof
+        # through its system's context, built once from the SystemSpec; there is
+        # no per-proof definition to re-register in the importing context.
         return ImportResult(success=True, target=ref_item)
-
-    def import_definition(self, definition, context):
-        # Import the given definition from one proof to another. Requires careful handling with inherited patterns
-
-        build_context = self.formal_system.build_context
-
-        # Get the pattern name
-        pattern_name = definition.pattern.name
-
-        # Get the instance of this pattern in this formal system
-        pattern = build_context.variables[pattern_name]
-
-        # Get a copy of context to add the variables needed for this pattern
-        context_copy = copy(context)
-        context_copy.string_variables.update(definition.variables)
-
-        # Use the build context pattern if it exists
-        for key, value in definition.variables.items():
-            name = value.name
-            if name in build_context.variables:
-                context_copy.string_variables[key] = build_context.variables[name]
-
-        # Carry the binder declarations and `where` proviso across the import so
-        # the proviso is still enforced (or, if it cannot be rebuilt in this
-        # context, the kernel path refuses the step - never silently drops it).
-        result = pattern.add_definition(definition.lower.pattern, definition.higher.pattern, context_copy,
-                                        require_lower_match=False,
-                                        fresh=definition.fresh or None,
-                                        kernel_condition=definition.kernel_condition)
-
-        if result is None:
-            raise Exception(f"Failed to import definition: {definition.higher.pattern}")
-
-        # Remove any existing (possibly duplicate) conditions
-        if result not in context.definitions:
-            remove_items = set()
-
-            for defn in context.definitions:
-                if defn.higher.pattern == result.higher.pattern and defn.pattern.can_map_to(pattern, context):
-                    # Can be removed
-                    remove_items.add(defn)
-
-            for item in remove_items:
-                context.definitions.remove(item)
-
-            # Add the definition to context
-            context.definitions.add(result)
 
     def _dependency_graph(self) -> dict[Proof, set[Proof]]:
         # The import/theorem dependency graph reachable from this proof: each
@@ -1015,7 +940,7 @@ class Proof:
 
             logical_lines = [
                 line for line in self.proof_lines[:deduction.index()]
-                if line.line_type is not None and line.line_type.behaviour in ("logical", "definition")
+                if line.line_type is not None and line.line_type.behaviour == "logical"
                 and line_is_accessible(deduction, line)
             ][-len(inference_rule.antecedents):]
 
@@ -1079,9 +1004,6 @@ class ProofLine:
 
         # The formula match (if any) on this line
         self.formula = None
-
-        # The definition created (if any) on this line
-        self.definition = None
 
         # The LineType used for this line
         self.line_type = None
@@ -1152,17 +1074,15 @@ class ProofLine:
             # `promotion.PromotedTheorem`).
             self.is_axiom = True
 
-        elif line_type.behaviour in ("definition", "import"):
-            # Not currently supported. These line types derived their payload
-            # through the `get_by_path` string interpreter - lower()/higher()/
-            # for() for a definition, path() for an import - and that
+        elif line_type.behaviour == "import":
+            # Not currently supported. An import line derived its target through
+            # the `get_by_path` string interpreter - path() - and that
             # accessor-function mechanism was removed, so the derivation is gone.
             # Fail *closed* rather than accept an inert line: a proof line whose
             # behaviour we can no longer honour must be rejected, not silently
-            # passed as valid. To be lifted when the references/definitions
-            # feature is reimplemented with a typed mechanism (see
-            # docs/proof-references-and-definitions-plan.md); `Proof.import_path`
-            # remains for that rewire.
+            # passed as valid. `Proof.import_path` remains, driven by the
+            # pre-seeded `reference_context` the API populates from stored proof
+            # references (see app/routers/proofs.py) rather than by a line.
             self.valid = False
             self.invalid_message = (
                 f"'{line_type.behaviour}' line types are not currently supported."
@@ -1176,45 +1096,19 @@ class ProofLine:
         # Get the index of this line in the proof
         return self.proof.proof_lines.index(self)
 
-    def follows_from_definition(self, other, definition, mapping, context):
-        # Check if this proof line follows from the other by means of a definition.
+    def follows_from_definition(self, other, definition, context):
+        # Check if this proof line follows from the other by means of a definition:
+        # one structural unfold over the shared-DAG term representation, checked in
+        # either direction, with no re-parsing (see formal_system/definitions.py).
 
         if (not self.line_type.behaviour == "logical") or (not other.line_type.behaviour == "logical"):
             # Must be logical lines
             return False
 
-        # Prefer the term-based checker: a definitional step is one structural
-        # unfold over the shared-DAG term representation, no re-parsing (see
-        # formal_system/definitions.py). It returns None when this definition is
-        # not soundly expressible as a kernel one (an undeclared binder the Define
-        # DSL cannot carry) - only then do we fall back to the string-based
-        # check_application. The kernel check covers both directions, and derives
-        # variable consistency structurally, so it applies only when no
-        # caller-supplied mapping constrains the match.
-        if not mapping and self.formula is not None and other.formula is not None:
-            kernel_result = follows_by_definition(self.formula, other.formula, definition, context)
-            if kernel_result is not None:
-                return kernel_result
-
-        # The kernel path is unavailable. A definition carrying a `where` proviso
-        # can only be enforced by that path - the string-based check_application
-        # enforces no proviso - so falling back would silently drop it and accept
-        # steps it should block. Refuse instead (the step is not verified).
-        if definition.kernel_condition is not None:
+        if self.formula is None or other.formula is None:
             return False
 
-        # Check if the definition applies - in either direction
-        return definition.check_application(
-            lower=other.formula,
-            higher=self.formula,
-            context=context,
-            mapping=mapping
-        ) or definition.check_application(
-            lower=self.formula,
-            higher=other.formula,
-            context=context,
-            mapping=mapping
-        )
+        return follows_by_definition(self.formula, other.formula, definition, context)
 
     def data(self):
         # Get data for this proof line
