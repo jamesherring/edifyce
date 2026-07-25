@@ -247,8 +247,8 @@ def check_step(fol, label, premises_conclusion, condition):
     """Match a whole step, then apply the proviso - the shape a checker uses."""
     system, context = fol
     r = rule(system, label)
-    schemas = [from_pattern(a, context) for a in r.antecedents] + [
-        from_pattern(r.deduction, context)
+    schemas = [from_pattern(a) for a in r.antecedents] + [
+        from_pattern(r.deduction)
     ]
     subjects = [formula_term(fol, s) for s in premises_conclusion]
     binding = match_all(list(zip(schemas, subjects)), context)

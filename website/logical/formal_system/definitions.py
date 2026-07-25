@@ -87,9 +87,9 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from ..kernel.side_conditions import SideCondition
-    from ..kernel.terms import FreeVars
     from ..matching.context import Context
     from ..matching.definitions import DefinedNotation
+    from ..matching.patterns import Pattern
 
 
 class DefinitionError(Exception):
@@ -135,7 +135,9 @@ def build_kernel_definition(
     lower: str | None,
     context: Context,
     condition: SideCondition | None = None,
-    fresh: FreeVars | None = None,
+    # Sort *patterns*, not constructors: `fresh` becomes a parse handle on the
+    # kernel definition, which reads a chosen binder name at check time.
+    fresh: dict[str, Pattern] | None = None,
     label: str | None = None,
 ) -> Definition:
     """The kernel definition that unfolds ``notation`` to ``lower``.

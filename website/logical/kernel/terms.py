@@ -40,10 +40,10 @@ treated as immutable once built. See the interning section below.
 
 Design invariant - *the kernel hard-codes no logic*
 ---------------------------------------------------
-A :class:`Node` is a production (an arbitrary per-system ``Pattern``) applied
-to named child terms. A :class:`Var` ranges over a *sort*, which is likewise
-an arbitrary ``Pattern``. The term type knows nothing about definitions:
-relating a defined and defining form is an explicit, cited step verified in
+A :class:`Node` is an arbitrary per-system ``Constructor`` (the projection of
+a production) applied to named child terms. A :class:`Var` ranges over a *sort*,
+which is likewise an arbitrary constructor. The term type knows nothing about
+definitions: relating a defined and defining form is an explicit, cited step in
 :mod:`definitions`, never something ``equal`` or ``unify`` does implicitly.
 Nothing in this module enumerates connectives, quantifiers or set-builder
 syntax, so first-order logic, ZF(C) and near-English definitional statements
@@ -88,7 +88,7 @@ if TYPE_CHECKING:
     # "Term" is quoted: this is a real assignment (not a PEP 563 annotation),
     # and the Term class is defined further down this module.
     Binding = dict[str, "Term"]
-    # Free-variable inventory: variable name -> its sort (an arbitrary Pattern).
+    # Free-variable inventory: variable name -> its sort (a Constructor).
     FreeVars = dict[str, Constructor]
 
 
@@ -134,9 +134,11 @@ class Term:
 class Var(Term):
     """A schematic variable (metavariable) ranging over a sort.
 
-    ``sort`` is an arbitrary ``Pattern`` (e.g. ``formula``, ``term``,
-    ``setvar``) - the term layer places no constraints on what it may be. For
-    example the ``p`` in a modus-ponens schema is ``Var("p", <formula sort>)``.
+    ``sort`` is an arbitrary
+    :class:`~website.logical.kernel.constructors.Constructor` (e.g. ``formula``,
+    ``term``, ``setvar``) - the term layer places no constraints on what it may
+    be. For example the ``p`` in a modus-ponens schema is
+    ``Var("p", <formula sort>)``.
     """
 
     def __init__(self, name: str, sort: Constructor) -> None:
@@ -227,15 +229,15 @@ class Bound(Var):
 class Node(Term):
     """A compound term: a production applied to named child terms.
 
-    ``pattern``    - the production (an arbitrary ``Pattern``); the constructor.
-                     For ``"(a -> b)"`` this is the ``implication`` pattern.
+    ``constructor`` - the production it applies, projected. For ``"(a -> b)"``
+                     this is the ``implication`` constructor.
     ``children``   - ``{slot_label: Term}`` for the production's variable slots,
                      e.g. ``{"p": <term a>, "q": <term b>}``. Empty for a leaf.
     ``literal``    - surface string for a ground leaf with no slots (a constant,
                      atom or regex token), e.g. ``Node(atom, literal="a")``.
                      Mutually exclusive with ``children``.
-    ``sort``       - the ``Pattern`` this term *inhabits* (its type), used only
-                     by sort checks in matching. Normally ``None``: a term's sort
+    ``sort``       - the sort this term *inhabits* (its type), used only by
+                     sort checks in matching. Normally ``None``: a term's sort
                      is then its own constructor, which is already a member of
                      whatever union it belongs to. It is set only when the
                      surface constructor is *not* itself a member of the sort -
@@ -508,9 +510,7 @@ def from_match(match: Match) -> Term:
     return _node(constructor=constructor, children=child_terms(match), sort=sort)
 
 
-def from_pattern(
-    pattern: Pattern, context: Context, schematic: set[str] | None = None
-) -> Term:
+def from_pattern(pattern: Pattern, schematic: set[str] | None = None) -> Term:
     """Project a rule-schema ``Pattern`` into a :class:`Term` whose variable
     slots become :class:`Var` leaves.
 
@@ -529,12 +529,17 @@ def from_pattern(
     so ``antecedent2.substitute({"p": a, "q": b})`` yields the term for
     ``"(a -> b)"`` - the same term ``from_match`` produces for that string.
 
+    Takes no context, like :func:`from_match`: projection reads only the
+    production's own declarations, so where it runs cannot change what it
+    returns. It read one until a slot's sort became kernel data - the recursion
+    into a non-schematic slot used to re-enter here with that slot's *pattern*,
+    and needed a context to do it.
+
     Today a caller applies a rule by supplying the binding and checking the
     result with :meth:`Term.equal`. Step 2 will instead *derive* that binding
     by unifying this schema against the proof line, closing the loop into a
     term-based proof checker.
     """
-
     return _from_constructor(constructor_for(pattern), schematic)
 
 
