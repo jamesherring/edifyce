@@ -35,7 +35,7 @@ from __future__ import annotations
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
-from graphlib import CycleError, TopologicalSorter
+from graphlib import CycleError
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete as sa_delete
@@ -63,6 +63,7 @@ from app.schemas import (
     VerifyProofResponse,
 )
 from website.logical.declarative import build_spec
+from website.logical.graphs import topological_order
 
 router = APIRouter(prefix="/proofs", tags=["proofs"])
 
@@ -209,17 +210,16 @@ def _dependency_order(
 ) -> list[uuid.UUID]:
     # Proofs ordered so a lemma is compiled before the proofs that cite it.
     # Raises graphlib.CycleError if the graph is cyclic.
-    sorter: TopologicalSorter[uuid.UUID] = TopologicalSorter()
-    for pid in node_ids:
-        sorter.add(pid, *(target for _alias, target, _pos in edges.get(pid, ())))
-    return list(sorter.static_order())
+    return topological_order(
+        {pid: [target for _alias, target, _pos in edges.get(pid, ())] for pid in node_ids}
+    )
 
 
 def _is_usable_lemma(engine_proof: EngineProof) -> bool:
-    # Match the engine's own import rule (proof.py `import_path`): only a fully
-    # valid, warning-free proof is a usable lemma. A warning-carrying proof is
-    # not seeded, so this path and the engine's native import agree on what a
-    # usable lemma is.
+    # Only a fully valid, warning-free proof is a usable lemma: a proof that
+    # does not stand cannot justify another one, and a warning is unresolved
+    # doubt about whether it stands. Such a proof is simply not seeded, so a
+    # citation of it fails to resolve rather than resolving to something shaky.
     return bool(engine_proof.valid) and not engine_proof.has_warnings
 
 
@@ -603,8 +603,9 @@ async def _reference_would_cycle(
     except this proof's own (they are being replaced) and ask whether any target
     already reaches ``proof_id``. References are same-system-only, so scoping the
     load to the system captures the whole reachable closure without scanning the
-    global table. The persistence-layer analogue of the engine's transitive
-    ``Proof.circular_dependency``.
+    global table. The reference graph is tracked relationally, not in the engine:
+    a ``Proof`` object knows the lemmas seeded into its ``reference_context``,
+    not the edges that produced them.
     """
     rows = (
         await session.execute(
