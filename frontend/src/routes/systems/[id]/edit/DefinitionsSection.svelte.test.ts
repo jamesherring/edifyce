@@ -127,12 +127,11 @@ describe('DefinitionsSection provisos', () => {
 	});
 });
 
-// Open the layering picker. Its trigger is the <button> that carries the
-// `combobox` role; the native Sort <select> carries that role too (and its
-// <option>s carry role="option"), so we disambiguate by tag rather than role.
+// Open the layering picker. The native Sort <select> also carries the `combobox`
+// role, so this relies on the picker's accessible name to tell them apart —
+// which is exactly what a screen-reader or voice-control user has to do.
 async function openLayerPicker() {
-	const picker = screen.getAllByRole('combobox').find((el) => el.tagName === 'BUTTON');
-	await userEvent.click(picker!);
+	await userEvent.click(screen.getByRole('combobox', { name: 'Build on an earlier definition' }));
 }
 
 // The picker's own options, by our command-item slot — the notation also shows
@@ -145,6 +144,19 @@ function pickerOptionTexts(): string[] {
 }
 
 describe('DefinitionsSection layering', () => {
+	it('names the layering picker, which a combobox cannot take from its contents', async () => {
+		const earlier = defn({ id: 'd0', name: 'member', higher: 'x in y' });
+		const later = defn({ id: 'd1', name: 'subset', higher: 'x sub y' });
+		renderSection([earlier, later]);
+		await userEvent.click(screen.getAllByRole('button', { name: /^Edit / })[1]);
+
+		// role="combobox" takes no name from its contents, so without an explicit
+		// one this control reached assistive tech unnamed.
+		expect(
+			screen.getByRole('combobox', { name: 'Build on an earlier definition' })
+		).toBeInTheDocument();
+	});
+
 	it('inserts an earlier definition’s notation into the expansion', async () => {
 		const earlier = defn({ id: 'd0', name: 'member', higher: 'x in y', lower: '…', provisos: [] });
 		const later = defn({ id: 'd1', name: 'subset', higher: 'x sub y', lower: '', provisos: [] });

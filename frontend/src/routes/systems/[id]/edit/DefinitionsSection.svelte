@@ -178,6 +178,7 @@
 					bind:value={layerPick}
 					onSelect={insertNotation}
 					placeholder="Insert defined notation…"
+					ariaLabel="Build on an earlier definition"
 					searchPlaceholder="Search definitions…"
 					emptyText="No earlier definitions."
 					class="text-muted-foreground"
