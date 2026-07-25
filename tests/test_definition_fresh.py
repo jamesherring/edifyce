@@ -63,10 +63,10 @@ def _context_of(system):
     return context
 
 
-def _only_definition(system):
-    definitions = list(_context_of(system).definitions)
-    assert len(definitions) == 1, definitions
-    return definitions[0]
+def _only_notation(system):
+    notations = list(_context_of(system).definitions)
+    assert len(notations) == 1, notations
+    return notations[0]
 
 
 def test_fresh_lets_a_quantified_proviso_definition_verify_a_step():
@@ -93,11 +93,19 @@ def test_fresh_builds_a_kernel_definition_and_no_fresh_fails_the_build():
     without_fresh = _subset_spec(fresh=False, condition="disjoint(x, y, term)")
 
     fresh_system = build_spec(with_fresh)["system"]
-    fresh_def = _only_definition(fresh_system)
-    assert fresh_def.kernel_condition is not None
-    assert fresh_def.kernel is not None
-    # Built once, at build time — not derived again per step.
-    assert build_kernel_definition(fresh_def, _context_of(fresh_system)) == fresh_def.kernel
+    (fresh_def,) = fresh_system.definitions
+    assert fresh_def.condition is not None
+    # Built once, at build time — not derived again per step. Rebuilding from the
+    # notation and the defining form as written reproduces it exactly.
+    rebuilt = build_kernel_definition(
+        _only_notation(fresh_system),
+        "∀z (z ∈ x → z ∈ y)",
+        _context_of(fresh_system),
+        condition=fresh_def.condition,
+        fresh=dict(fresh_def.fresh),
+        label=fresh_def.label,
+    )
+    assert rebuilt == fresh_def
 
     result = build_spec(without_fresh)
     assert "errors" in result

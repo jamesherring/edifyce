@@ -349,7 +349,7 @@ def test_variables_are_members_of_their_sort():
     # statements mentioning a variable do not parse - and a `$f`-only typecode
     # used in a binding fails deep in the builder with a bare KeyError.
     system = import_database(parse(HYPOTHESIS_FRAGMENT))
-    assert system.parse("ph [dup.1]").proof_lines[0].formula is not None
+    assert system.parse("ph [dup.1]").proof_lines[0].formula_term is not None
 
     setvar_system = import_database(parse(BINDER_FRAGMENT))
     assert "setvar" in setvar_system.build_context.variables

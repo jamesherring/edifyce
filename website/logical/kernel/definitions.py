@@ -85,7 +85,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .side_conditions import And, DisjointLeaves
-from .terms import Node, abstract, bind, from_match, _bound, _bound_label, _locations, _signature
+from .terms import Node, abstract, bind, from_match, _bound, _bound_label
 from .unify import match
 
 if TYPE_CHECKING:
@@ -120,6 +120,12 @@ class Definition:
     lower: Term
     condition: SideCondition | None = None
     fresh: tuple[tuple[str, Pattern], ...] = ()
+    # The name a proof cites this definition by (`[<label>, <line>]`), or None
+    # for an unnamed one (still reachable through the generic keyword). It lives
+    # here, not on the notation that parses the defined form, because a citation
+    # names an *axiom*: two definitions may share one defined form, and each
+    # stays separately citable.
+    label: str | None = None
 
     @classmethod
     def parse(
@@ -131,6 +137,7 @@ class Definition:
         context: Context,
         condition: SideCondition | None = None,
         fresh: FreeVars | None = None,
+        label: str | None = None,
     ) -> Definition:
         """Build a definition by parsing its two surface forms.
 
@@ -159,7 +166,7 @@ class Definition:
             matched = sort.match(text, context)
             if matched is None:
                 raise ValueError(f"Definition form {text!r} does not parse as '{sort.name}'.")
-            term = abstract(from_match(matched, context), variables)
+            term = abstract(from_match(matched), variables)
             if abstract_binders and bound_nodes:
                 term = bind(term, bound_nodes)
             return term
@@ -169,6 +176,7 @@ class Definition:
             lower=schema(lower, abstract_binders=True),
             condition=condition,
             fresh=fresh_items,
+            label=label,
         )
 
 
@@ -225,7 +233,7 @@ def introduced_leaves(definition: Definition) -> tuple[Node, ...]:
     other, or a variable slips through as though it were already accounted for.
     """
     def key(leaf: Node) -> tuple[tuple[str, ...], str | None]:
-        return (_signature(leaf.pattern), leaf.literal)
+        return (leaf.constructor.signature, leaf.literal)
 
     defined = {key(leaf) for leaf in _ground_leaves(definition.higher)}
     introduced: dict[tuple[tuple[str, ...], str | None], Node] = {}
@@ -288,7 +296,7 @@ def _resolve_bound_names(
         matched = sort.match(chosen, context)
         if matched is None:
             return None
-        resolved[_bound_label(index)] = from_match(matched, context)
+        resolved[_bound_label(index)] = from_match(matched)
     return resolved
 
 
@@ -390,13 +398,13 @@ def _rewrites_once(source: Term, target: Term, definition: Definition, context: 
     # constructor and differ in exactly one child, where the rewrite recurses.
     if not (isinstance(source, Node) and isinstance(target, Node)):
         return False
-    if _signature(source.pattern) != _signature(target.pattern):
+    if source.constructor.signature != target.constructor.signature:
         return False
     if source.literal is not None or target.literal is not None:
         return False
 
-    source_locations = _locations(source.pattern)
-    target_locations = _locations(target.pattern)
+    source_locations = source.constructor.slots
+    target_locations = target.constructor.slots
     if len(source_locations) != len(target_locations):
         return False
 

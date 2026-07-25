@@ -32,10 +32,24 @@ Binding = tuple[str, str]
 
 
 def template_prod(
-    sort: str, name: str, template: str, bindings: Iterable[Binding] = ()
+    sort: str,
+    name: str,
+    template: str,
+    bindings: Iterable[Binding] = (),
+    denotes_constant: bool = False,
 ) -> Production:
-    """A composite (notation) production, e.g. ``formula | membership | s ∈ t``."""
-    return Production(sort=sort, name=name, template=template, bindings=list(bindings))
+    """A composite (notation) production, e.g. ``formula | membership | s ∈ t``.
+
+    ``denotes_constant`` matters only for a *nullary* template, which parses to a
+    ground leaf a definition could introduce.
+    """
+    return Production(
+        sort=sort,
+        name=name,
+        template=template,
+        bindings=list(bindings),
+        denotes_constant=denotes_constant,
+    )
 
 
 def regex_prod(sort: str, name: str, regex: str) -> Production:
@@ -43,9 +57,20 @@ def regex_prod(sort: str, name: str, regex: str) -> Production:
     return Production(sort=sort, name=name, regex=regex)
 
 
-def atom_const_prod(sort: str, name: str, value: str) -> Production:
-    """An atom *constant* production: a sort member matching one literal token."""
-    return Production(sort=sort, name=name, atom_value=value)
+def atom_const_prod(
+    sort: str, name: str, value: str, denotes_constant: bool = False
+) -> Production:
+    """An atom *constant* production: a sort member matching one literal token.
+
+    ``denotes_constant`` is the separate, *object-language* question — whether
+    that token is a constant (``⊥``) or a variable the author happened to spell
+    as a single atom (``setvar ::= a | b | c``). Only the second can be bound, so
+    only the first may be introduced by a defining form. It defaults off here as
+    it does in the engine: declaring it is a deliberate act.
+    """
+    return Production(
+        sort=sort, name=name, atom_value=value, denotes_constant=denotes_constant
+    )
 
 
 def atom_family_prod(sort: str, name: str, base: str) -> Production:

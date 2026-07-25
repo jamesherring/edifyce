@@ -158,7 +158,7 @@ def compose_schema_term(
     for candidate in _composition_sorts(context, prefer):
         match = candidate.match(pattern.pattern, parse_context)
         if match is not None:
-            return revariabilise(from_match(match, parse_context), context.string_variables)
+            return revariabilise(from_match(match), context.string_variables)
 
     return None
 
@@ -198,7 +198,7 @@ def revariabilise(term: Term, metavariables: dict) -> Term:
                 return Var(node.literal, metavariables[node.literal])
             if node.children:
                 return Node(
-                    pattern=node.pattern,
+                    constructor=node.constructor,
                     children={label: walk(child) for label, child in node.children.items()},
                     literal=node.literal,
                     sort=node.sort,

@@ -7,14 +7,13 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from ..graphs import saturating_matching
+from ..kernel.definitions import check_definitional_step
 from ..kernel.side_conditions import Not, Occurs
-from ..kernel.terms import from_match
-from ..matching import Match
-from .definitions import follows_by_definition
 
 if TYPE_CHECKING:
+    from ..kernel.definitions import Definition
+    from ..kernel.terms import Term
     from ..matching.context import Context
-    from ..matching.definitions import Definition
     from .rules import InferenceRule
 
 
@@ -85,17 +84,17 @@ class Subproof:
         # The subproof's result: its last formula-bearing logical line.
         for line in reversed(self.lines):
             if line.line_type is not None and line.line_type.behaviour == "logical" \
-                    and line.formula is not None:
+                    and line.formula_term is not None:
                 return line
         return None
 
     @property
-    def eigenvariable(self) -> Match | None:
+    def eigenvariable(self) -> Term | None:
         # The fresh variable a "variable" subproof introduces (its opener's
-        # formula match), or None for other kinds.
+        # formula term), or None for other kinds.
         if self.kind != "variable" or self.assumption is None:
             return None
-        return self.assumption.formula
+        return self.assumption.formula_term
 
     def is_ancestor_of(self, other: Subproof | None) -> bool:
         # Whether this subproof encloses `other` (reflexively).
@@ -124,20 +123,19 @@ class Subproof:
         # structurally on kernel terms via the closed side-condition algebra
         # (kernel.side_conditions) - the graph representation, not strings. This
         # is the algebra's own worked example: Not(Occurs("x", "phi")).
-        eigenvariable = self.eigenvariable
-        if eigenvariable is None:
+        eigenvariable_term = self.eigenvariable
+        if eigenvariable_term is None:
             return False
 
-        eigenvariable_term = from_match(eigenvariable, context)
         fresh = Not(Occurs("eigenvariable", "hypothesis"))
 
         for assumption in self.enclosing_assumptions():
-            if assumption.formula is None:
+            if assumption.formula_term is None:
                 continue
 
             binding = {
                 "eigenvariable": eigenvariable_term,
-                "hypothesis": from_match(assumption.formula, context),
+                "hypothesis": assumption.formula_term,
             }
             if not fresh.check(binding, context):
                 return False
@@ -229,9 +227,6 @@ class Proof:
         # Labelled lines, plus any lemma proofs the caller pre-seeds under an
         # alias so this proof can cite them (see app/routers/proofs.py).
         self.reference_context = {}
-
-        # The proof model id
-        self.model_id = None
 
         # The root subproof and the live scope stack, built during parsing.
         # `root_scope` stays None until the first line is assigned, so a proof
@@ -412,7 +407,7 @@ class Proof:
             # A definitional step: `[<name>, <line>]` cites a named definition,
             # or `[Def, <line>]` leaves the applicable definition to be searched
             # for. Either way it cites exactly one source line.
-            named = self._definition_by_label(key, context)
+            named = self._definition_by_label(key)
             if named is not None or key == DEFINITION_KEY:
                 sources = [
                     item for r in ref_parts[1:]
@@ -479,10 +474,14 @@ class Proof:
             # Easy case
             return True
 
-        if proof_line.formula is None:
-            # No formula
+        if proof_line.formula_term is None:
+            # No formula. Parsing may already have said something more specific -
+            # that the formula was there but could not be projected into a term
+            # (see FormalSystem.parse) - so don't flatten that to the generic
+            # message.
             proof_line.valid = False
-            proof_line.invalid_message = "No formula defined for logical line."
+            if proof_line.invalid_message is None:
+                proof_line.invalid_message = "No formula defined for logical line."
             return False
 
         # Get the reference
@@ -537,7 +536,10 @@ class Proof:
                     deduction=proof_line,
                     context=context
             ):
-                # It's a valid line
+                # Record the rule as every other justifying branch does, so a
+                # zero-premise step is not the one kind of line whose
+                # justification is left unattributed.
+                proof_line.inference_rule = inference_rule
                 return True
 
         elif len(antecedents) == 0 and len(inference_rule.antecedents) < 5:
@@ -701,17 +703,17 @@ class Proof:
 
         if inference_rule.check_discharge(subproof, proof_line, context):
             proof_line.inference_rule = inference_rule
+            proof_line.discharged_scope = subproof
             return True
 
         proof_line.valid = False
         proof_line.invalid_message = f"{key} does not apply."
         return False
 
-    @staticmethod
-    def _definition_by_label(label: str, context: Context) -> "Definition | None":
-        # The definition in scope cited by this label, or None. Used to resolve a
+    def _definition_by_label(self, label: str) -> Definition | None:
+        # The system's definition cited by this label, or None. Used to resolve a
         # `[<name>, <line>]` citation to the specific named definition.
-        for definition in context.definitions:
+        for definition in self.formal_system.definitions:
             if definition.label == label:
                 return definition
         return None
@@ -747,18 +749,19 @@ class Proof:
         # non-logical citation is a clean invalid line, not an AttributeError
         # inside follows_from_definition (which dereferences line_type.behaviour).
         if source.line_type is None or source.line_type.behaviour != "logical" \
-                or source.formula is None:
+                or source.formula_term is None:
             proof_line.valid = False
             proof_line.invalid_message = f"Line {source.number} is not a formula line."
             return False
 
         candidates = [reference.definition] if reference.definition is not None \
-            else list(context.definitions)
+            else list(self.formal_system.definitions)
 
         for definition in candidates:
             if proof_line.follows_from_definition(source, definition, context):
                 proof_line.valid = True
                 proof_line.antecedents = (source,)
+                proof_line.applied_definition = definition
                 source.dependent_lines.add(proof_line)
                 return True
 
@@ -844,14 +847,19 @@ class ProofLine:
         # None for a line no citation can reach: a blank line or commentary.
         self.number = None
 
-        # The formula match (if any) on this line
-        self.formula = None
+        # The line's formula as a kernel term, projected during parsing (see
+        # FormalSystem.parse). This is what every check runs on: rule
+        # unification, side-conditions, definitional steps. None for a line that
+        # declares no formula field, or whose field is absent from the parse.
+        self.formula_term: Term | None = None
+
+        # The formula's surface string, kept beside the term because the
+        # string-rewriting rule path (semi-Thue systems like MIU) matches on
+        # flat text rather than structure - see InferenceRule._string_pairs.
+        self.formula_string: str | None = None
 
         # The LineType used for this line
         self.line_type = None
-
-        # The match with the line type pattern
-        self.match = None
 
         # The indentation of this line
         self.indent = len(self.text) - len(self.text.lstrip())
@@ -871,6 +879,30 @@ class ProofLine:
 
         # The inference instance with this line as the deduction
         self.inference = None
+
+        # The inference rule that justified this line, once one has (None while
+        # unchecked, for an unjustified line, and for a definitional step).
+        self.inference_rule = None
+
+        # The definition a definitional step unfolded or folded, once one has.
+        # Recorded because a generic `[Def, n]` citation names none: the checker
+        # searches the definitions in scope, so which one applied is knowable
+        # only here, and a reader cannot recover it from the citation text.
+        self.applied_definition: Definition | None = None
+
+        # The cited lines this line was justified from: those filling the rule's
+        # declared antecedent slots, and any surplus lines an
+        # `allow_extra_antecedents` rule tolerated. Declared here (rather than
+        # attached ad hoc by the checker) so every line carries them and a reader
+        # -- the proof-line snapshot in `app/db/proofs_mapping.py` -- can walk the
+        # justification graph without probing for the attribute.
+        self.antecedents: tuple[ProofLine, ...] = ()
+        self.extra_antecedents: tuple[ProofLine, ...] = ()
+
+        # The subproof a discharge rule consumed to justify this line, or None.
+        # A discharge cites a *block*, not lines, so it is recorded apart from
+        # `antecedents` rather than flattened into them.
+        self.discharged_scope: Subproof | None = None
 
         # Whether this step in the proof is valid
         self.valid = True
@@ -902,7 +934,13 @@ class ProofLine:
                 # the duration of its subproof, a fresh variable is simply
                 # introduced. Neither asserts anything until a discharge rule
                 # consumes the subproof, so there is nothing to justify here.
-                self.valid = True
+                #
+                # "Nothing to justify" is not "nothing can be wrong", though: if
+                # parsing already rejected the line (its formula would not
+                # project), granting it anyway would hide the fault here and
+                # surface it as an unexplained discharge failure further down.
+                if self.invalid_message is None:
+                    self.valid = True
             else:
                 # Logical lines for parsing
                 self.proof.check_logical_line(self, context)
@@ -910,8 +948,8 @@ class ProofLine:
         elif line_type.behaviour == "axiom":
             # An axiom line asserts its own formula, so it needs no justification:
             # `check_logical_line` short-circuits on `is_axiom`. It used to also
-            # generalise the formula into a reusable schema
-            # (`Match.create_pattern`), but nothing ever read the result - a
+            # generalise the formula into a reusable schema by round-tripping the
+            # match back into a pattern, but nothing ever read the result - a
             # promoted theorem is the typed mechanism for that now (see
             # `promotion.PromotedTheorem`).
             self.is_axiom = True
@@ -933,10 +971,12 @@ class ProofLine:
             # Must be logical lines
             return False
 
-        if self.formula is None or other.formula is None:
+        if self.formula_term is None or other.formula_term is None:
             return False
 
-        return follows_by_definition(self.formula, other.formula, definition, context)
+        return check_definitional_step(
+            self.formula_term, other.formula_term, definition, context
+        )
 
     def data(self):
         # Get data for this proof line

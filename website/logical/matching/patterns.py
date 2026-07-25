@@ -1,10 +1,18 @@
 """Pattern classes: the base :class:`Pattern` and its concrete subclasses."""
 
+from __future__ import annotations
+
 import random
+from typing import TYPE_CHECKING
 
 import regex as re
 
 from . import definitions, matches
+
+if TYPE_CHECKING:
+    from .context import Context
+    from .definitions import DefinedNotation
+    from .matches import Match
 
 
 class Pattern:
@@ -16,6 +24,30 @@ class Pattern:
 
         # Note any bracket pairs that should be respected
         self.respect_brackets = respect_brackets
+
+        # Whether the tokens this production yields are *constants* of the object
+        # language rather than variables of it — declared by the system author, as
+        # Metamath's `$c`/`$v` are. Opaque to matching, which never reads it; the
+        # kernel's definition builder does (see formal_system/definitions.py),
+        # exactly as with `StringPattern.schema_term`.
+        #
+        # Deliberately not `is_constant`: `AtomPattern.is_constant` asks a purely
+        # structural question (one literal token, or an indexed family?) and the
+        # two answers differ — a constant-shaped atom declared as a member of the
+        # variable sort is bindable, so it is *not* an object-language constant.
+        #
+        # False is the safe default: an undeclared leaf is treated as a variable,
+        # so a definition introducing it is refused rather than excused.
+        self.denotes_constant = False
+
+        # Memo slot for the kernel's projection of this production (see
+        # kernel.constructors). Filled by the kernel on first use and *owned by
+        # this pattern*, so it lives and dies with the production. A module-level
+        # cache cannot: a grammar is mutually recursive, so a constructor's slot
+        # sorts reach back to the production it was built from, and any strong
+        # global root keeps the whole graph alive for the process's lifetime.
+        # Opaque to matching, which never reads it — as with `schema_term`.
+        self.kernel_constructor = None
 
         # Default certainty of 0
         self.certainty = 0
@@ -100,89 +132,41 @@ class Pattern:
         # All ok
         return True
 
-    def may_contain(self, other, context, found=None):
-        # Check if this pattern may contain the other
+    def add_notation(self, defined: str, context: Context) -> DefinedNotation:
+        # Register `defined` as a production of this sort - the grammatical half
+        # of a definition, and all of it the matching layer needs (see
+        # DefinedNotation). What the notation unfolds to is the kernel's
+        # business; the system builder pairs the two.
+        #
+        # Returns the notation now in `context`, which may be one registered
+        # earlier: the same template for the same sort is one production however
+        # many definitions declare it.
 
-        if found is None:
-            found = set()
+        notation = definitions.DefinedNotation(defined, self, context)
 
-        if self in found:
-            return False
+        for existing in context.definitions:
+            if existing.equivalent(notation, context):
+                return existing
 
-        found.add(self)
+        context.definitions.add(notation)
 
-        if type(self) is UnionPattern:
-            sub_patterns = self.patterns
+        return notation
 
-        elif type(self) is StringPattern:
-            sub_patterns = tuple(self.variables.values())
+    def try_definitions(self, s: str, context: Context) -> Match | None:
+        # Try the defined notations in scope to see if one gives a match for s.
+        # Called after this pattern's own productions, so defined notation can
+        # never shadow a primitive one.
 
-        else:
-            # AbstractPattern or RegexPattern
-            return False
-
-        for sub_pattern in sub_patterns:
-            if sub_pattern.equivalent(other, context):
-                return True
-
-            if sub_pattern.may_contain(other, context, found):
-                return True
-
-        return False
-
-    def add_definition(self, lower, higher, context, require_lower_match=True,
-                       fresh=None, kernel_condition=None, label=None):
-        # Add a definition to this pattern
-
-        # If require_lower_match is False, the lower string will not be checked against the pattern. This helps avoid
-        # needing to keep chains of nested definitions in context
-
-        # fresh: {name: sort Pattern} for the defining form's bound variables;
-        # kernel_condition: an optional kernel-vocabulary proviso. Both are for
-        # the term-based checker (see formal_system/definitions.py) and default
-        # to none, so alias definitions are unaffected. label: an optional name a
-        # proof cites the definition by.
-
-        if require_lower_match and self.match(lower, context) is None:
-            # No match with lower
-            return None
-
-        try:
-            defn = definitions.Definition(lower, higher, self, context,
-                                          fresh=fresh, kernel_condition=kernel_condition, label=label)
-        except Exception:
-            if not require_lower_match:
-                # Try without the lower match
-                defn = definitions.Definition(None, higher, self, context,
-                                              fresh=fresh, kernel_condition=kernel_condition, label=label)
-            else:
-                return None
-
-        for d in context.definitions:
-            if d.equivalent(defn, context) and d.label == defn.label:
-                # This definition has already been created under the same name.
-                # Definitions that are structurally equal but carry *different*
-                # labels are kept apart, so each name stays citable (equivalence
-                # does not consider the label).
-                return d
-
-        context.definitions.add(defn)
-
-        return defn
-
-    def try_definitions(self, s, context):
-        # Try definitions to see if they can give a match for s
-
-        for definition in context.definitions:
-            if not definition.pattern.can_map_to(self, context):
+        for notation in context.definitions:
+            if not notation.sort.can_map_to(self, context):
                 continue
 
-            result = definition.match(s, context)
+            result = notation.match(s, context)
 
             if result is not None:
                 return result
 
-        # No definitions work
+        # No notation works
         return None
 
     def can_map_to(self, other, context, check_equivalent=True):
@@ -501,7 +485,7 @@ class StringPattern(Pattern):
             result = self.try_definitions(s, context)
 
             if result is not None:
-                # Definition applies
+                # A defined notation applies
                 return result
 
             # Check the non-variable parts all appear in order
@@ -1150,7 +1134,7 @@ class UnionPattern(Pattern):
         result = self.try_definitions(s, context)
 
         if result is not None:
-            # Definition applies
+            # A defined notation applies
             return result
 
         # Try union patterns - they may have definitions on lower union patterns

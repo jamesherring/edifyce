@@ -76,7 +76,7 @@ def _ground_schema_term(
     for sort in sorts:
         matched = sort.match(text, parse_context)
         if matched is not None:
-            return from_match(matched, parse_context)
+            return from_match(matched)
     return None
 
 

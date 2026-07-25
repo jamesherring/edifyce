@@ -12,7 +12,7 @@ What replaced it is a structured, order-independent description of a system --
 the :class:`SystemSpec` dataclasses (grammar productions, a logical line,
 definitions, axioms, rules). :func:`build_spec` / :func:`build_system` turn one
 into a ``FormalSystem`` **directly**, by calling the engine's own construction
-primitives (``build_schema_pattern``, ``add_variables``, ``add_definition``,
+primitives (``build_schema_pattern``, ``add_variables``, ``add_notation``,
 ``parse_side_condition``, the ``Pattern`` constructors) -- no text pass. Nothing
 here re-implements matching or proof checking; it only wires the declarative
 model into engine objects. Because there is no text pass, ``respect_brackets``
@@ -41,7 +41,11 @@ from .build_context import (
     combine_side_conditions,
 )
 from .formal_system import FormalSystem, InferenceRule, LineType, SubproofSchema
-from .formal_system.definitions import DefinitionError, build_kernel_definition
+from .formal_system.definitions import (
+    DefinitionError,
+    build_kernel_definition,
+    denotes_a_constant,
+)
 from .formal_system.side_condition_syntax import parse_side_condition
 from .matching import AtomPattern, Pattern, RegexPattern, StringPattern, UnionPattern
 
@@ -74,6 +78,19 @@ class Production:
     atom_value: str | None = None      # atom constant: the single literal token it matches
     atom_base: str | None = None       # atom family: base of the `p_#` indexed family
     bindings: list[tuple[str, str]] = field(default_factory=list)  # (var, sort)
+    # Whether this production's tokens are *constants* of the object language —
+    # one fixed denotation, never standing for a bound variable — as opposed to
+    # variables of it. This is Metamath's `$c` vs `$v`, and like Metamath's it is
+    # declared, not inferred: no property of a production's shape decides it. A
+    # single-token atom is a constant in `formula ::= ⊥` and a variable in
+    # `setvar ::= a | b | c`, and only the author knows which was meant.
+    #
+    # Consulted for one purpose: whether a definition's defining form may
+    # introduce this token without the defined form supplying it (see
+    # `formal_system.definitions.build_kernel_definition`). Defaults to False —
+    # variable-like — so omitting it costs a refused definition, never a
+    # capturing one.
+    denotes_constant: bool = False
 
 
 @dataclass
@@ -319,7 +336,7 @@ def _fresh_var(placeholder: str, used: set[str]) -> str:
 #
 # This constructs the engine objects straight from the SystemSpec by calling the
 # engine's own low-level primitives (build_schema_pattern, add_variables,
-# add_definition, parse_side_condition, the Pattern constructors), driven from
+# add_notation, parse_side_condition, the Pattern constructors), driven from
 # the spec fields directly. There is no text pass, so respect_brackets is set on
 # each pattern at construction rather than patched on afterwards.
 # ---------------------------------------------------------------------------
@@ -384,21 +401,48 @@ def build_system(spec: SystemSpec) -> FormalSystem:
         # Bracket parity deliberately not applied — see its uses.
         return pattern
 
+    def declare(pattern: Pattern, prod: Production) -> Pattern:
+        # Carry the author's object-language role onto the built pattern. Only a
+        # *leaf* production can ever be the term this decides about, but setting
+        # it uniformly keeps one path and costs nothing.
+        pattern.denotes_constant = prod.denotes_constant
+        return pattern
+
     # 1. Atomic productions: regex leaves, atom constants, and atom families.
     for prod in spec.productions:
         if prod.regex is not None:
-            ctx.variables[prod.name] = register(
-                RegexPattern(name=prod.name, pattern=_anchor(prod.regex))
+            ctx.variables[prod.name] = declare(
+                register(RegexPattern(name=prod.name, pattern=_anchor(prod.regex))), prod
             )
         elif prod.atom_value is not None or prod.atom_base is not None:
+            # An indexed family is a *supply* of interchangeable tokens — the
+            # whole point of `AtomPattern.fresh` is that there is always a next
+            # one, which is what eigenvariable selection draws on. So no grammar
+            # can make one denote a single fixed thing, and unlike a one-token
+            # atom (a constant in `formula ::= ⊥`, a variable in
+            # `setvar ::= a | b | c`) this is not a judgement call the author
+            # could get right. Refuse it rather than let a declaration excuse a
+            # leaf a binder can bind.
+            if prod.atom_base is not None and prod.denotes_constant:
+                raise DeclarativeError(
+                    f"Production {prod.name!r} is an indexed atom family "
+                    f"('{prod.atom_base}_#'), so it cannot denote a constant of the "
+                    f"object language: every member is an interchangeable "
+                    f"placeholder a binder may bind, and fresh ones can always be "
+                    f"minted. Declare a specific token with `atom_value` if you "
+                    f"meant a constant."
+                )
             # An atom constant (`value`, one literal token) or indexed family
             # (`base`, the infinite `p_#` -> p_0, p_1, ...). A single token needs
             # no bracket parity, so it is not `register`ed — its `respect_brackets`
             # stays None.
-            ctx.variables[prod.name] = AtomPattern(
-                name=prod.name,
-                value=prod.atom_value,
-                base=prod.atom_base,
+            ctx.variables[prod.name] = declare(
+                AtomPattern(
+                    name=prod.name,
+                    value=prod.atom_value,
+                    base=prod.atom_base,
+                ),
+                prod,
             )
     # (Inline line parts are registered per-line in step 5, immediately before
     # the line that uses them, so two lines may reuse a part name with different
@@ -416,7 +460,9 @@ def build_system(spec: SystemSpec) -> FormalSystem:
             continue
         pattern = StringPattern(name=prod.name, pattern=prod.template)
         pattern.add_variables(_binding_patterns(prod.bindings, ctx))
-        ctx.variables[prod.name] = register(pattern)
+        # A nullary template (`S`, `∅`) parses to a ground leaf, so it too can be
+        # the leaf a definition introduces and carries the declaration.
+        ctx.variables[prod.name] = declare(register(pattern), prod)
 
     # 4. Fill each sort union with its members, in declared order.
     for sort in spec.sort_names():
@@ -450,7 +496,7 @@ def build_system(spec: SystemSpec) -> FormalSystem:
         system.add_inference_rule(_build_rule(rule, ctx))
 
     # 8. Publish the build variables into the proof context, then finalise
-    # definitions against that (now complete) context, so `add_definition` can
+    # definitions against that (now complete) context, so `add_notation` can
     # match the lower form against the productions.
     system.context.variables.update(ctx.variables)
     # Per position, whether the definition layered — kept in spec order so a
@@ -617,25 +663,18 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
     # stray ground leaves that would force the string path.
     fresh_patterns = _binding_patterns(defn.fresh, ctx)
 
-    result = union.add_definition(
-        defn.lower,
-        defn.higher,
-        context_copy,
-        fresh=fresh_patterns or None,
-        kernel_condition=kernel_condition,
-        label=defn.label,
-    )
-    if result is None:
-        # The lower form matched nothing: the definition did not layer. Nothing
-        # was added to the proof context, so there is no kernel counterpart to
-        # build either.
+    # Whether the defining form is recognised *given the definitions before it* is
+    # what "layering" means, and it is settled before anything is registered: a
+    # definition that does not layer must leave the grammar untouched.
+    if union.match(defn.lower, context_copy) is None:
         return False
 
-    system.context.definitions.add(result)
+    notation = union.add_notation(defn.higher, context_copy)
+    system.context.definitions.add(notation)
 
-    # Build the kernel counterpart now, against the context the definition has
-    # just entered — a definition's *defined* form is grammatical only because the
-    # definition is in scope, so this must follow the add. `system.context` is
+    # Build the kernel counterpart now, against the context the notation has just
+    # entered — a definition's *defined* form is grammatical only because its
+    # notation is registered, so this must follow the add. `system.context` is
     # deliberately the one used (not `context_copy`): it is what a proof is
     # checked in, and the definition's own binding metavariables in `context_copy`
     # would parse the parameters differently.
@@ -643,9 +682,24 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
     # A definition with no sound kernel reading is rejected here rather than
     # silently accepted and refused per-step later.
     try:
-        result.kernel = build_kernel_definition(result, system.context)
+        kernel_definition = build_kernel_definition(
+            notation,
+            defn.lower,
+            system.context,
+            condition=kernel_condition,
+            fresh=fresh_patterns or None,
+            label=defn.label,
+        )
     except DefinitionError as exc:
         raise DeclarativeError(str(exc)) from exc
+
+    system.add_definition(kernel_definition)
+
+    # A nullary defined form is a new ground leaf of the grammar that no
+    # production declared a role for. The build has just settled it: the leaf
+    # abbreviates one fixed term, so a *later* definition may introduce it exactly
+    # as it may a declared constant, and `T ≝ S` layers on `S ≝ ⊥`.
+    notation.template.denotes_constant = denotes_a_constant(kernel_definition)
 
     # A freshly added definition or one that de-duplicated into an existing
     # equivalent — either way its form was recognised, so the definition layers.
@@ -694,7 +748,7 @@ def registered_definition_layering(spec: SystemSpec) -> list[bool]:
     Keyed by **position**, not by defined form, so a caller can tell whether a
     *specific* definition would be dropped even when two definitions share a
     higher form (a set of forms would collapse them) or are structurally
-    equivalent up to renaming (which ``add_definition`` de-duplicates).
+    equivalent up to renaming (which ``add_notation`` de-duplicates).
 
     Layering depends only on the grammar (productions, in their sort unions) and
     the definitions themselves; axioms, rules and lines contribute nothing to it.

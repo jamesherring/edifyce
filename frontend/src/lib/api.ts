@@ -81,6 +81,12 @@ export interface Production {
 	atom_value: string | null;
 	/** kind==="atom": the indexed family's base (e.g. `p` for the `p_#` family). */
 	atom_base: string | null;
+	/** Whether this production's tokens are constants of the object language
+	 * (`⊥`, `∅`) rather than variables of it. Declared, not inferred — `⊥` in
+	 * `formula ::= ⊥` and `a` in `setvar ::= a | b | c` are the same shape and
+	 * opposite answers. Only a constant may appear in a definition's defining
+	 * form without the defined form supplying it. */
+	denotes_constant: boolean;
 	bindings: Binding[];
 }
 
@@ -244,6 +250,8 @@ export interface ProductionCreate {
 	regex?: string | null;
 	atom_value?: string | null;
 	atom_base?: string | null;
+	/** See `Production.denotes_constant`. Omitted means variable-like. */
+	denotes_constant?: boolean;
 	bindings?: Binding[];
 }
 export type ProductionUpdate = Partial<ProductionCreate>;
@@ -361,6 +369,76 @@ export interface ProofDetail extends ProofSummary {
 	/** Incoming references (proofs that cite this one as a lemma), filtered to
 	 * those the viewer may read. */
 	referenced_by: ProofReferrer[];
+}
+
+// The stored structure of a checked proof — mirrors the ProofStructure models in
+// app/schemas.py, which read the rows in app/db/proof_lines.py. Distinct from
+// `ProofDetail.result`: that is the display snapshot the editor renders, this is
+// the structure the checker derived (each formula a node in the system's term
+// graph, each justification an edge).
+
+/** A term-graph node's identity, without its children. `digest` matches exactly;
+ * `alpha_digest` matches up to consistent renaming of free variables. */
+export interface TermSummary {
+	id: string;
+	kind: string;
+	constructor: string | null;
+	literal: string | null;
+	sort: string | null;
+	digest: string;
+	alpha_digest: string | null;
+}
+
+/** One justification edge. Exactly one target form is populated: `line_id` for a
+ * citation within this proof, or `proof_id`/`number` for one reaching into a
+ * cited lemma. */
+export interface ProofStructureAntecedent {
+	/** 'antecedent' (a declared rule slot), 'extra' (a tolerated surplus line),
+	 * or 'subproof' (the opener of a block a discharge rule consumed). */
+	role: string;
+	position: number;
+	line_id: string | null;
+	proof_id: string | null;
+	number: number | null;
+}
+
+export interface ProofStructureLine {
+	id: string;
+	/** Index into the source's lines, blanks and commentary included — unlike
+	 * `number`, the citation number, which is null for those. */
+	position: number;
+	number: number | null;
+	indent: number;
+	display: string;
+	line_type: string | null;
+	behaviour: string | null;
+	label: string | null;
+	/** The citation as written, then the rule the checker resolved it to (null
+	 * when nothing justified the line: a scope opener, axiom, or definitional step). */
+	reference: string | null;
+	rule: string | null;
+	/** The definition a definitional step applied. A generic `[Def, n]` citation
+	 * names none, so this is the only record of which one it was. */
+	definition_id: string | null;
+	valid: boolean;
+	invalid_message: string | null;
+	warning_message: string | null;
+	/** The scope this line opens, and the opener of the subproof it sits in. */
+	opens_scope: string | null;
+	scope_id: string | null;
+	/** The line's formula in the term graph; null for a line that bears none. */
+	term: TermSummary | null;
+	antecedents: ProofStructureAntecedent[];
+}
+
+export interface ProofStructure {
+	proof_id: string;
+	/** Whether a structure is materialised. Never "derived nothing" (an empty
+	 * proof still stores its one blank line), but not quite "unchecked" either: a
+	 * proof checked before this store existed materialises on its next verify.
+	 * Read `ProofSummary.valid` for whether it was checked. */
+	stored: boolean;
+	lines: ProofStructureLine[];
 }
 
 export interface ProofCreate {
@@ -637,6 +715,10 @@ export const api = {
 		remove: (id: string) => request<null>(`/proofs/${id}`, { method: 'DELETE' }),
 		/** Rebuild the parent system and check this proof against it, caching the verdict. */
 		verify: (id: string) => request<VerifyResponse>(`/proofs/${id}/verify`, { method: 'POST' }),
+		/** The structure the last verification stored — lines, their kernel terms,
+		 * and the justification edges between them. Never re-checks: an unverified
+		 * proof reports `stored: false`. */
+		structure: (id: string) => request<ProofStructure>(`/proofs/${id}/structure`),
 		/** Replace this proof's outgoing references (lemmas it cites) wholesale. */
 		setReferences: (id: string, references: ProofReferenceInput[]) =>
 			request<ProofDetail>(`/proofs/${id}/references`, {

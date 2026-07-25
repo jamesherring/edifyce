@@ -60,6 +60,7 @@ from ..kernel import (
     abstract,
     from_match,
 )
+from ..matching.definitions import DefinedNotation
 from ..matching.patterns import Pattern, UnionPattern
 
 if TYPE_CHECKING:
@@ -211,19 +212,21 @@ def _parse_term(text: str, context: Context) -> Term | None:
     lifts any leaf that is a declared metavariable to a ``Var`` (via ``abstract``)
     so it stays schematic. Returns ``None`` when nothing parses.
 
-    Defined notation is allowed: the parse may unfold the system's *resolved*
-    definitions. Any record that is not yet resolved is dropped
-    first, though — mid-build ``context.definitions`` can hold records that are
-    not yet resolved (they lack ``.match`` and would crash the unfold). Rule and
-    definition provisos are parsed once definitions have resolved (step 9 of
-    ``build_system``), so a proviso there sees real definitions.
+    Defined notation is allowed: the parse may use any notation already
+    registered. Mid-build ``context.definitions`` can also hold the *spec* records
+    a system is being assembled from, which are not notations and cannot parse
+    anything, so they are dropped first. Rule and definition provisos are parsed
+    once definitions have resolved (step 9 of ``build_system``), so a proviso
+    there sees the real ones.
     """
     parse_context = copy(context)
-    parse_context.definitions = [d for d in context.definitions if hasattr(d, "match")]
+    parse_context.definitions = [
+        d for d in context.definitions if isinstance(d, DefinedNotation)
+    ]
     for candidate in context.variables.values():
         if not isinstance(candidate, UnionPattern):
             continue
         matched = candidate.match(text, parse_context)
         if matched is not None:
-            return abstract(from_match(matched, parse_context), context.string_variables)
+            return abstract(from_match(matched), context.string_variables)
     return None

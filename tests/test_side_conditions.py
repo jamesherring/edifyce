@@ -79,13 +79,13 @@ def formula_term(fol, string):
     formula = system.build_context.variables["formula"]
     matched = formula.match(string, context)
     assert matched is not None, string
-    return from_match(matched, context)
+    return from_match(matched)
 
 
 def setvar_term(fol, string):
     system, context = fol
     setvar = system.build_context.variables["setvar"]
-    return from_match(setvar.match(string, context), context)
+    return from_match(setvar.match(string, context))
 
 
 # ---------------------------------------------------------------------------

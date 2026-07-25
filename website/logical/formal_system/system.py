@@ -2,6 +2,8 @@
 
 from copy import copy
 
+from ..kernel.definitions import Definition as KernelDefinition
+from ..kernel.terms import from_match
 from ..matching import Context, Match, Pattern, StringPattern, UnionPattern
 from .promotion import PromotedTheorem
 from .proof import Proof
@@ -29,6 +31,13 @@ class FormalSystem:
 
         # A list of valid inference rules for the system
         self.inference_rules = inference_rules if inference_rules is not None else []
+
+        # The system's definitional axioms (kernel Definitions). A proof cites
+        # one by label, or lets the generic keyword search them all. Held here
+        # rather than in the proof context because they are fixed once the system
+        # is built - the context carries only the *notations* that let a defined
+        # form parse (see matching.DefinedNotation).
+        self.definitions: list[KernelDefinition] = []
 
         # Proved/imported theorems registered for schematic reuse, keyed by label.
         # Kept out of `inference_rules` so the system's *primitive* rules stay
@@ -86,7 +95,7 @@ class FormalSystem:
             # Add the pattern
             add_pattern(self.pattern_dictionary, item)
 
-    def parse(self, text, proof=None, proof_model_id=None, context=None):
+    def parse(self, text, proof=None, context=None):
         # Parse the text into a proof. To let the proof cite lemmas from other
         # proofs, build the `Proof` yourself, seed its `reference_context` with
         # them, and pass it as `proof` (see app/routers/proofs.py).
@@ -100,7 +109,6 @@ class FormalSystem:
         if context is None:
             # Create a new proof context instance
             context = copy(self.context)
-            context.proof_model_id = proof_model_id
 
         i = -1
         while i + 1 < len(lines):
@@ -135,7 +143,6 @@ class FormalSystem:
 
                 # Record the line_type of this line
                 proof_line.line_type = line_type
-                proof_line.match = result
 
                 # Project the line type's declared formula/reference fields off
                 # the match. (`label`, `display` and axiom-marking are handled by
@@ -144,23 +151,40 @@ class FormalSystem:
                 # defined since the accessor-function syntax was removed.)
                 if line_type.formula_field is not None:
                     # The logical formula is the sub-field the line type declares
-                    # (or the whole match, for `formula: self`).
+                    # (or the whole match, for `formula: self`). Project it into a
+                    # kernel term *here*, while the match is still in hand: the
+                    # term is what every later check runs on, and the match itself
+                    # does not outlive this loop body.
                     try:
                         formula = _line_field(result, line_type.formula_field)
-                        # It has to be a match
-                        if type(formula) is Match:
-                            proof_line.formula = formula
-                    except Exception:
-                        pass
+                    except KeyError:
+                        # The line type names a field this line has no sub-match
+                        # for: the line simply carries no formula.
+                        formula = None
+
+                    if formula is not None:
+                        proof_line.formula_string = formula.string
+                        try:
+                            proof_line.formula_term = from_match(formula)
+                        except Exception as exc:
+                            # The parse produced a shape the term layer cannot
+                            # read. That used to surface as a raise out of the
+                            # whole parse, from whichever rule check projected it
+                            # first; failing the one line names where the problem
+                            # is and lets the rest of the proof still report.
+                            proof_line.valid = False
+                            proof_line.invalid_message = f"Could not read the formula on this line: {exc}"
 
                 if line_type.reference_field is not None:
                     # The citation reference is the declared sub-field.
                     try:
                         reference_match = _line_field(result, line_type.reference_field)
-                        proof_line.reference_string = reference_match.formatted_string()
+                    except KeyError:
+                        reference_match = None
+
+                    if reference_match is not None:
+                        proof_line.reference_string = reference_match.string
                         proof_line.reference_string_display = reference_match.string
-                    except Exception:
-                        pass
 
                 # No need to check other line types
                 break
@@ -198,6 +222,11 @@ class FormalSystem:
                 break
 
         return proof
+
+    def add_definition(self, definition: KernelDefinition) -> None:
+        # Register a definitional axiom. Labels are checked for uniqueness by the
+        # builder, so a citation resolves to exactly one.
+        self.definitions.append(definition)
 
     def add_inference_rule(self, rule):
         # Add an inference rule

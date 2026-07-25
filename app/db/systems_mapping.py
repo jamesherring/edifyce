@@ -85,6 +85,7 @@ def spec_to_system(spec: SystemSpec) -> FormalSystem:
             regex=prod.regex,
             atom_value=prod.atom_value,
             atom_base=prod.atom_base,
+            denotes_constant=prod.denotes_constant,
             union=symbols[prod.sort],
         )
         symbols[prod.name] = symbol
@@ -159,6 +160,7 @@ def system_to_spec(system: FormalSystem) -> SystemSpec:
             regex=symbol.regex,
             atom_value=symbol.atom_value,
             atom_base=symbol.atom_base,
+            denotes_constant=symbol.denotes_constant,
             bindings=[(b.var, b.symbol.name) for b in symbol.bindings],
         )
         for symbol in system.symbols

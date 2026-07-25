@@ -100,6 +100,12 @@ class Production(BaseModel):
     regex: str | None = None
     atom_value: str | None = None
     atom_base: str | None = None
+    # Whether this production's tokens are *constants* of the object language
+    # rather than variables of it — Metamath's `$c` vs `$v`. Declared, never
+    # inferred: `⊥` in `formula ::= ⊥` and `a` in `setvar ::= a | b | c` are the
+    # same shape and opposite answers. Only a constant may appear in a
+    # definition's defining form without the defined form supplying it.
+    denotes_constant: bool = False
     bindings: list[Binding] = Field(default_factory=list)
 
 
@@ -279,6 +285,10 @@ class ProductionCreate(BaseModel):
     regex: str | None = Field(None, max_length=512)
     atom_value: str | None = Field(None, min_length=1, max_length=512)
     atom_base: str | None = Field(None, min_length=1, max_length=128)
+    # See `Production.denotes_constant`. Defaults off: leaving it out treats the
+    # production as variable-like, which costs a refused definition rather than a
+    # capturing one.
+    denotes_constant: bool = False
     bindings: list[Binding] = Field(default_factory=list)
 
 
@@ -289,6 +299,7 @@ class ProductionUpdate(BaseModel):
     regex: str | None = Field(None, max_length=512)
     atom_value: str | None = Field(None, min_length=1, max_length=512)
     atom_base: str | None = Field(None, min_length=1, max_length=128)
+    denotes_constant: bool | None = None
     bindings: list[Binding] | None = None
 
 
@@ -476,6 +487,93 @@ class ProofDetail(ProofSummary):
     # Incoming references (proofs that cite this one as a lemma) — the "used by"
     # direction. Filtered to those the viewer may read.
     referenced_by: list[ProofReferrerOut] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Stored proof structure
+#
+# The read side of app/db/proof_lines.py: a checked proof decomposed into rows —
+# one per source line, each formula a root in the system's term graph, and the
+# justification edges between them. Written by verification, dropped when the
+# verdict is. Distinct from ProofDetail.result, which is the *display* snapshot
+# the editor renders; this is the structure the engine actually derived.
+# ---------------------------------------------------------------------------
+
+
+class TermSummary(BaseModel):
+    """A term-graph node's identity, without its children.
+
+    The DAG below it is queryable in SQL (`term_children`); what a client needs
+    here is the root's shape and its two search keys — ``digest`` (exact) and
+    ``alpha_digest`` (up to consistent renaming of free variables), so equal
+    statements can be grouped without re-parsing anything."""
+
+    id: uuid.UUID
+    kind: str
+    constructor: str | None = None
+    literal: str | None = None
+    sort: str | None = None
+    digest: str
+    alpha_digest: str | None = None
+
+
+class ProofLineAntecedentOut(BaseModel):
+    """One justification edge: a line this line was derived from.
+
+    Exactly one target form is populated — ``line_id`` for a citation within this
+    proof, or ``proof_id``/``number`` for one reaching into a cited lemma (which
+    owns its own line rows)."""
+
+    role: str
+    position: int
+    line_id: uuid.UUID | None = None
+    proof_id: uuid.UUID | None = None
+    number: int | None = None
+
+
+class ProofLineOut(BaseModel):
+    id: uuid.UUID
+    # Index into the source's lines (blanks and commentary included), unlike
+    # `number`, which is the citation number and is null for those.
+    position: int
+    number: int | None = None
+    indent: int
+    display: str
+    line_type: str | None = None
+    behaviour: str | None = None
+    label: str | None = None
+    # The citation as written, then the rule the checker resolved it to — null
+    # when nothing justified the line (a scope opener, an axiom, a definitional
+    # step, or an unjustified one).
+    reference: str | None = None
+    rule: str | None = None
+    # The definition a definitional step applied. A generic `[Def, n]` citation
+    # names none — the checker searches those in scope — so this is the only
+    # record of which one it was.
+    definition_id: uuid.UUID | None = None
+    valid: bool
+    invalid_message: str | None = None
+    warning_message: str | None = None
+    # The scope kind this line opens, and the opener of the subproof it sits in.
+    opens_scope: str | None = None
+    scope_id: uuid.UUID | None = None
+    # The line's formula in the term graph; null for a line that bears none.
+    term: TermSummary | None = None
+    antecedents: list[ProofLineAntecedentOut] = Field(default_factory=list)
+
+
+class ProofStructure(BaseModel):
+    """A proof's stored structure, or an empty one when none is stored.
+
+    ``stored`` says only that: a structure is on hand. It is never "derived
+    nothing" — even an empty proof stores its one blank line — but nor is it
+    quite "unchecked", since a proof last checked before this store existed
+    carries a verdict without a structure until its next verify. Read it as
+    *materialised*, and ``ProofSummary.valid`` as *checked*."""
+
+    proof_id: uuid.UUID
+    stored: bool
+    lines: list[ProofLineOut] = Field(default_factory=list)
 
 
 class ProofCreate(BaseModel):
