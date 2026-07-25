@@ -1,6 +1,7 @@
 """Small, dependency-free graph utilities used by the proof checker and the API.
 
-Two unrelated bits of graph logic that were open-coded at their call sites:
+Two unrelated bits of graph logic, kept here rather than open-coded at their
+call sites:
 
 * **Bipartite matching** - deciding whether cited antecedent lines can be
   assigned to an inference rule's antecedent *slots* at all, and enumerating the
@@ -11,11 +12,10 @@ Two unrelated bits of graph logic that were open-coded at their call sites:
   algorithm - a few lines, easy to audit, and enough for the handful of
   antecedents a rule ever has.
 
-* **Topological order** - compiling a proof's cited lemmas before the proofs
-  that cite them (`app/routers/proofs.py`, over the stored reference edges).
-  This is a thin, typed wrapper over the standard library's
-  :class:`graphlib.TopologicalSorter` so callers get a plain ordered list
-  without repeating the boilerplate.
+* **Topological order** - sequencing nodes after everything they depend on, as
+  proof references need (a lemma compiled before the proofs citing it). A thin,
+  typed wrapper over the standard library's :class:`graphlib.TopologicalSorter`
+  so callers get a plain ordered list without repeating the boilerplate.
 
 Kept deliberately generic (plain hashable nodes, no engine imports) so it stays a
 leaf utility and can be tested in isolation.
@@ -84,8 +84,7 @@ def topological_order(dependencies: Mapping[N, Iterable[N]]) -> list[N]:
     """Nodes ordered so each comes after everything it depends on.
 
     ``dependencies`` maps a node to the nodes it depends on (its predecessors).
-    Raises :class:`graphlib.CycleError` if the dependencies are circular; the
-    error carries the offending cycle in ``args[1]``.
+    Raises :class:`graphlib.CycleError` if the dependencies are circular.
     """
     sorter: TopologicalSorter[N] = TopologicalSorter()
     for node, deps in dependencies.items():

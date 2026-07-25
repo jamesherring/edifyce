@@ -216,10 +216,9 @@ def _dependency_order(
 
 
 def _is_usable_lemma(engine_proof: EngineProof) -> bool:
-    # Only a fully valid, warning-free proof is a usable lemma: a proof that
-    # does not stand cannot justify another one, and a warning is unresolved
-    # doubt about whether it stands. Such a proof is simply not seeded, so a
-    # citation of it fails to resolve rather than resolving to something shaky.
+    # A proof that does not stand cannot justify another, and a warning is
+    # unresolved doubt about whether it stands. Such a lemma is left unseeded, so
+    # a citation of it fails to resolve rather than resolving to something shaky.
     return bool(engine_proof.valid) and not engine_proof.has_warnings
 
 
@@ -604,8 +603,8 @@ async def _reference_would_cycle(
     already reaches ``proof_id``. References are same-system-only, so scoping the
     load to the system captures the whole reachable closure without scanning the
     global table. The reference graph is tracked relationally, not in the engine:
-    a ``Proof`` object knows the lemmas seeded into its ``reference_context``,
-    not the edges that produced them.
+    a ``Proof`` knows the lemmas seeded into its ``reference_context``, not the
+    edges that produced them, so this check has no engine-side counterpart.
     """
     rows = (
         await session.execute(

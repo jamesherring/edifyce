@@ -99,13 +99,9 @@ def test_topological_order_of_independent_nodes_contains_them_all():
     assert set(topological_order({"a": [], "b": []})) == {"a", "b"}
 
 
-def test_topological_order_raises_on_a_cycle():
-    # `app/routers/proofs.py` catches CycleError to reject a circular reference
-    # closure, so the raise is contract, not incidental.
+# `app/routers/proofs.py` catches CycleError to reject a circular reference
+# closure, so the raise is contract, not incidental.
+@pytest.mark.parametrize("cyclic", [{"a": ["b"], "b": ["a"]}, {"a": ["a"]}])
+def test_topological_order_raises_on_a_cycle(cyclic):
     with pytest.raises(CycleError):
-        topological_order({"a": ["b"], "b": ["a"]})
-
-
-def test_topological_order_raises_on_a_self_dependency():
-    with pytest.raises(CycleError):
-        topological_order({"a": ["a"]})
+        topological_order(cyclic)

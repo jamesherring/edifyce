@@ -220,8 +220,7 @@ class Proof:
         self.numbered_lines = []
 
         # Labelled lines, plus any lemma proofs the caller pre-seeds under an
-        # alias so this proof can cite them (see app/routers/proofs.py, which
-        # fills it from the stored reference edges before parsing).
+        # alias so this proof can cite them (see app/routers/proofs.py).
         self.reference_context = {}
 
         # The proof model id

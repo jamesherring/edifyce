@@ -3,9 +3,8 @@ via bipartite matching (InferenceRule.slot_admits + Proof._first_valid_assignmen
 - a rule applies regardless of the order its antecedents are cited, an impossible
 citation is rejected without raising, and extra antecedents are handled.
 
-Proof-to-proof dependency ordering is not an engine concern: the reference graph
-lives in the database and `app/routers/proofs.py` topologically orders the
-closure before parsing (covered by tests/test_proofs_api.py).
+Proof-to-proof dependency ordering is not an engine concern; it is covered by
+tests/test_proofs_api.py.
 
 Both systems are assembled declaratively (`SystemSpec` + `build_system`), the
 same build path the database and API use.

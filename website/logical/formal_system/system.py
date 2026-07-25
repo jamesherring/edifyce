@@ -86,9 +86,6 @@ class FormalSystem:
             # Add the pattern
             add_pattern(self.pattern_dictionary, item)
 
-    # `line_number_offset` is gone with the `indent` behaviour: it was only ever
-    # a "am I the recursive block call?" flag, set by the block parse that
-    # `LineSpec.scope` replaced. Nothing offset any line number.
     def parse(self, text, proof=None, proof_model_id=None, context=None):
         # Parse the text into a proof. To let the proof cite lemmas from other
         # proofs, build the `Proof` yourself, seed its `reference_context` with

@@ -1,5 +1,13 @@
 # Plan: proof-to-proof references & first-class definitions
 
+> **Status: delivered.** Kept as a record of the design, not a description of
+> the code. One thing it says is now false: the engine-side import machinery it
+> surveys under "What already exists" — `import_path`, `reference_proofs`,
+> `proofs_used`, `dependency_order`, `circular_dependency` — has been **deleted**.
+> The plan chose pre-seeding `reference_context` over import lines, so that
+> machinery was never wired up, and the reference graph now lives only in
+> `proof_references` with the sort and cycle checks in `app/routers/proofs.py`.
+
 A proposed sequence of small, additive PRs to deliver three capabilities:
 
 - **(a)** proofs that reference other proofs — transitively, with circular
