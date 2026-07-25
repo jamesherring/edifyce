@@ -16,7 +16,11 @@ from collections.abc import Mapping, Sequence
 from copy import copy
 from typing import TYPE_CHECKING
 
-from website.logical.build_context import FormalSystemContext, build_schema_pattern
+from website.logical.build_context import (
+    FormalSystemContext,
+    build_schema_pattern,
+    warm_grammar_index,
+)
 from website.logical.formal_system import FormalSystem, PromotedTheorem
 from website.logical.formal_system.side_condition_syntax import parse_side_condition
 from website.logical.kernel import from_match
@@ -175,7 +179,10 @@ def promote_from_source(
         raise ValueError("Cannot promote a theorem against a system with no build context.")
 
     # Copy the context so the theorem's metavariables can be set in
-    # string_variables without mutating the system's own build context.
+    # string_variables without mutating the system's own build context. Warm the
+    # grammar index on the original first, so the copy inherits it rather than
+    # rebuilding it per theorem.
+    warm_grammar_index(system.build_context)
     context = copy(system.build_context)
     string_variables: dict[str, Pattern] = {}
     for name, sort_name in metavariables.items():

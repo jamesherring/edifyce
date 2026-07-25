@@ -62,6 +62,11 @@ class FormalSystemContext:
     # survives the context copies taken during a parse.
     parse_memo: dict | None = None
 
+    # Lookups derived from `variables` (see _GrammarIndex). Shared, not rebuilt,
+    # by `__copy__`: promotion copies a context per theorem, and the grammar it
+    # indexes is the same one throughout.
+    grammar_index: object = None
+
     def inherit(self, parent: FormalSystemContext) -> None:
         # Inherit from parent context
 
@@ -91,6 +96,7 @@ class FormalSystemContext:
         new_context.system_dict = copy(self.system_dict)
         new_context.error_log = copy(self.error_log)
         new_context.parse_memo = self.parse_memo
+        new_context.grammar_index = self.grammar_index
 
         return new_context
 
@@ -111,9 +117,9 @@ def build_schema_pattern(
     if text in context.variables:
         return context.variables[text]
 
-    for candidate in context.variables.values():
-        if isinstance(candidate, AtomPattern) and candidate.is_constant and candidate.is_member(text):
-            return candidate
+    constant = _grammar_index(context).constant_atoms.get(text)
+    if constant is not None:
+        return constant
 
     pattern = StringPattern(name=name, pattern=text)
     pattern.add_variables(context.string_variables)
@@ -163,6 +169,53 @@ def compose_schema_term(
     return None
 
 
+@dataclass(frozen=True)
+class _GrammarIndex:
+    """Two lookups over a context's declared patterns, keyed by how many there are.
+
+    Both answer questions about the *grammar*, which is fixed once a system is
+    built - but the two callers below ask them per schema built, and promotion
+    builds one per theorem statement and premise. Scanning every declared pattern
+    each time is what made those scans, rather than the parse they set up, a third
+    of an import. `size` is the guard: a context's `variables` only ever grows,
+    while a system is being assembled, so a differing count means rebuild.
+    """
+
+    size: int
+    constant_atoms: dict[str, Pattern]
+    unions: list[Pattern]
+
+
+def warm_grammar_index(context: FormalSystemContext) -> None:
+    """Build the grammar index on `context` itself, before it is copied.
+
+    `__copy__` hands the index on by reference, but a copy that has to *build* one
+    stores it only on itself and is then thrown away - so promotion, which copies
+    the build context per theorem, rebuilt the index for every theorem. Warming
+    the original once means every later copy inherits a hit.
+    """
+    _grammar_index(context)
+
+
+def _grammar_index(context: FormalSystemContext) -> _GrammarIndex:
+    index = context.grammar_index
+    if index is not None and index.size == len(context.variables):
+        return index
+
+    constant_atoms: dict[str, Pattern] = {}
+    unions: list[Pattern] = []
+    for candidate in context.variables.values():
+        if isinstance(candidate, UnionPattern):
+            unions.append(candidate)
+        elif isinstance(candidate, AtomPattern) and candidate.is_constant:
+            # First declaration wins, as the scan this replaces did.
+            constant_atoms.setdefault(candidate.value, candidate)
+
+    index = _GrammarIndex(len(context.variables), constant_atoms, unions)
+    context.grammar_index = index
+    return index
+
+
 def _composition_sorts(
     context: FormalSystemContext, prefer: Sequence[Pattern]
 ) -> list[Pattern]:
@@ -176,11 +229,13 @@ def _composition_sorts(
     # matches nearly every time, and the sorts otherwise tried first are large
     # unions whose failing parse costs as much as the succeeding one.
     sorts = [pattern for pattern in prefer if isinstance(pattern, UnionPattern)]
+    if not sorts:
+        return _grammar_index(context).unions
+
     seen = {id(pattern) for pattern in sorts}
-    for candidate in context.variables.values():
-        if isinstance(candidate, UnionPattern) and id(candidate) not in seen:
-            sorts.append(candidate)
-            seen.add(id(candidate))
+    sorts.extend(
+        union for union in _grammar_index(context).unions if id(union) not in seen
+    )
     return sorts
 
 

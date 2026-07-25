@@ -85,9 +85,19 @@ def build_spec(
                 )
             )
         else:
-            # No variables: a constant of its sort (`c2 $a class 2`).
+            # No variables: a constant of its sort (`c2 $a class 2`). Metamath
+            # declares the object-language role Edifyce asks for rather than
+            # leaving it to be guessed - the token comes from a `$c`, never a
+            # `$v`, and the two are disjoint - so say so. Nothing reads it until
+            # a definition is built over the token (see Production), which is
+            # what an imported `df-` will be.
             productions.append(
-                Production(sort=assertion.typecode, name=assertion.label, atom_value=text)
+                Production(
+                    sort=assertion.typecode,
+                    name=assertion.label,
+                    atom_value=text,
+                    denotes_constant=True,
+                )
             )
 
     productions.extend(_variable_sort_productions(database, before))
@@ -203,7 +213,7 @@ def _binder_sorts(database: Database) -> list[str]:
     # `$f` typecodes built by no syntax axiom at all - set.mm's `setvar`, whose
     # only members *are* the declared variables. These are the individual-variable
     # sorts, which is what a `$d` constrains (see _distinct_provisos).
-    built = {a.typecode for a in database.syntax_assertions()}
+    built = database.syntax_typecodes()
     return [t for t in database.floating_typecodes() if t not in built]
 
 

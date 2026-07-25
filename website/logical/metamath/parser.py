@@ -136,6 +136,7 @@ class Database:
     _syntax: list[Assertion] | None = field(default=None, repr=False, compare=False)
     _positions: dict[str, int] | None = field(default=None, repr=False, compare=False)
     _floating_typecodes: list[str] | None = field(default=None, repr=False, compare=False)
+    _syntax_typecodes: set[str] | None = field(default=None, repr=False, compare=False)
 
     def logical_assertions(self) -> list[Assertion]:
         return [a for a in self.iter_assertions() if a.is_logical]
@@ -145,6 +146,12 @@ class Database:
         if self._syntax is None:
             self._syntax = [a for a in self.iter_assertions() if a.declares_notation]
         return self._syntax
+
+    def syntax_typecodes(self) -> set[str]:
+        """Every typecode some syntax axiom builds a statement of."""
+        if self._syntax_typecodes is None:
+            self._syntax_typecodes = {a.typecode for a in self.syntax_assertions()}
+        return self._syntax_typecodes
 
     def floating_typecodes(self) -> list[str]:
         """Every typecode some ``$f`` declares a variable at, in declaration order."""
