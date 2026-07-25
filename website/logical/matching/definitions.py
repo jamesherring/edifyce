@@ -6,7 +6,16 @@ from . import matches, patterns
 
 
 class Definition:
-    """A definition class - linking higher level string patterns with lower level ones."""
+    """A definition linking a higher-level string pattern with a lower-level one.
+
+    This is the *parser* half of a definition: :meth:`match` (via
+    ``Pattern.try_definitions``) is what makes defined notation grammatical, so
+    ``a sub b`` reads as a formula at all. It does not *apply* definitions —
+    verifying that one formula is another with a definition unfolded is the
+    kernel's job, against the term-based counterpart on :attr:`kernel` (see
+    ``formal_system/definitions.py``). Keeping application out of here is what
+    stops a second, capture-blind checker existing alongside the trusted one.
+    """
 
     def __init__(self, lower, higher, pattern, context,
                  fresh=None, kernel_condition=None, label=None):
@@ -33,7 +42,12 @@ class Definition:
         self.kernel_condition = kernel_condition
 
         self.lower = None
-        self.lower_match_template = None
+
+        # The defining form exactly as it was written. `self.lower` is a *pattern*
+        # derived from it, whose template renames a variable used in two roles
+        # (`create_pattern`'s collision rename), so it is not always a form the
+        # author would recognise. Keep the original for error messages.
+        self.lower_source = lower
 
         # Create a higher pattern
         self.higher = patterns.StringPattern(
@@ -55,25 +69,22 @@ class Definition:
             # Create a lower pattern
             self.lower = match.create_pattern(context)
 
-            # Keep the lower match as a template
-            self.lower_match_template = match
-
             # Store the variables in a common dictionary.
             self.variables = self.lower.variables
             self.variables.update(self.higher.variables)
 
-        # Cached term-based (kernel) counterpart, built lazily by the
-        # formal_system layer for definitional-step checking over the shared-DAG
-        # term representation (see formal_system/definitions.py). Held opaquely so
-        # the matching layer keeps its no-kernel-import rule; `ready` records that
-        # a build was attempted, and `kernel_definition is None` after that means
-        # the definition is not soundly expressible as a kernel definition (it has
-        # a binder the `Define` DSL cannot declare), so the caller falls back to
-        # the string-based check_application path. A shallow copy carries both
-        # across the context copies the engine makes, so the build happens at most
-        # once per definition.
-        self.kernel_definition = None
-        self.kernel_definition_ready = False
+        # The term-based (kernel) counterpart this definition denotes - what a
+        # definitional step is actually checked against (see
+        # formal_system/definitions.py). Held opaquely so the matching layer keeps
+        # its no-kernel-import rule, and filled in by the system builder right
+        # after the definition enters the proof context, since building it needs
+        # the definition itself in scope to parse the defined form.
+        #
+        # None only between construction and that build. A definition that cannot
+        # produce one fails the system build, so every definition a proof sees has
+        # it; the engine's context copies are shallow per definition, which is what
+        # carries it through to the checker.
+        self.kernel = None
 
     def match(self, s, context):
         # Check if the definition applies to a string s, of the higher level match.
@@ -96,73 +107,6 @@ class Definition:
             m.add_submatch(key, sub_match.duplicate())
 
         return m
-
-    def check_application(self, lower, higher, context, mapping=None, lower_to_higher_mapping=None):
-        # Check if this definition defines higher match from lower match. Recursive algorithm.
-        # Optionally specify mapping that must be consistent.
-
-        if self.lower is None:
-            # Can't do this if we don't know the lower pattern
-            return False
-
-        if self.kernel_condition is not None:
-            # A `where` proviso is enforced only on the kernel path
-            # (check_definitional_step); applying the definition through the
-            # string layer would bypass it, so the string layer refuses such
-            # definitions outright. Their steps are verified via
-            # follows_from_definition / formal_system/definitions.py instead.
-            return False
-
-        if mapping is None:
-            mapping = {}
-
-        if lower_to_higher_mapping is None:
-            lower_to_higher_mapping = {}
-
-        if lower.formatted_string() in lower_to_higher_mapping and \
-                not lower_to_higher_mapping[lower.formatted_string()] == higher.string:
-            # Inconsistent mapping
-            return False
-
-        if (lower.definition is None and higher.definition is None) or \
-                (lower.definition is not None and lower.definition.equivalent(higher.definition, context)):
-            # Both definitions are the same or both None. No need to unpack, just need to check sub_matches
-
-            if not len(lower.sub_matches) == len(higher.sub_matches):
-                return False
-
-            for key, lower_sub in lower.sub_matches.items():
-                if key not in higher.sub_matches:
-                    return False
-
-                higher_sub = higher.sub_matches[key]
-
-                # Check application inside the submatches
-                if not self.check_application(lower_sub, higher_sub, context, mapping, lower_to_higher_mapping):
-                    return False
-
-            # Otherwise ok
-
-            if len(lower.sub_matches) == 0:
-                lower_to_higher_mapping[lower.formatted_string()] = higher.formatted_string()
-
-            # Don't need to check definition variables since both lower and higher are making use of the same definition
-            return True
-
-        # Otherwise, lower and higher definitions are different. Need higher to define to lower to be valid
-        if higher.definition is None or not self.equivalent(higher.definition, context, allow_mapping_to=True):
-            return False
-
-        # Higher must use this definition.
-
-        mapping = copy(higher.sub_matches)
-        result = self.lower_match_template.maps_to_up_to_definition(lower, context, mapping=mapping)
-        if not result:
-            return False
-
-        # No proviso to check: a definition carrying a `where` proviso was
-        # refused at the top of this method, so one that reaches here has none.
-        return True
 
     def equivalent(self, other, context, memo=None, allow_mapping_to=False):
         # Check if two definitions are the same.
@@ -201,55 +145,6 @@ class Definition:
         # Otherwise ok
         memo[(self, other)] = True
         return True
-
-    def get_lower(self, higher_match, context):
-        # Get a lower match from the higher match
-
-        if self.lower is None:
-            # Can't do this if we don't know the lower pattern
-            return False
-
-        if self.kernel_condition is not None:
-            # A `where` proviso is enforced only on the kernel path; unfolding
-            # here would skip it, so refuse (callers fall through to the kernel
-            # definitional-step check). See check_application above.
-            return False
-
-        # Variables are from the given higher match
-        variables = higher_match.sub_matches
-
-        # Build the lower string from the pattern
-        s = ""
-
-        # First get all the locations
-        var_locations = list(self.lower.variable_locations)
-        non_var_locations = list(self.lower.non_variable_locations)
-        locations = var_locations + non_var_locations
-        locations.sort()
-
-        for i in locations:
-            if i in non_var_locations:
-                s += self.lower.non_variable_locations[i]
-                continue
-
-            # i in var_locations
-            label = self.lower.variable_locations[i]["label"]
-            pattern = self.lower.variable_locations[i]["pattern"]
-
-            if not (label in variables):
-                raise ValueError(f"Could not build lower pattern - missing variable {label}.")
-
-            if not (pattern.equivalent(variables[label].pattern, context, allow_mapping_to=True)):
-                raise ValueError(f"Could not build lower pattern - mismatched patterns for variable {label}.")
-
-            s += variables[label].formatted_string()
-
-        result = self.pattern.match(s, context)
-
-        if result is None:
-            raise ValueError(f"Could not build lower pattern - no match for {s}.")
-
-        return result
 
     def __str__(self):
         if self.lower is None:

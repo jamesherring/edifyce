@@ -1,15 +1,18 @@
-"""The bridge from a legacy matching.Definition to the kernel's term-based
-definitional-step checker (formal_system/definitions.py).
+"""Building a kernel definition from a matching.Definition, and checking a
+definitional step against it (formal_system/definitions.py).
 
-``ProofLine.follows_from_definition`` now checks a definitional step over the
-shared-DAG term representation when the definition is soundly expressible as a
-kernel one, and falls back to the string-based ``Definition.check_application``
-otherwise. These tests pin both branches: an alias definition and a
-binder-carrying one (whose bound variables are declared with the ``fresh`` clause,
-optionally constrained by a ``where`` proviso) go through the kernel checker
-- accepting a correct unfold in either direction, rejecting a wrong one, and
-avoiding capture - while a definition with an *undeclared* binder or a legacy
-``if`` proviso is refused by the soundness gate so the legacy path is kept.
+Every definition gets its kernel counterpart when the *system* is built, and
+``ProofLine.follows_from_definition`` checks each step over the shared-DAG term
+representation against it. There is no second way to apply a definition, so a
+definition that has no sound kernel reading is rejected where its author can act
+on it: the build fails.
+
+These tests pin both sides. An alias definition, a constant-carrying one, and a
+binder-carrying one (whose bound variables are declared with ``fresh``, optionally
+constrained by a ``where`` proviso) build and check - accepting a correct unfold in
+either direction, rejecting a wrong one, and avoiding capture. A defining form
+that introduces an *undeclared* binder, or a legacy ``if`` proviso, fails the
+build.
 """
 
 from copy import copy
@@ -22,10 +25,10 @@ pytest.importorskip("regex")
 # database and API use.
 from website.logical.declarative import SystemSpec, build_spec
 from website.logical.formal_system.definitions import (
+    DefinitionError,
+    build_kernel_definition,
     follows_by_definition,
-    kernel_definition_for,
 )
-from website.logical.matching.definitions import Definition
 
 from tests.spec_helpers import (
     atom_const_prod,
@@ -89,11 +92,18 @@ def alias_spec() -> SystemSpec:
     )
 
 
-# A grammar whose defining form (built in-test, see `binder_definition`) binds a
-# fresh variable `z` the legacy `Define` DSL cannot declare, so a capture-blind
-# kernel unfold would be unsound - the bridge must refuse it and keep the string
-# path. The system itself carries no `Define`; it only supplies the grammar.
-def binder_spec() -> SystemSpec:
+# df-subset with its binder `z` *undeclared*: the defining form binds `z`, but
+# neither `fresh` nor the defined form mentions it, so a capture-blind unfold
+# would be unsound. There is no reading of this definition the kernel can check,
+# so the system must not build. `declare_z_as_a_parameter` spells the same mistake
+# the other way - `z` given as an ordinary parameter, as if the unfold's consumer
+# supplied it - which is equally unsound and must be refused too.
+def binder_spec(
+    where: str | None = None, *, declare_z_as_a_parameter: bool = False
+) -> SystemSpec:
+    bindings = [("x", "setvar"), ("y", "setvar")]
+    if declare_z_as_a_parameter:
+        bindings.append(("z", "setvar"))
     return SystemSpec(
         name="BinderSys",
         brackets=brackets(),
@@ -105,6 +115,12 @@ def binder_spec() -> SystemSpec:
             template_prod("formula", "subset", "(x ⊆ y)", [("x", "setvar"), ("y", "setvar")]),
         ],
         lines=[statement_line()],
+        definitions=[
+            defn(
+                "formula", "df_subset", "(x ⊆ y)", "∀z.((z ∈ x) → (z ∈ y))",
+                bindings, condition=where,
+            ),
+        ],
         rules=[_hyp_rule()],
     )
 
@@ -137,69 +153,126 @@ def alias_system():
 
 
 @pytest.fixture(scope="module")
-def binder_system():
-    return build_declarative(binder_spec())
-
-
-@pytest.fixture(scope="module")
 def const_system():
     return build_declarative(const_spec())
 
 
-def binder_definition(system):
-    # (x ⊆ y) := ∀z.((z ∈ x) → (z ∈ y)) with z's binder status *not* declared.
-    # Built directly so z is an undeclared bound variable of the defining form;
-    # the soundness gate must refuse it (contrast `fresh_system`, whose `fresh`
-    # binding declares z, so the kernel path is taken).
-    context = context_of(system)
-    setvar = system.build_context.variables["setvar"]
-    context.string_variables = {"x": setvar, "y": setvar}
-    formula = system.build_context.variables["formula"]
-    return Definition(
-        lower="∀z.((z ∈ x) → (z ∈ y))",
-        higher="(x ⊆ y)",
-        pattern=formula,
-        context=context,
-    )
-
-
 # ---------------------------------------------------------------------------
-# kernel_definition_for - the soundness gate
+# build_kernel_definition - the build-time soundness gate
 # ---------------------------------------------------------------------------
 
 
 def test_binder_free_alias_builds_a_kernel_definition(alias_system):
+    # The kernel counterpart is built with the system, not derived per step.
     definition = only_definition(alias_system)
-    kernel_def = kernel_definition_for(definition, context_of(alias_system))
-    assert kernel_def is not None
-    # It is cached on the legacy definition (built at most once).
-    assert definition.kernel_definition_ready is True
-    assert definition.kernel_definition is kernel_def
+    assert definition.kernel is not None
 
 
-def test_binder_carrying_definition_is_refused(binder_system):
-    definition = binder_definition(binder_system)
-    kernel_def = kernel_definition_for(definition, context_of(binder_system))
-    # `z` is a bound variable the Define DSL cannot declare; the gate refuses it.
-    assert kernel_def is None
-    assert definition.kernel_definition_ready is True
+def test_undeclared_binder_fails_the_build():
+    # `z` is bound by the defining form and absent from the defined form, so no
+    # unfold of this definition is capture-safe. The build says so, naming the
+    # variable and the fix.
+    result = build_spec(binder_spec())
+    assert "errors" in result
+    (message,) = result["errors"]
+    assert "'z'" in message and "fresh" in message
+
+
+def test_undeclared_binder_with_a_proviso_fails_the_build():
+    # A `where` proviso does not rescue it: the proviso is checked against the
+    # binding an unfold produces, and there is no sound unfold to produce one.
+    result = build_spec(binder_spec(where="disjoint(x, y, setvar)"))
+    assert "errors" in result
+    assert "'z'" in result["errors"][0]
+
+
+def test_binder_declared_as_an_ordinary_parameter_fails_the_build():
+    # Declaring `z` as a parameter is the same unsoundness spelled differently:
+    # the defined form cannot supply it, so it is a binder however it is declared.
+    # This is also the case whose generated pattern renames `z` to `z_0`, so the
+    # message must quote the defining form the author wrote.
+    result = build_spec(binder_spec(declare_z_as_a_parameter=True))
+    assert "errors" in result
+    (message,) = result["errors"]
+    assert "'z'" in message and "z_0" not in message
+    assert "∀z.((z ∈ x) → (z ∈ y))" in message
+
+
+def test_a_definition_built_outside_the_system_builder_says_so(alias_system):
+    # `Pattern.add_definition` is public and does not build a kernel counterpart —
+    # only `declarative.build_system` does. A definition that reaches a proof that
+    # way must name the broken invariant, not fail as an AttributeError several
+    # frames inside the kernel.
+    system = alias_system
+    formula = system.build_context.variables["formula"]
+    context = context_of(system)
+    context.string_variables = {"x": system.build_context.variables["setvar"],
+                                "y": system.build_context.variables["setvar"]}
+    unbuilt = formula.add_definition("(x ∈ y)", "x below y", context)
+    assert unbuilt is not None and unbuilt.kernel is None
+
+    _proof, (alias, canonical) = formulae(system, "a sub b", "(a ∈ b)")
+    with pytest.raises(DefinitionError, match="no kernel counterpart"):
+        follows_by_definition(alias, canonical, unbuilt, context)
+
+
+def test_a_definition_with_no_defining_form_is_refused(alias_system):
+    # `require_lower_match=False` builds a definition whose lower form is unknown.
+    # It makes defined notation parse, but there is nothing to unfold *to*.
+    context = context_of(alias_system)
+    formula = alias_system.build_context.variables["formula"]
+    open_definition = formula.add_definition(
+        "not a formula at all", "x beside y", context, require_lower_match=False
+    )
+    assert open_definition is not None and open_definition.lower is None
+
+    with pytest.raises(DefinitionError, match="no defining form"):
+        build_kernel_definition(open_definition, context)
 
 
 def test_constant_carrying_definition_builds_a_kernel_definition(const_system):
     # `⊥` is a lower-only ground leaf, like an undeclared binder — but it is a
-    # grammar constant, which can never be captured, so the gate admits it and the
-    # definition stays on the kernel path.
+    # grammar constant, which can never be captured, so the gate admits it.
     definition = only_definition(const_system)
-    kernel_def = kernel_definition_for(definition, context_of(const_system))
-    assert kernel_def is not None
-    assert definition.kernel_definition is kernel_def
+    assert definition.kernel is not None
+
+
+# A nullary abbreviation: `S` names one specific formula. Its defining form's `a`
+# and `b` are lower-only *and* variable-like (the setvar regex claims them), so a
+# leaf-only guard would flag them — but `S` takes no arguments, so an unfold
+# substitutes nothing and there is nothing to capture.
+def nullary_spec() -> SystemSpec:
+    return SystemSpec(
+        name="NullarySys",
+        brackets=brackets(),
+        productions=[
+            _setvar_prod(),
+            template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+        ],
+        lines=[statement_line()],
+        definitions=[defn("formula", "s", "S", "(a ∈ b)", [])],
+        rules=[_hyp_rule()],
+    )
+
+
+def test_nullary_abbreviation_builds_and_checks_a_step():
+    system = build_declarative(nullary_spec())
+    definition = only_definition(system)
+    assert definition.kernel is not None
+
+    context = context_of(system)
+    _proof, (abbreviated, spelled, other) = formulae(
+        system, "S", "(a ∈ b)", "(a ∈ c)"
+    )
+    assert follows_by_definition(abbreviated, spelled, definition, context) is True
+    assert follows_by_definition(spelled, abbreviated, definition, context) is True
+    assert follows_by_definition(abbreviated, other, definition, context) is False
 
 
 # A constant grammar plus an unused sort whose regex is malformed. The bad regex
 # is never exercised at build time (its sort is referenced by nothing), so it
-# compiles lazily — only when the constant probe matches a leaf against it. The
-# gate must stay fail-closed: fall back to the string path, never let the error
-# abort the proof check.
+# compiles lazily — only when the constant probe matches a leaf against it. An
+# unrelated broken sort must not decide whether a definition is capture-safe.
 def const_bad_regex_spec() -> SystemSpec:
     spec = const_spec()
     spec.productions.append(regex_prod("junk", "junk_atom", "[unclosed"))
@@ -208,9 +281,7 @@ def const_bad_regex_spec() -> SystemSpec:
 
 def test_malformed_unused_regex_sort_does_not_abort_the_gate():
     system = build_declarative(const_bad_regex_spec())
-    definition = only_definition(system)
-    # The probe trips the bad regex, so the gate declines rather than raising.
-    assert kernel_definition_for(definition, context_of(system)) is None
+    assert only_definition(system).kernel is not None
 
 
 # ---------------------------------------------------------------------------
@@ -265,27 +336,9 @@ def test_follows_from_definition_uses_the_kernel_path(alias_system):
     proof, _ = formulae(alias_system, "a sub b", "(a ∈ b)", "(a ∈ c)")
     alias_line, canonical_line, other_line = proof.proof_lines
 
-    assert alias_line.follows_from_definition(canonical_line, definition, {}, context) is True
-    assert alias_line.follows_from_definition(other_line, definition, {}, context) is False
-    assert definition.kernel_definition is not None
-
-
-def test_binder_definition_falls_back_to_string_path(binder_system):
-    # The bridge declines (returns None) for the binder-carrying definition, so
-    # follows_from_definition must delegate to the string-based path rather than
-    # accept a capture-blind unfold.
-    definition = binder_definition(binder_system)
-    context = context_of(binder_system)
-    proof, _ = formulae(binder_system, "(a ⊆ b)", "∀z.((z ∈ a) → (z ∈ b))")
-    subset_line, unfolded_line = proof.proof_lines
-
-    assert subset_line.formula is not None and unfolded_line.formula is not None
-    # No kernel counterpart: the term-based check is not applicable here.
-    assert follows_by_definition(subset_line.formula, unfolded_line.formula, definition, context) is None
-    # The ProofLine method still returns a boolean via the legacy fallback.
-    assert isinstance(
-        subset_line.follows_from_definition(unfolded_line, definition, {}, context), bool
-    )
+    assert alias_line.follows_from_definition(canonical_line, definition, context) is True
+    assert alias_line.follows_from_definition(other_line, definition, context) is False
+    assert definition.kernel is not None
 
 
 # The declarative form of the same df-subset system, built for the happy-path
@@ -337,7 +390,7 @@ def test_fresh_clause_is_captured_on_the_definition(fresh_system):
 
 def test_declared_binder_builds_a_kernel_definition(fresh_system):
     definition = only_definition(fresh_system)
-    assert kernel_definition_for(definition, context_of(fresh_system)) is not None
+    assert definition.kernel is not None
 
 
 def test_declared_binder_unfold_accepted_both_directions(fresh_system):
@@ -382,7 +435,7 @@ def test_unfold_is_capture_avoiding(fresh_system):
 def test_where_proviso_is_parsed_into_a_kernel_condition(guarded_system):
     definition = only_definition(guarded_system)
     assert definition.kernel_condition is not None
-    assert kernel_definition_for(definition, context_of(guarded_system)) is not None
+    assert definition.kernel is not None
 
 
 def test_where_proviso_gates_the_unfold(guarded_system):
@@ -400,42 +453,24 @@ def test_where_proviso_gates_the_unfold(guarded_system):
     assert follows_by_definition(bad_subset, bad_unfold, definition, context) is False
 
 
-def test_where_definition_is_refused_by_the_string_path(guarded_system):
-    # A `where` proviso is enforced only on the kernel path; the string-layer
-    # application primitives (get_lower, check_application) must refuse a
-    # proviso-carrying definition so it cannot be applied unchecked (e.g. via
-    # Match.equivalent_under_definitions).
+def test_a_definition_has_no_second_way_to_be_applied(guarded_system):
+    # The string-layer application primitives are gone. They could not evaluate a
+    # `where` proviso, so a definition carrying one had to be refused there and
+    # checked on the kernel path — two paths disagreeing by construction. Now
+    # there is one, and this pins that the other cannot come back unnoticed.
     definition = only_definition(guarded_system)
-    context = context_of(guarded_system)
     assert definition.kernel_condition is not None
+    assert not hasattr(definition, "check_application")
+    assert not hasattr(definition, "get_lower")
 
-    higher = definition.higher.match("(a ⊆ b)", context)
+    higher = definition.higher.match("(a ⊆ b)", context_of(guarded_system))
     assert higher is not None
-    assert definition.get_lower(higher, context) is False
-    assert definition.check_application(higher, higher, context) is False
-
-
-def test_where_definition_refuses_when_the_kernel_path_is_unavailable(binder_system):
-    # A definition that carries a kernel `where` proviso but cannot build a
-    # kernel definition (here: an undeclared binder) must be refused, not routed
-    # to the string fallback that ignores the proviso.
-    from website.logical.kernel import Equal
-
-    definition = binder_definition(binder_system)
-    definition.kernel_condition = Equal("x", "y")  # any kernel proviso
-    context = context_of(binder_system)
-    proof, _ = formulae(binder_system, "(a ⊆ b)", "∀z.((z ∈ a) → (z ∈ b))")
-    subset_line, unfolded_line = proof.proof_lines
-
-    # No kernel counterpart is buildable, and the proviso cannot be enforced on
-    # the string path, so the step is refused rather than silently accepted.
-    assert kernel_definition_for(definition, context) is None
-    assert subset_line.follows_from_definition(unfolded_line, definition, {}, context) is False
+    assert not hasattr(higher, "equivalent_under_definitions")
+    assert not hasattr(higher, "maps_to_up_to_definition")
 
 
 # ---------------------------------------------------------------------------
-# check_definitional_line: the proof-check entry point (provisos honored
-# consistently, and a clear diagnostic when a proviso can't be enforced)
+# check_definitional_line: the proof-check entry point
 # ---------------------------------------------------------------------------
 
 
@@ -468,35 +503,17 @@ def test_check_definitional_line_honors_the_proviso_on_the_kernel_path(guarded_s
     assert "does not apply between" in bad_target.invalid_message
 
 
-def test_check_definitional_line_explains_an_unenforceable_proviso(binder_system):
-    # A proviso-carrying definition with no kernel counterpart (undeclared binder)
-    # can never apply: the message must name that cause, not a bare "does not apply".
-    from website.logical.kernel import Equal
-
-    definition = binder_definition(binder_system)
-    definition.kernel_condition = Equal("x", "y")
-    context = context_of(binder_system)
-    proof, _ = formulae(binder_system, "(a ⊆ b)", "∀z.((z ∈ a) → (z ∈ b))")
+def test_check_definitional_line_reports_a_plain_non_application(alias_system):
+    # Every definition reaching a proof is kernel-expressible, so a cited step
+    # that does not hold has exactly one cause worth reporting: the definition does
+    # not relate these two lines. There is no longer a second, unenforceable class
+    # of definition needing its own diagnostic — those fail the build instead.
+    definition = only_definition(alias_system)
+    context = context_of(alias_system)
+    proof, _ = formulae(alias_system, "a sub b", "(a ∈ c)")
     source, target = proof.proof_lines
 
     assert proof.check_definitional_line(
         target, _definition_reference(source, definition), context
     ) is False
-    message = target.invalid_message
-    assert "proviso" in message and "fresh" in message
-
-
-def test_check_definitional_line_message_is_generic_without_a_proviso(binder_system):
-    # The clear-proviso message is scoped to proviso-carrying definitions: an
-    # undeclared-binder definition with *no* proviso still reports the plain
-    # non-application message (it falls back to the string path, which may simply
-    # not relate these two lines).
-    definition = binder_definition(binder_system)  # no kernel_condition
-    context = context_of(binder_system)
-    proof, _ = formulae(binder_system, "(a ⊆ b)", "(a ∈ b)")
-    source, target = proof.proof_lines
-
-    assert proof.check_definitional_line(
-        target, _definition_reference(source, definition), context
-    ) is False
-    assert "proviso" not in target.invalid_message
+    assert "does not apply between" in target.invalid_message

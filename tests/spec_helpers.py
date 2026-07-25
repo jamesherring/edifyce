@@ -241,13 +241,19 @@ def mp_rule() -> Rule:
 
 
 def subset_def() -> Definition:
-    """``x ⊆ y`` ≝ ``∀z (z ∈ x → z ∈ y)`` — the canonical layered definition."""
+    """``x ⊆ y`` ≝ ``∀z (z ∈ x → z ∈ y)`` — the canonical layered definition.
+
+    ``z`` is declared with ``fresh``, not as a parameter: the defining form
+    *binds* it and the defined form never mentions it, so it is a binder the
+    unfold must be free to rename rather than an argument to be supplied.
+    """
     return defn(
         "formula",
         "subset",
         "x ⊆ y",
         "∀z (z ∈ x → z ∈ y)",
-        [("x", "variable"), ("y", "variable"), ("z", "variable")],
+        [("x", "variable"), ("y", "variable")],
+        fresh=[("z", "variable")],
     )
 
 

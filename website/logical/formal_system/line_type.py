@@ -21,9 +21,16 @@ class LineType:
         self.formula_field = formula_field
         self.reference_field = reference_field
 
-        # The behaviour of these lines
+        # The behaviour of these lines. There is deliberately no "definition"
+        # behaviour: a definition belongs to the *system*, built once from its
+        # SystemSpec and reaching every proof through the shared context. A line
+        # that introduced one would have to register it into the proof context at
+        # parse time, which nothing has done since the accessor mechanism that
+        # supplied its payload was removed - so the value could only ever produce
+        # lines that fail closed. A definitional *step* needs no such line: it is
+        # a `logical` line citing a definition (see `proof.DEFINITION_KEY`).
         self.behaviour = behaviour
-        if self.behaviour not in ("none", "import", "logical", "axiom", "definition", "comment"):
+        if self.behaviour not in ("none", "import", "logical", "axiom", "comment"):
             raise ValueError(f"'{self.behaviour}' is not a valid LineType behaviour.")
 
         # A logical line is checked against its formula, so one it cannot project
