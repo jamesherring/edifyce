@@ -169,6 +169,10 @@ class FormalSystem:
                 proof_line.invalid_message = "Could not parse line."
                 proof_line.valid = False
 
+            # Give the line its citation number. Done here, after the line type
+            # is known, because whether a line can be cited depends on it.
+            proof.assign_line_number(proof_line)
+
             # Place the line in its subproof (a no-op for systems that declare
             # no scope openers - every line then lands in the root scope).
             proof.assign_scope(proof_line)

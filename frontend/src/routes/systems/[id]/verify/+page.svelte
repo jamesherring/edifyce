@@ -38,6 +38,15 @@
 		return parsed.lines.map(lineTone);
 	});
 
+	// The numbers a citation names, under the same one-for-one guard as the tint:
+	// showing stale numbers would be worse than showing plain row positions.
+	const lineNumbers = $derived.by<(number | null)[]>(() => {
+		const parsed = result?.proof;
+		const lines = proofText.split('\n');
+		if (!parsed || parsed.lines.length !== lines.length) return [];
+		return parsed.lines.map((line) => line.number ?? null);
+	});
+
 	async function loadSystem(id: string) {
 		const seq = ++loadSeq;
 		// Invalidate any in-flight verify so its result can't land in the new
@@ -160,6 +169,7 @@
 						rows={14}
 						showLineNumbers
 						{lineStatuses}
+						{lineNumbers}
 					/>
 				</Card.Content>
 			</Card.Root>

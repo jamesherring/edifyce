@@ -569,6 +569,23 @@ def test_scope_line_opens_a_subproof_and_scopes_references():
     assert "scope" in (proof.proof_lines[3].invalid_message or "").lower()
 
 
+def test_scope_error_names_the_citation_number_not_the_text_position():
+    # The message has to agree with what the author typed. The leading blank
+    # shifts every text position by one but no citation number, so the rejected
+    # `[R, 2]` must be reported as line 2 — not line 3, where it sits in the file.
+    system = build_system(scoped_spec())
+    proof = system.parse(
+        "\n"
+        "assume a\n"
+        "    a [R, 1]\n"
+        "assume b\n"
+        "    a [R, 2]"
+    )
+    bad = proof.proof_lines[4]
+    assert bad.valid is False
+    assert "Line 2 is out of scope" in (bad.invalid_message or "")
+
+
 def test_invalid_line_scope_is_rejected():
     spec = SystemSpec(
         name="BadScope",

@@ -15,7 +15,8 @@
 		class: className,
 		id,
 		showLineNumbers = false,
-		lineStatuses = []
+		lineStatuses = [],
+		lineNumbers = []
 	}: {
 		value?: string;
 		placeholder?: string;
@@ -25,6 +26,10 @@
 		/** Render a line-number gutter (tinted by `lineStatuses`) beside the text. */
 		showLineNumbers?: boolean;
 		lineStatuses?: LineStatus[];
+		/** The number each line is cited by, aligned index-for-index with the
+		 *  editor's lines — null where a line has none (a blank line). Empty means
+		 *  "not known", and the gutter falls back to plain row positions. */
+		lineNumbers?: (number | null)[];
 	} = $props();
 
 	let textarea = $state<HTMLTextAreaElement | null>(null);
@@ -96,7 +101,7 @@
 						lineStatuses[i] === 'ok' && 'text-success'
 					]}
 				>
-					{i + 1}
+					{lineNumbers.length > 0 ? (lineNumbers[i] ?? '') : i + 1}
 				</div>
 			{/each}
 		</div>

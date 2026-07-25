@@ -9,6 +9,7 @@ const user = userEvent.setup();
 function line(overrides: Record<string, unknown> = {}) {
 	return {
 		valid: true,
+		number: 1,
 		behaviour: 'logical',
 		name: 'statement',
 		invalid_message: null,
@@ -46,5 +47,37 @@ describe('ProofResults line interaction', () => {
 	it('shows the idle message before any result', () => {
 		render(ProofResults, { result: null, idleMessage: 'Start typing…' });
 		expect(screen.getByText('Start typing…')).toBeInTheDocument();
+	});
+});
+
+describe('ProofResults gutter numbering', () => {
+	it('numbers by citation, leaving an unnumbered line blank', () => {
+		// A blank line carries no citation number, so the steps around it keep the
+		// numbers their references name. The gutter must show those, not the row
+		// position — which here would misnumber both steps.
+		render(ProofResults, {
+			result: result([
+				line({ number: null, display: '', behaviour: null, name: null }),
+				line({ number: 1, display: 'a [HYP]' }),
+				line({ number: 2, display: 'b [MP, 1]' })
+			])
+		});
+		const gutter = screen
+			.getAllByRole('listitem')
+			.map((li) => li.querySelector('span')?.textContent?.trim());
+		expect(gutter).toEqual(['', '1', '2']);
+	});
+
+	it('falls back to row position for a payload cached before numbering existed', () => {
+		const stale = () => {
+			const l = line();
+			delete (l as Record<string, unknown>).number;
+			return l;
+		};
+		render(ProofResults, { result: result([stale(), stale()]) });
+		const gutter = screen
+			.getAllByRole('listitem')
+			.map((li) => li.querySelector('span')?.textContent?.trim());
+		expect(gutter).toEqual(['1', '2']);
 	});
 });

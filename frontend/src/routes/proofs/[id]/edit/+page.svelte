@@ -67,6 +67,15 @@
 		return parsed.lines.map(lineTone);
 	});
 
+	// The numbers a citation names, under the same one-for-one guard as the tint:
+	// showing stale numbers would be worse than showing plain row positions.
+	const lineNumbers = $derived.by<(number | null)[]>(() => {
+		const parsed = liveResult?.proof;
+		const editorLines = source.split('\n');
+		if (!parsed || parsed.lines.length !== editorLines.length) return [];
+		return parsed.lines.map((line) => line.number ?? null);
+	});
+
 	async function load(id: string) {
 		const seq = ++loadSeq;
 		loading = true;
@@ -272,6 +281,7 @@
 						rows={14}
 						showLineNumbers
 						{lineStatuses}
+						{lineNumbers}
 					/>
 					<div class="flex justify-end">
 						<Button onclick={saveSource} disabled={savingSource || !dirty}>

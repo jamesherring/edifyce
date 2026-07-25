@@ -223,6 +223,48 @@ def test_proof_data_structure(simple_system):
 
 
 # ---------------------------------------------------------------------------
+# Citation numbering
+# ---------------------------------------------------------------------------
+
+
+def test_blank_lines_carry_no_citation_number(prop_logic_system):
+    # Numbers count citable steps, not text lines, so `[MP, 1, 2]` names the two
+    # hypotheses however the source is spaced out.
+    proof = prop_logic_system.parse(
+        "\n"
+        "a [HYP]\n"
+        "\n"
+        "(a -> b) [HYP]\n"
+        "\n"
+        "b [MP, 1, 2]"
+    )
+    assert proof.valid is True
+    assert [line.number for line in proof.proof_lines] == [None, 1, None, 2, None, 3]
+
+
+def test_inserting_a_blank_line_does_not_renumber_citations(prop_logic_system):
+    # The regression this numbering exists for: pressing Enter above a proof used
+    # to shift every citation below it.
+    source = "a [HYP]\n(a -> b) [HYP]\nb [MP, 1, 2]"
+    assert prop_logic_system.parse(source).valid is True
+    assert prop_logic_system.parse("\n" + source).valid is True
+
+
+def test_unparseable_lines_are_still_numbered(prop_logic_system):
+    # A line that matched no type is a step the author is still writing; skipping
+    # it would renumber everything below a typo.
+    proof = prop_logic_system.parse("a [HYP]\n???\n(a -> b) [HYP]\nb [MP, 1, 3]")
+    assert [line.number for line in proof.proof_lines] == [1, 2, 3, 4]
+    assert proof.proof_lines[1].valid is False
+    assert proof.proof_lines[3].valid is True
+
+
+def test_citation_number_reaches_the_data_payload(prop_logic_system):
+    lines = prop_logic_system.parse("\na [HYP]").data()["lines"]
+    assert [line["number"] for line in lines] == [None, 1]
+
+
+# ---------------------------------------------------------------------------
 # Logical lines and inference rules
 # ---------------------------------------------------------------------------
 
