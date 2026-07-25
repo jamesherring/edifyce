@@ -24,7 +24,11 @@ pytest.importorskip("regex")
 # Every system fixture is built declaratively via `build_spec`, the same path the
 # database and API use.
 from website.logical.declarative import SystemSpec, build_spec
-from website.logical.formal_system.definitions import follows_by_definition
+from website.logical.formal_system.definitions import (
+    DefinitionError,
+    build_kernel_definition,
+    follows_by_definition,
+)
 
 from tests.spec_helpers import (
     atom_const_prod,
@@ -192,6 +196,38 @@ def test_binder_declared_as_an_ordinary_parameter_fails_the_build():
     (message,) = result["errors"]
     assert "'z'" in message and "z_0" not in message
     assert "∀z.((z ∈ x) → (z ∈ y))" in message
+
+
+def test_a_definition_built_outside_the_system_builder_says_so(alias_system):
+    # `Pattern.add_definition` is public and does not build a kernel counterpart —
+    # only `declarative.build_system` does. A definition that reaches a proof that
+    # way must name the broken invariant, not fail as an AttributeError several
+    # frames inside the kernel.
+    system = alias_system
+    formula = system.build_context.variables["formula"]
+    context = context_of(system)
+    context.string_variables = {"x": system.build_context.variables["setvar"],
+                                "y": system.build_context.variables["setvar"]}
+    unbuilt = formula.add_definition("(x ∈ y)", "x below y", context)
+    assert unbuilt is not None and unbuilt.kernel is None
+
+    _proof, (alias, canonical) = formulae(system, "a sub b", "(a ∈ b)")
+    with pytest.raises(DefinitionError, match="no kernel counterpart"):
+        follows_by_definition(alias, canonical, unbuilt, context)
+
+
+def test_a_definition_with_no_defining_form_is_refused(alias_system):
+    # `require_lower_match=False` builds a definition whose lower form is unknown.
+    # It makes defined notation parse, but there is nothing to unfold *to*.
+    context = context_of(alias_system)
+    formula = alias_system.build_context.variables["formula"]
+    open_definition = formula.add_definition(
+        "not a formula at all", "x beside y", context, require_lower_match=False
+    )
+    assert open_definition is not None and open_definition.lower is None
+
+    with pytest.raises(DefinitionError, match="no defining form"):
+        build_kernel_definition(open_definition, context)
 
 
 def test_constant_carrying_definition_builds_a_kernel_definition(const_system):

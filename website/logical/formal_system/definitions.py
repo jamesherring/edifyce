@@ -140,17 +140,20 @@ def _reachable_patterns(sort: Pattern) -> set[Pattern]:
     return found
 
 
-def _is_capture_safe_constant(leaf: Node, sort: Pattern, context: Context) -> bool:
+def _is_capture_safe_constant(
+    leaf: Node, patterns: set[Pattern], context: Context
+) -> bool:
     """Whether ``leaf`` is a grammar *constant* — a symbol that can never stand in
     for a bound variable, so a lower-only occurrence of it in a defining form is
     safe to unfold without risk of capture.
 
     Two conditions, and both are needed. The leaf's own constructor must be a
     constant one (positive evidence, from the parse itself, that this position
-    holds a fixed symbol), **and** nothing bindable within ``sort``'s term language
-    may also claim the token - not a family atom, not a declared metavariable, not
-    any regex-token sort. The second covers an ambiguous grammar, where the same
-    token reads as a declared constant *and* as a variable in the same slot.
+    holds a fixed symbol), **and** nothing bindable in ``patterns`` - the sorts
+    reachable from the definition's own sort - may also claim the token: not a
+    family atom, not a declared metavariable, not any regex-token sort. The second
+    covers an ambiguous grammar, where the same token reads as a declared constant
+    *and* as a variable in the same slot.
     """
     if not _is_constant_constructor(leaf.pattern):
         return False
@@ -158,7 +161,6 @@ def _is_capture_safe_constant(leaf: Node, sort: Pattern, context: Context) -> bo
     literal = leaf.literal
     if literal in context.string_variables:
         return False
-    patterns = _reachable_patterns(sort)
     if any(
         isinstance(p, AtomPattern) and not p.is_constant and p.is_member(literal)
         for p in patterns
@@ -186,18 +188,24 @@ def _matches(pattern: RegexPattern, literal: str, context: Context) -> bool:
 
 
 def _undeclared_binder_error(
-    legacy: MatchingDefinition, names: list[str]
+    legacy: MatchingDefinition, names: list[str], *, declared_as_parameters: bool = False
 ) -> DefinitionError:
     """The build error for a defining form that introduces ``names`` out of
-    nowhere - written for the author, and naming the fix."""
+    nowhere - written for the author, and naming the fix.
+
+    ``declared_as_parameters`` distinguishes the two ways the same mistake is
+    spelled: a name given as an ordinary parameter needs *moving*, one never
+    declared at all needs adding.
+    """
     listed = ", ".join(repr(name) for name in names)
+    move = " — as a `fresh` binder, not as an ordinary parameter" if declared_as_parameters else ""
     return DefinitionError(
         f"Definition '{legacy.higher.pattern}' introduces {listed} in its defining "
         f"form '{legacy.lower_source}', but the defined form does not mention "
         f"{'them' if len(names) > 1 else 'it'}. A variable the defining form binds "
         f"must be declared, so an unfold can rename it and avoid capturing a "
         f"variable of the same name in the argument: declare {listed} with a "
-        f"`fresh` clause, giving the sort — not as an ordinary parameter."
+        f"`fresh` clause, giving the sort{move}."
     )
 
 
@@ -237,7 +245,7 @@ def build_kernel_definition(legacy: MatchingDefinition, context: Context) -> Def
 
     undeclared = _lower_only_parameters(legacy)
     if undeclared:
-        raise _undeclared_binder_error(legacy, undeclared)
+        raise _undeclared_binder_error(legacy, undeclared, declared_as_parameters=True)
 
     try:
         kernel_def = Definition.parse(
@@ -272,12 +280,13 @@ def build_kernel_definition(legacy: MatchingDefinition, context: Context) -> Def
     # no declaration.
     if _has_parameters(kernel_def.higher):
         defined_literals = {leaf.literal for leaf in _ground_leaves(kernel_def.higher)}
+        bindable = _reachable_patterns(legacy.pattern)
         undeclared = sorted(
             {
                 leaf.literal
                 for leaf in _ground_leaves(kernel_def.lower)
                 if leaf.literal not in defined_literals
-                and not _is_capture_safe_constant(leaf, legacy.pattern, context)
+                and not _is_capture_safe_constant(leaf, bindable, context)
             }
         )
         if undeclared:
@@ -295,7 +304,20 @@ def follows_by_definition(
     ``legacy.kernel`` is built when the system is (see
     :func:`build_kernel_definition`), so a definition that reaches a proof always
     carries one.
+
+    Raises :class:`DefinitionError` if one does not - which means it was built
+    outside the system builder, via :meth:`Pattern.add_definition` directly.
+    Better to say so than to hand ``None`` to the kernel and fail as an
+    ``AttributeError`` several frames in.
     """
+    if legacy.kernel is None:
+        raise DefinitionError(
+            f"Definition '{legacy.higher.pattern}' has no kernel counterpart, so no "
+            f"step can be checked against it. Definitions are built through "
+            f"`declarative.build_system`, which constructs one for each; this one "
+            f"reached a proof without it."
+        )
+
     return check_definitional_step(
         from_match(before, context), from_match(after, context), legacy.kernel, context
     )
