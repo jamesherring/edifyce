@@ -526,7 +526,7 @@ def defined_notation_spec() -> SystemSpec:
         brackets=brackets(),
         productions=[
             regex_prod("term", "variable", "[a-z]"),
-            template_prod("term", "zero", "0", []),
+            template_prod("term", "zero", "0", [], denotes_constant=True),
             template_prod("formula", "pred", "P(t)", [("t", "term")]),
         ],
         lines=[statement_line()],

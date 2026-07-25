@@ -100,6 +100,12 @@ class Production(BaseModel):
     regex: str | None = None
     atom_value: str | None = None
     atom_base: str | None = None
+    # Whether this production's tokens are *constants* of the object language
+    # rather than variables of it — Metamath's `$c` vs `$v`. Declared, never
+    # inferred: `⊥` in `formula ::= ⊥` and `a` in `setvar ::= a | b | c` are the
+    # same shape and opposite answers. Only a constant may appear in a
+    # definition's defining form without the defined form supplying it.
+    denotes_constant: bool = False
     bindings: list[Binding] = Field(default_factory=list)
 
 
@@ -279,6 +285,10 @@ class ProductionCreate(BaseModel):
     regex: str | None = Field(None, max_length=512)
     atom_value: str | None = Field(None, min_length=1, max_length=512)
     atom_base: str | None = Field(None, min_length=1, max_length=128)
+    # See `Production.denotes_constant`. Defaults off: leaving it out treats the
+    # production as variable-like, which costs a refused definition rather than a
+    # capturing one.
+    denotes_constant: bool = False
     bindings: list[Binding] = Field(default_factory=list)
 
 
@@ -289,6 +299,7 @@ class ProductionUpdate(BaseModel):
     regex: str | None = Field(None, max_length=512)
     atom_value: str | None = Field(None, min_length=1, max_length=512)
     atom_base: str | None = Field(None, min_length=1, max_length=128)
+    denotes_constant: bool | None = None
     bindings: list[Binding] | None = None
 
 

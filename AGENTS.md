@@ -43,6 +43,39 @@ which the API reaches via `app.db.system_to_spec`, so the relational rows are th
 source of truth, not any source blob — and `FormalSystem.parse(text)` for a
 proof. Start there when tracing behaviour.
 
+### Constants vs variables of the object language
+
+A production declares `denotes_constant`: whether its tokens name one fixed thing
+(`⊥`, `∅`) or stand for variables a binder can bind. This is Metamath's `$c` vs
+`$v`, and like Metamath's it is **declared, not inferred** — nothing about a
+production's shape settles it, since a one-token atom is a constant in
+`formula ::= ⊥` and a variable in `setvar ::= a | b | c`. The engine once guessed
+from the constructor's shape and had holes.
+
+It gates exactly one thing: whether a definition's defining form may mention a
+leaf the defined form does not supply (`formal_system/definitions.py`). It reaches
+nothing else — not unification, equality, side-conditions, or rule checking. The
+default is `False`, variable-like, so a forgotten declaration costs a refused
+definition rather than a capturing one; the unsafe direction takes a positive act.
+
+One declaration the engine refuses outright: an **indexed atom family** (`p_#`)
+is a supply of interchangeable tokens — `AtomPattern.fresh` mints new ones — so no
+grammar makes it a constant and no author could mean it. Every other case is a
+genuine judgement about the grammar that nothing yet can check.
+
+Two follow-ups this leaves open:
+
+- **Binding slots on productions.** Nothing declares which slot of `∀x p` *binds*,
+  or what it scopes over. With that, the engine could validate a `denotes_constant`
+  declaration (a token in a binder slot's sort is not a constant, whatever the
+  author ticked), infer a definition's `fresh` clause instead of asking for it, and
+  make a definitional step scope-aware — which is what admitting an open
+  abbreviation like `S ≝ (a ∈ b)` would need. Metamath has none of this and does
+  not miss it, so this is a capability change, not a soundness fix.
+- **Conservativity.** That a defined symbol is fresh and the definition
+  non-circular is still untreated, as in Metamath. Only the *capture* half of
+  admissibility is checked.
+
 The bespoke `.edi` source language and its compiler are **gone**. A system is a
 `SystemSpec` and nothing else; there is no text form to round-trip through, and
 `LineType` behaviours the compiler alone could author (`indent`, a logical line

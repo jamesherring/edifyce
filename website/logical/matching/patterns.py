@@ -17,6 +17,21 @@ class Pattern:
         # Note any bracket pairs that should be respected
         self.respect_brackets = respect_brackets
 
+        # Whether the tokens this production yields are *constants* of the object
+        # language rather than variables of it — declared by the system author, as
+        # Metamath's `$c`/`$v` are. Opaque to matching, which never reads it; the
+        # kernel's definition builder does (see formal_system/definitions.py),
+        # exactly as with `StringPattern.schema_term`.
+        #
+        # Deliberately not `is_constant`: `AtomPattern.is_constant` asks a purely
+        # structural question (one literal token, or an indexed family?) and the
+        # two answers differ — a constant-shaped atom declared as a member of the
+        # variable sort is bindable, so it is *not* an object-language constant.
+        #
+        # False is the safe default: an undeclared leaf is treated as a variable,
+        # so a definition introducing it is refused rather than excused.
+        self.denotes_constant = False
+
         # Default certainty of 0
         self.certainty = 0
 
