@@ -9,7 +9,7 @@ import { api } from '$lib/api';
 // Drive the route param through a reactive `$app/state` stand-in so changing
 // `page.params.id` re-runs the page's load effect (see page-mock.svelte.ts).
 vi.mock('$app/state', async () => await import('$lib/testing/page-mock.svelte'));
-vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
+vi.mock('$app/navigation', () => ({ goto: vi.fn(), beforeNavigate: vi.fn() }));
 // The edit page renders every section, and each grabs its `api.parts.<x>` crud
 // object at init — so the mock must expose them (the methods are never called
 // here; no save happens). `partStub` is defined inside the factory because

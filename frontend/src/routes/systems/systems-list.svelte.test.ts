@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/svelte';
+import { tick } from 'svelte';
 import userEvent from '@testing-library/user-event';
 import Page from './+page.svelte';
 import { auth } from '$lib/auth.svelte';
 import { api } from '$lib/api';
 
-vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
+vi.mock('$app/navigation', () => ({ goto: vi.fn(), beforeNavigate: vi.fn() }));
 vi.mock('$lib/api', () => ({
 	api: {
 		me: vi.fn(),
@@ -78,12 +79,12 @@ describe('systems list', () => {
 			updated_at: '2020-01-01T00:00:00Z',
 			owner: { id: 'u1', display_name: 'Ada' }
 		}));
-		apiMock.systems.listPublic.mockResolvedValue({ items: rows, total: 25, limit: 10, offset: 0 });
+		apiMock.systems.list.mockResolvedValue({ items: rows, total: 25, limit: 10, offset: 0 });
 
 		render(Page);
 		// The first request asks for page one (offset 0) at the configured size.
 		await waitFor(() =>
-			expect(apiMock.systems.listPublic).toHaveBeenLastCalledWith(
+			expect(apiMock.systems.list).toHaveBeenLastCalledWith(
 				expect.objectContaining({ limit: 10, offset: 0 })
 			)
 		);
@@ -92,9 +93,38 @@ describe('systems list', () => {
 		// paging is server-side, not a client-side slice of one big response.
 		await user.click(await screen.findByRole('button', { name: 'Next page' }));
 		await waitFor(() =>
-			expect(apiMock.systems.listPublic).toHaveBeenLastCalledWith(
+			expect(apiMock.systems.list).toHaveBeenLastCalledWith(
 				expect.objectContaining({ offset: 10 })
 			)
 		);
+	});
+
+	it('lands a signed-in user on their own systems, not the published list', async () => {
+		render(Page);
+		await waitFor(() => expect(apiMock.systems.list).toHaveBeenCalled());
+		expect(apiMock.systems.listPublic).not.toHaveBeenCalled();
+		expect(await screen.findByRole('button', { name: 'My systems' })).toBeInTheDocument();
+	});
+
+	it('keeps the published list once the user picks it', async () => {
+		render(Page);
+		await waitFor(() => expect(apiMock.systems.list).toHaveBeenCalled());
+
+		await user.click(await screen.findByRole('button', { name: 'Published' }));
+		await waitFor(() => expect(apiMock.systems.listPublic).toHaveBeenCalled());
+
+		// The default must not reassert itself and yank them back.
+		apiMock.systems.list.mockClear();
+		await tick();
+		await Promise.resolve();
+		expect(apiMock.systems.list).not.toHaveBeenCalled();
+	});
+
+	it('offers a way out of an empty list instead of a bare message', async () => {
+		render(Page);
+		await waitFor(() => expect(apiMock.systems.list).toHaveBeenCalled());
+		expect(await screen.findByText('No systems yet')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'New system' })).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Browse published' })).toBeInTheDocument();
 	});
 });

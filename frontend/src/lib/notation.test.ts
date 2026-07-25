@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { notationReference, ruleShape } from './notation';
+import { notationReference, rulePremises, ruleShape } from './notation';
 import type { FormalSystemDetail, Production, Rule } from './api';
 
 function system(parts: Partial<FormalSystemDetail> = {}): FormalSystemDetail {
@@ -72,6 +72,14 @@ describe('ruleShape', () => {
 			subproof: { derive: 'q', assume: 'p', fresh: null }
 		});
 		expect(ruleShape(impliesIntro)).toBe('[assume p ⊢ q] ⊢ (p → q)');
+	});
+
+	it('exposes the premise side alone, for a table with its own conclusion column', () => {
+		// The read-only system detail page splits "From" and "Infer" across cells.
+		expect(rulePremises(rule({ antecedents: ['p', '(p → q)'] }))).toBe('p ; (p → q)');
+		expect(
+			rulePremises(rule({ subproof: { derive: 'q', assume: 'p', fresh: null } }))
+		).toBe('[assume p ⊢ q]');
 	});
 
 	it('names an eigenvariable subproof by its fresh variable', () => {

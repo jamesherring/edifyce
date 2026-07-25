@@ -4,6 +4,7 @@
 	import SectionCard from '$lib/components/SectionCard.svelte';
 	import InlineEmpty from '$lib/components/InlineEmpty.svelte';
 	import type { Binding, FormalSystemDetail } from '$lib/api';
+	import { rulePremises } from '$lib/notation';
 
 	let { system }: { system: FormalSystemDetail } = $props();
 
@@ -158,7 +159,7 @@
 									{/if}
 								</Table.Cell>
 								<Table.Cell class="font-mono text-muted-foreground">
-									{rule.antecedents.join(' ; ') || '—'}
+									{rulePremises(rule)}
 								</Table.Cell>
 								<Table.Cell class="font-mono">{rule.deduction}</Table.Cell>
 								<Table.Cell class="hidden font-mono text-xs text-muted-foreground sm:table-cell">

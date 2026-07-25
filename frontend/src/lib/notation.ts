@@ -20,26 +20,26 @@ function productionForm(production: FormalSystemDetail['productions'][number]): 
 }
 
 /**
- * A rule written as `premises ⊢ conclusion`.
+ * What a rule reasons *from*.
  *
  * A discharge rule (→I, RAA, ∀I) cites no lines — the subproof it consumes *is*
- * its premise — so writing only its (empty) antecedents would render it as a
+ * its premise — so writing only its (empty) antecedents renders it as a
  * zero-premise rule. Its subproof is shown instead, in the engine's own
- * `assume`/`fresh` vocabulary: `[assume p ⊢ q] ⊢ (p → q)`.
+ * `assume`/`fresh` vocabulary: `[assume p ⊢ q]`.
  */
-export function ruleShape(rule: Rule): string {
+export function rulePremises(rule: Rule): string {
 	const sub = rule.subproof;
-	let premises: string;
-	if (sub) {
-		// The backend sets exactly one of `assume`/`fresh`; the type allows both to
-		// be null, so fall back to the bare subproof rather than print "assume null".
-		const opener =
-			sub.fresh !== null ? `fresh ${sub.fresh}` : sub.assume !== null ? `assume ${sub.assume}` : '';
-		premises = `[${opener ? `${opener} ⊢ ` : ''}${sub.derive}]`;
-	} else {
-		premises = rule.antecedents.join(' ; ') || '—';
-	}
-	return `${premises} ⊢ ${rule.deduction}`;
+	if (!sub) return rule.antecedents.join(' ; ') || '—';
+	// The backend sets exactly one of `assume`/`fresh`; the type allows both to be
+	// null, so fall back to the bare subproof rather than print "assume null".
+	const opener =
+		sub.fresh !== null ? `fresh ${sub.fresh}` : sub.assume !== null ? `assume ${sub.assume}` : '';
+	return `[${opener ? `${opener} ⊢ ` : ''}${sub.derive}]`;
+}
+
+/** A rule written whole, as `premises ⊢ conclusion`. */
+export function ruleShape(rule: Rule): string {
+	return `${rulePremises(rule)} ⊢ ${rule.deduction}`;
 }
 
 /**

@@ -178,7 +178,7 @@ one page invite "did that save?" confusion.
 Ordered by leverage. Phase 0 is a bug fix; the rest is the "best-in-class"
 push and can land incrementally.
 
-Phases 0–2 have since landed; 3–5 are still open. The audit above describes the
+Phases 0–4 have since landed; only Phase 5 is still open. The audit above describes the
 state *before* those changes, so read it as the reasoning behind them rather
 than as a description of the app today.
 
@@ -218,11 +218,15 @@ most. If it's wanted later it has to be opt-in per field, not global.
 - **Drag-and-drop reordering** (with a keyboard fallback); disable end-cap
   chevrons.
 
-### Phase 4 — Lists, entry points, safety
+### Phase 4 — Lists, entry points, safety — **done**
 - Default authenticated users to **mine**; keep Published for discovery.
 - Richer empty states with a primary CTA.
-- **Unsaved-changes guard** (`beforeNavigate`) on both editors; consider autosave
-  of drafts.
+- **Unsaved-changes guard** (`beforeNavigate`) on both editors.
+
+Draft autosave was considered and not built: with live verification already
+running on every keystroke, autosaving would also record a verdict for
+half-written text, and the explicit save is what makes "saved and checked" mean
+something. Worth revisiting only alongside a draft/committed split.
 
 ### Phase 5 — Polish & a11y
 - `aria-label`s on icon buttons, focus management for sheets, consistent button
