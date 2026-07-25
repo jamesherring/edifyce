@@ -271,7 +271,7 @@ def test_definition_backed_union_match_keeps_structure():
     )
 
     match = formula.match("a is a member of b", context)
-    assert match.definition is not None  # matched via the definition
+    assert match.sort is not None  # matched via defined notation
 
     term = from_match(match, context)
     # Structure preserved and it still round-trips, with no stored definition.

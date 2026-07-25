@@ -536,14 +536,19 @@ def from_match(match: Match, context: Context) -> Term:
     parsed ``"(a -> b)"``). Those are collapsed, so a formula is the same term
     however many union layers happened to parse it.
 
+    Nothing here knows definitions exist. Defined notation arrives already
+    shaped like any other production - its template *is* the constructor, and
+    ``Match.sort`` names the sort that ad-hoc constructor inhabits, which reads
+    straight across to :attr:`Node.sort` (see ``Definition.match``).
+
     The branches below, by example, for a system with ``formula`` (a union of
     ``atom`` and ``implication``)::
 
         match of "a"           (a declared variable)  -> Var("a", formula)
-        match of "a is a … of" (definition-backed)    -> Node(<defn.higher>, {...})
         match of "(a -> b)"    (union coercion)       -> collapse to the implication Node
         match of "a"           (a ground atom)        -> Node(atom, literal="a")
         match of "(a -> b)"    (compound)             -> Node(implication, {"p": .., "q": ..})
+        match of "a is a … of" (defined notation)     -> Node(<template>, {...}, sort=formula)
     """
     pattern = match.pattern
 
@@ -561,23 +566,6 @@ def from_match(match: Match, context: Context) -> Term:
     if match.is_variable:
         return _var(name=match.string, sort=pattern)
 
-    # A definition-backed match: the matched sort (often a UnionPattern) is not
-    # itself a template, and its sub-matches are the definition's variables. The
-    # definition's `higher` form carries both the surface template and those
-    # variables, so we use it to build a faithfully-structured node - e.g. for a
-    # definition "x is a subset of y" of `formula`, "a is a subset of b" becomes
-    # Node(<higher "x is a subset of y">, {"x": .., "y": ..}). The definition
-    # itself is used only transiently to pick the constructor; the term keeps no
-    # reference to it (relating higher and lower forms is a cited step 4). Its
-    # ad-hoc higher constructor is not a member of the matched sort, so record
-    # that sort (e.g. `formula`) explicitly so sort checks still admit it.
-    if match.definition is not None:
-        higher = match.definition.higher
-        sort = match.definition.pattern
-        if match.sub_matches:
-            return _node(pattern=higher, children=child_terms(match), sort=sort)
-        return _node(pattern=higher, literal=match.string, sort=sort)
-
     # A union match is a coercion wrapper around a single chosen branch: e.g.
     # `formula` wrapping the `implication` that matched "(a -> b)". Collapse it.
     if isinstance(pattern, UnionPattern):
@@ -585,16 +573,16 @@ def from_match(match: Match, context: Context) -> Term:
         if len(subs) == 1:
             return from_match(subs[0], context)
         # No single branch (nothing to collapse to): treat as a ground leaf.
-        return _node(pattern=pattern, literal=match.string)
+        return _node(pattern=pattern, literal=match.string, sort=match.sort)
 
     # A ground leaf: regex/atomic token or a literal pattern with no slots, e.g.
     # the atom "a" -> Node(atom, literal="a").
     if not match.sub_matches:
-        return _node(pattern=pattern, literal=match.string)
+        return _node(pattern=pattern, literal=match.string, sort=match.sort)
 
     # A compound: recurse into the named sub-matches, e.g. "(a -> b)" ->
     # Node(implication, {"p": <term a>, "q": <term b>}).
-    return _node(pattern=pattern, children=child_terms(match))
+    return _node(pattern=pattern, children=child_terms(match), sort=match.sort)
 
 
 def from_pattern(

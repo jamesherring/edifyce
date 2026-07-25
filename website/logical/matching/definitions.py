@@ -99,11 +99,14 @@ class Definition:
         if higher_match is None:
             return None
 
-        # Success - create a match
+        # The match's *constructor* is the defined form's own template, and the
+        # sort it inhabits is recorded alongside - the template is ad-hoc, so no
+        # union declares it a member. Naming both here is what lets the term
+        # layer project this like any other production.
         m = matches.Match(
             string=s,
-            pattern=self.pattern,
-            definition=self
+            pattern=self.higher,
+            sort=self.pattern,
         )
 
         # Re-parent the higher match's sub-matches onto the definition match.

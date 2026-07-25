@@ -161,7 +161,7 @@ def test_defined_notation_matches_as_formula(zfc, text):
 def test_defined_notation_is_backed_by_a_definition(zfc):
     formula = zfc.context.variables["formula"]
     match = formula.match("x ⊆ y", zfc.context)
-    assert match.definition is not None
+    assert match.sort is not None
 
 
 # ---------------------------------------------------------------------------
