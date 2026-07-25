@@ -18,6 +18,9 @@
 		items: T[];
 		emptyMessage: string;
 		row: Snippet<[T]>;
+		/** Names one item for the row controls. Without it every section renders a
+		 *  dozen buttons all called "Edit", which is unusable by label alone. */
+		itemLabel: (item: T) => string;
 		onAdd: () => void;
 		onEdit: (item: T) => void;
 		onReorder: (ids: string[]) => void;
@@ -32,6 +35,7 @@
 		items,
 		emptyMessage,
 		row,
+		itemLabel,
 		onAdd,
 		onEdit,
 		onReorder,
@@ -140,7 +144,8 @@
 							disabled={busy || i === 0}
 							onclick={() => move(i, -1)}
 						>
-							<ChevronUp class="size-4" /><span class="sr-only">Move up</span>
+							<ChevronUp class="size-4" />
+							<span class="sr-only">Move {itemLabel(item)} up</span>
 						</Button>
 						<Button
 							type="button"
@@ -150,7 +155,8 @@
 							disabled={busy || i === items.length - 1}
 							onclick={() => move(i, 1)}
 						>
-							<ChevronDown class="size-4" /><span class="sr-only">Move down</span>
+							<ChevronDown class="size-4" />
+							<span class="sr-only">Move {itemLabel(item)} down</span>
 						</Button>
 						<Button
 							type="button"
@@ -160,7 +166,8 @@
 							disabled={busy}
 							onclick={() => onEdit(item)}
 						>
-							<Pencil class="size-4" /><span class="sr-only">Edit</span>
+							<Pencil class="size-4" />
+							<span class="sr-only">Edit {itemLabel(item)}</span>
 						</Button>
 					</div>
 				</li>

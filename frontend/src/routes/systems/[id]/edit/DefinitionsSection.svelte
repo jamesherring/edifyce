@@ -109,6 +109,7 @@
 
 <PartSection
 	title="Definitions"
+	itemLabel={(d) => `definition ${d.name}`}
 	id="definitions"
 	addLabel="Add definition"
 	canAdd={sortNames.length > 0}

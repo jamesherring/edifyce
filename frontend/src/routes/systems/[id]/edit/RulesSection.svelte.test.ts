@@ -44,15 +44,43 @@ function renderSection(over: Partial<Rule> = {}) {
 	return { onChanged };
 }
 
+describe('RulesSection toggle accessibility', () => {
+	it('exposes which option is chosen, rather than only colouring it', async () => {
+		renderSection();
+		await userEvent.click(screen.getByRole('button', { name: /^Edit / }));
+
+		// Selection was conveyed by background colour alone, which no screen reader
+		// can see.
+		expect(screen.getByRole('button', { name: 'Structural' })).toHaveAttribute(
+			'aria-pressed',
+			'true'
+		);
+		expect(screen.getByRole('button', { name: 'String rewriting' })).toHaveAttribute(
+			'aria-pressed',
+			'false'
+		);
+	});
+
+	it('keeps the visible word in a toggle\u2019s name, so voice control can reach it', async () => {
+		renderSection();
+		await userEvent.click(screen.getByRole('button', { name: /^Edit / }));
+
+		// An aria-label would have replaced "Off" outright — saying "click Off"
+		// would then match nothing.
+		const toggle = screen.getByRole('button', { name: 'Allow extra antecedents: Off' });
+		expect(toggle).toHaveAttribute('aria-pressed', 'false');
+	});
+});
+
 describe('RulesSection allow_extra_antecedents', () => {
 	it('pre-fills the toggle and sends the flipped value', async () => {
 		renderSection({ allow_extra_antecedents: true });
-		await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+		await userEvent.click(screen.getByRole('button', { name: /^Edit / }));
 
 		// The stored value drives the toggle's label.
-		const toggle = screen.getByRole('button', { name: 'Enabled' });
+		const toggle = screen.getByRole('button', { name: /Enabled$/ });
 		await userEvent.click(toggle);
-		await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+		await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
 		const [, , payload] = vi.mocked(api.parts.rules.update).mock.calls[0];
 		expect(payload).toMatchObject({ allow_extra_antecedents: false });
@@ -67,14 +95,14 @@ describe('RulesSection allow_extra_antecedents', () => {
 			side_conditions: [],
 			allow_extra_antecedents: true
 		});
-		await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+		await userEvent.click(screen.getByRole('button', { name: /^Edit / }));
 
 		// The discharge check cites one subproof opener and never reads the flag, so
 		// the option is not offered — but it is inert, not invalid, so the stored
 		// value round-trips rather than being silently cleared.
 		expect(screen.queryByText('Allow extra antecedents')).not.toBeInTheDocument();
 
-		await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+		await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 		const [, , payload] = vi.mocked(api.parts.rules.update).mock.calls[0];
 		expect(payload.allow_extra_antecedents).toBe(true);
 	});
@@ -83,13 +111,13 @@ describe('RulesSection allow_extra_antecedents', () => {
 describe('RulesSection provisos', () => {
 	it('pre-fills the provisos editor from a rule’s side_conditions', async () => {
 		renderSection();
-		await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+		await userEvent.click(screen.getByRole('button', { name: /^Edit / }));
 		expect(screen.getByDisplayValue('not occurs(x, p)')).toBeInTheDocument();
 	});
 
 	it('sends edited provisos in the update payload, trimmed and blank-filtered', async () => {
 		renderSection();
-		await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+		await userEvent.click(screen.getByRole('button', { name: /^Edit / }));
 
 		// Add a second proviso and a blank one; the blank must be dropped.
 		await userEvent.click(screen.getByRole('button', { name: 'Add proviso' }));
@@ -98,7 +126,7 @@ describe('RulesSection provisos', () => {
 		await userEvent.type(inputs[1], '  equal(x, p)  ');
 		// inputs[2] left blank
 
-		await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+		await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
 		expect(vi.mocked(api.parts.rules.update)).toHaveBeenCalledWith(
 			'sys1',
@@ -119,7 +147,7 @@ describe('RulesSection matching kind', () => {
 		await userEvent.type(screen.getByPlaceholderText('e.g. q'), 'Mxx');
 
 		await userEvent.click(screen.getByRole('button', { name: 'String rewriting' }));
-		await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+		await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
 		expect(vi.mocked(api.parts.rules.create)).toHaveBeenCalledWith(
 			'sys1',

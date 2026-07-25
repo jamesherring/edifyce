@@ -24,6 +24,7 @@ function renderSection(overrides: Record<string, unknown> = {}) {
 		items,
 		emptyMessage: 'No sorts yet.',
 		row: rowSnippet,
+		itemLabel: (item: Item) => `sort ${item.id}`,
 		onReorder,
 		onAdd,
 		onEdit,
@@ -48,23 +49,37 @@ describe('PartSection', () => {
 	it('reorders by swapping the moved item down one place', async () => {
 		const { onReorder } = renderSection();
 		// One "Move down" button per row; the first row's swaps a↔b.
-		await userEvent.click(screen.getAllByRole('button', { name: 'Move down' })[0]);
+		await userEvent.click(screen.getAllByRole('button', { name: /^Move .+ down$/ })[0]);
 		expect(onReorder).toHaveBeenCalledWith(['b', 'a', 'c']);
 	});
 
 	it('reorders by swapping the moved item up one place', async () => {
 		const { onReorder } = renderSection();
 		// The last row's "Move up" swaps b↔c.
-		const ups = screen.getAllByRole('button', { name: 'Move up' });
+		const ups = screen.getAllByRole('button', { name: /^Move .+ up$/ });
 		await userEvent.click(ups[ups.length - 1]);
 		expect(onReorder).toHaveBeenCalledWith(['a', 'c', 'b']);
 	});
 
 	it('disables moving the first item up and the last item down (no wrap)', () => {
 		renderSection();
-		expect(screen.getAllByRole('button', { name: 'Move up' })[0]).toBeDisabled();
-		const downs = screen.getAllByRole('button', { name: 'Move down' });
+		expect(screen.getAllByRole('button', { name: /^Move .+ up$/ })[0]).toBeDisabled();
+		const downs = screen.getAllByRole('button', { name: /^Move .+ down$/ });
 		expect(downs[downs.length - 1]).toBeDisabled();
+	});
+
+	it('names each row control after its item, not just "Edit"', () => {
+		renderSection();
+		// A section renders one set of controls per row; identical names would leave
+		// a screen-reader user with a dozen buttons called "Edit" and no way to tell
+		// them apart.
+		expect(screen.getByRole('button', { name: 'Edit sort a' })).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Move sort b up' })).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Move sort c up' })).toBeInTheDocument();
+		const names = screen
+			.getAllByRole('button')
+			.map((b) => b.textContent?.replace(/\s+/g, ' ').trim());
+		expect(new Set(names).size).toBe(names.length);
 	});
 
 	it('invokes onAdd when the add button is clicked', async () => {

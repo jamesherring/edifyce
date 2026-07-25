@@ -31,6 +31,7 @@
 
 <PartSection
 	title="Sorts"
+	itemLabel={(s) => `sort ${s.name}`}
 	id="sorts"
 	addLabel="Add sort"
 	items={sorts}

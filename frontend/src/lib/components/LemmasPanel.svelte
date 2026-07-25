@@ -292,6 +292,7 @@
 				bind:value={pickValue}
 				onSelect={addPicked}
 				placeholder="Add a lemma…"
+				ariaLabel="Add a lemma to cite"
 				searchPlaceholder="Search proofs…"
 				emptyText="No other proofs in this system."
 				disabled={options.length === 0}

@@ -178,7 +178,7 @@ one page invite "did that save?" confusion.
 Ordered by leverage. Phase 0 is a bug fix; the rest is the "best-in-class"
 push and can land incrementally.
 
-Phases 0–4 have since landed; only Phase 5 is still open. The audit above describes the
+All five phases have since landed. The audit above describes the
 state *before* those changes, so read it as the reasoning behind them rather
 than as a description of the app today.
 
@@ -228,9 +228,24 @@ running on every keystroke, autosaving would also record a verdict for
 half-written text, and the explicit save is what makes "saved and checked" mean
 something. Worth revisiting only alongside a draft/committed split.
 
-### Phase 5 — Polish & a11y
-- `aria-label`s on icon buttons, focus management for sheets, consistent button
-  casing, and a consolidated/clearer save model.
+### Phase 5 — Polish & a11y — **done**
+- Accessible names: nothing interactive is left unnamed, and a section's row
+  controls name what they act on ("Edit rule MP") instead of twelve buttons all
+  called "Edit". Toggles and segmented controls carry `aria-pressed`, since
+  selection had been conveyed by background colour alone.
+- Focus management for sheets was already correct — a sheet moves focus to its
+  first field and returns it to the button that opened it — so this pass just
+  pinned it down.
+- Consistent button casing and ellipsis.
+
+On the **save model**: the two models were kept, and made legible rather than
+uniform. A part is a discrete thing confirmed in its own sheet; details is a
+form. The confusion was that nothing said which was which, so the Details card
+now carries the same saved/unsaved signal as the proof editor, its Save is
+disabled when there is nothing to save, and its description names both
+behaviours. Collapsing the two would mean either batching part edits (losing the
+immediacy that makes the compile status useful) or autosaving details (which
+Phase 4 rejected for the same reason it rejected draft autosave).
 
 ### Suggested sequencing
 Phase 0 (bug) → Phase 1 + 2 together (they define the new proof experience) →

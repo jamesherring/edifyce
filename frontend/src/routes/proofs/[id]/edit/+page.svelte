@@ -310,6 +310,7 @@
 				<Card.Content class="flex flex-col gap-3">
 					<div bind:this={editorPane} class="flex flex-col gap-2">
 						<SymbolPalette root={editorPane} {symbols} />
+						<Label for="source" class="sr-only">Proof text</Label>
 						<CodeEditor
 							id="source"
 							bind:value={source}
