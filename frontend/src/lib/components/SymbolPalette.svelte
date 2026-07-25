@@ -25,8 +25,10 @@
 	const quick = $derived(symbols.length > 0 ? symbols : STARTER);
 
 	let active = $state<TextField | null>(null);
-	let toolbar = $state<HTMLDivElement | null>(null);
-	let focusIndex = $state(0);
+	let quickStrip = $state<HTMLDivElement | null>(null);
+	let catalogueStrip = $state<HTMLDivElement | null>(null);
+	let quickIndex = $state(0);
+	let catalogueIndex = $state(0);
 	let expanded = $state(false);
 	let query = $state('');
 
@@ -48,11 +50,17 @@
 		};
 	});
 
-	/** The field an insert lands in: the last-focused one, or — before the user has
-	 *  focused anything, or once a removed row's input has left the DOM — the first
-	 *  target in the container, so a click is never silently dropped. */
+	/** The field an insert lands in: the one last focused, or — before the user has
+	 *  focused anything — the first target in the container, so an early click
+	 *  isn't silently dropped. */
 	function target(): TextField | null {
-		if (active?.isConnected) return active;
+		if (active) {
+			// The field being typed into has since left the DOM (a repeatable row was
+			// removed). Drop the insert rather than quietly writing the symbol into
+			// some other field the user never touched.
+			if (!active.isConnected) active = null;
+			return active;
+		}
 		return root?.querySelector<TextField>(SYMBOL_FIELD_SELECTOR) ?? null;
 	}
 
@@ -63,18 +71,25 @@
 		insertAtCaret(el, char);
 	}
 
-	// Roving tabindex: the whole strip is one tab stop and the arrow keys move
-	// between symbols, rather than making a keyboard user tab past every button.
-	function onToolbarKeydown(event: KeyboardEvent) {
-		const buttons = [...(toolbar?.querySelectorAll<HTMLButtonElement>('button') ?? [])];
+	// Roving tabindex: each strip of keys is a single tab stop whose arrow keys
+	// move between symbols, rather than making a keyboard user tab past every
+	// button to reach the editor below.
+	function rove(
+		event: KeyboardEvent,
+		container: HTMLElement | null,
+		setIndex: (index: number) => void
+	) {
+		const buttons = [...(container?.querySelectorAll<HTMLButtonElement>('button') ?? [])];
 		if (buttons.length === 0) return;
 		const from = Math.max(0, buttons.indexOf(document.activeElement as HTMLButtonElement));
 		let next: number;
 		switch (event.key) {
 			case 'ArrowRight':
+			case 'ArrowDown':
 				next = (from + 1) % buttons.length;
 				break;
 			case 'ArrowLeft':
+			case 'ArrowUp':
 				next = (from - 1 + buttons.length) % buttons.length;
 				break;
 			case 'Home':
@@ -87,8 +102,14 @@
 				return;
 		}
 		event.preventDefault();
-		focusIndex = next;
+		setIndex(next);
 		buttons[next].focus();
+	}
+
+	/** Which key in a strip carries the tab stop, clamped so a shrinking strip
+	 *  (the catalogue as a search narrows it) always keeps exactly one. */
+	function stop(index: number, count: number): number {
+		return Math.min(index, Math.max(0, count - 1));
 	}
 
 	const filtered = $derived.by(() => {
@@ -99,6 +120,19 @@
 			symbols: group.symbols.filter((s) => s.name.includes(q) || s.char === query.trim())
 		})).filter((group) => group.symbols.length > 0);
 	});
+
+	// The catalogue's groups form one continuous strip for the roving tabindex, so
+	// each group needs to know how many keys precede it.
+	const groupOffsets = $derived.by(() => {
+		const offsets: number[] = [];
+		let seen = 0;
+		for (const group of filtered) {
+			offsets.push(seen);
+			seen += group.symbols.length;
+		}
+		return offsets;
+	});
+	const catalogueCount = $derived(filtered.reduce((n, group) => n + group.symbols.length, 0));
 </script>
 
 {#snippet key(symbol: SymbolEntry, tabindex: number)}
@@ -120,15 +154,15 @@
 		<!-- `onmousedown` is prevented on every key so the target field keeps its
 		     selection: the insert replaces what was selected, as typing would. -->
 		<div
-			bind:this={toolbar}
+			bind:this={quickStrip}
 			role="toolbar"
 			tabindex="-1"
 			aria-label="Insert a symbol"
 			class="flex flex-wrap items-center gap-1.5"
-			onkeydown={onToolbarKeydown}
+			onkeydown={(e) => rove(e, quickStrip, (i) => (quickIndex = i))}
 		>
 			{#each quick as symbol, i (symbol.char)}
-				{@render key(symbol, i === Math.min(focusIndex, quick.length - 1) ? 0 : -1)}
+				{@render key(symbol, i === stop(quickIndex, quick.length) ? 0 : -1)}
 			{/each}
 		</div>
 		<button
@@ -151,19 +185,31 @@
 				class="h-8"
 			/>
 			<!-- Capped and scrolled so the full catalogue can't shove the editor (or a
-			     sheet's fields) off screen; the search stays put above it. -->
-			<div class="flex max-h-56 flex-col gap-3 overflow-y-auto">
+			     sheet's fields) off screen; the search stays put above it. Its groups
+			     are one roving strip, so reaching the editor below is a single Tab
+			     rather than a hundred-odd. -->
+			<div
+				bind:this={catalogueStrip}
+				role="toolbar"
+				tabindex="-1"
+				aria-label="Symbol catalogue"
+				class="flex max-h-56 flex-col gap-3 overflow-y-auto"
+				onkeydown={(e) => rove(e, catalogueStrip, (i) => (catalogueIndex = i))}
+			>
 				{#if filtered.length === 0}
 					<p class="text-muted-foreground py-2 text-center text-xs">
 						No symbol matches “{query.trim()}”.
 					</p>
 				{:else}
-					{#each filtered as group (group.title)}
+					{#each filtered as group, groupIndex (group.title)}
 						<div class="flex flex-col gap-1.5">
 							<p class="text-muted-foreground text-xs font-medium">{group.title}</p>
 							<div class="flex flex-wrap gap-1.5">
-								{#each group.symbols as symbol (symbol.char)}
-									{@render key(symbol, 0)}
+								{#each group.symbols as symbol, i (symbol.char)}
+									{@render key(
+										symbol,
+										groupOffsets[groupIndex] + i === stop(catalogueIndex, catalogueCount) ? 0 : -1
+									)}
 								{/each}
 							</div>
 						</div>

@@ -74,6 +74,17 @@ describe('SymbolPalette', () => {
 		expect(first.value).toBe('∈');
 	});
 
+	it('drops the insert when the focused field has been removed, rather than retargeting', async () => {
+		const { first, second } = setup();
+		second.focus();
+		second.remove();
+
+		await user.click(screen.getByRole('button', { name: 'Insert is a member of' }));
+
+		// Writing into `first` here would mutate a field the user never touched.
+		expect(first.value).toBe('');
+	});
+
 	it('reveals the whole catalogue, filtered by a search', async () => {
 		setup();
 		await user.click(screen.getByRole('button', { name: 'More symbols' }));
@@ -82,6 +93,29 @@ describe('SymbolPalette', () => {
 		await user.type(screen.getByRole('textbox', { name: 'Search symbols' }), 'subset');
 		expect(screen.getByRole('button', { name: 'Insert is a proper subset of' })).toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: 'Insert capital gamma' })).toBeNull();
+	});
+
+	it('keeps the whole catalogue to a single tab stop', async () => {
+		setup();
+		await user.click(screen.getByRole('button', { name: 'More symbols' }));
+		const catalogue = screen.getByRole('toolbar', { name: 'Symbol catalogue' });
+		const keys = [...catalogue.querySelectorAll('button')];
+		// Otherwise reaching the editor below means tabbing past every symbol.
+		expect(keys.length).toBeGreaterThan(100);
+		expect(keys.filter((b) => b.tabIndex === 0)).toHaveLength(1);
+	});
+
+	it('keeps a tab stop in the catalogue when a search narrows it', async () => {
+		setup();
+		await user.click(screen.getByRole('button', { name: 'More symbols' }));
+		const catalogue = screen.getByRole('toolbar', { name: 'Symbol catalogue' });
+		catalogue.querySelector('button')!.focus();
+		await user.keyboard('{End}');
+
+		await user.type(screen.getByRole('textbox', { name: 'Search symbols' }), 'subset');
+
+		const keys = [...catalogue.querySelectorAll('button')];
+		expect(keys.filter((b) => b.tabIndex === 0)).toHaveLength(1);
 	});
 
 	it('is one tab stop, with the arrow keys moving between symbols', async () => {

@@ -4,7 +4,7 @@
   import SymbolPalette from '$lib/components/SymbolPalette.svelte';
   import type { SymbolEntry } from '$lib/symbols';
   import { cn } from '$lib/utils';
-  import type { Snippet } from 'svelte';
+  import { tick, type Snippet } from 'svelte';
 
   type Props = {
     open: boolean;
@@ -38,10 +38,24 @@
   }: Props = $props();
 
   let form = $state<HTMLFormElement | null>(null);
+
+  // The sheet otherwise focuses its first tabbable node on open, which the symbol
+  // palette now is — leaving the user typing into nothing (and Space inserting a
+  // symbol). Put the caret in the first field instead, which is where it landed
+  // before the palette existed.
+  async function focusFirstField(event: Event) {
+    event.preventDefault();
+    await tick();
+    form?.querySelector<HTMLElement>('input, textarea, select')?.focus();
+  }
 </script>
 
 <Sheet.Root {open} {onOpenChange}>
-  <Sheet.Content side="right" class={cn('w-full sm:max-w-lg', contentClass)}>
+  <Sheet.Content
+    side="right"
+    class={cn('w-full sm:max-w-lg', contentClass)}
+    onOpenAutoFocus={symbols ? focusFirstField : undefined}
+  >
     <Sheet.Header>
       <Sheet.Title>{title}</Sheet.Title>
       {#if description}

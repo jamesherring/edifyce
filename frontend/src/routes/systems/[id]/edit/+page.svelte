@@ -329,9 +329,9 @@
 		<!-- Contents: the notation, grammar, rules and definitions. -->
 		<div class="space-y-4">
 			<SortsSection systemId={system.id} sorts={system.sorts} onChanged={refresh} />
-			<BracketsSection systemId={system.id} brackets={system.brackets} onChanged={refresh} />
+			<BracketsSection systemId={system.id} brackets={system.brackets} {symbols} onChanged={refresh} />
 			<ProductionsSection systemId={system.id} productions={system.productions} {sortNames} {symbols} onChanged={refresh} />
-			<LineTypesSection systemId={system.id} lines={system.lines} {sortNames} onChanged={refresh} />
+			<LineTypesSection systemId={system.id} lines={system.lines} {sortNames} {symbols} onChanged={refresh} />
 			<AxiomsSection systemId={system.id} axioms={system.axioms} {symbols} onChanged={refresh} />
 			<RulesSection systemId={system.id} rules={system.rules} {symbols} onChanged={refresh} />
 			<DefinitionsSection systemId={system.id} definitions={system.definitions} {sortNames} {symbols} onChanged={refresh} />

@@ -6,17 +6,20 @@
 	import { Label } from '$lib/components/ui/label';
 	import { Input } from '$lib/components/ui/input';
 	import { api, type LineType, type LinePartInput, type LineScope } from '$lib/api';
+	import type { SymbolEntry } from '$lib/symbols';
 	import { createSectionController } from './section.svelte';
 
 	let {
 		systemId,
 		lines,
 		sortNames,
+		symbols,
 		onChanged
 	}: {
 		systemId: string;
 		lines: LineType[];
 		sortNames: string[];
+		symbols: SymbolEntry[];
 		onChanged: () => Promise<void> | void;
 	} = $props();
 
@@ -97,11 +100,12 @@
 	onDelete={s.editing ? s.del : undefined}
 	saving={s.saving}
 	{canSave}
+	{symbols}
 >
 	<FormField label="Name" id="line-name" bind:value={name} placeholder="e.g. statement" maxlength={128} />
 	<div class="space-y-2">
 		<Label for="line-shape">Shape</Label>
-		<Input id="line-shape" bind:value={shape} class="font-mono" placeholder="e.g. <formula> [<reference>]" maxlength={256} />
+		<Input id="line-shape" bind:value={shape} class="font-mono" data-symbol-field placeholder="e.g. <formula> [<reference>]" maxlength={256} />
 	</div>
 	<div class="space-y-2">
 		<Label for="line-logical">Logical sort <span class="text-muted-foreground">(optional)</span></Label>
@@ -139,7 +143,7 @@
 		{#snippet row(part)}
 			<Input bind:value={part.name} class="font-mono" placeholder="name" maxlength={128} />
 			<span class="text-muted-foreground">matches</span>
-			<Input bind:value={part.regex} class="font-mono" placeholder="regex" maxlength={512} />
+			<Input bind:value={part.regex} class="font-mono" data-symbol-field placeholder="regex" maxlength={512} />
 		{/snippet}
 	</RepeatableRows>
 </EditSheet>
