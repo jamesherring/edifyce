@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from bisect import bisect_left
 from typing import TYPE_CHECKING
 
 import regex as re
@@ -10,9 +11,108 @@ import regex as re
 from . import definitions, matches
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable, Iterator
+
     from .context import Context
     from .definitions import DefinedNotation
     from .matches import Match
+
+    # A template segment: `(kind, text, sort, length)`. For a literal, `text` is
+    # the literal itself and `sort` is None; for a slot, `text` is the slot's
+    # label and `sort` the pattern that fills it. A tuple rather than a dataclass
+    # because the walk unpacks one per step of every attempt.
+    Segment = tuple[int, str, "Pattern | None", int]
+
+    # Where a string's bracket delimiters sit, and the nesting depth each leaves
+    # it at: two lists of the same length (see `Pattern.bracket_profile`).
+    BracketProfile = tuple[list[int], list[int]]
+
+
+# A template segment's kind (see StringPattern.segments).
+_LITERAL = 0
+_VARIABLE = 1
+
+# Tags distinguishing a bracket answer, and a verdict on the metavariables in
+# scope, from a parse in a shared memo (see Pattern.bracket_profile).
+_BRACKETS = "brackets"
+_METAVARIABLES = "metavariables"
+
+# `bracket_profile`'s answer when there is no profile to give but the string is not
+# at fault: the pattern declares no brackets, or declares delimiters longer than a
+# character. Distinct from None, which means the string failed the check.
+_NO_BRACKETS = ()
+
+
+def _occurrences(s: str, text: str, start: int, limit: int) -> Iterator[int]:
+    # Every position in `s[start:limit]` where `text` occurs, in increasing order.
+    # A generator, because a slot's first candidate usually parses and the rest of
+    # the scan is then never paid for.
+    at = s.find(text, start)
+
+    while at != -1 and at <= limit:
+        yield at
+        at = s.find(text, at + 1)
+
+
+def _balanced_ends(
+    candidates: Iterable[int], profile: BracketProfile, start: int
+) -> Iterator[int]:
+    # Those of `candidates` - which must increase - that leave the slot holding a
+    # bracket-balanced substring of `s`, given `s`'s bracket profile.
+    #
+    # `s[start:end]` is balanced exactly when the nesting depth is the same at
+    # both ends and never dips below it in between, so one forward pass over the
+    # brackets between candidates decides all of them. The pass stops for good at
+    # the first dip: that closing bracket is inside every longer span too.
+    positions, levels = profile
+    total = len(positions)
+
+    at = bisect_left(positions, start)
+    base = levels[at - 1] if at else 0
+    floor = base
+
+    for end in candidates:
+        while at < total and positions[at] < end:
+            if levels[at] < floor:
+                floor = levels[at]
+            at += 1
+
+        if floor < base:
+            return
+
+        if (levels[at - 1] if at else 0) == base:
+            yield end
+
+
+def _metavariable_spelt_with_brackets(pattern: Pattern, context: Context) -> bool:
+    # Whether any metavariable in scope is spelled with a bracket delimiter in it.
+    # Practically never - but a union answers a metavariable by *name* before it
+    # checks brackets, so one would be the counterexample to the reasoning in
+    # `StringPattern._sort_refuses_unbalanced`, and that reasoning is what lets
+    # the search skip a split rather than parse it.
+    #
+    # Deliberately blunter than "spelled unbalanced": the names are concatenated
+    # and searched once, so the whole question costs two substring scans however
+    # many metavariables a rule schema declares. Answered per parse, not per
+    # candidate split; the key names the dict rather than its contents, which is
+    # sound because nothing adds a metavariable during a parse.
+    names = context.string_variables
+    memo = context.parse_memo
+
+    key = None
+    if memo is not None:
+        key = (id(names), len(names), id(pattern._respect_brackets), _METAVARIABLES)
+
+        if key in memo:
+            return memo[key]
+
+    spelling = "".join(names)
+    answer = any(delimiter in spelling for delimiter in pattern._delimiters)
+
+    if key is not None:
+        memo[key] = answer
+
+    return answer
 
 
 class Pattern:
@@ -52,6 +152,16 @@ class Pattern:
         # Default certainty of 0
         self.certainty = 0
 
+        # Whether some union lists this pattern as a member (see
+        # `UnionPattern.add_pattern`). A union memoises what its members look
+        # like — their flattening, their order, the character each may open with
+        # — so a member that changes shape afterwards has to say so, and one that
+        # belongs to no union has nothing to tell. That distinction is worth
+        # keeping: a rule schema builds a template and parses with it
+        # immediately (see `build_context.build_schema_pattern`), so invalidating
+        # unconditionally would re-flatten the whole grammar once per schema.
+        self.union_member = False
+
         # Arbitrary id for use in URLs
         self.url_id = "".join(random.SystemRandom().choice("0123456789abcdef") for _ in range(8))
 
@@ -72,6 +182,154 @@ class Pattern:
         self._opening_of = None
         if pairs and all(len(opening) == 1 and len(closing) == 1 for opening, closing in pairs.items()):
             self._opening_of = {closing: opening for opening, closing in pairs.items()}
+
+        # Every delimiter, opening and closing, for the one question asked about
+        # the delimiters rather than about a string (see
+        # `_metavariable_spelt_with_brackets`).
+        self._delimiters = () if pairs is None else (*pairs, *pairs.values())
+
+        # The sole pair, when there is only one - the case every bracketed system
+        # in practice is (see `_one_pair_profile`).
+        self._one_pair = None
+        if self._opening_of is not None and len(pairs) == 1:
+            self._one_pair = next(iter(pairs.items()))
+
+    def brackets_respected(self, s: str, context: Context) -> bool:
+        # `check_brackets`, memoised for the length of one parse.
+        return self.bracket_profile(s, context) is not None
+
+    def bracket_profile(self, s: str, context: Context) -> BracketProfile | None:
+        """Where ``s``'s brackets are and how deep each leaves it, or None.
+
+        A pair of lists — the index of each delimiter, and the nesting depth
+        after it. Read-only to every caller, and memoised, so they are handed out
+        live rather than copied. None means ``s`` does not respect this pattern's brackets;
+        :data:`_NO_BRACKETS` means there is nothing to say (no table, or
+        delimiters longer than a character) and the string is not at fault.
+
+        The same single pass that decides whether ``s`` is balanced also answers,
+        thereafter for free, every question the search asks about a *span* of it:
+        ``s[a:b]`` is balanced exactly when the depth is the same at ``a`` and
+        ``b`` and never dips below it in between. That is what turns "which splits
+        are worth parsing at all" from a parse per candidate into a pointer walk
+        (see :func:`_balanced_ends`), and it is why the check is worth memoising
+        rather than merely making fast: every candidate parse of every substring
+        of every formula runs it.
+
+        Only the delimiters are recorded, not a depth per character. The formula
+        is much longer than its bracket list, and building a per-character profile
+        cost more than the scan it was replacing.
+        """
+        pairs = self._respect_brackets
+
+        if pairs is None:
+            # Nothing to respect
+            return _NO_BRACKETS
+
+        memo = context.parse_memo
+
+        # Keyed by the bracket table rather than by the pattern - a grammar's
+        # productions share one table, and the answer depends on nothing else. A
+        # three-part key, so it cannot collide with the two-part parse keys.
+        key = None
+        if memo is not None:
+            key = (id(pairs), s, _BRACKETS)
+
+            if key in memo:
+                return memo[key]
+
+        profile = self._bracket_profile(s)
+
+        if key is not None:
+            memo[key] = profile
+
+        return profile
+
+    def _bracket_profile(self, s: str) -> BracketProfile | None:
+        # Multi-character delimiters fall back to the general scan, which yields a
+        # verdict but no profile.
+        opening_of = self._opening_of
+
+        if opening_of is None:
+            return _NO_BRACKETS if self.check_brackets(s) else None
+
+        if self._one_pair is not None:
+            return self._one_pair_profile(s, *self._one_pair)
+
+        pairs = self._respect_brackets
+
+        positions = []
+        levels = []
+        stack = []
+        depth = 0
+
+        for i, character in enumerate(s):
+            if character in pairs:
+                stack.append(character)
+                depth += 1
+            elif character in opening_of:
+                if not stack or stack[-1] != opening_of[character]:
+                    # No corresponding opening bracket
+                    return None
+                stack.pop()
+                depth -= 1
+            else:
+                continue
+
+            positions.append(i)
+            levels.append(depth)
+
+        if stack:
+            # Stack left open at the end
+            return None
+
+        return positions, levels
+
+    @staticmethod
+    def _one_pair_profile(s: str, opener: str, closer: str) -> BracketProfile | None:
+        # One grouping pair - which is what every bracketed system here declares -
+        # so the delimiters can be *found* rather than the string walked. The two
+        # `find` scans run in C and the loop turns once per bracket instead of once
+        # per character, which matters because this runs on every substring of
+        # every formula. With one pair there is also nothing to match up: a depth
+        # that never goes negative and ends at zero is the whole condition.
+        positions = []
+        levels = []
+        depth = 0
+
+        opening = s.find(opener)
+        closing = s.find(closer)
+
+        while True:
+            if opening == -1:
+                if closing == -1:
+                    break
+                at = closing
+            elif closing == -1 or opening < closing:
+                at = opening
+            else:
+                at = closing
+
+            if at == opening:
+                depth += 1
+                opening = s.find(opener, at + 1)
+            else:
+                depth -= 1
+
+                if depth < 0:
+                    # No corresponding opening bracket
+                    return None
+
+                closing = s.find(closer, at + 1)
+
+            positions.append(at)
+            levels.append(depth)
+
+        if depth:
+            # Left open at the end
+            return None
+
+        return positions, levels
 
     def check_brackets(self, s):
         # Return a boolean indicating if the string s respects brackets
@@ -360,11 +618,16 @@ class StringPattern(Pattern):
         # actual match
         self.certainty = 0
 
-        # Build the non-variable locations, and the two orderings over them that
-        # `match` walks on every attempt (see get_non_variable_locations).
+        # Build the non-variable locations, and everything `match` derives from
+        # them on every attempt (see get_non_variable_locations).
         self.non_variable_locations = None
         self.non_variable_order = []
         self.last_variable_location = -1
+        self.segments: tuple[Segment, ...] = ()
+        self.segment_at_offset: dict[int, int] = {}
+        self.literal_tail: tuple[int, ...] = (0,)
+        self.first_literal_after: tuple[int, ...] = (-1,)
+        self.has_repeated_variables = False
 
         # Artificially infinite certainty
         self.certainty = 10000
@@ -407,29 +670,111 @@ class StringPattern(Pattern):
         self.non_variable_order = sorted(self.non_variable_locations)
         self.last_variable_location = max(self.variable_locations, default=-1)
 
-    def match(self, s, context, pattern_offset=0, non_variable_mapping=None, debug=None):
-        # Match a string s against this pattern with the given context.
-        # Optionally offset the pattern string, to start at an index > 0. This is used recursively.
+        self.build_segments()
 
-        # Optionally specify non variable mapping.
+        # Adding a variable rewrites the template's literals and its certainty,
+        # which is exactly what a union's leaf order and leading-character index
+        # are built from - so a member reshaped after it joined must discard
+        # them, or the production stops being offered for strings it now reads.
+        # (`declarative` fills a template before the union takes it, so this
+        # normally never fires; the primitive is public and the ordering is not
+        # something a caller should have to know.)
+        if self.union_member:
+            invalidate_union_memos()
+
+    def build_segments(self) -> None:
+        """Decompose the template into the slots and literals ``match`` walks.
+
+        A ``StringPattern`` is a template with named slots — ``(a → b)`` — and
+        matching is: place the literals, parse what falls between them at the
+        slots' sorts. That reading was previously recovered on the fly, character
+        offset by character offset, at every step of every attempt. It is a
+        property of the template, so it belongs here.
+
+        ``variable_locations`` and ``non_variable_locations`` partition the
+        template exactly (``rewriting`` walks the same partition), so this is a
+        total walk of it.
+        """
+        segments: list[Segment] = []
+
+        i = 0
+        while i < len(self.pattern):
+            if i in self.variable_locations:
+                location = self.variable_locations[i]
+                label = location["label"]
+                segments.append((_VARIABLE, label, location["pattern"], len(label)))
+                i += len(label)
+
+            elif i in self.non_variable_locations:
+                part = self.non_variable_locations[i]
+                segments.append((_LITERAL, part, None, len(part)))
+                i += len(part)
+
+            else:
+                raise ValueError(
+                    f"Offset {i} of {self.name!r} is in neither partition of its template."
+                )
+
+        self.segments = tuple(segments)
+        count = len(segments)
+
+        # Literal characters still owed from each segment on. A split leaving
+        # fewer characters than this cannot complete, whatever the slots take.
+        tail = [0] * (count + 1)
+        for k in range(count - 1, -1, -1):
+            kind, _, _, size = segments[k]
+            tail[k] = tail[k + 1] + (size if kind == _LITERAL else 0)
+        self.literal_tail = tuple(tail)
+
+        # The first literal segment after each one, or -1. A slot can never end
+        # past the last place that literal occurs in the string.
+        following = [-1] * (count + 1)
+        nearest = -1
+        for k in range(count - 1, -1, -1):
+            following[k] = nearest
+            if segments[k][0] == _LITERAL:
+                nearest = k
+        self.first_literal_after = tuple(following)
+
+        # Where each segment starts, so a caller entering mid-template
+        # (`pattern_offset`) lands on a segment rather than on a character.
+        self.segment_at_offset = {}
+        offset = 0
+        for k, segment in enumerate(segments):
+            self.segment_at_offset[offset] = k
+            offset += segment[3]
+        self.segment_at_offset[offset] = count
+
+        # Whether any label fills more than one slot. When none does, whether a
+        # suffix matches is a function of (position, segment) alone.
+        labels = [segment[1] for segment in segments if segment[0] == _VARIABLE]
+        self.has_repeated_variables = len(labels) != len(set(labels))
+
+    def match(
+        self, s: str, context: Context, pattern_offset: int = 0, debug: int | None = None
+    ) -> Match | None:
+        # Match a string s against this pattern with the given context.
+        # Optionally offset the pattern string, to start at an index > 0 - that
+        # is, match `s` against the template's tail from that offset on.
         #
-        # Only whole-pattern calls are memoised (see UnionPattern.match for why
-        # there is a memo at all): a partial call carries a `non_variable_mapping`
-        # already shifted for its caller, so its result is not a function of
-        # `(self, s)` alone.
+        # Only whole-template calls are memoised (see UnionPattern.match for why
+        # there is a memo at all); a partial call is a function of the offset too,
+        # and nothing repeats one.
         memo = context.parse_memo
-        if memo is None or pattern_offset != 0 or non_variable_mapping is not None:
-            return self._match(s, context, pattern_offset, non_variable_mapping, debug)
+        if memo is None or pattern_offset != 0:
+            return self._match(s, context, pattern_offset, debug)
 
         key = (id(self), s)
         if key in memo:
             return memo[key]
 
-        result = self._match(s, context, pattern_offset, non_variable_mapping, debug)
+        result = self._match(s, context, pattern_offset, debug)
         memo[key] = result
         return result
 
-    def _match(self, s, context, pattern_offset=0, non_variable_mapping=None, debug=None):
+    def _match(
+        self, s: str, context: Context, pattern_offset: int = 0, debug: int | None = None
+    ) -> Match | None:
         next_debug = None
         if debug is not None:
             # Debugging
@@ -440,31 +785,34 @@ class StringPattern(Pattern):
 
             next_debug = debug + 1
 
-        string_variables = context.string_variables
-
-        if pattern_offset == 0 and not self.check_brackets(s):
-            # Brackets don't match
-            return None
-
-        # Create an optimistic match
-        m = matches.Match(
-            pattern=self,
-            string=s
-        )
+        # The bracket profile of `s`, when there is one to have: both the verdict
+        # on `s` itself and, once the search starts splitting it, an O(1) verdict
+        # on every span of it. Only for a whole-template attempt - at an offset,
+        # `s` is somebody else's tail and may legitimately be unbalanced.
+        profile = None
 
         if pattern_offset == 0:
-            if len(self.variables) == 0 and s == self.pattern:
+
+            profile = self.bracket_profile(s, context)
+
+            if profile is None:
+                # Brackets don't match
+                return None
+
+            if profile is _NO_BRACKETS:
+                # Balanced vacuously, and with nothing to prune candidate splits by
+                profile = None
+
+            if not self.variables and s == self.pattern:
                 # Match
-                return m
+                return matches.Match(pattern=self, string=s)
 
-            # Check if the whole string is a variable
-            for svar, sub_pattern in string_variables.items():
-                if s == svar and self.equivalent(sub_pattern, context):
-                    # Match!
-                    m.is_variable = True
-                    return m
+            # The whole string may be a declared metavariable, of a sort this
+            # production can stand in for.
+            spelled = context.string_variables.get(s)
 
-        if pattern_offset == 0:
+            if spelled is not None and self.equivalent(spelled, context):
+                return matches.Match(pattern=self, string=s, is_variable=True)
 
             # Try definitions
             result = self.try_definitions(s, context)
@@ -473,318 +821,299 @@ class StringPattern(Pattern):
                 # A defined notation applies
                 return result
 
-            # Check the non-variable parts all appear in order
-            indices = self.non_variable_order
+            if not self._literals_appear_in_order(s):
+                # Cannot match, on the literals alone
+                return None
 
-            i = 0
-            for index in indices:
-                part = self.non_variable_locations[index]
+        if not self.variables:
+            # No slots: the template is a literal, and matching is string equality
+            # against whatever of it is left.
+            if s == self.pattern[pattern_offset:]:
+                return matches.Match(pattern=self, string=s)
 
-                # Find the next occurrence of the part
-                j = s.find(part, i)
-
-                if j == -1:
-                    # No match
-                    return None
-
-                if index == 0 and j > 0:
-                    # Also no match
-                    return None
-
-                i = j + len(part)
-
-            # Check the end of the pattern
-            if len(indices) > 0:
-                last_non_variable = indices[-1]
-
-                if last_non_variable > self.last_variable_location:
-                    # Pattern ends with a non-variable
-                    part = self.non_variable_locations[last_non_variable]
-
-                    if not s[-len(part):] == part:
-                        # No match at the end
-                        return None
-
-        # Get the pattern string, excluding any initial offset
-        pattern = self.pattern[pattern_offset:]
-
-        if len(self.variables) == 0:
-            # No variables
-
-            if s == pattern:
-                # Valid match
-                return m
-
-            # Otherwise, no match
             return None
 
-        # Otherwise, there are variables. Check the pattern character by character.
+        segment = self.segment_at_offset.get(pattern_offset)
 
-        # NB this can't be done with regex - could be multiple matches with the same starting position only one of
-        # which is valid
+        if segment is None:
+            raise ValueError(f"Invalid offset in StringPattern matching - matching {s} in {self.name}.")
 
-        if len(pattern) == 0 and len(s) == 0:
-            # Easy case
-            return m
+        # One dict of bindings is threaded through the whole search and undone on
+        # the way out of a dead end, rather than a Match being built at every
+        # template position and merged upwards.
+        bindings = {}
 
-        if len(pattern) == 0 and len(s) > 0:
-            # No match
+        # Whether a suffix matches depends on the bindings already made only when
+        # a slot label repeats. With distinct labels a dead end is a dead end for
+        # good, and worth remembering for the length of this attempt.
+        failed = None if self.has_repeated_variables else set()
+
+        if not self._walk(s, 0, segment, context, bindings, next_debug, failed, profile):
             return None
 
-        if non_variable_mapping is None:
-            # Build a non-variable mapping - so we know where the possible positions are for each non-variable string
-            non_variable_mapping = []
+        m = matches.Match(pattern=self, string=s)
+        for label, sub in bindings.items():
+            m.add_submatch(label, sub)
 
-        if pattern_offset == 0 and type(non_variable_mapping) is list:
+        return m
 
-            index = 0
-            for part_index, pattern_part in self.non_variable_locations.items():
+    def _literals_appear_in_order(self, s: str) -> bool:
+        # Whether `s` could match this template, judged on its literal parts alone
+        # - a necessary condition, and a cheap one. Every literal part must occur,
+        # in template order; a template opening with a literal must find it at
+        # position 0, and one ending with a literal must find it at the end.
+        # Nearly every candidate a union offers a production dies here, before the
+        # search proper allocates anything.
+        i = 0
+        for index in self.non_variable_order:
+            part = self.non_variable_locations[index]
 
-                # Find the next occurrence of s_part in s, starting from the previous index
-                next_index = s.find(pattern_part, index)
+            j = s.find(part, i)
 
-                # Add to non variable mapping
-                non_variable_mapping.append([part_index, [next_index]])
+            if j == -1:
+                # Missing entirely
+                return False
 
-                if next_index == -1:
-                    return None
+            if index == 0 and j > 0:
+                # The template opens with it, so the string must too
+                return False
 
-                index = next_index + 1
+            i = j + len(part)
 
-            # Add any other legal non variable mappings
-            for i in range(len(non_variable_mapping) - 1, -1, -1):
-                part_index, lst = non_variable_mapping[i]
-                start_index = lst[0]
-                pattern_part = self.non_variable_locations[part_index]
+        if self.non_variable_order:
+            last = self.non_variable_order[-1]
 
-                max_index = len(s)
-                if i < len(non_variable_mapping) - 1:
-                    # There is a next item
-                    max_index = non_variable_mapping[i + 1][1][-1]
+            if last > self.last_variable_location and not s.endswith(self.non_variable_locations[last]):
+                # The template ends with it, so the string must too
+                return False
 
-                # Search for further instances of pattern_part in s, and add the index of these to lst
-                next_index = start_index + 1
-                while next_index < max_index:
-                    increment = s[next_index:].find(pattern_part)
-                    next_index += increment
+        return True
 
-                    if increment > -1:
-                        lst.append(next_index)
-                        next_index += 1
-                    else:
-                        break
+    def _walk(
+        self,
+        s: str,
+        start: int,
+        segment: int,
+        context: Context,
+        bindings: dict[str, Match],
+        debug: int | None,
+        failed: set[tuple[int, int]] | None,
+        profile: BracketProfile | None,
+    ) -> bool:
+        # Match `s[start:]` against this template from `segment` on, recording a
+        # sub-match per slot filled in `bindings` and returning whether it
+        # matched; on failure `bindings` is left as it was found.
+        #
+        # Positions are indices into the whole of `s`, so a step neither copies
+        # the string nor rebases anything it carries - which is what the walk this
+        # replaced spent most of its time doing, rebuilding a table of candidate
+        # literal positions at every template position it advanced past.
+        #
+        # NB this can't be done with a regex: a slot is filled by *parsing* a
+        # substring at its declared sort, and several splits can put the same
+        # literal in the same place with only one of them parsing.
+        segments = self.segments
+        count = len(segments)
 
-            # Convert to a dictionary
-            non_variable_mapping = {item[0]: item[1] for item in non_variable_mapping}
+        # Literal segments are forced. Consume them up to the next slot.
+        while segment < count:
+            kind, text, sort, size = segments[segment]
 
-        # Check if this is a variable
-        if pattern_offset in self.variable_locations:
-            # Looks like a variable
+            if kind == _VARIABLE:
+                break
 
-            var = self.variable_locations[pattern_offset]["label"]
-            sub_pattern = self.variable_locations[pattern_offset]["pattern"]
+            if not s.startswith(text, start):
+                return False
 
-            # Check if there is a matching string variable in s
-            for string_var, str_pattern in string_variables.items():
-                if not s[:len(string_var)] == string_var:
-                    continue
+            start += size
+            segment += 1
 
-                # This looks like a string variable. Check the variable type is the same or part of a union
-                if str_pattern.equivalent(sub_pattern, context) or \
-                        (type(sub_pattern) is UnionPattern and sub_pattern.contains_pattern(str_pattern, context, allow_nested=True)):
-                        # (type(sub_pattern) is UnionPattern and str_pattern in sub_pattern.nested_options(context)):
-                    # These refer to the same pattern
+        else:
+            # Only reached when the loop ran out of segments rather than breaking
+            # on a slot: the template is exhausted, so the string must be too.
+            return start == len(s)
 
-                    # Check the remainder of s also matches
-                    remainder = s[len(string_var):]
+        state = (start, segment)
+        if failed is not None and state in failed:
+            return False
 
-                    new_non_variable_mapping = {
-                        key: [entry - len(string_var) for entry in non_variable_mapping[key]]
-                        for key in non_variable_mapping
-                    }
+        # A metavariable spelled at this position fills the slot whole, whatever
+        # else the template would let the slot take. Tried first, as the walk this
+        # replaced tried it: a rule schema is read with its metavariables in
+        # scope, and reading one as a formula that merely *starts* with its name
+        # is never what was meant.
+        for name, declared in context.string_variables.items():
+            if not s.startswith(name, start):
+                continue
 
-                    remainder_match = self.match(
-                        remainder,
-                        context,
-                        pattern_offset=pattern_offset + len(var),
-                        non_variable_mapping=new_non_variable_mapping,
-                        debug=debug
-                    )
+            if not (
+                declared.equivalent(sort, context)
+                or (type(sort) is UnionPattern and sort.contains_pattern(declared, context, allow_nested=True))
+            ):
+                # Declared at a sort this slot cannot take
+                continue
 
-                    if remainder_match is None:
-                        continue
+            sub = sort.match(name, context, debug=debug)
 
-                    # Match! Check for sub_match conflicts
+            if sub is None:
+                continue
 
-                    if var in remainder_match.sub_matches:
-                        remainder_sub = remainder_match.sub_matches[var]
-                        if not (remainder_sub.pattern == sub_pattern and remainder_sub.string == string_var):
-                            # There's a conflict with this variable later in the string
-                            continue
+            if self._bind(s, start + len(name), segment, context, bindings, debug, failed, profile, sub):
+                return True
 
-                    # Otherwise, copy the sub_matches to m and return
-                    for name, sub in remainder_match.sub_matches.items():
-                        m.add_submatch(name, sub)
+        # Otherwise the slot takes a prefix of what is left, and what the template
+        # owes next decides which prefixes are worth trying at all.
+        for end in self._slot_candidates(s, start, segment, context, profile):
 
-                    sub_pattern_match = sub_pattern.match(string_var, context, debug=next_debug)
+            sub = sort.match(s[start:end], context, debug=debug)
 
-                    # Add the string variable
-                    m.add_submatch(
-                        var=var,
-                        m=sub_pattern_match
-                    )
+            if sub is None:
+                # Nothing of that length parses at the slot's sort
+                continue
 
-                    return m
+            if self._bind(s, end, segment, context, bindings, debug, failed, profile, sub):
+                return True
 
-            # Check what comes after the variable in the pattern to filter what to do
-            next_offset = pattern_offset + len(var)
+        if failed is not None:
+            failed.add(state)
 
-            if next_offset == len(self.pattern):
-                # This is the final part of the pattern
-                possible_js = [len(s)]
+        return False
 
-            elif next_offset in self.variable_locations:
-                # There is another variable immediately following this one (generally not good as it's way slower)
+    def _bind(
+        self,
+        s: str,
+        end: int,
+        segment: int,
+        context: Context,
+        bindings: dict[str, Match],
+        debug: int | None,
+        failed: set[tuple[int, int]] | None,
+        profile: BracketProfile | None,
+        sub: Match,
+    ) -> bool:
+        # Fill the slot at `segment` with `sub`, then match on from `end`. Undoes
+        # the binding if what follows does not match. Returns whether it did.
+        label = self.segments[segment][1]
 
-                # Loop through the possibilities for the variable in s
-                possible_js = list(range(0, len(s) + 1))
+        previous = bindings.get(label)
+
+        if previous is not None and previous.string != sub.string:
+            # The label is bound to different text elsewhere in the template, and
+            # one label means one substring
+            return False
+
+        bindings[label] = sub
+
+        if self._walk(s, end, segment + 1, context, bindings, debug, failed, profile):
+            return True
+
+        if previous is None:
+            del bindings[label]
+        else:
+            bindings[label] = previous
+
+        return False
+
+    def _slot_candidates(
+        self,
+        s: str,
+        start: int,
+        segment: int,
+        context: Context,
+        profile: BracketProfile | None,
+    ) -> Iterable[int]:
+        # The end positions worth trying for the slot at `segment`, in increasing
+        # order - so an ambiguous template still resolves to the shortest binding,
+        # as it did when this enumerated candidate positions up front.
+        segments = self.segments
+        count = len(segments)
+        length = len(s)
+        following = segment + 1
+
+        # Whatever the slot takes, the literals still owed have to fit in what is
+        # left over.
+        limit = length - self.literal_tail[following]
+
+        if limit < start:
+            return ()
+
+        if following == count:
+            # Final slot: it takes the rest of the string, or nothing does
+            return (length,)
+
+        else:
+            kind, text, _, size = segments[following]
+
+            if kind == _VARIABLE:
+                # Adjacent slots - nothing separates them, so every boundary is a
+                # candidate. Bounded by the last place the next literal owed can
+                # sit, which is often all that keeps this short of the whole
+                # string.
+                literal = self.first_literal_after[segment]
+
+                if literal >= 0:
+                    latest = s.rfind(segments[literal][1])
+
+                    if latest == -1:
+                        return ()
+
+                    if latest < limit:
+                        limit = latest
+
+                candidates = range(start, limit + 1)
+
+            elif following + 1 == count:
+                # The template ends with this literal, so the string must too -
+                # which fixes the slot's end exactly.
+                end = length - size
+
+                if end < start or not s.startswith(text, end):
+                    return ()
+
+                return (end,)
 
             else:
-                # Must be a non-variable string
-                if not (next_offset in self.non_variable_locations):
-                    raise ValueError(f"Invalid offset in StringPattern matching - matching {s} in {self.name}.")
+                candidates = _occurrences(s, text, start, limit)
 
-                # Get the possible positions of the pattern part in s
-                possible_js = non_variable_mapping[next_offset]
+        # A slot can only be filled by a bracket-balanced substring, whenever its
+        # sort is bound to refuse an unbalanced one - so a split that would leave
+        # it holding an unbalanced one is not worth parsing. Reading
+        # `((p → q) → (r → s))` at `(a → b)`, three of the four arrows are inside
+        # an operand, and every one of them was parsed before being dismissed.
+        #
+        # Only where the template leaves the slot's end genuinely open, which is
+        # what the two returns above have already excluded: where exactly one
+        # split is possible, whether it is balanced is the sub-parse's own first
+        # question and asking it here as well would only be paying twice.
+        if profile is None or not profile[0]:
+            return candidates
 
-                # Get the non-variable pattern part
-                pattern_part = self.non_variable_locations[next_offset]
+        if not self._sort_refuses_unbalanced(segments[segment][2], context):
+            return candidates
 
-                # If the pattern part is final, it has to match the rest of the s exactly
-                if len(possible_js) > 1 and next_offset + len(pattern_part) == len(self.pattern):
-                    # The next pattern part is final. Keep only the final j
-                    possible_js = [possible_js[-1]]
+        return _balanced_ends(candidates, profile, start)
 
-            # Find max j - the position of the next non-variable part
-            max_j = len(s)
-            keys = tuple(key for key in self.non_variable_locations if key - pattern_offset >= 0)
+    def _sort_refuses_unbalanced(self, sort: Pattern, context: Context) -> bool:
+        # Whether `sort` is certain to refuse a string that does not respect this
+        # pattern's brackets - which is what licenses skipping such a split rather
+        # than parsing it to find out.
+        #
+        # A union checks the table before it tries any of its members, so sharing
+        # the table settles it - with one exception: a union answers a declared
+        # metavariable first, by *name*, and nothing obliges a name to balance.
+        # Nothing else here may be assumed to check at all: an atom and a regex
+        # never do, and a production's own template is checked only at the top of
+        # a whole-string attempt.
+        if type(sort) is not UnionPattern:
+            return False
 
-            if len(keys) > 0:
+        if sort.respect_brackets is not self._respect_brackets:
+            return False
 
-                # Min key is the position of the next non-variable part in the pattern
-                min_key = min(keys)
+        if not context.string_variables:
+            return True
 
-                # max_j
-                max_j = max(non_variable_mapping[min_key])
-
-            possible_js = [j for j in possible_js if 0 <= j <= max_j]
-
-            # Loop through the possibilities for the variable in s
-            for j in possible_js:
-
-                # Get the substring and remainder of s
-                sub_s = s[:j]
-                remainder = s[j:]
-
-                remainder_match = None
-
-                # Test if this sub_match is valid
-                sub_match = sub_pattern.match(
-                    sub_s,
-                    context,
-                    debug=next_debug
-                )
-
-                if sub_match is None:
-                    # No match here
-                    continue
-
-                if len(remainder) == 0:
-                    if next_offset < len(self.pattern) and next_offset not in self.variable_locations:
-                        # Pattern still has a string left with nothing to match in s (and it's not a variable,
-                        # which could match an empty string). No match.
-                        continue
-
-                else:
-                    # Remainder is not empty - need to check
-
-                    new_non_variable_mapping = {
-                        key: [entry - j for entry in non_variable_mapping[key]]
-                        for key in non_variable_mapping
-                    }
-
-                    # Check if the remainder of the string is a match
-                    remainder_match = self.match(
-                        remainder,
-                        context,
-                        pattern_offset=pattern_offset + len(var),
-                        non_variable_mapping=new_non_variable_mapping,
-                        debug=debug
-                    )
-
-                    if remainder_match is None:
-                        # No match.
-                        continue
-
-                # The remainder matches
-
-                # Match!
-
-                # Check for conflicts with the sub_matches
-                if remainder_match is not None:
-                    if var in remainder_match.sub_matches:
-                        remainder_sub = remainder_match.sub_matches[var]
-                        if not (remainder_sub.pattern == sub_pattern and remainder_sub.string == sub_s):
-                            # There's a conflict with this variable later in the string
-                            continue
-
-                    # Otherwise, copy the sub_matches to m and return
-                    for name, sub in remainder_match.sub_matches.items():
-                        m.add_submatch(name, sub)
-
-                # Add the string variable
-                m.add_submatch(var, sub_match)
-
-                return m
-
-        # Not a variable - check for literal character match
-        if pattern_offset not in self.non_variable_locations:
-            # No match
-            return None
-
-        part = self.non_variable_locations[pattern_offset]
-
-        if part == s[:len(part)]:
-            # Skip past the part in s and in the pattern
-
-            if len(s[len(part):]) == 0 and pattern_offset + len(part) == len(self.pattern):
-                # Reached the end of the pattern and string
-                return m
-
-            new_non_variable_mapping = {
-                key: [entry - len(part) for entry in non_variable_mapping[key]]
-                for key in non_variable_mapping
-            }
-
-            remainder_match = self.match(
-                s[len(part):],
-                context,
-                pattern_offset=pattern_offset + len(part),
-                non_variable_mapping=new_non_variable_mapping,
-                debug=debug
-            )
-
-            if remainder_match is not None:
-                # Success
-
-                # Copy the sub_matches to m and return
-                for name, sub in remainder_match.sub_matches.items():
-                    m.add_submatch(name, sub)
-
-                return m
-
-        # Otherwise, no match
-        return None
+        return not _metavariable_spelt_with_brackets(self, context)
 
     def add_variable(self, name, pattern, use_location="all"):
         # Add a variable
@@ -960,7 +1289,7 @@ def invalidate_union_memos() -> None:
     _union_revision += 1
 
 
-def _may_open_with(pattern, character):
+def _may_open_with(pattern: Pattern, character: str) -> bool:
     # Whether `pattern` could match a string beginning with `character`.
     #
     # A StringPattern whose template opens with a literal must find that literal
@@ -1007,6 +1336,9 @@ class UnionPattern(Pattern):
         # character as strings arrive. See `leaf_candidates`.
         self._leaf_index: dict = {}
         self._leaf_index_revision: int | None = None
+
+        for pattern in self.patterns:
+            pattern.union_member = True
 
         # A union built from members that already exist elsewhere can appear
         # inside a flattening taken a moment ago.
@@ -1076,7 +1408,7 @@ class UnionPattern(Pattern):
 
                     return m
 
-        if not self.check_brackets(s):
+        if not self.brackets_respected(s, context):
             # Brackets don't match
             return None
 
@@ -1134,9 +1466,10 @@ class UnionPattern(Pattern):
         # No match
         return None
 
-    def add_pattern(self, pattern):
+    def add_pattern(self, pattern: Pattern) -> None:
         """Add ``pattern`` to the union, invalidating any memoised flattening."""
         self.patterns.append(pattern)
+        pattern.union_member = True
         invalidate_union_memos()
 
     def add_variables(self, variable_dict):
@@ -1249,7 +1582,9 @@ class UnionPattern(Pattern):
         self._nested_options_cache[path_dict] = (_union_revision, found)
         return found
 
-    def match_options(self, context):
+    def match_options(
+        self, context: Context
+    ) -> tuple[dict, list[Pattern], list[Pattern]]:
         """The flattening `match` reads: paths, then leaves by certainty, then unions.
 
         Splitting the flattening into the two lists `match` walks, and ordering the
@@ -1269,7 +1604,9 @@ class UnionPattern(Pattern):
         self._match_options_cache = (_union_revision, (options, leaves, unions))
         return options, leaves, unions
 
-    def leaf_candidates(self, s, context, leaves):
+    def leaf_candidates(
+        self, s: str, context: Context, leaves: list[Pattern]
+    ) -> list[Pattern]:
         """Those of `leaves` that could match a string starting as `s` does.
 
         A production that opens with a literal can only read a string opening

@@ -10,6 +10,7 @@ from website.logical.matching import (
     RegexPattern,
     StringPattern,
     UnionPattern,
+    patterns as patterns_module,
 )
 
 
@@ -214,3 +215,37 @@ def test_the_leaf_index_stands_down_when_it_cannot_reason(context):
     definition_context = copy(context)
     definition_context.definitions = {object()}
     assert union.leaf_candidates("( 1 + 2 )", definition_context, leaves) is leaves
+
+
+def test_a_member_reshaped_after_it_joined_is_still_offered(context):
+    # The index reads a member's *leading literal*, and giving a template its
+    # slots rewrites that: `a = b` opens with the literal `a = b` until `a` is a
+    # variable, after which it opens with anything. A union parsed against in
+    # between must not keep the earlier reading, or the production silently stops
+    # being tried for every string it now reads.
+    union, _, _ = _arith_union()
+
+    equals = StringPattern(name="equals", pattern="a = b")
+    union.add_pattern(equals)
+
+    # A parse here is what fills the flattening and the leading-character index.
+    assert union.match("7", context) is not None
+
+    equals.add_variables({"a": union, "b": union})
+
+    assert union.match("1 = 2", context) is not None
+
+
+def test_reshaping_a_template_outside_any_union_costs_no_invalidation(context):
+    # The other half of the contract: a rule schema builds a template and parses
+    # with it straight away, so invalidating on every `add_variables` would
+    # re-flatten the whole grammar once per schema.
+    union, _, _ = _arith_union()
+    assert union.match("7", context) is not None
+
+    before = patterns_module._union_revision
+
+    schema = StringPattern(name="schema", pattern="( a + b )")
+    schema.add_variables({"a": union, "b": union})
+
+    assert patterns_module._union_revision == before

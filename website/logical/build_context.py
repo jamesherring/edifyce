@@ -142,7 +142,7 @@ def compose_schema_term(
     # Fixed grammar, fixed definitions, fixed metavariables for the whole of this
     # parse, so the same substring always parses the same way - memoise it. The
     # candidate sorts below re-parse overlapping substrings heavily, and nesting
-    # multiplies that: set.mm's 16-binder `cbvral8vw` does not finish without it.
+    # multiplies that: a deeply nested template does not finish without it.
     parse_context.parse_memo = {}
 
     for candidate in _composition_sorts(context, prefer):
@@ -158,11 +158,12 @@ class _GrammarIndex:
     """Two lookups over a context's declared patterns, keyed by how many there are.
 
     Both answer questions about the *grammar*, which is fixed once a system is
-    built - but the two callers below ask them per schema built, and promotion
+    built - but the two callers above ask them per schema built, and promotion
     builds one per theorem statement and premise. Scanning every declared pattern
-    each time is what made those scans, rather than the parse they set up, a third
-    of an import. `size` is the guard: a context's `variables` only ever grows,
-    while a system is being assembled, so a differing count means rebuild.
+    each time is what made those scans, rather than the parse they set up, the
+    bulk of building a system with a large grammar. `size` is the guard: a
+    context's `variables` only ever grows, while a system is being assembled, so
+    a differing count means rebuild.
     """
 
     size: int
@@ -209,9 +210,9 @@ def _composition_sorts(
     # formula is actually parsed at. Callers that know it (promotion does - see
     # _logical_sorts) pass it, so the answer no longer depends on where in the
     # grammar's declaration order the right sort happens to sit. It is also the
-    # faster order where the two differ: on a set.mm import the logical sort
-    # matches nearly every time, and the sorts otherwise tried first are large
-    # unions whose failing parse costs as much as the succeeding one.
+    # faster order where the two differ: the logical sort matches nearly every
+    # time, and the sorts otherwise tried first are large unions whose failing
+    # parse costs as much as the succeeding one.
     sorts = [pattern for pattern in prefer if isinstance(pattern, UnionPattern)]
     if not sorts:
         return _grammar_index(context).unions
