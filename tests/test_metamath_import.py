@@ -24,10 +24,13 @@ verbatim set.mm string, which is what the decoder is actually tested against.
 
 from __future__ import annotations
 
+from copy import copy
+
 import pytest
 
 pytest.importorskip("regex")
 
+from website.logical.declarative import build_system
 from website.logical.metamath import (
     MetamathError,
     build_spec,
@@ -489,3 +492,70 @@ def test_import_errors_are_reported(database):
 
     with pytest.raises(MetamathError, match="has no proof"):
         import_proof(database, "2re")
+
+
+# The `A.` / `A` collision, reduced to its parts. set.mm's `wral` is
+# `A. x e. A ph`, where `A.` is the universal quantifier and `A` a class
+# variable; nothing else about restricted quantification matters here.
+QUANTIFIER_FRAGMENT = r"""
+$c |- wff class setvar A. e. $.
+$v ph x A B y $.
+wph $f wff ph $.
+vx $f setvar x $.
+vy $f setvar y $.
+cA $f class A $.
+cB $f class B $.
+wral $a wff A. x e. A ph $.
+${
+  rgenw.1 $e |- ph $.
+  rgenw $a |- A. x e. A ph $.
+$}
+$( Mentions `y` and `B`, so the variable sorts carry them - see
+   test_variable_sorts_carry_only_reachable_variables. $)
+other $a |- A. y e. B ph $.
+"""
+
+
+def test_a_variable_hidden_inside_a_constant_is_renamed():
+    # A production's variables are located by scanning the template for their
+    # names, so the class variable `A` is also found at offset 0, inside the
+    # quantifier `A.`. The production then demands the same class in both places.
+    database = parse(QUANTIFIER_FRAGMENT)
+    production = next(p for p in build_spec(database).productions if p.name == "wral")
+
+    assert production.template == "A. x e. A_0 ph"
+    assert dict(production.bindings) == {"x": "setvar", "A_0": "class", "ph": "wff"}
+
+    # The setvar `x` does not collide with anything, so it keeps its name.
+    assert "x" in dict(production.bindings)
+
+
+def test_a_quantification_parses_over_any_class():
+    # The symptom the rename fixes: with `A` claimed at offset 0, only a
+    # quantification over a class *literally named* `A` parsed, which silently
+    # invalidated every restricted quantification in set.mm.
+    database = parse(QUANTIFIER_FRAGMENT)
+    system = build_system(build_spec(database))
+    context = copy(system.context)
+    wff = system.build_context.variables["wff"]
+
+    assert wff.match("A. x e. A ph", context) is not None
+    assert wff.match("A. y e. B ph", context) is not None
+
+
+def test_a_variable_not_hidden_in_a_constant_keeps_its_name():
+    # The rename is driven by a real collision (more substring occurrences than
+    # token occurrences), so an ordinary production is left exactly as written.
+    database = parse(
+        r"""
+$c |- wff ( ) -> $.
+$v ph ps $.
+wph $f wff ph $.
+wps $f wff ps $.
+wi $a wff ( ph -> ps ) $.
+"""
+    )
+    production = next(p for p in build_spec(database).productions if p.name == "wi")
+
+    assert production.template == "( ph -> ps )"
+    assert dict(production.bindings) == {"ph": "wff", "ps": "wff"}

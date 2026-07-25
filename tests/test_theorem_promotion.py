@@ -375,3 +375,30 @@ def test_closed_statement_is_usable_as_a_premise():
 
     proof = system.parse("2 ∈ ℕ [2nn]\n2 ∈ ℝ [up, 1]")
     assert proof.valid is True
+
+
+def test_a_citation_may_name_more_than_sixteen_antecedents():
+    # The cap on cited antecedents was 16, on the reasoning that no real proof
+    # approaches it. set.mm has 437 assertions taking more than 16 essential
+    # hypotheses (the largest, `aks6d1c2lem3`, takes 35), so importing one
+    # produces a citation that big and it must check.
+    arity = 24
+    system = build_system(HILBERT)
+    premises = tuple(f"(p{i} → p{i})" for i in range(arity))
+    metavariables = {f"p{i}": "formula" for i in range(arity)}
+
+    # Each premise is proved by the identity theorem, then all of them are cited
+    # at once by a theorem that takes every one of them.
+    system.promote(promote_from_source(system, "I", "(p → p)", {"p": "formula"}))
+    system.promote(
+        promote_from_source(system, "BIG", "(q → q)", {**metavariables, "q": "formula"},
+                            premises=premises)
+    )
+
+    lines = [f"((a{i} → a{i}) → (a{i} → a{i})) [I]" for i in range(arity)]
+    citation = ", ".join(str(i + 1) for i in range(arity))
+    lines.append(f"((z → z) → (z → z)) [BIG, {citation}]")
+
+    proof = system.parse("\n".join(lines))
+    assert proof.proof_lines[arity].valid is True, proof.proof_lines[arity].invalid_message
+    assert proof.valid is True
