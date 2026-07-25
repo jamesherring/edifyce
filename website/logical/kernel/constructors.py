@@ -217,6 +217,18 @@ def _link(constructor: Constructor, pattern: Pattern) -> None:
             for info in pattern.variable_locations.values()
         }
     if isinstance(pattern, UnionPattern):
+        if not pattern.patterns:
+            # Branches are resolved once, here, so an empty union would be sealed
+            # admitting nothing but itself and every later variable of that sort
+            # would silently refuse to bind. A sort with no productions cannot be
+            # declared (`SystemSpec.sort_names` reads them off the productions),
+            # so this only ever means the union has not been filled yet - the
+            # ordering `declarative.build_system` exists to get right. Loud, since
+            # the alternative is a system that builds and then rejects valid proofs.
+            raise ValueError(
+                f"Sort {pattern.name!r} was projected before its productions were "
+                "added; fill the union first (see declarative.build_system step 4)."
+            )
         constructor.members = tuple(
             constructor_for(member) for member in pattern.patterns
         )

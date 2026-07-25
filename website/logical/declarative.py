@@ -493,9 +493,24 @@ def build_system(spec: SystemSpec) -> FormalSystem:
             # atom constant is left unregistered in step 1.
             line_register = unregistered if line.behaviour == "comment" else register
             for part in line.parts:
-                ctx.variables[part.name] = line_register(
+                built = line_register(
                     RegexPattern(name=part.name, pattern=_anchor(part.regex))
                 )
+                # Two lines may declare the same part name with *different*
+                # regexes, and each must keep its own — that is what the rebind
+                # is for. Declaring the identical part twice is not that case,
+                # and must not mint a second object: productions are canonical
+                # (one object per production, so sort identity decides sort
+                # equality — see kernel.constructors.Constructor.admits), and two
+                # equivalent-but-distinct patterns would break it.
+                previous = ctx.variables.get(part.name)
+                if (
+                    isinstance(previous, RegexPattern)
+                    and previous.pattern == built.pattern
+                    and previous.respect_brackets == built.respect_brackets
+                ):
+                    built = previous
+                ctx.variables[part.name] = built
             _build_line(line, sorts, ctx, system, line_register)
 
     # 6. Axioms -> axiom-behaviour line types.
@@ -683,6 +698,16 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
     notation = union.add_notation(defn.higher, context_copy)
     system.context.definitions.add(notation)
 
+    # Whether the sort actually parses the defined form through *this* notation.
+    # A sort tries its own productions before its notations, so a form the grammar
+    # already spells (`Define x ∈ y as ...`) parses to a declared production and
+    # never reaches here. Asked of the registered notation rather than of the
+    # grammar-before-it, because two definitions may share one defined form: the
+    # second finds the first's notation, which is the same production and still
+    # its own leaf.
+    matched = union.match(defn.higher, system.context)
+    parses_to_its_own_leaf = matched is not None and matched.pattern is notation.template
+
     # A nullary defined form is a new ground leaf of the grammar that no production
     # declared a role for, so the build settles its role here: the leaf abbreviates
     # one fixed term, and a *later* definition may introduce it exactly as it may a
@@ -694,7 +719,7 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
     # among its defined form's, so `introduced_leaves` never puts it to the
     # constants check during this build, and a build that goes on to fail discards
     # the notation with the rest of the half-built system.
-    notation.template.denotes_constant = denotes_a_constant(notation)
+    notation.template.denotes_constant = denotes_a_constant(notation, parses_to_its_own_leaf)
 
     # Build the kernel counterpart now, against the context the notation has just
     # entered — a definition's *defined* form is grammatical only because its

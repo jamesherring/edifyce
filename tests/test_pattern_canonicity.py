@@ -37,7 +37,7 @@ from tests.spec_helpers import (
     universal_prod,
     variable_prod,
 )
-from website.logical.declarative import SystemSpec, build_spec
+from website.logical.declarative import LinePart, LineSpec, SystemSpec, build_spec
 from website.logical.kernel import from_match
 from website.logical.kernel.constructors import Constructor, constructor_for
 from website.logical.kernel.terms import Node, Term
@@ -115,6 +115,76 @@ def test_each_production_name_binds_one_object(system):
     assert duplicated == {}
 
 
+def test_two_lines_declaring_the_identical_part_share_one_production():
+    # Line parts are registered per line, so a second line *rebinds* the name —
+    # deliberately, since two lines may spell the same part differently. Declaring
+    # the identical part twice is not that case, and must not mint a second
+    # object: two equivalent-but-distinct productions break the identity that
+    # sort admission decides on.
+    shared = LinePart(name="reference", regex="[A-Za-z0-9, ]+")
+    spec = SystemSpec(
+        name="Parts",
+        brackets=brackets(),
+        productions=[variable_prod(), membership_prod(), implication_prod()],
+        lines=[
+            LineSpec(name="claim", shape="<formula> [<reference>]",
+                     parts=[shared], logical_sort="formula"),
+            LineSpec(name="restate", shape="also <formula> [<reference>]",
+                     parts=[LinePart(name=shared.name, regex=shared.regex)],
+                     logical_sort="formula"),
+        ],
+        rules=[hyp_rule()],
+    )
+    result = build_spec(spec)
+    assert "errors" not in result, result.get("errors")
+    built = result["system"]
+
+    parts = {
+        id(info["pattern"]): info["pattern"]
+        for line_type in built.line_types
+        for info in line_type.pattern.variable_locations.values()
+        if info["pattern"].name == "reference"
+    }
+    assert len(parts) == 1
+
+    # Both lines still parse — sharing the production changed nothing observable.
+    assert built.parse("x ∈ y [HYP]").valid is True
+    assert built.parse("also x ∈ y [HYP]").valid is True
+
+
+def test_two_lines_may_still_spell_the_same_part_differently():
+    # The rebind this shares an object with must not become a blanket dedup: two
+    # lines naming one part with *different* regexes keep their own.
+    spec = SystemSpec(
+        name="PartsDiffer",
+        brackets=brackets(),
+        productions=[variable_prod(), membership_prod(), implication_prod()],
+        lines=[
+            LineSpec(name="claim", shape="<formula> [<reference>]",
+                     parts=[LinePart(name="reference", regex="[A-Za-z0-9, ]+")],
+                     logical_sort="formula"),
+            LineSpec(name="restate", shape="also <formula> [<reference>]",
+                     parts=[LinePart(name="reference", regex="[0-9]+")],
+                     logical_sort="formula"),
+        ],
+        rules=[hyp_rule()],
+    )
+    result = build_spec(spec)
+    assert "errors" not in result, result.get("errors")
+    built = result["system"]
+
+    parts = {
+        id(info["pattern"])
+        for line_type in built.line_types
+        for info in line_type.pattern.variable_locations.values()
+        if info["pattern"].name == "reference"
+    }
+    assert len(parts) == 2
+
+    # And `claim` kept its own, wider regex — the alphabetic citation still parses.
+    assert built.parse("x ∈ y [HYP]").valid is True
+
+
 def test_copying_a_context_shares_its_productions(system):
     # Contexts are copied all over the engine (per proof line, per rule, per
     # side condition). Every one of those copies must keep the *same* production
@@ -162,16 +232,13 @@ def test_the_build_projects_each_sort_with_its_branches(system):
             assert constructor_for(member) in constructor.admits
 
 
-def test_projecting_an_unfilled_sort_is_what_the_ordering_prevents(system):
-    # The failure mode the explicit projection exists to rule out, pinned so the
-    # ordering is not quietly reintroduced as an accident: a union projected
-    # before its branches are added stays empty.
-    union = UnionPattern(name="late", patterns=[])
-    constructor = constructor_for(union)
-    union.patterns.append(system.context.variables["implication"])
-
-    assert constructor.members == ()
-    assert constructor.admits == frozenset({constructor})
+def test_projecting_an_unfilled_sort_raises_rather_than_sealing_it_empty(system):
+    # Branches are resolved once, at projection, so projecting an unfilled union
+    # would seal it admitting nothing but itself — a system that builds and then
+    # refuses valid proofs. A sort with no productions cannot be declared, so this
+    # can only mean the ordering went wrong, and it fails loudly.
+    with pytest.raises(ValueError, match="before its productions"):
+        constructor_for(UnionPattern(name="late", patterns=[]))
 
 
 def test_nothing_reachable_from_a_term_is_a_production(system):

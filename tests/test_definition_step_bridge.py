@@ -357,6 +357,30 @@ def test_every_constructor_snapshots_its_production_s_declared_role():
     assert constructor_for(notation.template).denotes_constant is True
 
 
+def test_a_defined_form_the_grammar_already_parses_is_not_a_constant():
+    # A nullary notation whose form a declared production *already* parses. A
+    # sort tries its productions before its notations, so this notation never
+    # fires and its form parses to a compound, not to a leaf of its own — the
+    # opposite of what makes a nullary abbreviation a constant.
+    #
+    # "Nullary" alone would mark it constant, which is the unsafe direction: the
+    # flag is what excuses a later definition from accounting for a token.
+    spec = nullary_spec(closed=True)
+    spec.definitions = [defn("formula", "shadowed", "(⊥ → ⊥)", "⊥", [])]
+    system = build_declarative(spec)
+
+    notation = only_notation(system)
+    assert notation.template.pattern == "(⊥ → ⊥)"
+    assert notation.template.denotes_constant is False
+    assert constructor_for(notation.template).denotes_constant is False
+
+    # And the form really is parsed by the declared production, not the notation.
+    formula = context_of(system).variables["formula"]
+    matched = formula.match("(⊥ → ⊥)", context_of(system))
+    assert matched is not None
+    assert matched.pattern is not notation.template
+
+
 def test_layering_on_a_definition_with_parameters_introduces_nothing():
     # The counterpart: `(x ∉ y)` is compound, never a ground leaf, so the derived
     # role is False and nothing is excused by it — there was nothing to excuse.

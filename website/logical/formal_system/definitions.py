@@ -215,10 +215,10 @@ def build_kernel_definition(
     return kernel_def
 
 
-def denotes_a_constant(notation: DefinedNotation) -> bool:
+def denotes_a_constant(notation: DefinedNotation, parses_to_its_own_leaf: bool) -> bool:
     """Whether a definition's *defined* form is itself a constant of the object
-    language - true exactly when the notation is nullary, so that form parses to
-    a ground leaf.
+    language: true when the notation is nullary **and** its form is new to the
+    grammar, so that form parses to this notation's own ground leaf.
 
     A nullary definition (``S ≝ (⊥ → ⊥)``) puts a new leaf into the grammar that
     no production declared a role for. It needs no declaration: ``S`` abbreviates
@@ -232,12 +232,23 @@ def denotes_a_constant(notation: DefinedNotation) -> bool:
     Derived rather than declared: there is nothing here for an author to know
     that the engine does not.
 
+    ``parses_to_its_own_leaf`` is why nullary alone will not do. A sort tries its
+    own productions before its notations, so a defined form the grammar *already*
+    spells (``Define x ∈ y as ...`` with no parameters) never reaches this
+    notation: it parses through the declared production, and to a compound rather
+    than to a leaf of this notation at all. Marking that template a constant would
+    be the unsafe direction — the flag is what excuses a *later* definition from
+    accounting for a token — so a shadowed form takes the variable-like default.
+    Nothing is ever built through such a template either way, which is why this is
+    a correctness statement rather than a bug fix.
+
+    Note it is a question about *this* notation, not about the grammar before it:
+    two definitions may share one defined form, and the second finds the first's
+    notation. That is one production and still its own leaf, so both agree.
+
     Asked of the *notation* rather than the built definition, so the answer is
     available before the definition is built - which is what lets a constructor
     snapshot the declaration instead of reading it back through the production
-    for the rest of the system's life. The two agree by construction: a
-    definition's parameters are exactly its notation's slots (see
-    :func:`build_kernel_definition`), so the defined form is a ground leaf
-    exactly when the notation takes none.
+    for the rest of the system's life.
     """
-    return not notation.variables
+    return not notation.variables and parses_to_its_own_leaf
