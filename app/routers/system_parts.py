@@ -503,11 +503,28 @@ async def _assign_line(session: AsyncSession, system_id: uuid.UUID, row: LineRow
         # None clears the scope (a plain line); the Literal on the payload has
         # already rejected any value other than "assumption"/"variable".
         row.scope = payload.scope
+    if "behaviour" in fields and payload.behaviour is not None:
+        row.behaviour = payload.behaviour
     if "logical_sort" in fields:
         row.logical_symbol = (
             await _resolve_sort(session, system_id, payload.logical_sort)
             if payload.logical_sort is not None else None
         )
+    # Commentary carries no formula and opens no scope: the build rejects either
+    # pairing, so catch it here as a 422 rather than letting the system fail to
+    # compile later. (See declarative._build_line for why each is refused.)
+    if row.behaviour == "comment":
+        if row.logical_symbol is not None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "A comment line carries no formula, so it cannot have a logical sort.",
+            )
+        if row.scope is not None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "A comment line is unnumbered, so it cannot open a subproof scope; "
+                "no rule could discharge it.",
+            )
     if "parts" in fields and payload.parts is not None:
         row.parts = [LinePartRow(position=i, name=p.name, regex=p.regex) for i, p in enumerate(payload.parts)]
 

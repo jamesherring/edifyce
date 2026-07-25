@@ -19,6 +19,7 @@ from tests.spec_helpers import (
     biconditional_prod,
     brackets,
     conjunction_prod,
+    comment_line,
     cp_rule,
     defn,
     disjunction_prod,
@@ -534,6 +535,60 @@ def scoped_spec() -> SystemSpec:
         lines=[statement_line(), assumption_line()],
         rules=[reiteration_rule()],
     )
+
+
+def commented_spec() -> SystemSpec:
+    spec = scoped_spec()
+    spec.lines.append(comment_line())
+    return spec
+
+
+def test_comment_line_builds_an_unchecked_line_type():
+    system = build_system(commented_spec())
+    note = {lt.name: lt for lt in system.line_types}["note"]
+    assert note.behaviour == "comment"
+    # No formula to project — the field is left unset rather than pointed at
+    # prose, so nothing harvesting line formulae picks it up.
+    assert note.formula_field is None
+
+
+def test_comment_line_is_valid_unnumbered_and_uncitable():
+    system = build_system(commented_spec())
+    proof = system.parse("-- a header\na [R, 1]\n-- trailing note")
+    notes = [line for line in proof.proof_lines if line.display.startswith("--")]
+
+    # Prose passes without justification and takes no citation number, so the
+    # step between the two notes is still line 1.
+    assert all(line.valid for line in notes)
+    assert [line.number for line in proof.proof_lines] == [None, 1, None]
+
+
+def test_comment_line_does_not_close_the_subproof_it_sits_in():
+    # An unindented note dedents past the opener. If commentary took part in
+    # scoping it would close the subproof and the next step would be rejected as
+    # out of scope — a failure on a line the author never touched.
+    system = build_system(commented_spec())
+    proof = system.parse("assume a\n-- granted for the subproof\n    a [R, 1]")
+    assert proof.valid is True
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"behaviour": "indent"}, "invalid behaviour"),
+        ({"behaviour": "comment", "scope": "assumption"}, "cannot open a"),
+        ({"behaviour": "comment", "logical_sort": "formula"}, "carries no formula"),
+    ],
+)
+def test_unauthorable_line_behaviours_are_build_errors(overrides, expected):
+    spec = scoped_spec()
+    line = comment_line()
+    for field, value in overrides.items():
+        setattr(line, field, value)
+    spec.lines.append(line)
+
+    with pytest.raises(DeclarativeError, match=expected):
+        build_system(spec)
 
 
 def test_scope_line_builds_a_scope_opening_line_type():

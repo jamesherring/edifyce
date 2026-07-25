@@ -51,6 +51,14 @@ class DeclarativeError(Exception):
 # The scopes a line type may open (mirrors LineType.scope's accepted values).
 _LINE_SCOPES = (None, "assumption", "variable")
 
+# The line behaviours a declarative system may author. `LineType` accepts more,
+# but the rest are not offered here: `axiom` is emitted from `spec.axioms` rather
+# than declared; `definition`/`import` fail closed in the checker (their payload
+# came from an accessor mechanism that was removed); and `indent` is the block
+# nesting that `LineSpec.scope` replaced. A value the engine ignores or refuses
+# is worse than no value at all, so building one is an error, not a silent no-op.
+_LINE_BEHAVIOURS = ("logical", "comment")
+
 
 # ---------------------------------------------------------------------------
 # Structured records: the declarative model of a system
@@ -150,6 +158,12 @@ class LineSpec:
     # →I) or "variable" (opens one under a fresh variable, for e.g. ∀I). A scope
     # opener may still bear a formula, so this is separate from the line's shape.
     scope: str | None = None
+    # What the checker does with lines of this type: "logical" (the default — the
+    # line asserts a formula and must be justified) or "comment" (prose, never
+    # checked and never numbered, so no citation can name it). A comment line
+    # carries no formula, so it needs no `logical_sort` and its shape need not
+    # name a grammar sort — the one line kind that may be pure text.
+    behaviour: str = "logical"
 
 
 @dataclass
@@ -204,33 +218,44 @@ def _anchor(regex: str) -> str:
 
 def _line_layout(
     line: LineSpec, sorts: set[str],
-) -> tuple[str, list[tuple[str, str]], tuple[str, str], tuple[str, str] | None]:
+) -> tuple[str, list[tuple[str, str]], tuple[str, str] | None, tuple[str, str] | None]:
     """Resolve a line's template and its formula/reference placeholders.
 
     Returns ``(template, placeholders, logical_ph, reference_ph)`` where each
-    ``_ph`` is a ``(placeholder_name, variable)`` pair (``reference_ph`` may be
-    ``None``), given the system's grammar ``sorts`` so the logical placeholder
-    can be resolved.
+    ``_ph`` is a ``(placeholder_name, variable)`` pair (either may be ``None``),
+    given the system's grammar ``sorts`` so the logical placeholder can be
+    resolved. ``logical_ph`` is ``None`` only for a comment line, which carries
+    no formula.
     """
     part_names = {p.name for p in line.parts}
 
     # Tokenise the shape into (placeholder | literal) fragments.
     template, placeholders = _shape_to_template(line.shape)
 
-    # Choose the logical placeholder: explicit 'logical <sort>' or first sort.
-    logical_ph = None
-    if line.logical_sort:
-        for ph, var in placeholders:
-            if ph == line.logical_sort:
-                logical_ph = (ph, var)
-                break
-    if logical_ph is None:
-        for ph, var in placeholders:
-            if ph in sorts:
-                logical_ph = (ph, var)
-                break
-    if logical_ph is None:
-        raise DeclarativeError("Line shape must contain a placeholder naming a grammar sort.")
+    # A comment line asserts nothing, so it has no formula to project — and its
+    # shape is free to be prose, naming no grammar sort at all.
+    if line.behaviour == "comment":
+        if line.logical_sort is not None:
+            raise DeclarativeError(
+                f"Line {line.name!r} is commentary, so it carries no formula; "
+                f"remove its logical sort {line.logical_sort!r}."
+            )
+        logical_ph = None
+    else:
+        # Choose the logical placeholder: explicit 'logical <sort>' or first sort.
+        logical_ph = None
+        if line.logical_sort:
+            for ph, var in placeholders:
+                if ph == line.logical_sort:
+                    logical_ph = (ph, var)
+                    break
+        if logical_ph is None:
+            for ph, var in placeholders:
+                if ph in sorts:
+                    logical_ph = (ph, var)
+                    break
+        if logical_ph is None:
+            raise DeclarativeError("Line shape must contain a placeholder naming a grammar sort.")
 
     # The reference placeholder (if any inline part is used).
     reference_ph = None
@@ -452,6 +477,18 @@ def _build_line(line: LineSpec, sorts: set[str], ctx: FormalSystemContext,
             f"Line {line.name!r} has invalid scope {line.scope!r}; "
             f"expected one of {', '.join(repr(s) for s in _LINE_SCOPES)}."
         )
+    if line.behaviour not in _LINE_BEHAVIOURS:
+        raise DeclarativeError(
+            f"Line {line.name!r} has invalid behaviour {line.behaviour!r}; "
+            f"expected one of {', '.join(repr(b) for b in _LINE_BEHAVIOURS)}."
+        )
+    if line.behaviour == "comment" and line.scope is not None:
+        # A subproof has to be opened by a line the discharge rule can cite, and
+        # commentary is unnumbered — so the subproof could never be discharged.
+        raise DeclarativeError(
+            f"Line {line.name!r} is commentary, so it cannot open a "
+            f"{line.scope} scope; no rule could discharge it."
+        )
     template, placeholders, logical_ph, reference_ph = _line_layout(line, sorts)
 
     # Each line gets a distinctly-named pattern (a single line named "statement"
@@ -464,9 +501,12 @@ def _build_line(line: LineSpec, sorts: set[str], ctx: FormalSystemContext,
     line_type = LineType(
         name=line.name,
         pattern=pattern,
-        behaviour="logical",
+        behaviour=line.behaviour,
         scope=line.scope,
-        formula_field=logical_ph[1],
+        # Declared, not merely absent: a comment line has no formula to project,
+        # so leaving the field unset keeps prose out of anything that harvests
+        # line formulae (the term graph, definitional steps).
+        formula_field=logical_ph[1] if logical_ph is not None else None,
         reference_field=reference_ph[1] if reference_ph is not None else None,
     )
     ctx.variables[line.name] = line_type
