@@ -10,7 +10,7 @@ from ..graphs import find_cycle, saturating_matching, topological_order
 from ..kernel.side_conditions import Not, Occurs
 from ..kernel.terms import from_match
 from ..matching import Match
-from .definitions import follows_by_definition, kernel_definition_for
+from .definitions import follows_by_definition
 
 if TYPE_CHECKING:
     from ..matching.context import Context
@@ -763,7 +763,7 @@ class Proof:
             else list(context.definitions)
 
         for definition in candidates:
-            if proof_line.follows_from_definition(source, definition, {}, context):
+            if proof_line.follows_from_definition(source, definition, context):
                 proof_line.valid = True
                 proof_line.antecedents = (source,)
                 source.dependent_lines.add(proof_line)
@@ -771,30 +771,10 @@ class Proof:
 
         proof_line.valid = False
         if reference.definition is not None:
-            # A proviso is enforced only on the kernel definitional-step path; the
-            # string path can't evaluate it and so refuses a proviso-carrying
-            # definition outright (see follows_from_definition). When such a
-            # definition also has no kernel counterpart, it can never apply anywhere.
-            # `kernel_definition_for` returns None for several reasons (no lower form,
-            # a defining form that doesn't parse as a kernel definition, or an
-            # undeclared binder), so name the general cause - the kernel path is
-            # unavailable - rather than asserting one specific reason, while pointing
-            # at the usual fix. Beats a bare "does not apply" that hides the proviso.
-            definition = reference.definition
-            if definition.kernel_condition is not None \
-                    and kernel_definition_for(definition, context) is None:
-                proof_line.invalid_message = (
-                    f"{reference.key} carries a proviso, but this definition has no "
-                    f"kernel counterpart to enforce it against, so the step can't be "
-                    f"verified. A proviso is enforced only on the kernel "
-                    f"definitional-step path, which needs the defining form to parse "
-                    f"as a kernel definition with any bound variable declared `fresh`."
-                )
-            else:
-                proof_line.invalid_message = (
-                    f"{reference.key} does not apply between this line and line "
-                    f"{source.number}."
-                )
+            proof_line.invalid_message = (
+                f"{reference.key} does not apply between this line and line "
+                f"{source.number}."
+            )
         else:
             proof_line.invalid_message = (
                 f"{reference.key} does not apply: no definition in scope relates this line "
@@ -1116,45 +1096,19 @@ class ProofLine:
         # Get the index of this line in the proof
         return self.proof.proof_lines.index(self)
 
-    def follows_from_definition(self, other, definition, mapping, context):
-        # Check if this proof line follows from the other by means of a definition.
+    def follows_from_definition(self, other, definition, context):
+        # Check if this proof line follows from the other by means of a definition:
+        # one structural unfold over the shared-DAG term representation, checked in
+        # either direction, with no re-parsing (see formal_system/definitions.py).
 
         if (not self.line_type.behaviour == "logical") or (not other.line_type.behaviour == "logical"):
             # Must be logical lines
             return False
 
-        # Prefer the term-based checker: a definitional step is one structural
-        # unfold over the shared-DAG term representation, no re-parsing (see
-        # formal_system/definitions.py). It returns None when this definition is
-        # not soundly expressible as a kernel one (an undeclared binder the Define
-        # DSL cannot carry) - only then do we fall back to the string-based
-        # check_application. The kernel check covers both directions, and derives
-        # variable consistency structurally, so it applies only when no
-        # caller-supplied mapping constrains the match.
-        if not mapping and self.formula is not None and other.formula is not None:
-            kernel_result = follows_by_definition(self.formula, other.formula, definition, context)
-            if kernel_result is not None:
-                return kernel_result
-
-        # The kernel path is unavailable. A definition carrying a `where` proviso
-        # can only be enforced by that path - the string-based check_application
-        # enforces no proviso - so falling back would silently drop it and accept
-        # steps it should block. Refuse instead (the step is not verified).
-        if definition.kernel_condition is not None:
+        if self.formula is None or other.formula is None:
             return False
 
-        # Check if the definition applies - in either direction
-        return definition.check_application(
-            lower=other.formula,
-            higher=self.formula,
-            context=context,
-            mapping=mapping
-        ) or definition.check_application(
-            lower=self.formula,
-            higher=other.formula,
-            context=context,
-            mapping=mapping
-        )
+        return follows_by_definition(self.formula, other.formula, definition, context)
 
     def data(self):
         # Get data for this proof line

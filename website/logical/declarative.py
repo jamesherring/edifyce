@@ -41,6 +41,7 @@ from .build_context import (
     combine_side_conditions,
 )
 from .formal_system import FormalSystem, InferenceRule, LineType, SubproofSchema
+from .formal_system.definitions import DefinitionError, build_kernel_definition
 from .formal_system.side_condition_syntax import parse_side_condition
 from .matching import AtomPattern, Pattern, RegexPattern, StringPattern, UnionPattern
 
@@ -626,12 +627,31 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
         kernel_condition=kernel_condition,
         label=defn.label,
     )
-    if result is not None:
-        system.context.definitions.add(result)
-    # Non-None covers both a freshly added definition and one that de-duplicated
-    # into an existing equivalent — either way its form was recognised, so the
-    # definition layers. None means the lower form matched nothing.
-    return result is not None
+    if result is None:
+        # The lower form matched nothing: the definition did not layer. Nothing
+        # was added to the proof context, so there is no kernel counterpart to
+        # build either.
+        return False
+
+    system.context.definitions.add(result)
+
+    # Build the kernel counterpart now, against the context the definition has
+    # just entered — a definition's *defined* form is grammatical only because the
+    # definition is in scope, so this must follow the add. `system.context` is
+    # deliberately the one used (not `context_copy`): it is what a proof is
+    # checked in, and the definition's own binding metavariables in `context_copy`
+    # would parse the parameters differently.
+    #
+    # A definition with no sound kernel reading is rejected here rather than
+    # silently accepted and refused per-step later.
+    try:
+        result.kernel = build_kernel_definition(result, system.context)
+    except DefinitionError as exc:
+        raise DeclarativeError(str(exc)) from exc
+
+    # A freshly added definition or one that de-duplicated into an existing
+    # equivalent — either way its form was recognised, so the definition layers.
+    return True
 
 
 # ---------------------------------------------------------------------------

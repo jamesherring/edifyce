@@ -35,6 +35,12 @@ class Definition:
         self.lower = None
         self.lower_match_template = None
 
+        # The defining form exactly as it was written. `self.lower` is a *pattern*
+        # derived from it, whose template renames a variable used in two roles
+        # (`create_pattern`'s collision rename), so it is not always a form the
+        # author would recognise. Keep the original for error messages.
+        self.lower_source = lower
+
         # Create a higher pattern
         self.higher = patterns.StringPattern(
             name="Definition (higher)",
@@ -62,18 +68,18 @@ class Definition:
             self.variables = self.lower.variables
             self.variables.update(self.higher.variables)
 
-        # Cached term-based (kernel) counterpart, built lazily by the
-        # formal_system layer for definitional-step checking over the shared-DAG
-        # term representation (see formal_system/definitions.py). Held opaquely so
-        # the matching layer keeps its no-kernel-import rule; `ready` records that
-        # a build was attempted, and `kernel_definition is None` after that means
-        # the definition is not soundly expressible as a kernel definition (it has
-        # a binder the `Define` DSL cannot declare), so the caller falls back to
-        # the string-based check_application path. A shallow copy carries both
-        # across the context copies the engine makes, so the build happens at most
-        # once per definition.
-        self.kernel_definition = None
-        self.kernel_definition_ready = False
+        # The term-based (kernel) counterpart this definition denotes - what a
+        # definitional step is actually checked against (see
+        # formal_system/definitions.py). Held opaquely so the matching layer keeps
+        # its no-kernel-import rule, and filled in by the system builder right
+        # after the definition enters the proof context, since building it needs
+        # the definition itself in scope to parse the defined form.
+        #
+        # None only between construction and that build. A definition that cannot
+        # produce one fails the system build, so every definition a proof sees has
+        # it; the engine's context copies are shallow per definition, which is what
+        # carries it through to the checker.
+        self.kernel = None
 
     def match(self, s, context):
         # Check if the definition applies to a string s, of the higher level match.
