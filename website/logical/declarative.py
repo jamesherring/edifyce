@@ -470,7 +470,7 @@ def build_system(spec: SystemSpec) -> FormalSystem:
         union = ctx.variables[sort]
         for prod in spec.productions:
             if prod.sort == sort:
-                union.patterns.append(ctx.variables[prod.name])
+                union.add_pattern(ctx.variables[prod.name])
 
     # 4a. Project the grammar to its kernel constructors, now that the unions are
     # complete. Everything from here on builds terms, and a term's sort is a

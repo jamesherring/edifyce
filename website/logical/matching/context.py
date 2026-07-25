@@ -16,6 +16,13 @@ class Context:
     # Logical context for inside proofs
     logical: dict = field(default_factory=dict)
 
+    # Memo for one top-level parse: {(id(pattern), string): Match | None}. None -
+    # the default - disables it. A context is long-lived and what a string parses
+    # to depends on the grammar, `definitions` and `string_variables`, so only a
+    # caller that knows all three are fixed for the duration of a parse may switch
+    # it on. See `UnionPattern.match` for why the memo exists at all.
+    parse_memo: dict | None = None
+
     def __copy__(self):
         # Every field is copied one level deep. Callers copy a context to scope
         # it — per proof line, per rule application — and the default shallow
@@ -36,4 +43,8 @@ class Context:
 
             # Logical is a dict of dicts
             logical={key: copy(self.logical[key]) for key in self.logical},
+
+            # Shared, not copied, so the memo survives the context copies taken
+            # during a parse.
+            parse_memo=self.parse_memo,
         )

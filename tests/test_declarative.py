@@ -895,3 +895,33 @@ def test_subproof_requires_exactly_one_opener(subproof):
     result = build_spec(spec)
     assert "errors" in result
     assert "exactly one" in result["errors"][0].lower()
+
+
+def test_the_grammar_index_notices_a_new_declaration():
+    # `build_schema_pattern` resolves a bare constant token through an index over
+    # the context's declared patterns, guarded by how many there are. A production
+    # declared after the index was built must still be found.
+    from copy import copy
+
+    from website.logical.build_context import (
+        FormalSystemContext,
+        build_schema_pattern,
+        warm_grammar_index,
+    )
+    from website.logical.matching import AtomPattern
+
+    context = FormalSystemContext()
+    falsum = AtomPattern(name="falsum", value="⊥")
+    context.variables["falsum"] = falsum
+    warm_grammar_index(context)
+
+    assert build_schema_pattern("⊥", context, "schema") is falsum
+
+    # Declare a second constant, then ask for it: the index must be rebuilt, not
+    # trusted, or the new token falls through to a StringPattern template.
+    verum = AtomPattern(name="verum", value="⊤")
+    context.variables["verum"] = verum
+    assert build_schema_pattern("⊤", context, "schema") is verum
+
+    # A copy inherits the index and resolves against it without rebuilding.
+    assert build_schema_pattern("⊥", copy(context), "schema") is falsum
