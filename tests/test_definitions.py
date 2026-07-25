@@ -670,8 +670,9 @@ def test_a_well_formed_definition_introduces_nothing(prop):
 def test_a_declared_binder_is_not_reported(theory, setvar):
     # `z` is declared `fresh`, so it is stored abstractly and its name is chosen
     # by the step rather than supplied by the defined form. Being declared is
-    # exactly what makes it safe — `Bound` subclasses `Var`, so this also pins
-    # that a binder is not mistaken for an undetermined parameter.
+    # exactly what makes it safe. `Bound` subclasses `Var`, so a binder would read
+    # as an undetermined parameter but for `Bound.free_vars` returning nothing —
+    # this pins that the two agree.
     d = df_subset(theory, setvar, fresh={"z": setvar})
     assert unbound_parameters(d) == ()
     assert introduced_leaves(d) == ()

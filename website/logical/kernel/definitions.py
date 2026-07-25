@@ -85,7 +85,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .side_conditions import And, DisjointLeaves
-from .terms import Bound, Node, Var, abstract, bind, from_match, _bound, _bound_label, _locations, _signature
+from .terms import Node, abstract, bind, from_match, _bound, _bound_label, _locations, _signature
 from .unify import match
 
 if TYPE_CHECKING:
@@ -172,39 +172,40 @@ class Definition:
         )
 
 
-def _leaves(term: Term) -> list[Term]:
-    """Every leaf of ``term``: variables, abstract binders, and ground nodes."""
-    if not isinstance(term, Node) or not term.children:
-        return [term]
-    return [leaf for child in term.children.values() for leaf in _leaves(child)]
+def _ground_leaves(term: Term) -> list[Node]:
+    """Every ground leaf of ``term``: a childless :class:`Node` carrying a literal.
+
+    Variables are excluded - :meth:`Term.free_vars` is the traversal for those.
+    (Named for what it collects, to stay clear of :mod:`side_conditions`'
+    same-named helper, which yields sort-restricted surface *strings*.)
+    """
+    if not isinstance(term, Node):
+        return []
+    if not term.children:
+        return [term] if term.literal is not None else []
+    return [leaf for child in term.children.values() for leaf in _ground_leaves(child)]
 
 
 def unbound_parameters(definition: Definition) -> tuple[str, ...]:
     """Parameter names the defining form uses that the defined form does not
     provide, in sorted order.
 
-    An unfold binds parameters by matching ``higher`` against the redex, so one
-    that ``higher`` never mentions is not determined by the step - it would be
-    free in the result, and free in a way the surrounding term could capture.
+    This is the free-variable-preservation property stated directly: an unfold
+    binds parameters by matching ``higher`` against the redex, so a variable free
+    in ``lower`` alone is never determined by the step. It would be free in the
+    result, and free in a way the surrounding term could capture.
 
-    A binder declared ``fresh`` is a :class:`~website.logical.kernel.terms.Bound`,
-    which *is* a ``Var`` by inheritance but is not a parameter: its name is chosen
-    by the step, not supplied by ``higher``. Being declared is what makes it safe,
-    so it is never reported.
+    A binder declared ``fresh`` is not a parameter - its name is chosen by the
+    step, not supplied by ``higher`` - and :meth:`Bound.free_vars` already says
+    so, so no special case is needed here.
     """
-    def names(term: Term) -> set[str]:
-        return {
-            leaf.name
-            for leaf in _leaves(term)
-            if isinstance(leaf, Var) and not isinstance(leaf, Bound)
-        }
-
-    return tuple(sorted(names(definition.lower) - names(definition.higher)))
+    introduced = set(definition.lower.free_vars()) - set(definition.higher.free_vars())
+    return tuple(sorted(introduced))
 
 
 def introduced_leaves(definition: Definition) -> tuple[Node, ...]:
     """The ground leaves the defining form spells out that the defined form does
-    not, deduplicated by surface literal.
+    not, deduplicated by surface literal and ordered by it.
 
     Each is a token the unfold conjures from nothing. Some are harmless - a
     constant of the object language (``⊥``, ``∅``) denotes one fixed thing and
@@ -213,17 +214,12 @@ def introduced_leaves(definition: Definition) -> tuple[Node, ...]:
     caller's to do; what the kernel settles is *which* leaves are unaccounted for.
 
     A binder declared ``fresh`` is stored abstractly (a
-    :class:`~website.logical.kernel.terms.Bound`) and so is never reported - being
-    declared is exactly what makes it safe.
+    :class:`~website.logical.kernel.terms.Bound`, a variable rather than a ground
+    leaf) and so is never reported - being declared is exactly what makes it safe.
     """
-    defined = {
-        leaf.literal for leaf in _leaves(definition.higher)
-        if isinstance(leaf, Node) and leaf.literal is not None
-    }
+    defined = {leaf.literal for leaf in _ground_leaves(definition.higher)}
     introduced: dict[str, Node] = {}
-    for leaf in _leaves(definition.lower):
-        if not isinstance(leaf, Node) or leaf.literal is None:
-            continue
+    for leaf in _ground_leaves(definition.lower):
         if leaf.literal not in defined:
             introduced.setdefault(leaf.literal, leaf)
     return tuple(introduced[literal] for literal in sorted(introduced))

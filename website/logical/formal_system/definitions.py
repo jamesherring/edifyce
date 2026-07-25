@@ -65,6 +65,8 @@ from ..kernel.terms import Node
 from ..matching import AtomPattern, RegexPattern, StringPattern, UnionPattern
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from ..matching.context import Context
     from ..matching.definitions import Definition as MatchingDefinition
     from ..matching.matches import Match
@@ -175,7 +177,7 @@ def _matches(pattern: RegexPattern, literal: str, context: Context) -> bool:
 
 
 def _introduced_name_error(
-    legacy: MatchingDefinition, names: list[str]
+    legacy: MatchingDefinition, names: Sequence[str]
 ) -> DefinitionError:
     """The build error for a defining form that introduces ``names`` out of
     nowhere - written for the author, and naming both remedies.
@@ -265,7 +267,7 @@ def build_kernel_definition(legacy: MatchingDefinition, context: Context) -> Def
     # either makes the unfold depend on where it is taken.
     unbound = unbound_parameters(kernel_def)
     if unbound:
-        raise _introduced_name_error(legacy, list(unbound))
+        raise _introduced_name_error(legacy, unbound)
 
     bindable = _reachable_patterns(legacy.pattern)
     conjured = [
