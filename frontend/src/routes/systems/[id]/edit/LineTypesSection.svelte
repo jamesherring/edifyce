@@ -7,6 +7,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { api, type LineType, type LinePartInput, type LineScope } from '$lib/api';
 	import type { SymbolEntry } from '$lib/symbols';
+	import type { NotationGroup } from '$lib/notation';
 	import { createSectionController } from './section.svelte';
 
 	let {
@@ -14,13 +15,16 @@
 		lines,
 		sortNames,
 		symbols,
-		onChanged
+		onChanged,
+		notation = []
 	}: {
 		systemId: string;
 		lines: LineType[];
 		sortNames: string[];
 		symbols: SymbolEntry[];
 		onChanged: () => Promise<void> | void;
+		/** Optional: the grammar reference shown in the edit sheet. */
+		notation?: NotationGroup[];
 	} = $props();
 
 	let name = $state('');
@@ -71,6 +75,7 @@
 	parsing a proof line. -->
 <PartSection
 	title="Line types"
+	id="line-types"
 	addLabel="Add line type"
 	items={lines}
 	emptyMessage="No line types yet — these define the shapes a proof line may take."
@@ -100,6 +105,7 @@
 	onDelete={s.editing ? s.del : undefined}
 	saving={s.saving}
 	{canSave}
+	{notation}
 	{symbols}
 >
 	<FormField label="Name" id="line-name" bind:value={name} placeholder="e.g. statement" maxlength={128} />

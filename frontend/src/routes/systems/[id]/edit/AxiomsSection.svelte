@@ -7,18 +7,22 @@
 	import { Input } from '$lib/components/ui/input';
 	import { api, type Axiom, type Binding } from '$lib/api';
 	import type { SymbolEntry } from '$lib/symbols';
+	import type { NotationGroup } from '$lib/notation';
 	import { createSectionController } from './section.svelte';
 
 	let {
 		systemId,
 		axioms,
 		symbols,
-		onChanged
+		onChanged,
+		notation = []
 	}: {
 		systemId: string;
 		axioms: Axiom[];
 		symbols: SymbolEntry[];
 		onChanged: () => Promise<void> | void;
+		/** Optional: the grammar reference shown in the edit sheet. */
+		notation?: NotationGroup[];
 	} = $props();
 
 	let label = $state('');
@@ -56,6 +60,7 @@
 
 <PartSection
 	title="Axioms"
+	id="axioms"
 	addLabel="Add axiom"
 	items={axioms}
 	emptyMessage="No axioms yet."
@@ -81,6 +86,7 @@
 	onDelete={s.editing ? s.del : undefined}
 	saving={s.saving}
 	{canSave}
+	{notation}
 	{symbols}
 >
 	<FormField label="Label" id="axiom-label" bind:value={label} placeholder="e.g. EXT" maxlength={64} />

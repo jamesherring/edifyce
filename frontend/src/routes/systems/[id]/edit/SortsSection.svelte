@@ -3,13 +3,21 @@
 	import EditSheet from '$lib/components/EditSheet.svelte';
 	import FormField from '$lib/components/FormField.svelte';
 	import { api, type Sort } from '$lib/api';
+	import type { NotationGroup } from '$lib/notation';
 	import { createSectionController } from './section.svelte';
 
 	let {
 		systemId,
 		sorts,
-		onChanged
-	}: { systemId: string; sorts: Sort[]; onChanged: () => Promise<void> | void } = $props();
+		onChanged,
+		notation = []
+	}: {
+		systemId: string;
+		sorts: Sort[];
+		onChanged: () => Promise<void> | void;
+		/** Optional: the grammar reference shown in the edit sheet. */
+		notation?: NotationGroup[];
+	} = $props();
 
 	let name = $state('');
 	const canSave = $derived(name.trim().length > 0);
@@ -27,6 +35,7 @@
 
 <PartSection
 	title="Sorts"
+	id="sorts"
 	addLabel="Add sort"
 	items={sorts}
 	emptyMessage="No sorts yet — a sort is a syntactic category like “term” or “formula”."
@@ -48,6 +57,7 @@
 	onDelete={s.editing ? s.del : undefined}
 	saving={s.saving}
 	{canSave}
+	{notation}
 >
 	<FormField label="Name" id="sort-name" bind:value={name} placeholder="e.g. term" maxlength={128} />
 </EditSheet>

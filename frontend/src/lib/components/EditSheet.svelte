@@ -2,7 +2,9 @@
   import * as Sheet from '$lib/components/ui/sheet';
   import { Button } from '$lib/components/ui/button';
   import SymbolPalette from '$lib/components/SymbolPalette.svelte';
+  import NotationReference from '$lib/components/NotationReference.svelte';
   import type { SymbolEntry } from '$lib/symbols';
+  import type { NotationGroup } from '$lib/notation';
   import { cn } from '$lib/utils';
   import { tick, type Snippet } from 'svelte';
 
@@ -21,6 +23,9 @@
     /** Set (even to `[]`) to show a symbol palette above the form, typing into
      *  whichever `data-symbol-field` input was last focused. */
     symbols?: SymbolEntry[];
+    /** The grammar this form is written against, shown as a collapsible reference
+     *  beside the palette. */
+    notation?: NotationGroup[];
   };
 
   let {
@@ -34,7 +39,8 @@
     onDelete,
     saving = false,
     canSave = true,
-    symbols
+    symbols,
+    notation = []
   }: Props = $props();
 
   let form = $state<HTMLFormElement | null>(null);
@@ -64,8 +70,9 @@
     </Sheet.Header>
     {#if symbols}
       <!-- Outside the scrolling form so it stays put while the fields scroll. -->
-      <div class="border-b px-6 pb-3">
+      <div class="flex flex-col gap-2 border-b px-6 pb-3">
         <SymbolPalette root={form} {symbols} />
+        <NotationReference groups={notation} />
       </div>
     {/if}
     <form
