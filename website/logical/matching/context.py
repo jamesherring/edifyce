@@ -16,11 +16,11 @@ class Context:
     # Logical context for inside proofs
     logical: dict = field(default_factory=dict)
 
-    # The proof model id
-    proof_model_id: object = None
-
     def __copy__(self):
-        # Return a copy of the context
+        # Every field is copied one level deep. Callers copy a context to scope
+        # it — per proof line, per rule application — and the default shallow
+        # copy would share these containers, letting a nested scope's bindings
+        # leak back into its parent.
         return Context(
             variables=copy(self.variables),
             string_variables=copy(self.string_variables),
@@ -29,6 +29,4 @@ class Context:
 
             # Logical is a dict of dicts
             logical={key: copy(self.logical[key]) for key in self.logical},
-
-            proof_model_id=self.proof_model_id
         )

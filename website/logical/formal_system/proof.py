@@ -223,9 +223,6 @@ class Proof:
         # alias so this proof can cite them (see app/routers/proofs.py).
         self.reference_context = {}
 
-        # The proof model id
-        self.model_id = None
-
         # The root subproof and the live scope stack, built during parsing.
         # `root_scope` stays None until the first line is assigned, so a proof
         # that never uses scopes carries no subproof machinery.
