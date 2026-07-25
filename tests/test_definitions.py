@@ -29,6 +29,7 @@ from website.logical.kernel import (
 from website.logical.matching import Context, RegexPattern, StringPattern, UnionPattern
 from tests.spec_helpers import (
     atom_const_prod,
+    atom_family_prod,
     brackets,
     regex_prod,
     statement_line,
@@ -818,6 +819,38 @@ def test_an_atom_constant_in_the_variable_sort_is_not_excused():
     assert "errors" in result
     (message,) = result["errors"]
     assert "'c'" in message
+
+
+def test_an_atom_family_cannot_be_declared_a_constant():
+    # A family is a supply of interchangeable tokens — `AtomPattern.fresh` mints
+    # new ones, which is what eigenvariable selection draws on. So this is not a
+    # judgement the author could get right, and the build refuses it rather than
+    # letting it excuse `S ≝ (p_0 ∈ p_1)` and admit `∀p_0.S ⟶ ∀p_0.(p_0 ∈ p_1)`.
+    spec = SystemSpec(
+        name="FamilyConstant",
+        brackets=brackets(),
+        productions=[
+            atom_family_prod("setvar", "prop", "p"),
+            template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+            template_prod("formula", "forall", "∀x.phi", [("x", "setvar"), ("phi", "formula")]),
+            template_prod("formula", "ess", "S", []),
+        ],
+        lines=[statement_line()],
+        definitions=[
+            Definition_(sort="formula", name="d", higher="S", lower="(p_0 ∈ p_1)", bindings=[])
+        ],
+    )
+    spec.productions[0].denotes_constant = True
+
+    result = build_spec(spec)
+    assert "errors" in result
+    (message,) = result["errors"]
+    assert "'prop'" in message and "p_#" in message
+
+    # Left undeclared the family is variable-like, so the definition is refused
+    # for the ordinary reason and the system still does not build.
+    spec.productions[0].denotes_constant = False
+    assert "errors" in build_spec(spec)
 
 
 def test_declaring_a_bindable_atom_constant_is_the_author_s_to_get_wrong():

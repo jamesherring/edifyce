@@ -188,9 +188,10 @@ is now one.
   the question, so productions now **declare** it (`denotes_constant`), as
   Metamath declares `$c` vs `$v`. The heuristic and its reachability probe are
   gone. The declaration is authoritative and its default (variable-like) is the
-  safe one; validating a wrong declaration needs binding slots on productions,
-  which would also let `fresh` be inferred and open abbreviations return. See
-  AGENTS.md.
+  safe one. An indexed atom family is refused the declaration outright (it is a
+  supply of interchangeable tokens, never a constant); validating any *other*
+  wrong declaration needs binding slots on productions, which would also let
+  `fresh` be inferred and open abbreviations return. See AGENTS.md.
 
 ### D3 — definitions as a top-level surface (backend + frontend)
 - `api.definitions` namespace and a **per-system definitions page** (list +

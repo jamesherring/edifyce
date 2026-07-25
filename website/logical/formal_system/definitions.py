@@ -69,6 +69,12 @@ refused, so a forgotten declaration costs a rejected definition. The unsafe
 direction - declaring a bindable token constant - takes a positive act, and stays
 confined to the system it is made in (a proof is only ever checked against its
 own system, and cross-proof citation is same-system-only).
+
+One declaration is refused outright rather than trusted: an indexed atom family
+(``p_#``) is a supply of interchangeable tokens, so no grammar makes it denote a
+fixed thing and no author could mean it. ``declarative.build_system`` rejects it.
+Every other case is a genuine judgement about the grammar, which only binding
+slots on productions could check (see AGENTS.md).
 """
 
 from __future__ import annotations

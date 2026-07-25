@@ -58,6 +58,11 @@ nothing else — not unification, equality, side-conditions, or rule checking. T
 default is `False`, variable-like, so a forgotten declaration costs a refused
 definition rather than a capturing one; the unsafe direction takes a positive act.
 
+One declaration the engine refuses outright: an **indexed atom family** (`p_#`)
+is a supply of interchangeable tokens — `AtomPattern.fresh` mints new ones — so no
+grammar makes it a constant and no author could mean it. Every other case is a
+genuine judgement about the grammar that nothing yet can check.
+
 Two follow-ups this leaves open:
 
 - **Binding slots on productions.** Nothing declares which slot of `∀x p` *binds*,

@@ -415,6 +415,23 @@ def build_system(spec: SystemSpec) -> FormalSystem:
                 register(RegexPattern(name=prod.name, pattern=_anchor(prod.regex))), prod
             )
         elif prod.atom_value is not None or prod.atom_base is not None:
+            # An indexed family is a *supply* of interchangeable tokens — the
+            # whole point of `AtomPattern.fresh` is that there is always a next
+            # one, which is what eigenvariable selection draws on. So no grammar
+            # can make one denote a single fixed thing, and unlike a one-token
+            # atom (a constant in `formula ::= ⊥`, a variable in
+            # `setvar ::= a | b | c`) this is not a judgement call the author
+            # could get right. Refuse it rather than let a declaration excuse a
+            # leaf a binder can bind.
+            if prod.atom_base is not None and prod.denotes_constant:
+                raise DeclarativeError(
+                    f"Production {prod.name!r} is an indexed atom family "
+                    f"('{prod.atom_base}_#'), so it cannot denote a constant of the "
+                    f"object language: every member is an interchangeable "
+                    f"placeholder a binder may bind, and fresh ones can always be "
+                    f"minted. Declare a specific token with `atom_value` if you "
+                    f"meant a constant."
+                )
             # An atom constant (`value`, one literal token) or indexed family
             # (`base`, the infinite `p_#` -> p_0, p_1, ...). A single token needs
             # no bracket parity, so it is not `register`ed — its `respect_brackets`

@@ -70,22 +70,22 @@ describe('ProductionsSection sort validation', () => {
 	});
 });
 
-describe('ProductionsSection atom productions', () => {
-	function atomFamily() {
-		return {
-			id: 'p2',
-			name: 'prop',
-			sort: 'formula',
-			kind: 'atom',
-			template: null,
-			regex: null,
-			atom_value: null,
-			atom_base: 'p',
-			denotes_constant: false,
-			bindings: []
-		};
-	}
+function atomFamily() {
+	return {
+		id: 'p2',
+		name: 'prop',
+		sort: 'formula',
+		kind: 'atom',
+		template: null,
+		regex: null,
+		atom_value: null,
+		atom_base: 'p',
+		denotes_constant: false,
+		bindings: []
+	};
+}
 
+describe('ProductionsSection atom productions', () => {
 	it('opens an atom family in Family mode showing its base', async () => {
 		render(ProductionsSection, {
 			systemId: 'sys-1',
@@ -131,6 +131,19 @@ describe('ProductionsSection object-language role', () => {
 		await user.click(screen.getByRole('button', { name: /^Edit / }));
 		const toggle = await screen.findByRole('button', { name: /object language/i });
 		expect(toggle.getAttribute('aria-pressed')).toBe('true');
+	});
+
+	it('hides the toggle for an indexed family, which can never be a constant', async () => {
+		render(ProductionsSection, {
+			systemId: 'sys-1',
+			productions: [atomFamily()],
+			sortNames: ['formula'],
+			symbols: [],
+			onChanged: vi.fn()
+		});
+		await user.click(screen.getByRole('button', { name: /^Edit / }));
+		await screen.findByRole('button', { name: /Save changes/ });
+		expect(screen.queryByRole('button', { name: /object language/i })).toBeNull();
 	});
 
 	it('hides the toggle for a composite with slots, which is never a leaf', async () => {

@@ -43,9 +43,13 @@
 	let denotesConstant = $state(false);
 	let bindings = $state<Binding[]>([]);
 
-	// A composite with slots is never a leaf, so the question cannot arise for it.
-	// A nullary template (`S`, `∅`) *is* a leaf, so it keeps the toggle.
-	const isLeaf = $derived(mode !== 'template' || bindings.length === 0);
+	// A composite with slots is never a leaf, so the question cannot arise for it;
+	// a nullary template (`S`, `∅`) *is* a leaf, so it keeps the toggle. An indexed
+	// family is a supply of interchangeable tokens and can never be a constant —
+	// the engine refuses that declaration outright, so don't offer it.
+	const canDeclareConstant = $derived(
+		mode !== 'atom_base' && (mode !== 'template' || bindings.length === 0)
+	);
 
 	const placeholder = $derived(MODES.find((m) => m.key === mode)!.placeholder);
 
@@ -95,10 +99,12 @@
 			regex: mode === 'regex' ? v : null,
 			atom_value: mode === 'atom_value' ? v : null,
 			atom_base: mode === 'atom_base' ? v : null,
-			// Sent as-is even for a composite with slots, where the flag is inert (it
-			// is only ever read of a ground leaf). The editor hides the toggle there
-			// rather than forcing a value, so the setting survives if the slots go.
-			denotes_constant: denotesConstant,
+			// Sent as-is for a composite with slots, where the flag is inert (it is
+			// only ever read of a ground leaf) — the editor hides the toggle rather
+			// than forcing a value, so the setting survives if the slots go. Forced
+			// off for a family, where it is not inert but a build error, so switching
+			// a declared constant to Family mode can't store an unbuildable row.
+			denotes_constant: mode === 'atom_base' ? false : denotesConstant,
 			bindings: mode === 'template' ? bindings.filter((b) => b.var.trim() && b.sort.trim()) : []
 		};
 	}
@@ -178,7 +184,7 @@
 	{#if mode === 'template'}
 		<BindingsEditor bind:bindings />
 	{/if}
-	{#if isLeaf}
+	{#if canDeclareConstant}
 		<div class="space-y-2">
 			<div class="flex items-center justify-between">
 				<Label>Constant of the object language</Label>
