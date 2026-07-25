@@ -417,19 +417,20 @@ def test_where_proviso_gates_the_unfold(guarded_system):
     assert follows_by_definition(bad_subset, bad_unfold, definition, context) is False
 
 
-def test_where_definition_is_refused_by_the_string_path(guarded_system):
-    # A `where` proviso is enforced only on the kernel path; the string-layer
-    # application primitives (get_lower, check_application) must refuse a
-    # proviso-carrying definition so it cannot be applied unchecked (e.g. via
-    # Match.equivalent_under_definitions).
+def test_a_definition_has_no_second_way_to_be_applied(guarded_system):
+    # The string-layer application primitives are gone. They could not evaluate a
+    # `where` proviso, so a definition carrying one had to be refused there and
+    # checked on the kernel path — two paths disagreeing by construction. Now
+    # there is one, and this pins that the other cannot come back unnoticed.
     definition = only_definition(guarded_system)
-    context = context_of(guarded_system)
     assert definition.kernel_condition is not None
+    assert not hasattr(definition, "check_application")
+    assert not hasattr(definition, "get_lower")
 
-    higher = definition.higher.match("(a ⊆ b)", context)
+    higher = definition.higher.match("(a ⊆ b)", context_of(guarded_system))
     assert higher is not None
-    assert definition.get_lower(higher, context) is False
-    assert definition.check_application(higher, higher, context) is False
+    assert not hasattr(higher, "equivalent_under_definitions")
+    assert not hasattr(higher, "maps_to_up_to_definition")
 
 
 # ---------------------------------------------------------------------------
