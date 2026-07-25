@@ -89,15 +89,16 @@ class FormalSystem:
     # `line_number_offset` is gone with the `indent` behaviour: it was only ever
     # a "am I the recursive block call?" flag, set by the block parse that
     # `LineSpec.scope` replaced. Nothing offset any line number.
-    def parse(self, text, proof=None, proof_model_id=None, reference_proofs=None, context=None):
-        # Parse the text into a proof.
+    def parse(self, text, proof=None, proof_model_id=None, context=None):
+        # Parse the text into a proof. To let the proof cite lemmas from other
+        # proofs, build the `Proof` yourself, seed its `reference_context` with
+        # them, and pass it as `proof` (see app/routers/proofs.py).
 
         lines = text.split("\n")
 
         if proof is None:
             # Create a new proof instance
             proof = Proof(formal_system=self)
-            proof.reference_proofs = reference_proofs
 
         if context is None:
             # Create a new proof context instance

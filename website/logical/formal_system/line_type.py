@@ -21,16 +21,22 @@ class LineType:
         self.formula_field = formula_field
         self.reference_field = reference_field
 
-        # The behaviour of these lines. There is deliberately no "definition"
-        # behaviour: a definition belongs to the *system*, built once from its
-        # SystemSpec and reaching every proof through the shared context. A line
-        # that introduced one would have to register it into the proof context at
-        # parse time, which nothing has done since the accessor mechanism that
-        # supplied its payload was removed - so the value could only ever produce
-        # lines that fail closed. A definitional *step* needs no such line: it is
-        # a `logical` line citing a definition (see `proof.DEFINITION_KEY`).
+        # The behaviour of these lines. The set is closed to what a SystemSpec
+        # can actually build: `logical` and `comment` from a LineSpec, `axiom`
+        # from a declared axiom. Three values were dropped once the `.edi`
+        # compiler - the only thing that could name them - went away:
+        #
+        #   "definition" - a definition belongs to the *system*, built once from
+        #                  its SystemSpec and reaching every proof through the
+        #                  shared context. A definitional *step* needs no line
+        #                  type of its own: it is a `logical` line citing a
+        #                  definition (see `proof.DEFINITION_KEY`).
+        #   "import"     - a proof cites another proof's lemma through the
+        #                  `reference_context` its caller pre-seeds, not through
+        #                  a line that names a path (see app/routers/proofs.py).
+        #   "none"       - an inert line, which `comment` already covers.
         self.behaviour = behaviour
-        if self.behaviour not in ("none", "import", "logical", "axiom", "comment"):
+        if self.behaviour not in ("logical", "axiom", "comment"):
             raise ValueError(f"'{self.behaviour}' is not a valid LineType behaviour.")
 
         # A logical line is checked against its formula, so one it cannot project
