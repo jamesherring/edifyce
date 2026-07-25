@@ -86,7 +86,7 @@ class FormalSystem:
             # Add the pattern
             add_pattern(self.pattern_dictionary, item)
 
-    def parse(self, text, proof=None, proof_model_id=None, context=None):
+    def parse(self, text, proof=None, context=None):
         # Parse the text into a proof. To let the proof cite lemmas from other
         # proofs, build the `Proof` yourself, seed its `reference_context` with
         # them, and pass it as `proof` (see app/routers/proofs.py).
@@ -100,7 +100,6 @@ class FormalSystem:
         if context is None:
             # Create a new proof context instance
             context = copy(self.context)
-            context.proof_model_id = proof_model_id
 
         i = -1
         while i + 1 < len(lines):
