@@ -83,7 +83,7 @@ def term(theory, formula, string):
     _system, context = theory
     matched = formula.match(string, context)
     assert matched is not None, string
-    return from_match(matched, context)
+    return from_match(matched)
 
 
 # Propositional logic with a biconditional whose arguments are *formulas*. Unlike
@@ -279,7 +279,7 @@ def test_definition_backed_subject_admits_its_sort():
     context.string_variables = {"x": setvar, "y": setvar}
     formula.add_notation("x is a member of y", context)
 
-    subject = from_match(formula.match("a is a member of b", context), context)
+    subject = from_match(formula.match("a is a member of b", context))
     # Its recorded sort is the union it belongs to, not its higher constructor.
     assert subject.sort is formula
 
@@ -752,7 +752,7 @@ def test_a_leaf_is_not_excused_by_a_same_spelled_other_constructor():
     # grammar layer to excuse the constants.
     assert [leaf.literal for leaf in introduced_leaves(d)] == ["S", "c"]
     reported = {leaf.literal: leaf for leaf in introduced_leaves(d)}
-    assert reported["S"].pattern is not d.higher.pattern
+    assert reported["S"].constructor is not d.higher.constructor
 
 
 def _masked_build_spec(productions):

@@ -165,7 +165,7 @@ class FormalSystem:
                     if formula is not None:
                         proof_line.formula_string = formula.string
                         try:
-                            proof_line.formula_term = from_match(formula, context)
+                            proof_line.formula_term = from_match(formula)
                         except Exception as exc:
                             # The parse produced a shape the term layer cannot
                             # read. That used to surface as a raise out of the

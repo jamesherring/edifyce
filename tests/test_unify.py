@@ -19,7 +19,7 @@ pytest.importorskip("regex")
 
 import website.logical.matching.patterns as patterns
 from website.logical.declarative import SystemSpec, build_system
-from website.logical.kernel import Node, Var, from_match, from_pattern, match, match_all
+from website.logical.kernel import Node, Var, constructor_for, from_match, from_pattern, match, match_all
 from tests.spec_helpers import brackets, regex_prod, rule as rule_spec, statement_line, template_prod
 
 
@@ -97,7 +97,7 @@ def term(formula, context, string):
     """Parse a formula string into a ground term."""
     matched = formula.match(string, context)
     assert matched is not None, string
-    return from_match(matched, context)
+    return from_match(matched)
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +136,7 @@ def test_match_reduces_to_equality_without_variables(rich, left, right, equal):
 def test_match_enforces_consistent_repeated_variable(rich):
     system, context, formula = rich
     implication = system.build_context.variables["implication"]
-    schema = Node(implication, {"p": Var("p", formula), "q": Var("p", formula)})  # (p -> p)
+    schema = Node(constructor_for(implication), {"p": Var("p", formula), "q": Var("p", formula)})  # (p -> p)
 
     assert match(schema, term(formula, context, "(a -> a)"), context) is not None
     assert match(schema, term(formula, context, "(a -> b)"), context) is None
@@ -156,7 +156,7 @@ def test_match_respects_sorts(rich):
 def test_concrete_schema_does_not_match_opaque_variable(rich):
     _system, context, formula = rich
     implication = formula.patterns[1]  # the implication production, keyed p/q
-    schema = Node(implication, {"p": Var("p", formula), "q": Var("q", formula)})
+    schema = Node(constructor_for(implication), {"p": Var("p", formula), "q": Var("q", formula)})
 
     # Subject is a bare variable (opaque): a concrete production cannot match it.
     subject = Var("phi", formula)
@@ -258,11 +258,11 @@ def test_match_then_substitute_round_trips(rich, schema_string, subject_string):
     p, q = Var("p", formula), Var("q", formula)
 
     if schema_string == "(p -> p)":
-        schema = Node(implication, {"p": p, "q": p})
+        schema = Node(constructor_for(implication), {"p": p, "q": p})
     elif schema_string == "(p ∧ q)":
-        schema = Node(conjunction, {"p": p, "q": q})
+        schema = Node(constructor_for(conjunction), {"p": p, "q": q})
     else:  # "(p -> q)"
-        schema = Node(implication, {"p": p, "q": q})
+        schema = Node(constructor_for(implication), {"p": p, "q": q})
 
     subject = term(formula, context, subject_string)
     binding = match(schema, subject, context)

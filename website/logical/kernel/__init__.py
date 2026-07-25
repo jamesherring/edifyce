@@ -41,12 +41,14 @@ from .side_conditions import (
     Or,
     SideCondition,
 )
+from .constructors import Constructor, constructor_for
 from .terms import Bound, Node, Term, Var, abstract, bind, from_match, from_pattern, intern
 from .unify import match, match_all
 
 __all__ = [
     "And",
     "Bound",
+    "Constructor",
     "Definition",
     "DisjointLeaves",
     "Equal",
@@ -62,6 +64,7 @@ __all__ = [
     "abstract",
     "bind",
     "check_definitional_step",
+    "constructor_for",
     "from_match",
     "from_pattern",
     "intern",

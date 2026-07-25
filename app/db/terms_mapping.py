@@ -23,21 +23,19 @@ from sqlalchemy.orm import Session
 
 from app.db.terms import (
     TERM_KIND_BOUND,
-    TERM_KIND_DEFINED,
     TERM_KIND_NODE,
     TERM_KIND_VAR,
     TermChildRow,
     TermRow,
 )
-from website.logical.kernel import Bound, Node, Term, Var, intern
-from website.logical.matching.patterns import RegexPattern
+from website.logical.kernel import Bound, Node, Term, Var, constructor_for, intern
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from app.db.models import FormalSystem
+    from website.logical.kernel.constructors import Constructor
     from website.logical.matching.context import Context
-    from website.logical.matching.patterns import Pattern
 
     # Decides whether a leaf is a renameable free variable, and if so its
     # identity (see _free_identity). Callers pass one to alpha_digest/store_term
@@ -45,15 +43,14 @@ if TYPE_CHECKING:
     FreeIdentity = Callable[[Term], "tuple[str, ...] | None"]
 
 
-def _slot_order(pattern: Pattern, children: dict[str, Term]) -> list[str]:
+def _slot_order(constructor: Constructor, children: dict[str, Term]) -> list[str]:
     """Child slot labels in template (reading) order, deduped per label.
 
     Any child label absent from the template (not expected, but kept
     deterministic) sorts to the end.
     """
     ordered: list[str] = []
-    for offset in sorted(pattern.variable_locations):
-        label = pattern.variable_locations[offset]["label"]
+    for label in constructor.slots:
         if label in children and label not in ordered:
             ordered.append(label)
     ordered.extend(sorted(label for label in children if label not in ordered))
@@ -73,27 +70,22 @@ def _row_fields(term: Term) -> dict[str, str | int | None]:
     if not isinstance(term, Node):
         raise TypeError(f"Unsupported term kind: {type(term).__name__}")
 
-    if term.sort is not None:
-        # A definition-backed node: its constructor is the definition's ad-hoc
-        # higher form, which has no name in the system namespace. Store the
-        # higher *template* string — the same string as the decomposition's
-        # definitions.higher column — and the inhabited sort's name.
-        return {
-            "kind": TERM_KIND_DEFINED,
-            "constructor": term.pattern.pattern,
-            "literal": term.literal,
-            "sort": term.sort.name,
-        }
-
-    if not term.pattern.name:
+    if not term.constructor.name:
         raise ValueError(
-            f"Cannot store a term whose constructor has no name: {term.pattern!r}"
+            f"Cannot store a term whose constructor has no name: {term.constructor!r}"
         )
-    return {
+
+    fields: dict[str, str | int | None] = {
         "kind": TERM_KIND_NODE,
-        "constructor": term.pattern.name,
+        "constructor": term.constructor.name,
         "literal": term.literal,
     }
+    if term.sort is not None:
+        # The constructor is not itself a member of the sort it inhabits - a
+        # defined form, whose template is an ad-hoc production no union lists.
+        # Record the sort so admission still resolves on the way back.
+        fields["sort"] = term.sort.name
+    return fields
 
 
 def digest_term(term: Term, _memo: dict[int, str] | None = None) -> str:
@@ -162,9 +154,9 @@ def _free_identity(term: Term) -> tuple[str, ...] | None:
         isinstance(term, Node)
         and not term.children
         and term.literal is not None
-        and isinstance(term.pattern, RegexPattern)
+        and term.constructor.kind == "regex"
     ):
-        return ("leaf", term.pattern.name, term.literal)
+        return ("leaf", term.constructor.name, term.literal)
     return None
 
 
@@ -188,7 +180,7 @@ def _assign_free_indices(
         numbering.setdefault(identity, len(numbering))
         return
     if isinstance(term, Node) and term.children:
-        for slot in _slot_order(term.pattern, term.children):
+        for slot in _slot_order(term.constructor, term.children):
             _assign_free_indices(term.children[slot], resolve, numbering, visited)
 
 
@@ -224,7 +216,7 @@ def _alpha_hash(
         child_hashes = (
             [
                 [slot, _alpha_hash(term.children[slot], resolve, numbering, memo)]
-                for slot in _slot_order(term.pattern, term.children)
+                for slot in _slot_order(term.constructor, term.children)
             ]
             if term.children
             else []
@@ -337,7 +329,7 @@ def store_term(
             **_row_fields(t),
         )
         if isinstance(t, Node) and t.children:
-            for position, slot in enumerate(_slot_order(t.pattern, t.children)):
+            for position, slot in enumerate(_slot_order(t.constructor, t.children)):
                 row.children.append(
                     TermChildRow(
                         slot=slot,
@@ -356,11 +348,29 @@ def load_term(row: TermRow, context: Context) -> Term:
 
     Constructor names resolve against ``context`` (a compiled system's proof
     context): productions and sorts by name in ``context.variables``, defined
-    defined constructors by template string among ``context.definitions``. An
+    defined notations by name among ``context.definitions``. An
     unresolvable name raises — a stored term that no longer matches its system
     is data corruption, not something to paper over.
     """
     return intern(_load(row, context, {}))
+
+
+def _constructor_named(name: str, context: Context) -> Constructor:
+    """The constructor a stored name denotes: a declared production, or the
+    defined notation of that name.
+
+    One lookup covers both because a notation's name carries a ``:``, which a
+    declared production's name never can (see ``DefinedNotation``) - so the two
+    namespaces cannot collide and a row needs no kind to tell them apart.
+    """
+    pattern = context.variables.get(name)
+    if pattern is None:
+        pattern = next(
+            (n.template for n in context.definitions if n.template.name == name), None
+        )
+    if pattern is None:
+        raise LookupError(f"No production or defined notation named {name!r} in context")
+    return constructor_for(pattern)
 
 
 def _load(row: TermRow, context: Context, memo: dict[object, Term]) -> Term:
@@ -376,37 +386,12 @@ def _load(row: TermRow, context: Context, memo: dict[object, Term]) -> Term:
         term = Bound(row.bound_index, context.variables[row.sort])
     elif row.kind == TERM_KIND_NODE:
         term = Node(
-            pattern=context.variables[row.constructor],
+            constructor=_constructor_named(row.constructor, context),
             children={
                 edge.slot: _load(edge.child, context, memo) for edge in row.children
             },
             literal=row.literal,
-        )
-    elif row.kind == TERM_KIND_DEFINED:
-        # Match on the stored sort too: two notations may share a template
-        # across different sorts, and context.definitions is a set, so the
-        # template alone would pick one arbitrarily.
-        notation = next(
-            (
-                candidate
-                for candidate in context.definitions
-                if candidate.template.pattern == row.constructor
-                and candidate.sort.name == row.sort
-            ),
-            None,
-        )
-        if notation is None:
-            raise LookupError(
-                f"No defined notation of {row.sort!r} with form "
-                f"{row.constructor!r} in context"
-            )
-        term = Node(
-            pattern=notation.template,
-            children={
-                edge.slot: _load(edge.child, context, memo) for edge in row.children
-            },
-            literal=row.literal,
-            sort=notation.sort,
+            sort=context.variables[row.sort] if row.sort is not None else None,
         )
     else:
         raise ValueError(f"Unknown term row kind: {row.kind!r}")

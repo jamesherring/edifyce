@@ -40,6 +40,15 @@ class Pattern:
         # so a definition introducing it is refused rather than excused.
         self.denotes_constant = False
 
+        # Memo slot for the kernel's projection of this production (see
+        # kernel.constructors). Filled by the kernel on first use and *owned by
+        # this pattern*, so it lives and dies with the production. A module-level
+        # cache cannot: a grammar is mutually recursive, so a constructor's slot
+        # sorts reach back to the production it was built from, and any strong
+        # global root keeps the whole graph alive for the process's lifetime.
+        # Opaque to matching, which never reads it — as with `schema_term`.
+        self.kernel_constructor = None
+
         # Default certainty of 0
         self.certainty = 0
 

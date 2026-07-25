@@ -22,8 +22,8 @@ representation they are the same operation with two settings:
 So :func:`match` is the second corner of that table, and structural equality is
 the first: with no variables, ``match(a, b, ctx) is not None`` iff
 ``a.equal(b, ctx)``. Both share the *same* constructor identity
-(``terms._signature``) and positional child alignment, so matching and equality
-can never disagree about what "the same shape" means.
+(``Constructor.signature``) and positional child alignment, so matching and
+equality can never disagree about what "the same shape" means.
 
 This is *first-order matching* - variables occur only on the schema side and
 bind to whole subterms; it is the one-directional specialisation of unification
@@ -52,9 +52,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..matching.patterns import UnionPattern
-# Reuse the *same* constructor identity and slot alignment that Term.equal
-# uses, so matching and equality stay defined against one source of truth.
-from .terms import Var, _locations, _signature
+# Reuse the *same* constructor identity and slot alignment that Term.equal uses,
+# so matching and equality stay defined against one source of truth. Both are now
+# fields on the constructor rather than walks over a template (see constructors).
+from .constructors import constructor_for
+from .terms import Var
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -104,7 +106,7 @@ def match(
 
     # Both are Nodes. Constructors must agree name-insensitively (a schema's
     # "(p -> q)" and a production's "(lhs -> rhs)" are the same constructor).
-    if _signature(schema.pattern) != _signature(subject.pattern):
+    if schema.constructor.signature != subject.constructor.signature:
         return None
 
     # Ground leaves (atoms, constants) compare by their surface string.
@@ -115,8 +117,8 @@ def match(
     # constructors may spell their slots differently, and a schema may repeat a
     # variable (e.g. "(p -> p)"). Threading one binding makes a repeated - or
     # cross-antecedent - variable bind consistently.
-    schema_locations = _locations(schema.pattern)
-    subject_locations = _locations(subject.pattern)
+    schema_locations = schema.constructor.slots
+    subject_locations = subject.constructor.slots
     if len(schema_locations) != len(subject_locations):
         return None
 
@@ -160,22 +162,41 @@ def _sort_admits(sort: Pattern, term: Term, context: Context) -> bool:
     sort (an ``atom``-sorted variable must not capture an ``implication``).
     """
     term_sort = _term_sort(term)
-    if sort.equivalent(term_sort, context, allow_mapping_to=True):
-        return True
-    if isinstance(sort, UnionPattern) and sort.contains_pattern(
-        term_sort, context, allow_nested=True
-    ):
+
+    # Memoised per (sort, term sort): the answer is a property of the grammar,
+    # which does not change once the system is built, but deriving it walks the
+    # pattern lattice twice over - and a variable binds against the same pair on
+    # every rule check. The memo lives on the sort's constructor, so it is
+    # reclaimed with the grammar (see constructors.Constructor.admits).
+    #
+    # Keying on the pair alone is sound because `context` does not participate in
+    # the answer: `Pattern.equivalent`, `can_map_to` and `contains_pattern` thread
+    # it through to each other and never read it (only `match` reads a context,
+    # for its string variables). Were that to change, this memo would have to key
+    # on the context too - so if you make equivalence context-sensitive, come here.
+    memo = constructor_for(sort).admits
+    cached = memo.get(term_sort)
+    if cached is not None:
+        return cached
+
+    admitted = sort.equivalent(term_sort, context, allow_mapping_to=True) or (
         # `term_sort` is one of the union's (possibly nested) branches, e.g. an
         # `implication` is admitted where a `formula` is expected.
-        return True
-    return False
+        isinstance(sort, UnionPattern)
+        and sort.contains_pattern(term_sort, context, allow_nested=True)
+    )
+    memo[term_sort] = admitted
+    return admitted
 
 
 def _term_sort(term: Term) -> Pattern:
     """The sort (a ``Pattern``) that ``term`` inhabits - a variable's declared
     sort, a node's recorded ``sort`` when it has one (a definition shorthand,
     whose constructor is not itself a member of its sort), or otherwise the
-    node's own constructor (already a member of whatever union it belongs to)."""
+    node's own constructor (already a member of whatever union it belongs to).
+
+    A constructor's ``source`` is the production it was projected from - the sort
+    lattice still lives on the matching layer, so this is where the two meet."""
     if isinstance(term, Var):
         return term.sort
-    return term.sort if term.sort is not None else term.pattern
+    return term.sort if term.sort is not None else term.constructor.source

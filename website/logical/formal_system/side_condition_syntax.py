@@ -228,5 +228,5 @@ def _parse_term(text: str, context: Context) -> Term | None:
             continue
         matched = candidate.match(text, parse_context)
         if matched is not None:
-            return abstract(from_match(matched, parse_context), context.string_variables)
+            return abstract(from_match(matched), context.string_variables)
     return None

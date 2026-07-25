@@ -265,7 +265,7 @@ def test_an_unprojectable_formula_fails_its_own_line(scoped, monkeypatch):
     # A formula the term layer cannot read used to escape as a raise out of the
     # whole parse, from whichever rule check projected it first. Now it fails the
     # one line it is on, saying so, and the rest of the proof still reports.
-    def refuse(match, context):
+    def refuse(match):
         raise ValueError("no term for this shape")
 
     monkeypatch.setattr(system_module, "from_match", refuse)

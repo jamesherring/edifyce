@@ -17,12 +17,11 @@ Row kinds mirror the kernel's term kinds, plus one storage distinction:
 
 * ``node`` — a production applied to child terms (or a ground leaf via
   ``literal``). ``constructor`` is the production's *name*, resolvable in the
-  compiled system's namespace.
-* ``defined`` — a node whose constructor is a *definition's* ad-hoc higher
-  form (e.g. ``x ⊆ y``), which has no name in the namespace. ``constructor``
-  is the higher template string — exactly the decomposition's
-  ``definitions.higher`` column, so "which statements use defined notation"
-  is a join against ``definitions``.
+  compiled system's namespace. Defined notation is a production too, named
+  ``<sort>:<template>`` (e.g. ``formula:x ⊆ y``); a declared production's name
+  cannot contain ``:``, so one lookup covers both and no separate row kind is
+  needed. Such a node also carries ``sort``, because its constructor is not
+  itself a member of the sort it inhabits.
 * ``var`` / ``bound`` — a schematic variable / an abstract bound variable.
 """
 
@@ -42,7 +41,6 @@ if TYPE_CHECKING:
 # `kind` values. A closed set, but deliberately a plain string column rather
 # than a DB enum: adding a kind must not need a migration.
 TERM_KIND_NODE = "node"
-TERM_KIND_DEFINED = "defined"
 TERM_KIND_VAR = "var"
 TERM_KIND_BOUND = "bound"
 
