@@ -4,6 +4,7 @@
 	import PageContainer from '$lib/components/PageContainer.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import LoadingSpinner from '$lib/components/LoadingSpinner.svelte';
+	import EmptyState from '$lib/components/EmptyState.svelte';
 	import StatusBadge from '$lib/components/StatusBadge.svelte';
 	import { DataTable, renderComponent } from '$lib/components/ui/data-table';
 	import * as Alert from '$lib/components/ui/alert';
@@ -115,6 +116,26 @@
 		</Alert.Root>
 	{:else if list.loading && list.items.length === 0}
 		<LoadingSpinner message="Loading systems…" />
+	{:else if list.total === 0 && !list.search}
+		<!-- Genuinely nothing to show, as opposed to a search that matched nothing:
+		     that keeps the table so the search can be changed. -->
+		{#if list.view === 'mine'}
+			<EmptyState
+				title="No systems yet"
+				description="A formal system defines the notation, grammar and inference rules your proofs are written in."
+				actionLabel="New system"
+				onAction={() => goto('/systems/new')}
+				secondaryActionLabel="Browse published"
+				onSecondaryAction={() => list.switchView('public')}
+			/>
+		{:else}
+			<EmptyState
+				title="No published systems yet"
+				description="Nothing has been published for everyone to see. Systems stay private until their author publishes them."
+				actionLabel={auth.user ? 'New system' : undefined}
+				onAction={auth.user ? () => goto('/systems/new') : undefined}
+			/>
+		{/if}
 	{:else}
 		<!-- Remount on view switch so the table's internal page/sort/search reset. -->
 		{#key list.view}
@@ -125,9 +146,11 @@
 				searchPlaceholder="Search systems…"
 				onrowclick={(row) => goto(`/systems/${row.id}`)}
 				serverSide={list.serverSide}
-				emptyMessage={list.view === 'mine'
-					? "You haven't created any systems yet."
-					: 'No published systems yet.'}
+				emptyMessage={list.search
+					? `No systems match “${list.search}”.`
+					: list.view === 'mine'
+						? "You haven't created any systems yet."
+						: 'No published systems yet.'}
 			/>
 		{/key}
 	{/if}

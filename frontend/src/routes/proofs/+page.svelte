@@ -4,6 +4,7 @@
 	import PageContainer from '$lib/components/PageContainer.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import LoadingSpinner from '$lib/components/LoadingSpinner.svelte';
+	import EmptyState from '$lib/components/EmptyState.svelte';
 	import StatusBadge from '$lib/components/StatusBadge.svelte';
 	import CheckBadge from '$lib/components/CheckBadge.svelte';
 	import { DataTable, renderComponent } from '$lib/components/ui/data-table';
@@ -122,6 +123,26 @@
 		</Alert.Root>
 	{:else if list.loading && list.items.length === 0}
 		<LoadingSpinner message="Loading proofs…" />
+	{:else if list.total === 0 && !list.search}
+		<!-- Genuinely nothing to show, as opposed to a search that matched nothing:
+		     that keeps the table so the search can be changed. -->
+		{#if list.view === 'mine'}
+			<EmptyState
+				title="No proofs yet"
+				description="A proof is checked line by line against a formal system. Write one and watch it verify as you type."
+				actionLabel="New proof"
+				onAction={() => goto('/proofs/new')}
+				secondaryActionLabel="Browse published"
+				onSecondaryAction={() => list.switchView('public')}
+			/>
+		{:else}
+			<EmptyState
+				title="No published proofs yet"
+				description="Nothing has been published for everyone to see. Proofs stay private until their author publishes them."
+				actionLabel={auth.user ? 'New proof' : undefined}
+				onAction={auth.user ? () => goto('/proofs/new') : undefined}
+			/>
+		{/if}
 	{:else}
 		<!-- Remount on view switch so the table's internal page/sort/search reset. -->
 		{#key list.view}
@@ -132,9 +153,11 @@
 				searchPlaceholder="Search proofs…"
 				onrowclick={(row) => goto(`/proofs/${row.id}`)}
 				serverSide={list.serverSide}
-				emptyMessage={list.view === 'mine'
-					? "You haven't written any proofs yet."
-					: 'No published proofs yet.'}
+				emptyMessage={list.search
+					? `No proofs match “${list.search}”.`
+					: list.view === 'mine'
+						? "You haven't written any proofs yet."
+						: 'No published proofs yet.'}
 			/>
 		{/key}
 	{/if}

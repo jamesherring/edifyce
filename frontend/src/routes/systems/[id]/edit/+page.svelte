@@ -30,6 +30,7 @@
 	} from '$lib/api';
 	import { systemSymbols } from '$lib/symbols';
 	import { notationReference } from '$lib/notation';
+	import { createUnsavedGuard } from '$lib/unsaved-guard.svelte';
 	import { auth } from '$lib/auth.svelte';
 	import { toastSuccess, toastError } from '$lib/toast';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
@@ -60,6 +61,15 @@
 	// the grammar reference shown beside it.
 	const symbols = $derived(systemSymbols(system));
 	const notation = $derived(notationReference(system));
+
+	// Only the details form defers its save — every part saves from its own sheet
+	// the moment you confirm it — so that's all this guards.
+	const detailsDirty = $derived(
+		!!system &&
+			(name.trim() !== system.name ||
+				(description.trim() || null) !== (system.description ?? null))
+	);
+	const guard = createUnsavedGuard(() => detailsDirty);
 
 	// The outline's table of contents. Ids double as the sections' scroll anchors.
 	const outline = $derived<OutlineSection[]>(
@@ -201,6 +211,7 @@
 			// bumps loadSeq but leaves page.params.id unchanged.
 			if (page.params.id !== id) return;
 			toastSuccess('System deleted.');
+			guard.allow();
 			goto('/systems');
 		} catch (err) {
 			if (page.params.id === id) {
@@ -369,6 +380,16 @@
 				</Button>
 			</Card.Content>
 		</Card.Root>
+
+		<ConfirmDialog
+			open={guard.prompting}
+			title="Leave without saving?"
+			description="The system details have changes you haven't saved. They'll be lost if you leave now."
+			confirmLabel="Leave"
+			variant="destructive"
+			onConfirm={guard.leave}
+			onCancel={guard.stay}
+		/>
 
 		<ConfirmDialog
 			bind:open={confirmOpen}

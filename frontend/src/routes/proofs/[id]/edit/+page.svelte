@@ -26,6 +26,7 @@
 		type VerifyResponse
 	} from '$lib/api';
 	import { systemSymbols } from '$lib/symbols';
+	import { createUnsavedGuard } from '$lib/unsaved-guard.svelte';
 	import { auth } from '$lib/auth.svelte';
 	import { toastSuccess, toastError } from '$lib/toast';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
@@ -70,6 +71,10 @@
 	const detailsDirty = $derived(
 		!!proof && (name.trim() !== proof.name || (description.trim() || null) !== (proof.description ?? null))
 	);
+
+	// Neither the proof text nor the details autosave, so a stray click on a nav
+	// link would drop them silently.
+	const guard = createUnsavedGuard(() => dirty || detailsDirty);
 
 	// Tint the gutter only when the live result lines line up one-for-one with the
 	// editor's lines; otherwise (e.g. blank lines the parser drops) leave it plain
@@ -238,6 +243,7 @@
 			await api.proofs.remove(id);
 			if (page.params.id !== id) return;
 			toastSuccess('Proof deleted.');
+			guard.allow();
 			goto('/proofs');
 		} catch (err) {
 			if (page.params.id === id) {
@@ -409,6 +415,16 @@
 				</Button>
 			</Card.Content>
 		</Card.Root>
+
+		<ConfirmDialog
+			open={guard.prompting}
+			title="Leave without saving?"
+			description="This proof has changes you haven't saved. They'll be lost if you leave now."
+			confirmLabel="Leave"
+			variant="destructive"
+			onConfirm={guard.leave}
+			onCancel={guard.stay}
+		/>
 
 		<ConfirmDialog
 			bind:open={confirmOpen}

@@ -1,3 +1,4 @@
+import { untrack } from 'svelte';
 import type { SortingState } from '@tanstack/table-core';
 import { ApiError, type ListParams, type Page } from '$lib/api';
 import { auth } from '$lib/auth.svelte';
@@ -16,6 +17,10 @@ export interface PaginatedList<T> {
 	readonly loading: boolean;
 	readonly error: string | null;
 	readonly view: ListView;
+	/** The active search term — empty when the user hasn't searched. Lets a page
+	 *  tell "nothing here yet" from "nothing matched", which want different
+	 *  empty states. */
+	readonly search: string;
 	/** Hand straight to `<DataTable serverSide={…} />`. */
 	readonly serverSide: ServerSideConfig;
 	/** Switch master list, resetting page/search/sort. */
@@ -75,32 +80,53 @@ export function createPaginatedList<T>(opts: {
 		}
 	}
 
-	function switchView(next: ListView): void {
+	function applyView(next: ListView): void {
 		if (next === view) return;
 		view = next;
 		pageIndex = 0;
 		search = '';
 		sorting = [];
-		// Clear the rows so the switch shows the spinner, not the previous view's
-		// data under the (possibly different) new columns.
+		// Clear the result set so the switch shows the spinner, not the previous
+		// view's data under the (possibly different) new columns. `total` describes
+		// the same result set as `items` and has to go with it, or an empty-state
+		// check would read the old view's count.
 		items = [];
+		total = 0;
 	}
 
-	// Logging out while on "mine" would leave the next fetch 401ing; fall back to
-	// the public list.
+	// Whether the user has picked a view for themselves. Not reactive on purpose:
+	// it gates the default below without re-running it.
+	let chosen = false;
+
+	function switchView(next: ListView): void {
+		chosen = true;
+		applyView(next);
+	}
+
+	// Who you are decides which list you land on: a signed-in user's own rows are
+	// what they came for, and the published list is for discovery. Once they've
+	// picked a view themselves, that stands — except when signing out, where
+	// staying on "mine" would 401 every fetch.
 	$effect(() => {
-		if (auth.ready && !auth.user && view === 'mine') switchView('public');
+		if (!auth.ready) return;
+		const user = auth.user;
+		// `applyView` reads `view`, which this effect only ever writes — tracking it
+		// would re-run the effect on every switch to no purpose.
+		untrack(() => {
+			if (!user) applyView('public');
+			else if (!chosen) applyView('mine');
+		});
 	});
 
-	// Re-fetch on any view/page/search/sort change. Only 'mine' depends on auth
-	// resolving; reading auth.ready only in that branch keeps the public list from
-	// re-fetching a second time when auth flips.
+	// Re-fetch on any view/page/search/sort change, but not before auth resolves:
+	// until then we don't know which list this user should be looking at, and
+	// fetching the wrong one costs a request and flashes the wrong rows.
 	$effect(() => {
 		void pageIndex;
 		void search;
 		void sorting;
-		const current = view;
-		if (current === 'mine') void auth.ready;
+		void view;
+		if (!auth.ready) return;
 		fetchPage();
 	});
 
@@ -137,6 +163,9 @@ export function createPaginatedList<T>(opts: {
 		},
 		get view() {
 			return view;
+		},
+		get search() {
+			return search;
 		},
 		serverSide,
 		switchView
