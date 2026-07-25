@@ -22,16 +22,31 @@ definition.
 Why this is a build-time step, not a check-time one
 ---------------------------------------------------
 Not every ``Define higher as lower`` is soundly expressible as a kernel
-definition. A defining form may introduce a binder (the ``z`` in
-``∀z.(z ∈ x → z ∈ y)``) that the defined form does not mention; unfolding such a
-definition without treating ``z`` as a binder would capture a free ``z`` in the
-argument and silently change meaning. The ``Define`` DSL can declare those with a
-``fresh`` clause, and the kernel then renames the binder to avoid capture - but
-an *undeclared* binder has no sound reading.
+definition. The defining form may name something the defined form cannot supply -
+an undeclared binder (the ``z`` in ``∀z.(z ∈ x → z ∈ y)``), a parameter the
+defined form omits, or a variable simply left free. Each makes the unfold conjure
+a name, and a conjured name is capturable wherever the step happens to be taken.
 
 That is a property of the definition, not of any particular step, so it is
-settled once, when the system is built and its author can act on it, rather than
-surfacing as an opaque "does not apply" on some later proof line.
+settled once - when the system is built and its author can act on it - rather
+than surfacing as an opaque "does not apply" on some later proof line. It is also
+why no proviso can stand in for it: a proviso constrains the *binding* an unfold
+produces, while this constrains where the defined form may legally *occur*, which
+a cited step never sees.
+
+Which layer owns what
+---------------------
+The kernel owns the rule and states it over the term graph:
+:func:`~website.logical.kernel.definitions.unbound_parameters` and
+:func:`~website.logical.kernel.definitions.introduced_leaves` report exactly the
+leaves a defining form introduces from nowhere. It deliberately stops there,
+because deciding which of those are *benign* - a constant of the object language
+like ``⊥`` denotes one fixed thing and can be neither renamed nor captured - is a
+question about the grammar, not about the graph.
+
+So this module supplies only that grammar predicate
+(:func:`_is_capture_safe_constant` and friends), and the matching layer below it
+does neither: patterns parse, and nothing else.
 """
 
 from __future__ import annotations
@@ -39,8 +54,14 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from ..kernel import Definition, check_definitional_step, from_match
-from ..kernel.terms import Node, Term, Var
+from ..kernel import (
+    Definition,
+    check_definitional_step,
+    from_match,
+    introduced_leaves,
+    unbound_parameters,
+)
+from ..kernel.terms import Node
 from ..matching import AtomPattern, RegexPattern, StringPattern, UnionPattern
 
 if TYPE_CHECKING:
@@ -61,40 +82,6 @@ class DefinitionError(Exception):
     Carries a message written for the *author* of the definition; the declarative
     builder surfaces it as a build error against the system.
     """
-
-
-def _ground_leaves(term: Term) -> list[Node]:
-    """Every ground leaf (childless :class:`Node` carrying a literal) in ``term``.
-
-    A definition's *parameters* project to :class:`~website.logical.kernel.terms.Var`
-    leaves, not ``Node`` literals, and so are excluded; what remains are the fixed
-    tokens the form mentions - genuine constants, and, crucially, any *bound*
-    variable the defining form introduces (e.g. the ``z`` in ``∀z.(z ∈ x → z ∈ y)``),
-    which a ``fresh``-less parse leaves as a ground leaf.
-    """
-    leaves: list[Node] = []
-
-    def walk(node: Term) -> None:
-        if isinstance(node, Node):
-            if not node.children:
-                if node.literal is not None:
-                    leaves.append(node)
-                return
-            for child in node.children.values():
-                walk(child)
-
-    walk(term)
-    return leaves
-
-
-def _has_parameters(term: Term) -> bool:
-    """Whether ``term`` contains a schematic :class:`~website.logical.kernel.terms.Var`
-    - i.e. whether the definition takes arguments at all."""
-    if isinstance(term, Var):
-        return True
-    return isinstance(term, Node) and any(
-        _has_parameters(child) for child in term.children.values()
-    )
 
 
 def _is_constant_constructor(pattern: Pattern) -> bool:
@@ -187,25 +174,27 @@ def _matches(pattern: RegexPattern, literal: str, context: Context) -> bool:
         return False
 
 
-def _undeclared_binder_error(
-    legacy: MatchingDefinition, names: list[str], *, declared_as_parameters: bool = False
+def _introduced_name_error(
+    legacy: MatchingDefinition, names: list[str]
 ) -> DefinitionError:
     """The build error for a defining form that introduces ``names`` out of
-    nowhere - written for the author, and naming the fix.
+    nowhere - written for the author, and naming both remedies.
 
-    ``declared_as_parameters`` distinguishes the two ways the same mistake is
-    spelled: a name given as an ordinary parameter needs *moving*, one never
-    declared at all needs adding.
+    One message covers every spelling of the mistake (an undeclared binder, a
+    parameter the defined form omits, a variable left free), because they are the
+    same defect and the author's two ways out are the same.
     """
     listed = ", ".join(repr(name) for name in names)
-    move = " — as a `fresh` binder, not as an ordinary parameter" if declared_as_parameters else ""
+    them = "them" if len(names) > 1 else "it"
     return DefinitionError(
         f"Definition '{legacy.higher.pattern}' introduces {listed} in its defining "
         f"form '{legacy.lower_source}', but the defined form does not mention "
-        f"{'them' if len(names) > 1 else 'it'}. A variable the defining form binds "
-        f"must be declared, so an unfold can rename it and avoid capturing a "
-        f"variable of the same name in the argument: declare {listed} with a "
-        f"`fresh` clause, giving the sort{move}."
+        f"{them}. An unfold would then conjure {them} wherever the definition is "
+        f"used, and under a binder of the same name that silently rebinds "
+        f"{them} — so the step would not mean the same thing everywhere it is "
+        f"taken. Either make {listed} parameters the defined form supplies, or, if "
+        f"the defining form binds {them}, declare {them} with a `fresh` clause "
+        f"giving the sort."
     )
 
 
@@ -245,7 +234,7 @@ def build_kernel_definition(legacy: MatchingDefinition, context: Context) -> Def
 
     undeclared = _lower_only_parameters(legacy)
     if undeclared:
-        raise _undeclared_binder_error(legacy, undeclared, declared_as_parameters=True)
+        raise _introduced_name_error(legacy, undeclared)
 
     try:
         kernel_def = Definition.parse(
@@ -267,30 +256,25 @@ def build_kernel_definition(legacy: MatchingDefinition, context: Context) -> Def
             f"definition of {legacy.pattern.name}: {exc}"
         ) from exc
 
-    # Binder guard: with no `fresh` declared, a bound variable of the defining
-    # form survives as a ground leaf present in `lower` but not in `higher`.
-    # Unfolding such a definition is capture-blind, so refuse it.
-    #
-    # Only for a definition that takes parameters, though. Capture is a parameter's
-    # substitution landing under a binder, so a definition with none — a nullary
-    # abbreviation like `S ≝ a` or `∅ ≝ 0` — substitutes nothing and unfolds to a
-    # fixed term whatever its defining form mentions. A lower-only leaf that is a
-    # grammar *constant* is exempt for the same reason: a constant can never be
-    # captured, so a defining form that merely mentions one (e.g. `∅`, `⊥`) needs
-    # no declaration.
-    if _has_parameters(kernel_def.higher):
-        defined_literals = {leaf.literal for leaf in _ground_leaves(kernel_def.higher)}
-        bindable = _reachable_patterns(legacy.pattern)
-        undeclared = sorted(
-            {
-                leaf.literal
-                for leaf in _ground_leaves(kernel_def.lower)
-                if leaf.literal not in defined_literals
-                and not _is_capture_safe_constant(leaf, bindable, context)
-            }
-        )
-        if undeclared:
-            raise _undeclared_binder_error(legacy, undeclared)
+    # The kernel settles which leaves the defining form introduces from nowhere -
+    # the structural question, over the two term schemas. All that is left here is
+    # the grammar question it deliberately leaves open: which of them are constants
+    # of the object language (`⊥`, `∅`), which denote one fixed thing and so can be
+    # neither renamed nor captured. Everything else is a name the unfold would
+    # conjure - an undeclared binder, or a variable free in the defining form - and
+    # either makes the unfold depend on where it is taken.
+    unbound = unbound_parameters(kernel_def)
+    if unbound:
+        raise _introduced_name_error(legacy, list(unbound))
+
+    bindable = _reachable_patterns(legacy.pattern)
+    conjured = [
+        leaf.literal
+        for leaf in introduced_leaves(kernel_def)
+        if not _is_capture_safe_constant(leaf, bindable, context)
+    ]
+    if conjured:
+        raise _introduced_name_error(legacy, conjured)
 
     return kernel_def
 

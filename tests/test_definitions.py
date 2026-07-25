@@ -20,7 +20,9 @@ from website.logical.kernel import (
     Var,
     check_definitional_step,
     from_match,
+    introduced_leaves,
     match,
+    unbound_parameters,
     unfold,
 )
 from website.logical.matching import Context, RegexPattern, StringPattern, UnionPattern
@@ -649,3 +651,64 @@ def test_rejects_a_chosen_name_that_is_not_a_leaf_of_its_sort(theory, formula, s
     # A genuine single-letter name is still accepted, confirming only the
     # ill-typed choices are refused.
     assert unfold(d, redex, context, names={"z": "w"}) is not None
+
+
+# ---------------------------------------------------------------------------
+# Admissibility: what a defining form may introduce
+# ---------------------------------------------------------------------------
+
+
+def test_a_well_formed_definition_introduces_nothing(prop):
+    # Every leaf of `((p → q) ∧ (q → p))` is a parameter the defined form
+    # supplies, so the unfold is free-variable preserving and there is nothing to
+    # report.
+    d = df_bicon(prop)
+    assert unbound_parameters(d) == ()
+    assert introduced_leaves(d) == ()
+
+
+def test_a_declared_binder_is_not_reported(theory, setvar):
+    # `z` is declared `fresh`, so it is stored abstractly and its name is chosen
+    # by the step rather than supplied by the defined form. Being declared is
+    # exactly what makes it safe — `Bound` subclasses `Var`, so this also pins
+    # that a binder is not mistaken for an undetermined parameter.
+    d = df_subset(theory, setvar, fresh={"z": setvar})
+    assert unbound_parameters(d) == ()
+    assert introduced_leaves(d) == ()
+
+
+def test_an_undeclared_binder_is_reported_as_a_ground_leaf(theory, setvar):
+    # Without `fresh`, `z` survives the parse as an ordinary ground leaf: the
+    # defining form spells a name the defined form never mentions.
+    d = df_subset(theory, setvar)
+    assert unbound_parameters(d) == ()
+    assert [leaf.literal for leaf in introduced_leaves(d)] == ["z"]
+
+
+def test_a_parameter_the_defined_form_cannot_supply_is_reported(theory, setvar):
+    # `w` is a parameter of the defining form alone. An unfold binds parameters by
+    # matching the *defined* form against the redex, so nothing determines `w`;
+    # it would be free in the result and open to capture where the step is taken.
+    _system, context = theory
+    formula = _system.build_context.variables["formula"]
+    d = Definition.parse(
+        formula,
+        "(x ⊆ y)",
+        "∀z.((z ∈ x) → (z ∈ w))",
+        {"x": setvar, "y": setvar, "w": setvar},
+        context,
+        fresh={"z": setvar},
+    )
+    assert unbound_parameters(d) == ("w",)
+
+
+def test_introduced_leaves_are_deduplicated_and_ordered(theory, setvar):
+    # `z` occurs twice in the defining form; it is one problem, reported once, and
+    # several are reported in a stable order so a build error reads the same way
+    # every time.
+    _system, context = theory
+    formula = _system.build_context.variables["formula"]
+    d = Definition.parse(
+        formula, "(x ⊆ y)", "∀q.((z ∈ z) → (q ∈ y))", {"x": setvar, "y": setvar}, context
+    )
+    assert [leaf.literal for leaf in introduced_leaves(d)] == ["q", "z"]

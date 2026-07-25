@@ -45,10 +45,27 @@ one unfold followed by a structural compare. Searching for *which* definition
 applies *where* - to keep proofs terse - is the elaboration layer's job; the
 trusted core only ever checks a step it is handed.
 
-Scope: this verifies the *use* of a definition. It does not check a
-definition's *admissibility* (conservativity - that the defined symbol is fresh
-and non-circular). As in Metamath, admitting a definition trusts it as an
-axiom; optional well-formedness checks are a separate concern.
+Admissibility - what an unfold may introduce
+--------------------------------------------
+:func:`unbound_parameters` and :func:`introduced_leaves` answer the structural
+half of whether a definition is *admissible* at all, over the same two schemas.
+Both express one property: **an unfold must preserve free variables**. If every
+leaf of ``lower`` is either a parameter ``higher`` provides or a binder declared
+``fresh``, then the unfolded term's free variables are exactly the redex's, so
+the step means the same thing wherever it is taken. A defining form that
+introduces a name from nowhere breaks that: ``S := (a ∈ b)`` unfolded under
+``∀a`` yields ``∀a.(a ∈ b)``, capturing an ``a`` that was free in ``S``. No
+proviso can repair it, because the constraint is on where the defined form may
+*occur*, which a cited step does not see.
+
+The kernel reports the offending leaves; it does not decide which are benign.
+Telling a constant of the object language (``⊥``) from a variable is a question
+about the grammar, so the layer that owns the grammar filters (see
+``formal_system/definitions.py``).
+
+Scope: this is the *capture* half of admissibility. Conservativity - that the
+defined symbol is fresh and the definition non-circular - is still untreated: as
+in Metamath, admitting a definition trusts it as an axiom.
 
 Worked example - subset
 -----------------------
@@ -68,7 +85,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .side_conditions import And, DisjointLeaves
-from .terms import Node, abstract, bind, from_match, _bound, _bound_label, _locations, _signature
+from .terms import Bound, Node, Var, abstract, bind, from_match, _bound, _bound_label, _locations, _signature
 from .unify import match
 
 if TYPE_CHECKING:
@@ -153,6 +170,63 @@ class Definition:
             condition=condition,
             fresh=fresh_items,
         )
+
+
+def _leaves(term: Term) -> list[Term]:
+    """Every leaf of ``term``: variables, abstract binders, and ground nodes."""
+    if not isinstance(term, Node) or not term.children:
+        return [term]
+    return [leaf for child in term.children.values() for leaf in _leaves(child)]
+
+
+def unbound_parameters(definition: Definition) -> tuple[str, ...]:
+    """Parameter names the defining form uses that the defined form does not
+    provide, in sorted order.
+
+    An unfold binds parameters by matching ``higher`` against the redex, so one
+    that ``higher`` never mentions is not determined by the step - it would be
+    free in the result, and free in a way the surrounding term could capture.
+
+    A binder declared ``fresh`` is a :class:`~website.logical.kernel.terms.Bound`,
+    which *is* a ``Var`` by inheritance but is not a parameter: its name is chosen
+    by the step, not supplied by ``higher``. Being declared is what makes it safe,
+    so it is never reported.
+    """
+    def names(term: Term) -> set[str]:
+        return {
+            leaf.name
+            for leaf in _leaves(term)
+            if isinstance(leaf, Var) and not isinstance(leaf, Bound)
+        }
+
+    return tuple(sorted(names(definition.lower) - names(definition.higher)))
+
+
+def introduced_leaves(definition: Definition) -> tuple[Node, ...]:
+    """The ground leaves the defining form spells out that the defined form does
+    not, deduplicated by surface literal.
+
+    Each is a token the unfold conjures from nothing. Some are harmless - a
+    constant of the object language (``⊥``, ``∅``) denotes one fixed thing and
+    can be neither renamed nor captured - and some are not: an undeclared binder,
+    or a free variable. Distinguishing them needs the grammar, so that is the
+    caller's to do; what the kernel settles is *which* leaves are unaccounted for.
+
+    A binder declared ``fresh`` is stored abstractly (a
+    :class:`~website.logical.kernel.terms.Bound`) and so is never reported - being
+    declared is exactly what makes it safe.
+    """
+    defined = {
+        leaf.literal for leaf in _leaves(definition.higher)
+        if isinstance(leaf, Node) and leaf.literal is not None
+    }
+    introduced: dict[str, Node] = {}
+    for leaf in _leaves(definition.lower):
+        if not isinstance(leaf, Node) or leaf.literal is None:
+            continue
+        if leaf.literal not in defined:
+            introduced.setdefault(leaf.literal, leaf)
+    return tuple(introduced[literal] for literal in sorted(introduced))
 
 
 def unfold(
