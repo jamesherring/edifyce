@@ -1,6 +1,9 @@
 # Why Metamath's √2 proof is so verbose — and what Edifyce needs before a set.mm import
 
-**Status:** analysis / pre-import design note. No code yet.
+**Status:** analysis note. A1 and A2 have since been implemented — for where the
+import stands now, the decisions taken since, and what remains, see
+[`metamath-import-roadmap.md`](metamath-import-roadmap.md). This note is the
+analysis those decisions rest on.
 
 Goal restated: import Metamath's `set.mm` while keeping **full verifiability** and
 **full generality** (Edifyce must stay a *general* proof assistant — any formal
