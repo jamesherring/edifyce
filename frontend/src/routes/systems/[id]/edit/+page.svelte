@@ -286,16 +286,6 @@
 		</Card.Root>
 
 		<ConfirmDialog
-			open={guard.prompting}
-			title="Leave without saving?"
-			description="The system details have changes you haven't saved. They'll be lost if you leave now."
-			confirmLabel="Leave"
-			variant="destructive"
-			onConfirm={guard.leave}
-			onCancel={guard.stay}
-		/>
-
-		<ConfirmDialog
 			bind:open={confirmOpen}
 			title="Delete this system?"
 			description={`"${system.name}" and all its notation, rules and definitions will be permanently deleted.`}

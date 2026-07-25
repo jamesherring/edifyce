@@ -1,3 +1,4 @@
+import { untrack } from 'svelte';
 import type { SortingState } from '@tanstack/table-core';
 import { ApiError, type ListParams, type Page } from '$lib/api';
 import { auth } from '$lib/auth.svelte';
@@ -85,9 +86,12 @@ export function createPaginatedList<T>(opts: {
 		pageIndex = 0;
 		search = '';
 		sorting = [];
-		// Clear the rows so the switch shows the spinner, not the previous view's
-		// data under the (possibly different) new columns.
+		// Clear the result set so the switch shows the spinner, not the previous
+		// view's data under the (possibly different) new columns. `total` describes
+		// the same result set as `items` and has to go with it, or an empty-state
+		// check would read the old view's count.
 		items = [];
+		total = 0;
 	}
 
 	// Whether the user has picked a view for themselves. Not reactive on purpose:
@@ -105,8 +109,13 @@ export function createPaginatedList<T>(opts: {
 	// staying on "mine" would 401 every fetch.
 	$effect(() => {
 		if (!auth.ready) return;
-		if (!auth.user) applyView('public');
-		else if (!chosen) applyView('mine');
+		const user = auth.user;
+		// `applyView` reads `view`, which this effect only ever writes — tracking it
+		// would re-run the effect on every switch to no purpose.
+		untrack(() => {
+			if (!user) applyView('public');
+			else if (!chosen) applyView('mine');
+		});
 	});
 
 	// Re-fetch on any view/page/search/sort change, but not before auth resolves:

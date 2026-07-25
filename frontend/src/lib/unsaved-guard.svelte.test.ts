@@ -83,6 +83,19 @@ describe('createUnsavedGuard', () => {
 		expect(gotoMock).not.toHaveBeenCalled();
 	});
 
+	it('re-arms after the user stays, so a second attempt is blocked too', () => {
+		const { guard, handler } = setup(() => true);
+		handler(navigation());
+		guard.stay();
+
+		// Dismissing the prompt (Cancel, Escape, the close button) must not be a
+		// one-shot pass out of the editor.
+		const second = navigation();
+		handler(second);
+		expect(second.cancel).toHaveBeenCalledOnce();
+		expect(guard.prompting).toBe(true);
+	});
+
 	it('stands down for a navigation the page makes itself', () => {
 		const { guard, handler } = setup(() => true);
 		guard.allow();
