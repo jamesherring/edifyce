@@ -915,8 +915,9 @@ async def get_proof_structure(
     """The proof as the checker decomposed it: lines, terms, justification edges.
 
     Read-only and never computed on demand — it reports what the last
-    verification stored, so an unverified proof reports ``stored: false`` rather
-    than quietly re-running the engine. Visibility follows the proof itself.
+    verification stored rather than quietly re-running the engine, so ``stored``
+    answers "is a structure materialised", not "was this proof checked" (which is
+    ``valid``). Visibility follows the proof itself.
     """
     proof = await _get_readable_or_404(session, proof_id, user)
     rows = (
