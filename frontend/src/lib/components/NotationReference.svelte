@@ -6,14 +6,15 @@
 
 	type Props = {
 		groups: NotationGroup[];
+		/** Whether the reference is showing. Collapsed by default: the form is what
+		 *  the author came for, and the grammar is a lookup they reach for only when
+		 *  a name escapes them. Bindable so a host with limited room can keep only
+		 *  one authoring aid open at a time. */
+		open?: boolean;
 		class?: string;
 	};
 
-	let { groups, class: className }: Props = $props();
-
-	// Collapsed by default: the form is what the author came for, and the grammar
-	// is a lookup they reach for only when a name escapes them.
-	let open = $state(false);
+	let { groups, open = $bindable(false), class: className }: Props = $props();
 
 	const count = $derived(groups.reduce((n, group) => n + group.entries.length, 0));
 </script>
@@ -34,7 +35,9 @@
 		{#if open}
 			<!-- Capped and scrolled: a mature system's grammar is long, and the form
 			     below has to stay reachable. -->
-			<div class="bg-muted/30 flex max-h-56 flex-col gap-3 overflow-y-auto rounded-md border p-3">
+			<div
+				class="bg-muted/30 flex max-h-40 flex-col gap-3 overflow-y-auto rounded-md border p-3 sm:max-h-56"
+			>
 				{#each groups as group (group.title)}
 					<div class="flex flex-col gap-1">
 						<p class="text-muted-foreground text-xs font-medium">{group.title}</p>

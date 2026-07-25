@@ -45,10 +45,27 @@
 
   let form = $state<HTMLFormElement | null>(null);
 
-  // The sheet otherwise focuses its first tabbable node on open, which the symbol
-  // palette now is — leaving the user typing into nothing (and Space inserting a
+  // Whether anything renders above the form. Both authoring aids are optional and
+  // independent, so the block shows for either — and the focus override below has
+  // to key off the same condition, not just `symbols`.
+  const hasAids = $derived(!!symbols || notation.length > 0);
+
+  // A sheet is a fixed-height column: header, aids, scrolling form, footer. Two
+  // expanded aids starve the form of every pixel — on a phone that left the
+  // fields unreachable — so only one is open at a time.
+  let paletteOpen = $state(false);
+  let referenceOpen = $state(false);
+  $effect(() => {
+    if (paletteOpen) referenceOpen = false;
+  });
+  $effect(() => {
+    if (referenceOpen) paletteOpen = false;
+  });
+
+  // The sheet otherwise focuses its first tabbable node on open, which an aid
+  // would be — leaving the user typing into nothing (and Space inserting a
   // symbol). Put the caret in the first field instead, which is where it landed
-  // before the palette existed.
+  // before the aids existed.
   async function focusFirstField(event: Event) {
     event.preventDefault();
     await tick();
@@ -60,7 +77,7 @@
   <Sheet.Content
     side="right"
     class={cn('w-full sm:max-w-lg', contentClass)}
-    onOpenAutoFocus={symbols ? focusFirstField : undefined}
+    onOpenAutoFocus={hasAids ? focusFirstField : undefined}
   >
     <Sheet.Header>
       <Sheet.Title>{title}</Sheet.Title>
@@ -68,11 +85,13 @@
         <Sheet.Description>{description}</Sheet.Description>
       {/if}
     </Sheet.Header>
-    {#if symbols}
+    {#if hasAids}
       <!-- Outside the scrolling form so it stays put while the fields scroll. -->
       <div class="flex flex-col gap-2 border-b px-6 pb-3">
-        <SymbolPalette root={form} {symbols} />
-        <NotationReference groups={notation} />
+        {#if symbols}
+          <SymbolPalette root={form} {symbols} bind:expanded={paletteOpen} />
+        {/if}
+        <NotationReference groups={notation} bind:open={referenceOpen} />
       </div>
     {/if}
     <form
@@ -81,7 +100,7 @@
         e.preventDefault();
         if (canSave && !saving) onSave();
       }}
-      class="flex flex-1 flex-col gap-4 overflow-y-auto px-6 py-4"
+      class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 py-4"
     >
       {@render children()}
     </form>

@@ -86,7 +86,7 @@
 		{#each sections as section (section.id)}
 			<a
 				href={`#${section.id}`}
-				aria-current={active === section.id ? 'true' : undefined}
+				aria-current={active === section.id ? 'location' : undefined}
 				onclick={() => (pinned = section.id)}
 				class={[
 					'flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',

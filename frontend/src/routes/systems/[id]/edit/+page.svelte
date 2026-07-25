@@ -329,7 +329,7 @@
 					<CompileStatus {validation} {validating} />
 				</div>
 
-				<SortsSection systemId={system.id} sorts={system.sorts} {notation} onChanged={refresh} />
+				<SortsSection systemId={system.id} sorts={system.sorts} onChanged={refresh} />
 				<BracketsSection systemId={system.id} brackets={system.brackets} {symbols} {notation} onChanged={refresh} />
 				<ProductionsSection systemId={system.id} productions={system.productions} {sortNames} {symbols} {notation} onChanged={refresh} />
 				<LineTypesSection systemId={system.id} lines={system.lines} {sortNames} {symbols} {notation} onChanged={refresh} />

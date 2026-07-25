@@ -3,20 +3,16 @@
 	import EditSheet from '$lib/components/EditSheet.svelte';
 	import FormField from '$lib/components/FormField.svelte';
 	import { api, type Sort } from '$lib/api';
-	import type { NotationGroup } from '$lib/notation';
 	import { createSectionController } from './section.svelte';
 
 	let {
 		systemId,
 		sorts,
-		onChanged,
-		notation = []
+		onChanged
 	}: {
 		systemId: string;
 		sorts: Sort[];
 		onChanged: () => Promise<void> | void;
-		/** Optional: the grammar reference shown in the edit sheet. */
-		notation?: NotationGroup[];
 	} = $props();
 
 	let name = $state('');
@@ -57,7 +53,6 @@
 	onDelete={s.editing ? s.del : undefined}
 	saving={s.saving}
 	{canSave}
-	{notation}
 >
 	<FormField label="Name" id="sort-name" bind:value={name} placeholder="e.g. term" maxlength={128} />
 </EditSheet>

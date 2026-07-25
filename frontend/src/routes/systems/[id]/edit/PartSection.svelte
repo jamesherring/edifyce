@@ -113,12 +113,15 @@
 					ondragend={endDrag}
 				>
 					<!-- Mouse-only affordance: the chevrons below are the keyboard path, so
-					     this stays out of the tab order and the accessibility tree. -->
+					     this stays out of the tab order and the accessibility tree. Shown
+					     only to a fine pointer — native drag-and-drop emits no events for
+					     touch, so on a phone this would be a handle that does nothing;
+					     there the chevrons are the whole story. -->
 					<span
 						aria-hidden="true"
 						title="Drag to reorder"
 						class={[
-							'text-muted-foreground/50 hover:text-muted-foreground shrink-0 touch-none',
+							'text-muted-foreground/50 hover:text-muted-foreground hidden shrink-0 touch-none pointer-fine:inline-flex',
 							busy ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'
 						]}
 						onpointerdown={() => (armed = !busy)}

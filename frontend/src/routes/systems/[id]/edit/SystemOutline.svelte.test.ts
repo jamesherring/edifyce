@@ -51,7 +51,7 @@ describe('SystemOutline', () => {
 		setup();
 		const sorts = screen.getByRole('link', { name: /Sorts/ });
 		await user.click(sorts);
-		expect(sorts).toHaveAttribute('aria-current', 'true');
+		expect(sorts).toHaveAttribute('aria-current', 'location');
 		expect(screen.getByRole('link', { name: /Grammar/ })).not.toHaveAttribute('aria-current');
 	});
 
@@ -59,7 +59,7 @@ describe('SystemOutline', () => {
 		setup();
 		await user.click(screen.getByRole('link', { name: /Grammar/ }));
 		const nav = screen.getByRole('navigation', { name: 'System contents' });
-		expect(nav.querySelectorAll('[aria-current="true"]')).toHaveLength(1);
+		expect(nav.querySelectorAll('[aria-current="location"]')).toHaveLength(1);
 	});
 
 	it('shows the compile verdict beside the outline', () => {
