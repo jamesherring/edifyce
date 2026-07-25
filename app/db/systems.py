@@ -70,6 +70,15 @@ class SymbolRow(Base):
     # indexed family's base (`atom_base`, e.g. "p" for the p_# family).
     atom_value: Mapped[str | None] = mapped_column(String(512))
     atom_base: Mapped[str | None] = mapped_column(String(128))
+    # Whether this production's tokens are constants of the object language
+    # rather than variables of it — Metamath's `$c` vs `$v`, and the gate on
+    # whether a definition may introduce one (see
+    # `website.logical.formal_system.definitions`). Not nullable: every
+    # production has an answer, and `false` (variable-like) is both the safe
+    # default and what every production stored before this column existed must be
+    # read as — a system whose constants were being excused by the old shape
+    # heuristic now names them explicitly or has its definition refused.
+    denotes_constant: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     # The union (sort) this symbol belongs to — "membership is a formula". Null
     # for a top-level sort. Self-FK within symbols.
     member_of_union_id: Mapped[uuid.UUID | None] = mapped_column(

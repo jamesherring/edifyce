@@ -419,7 +419,8 @@ async def create_production(
         system_id=system_id, name=payload.name,
         kind=_production_kind(payload.template, payload.regex, payload.atom_value, payload.atom_base),
         template=payload.template, regex=payload.regex,
-        atom_value=payload.atom_value, atom_base=payload.atom_base, union=union,
+        atom_value=payload.atom_value, atom_base=payload.atom_base,
+        denotes_constant=payload.denotes_constant, union=union,
         position=await _next_symbol_position(session, system_id, union=False),
     )
     row.bindings = await _binding_rows(session, system_id, ProductionBindingRow, payload.bindings)
@@ -449,6 +450,8 @@ async def update_production(
         row.atom_value = payload.atom_value
     if "atom_base" in fields:
         row.atom_base = payload.atom_base
+    if "denotes_constant" in fields and payload.denotes_constant is not None:
+        row.denotes_constant = payload.denotes_constant
     if fields & {"template", "regex", "atom_value", "atom_base"}:
         row.kind = _production_kind(row.template, row.regex, row.atom_value, row.atom_base)
     if "bindings" in fields and payload.bindings is not None:
