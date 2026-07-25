@@ -397,6 +397,85 @@ thm $p |- EARLY $= ( other.1 ) A $.
         import_proof(parse(out_of_scope), "thm")
 
 
+def test_a_proved_syntax_theorem_is_not_a_production():
+    # set.mm's `bj-0` is `$p wff ( ( ph -> ps ) -> ch )` - a *proved* syntactic
+    # theorem, derivable from `wi`, introducing no notation. Read as a production
+    # it invents a constructor overlapping the real nesting, and (having more
+    # literal structure) it wins the parse: formulas then build `bj-0` nodes that
+    # no schema matches. Only `$a` statements declare notation.
+    database = parse(
+        r"""
+$c |- wff ( ) -> $.
+$v ph ps ch $.
+wph $f wff ph $.
+wps $f wff ps $.
+wch $f wff ch $.
+wi $a wff ( ph -> ps ) $.
+bj-0 $p wff ( ( ph -> ps ) -> ch ) $= ( wi ) ABCDD $.
+"""
+    )
+    assert [a.label for a in database.syntax_assertions()] == ["wi"]
+    assert database.assertions["bj-0"].declares_notation is False
+
+
+def test_the_grammar_respects_declaration_order():
+    # Rejecting forward *citations* is not enough: notation declared later must
+    # not be available to *parse* an earlier theorem's lines either, or what the
+    # kernel checks depends on notation that did not exist yet.
+    database = parse(
+        r"""
+$c |- wff ( ) -> LATE $.
+$v ph ps $.
+wph $f wff ph $.
+wps $f wff ps $.
+wi $a wff ( ph -> ps ) $.
+early $a |- ( ph -> ps ) $.
+late $a wff LATE $.
+"""
+    )
+    assert [p.name for p in build_spec(database).productions if p.name != "wff_var"] == [
+        "wi", "late",
+    ]
+    assert [
+        p.name for p in build_spec(database, before="early").productions
+        if p.name != "wff_var"
+    ] == ["wi"]
+
+
+def test_variable_sorts_carry_only_reachable_variables():
+    # A sort's leaf pattern enumerates its variables, so taking *every* declared
+    # variable makes the pattern grow with the database - at set.mm's 355 it no
+    # longer fits its column. Only variables a statement in scope can mention are
+    # needed.
+    database = parse(
+        r"""
+$c |- wff $.
+$v ph ps unused $.
+wph $f wff ph $.
+wps $f wff ps $.
+wunused $f wff unused $.
+wff_a $a wff ph $.
+ax $a |- ph $.
+"""
+    )
+    variable_pattern = next(
+        p.regex for p in build_spec(database).productions if p.name == "wff_var"
+    )
+    assert "unused" not in variable_pattern
+    assert "ph" in variable_pattern
+
+
+def test_comment_stripping_is_linear():
+    # Comments were removed by re-slicing the remaining text each time, which is
+    # quadratic: set.mm holds ~56k comments in 51MB and took minutes. This parses
+    # in milliseconds when linear, and pathologically slowly if that regresses.
+    source = "$c a $.\n" + "$( filler comment $)\n" * 5000 + "$v x $.\n"
+    database = parse(source)
+
+    assert database.constants == {"a"}
+    assert database.variables == {"x"}
+
+
 def test_duplicate_labels_are_rejected():
     # Labels are one flat namespace. Overwriting silently would lose the first
     # statement while leaving its label in `order`, yielding the second twice.

@@ -92,6 +92,23 @@ class Assertion:
         return self.typecode == ASSERTION_TYPECODE
 
     @property
+    def is_axiom(self) -> bool:
+        """Whether this is a ``$a`` (asserted) rather than a ``$p`` (proved)."""
+        return not self.proof
+
+    @property
+    def declares_notation(self) -> bool:
+        """Whether this introduces a grammar production.
+
+        Only an *asserted* statement with a syntax typecode does. A ``$p`` with a
+        syntax typecode is a proved *syntactic theorem* - set.mm's ``bj-0``,
+        ``wff ( ( ph -> ps ) -> ch )``, is provable from ``wi`` and introduces no
+        new notation. Reading one as a production invents a redundant constructor
+        that overlaps the real nesting and makes the grammar ambiguous.
+        """
+        return self.is_axiom and not self.is_logical
+
+    @property
     def essentials(self) -> tuple[Hypothesis, ...]:
         return tuple(h for h in self.mandatory if not h.floating)
 
@@ -116,7 +133,8 @@ class Database:
         return [a for a in self.iter_assertions() if a.is_logical]
 
     def syntax_assertions(self) -> list[Assertion]:
-        return [a for a in self.iter_assertions() if not a.is_logical]
+        """The statements that *declare* notation, in file order."""
+        return [a for a in self.iter_assertions() if a.declares_notation]
 
     def iter_assertions(self) -> Iterator[Assertion]:
         return (self.assertions[label] for label in self.order)
@@ -125,21 +143,25 @@ class Database:
 def _strip_comments(text: str) -> str:
     # Remove `$( ... $)` comments. Metamath forbids nesting, so a linear scan is
     # correct; an unterminated comment is a hard error rather than a silent tail.
+    #
+    # Scan by index rather than re-slicing the remainder: set.mm holds ~56k
+    # comments in 51MB, so carrying the tail forward each time is quadratic and
+    # takes minutes, against well under a second for this.
     out: list[str] = []
-    rest = text
+    position = 0
     while True:
-        start = rest.find("$(")
+        start = text.find("$(", position)
         if start == -1:
-            out.append(rest)
+            out.append(text[position:])
             return "".join(out)
 
-        out.append(rest[:start])
-        end = rest.find("$)", start + 2)
+        out.append(text[position:start])
+        end = text.find("$)", start + 2)
         if end == -1:
             raise MetamathError("Unterminated comment ($( with no $)).")
         # Keep a space so tokens either side never fuse across the comment.
         out.append(" ")
-        rest = rest[end + 2:]
+        position = end + 2
 
 
 class _Scope:

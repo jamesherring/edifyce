@@ -54,11 +54,22 @@ class _Entry:
     line: int | None = None
 
 
-def build_spec(database: Database, name: str = "Metamath") -> SystemSpec:
-    """Build the Edifyce grammar declared by ``database``'s syntax axioms."""
+def build_spec(
+    database: Database, name: str = "Metamath", before: str | None = None
+) -> SystemSpec:
+    """Build the Edifyce grammar declared by ``database``'s syntax axioms.
+
+    ``before`` stops at that label, exclusive. Rejecting forward *citations* is
+    not enough on its own: a syntax step never reaches the kernel, so if the
+    grammar carries notation declared later, a proof's lines can be *parsed*
+    using it even though nothing cites it - and what the kernel then checks
+    depends on notation that did not exist yet. set.mm makes this concrete: the
+    mathbox theorem `bj-0` overlaps the nesting of `wi`, and without this limit
+    it captures the parse of formulas in theorems 600k lines earlier.
+    """
     productions: list[Production] = []
 
-    for assertion in database.syntax_assertions():
+    for assertion in _syntax_before(database, before):
         bindings = [(h.variable, h.typecode) for h in assertion.floatings]
         text = " ".join(assertion.tokens)
 
@@ -77,8 +88,8 @@ def build_spec(database: Database, name: str = "Metamath") -> SystemSpec:
                 Production(sort=assertion.typecode, name=assertion.label, atom_value=text)
             )
 
-    productions.extend(_variable_sort_productions(database))
-    logical_sort = _logical_sort(database)
+    productions.extend(_variable_sort_productions(database, before))
+    logical_sort = _logical_sort(database, before)
 
     return SystemSpec(
         name=name,
@@ -95,14 +106,43 @@ def build_spec(database: Database, name: str = "Metamath") -> SystemSpec:
     )
 
 
-def _declared_variables(database: Database) -> dict[str, list[str]]:
+def _syntax_before(database: Database, before: str | None) -> list[Assertion]:
+    # The notation-declaring statements available to `before`, in file order.
+    syntax = database.syntax_assertions()
+    if before is None:
+        return syntax
+    limit = database.order.index(before)
+    positions = {label: index for index, label in enumerate(database.order)}
+    return [a for a in syntax if positions[a.label] < limit]
+
+
+def _mentioned_variables(database: Database, before: str | None) -> set[str]:
+    # The variables that can appear in statements available to `before` - its own
+    # included. Restricting to these keeps the grammar proportionate: set.mm
+    # declares 355 variables, and enumerating all of them in every sort's leaf
+    # pattern makes a regex too large to store, while only a handful are ever
+    # reachable from a given theorem.
+    limit = len(database.order) if before is None else database.order.index(before) + 1
+    mentioned: set[str] = set()
+    for label in database.order[:limit]:
+        assertion = database.assertions[label]
+        mentioned.update(t for t in assertion.tokens if t in database.variables)
+        for hypothesis in assertion.mandatory:
+            mentioned.update(t for t in hypothesis.tokens if t in database.variables)
+    return mentioned
+
+
+def _declared_variables(
+    database: Database, before: str | None = None
+) -> dict[str, list[str]]:
     # Every `$f`-declared typecode, mapped to the variables inhabiting it. A
     # variable is a member of its sort in its own right - `wph $f wff ph` makes a
     # bare `ph` a wff - so this holds for sorts that *also* have syntax axioms,
     # not only for variable-only ones.
+    mentioned = _mentioned_variables(database, before)
     sorts: dict[str, list[str]] = {}
     for hypothesis in database.hypotheses.values():
-        if not hypothesis.floating:
+        if not hypothesis.floating or hypothesis.variable not in mentioned:
             continue
         members = sorts.setdefault(hypothesis.typecode, [])
         if hypothesis.variable not in members:
@@ -118,7 +158,9 @@ def _binder_sorts(database: Database) -> list[str]:
     return [t for t in _declared_variables(database) if t not in built]
 
 
-def _variable_sort_productions(database: Database) -> list[Production]:
+def _variable_sort_productions(
+    database: Database, before: str | None = None
+) -> list[Production]:
     # A leaf production per sort carrying the variables declared for it. Anchored
     # alternation rather than a general identifier pattern, so a sort admits the
     # variables the database declares and nothing else. Without these a bare
@@ -130,15 +172,15 @@ def _variable_sort_productions(database: Database) -> list[Production]:
             name=f"{typecode}_var",
             regex="(?:" + "|".join(re.escape(v) for v in sorted(members)) + ")",
         )
-        for typecode, members in _declared_variables(database).items()
+        for typecode, members in _declared_variables(database, before).items()
     ]
 
 
-def _logical_sort(database: Database) -> str:
+def _logical_sort(database: Database, before: str | None = None) -> str:
     # The sort a `|-` statement is written in. Metamath does not say so directly:
     # the assertion typecode `|-` is not itself a grammar sort, so infer it from
     # the syntax axioms - conventionally `wff`, but read rather than assumed.
-    sorts = [a.typecode for a in database.syntax_assertions()]
+    sorts = [a.typecode for a in _syntax_before(database, before)]
     for candidate in ("wff", "formula"):
         if candidate in sorts:
             return candidate
@@ -404,7 +446,7 @@ def import_theorem(
     if assertion is None:
         raise MetamathError(f"No assertion labelled {label!r}.")
 
-    system = build_system(build_spec(database, name))
+    system = build_system(build_spec(database, name, before=label))
     promote_assertions(database, system, before=label)
 
     metavariables = {h.variable: h.typecode for h in assertion.floatings}
