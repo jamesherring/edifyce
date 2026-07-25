@@ -50,6 +50,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, uuid_pk_column
 
 if TYPE_CHECKING:
+    from app.db.proof_lines import ProofLineRow
     from app.db.terms import TermRow
 
 # JSONB on Postgres (the real deployment), generic JSON elsewhere so a SQLite
@@ -288,6 +289,17 @@ class Proof(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         foreign_keys="ProofReference.references_id",
         back_populates="referenced",
         viewonly=True,
+    )
+
+    # The proof decomposed into structural rows — one per source line, each
+    # formula interned into the term graph (see app/db/proof_lines.py). Derived
+    # from `source` by the last verification and dropped whenever `valid` is, so
+    # it is never loaded to decide anything the engine owns.
+    line_rows: Mapped[list["ProofLineRow"]] = relationship(
+        back_populates="proof",
+        cascade="all, delete-orphan",
+        order_by="ProofLineRow.position",
+        foreign_keys="ProofLineRow.proof_id",
     )
 
 

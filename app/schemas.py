@@ -478,6 +478,87 @@ class ProofDetail(ProofSummary):
     referenced_by: list[ProofReferrerOut] = Field(default_factory=list)
 
 
+# ---------------------------------------------------------------------------
+# Stored proof structure
+#
+# The read side of app/db/proof_lines.py: a checked proof decomposed into rows —
+# one per source line, each formula a root in the system's term graph, and the
+# justification edges between them. Written by verification, dropped when the
+# verdict is. Distinct from ProofDetail.result, which is the *display* snapshot
+# the editor renders; this is the structure the engine actually derived.
+# ---------------------------------------------------------------------------
+
+
+class TermSummary(BaseModel):
+    """A term-graph node's identity, without its children.
+
+    The DAG below it is queryable in SQL (`term_children`); what a client needs
+    here is the root's shape and its two search keys — ``digest`` (exact) and
+    ``alpha_digest`` (up to consistent renaming of free variables), so equal
+    statements can be grouped without re-parsing anything."""
+
+    id: uuid.UUID
+    kind: str
+    constructor: str | None = None
+    literal: str | None = None
+    sort: str | None = None
+    digest: str
+    alpha_digest: str | None = None
+
+
+class ProofLineAntecedentOut(BaseModel):
+    """One justification edge: a line this line was derived from.
+
+    Exactly one target form is populated — ``line_id`` for a citation within this
+    proof, or ``proof_id``/``number`` for one reaching into a cited lemma (which
+    owns its own line rows)."""
+
+    role: str
+    position: int
+    line_id: uuid.UUID | None = None
+    proof_id: uuid.UUID | None = None
+    number: int | None = None
+
+
+class ProofLineOut(BaseModel):
+    id: uuid.UUID
+    # Index into the source's lines (blanks and commentary included), unlike
+    # `number`, which is the citation number and is null for those.
+    position: int
+    number: int | None = None
+    indent: int
+    display: str
+    line_type: str | None = None
+    behaviour: str | None = None
+    label: str | None = None
+    # The citation as written, then the rule the checker resolved it to — null
+    # when nothing justified the line (a scope opener, an axiom, a definitional
+    # step, or an unjustified one).
+    reference: str | None = None
+    rule: str | None = None
+    valid: bool
+    invalid_message: str | None = None
+    warning_message: str | None = None
+    # The scope kind this line opens, and the opener of the subproof it sits in.
+    opens_scope: str | None = None
+    scope_id: uuid.UUID | None = None
+    # The line's formula in the term graph; null for a line that bears none.
+    term: TermSummary | None = None
+    antecedents: list[ProofLineAntecedentOut] = Field(default_factory=list)
+
+
+class ProofStructure(BaseModel):
+    """A proof's stored structure, or an empty one when none is stored.
+
+    ``stored`` is false only when the proof has not been checked since its last
+    edit: even an empty proof stores its one blank line, so "no lines" always
+    means "nothing was derived", never "derived nothing"."""
+
+    proof_id: uuid.UUID
+    stored: bool
+    lines: list[ProofLineOut] = Field(default_factory=list)
+
+
 class ProofCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=256)
     # The system this proof is written against; must be owned by the caller.

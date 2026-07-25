@@ -19,7 +19,7 @@ pytest.importorskip("aiosqlite")
 pytest.importorskip("regex")
 
 from fastapi.testclient import TestClient
-from sqlalchemy import NullPool, create_engine, event
+from sqlalchemy import NullPool, create_engine, event, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
@@ -29,8 +29,12 @@ from app.db import (
     FormalSystem,
     Proof,
     ProofFolder,
+    ProofLineAntecedentRow,
+    ProofLineRow,
     ProofReference,
     SideConditionRow,
+    TermChildRow,
+    TermRow,
     spec_to_system,
 )
 from app.db.models import OAuthAccount, User
@@ -63,10 +67,12 @@ from tests.spec_helpers import (
     statement_line,
     variable_prod,
 )
+from tests.zfc_systems import scoped_zfc_spec
 from website.logical.declarative import SystemSpec
 
-# Auth tables + the system-decomposition tables + the proof tables (all
-# SQLite-creatable). The pgvector `theorems` table is deliberately omitted.
+# Auth tables + the system-decomposition tables + the proof tables + the term
+# graph a verified proof's lines are stored into (all SQLite-creatable). The
+# pgvector `theorems` table is deliberately omitted.
 _TABLES = [
     m.__table__
     for m in (
@@ -75,6 +81,7 @@ _TABLES = [
         DefinitionBindingRow, DefinitionFreshRow, AxiomRow, AxiomBindingRow, RuleRow,
         RuleAntecedentRow, RuleBindingRow, SideConditionRow,
         ProofFolder, Proof, ProofReference,
+        TermRow, TermChildRow, ProofLineRow, ProofLineAntecedentRow,
     )
 ]
 
@@ -148,13 +155,16 @@ def _logout(client: TestClient) -> None:
     assert client.post("/api/auth/logout").status_code == 204
 
 
-def _seed_system(db_path, owner_id: str, published: bool = False) -> str:
-    # Insert a ZFC system owned by the given user directly, so a proof has a real
-    # system to attach to and verify against.
+def _seed_system(
+    db_path, owner_id: str, published: bool = False, spec: SystemSpec | None = None
+) -> str:
+    # Insert a system owned by the given user directly, so a proof has a real
+    # system to attach to and verify against. Defaults to the ZFC fragment above;
+    # pass `spec` for a scenario that needs different machinery (e.g. subproofs).
     engine = create_engine(f"sqlite:///{db_path}")
     try:
         with Session(engine) as session:
-            system = spec_to_system(zfc_spec())
+            system = spec_to_system(spec if spec is not None else zfc_spec())
             system.owner_id = uuid.UUID(owner_id)
             # Distinct slug per seed so a user can own several (the (owner, slug)
             # index is unique); the API isn't exercised for system creation here.
@@ -815,3 +825,214 @@ def test_draft_dependents_do_not_block_unpublish_or_delete(client, db):
     assert client.patch(f"/api/proofs/{lemma}", json={"published": False}).status_code == 200
     # ...nor deleting it (the draft dependent just goes stale).
     assert client.delete(f"/api/proofs/{lemma}").status_code == 204
+
+
+# ---------------------------------------------------------------------------
+# Stored proof structure: lines projected to kernel terms + justification edges
+# ---------------------------------------------------------------------------
+
+# Two hypotheses and the modus ponens they license. `[MP]` cites no lines, so the
+# antecedents below are the ones the *checker* resolved — which is the point of
+# storing edges rather than the reference string.
+_MP_SRC = "x = x [HYP]\n(x = x → x = x) [HYP]\nx = x [MP]"
+
+
+def _structure(client: TestClient, proof_id: str) -> dict:
+    resp = client.get(f"/api/proofs/{proof_id}/structure")
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def _terms(db_path) -> list[TermRow]:
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with Session(engine) as session:
+            return list(session.scalars(select(TermRow)))
+    finally:
+        engine.dispose()
+
+
+def test_structure_is_empty_until_the_proof_is_verified(client, db):
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    pid = _create_proof(client, sid, "Unchecked", source=_MP_SRC)
+
+    assert _structure(client, pid) == {"proof_id": pid, "stored": False, "lines": []}
+
+    client.post(f"/api/proofs/{pid}/verify")
+    assert _structure(client, pid)["stored"] is True
+
+
+def test_verify_stores_every_line_with_its_kernel_term(client, db):
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    pid = _create_proof(client, sid, "MP", source=_MP_SRC)
+    assert client.post(f"/api/proofs/{pid}/verify").json()["success"] is True
+
+    lines = _structure(client, pid)["lines"]
+    assert [line["position"] for line in lines] == [0, 1, 2]
+    assert [line["number"] for line in lines] == [1, 2, 3]
+    assert [line["behaviour"] for line in lines] == ["logical"] * 3
+    assert [line["reference"] for line in lines] == ["HYP", "HYP", "MP"]
+    # Here the written citation and the resolved rule agree; they need not (a
+    # promoted theorem resolves to a rule in no system's rule list), which is why
+    # both are stored.
+    assert [line["rule"] for line in lines] == ["HYP", "HYP", "MP"]
+    assert all(line["valid"] for line in lines)
+
+    # Every formula reached the term graph, keyed by its top constructor.
+    assert [line["term"]["constructor"] for line in lines] == [
+        "equality", "implication", "equality",
+    ]
+    # And lines 1 and 3 are the *same* statement, so they share one interned row.
+    assert lines[0]["term"]["id"] == lines[2]["term"]["id"]
+
+
+def test_stored_terms_are_interned_per_system_not_per_line(client, db):
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    pid = _create_proof(client, sid, "MP", source=_MP_SRC)
+    client.post(f"/api/proofs/{pid}/verify")
+
+    # `x = x` three times, `(x = x → x = x)` once: three distinct subterms in all
+    # (the variable `x`, the equality, the implication), stored once each.
+    stored = {(term.kind, term.constructor, term.literal) for term in _terms(db)}
+    assert stored == {
+        ("node", "variable", "x"),
+        ("node", "equality", None),
+        ("node", "implication", None),
+    }
+
+    # Re-verifying reuses those rows rather than duplicating them.
+    client.post(f"/api/proofs/{pid}/verify")
+    assert len(_terms(db)) == 3
+
+
+def test_stored_edges_record_the_lines_the_checker_actually_used(client, db):
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    pid = _create_proof(client, sid, "MP", source=_MP_SRC)
+    client.post(f"/api/proofs/{pid}/verify")
+
+    lines = _structure(client, pid)["lines"]
+    assert lines[0]["antecedents"] == [] and lines[1]["antecedents"] == []
+    # `[MP]` names no lines; the edges are the two the checker inferred, in slot
+    # order, and they point at rows in this proof (not at a cited lemma).
+    assert [(a["role"], a["line_id"]) for a in lines[2]["antecedents"]] == [
+        ("antecedent", lines[0]["id"]),
+        ("antecedent", lines[1]["id"]),
+    ]
+    assert all(a["proof_id"] is None for a in lines[2]["antecedents"])
+
+
+def test_a_line_that_does_not_parse_is_stored_with_its_error_and_no_term(client, db):
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    pid = _create_proof(client, sid, "Broken", source=INVALID_PROOF)
+    assert client.post(f"/api/proofs/{pid}/verify").json()["success"] is False
+
+    (line,) = _structure(client, pid)["lines"]
+    assert line["valid"] is False
+    assert line["line_type"] is None and line["behaviour"] is None
+    # No formula to project, so no term — but the line itself is still recorded.
+    assert line["term"] is None
+    assert line["invalid_message"] is not None
+    assert line["display"] == INVALID_PROOF
+
+
+def test_editing_the_source_discards_the_stored_structure(client, db):
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    pid = _create_proof(client, sid, "MP", source=_MP_SRC)
+    client.post(f"/api/proofs/{pid}/verify")
+    assert len(_structure(client, pid)["lines"]) == 3
+
+    # The snapshot describes a *checked* proof, so an edit drops it wholesale
+    # rather than leaving rows that describe the old source.
+    assert client.patch(f"/api/proofs/{pid}", json={"source": VALID_PROOF}).status_code == 200
+    assert _structure(client, pid)["stored"] is False
+
+    client.post(f"/api/proofs/{pid}/verify")
+    assert [line["display"] for line in _structure(client, pid)["lines"]] == [VALID_PROOF]
+
+
+def test_publishing_stores_the_structure_without_a_separate_verify(client, db):
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid, published=True)
+    pid = _create_proof(client, sid, "MP", source=_MP_SRC)
+    assert client.patch(f"/api/proofs/{pid}", json={"published": True}).status_code == 200
+    assert len(_structure(client, pid)["lines"]) == 3
+
+
+def test_a_citation_into_a_lemma_is_stored_by_proof_and_number(client, db):
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
+    main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
+    assert client.post(f"/api/proofs/{main}/verify").json()["success"] is True
+
+    lines = _structure(client, main)["lines"]
+    edges = lines[1]["antecedents"]
+    # `[MP, A.1, 1]` cites the lemma's line 1 and this proof's line 1. Edges are
+    # stored in the *rule's* slot order (MP takes `p` then `(p → q)`), not the
+    # order they were written, so compare as a set: what matters here is how each
+    # target is addressed. The lemma's line lives in another proof — which owns
+    # its own rows — so it is named by proof id and citation number, not by FK.
+    assert [edge["position"] for edge in edges] == [0, 1]
+    assert {(edge["proof_id"], edge["number"], edge["line_id"]) for edge in edges} == {
+        (lemma, 1, None),
+        (None, None, lines[0]["id"]),
+    }
+
+
+def test_editing_a_lemma_discards_the_dependents_structure(client, db):
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
+    main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
+    client.post(f"/api/proofs/{main}/verify")
+    assert _structure(client, main)["stored"] is True
+
+    # The dependent's structure was derived through the lemma, so it goes stale
+    # with the verdict it was stored alongside.
+    assert client.patch(f"/api/proofs/{lemma}", json={"source": VALID_PROOF}).status_code == 200
+    assert _structure(client, main)["stored"] is False
+
+
+def test_structure_visibility_follows_the_proof(client, db):
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid, published=True)
+    draft = _create_proof(client, sid, "Draft", source=VALID_PROOF)
+    public = _create_proof(client, sid, "Public", source=VALID_PROOF)
+    assert client.patch(f"/api/proofs/{public}", json={"published": True}).status_code == 200
+    _logout(client)
+
+    assert client.get(f"/api/proofs/{draft}/structure").status_code == 404
+    assert client.get(f"/api/proofs/{public}/structure").status_code == 200
+
+
+def test_subproofs_and_discharge_are_stored_as_scope_and_edges(client, db):
+    # The scoped system has assumption subproofs and a discharge rule (CP), so it
+    # exercises the two structural things a flat proof cannot: a line that opens a
+    # scope, and a line justified by a *block* rather than by cited lines.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid, spec=scoped_zfc_spec())
+    source = "assume x ∈ y\n    x ∈ y [R, 1]\n(x ∈ y → x ∈ y) [CP, 1]"
+    pid = _create_proof(client, sid, "Conditional", source=source)
+    assert client.post(f"/api/proofs/{pid}/verify").json()["success"] is True
+
+    opener, reiterated, discharge = _structure(client, pid)["lines"]
+    assert opener["opens_scope"] == "assumption"
+    # A scope opener is granted by fiat, so no rule justifies it.
+    assert [line["rule"] for line in (opener, reiterated, discharge)] == [None, "R", "CP"]
+    # The line under the opener is inside the subproof it opened; the opener
+    # itself and the discharge line sit in the enclosing (root) scope.
+    assert reiterated["scope_id"] == opener["id"]
+    assert opener["scope_id"] is None
+    assert discharge["scope_id"] is None
+    # CP consumed the whole subproof, recorded by the opener that names it.
+    assert [(a["role"], a["line_id"]) for a in discharge["antecedents"]] == [
+        ("subproof", opener["id"])
+    ]

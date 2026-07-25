@@ -15,6 +15,8 @@ from app.db.models import (
     Theorem,
     User,
 )
+from app.db.proof_lines import ProofLineAntecedentRow, ProofLineRow
+from app.db.proofs_mapping import clear_proof_lines, store_proof_lines
 from app.db.session import get_session
 from app.db.systems import (
     AxiomBindingRow,
@@ -47,6 +49,11 @@ __all__ = [
     "User",
     "ProofReference",
     "get_session",
+    # Proof structure (app/db/proof_lines.py) + the checked-proof projection.
+    "ProofLineAntecedentRow",
+    "ProofLineRow",
+    "clear_proof_lines",
+    "store_proof_lines",
     # Normalised system decomposition (app/db/systems.py) + spec round trip.
     "AxiomBindingRow",
     "AxiomRow",

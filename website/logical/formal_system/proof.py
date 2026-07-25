@@ -527,7 +527,10 @@ class Proof:
                     deduction=proof_line,
                     context=context
             ):
-                # It's a valid line
+                # Record the rule as every other justifying branch does, so a
+                # zero-premise step is not the one kind of line whose
+                # justification is left unattributed.
+                proof_line.inference_rule = inference_rule
                 return True
 
         elif len(antecedents) == 0 and len(inference_rule.antecedents) < 5:
@@ -691,6 +694,7 @@ class Proof:
 
         if inference_rule.check_discharge(subproof, proof_line, context):
             proof_line.inference_rule = inference_rule
+            proof_line.discharged_scope = subproof
             return True
 
         proof_line.valid = False
@@ -861,6 +865,24 @@ class ProofLine:
 
         # The inference instance with this line as the deduction
         self.inference = None
+
+        # The inference rule that justified this line, once one has (None while
+        # unchecked, for an unjustified line, and for a definitional step).
+        self.inference_rule = None
+
+        # The cited lines this line was justified from: those filling the rule's
+        # declared antecedent slots, and any surplus lines an
+        # `allow_extra_antecedents` rule tolerated. Declared here (rather than
+        # attached ad hoc by the checker) so every line carries them and a reader
+        # -- the proof-line snapshot in `app/db/proofs_mapping.py` -- can walk the
+        # justification graph without probing for the attribute.
+        self.antecedents: tuple[ProofLine, ...] = ()
+        self.extra_antecedents: tuple[ProofLine, ...] = ()
+
+        # The subproof a discharge rule consumed to justify this line, or None.
+        # A discharge cites a *block*, not lines, so it is recorded apart from
+        # `antecedents` rather than flattened into them.
+        self.discharged_scope: Subproof | None = None
 
         # Whether this step in the proof is valid
         self.valid = True
