@@ -114,6 +114,7 @@
 
 <PartSection
 	title="Inference rules"
+	itemLabel={(r) => `rule ${r.label}`}
 	id="rules"
 	addLabel="Add rule"
 	items={rules}
@@ -172,9 +173,13 @@
 				<Button
 					type="button"
 					size="sm"
+					aria-pressed={allowExtraAntecedents}
 					variant={allowExtraAntecedents ? 'default' : 'outline'}
 					onclick={() => (allowExtraAntecedents = !allowExtraAntecedents)}
 				>
+					<!-- Prefix rather than aria-label: an aria-label would replace the
+					     visible word, leaving "Off" unspeakable to voice control. -->
+					<span class="sr-only">Allow extra antecedents:</span>
 					{allowExtraAntecedents ? 'Enabled' : 'Off'}
 				</Button>
 			</div>
@@ -196,6 +201,7 @@
 				<Button
 					type="button"
 					size="sm"
+					aria-pressed={matching === option.value}
 					variant={matching === option.value ? 'default' : 'outline'}
 					onclick={() => (matching = option.value)}
 				>
@@ -233,9 +239,11 @@
 			<Button
 				type="button"
 				size="sm"
+				aria-pressed={hasSubproof}
 				variant={hasSubproof ? 'default' : 'outline'}
 				onclick={() => (hasSubproof = !hasSubproof)}
 			>
+				<span class="sr-only">Discharge subproof:</span>
 				{hasSubproof ? 'Enabled' : 'Off'}
 			</Button>
 		</div>
@@ -247,6 +255,7 @@
 				<Button
 					type="button"
 					size="sm"
+					aria-pressed={subproofOpener === 'assume'}
 					variant={subproofOpener === 'assume' ? 'default' : 'outline'}
 					onclick={() => (subproofOpener = 'assume')}
 				>
@@ -255,6 +264,7 @@
 				<Button
 					type="button"
 					size="sm"
+					aria-pressed={subproofOpener === 'fresh'}
 					variant={subproofOpener === 'fresh' ? 'default' : 'outline'}
 					onclick={() => (subproofOpener = 'fresh')}
 				>

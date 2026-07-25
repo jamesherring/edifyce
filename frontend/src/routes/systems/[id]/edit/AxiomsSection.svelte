@@ -60,6 +60,7 @@
 
 <PartSection
 	title="Axioms"
+	itemLabel={(a) => `axiom ${a.label}`}
 	id="axioms"
 	addLabel="Add axiom"
 	items={axioms}

@@ -42,8 +42,8 @@ describe('LineTypesSection logical-sort validation', () => {
 			symbols: [],
 			onChanged: vi.fn()
 		});
-		await user.click(screen.getByRole('button', { name: 'Edit' }));
-		const save = await screen.findByRole('button', { name: /Save Changes/ });
+		await user.click(screen.getByRole('button', { name: /^Edit / }));
+		const save = await screen.findByRole('button', { name: /Save changes/ });
 
 		// Name + shape are filled, so only the stale logical sort blocks Save.
 		expect(save).toBeDisabled();
@@ -61,8 +61,8 @@ describe('LineTypesSection logical-sort validation', () => {
 			symbols: [],
 			onChanged: vi.fn()
 		});
-		await user.click(screen.getByRole('button', { name: 'Edit' }));
-		const save = await screen.findByRole('button', { name: /Save Changes/ });
+		await user.click(screen.getByRole('button', { name: /^Edit / }));
+		const save = await screen.findByRole('button', { name: /Save changes/ });
 		expect(save).toBeEnabled();
 	});
 });
@@ -80,7 +80,7 @@ describe('LineTypesSection commentary', () => {
 
 	it('pre-fills the toggle and hides the fields a comment cannot carry', async () => {
 		renderWith({ behaviour: 'comment', logical_sort: null });
-		await user.click(screen.getByRole('button', { name: 'Edit' }));
+		await user.click(screen.getByRole('button', { name: /^Edit / }));
 
 		expect(screen.getByRole('button', { name: 'Enabled' })).toBeInTheDocument();
 		// A comment bears no formula and opens no scope, so neither is offered.
@@ -92,9 +92,9 @@ describe('LineTypesSection commentary', () => {
 		// The API rejects both pairings, so the save must send nulls rather than
 		// carry the now-hidden values through.
 		renderWith({ scope: 'assumption' });
-		await user.click(screen.getByRole('button', { name: 'Edit' }));
+		await user.click(screen.getByRole('button', { name: /^Edit / }));
 		await user.click(screen.getByRole('button', { name: 'Off' }));
-		await user.click(screen.getByRole('button', { name: /Save Changes/ }));
+		await user.click(screen.getByRole('button', { name: /Save changes/ }));
 
 		const { api } = await import('$lib/api');
 		expect(vi.mocked(api.parts.lineTypes.update)).toHaveBeenCalledWith(

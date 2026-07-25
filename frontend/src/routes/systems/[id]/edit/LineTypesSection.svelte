@@ -86,6 +86,7 @@
 	parsing a proof line. -->
 <PartSection
 	title="Line types"
+	itemLabel={(l) => `line type ${l.name}`}
 	id="line-types"
 	addLabel="Add line type"
 	items={lines}

@@ -84,6 +84,7 @@
 					<div class="inline-flex rounded-md border p-0.5 text-sm">
 						<button
 							type="button"
+							aria-pressed={list.view === 'public'}
 							onclick={() => list.switchView('public')}
 							class={[
 								'rounded px-3 py-1 font-medium transition-colors',
@@ -96,6 +97,7 @@
 						</button>
 						<button
 							type="button"
+							aria-pressed={list.view === 'mine'}
 							onclick={() => list.switchView('mine')}
 							class={[
 								'rounded px-3 py-1 font-medium transition-colors',

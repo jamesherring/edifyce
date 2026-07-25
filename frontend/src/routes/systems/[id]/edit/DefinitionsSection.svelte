@@ -109,6 +109,7 @@
 
 <PartSection
 	title="Definitions"
+	itemLabel={(d) => `definition ${d.name}`}
 	id="definitions"
 	addLabel="Add definition"
 	canAdd={sortNames.length > 0}
@@ -177,6 +178,7 @@
 					bind:value={layerPick}
 					onSelect={insertNotation}
 					placeholder="Insert defined notation…"
+					ariaLabel="Build on an earlier definition"
 					searchPlaceholder="Search definitions…"
 					emptyText="No earlier definitions."
 					class="text-muted-foreground"
