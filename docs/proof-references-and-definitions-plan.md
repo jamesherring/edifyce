@@ -1,5 +1,13 @@
 # Plan: proof-to-proof references & first-class definitions
 
+> **Status: delivered.** Kept as a record of the design, not a description of
+> the code. One thing it says is now false: the engine-side import machinery it
+> surveys under "What already exists" — `import_path`, `reference_proofs`,
+> `proofs_used`, `dependency_order`, `circular_dependency` — has been **deleted**.
+> The plan chose pre-seeding `reference_context` over import lines, so that
+> machinery was never wired up, and the reference graph now lives only in
+> `proof_references` with the sort and cycle checks in `app/routers/proofs.py`.
+
 A proposed sequence of small, additive PRs to deliver three capabilities:
 
 - **(a)** proofs that reference other proofs — transitively, with circular
@@ -162,10 +170,17 @@ is now one.
   verified no step.
 - `matching.Definition` remains as *parser* state — it is what makes defined
   notation grammatical — but no longer applies anything.
-- The capture guard is scoped to what can actually be captured: it applies only to
-  a definition that takes parameters (capture is a substitution landing under a
-  binder), reads a nullary production as a constant, and consults only the sorts
-  reachable from the definition's own sort.
+- The capture rule lives in the kernel, over the term graph: `unbound_parameters`
+  and `introduced_leaves` report the leaves a defining form introduces from
+  nowhere. It is one property — **an unfold must preserve free variables**, so the
+  step means the same thing wherever it is taken. Deciding which introduced leaves
+  are benign (a constant of the object language) is a grammar question, so
+  `formal_system/definitions.py` supplies that predicate and the matching layer
+  supplies neither: patterns parse, and nothing else.
+- This also closes the occurrence-site capture hole the first pass left open
+  (`∀a. S → ∀a. a` for a nullary `S ≝ a`), by refusing such a definition at build
+  time. What remains untreated is conservativity — that a defined symbol is fresh
+  and the definition non-circular.
 
 ### D3 — definitions as a top-level surface (backend + frontend)
 - `api.definitions` namespace and a **per-system definitions page** (list +

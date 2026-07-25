@@ -1,6 +1,7 @@
-"""Small, dependency-free graph utilities used by the proof checker.
+"""Small, dependency-free graph utilities used by the proof checker and the API.
 
-Two unrelated bits of graph logic the engine had open-coded:
+Two unrelated bits of graph logic, kept here rather than open-coded at their
+call sites:
 
 * **Bipartite matching** - deciding whether cited antecedent lines can be
   assigned to an inference rule's antecedent *slots* at all, and enumerating the
@@ -11,10 +12,10 @@ Two unrelated bits of graph logic the engine had open-coded:
   algorithm - a few lines, easy to audit, and enough for the handful of
   antecedents a rule ever has.
 
-* **Topological order** - ordering proofs by their import/theorem dependencies
-  and detecting circular ones. This is a thin, typed wrapper over the standard
-  library's :class:`graphlib.TopologicalSorter` so callers get a plain ordered
-  list and a clear cycle report without repeating the boilerplate.
+* **Topological order** - sequencing nodes after everything they depend on, as
+  proof references need (a lemma compiled before the proofs citing it). A thin,
+  typed wrapper over the standard library's :class:`graphlib.TopologicalSorter`
+  so callers get a plain ordered list without repeating the boilerplate.
 
 Kept deliberately generic (plain hashable nodes, no engine imports) so it stays a
 leaf utility and can be tested in isolation.
@@ -22,7 +23,7 @@ leaf utility and can be tested in isolation.
 
 from __future__ import annotations
 
-from graphlib import CycleError, TopologicalSorter
+from graphlib import TopologicalSorter
 from typing import TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
@@ -83,24 +84,9 @@ def topological_order(dependencies: Mapping[N, Iterable[N]]) -> list[N]:
     """Nodes ordered so each comes after everything it depends on.
 
     ``dependencies`` maps a node to the nodes it depends on (its predecessors).
-    Raises :class:`graphlib.CycleError` if the dependencies are circular; use
-    :func:`find_cycle` to report the offending nodes.
+    Raises :class:`graphlib.CycleError` if the dependencies are circular.
     """
     sorter: TopologicalSorter[N] = TopologicalSorter()
     for node, deps in dependencies.items():
         sorter.add(node, *deps)
     return list(sorter.static_order())
-
-
-def find_cycle(dependencies: Mapping[N, Iterable[N]]) -> list[N] | None:
-    """The nodes of a dependency cycle if one exists, else ``None``.
-
-    The returned list is the cycle as :class:`graphlib.TopologicalSorter`
-    reports it - a path of nodes whose last element repeats its first.
-    """
-    try:
-        topological_order(dependencies)
-    except CycleError as error:
-        # CycleError.args == (message, cycle_list); the cycle is the useful part.
-        return list(error.args[1])
-    return None

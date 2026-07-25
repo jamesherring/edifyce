@@ -40,7 +40,7 @@ afterEach(() => {
 async function openAddSheet() {
 	await user.click(screen.getByRole('button', { name: 'Add sort' }));
 	// The sheet content is portalled; wait for it to mount.
-	return screen.findByRole('button', { name: /Save Changes/ });
+	return screen.findByRole('button', { name: /Save changes/ });
 }
 
 describe('SortsSection save flow', () => {
@@ -67,7 +67,7 @@ describe('SortsSection save flow', () => {
 		expect(onChanged).toHaveBeenCalled();
 		// Closed on success: the Save button is gone.
 		await waitFor(() =>
-			expect(screen.queryByRole('button', { name: /Save Changes/ })).not.toBeInTheDocument()
+			expect(screen.queryByRole('button', { name: /Save changes/ })).not.toBeInTheDocument()
 		);
 	});
 
@@ -78,8 +78,8 @@ describe('SortsSection save flow', () => {
 			onChanged: vi.fn()
 		});
 		// Each row has an Edit button (from PartSection).
-		await user.click(screen.getByRole('button', { name: 'Edit' }));
-		const save = await screen.findByRole('button', { name: /Save Changes/ });
+		await user.click(screen.getByRole('button', { name: /^Edit / }));
+		const save = await screen.findByRole('button', { name: /Save changes/ });
 
 		await user.click(save); // name pre-filled, so save is enabled
 		expect(sorts.update).toHaveBeenCalledWith('sys-1', 's1', { name: 'term' });
@@ -98,6 +98,6 @@ describe('SortsSection save flow', () => {
 		expect(toastError).toHaveBeenCalled();
 		expect(onChanged).not.toHaveBeenCalled();
 		// Still open: the Save button is present.
-		expect(screen.getByRole('button', { name: /Save Changes/ })).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: /Save changes/ })).toBeInTheDocument();
 	});
 });

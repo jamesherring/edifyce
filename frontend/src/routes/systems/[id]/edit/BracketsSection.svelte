@@ -42,6 +42,7 @@
 
 <PartSection
 	title="Brackets"
+	itemLabel={(b) => `brackets ${b.opening} ${b.closing}`}
 	id="brackets"
 	addLabel="Add brackets"
 	items={brackets}

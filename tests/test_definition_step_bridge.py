@@ -237,36 +237,55 @@ def test_constant_carrying_definition_builds_a_kernel_definition(const_system):
     assert definition.kernel is not None
 
 
-# A nullary abbreviation: `S` names one specific formula. Its defining form's `a`
-# and `b` are lower-only *and* variable-like (the setvar regex claims them), so a
-# leaf-only guard would flag them — but `S` takes no arguments, so an unfold
-# substitutes nothing and there is nothing to capture.
-def nullary_spec() -> SystemSpec:
+# A nullary abbreviation: `S` names one specific formula, taking no arguments.
+# `closed` decides whether its defining form is built only from constants, or
+# mentions setvars `a`/`b` that nothing determines.
+def nullary_spec(*, closed: bool) -> SystemSpec:
     return SystemSpec(
         name="NullarySys",
         brackets=brackets(),
         productions=[
             _setvar_prod(),
             template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+            template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
+            template_prod("formula", "forall", "∀x.phi", [("x", "setvar"), ("phi", "formula")]),
+            atom_const_prod("formula", "falsum", "⊥"),
         ],
         lines=[statement_line()],
-        definitions=[defn("formula", "s", "S", "(a ∈ b)", [])],
+        definitions=[
+            defn("formula", "s", "S", "(⊥ → ⊥)" if closed else "(a ∈ b)", []),
+        ],
         rules=[_hyp_rule()],
     )
 
 
-def test_nullary_abbreviation_builds_and_checks_a_step():
-    system = build_declarative(nullary_spec())
+def test_closed_nullary_abbreviation_builds_and_checks_a_step():
+    # Every leaf of the defining form is a constant, so the unfold produces a
+    # fixed term wherever it is taken. Nothing to determine, nothing to capture.
+    system = build_declarative(nullary_spec(closed=True))
     definition = only_definition(system)
     assert definition.kernel is not None
 
     context = context_of(system)
     _proof, (abbreviated, spelled, other) = formulae(
-        system, "S", "(a ∈ b)", "(a ∈ c)"
+        system, "S", "(⊥ → ⊥)", "(⊥ → (⊥ → ⊥))"
     )
     assert follows_by_definition(abbreviated, spelled, definition, context) is True
     assert follows_by_definition(spelled, abbreviated, definition, context) is True
     assert follows_by_definition(abbreviated, other, definition, context) is False
+
+
+def test_open_nullary_abbreviation_fails_the_build():
+    # `S ≝ (a ∈ b)` leaves `a` and `b` free in the defining form: `S` cannot
+    # supply them, so the unfold conjures them at whatever position it is taken.
+    # Under a binder for the same name that is capture — `∀a.S` would unfold to
+    # `∀a.(a ∈ b)`, silently rebinding an `a` that was free in `S`. No proviso can
+    # repair it (the constraint is on where `S` may *occur*, which a cited step
+    # does not see), so the definition is refused when the system is built.
+    result = build_spec(nullary_spec(closed=False))
+    assert "errors" in result
+    (message,) = result["errors"]
+    assert "'a'" in message and "'b'" in message
 
 
 # A constant grammar plus an unused sort whose regex is malformed. The bad regex

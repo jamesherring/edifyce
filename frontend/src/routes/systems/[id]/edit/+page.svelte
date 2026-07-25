@@ -300,8 +300,24 @@
 
 		<Card.Root>
 			<Card.Header>
-				<Card.Title>Details</Card.Title>
-				<Card.Description>Name and description shown across the app.</Card.Description>
+				<div class="flex items-center justify-between gap-2">
+					<Card.Title>Details</Card.Title>
+					<div class="text-muted-foreground text-xs">
+						{#if saving}
+							<span class="inline-flex items-center gap-1">
+								<LoaderCircle class="size-3 animate-spin" /> Saving…
+							</span>
+						{:else if detailsDirty}
+							Unsaved changes
+						{:else}
+							Saved
+						{/if}
+					</div>
+				</div>
+				<Card.Description>
+					Name and description shown across the app. These save when you press Save changes;
+					everything below saves as soon as you confirm it.
+				</Card.Description>
 			</Card.Header>
 			<Card.Content>
 				<form class="flex flex-col gap-4" onsubmit={saveDetails}>
@@ -314,7 +330,7 @@
 						<Textarea id="description" bind:value={description} rows={3} />
 					</div>
 					<div class="flex justify-end">
-						<Button type="submit" disabled={saving || name.trim().length === 0}>
+						<Button type="submit" disabled={saving || !detailsDirty || name.trim().length === 0}>
 							{#if saving}
 								<LoaderCircle class="size-4 animate-spin" /> Saving…
 							{:else}

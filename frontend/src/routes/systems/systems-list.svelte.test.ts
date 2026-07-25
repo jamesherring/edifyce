@@ -120,6 +120,22 @@ describe('systems list', () => {
 		expect(apiMock.systems.list).not.toHaveBeenCalled();
 	});
 
+	it('exposes which view is active, rather than only colouring the tab', async () => {
+		render(Page);
+		await waitFor(() => expect(apiMock.systems.list).toHaveBeenCalled());
+
+		// Colour alone tells a screen-reader user nothing about which list they're
+		// looking at.
+		expect(await screen.findByRole('button', { name: 'My systems' })).toHaveAttribute(
+			'aria-pressed',
+			'true'
+		);
+		expect(screen.getByRole('button', { name: 'Published' })).toHaveAttribute(
+			'aria-pressed',
+			'false'
+		);
+	});
+
 	it('offers a way out of an empty list instead of a bare message', async () => {
 		render(Page);
 		await waitFor(() => expect(apiMock.systems.list).toHaveBeenCalled());

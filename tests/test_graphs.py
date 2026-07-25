@@ -1,11 +1,14 @@
 """Unit tests for the dependency-free graph utilities (website/logical/graphs.py):
-Kuhn's bipartite matching and the graphlib-backed topological order / cycle
-finder that back the proof checker's antecedent assignment and its
-import/theorem dependency handling.
+Kuhn's bipartite matching, which backs the proof checker's antecedent
+assignment, and the graphlib-backed topological order, which sequences a proof's
+cited lemmas before the proofs that cite them.
 """
 
+from graphlib import CycleError
+
+import pytest
+
 from website.logical.graphs import (
-    find_cycle,
     maximum_bipartite_matching,
     saturating_matching,
     topological_order,
@@ -83,7 +86,7 @@ def test_saturating_matching_of_no_slots_is_trivially_satisfied():
 
 
 # ---------------------------------------------------------------------------
-# topological_order / find_cycle
+# topological_order
 # ---------------------------------------------------------------------------
 
 
@@ -96,19 +99,9 @@ def test_topological_order_of_independent_nodes_contains_them_all():
     assert set(topological_order({"a": [], "b": []})) == {"a", "b"}
 
 
-def test_find_cycle_returns_none_for_a_dag():
-    assert find_cycle({"a": [], "b": ["a"], "c": ["b"]}) is None
-
-
-def test_find_cycle_reports_a_cycle():
-    cycle = find_cycle({"a": ["b"], "b": ["a"]})
-    assert cycle is not None
-    # graphlib reports a path whose last node repeats the first.
-    assert cycle[0] == cycle[-1]
-    assert set(cycle) == {"a", "b"}
-
-
-def test_find_cycle_detects_a_self_dependency():
-    cycle = find_cycle({"a": ["a"]})
-    assert cycle is not None
-    assert cycle[0] == cycle[-1] == "a"
+# `app/routers/proofs.py` catches CycleError to reject a circular reference
+# closure, so the raise is contract, not incidental.
+@pytest.mark.parametrize("cyclic", [{"a": ["b"], "b": ["a"]}, {"a": ["a"]}])
+def test_topological_order_raises_on_a_cycle(cyclic: dict[str, list[str]]) -> None:
+    with pytest.raises(CycleError):
+        topological_order(cyclic)

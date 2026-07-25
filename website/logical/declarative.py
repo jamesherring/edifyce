@@ -53,12 +53,10 @@ class DeclarativeError(Exception):
 # The scopes a line type may open (mirrors LineType.scope's accepted values).
 _LINE_SCOPES = (None, "assumption", "variable")
 
-# The line behaviours a declarative system may author. `LineType` accepts more,
-# but the rest are not offered here: `axiom` is emitted from `spec.axioms` rather
-# than declared, and `import` fails closed in the checker (its payload came from
-# an accessor mechanism that was removed). A value the engine ignores or refuses
-# is worse than no value at all, so building one is an error, not a silent
-# no-op.
+# The line behaviours a declarative system may author. `LineType` accepts one
+# more - `axiom` - which is emitted from `spec.axioms` rather than declared on a
+# line, so offering it here would give two ways to say the same thing. Keep this
+# in step with `app.schemas.LineBehaviour`, the API's mirror of it.
 _LINE_BEHAVIOURS = ("logical", "comment")
 
 

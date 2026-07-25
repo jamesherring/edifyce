@@ -50,7 +50,7 @@ function renderSection(definitions: Definition[]) {
 describe('DefinitionsSection fresh (bound variables)', () => {
 	it('pre-fills the fresh editor and sends it in the payload', async () => {
 		renderSection([defn({ fresh: [{ var: 'z', sort: 'variable' }] })]);
-		await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+		await userEvent.click(screen.getByRole('button', { name: /^Edit / }));
 
 		// The stored bound variable is shown.
 		expect(screen.getByDisplayValue('z')).toBeInTheDocument();
@@ -62,7 +62,7 @@ describe('DefinitionsSection fresh (bound variables)', () => {
 		await userEvent.type(varInputs[varInputs.length - 1], 'w');
 		await userEvent.type(sortInputs[sortInputs.length - 1], 'variable');
 
-		await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+		await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
 		const [, , payload] = vi.mocked(api.parts.definitions.update).mock.calls[0];
 		expect(payload).toMatchObject({
@@ -77,12 +77,12 @@ describe('DefinitionsSection fresh (bound variables)', () => {
 describe('DefinitionsSection label (citation name)', () => {
 	it('pre-fills the label and sends the edited value in the payload', async () => {
 		renderSection([defn({ label: 'df-subset' })]);
-		await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+		await userEvent.click(screen.getByRole('button', { name: /^Edit / }));
 
 		const input = screen.getByDisplayValue('df-subset');
 		await userEvent.clear(input);
 		await userEvent.type(input, 'subseteq');
-		await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+		await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
 		const [, , payload] = vi.mocked(api.parts.definitions.update).mock.calls[0];
 		expect(payload).toMatchObject({ label: 'subseteq' });
@@ -90,10 +90,10 @@ describe('DefinitionsSection label (citation name)', () => {
 
 	it('sends null when the label is cleared (unnamed definition)', async () => {
 		renderSection([defn({ label: 'df-subset' })]);
-		await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+		await userEvent.click(screen.getByRole('button', { name: /^Edit / }));
 
 		await userEvent.clear(screen.getByDisplayValue('df-subset'));
-		await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+		await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
 		const [, , payload] = vi.mocked(api.parts.definitions.update).mock.calls[0];
 		expect(payload.label).toBeNull();
@@ -103,13 +103,13 @@ describe('DefinitionsSection label (citation name)', () => {
 describe('DefinitionsSection provisos', () => {
 	it('pre-fills the provisos editor from a definition’s provisos', async () => {
 		renderSection([defn()]);
-		await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+		await userEvent.click(screen.getByRole('button', { name: /^Edit / }));
 		expect(screen.getByDisplayValue('disjoint(x, y)')).toBeInTheDocument();
 	});
 
 	it('sends edited provisos (trimmed, blank-filtered) and no condition', async () => {
 		renderSection([defn()]);
-		await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+		await userEvent.click(screen.getByRole('button', { name: /^Edit / }));
 
 		// Add a second proviso and a blank one; the blank must be dropped.
 		await userEvent.click(screen.getByRole('button', { name: 'Add proviso' }));
@@ -118,7 +118,7 @@ describe('DefinitionsSection provisos', () => {
 		await userEvent.type(inputs[1], '  not occurs(x, y)  ');
 		// inputs[2] left blank
 
-		await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+		await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
 		const [, , payload] = vi.mocked(api.parts.definitions.update).mock.calls[0];
 		expect(payload).toMatchObject({ provisos: ['disjoint(x, y)', 'not occurs(x, y)'] });
@@ -127,12 +127,11 @@ describe('DefinitionsSection provisos', () => {
 	});
 });
 
-// Open the layering picker. Its trigger is the <button> that carries the
-// `combobox` role; the native Sort <select> carries that role too (and its
-// <option>s carry role="option"), so we disambiguate by tag rather than role.
+// Open the layering picker. The native Sort <select> also carries the `combobox`
+// role, so this relies on the picker's accessible name to tell them apart —
+// which is exactly what a screen-reader or voice-control user has to do.
 async function openLayerPicker() {
-	const picker = screen.getAllByRole('combobox').find((el) => el.tagName === 'BUTTON');
-	await userEvent.click(picker!);
+	await userEvent.click(screen.getByRole('combobox', { name: 'Build on an earlier definition' }));
 }
 
 // The picker's own options, by our command-item slot — the notation also shows
@@ -145,13 +144,26 @@ function pickerOptionTexts(): string[] {
 }
 
 describe('DefinitionsSection layering', () => {
+	it('names the layering picker, which a combobox cannot take from its contents', async () => {
+		const earlier = defn({ id: 'd0', name: 'member', higher: 'x in y' });
+		const later = defn({ id: 'd1', name: 'subset', higher: 'x sub y' });
+		renderSection([earlier, later]);
+		await userEvent.click(screen.getAllByRole('button', { name: /^Edit / })[1]);
+
+		// role="combobox" takes no name from its contents, so without an explicit
+		// one this control reached assistive tech unnamed.
+		expect(
+			screen.getByRole('combobox', { name: 'Build on an earlier definition' })
+		).toBeInTheDocument();
+	});
+
 	it('inserts an earlier definition’s notation into the expansion', async () => {
 		const earlier = defn({ id: 'd0', name: 'member', higher: 'x in y', lower: '…', provisos: [] });
 		const later = defn({ id: 'd1', name: 'subset', higher: 'x sub y', lower: '', provisos: [] });
 		renderSection([earlier, later]);
 
 		// Edit the *second* definition — only the earlier one is offered to build on.
-		await userEvent.click(screen.getAllByRole('button', { name: 'Edit' })[1]);
+		await userEvent.click(screen.getAllByRole('button', { name: /^Edit / })[1]);
 		await openLayerPicker();
 		const option = await waitFor(() => {
 			const el = document.querySelector<HTMLElement>('[data-slot="command-item"]');
@@ -169,7 +181,7 @@ describe('DefinitionsSection layering', () => {
 		const later = defn({ id: 'd1', name: 'subset', higher: 'x sub y', lower: '(a ->', provisos: [] });
 		renderSection([earlier, later]);
 
-		await userEvent.click(screen.getAllByRole('button', { name: 'Edit' })[1]);
+		await userEvent.click(screen.getAllByRole('button', { name: /^Edit / })[1]);
 		await openLayerPicker();
 		const option = await waitFor(() => {
 			const el = document.querySelector<HTMLElement>('[data-slot="command-item"]');
@@ -192,7 +204,7 @@ describe('DefinitionsSection layering', () => {
 		];
 		renderSection(defs);
 
-		await userEvent.click(screen.getAllByRole('button', { name: 'Edit' })[1]);
+		await userEvent.click(screen.getAllByRole('button', { name: /^Edit / })[1]);
 		await openLayerPicker();
 		await waitFor(() => expect(pickerOptionTexts().length).toBeGreaterThan(0));
 
@@ -205,7 +217,7 @@ describe('DefinitionsSection layering', () => {
 
 	it('offers nothing to build on for the first definition', async () => {
 		renderSection([defn({ id: 'd0', lower: 'first' })]);
-		await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+		await userEvent.click(screen.getByRole('button', { name: /^Edit / }));
 		// The layering picker (label + combobox) only renders when an earlier
 		// definition exists.
 		expect(screen.queryByText('Build on an earlier definition')).not.toBeInTheDocument();

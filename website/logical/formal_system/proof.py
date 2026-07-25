@@ -6,7 +6,7 @@ from copy import copy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from ..graphs import find_cycle, saturating_matching, topological_order
+from ..graphs import saturating_matching
 from ..kernel.side_conditions import Not, Occurs
 from ..kernel.terms import from_match
 from ..matching import Match
@@ -200,19 +200,10 @@ class DefinitionReference:
     definition: object = None
 
 
-@dataclass(eq=False)
-class ImportResult:
-    """The outcome of :meth:`Proof.import_path`."""
-
-    success: bool
-    error_message: str | None = None
-    target: object = None
-
-
 class Proof:
     """A proof in a formal system."""
 
-    def __init__(self, formal_system, reference_proofs=None, result=None):
+    def __init__(self, formal_system, result=None):
 
         # The system in which this proof belongs
         self.formal_system = formal_system
@@ -235,14 +226,9 @@ class Proof:
         # that adding a blank line or a comment never renumbers the steps below.
         self.numbered_lines = []
 
-        # A dictionary of references to other proofs - given on proof creation
-        self.reference_proofs = reference_proofs
-
-        # A reference for labelled lines
+        # Labelled lines, plus any lemma proofs the caller pre-seeds under an
+        # alias so this proof can cite them (see app/routers/proofs.py).
         self.reference_context = {}
-
-        # Keep a set of proof models referenced from this one (no folders)
-        self.proofs_used = set()
 
         # The proof model id
         self.model_id = None
@@ -789,157 +775,6 @@ class Proof:
             )
         return False
 
-    def import_path(self, path, label, context):
-        # Import a result using the given path
-
-        def add_reference(obj):
-            # Add a reference to the given object - if it can be associated with a proof
-            if isinstance(obj, Proof):
-                self.proofs_used.add(obj)
-
-            elif isinstance(obj, ProofLine):
-                self.proofs_used.add(obj.proof)
-
-            elif hasattr(obj, "proof"):
-                self.proofs_used.add(obj.proof)
-
-            if self in self.proofs_used:
-                self.proofs_used.remove(self)
-
-        if path in self.reference_proofs:
-            # Found it
-            item = self.reference_proofs[path]
-            if "errorMessage" in item:
-                add_reference(item["target"])
-                return ImportResult(success=False, error_message=item["errorMessage"], target=item["target"])
-
-            ref_item = item["target"]
-
-        elif path in self.reference_context:
-            # Found it
-            ref_item = self.reference_context[path]
-
-            if hasattr(ref_item, "proof"):
-                # This is probably a ProofModel
-                ref_item = ref_item.proof
-
-        else:
-            parts = path.split(".")
-
-            initial = parts[0]
-            remainder = ".".join(parts[1:])
-
-            if initial in self.reference_context:
-                # Check reference context first
-                obj = self.reference_context[initial]
-
-                try:
-                    ref_item = obj.get_reference(remainder, context)
-
-                    if hasattr(ref_item, "proof"):
-                        # This is probably a ProofModel
-                        ref_item = ref_item.proof
-
-                except Exception as e:
-                    return ImportResult(success=False, error_message=str(e))
-
-            elif initial in self.reference_proofs:
-                # Found it
-                ref_dict = self.reference_proofs[initial]
-
-                if "errorMessage" in ref_dict:
-                    # This is an error string
-                    add_reference(ref_dict["target"])
-                    return ImportResult(success=False, error_message=ref_dict["errorMessage"], target=ref_dict["target"])
-
-                ref_target = ref_dict["target"]
-                ref_item = ref_target.get_reference(remainder, context)
-
-                if ref_item is None:
-                    # No such label in the ref proof
-                    add_reference(ref_target)
-                    return ImportResult(
-                        success=False,
-                        error_message=f"{initial} does not have a line with label {remainder}.",
-                        target=ref_target,
-                    )
-
-                if isinstance(ref_target, Proof) and (ref_target.has_warnings or not ref_target.valid):
-                    # Referenced proof has errors
-                    add_reference(ref_target)
-                    return ImportResult(
-                        success=False,
-                        error_message=f"{path} has unresolved errors.",
-                        target=ref_target,
-                    )
-
-            else:
-                # Don't recognise the path
-                return ImportResult(success=False, error_message=f"Could not find '{path}'.")
-
-        # Add the reference, snapshotting enough state to back the import out
-        # cleanly if it turns out to close a cycle. `had_label` distinguishes "the
-        # label had no prior binding" from "it was bound to something" so the
-        # rejection path restores the shadowed binding instead of erasing it.
-        previous_proofs_used = set(self.proofs_used)
-        had_label = label in self.reference_context
-        previous_binding = self.reference_context.get(label)
-        self.reference_context[label] = ref_item
-        add_reference(ref_item)
-
-        # Reject a circular import: a theorem that (transitively) depends on this
-        # proof cannot soundly justify it. add_reference has just recorded the new
-        # dependency edge, so a cycle now reachable through proofs_used means this
-        # import closes a loop. Restore the prior state (including any label this
-        # import shadowed) and fail rather than admit it.
-        if self.circular_dependency() is not None:
-            self.proofs_used = previous_proofs_used
-            if had_label:
-                self.reference_context[label] = previous_binding
-            else:
-                self.reference_context.pop(label, None)
-            return ImportResult(
-                success=False,
-                error_message=f"Importing '{path}' would create a circular dependency.",
-                target=ref_item,
-            )
-
-        # An import carries no definitions with it. A definition reaches a proof
-        # through its system's context, built once from the SystemSpec; there is
-        # no per-proof definition to re-register in the importing context.
-        return ImportResult(success=True, target=ref_item)
-
-    def _dependency_graph(self) -> dict[Proof, set[Proof]]:
-        # The import/theorem dependency graph reachable from this proof: each
-        # proof mapped to the proofs it uses (proofs_used, populated as imports
-        # are resolved). Only Proof vertices are followed - proofs_used holds
-        # Proof objects - so the walk terminates at proofs with no dependencies.
-        graph: dict[Proof, set[Proof]] = {}
-        stack: list[Proof] = [self]
-        while stack:
-            proof = stack.pop()
-            if proof in graph:
-                continue
-            dependencies = {dep for dep in proof.proofs_used if isinstance(dep, Proof)}
-            graph[proof] = dependencies
-            stack.extend(dep for dep in dependencies if dep not in graph)
-        return graph
-
-    def dependency_order(self) -> list[Proof]:
-        # The proofs this one transitively depends on (and itself), ordered so
-        # every proof comes after the proofs it uses - the order in which they
-        # could be checked from the ground up. Raises graphlib.CycleError if the
-        # imports are circular; call circular_dependency to report the cycle
-        # instead of raising.
-        return topological_order(self._dependency_graph())
-
-    def circular_dependency(self) -> list[Proof] | None:
-        # A circular import/theorem dependency reachable from this proof, as a
-        # list of proofs whose last entry repeats the first, or None if the
-        # dependency graph is acyclic. A theorem that (transitively) cites itself
-        # is not a sound justification, which this makes detectable.
-        return find_cycle(self._dependency_graph())
-
     def justify(self, deduction, context, inference_rule=None):
         # Artificially try to find a justification for the given reference. Optionally specify a inference rule.
 
@@ -1081,21 +916,7 @@ class ProofLine:
             # `promotion.PromotedTheorem`).
             self.is_axiom = True
 
-        elif line_type.behaviour == "import":
-            # Not currently supported. An import line derived its target through
-            # the `get_by_path` string interpreter - path() - and that
-            # accessor-function mechanism was removed, so the derivation is gone.
-            # Fail *closed* rather than accept an inert line: a proof line whose
-            # behaviour we can no longer honour must be rejected, not silently
-            # passed as valid. `Proof.import_path` remains, driven by the
-            # pre-seeded `reference_context` the API populates from stored proof
-            # references (see app/routers/proofs.py) rather than by a line.
-            self.valid = False
-            self.invalid_message = (
-                f"'{line_type.behaviour}' line types are not currently supported."
-            )
-
-        elif line_type.behaviour in ("none", "comment"):
+        elif line_type.behaviour == "comment":
             # Don't need to do anything :)
             pass
 

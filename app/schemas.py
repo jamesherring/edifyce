@@ -30,9 +30,8 @@ RuleMatching = Literal["structural", "string"]
 # "variable" (a fresh variable); None opens no scope. Mirrors LineRow.scope /
 # LineType.scope / declarative LineSpec.scope.
 LineScope = Literal["assumption", "variable"]
-# What the checker does with a line type. The engine's `LineType` accepts more,
-# but only these two are authorable: see declarative._LINE_BEHAVIOURS for why the
-# rest are refused rather than offered.
+# What the checker does with a line type. Mirrors declarative._LINE_BEHAVIOURS,
+# which is the authority on why `axiom` is not authorable here.
 LineBehaviour = Literal["logical", "comment"]
 
 # Free-text fields map to length-bounded DB columns (see app/db/systems.py). The

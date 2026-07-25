@@ -113,7 +113,7 @@
         <div></div>
       {/if}
       <Button size="sm" onclick={onSave} disabled={saving || !canSave}>
-        {saving ? 'Saving...' : 'Save Changes'}
+        {saving ? 'Saving…' : 'Save changes'}
       </Button>
     </Sheet.Footer>
   </Sheet.Content>

@@ -67,8 +67,8 @@ Modernised from the original Django app (`website/models.py` on `main`):
   association object, `ProofReference`): each edge carries the citation `alias`
   the citing proof uses to name the lemma in its source (`[alias.line]`) and a
   display `position`. The graph is kept acyclic; the API rejects an edge that
-  would close a cycle (the persistence-layer analogue of the engine's transitive
-  `Proof.circular_dependency`).
+  would close a cycle. This is the only place the dependency graph lives — the
+  engine tracks no proof-to-proof edges of its own.
 - **`terms`** / **`term_children`** — the **term graph** (`terms.py`): kernel
   term DAGs stored as shared rows, interned per system by a structural
   `digest` so equal subterms are stored once. This is the structural-search

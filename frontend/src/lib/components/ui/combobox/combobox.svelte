@@ -29,6 +29,7 @@
     searchPlaceholder = 'Search…',
     emptyText = 'No matches.',
     disabled = false,
+    ariaLabel,
     class: className
   }: {
     options: ComboboxOption[];
@@ -40,6 +41,9 @@
     searchPlaceholder?: string;
     emptyText?: string;
     disabled?: boolean;
+    /** Accessible name for the trigger. The placeholder alone leaves it unnamed
+     *  once a value is chosen, and says nothing about what is being picked. */
+    ariaLabel?: string;
     class?: string;
   } = $props();
 
@@ -75,6 +79,7 @@
       className
     )}
     role="combobox"
+    aria-label={ariaLabel}
     aria-expanded={open}
   >
     <span class="truncate">{selected ? selected.label : placeholder}</span>
@@ -82,7 +87,11 @@
   </Popover.Trigger>
   <Popover.Content class="w-[var(--bits-floating-anchor-width)] p-0" align="start">
     <Command.Root>
-      <Command.Input placeholder={searchPlaceholder} bind:value={search} />
+      <Command.Input
+        placeholder={searchPlaceholder}
+        aria-label={searchPlaceholder}
+        bind:value={search}
+      />
       <Command.List>
         <Command.Empty>{emptyText}</Command.Empty>
         <Command.Group>

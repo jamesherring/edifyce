@@ -95,6 +95,7 @@
 
 <PartSection
 	title="Grammar"
+	itemLabel={(p) => `production ${p.name}`}
 	id="grammar"
 	addLabel="Add production"
 	canAdd={sortNames.length > 0}
@@ -150,6 +151,7 @@
 			{#each MODES as m (m.key)}
 				<button
 					type="button"
+					aria-pressed={mode === m.key}
 					onclick={() => (mode = m.key)}
 					class={[
 						'rounded px-3 py-1',

@@ -43,8 +43,8 @@ describe('ProductionsSection sort validation', () => {
 			symbols: [],
 			onChanged: vi.fn()
 		});
-		await user.click(screen.getByRole('button', { name: 'Edit' }));
-		const save = await screen.findByRole('button', { name: /Save Changes/ });
+		await user.click(screen.getByRole('button', { name: /^Edit / }));
+		const save = await screen.findByRole('button', { name: /Save changes/ });
 
 		// Name + template are filled from the production, so only the stale sort
 		// keeps Save disabled.
@@ -63,8 +63,8 @@ describe('ProductionsSection sort validation', () => {
 			symbols: [],
 			onChanged: vi.fn()
 		});
-		await user.click(screen.getByRole('button', { name: 'Edit' }));
-		const save = await screen.findByRole('button', { name: /Save Changes/ });
+		await user.click(screen.getByRole('button', { name: /^Edit / }));
+		const save = await screen.findByRole('button', { name: /Save changes/ });
 		expect(save).toBeEnabled();
 	});
 });
@@ -92,8 +92,8 @@ describe('ProductionsSection atom productions', () => {
 			symbols: [],
 			onChanged: vi.fn()
 		});
-		await user.click(screen.getByRole('button', { name: 'Edit' }));
-		await screen.findByRole('button', { name: /Save Changes/ });
+		await user.click(screen.getByRole('button', { name: /^Edit / }));
+		await screen.findByRole('button', { name: /Save changes/ });
 		// fill() picked the atom_base discriminator, so the value input holds the base.
 		expect(screen.getByDisplayValue('p')).toBeTruthy();
 	});

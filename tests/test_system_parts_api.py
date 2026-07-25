@@ -1292,9 +1292,14 @@ def _defs_grammar(client: TestClient) -> str:
     # A minimal grammar for layering tests: one sort `f` with an atom production,
     # so a definition's higher form is new notation and its lower form is either
     # an atom or an earlier definition's higher form.
+    #
+    # The atom is a *constant*, not a regex leaf. These definitions are nullary
+    # (`S ≝ a` takes no arguments), so a variable-like `a` would be free in the
+    # defining form — a name the unfold conjures, which the build refuses. A
+    # constant denotes one fixed thing and can be neither renamed nor captured.
     sid = _new_system(client)
     _post(client, f"/api/formal-systems/{sid}/sorts", {"name": "f"})
-    _post(client, f"/api/formal-systems/{sid}/productions", {"name": "atom", "sort": "f", "regex": "[a-z]+"})
+    _post(client, f"/api/formal-systems/{sid}/productions", {"name": "atom", "sort": "f", "atom_value": "a"})
     return sid
 
 
