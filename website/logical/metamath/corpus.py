@@ -25,6 +25,7 @@ more variable *names* than a given theorem could mention. That is the weakening
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -70,7 +71,13 @@ def theorems(database: Database, limit: int | None = None) -> list[Assertion]:
 
     A ``$p`` with a *syntax* typecode (set.mm's ``bj-0``) is not one: it asserts
     no truth, so there is nothing for the kernel to check and nothing to promote.
+
+    A ``limit`` below 1 is a caller's error, not a property of the database, and
+    is rejected here so every entry point reports it the same way -- ``walk``
+    would otherwise fall silently empty while ``corpus_spec`` blamed the file.
     """
+    if limit is not None and limit < 1:
+        raise ValueError(f"limit must be at least 1 if given, not {limit}.")
     found = [a for a in database.iter_assertions() if a.is_logical and a.proof]
     return found if limit is None else found[:limit]
 
@@ -175,29 +182,34 @@ def _check(
     except Exception as exc:  # noqa: BLE001 - a decode/scope defect, not a verdict
         return CheckedTheorem(assertion.label, position, "", error=str(exc))
 
-    givens = _register_hypotheses(system, assertion)
     try:
-        proof = system.parse(source)
+        with _givens(system, assertion):
+            proof = system.parse(source)
     except Exception as exc:  # noqa: BLE001 - the checker raises on malformed input
+        # A given that would not register belongs here too, not in the verdict: a
+        # theorem checked without one of its own hypotheses is not *refuted*, it
+        # was never checked. Reporting it as a rejection would book an import
+        # defect of ours as mathematics that failed.
         return CheckedTheorem(assertion.label, position, source, error=str(exc))
-    finally:
-        # The block the hypotheses belong to closes with the theorem; leaving
-        # them promoted would let a later theorem cite a given that was never in
-        # scope for it.
-        for label in givens:
-            del system.promoted_theorems[label]
 
     return CheckedTheorem(assertion.label, position, source, proof=proof)
 
 
-def _register_hypotheses(system: FormalSystem, assertion: Assertion) -> list[str]:
+@contextmanager
+def _givens(system: FormalSystem, assertion: Assertion) -> Iterator[None]:
     # A theorem proves *under* its `$e` hypotheses, so the proof states them as
-    # lines justified by the hypothesis label. Registering them is what makes
-    # those lines resolve; the labels are returned so the caller can withdraw them.
+    # lines justified by the hypothesis label; registering them is what makes
+    # those lines resolve. The block they belong to closes with the theorem, so
+    # they are withdrawn on the way out - the walk, unlike `import_theorem`,
+    # reuses one system for the whole file, and a `$e` left promoted is a bare
+    # `|- ph` that proves anything a later theorem cares to cite it for.
+    #
+    # Withdrawal covers a *partial* registration too, which is why the labels are
+    # tracked as they are added rather than returned at the end.
     metavariables = {h.variable: h.typecode for h in assertion.floatings}
     registered: list[str] = []
-    for hypothesis in assertion.essentials:
-        try:
+    try:
+        for hypothesis in assertion.essentials:
             system.promote(
                 promote_from_source(
                     system,
@@ -206,7 +218,8 @@ def _register_hypotheses(system: FormalSystem, assertion: Assertion) -> list[str
                     metavariables=metavariables,
                 )
             )
-        except Exception:  # noqa: BLE001 - the premise line then fails to resolve
-            continue
-        registered.append(hypothesis.label)
-    return registered
+            registered.append(hypothesis.label)
+        yield
+    finally:
+        for label in registered:
+            del system.promoted_theorems[label]

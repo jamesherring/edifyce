@@ -119,6 +119,11 @@ corpus (slow, and see the roadmap's note on the rebuild cost). `--batch` sets ho
 often the run commits and empties the identity map, which is what keeps a long
 import's memory flat.
 
+The imported system and proofs are **ownerless**, so they do not appear in the
+app and cannot be verified through it — deliberately, because a stored system
+carries no promoted theorems yet and re-checking an imported proof against it
+would fail and overwrite the imported structure. See the roadmap, §1.3 and §3.2.
+
 After a run the corpus is queryable in plain SQL, with nothing recompiled:
 
 ```sql

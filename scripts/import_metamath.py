@@ -30,15 +30,22 @@ from app.db.session import get_engine, get_sessionmaker  # noqa: E402
 from website.logical.metamath import CheckedTheorem, parse  # noqa: E402
 
 
+def _positive(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, not {number}")
+    return number
+
+
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path, help="path to the .mm file")
     parser.add_argument(
-        "--limit", type=int, default=None, help="import only the first N theorems"
+        "--limit", type=_positive, default=None, help="import only the first N theorems"
     )
     parser.add_argument("--name", default="Metamath", help="name for the stored system")
     parser.add_argument(
-        "--batch", type=int, default=50, help="commit every N theorems (default 50)"
+        "--batch", type=_positive, default=50, help="commit every N theorems (default 50)"
     )
     parser.add_argument(
         "--quiet", action="store_true", help="suppress the per-theorem progress line"
@@ -75,7 +82,9 @@ async def main() -> int:
 
     started = time.monotonic()
     print(f"Reading {arguments.source}…", flush=True)
-    database = parse(arguments.source.read_text())
+    # `.mm` is UTF-8 (set.mm's comments and `$t` block are not ASCII); reading it
+    # under the platform locale fails outright wherever that is not UTF-8.
+    database = parse(arguments.source.read_text(encoding="utf-8"))
     print(
         f"  {len(database.assertions)} assertions in {time.monotonic() - started:.1f}s",
         flush=True,

@@ -170,6 +170,30 @@ system from `systems` rows and reloading each stored term renders back the exact
 formula its line states, for all 3,521 — with no `.mm` file, no importer, and no
 re-parse.
 
+**What is stored is the parse, not yet the means to repeat it.** A system row
+holds a grammar, definitions, axioms and rules. It has nowhere to hold a
+*promoted theorem* — and the Metamath library is 49,000 of them — so the stored
+system is grammar-only, and re-parsing an imported proof against it fails on its
+first citation (`Invalid reference: ax-mp`). The rows record a check that
+happened; they are not yet enough to re-run it. That is **§3.2's** storage
+decision, and this is its sharpest consequence: until it lands, an imported
+`proofs.valid` is a claim its own `formal_system_id` cannot reproduce.
+
+So an import is deliberately **ownerless and unpublished**. `POST
+/proofs/{id}/verify` writes a verdict back only for `user is not None and
+proof.owner_id == user.id`, and reads at all only for a published proof or its
+owner — so no request can reach an imported proof, re-check it against the
+grammar-only system, and have `_record_verdict` drop the imported structure via
+`store_proof_lines`'s clear. The same reason it is not re-checkable is the reason
+it must not be *offered* for re-checking. `test_metamath_persistence` pins both
+halves, so §3.2 closing the gap is a visible change rather than a silent one.
+
+A related consequence of the same split: a theorem is checked under
+`before=label` but stored under the union grammar, which is exactly the
+forward-notation capture `before` exists to prevent. It costs nothing today —
+the stored *terms* come from the correct parse, and nothing re-parses — but it is
+another reason an imported proof must not be handed back to the checker.
+
 What the walk trades for that speed is the exactness of the grammar limit
 *between* rebuilds. The system is rebuilt when a syntax axiom is declared, not
 per theorem, so a run of theorems declaring no notation shares one grammar —
@@ -293,6 +317,14 @@ ${  min $e |- ph $.   maj $e |- ( ph -> ps ) $.   ax-mp $a |- ps $.  $}
 **The split to make:** logical `$a` → the system's `inference_rules` (they define
 it); `$p` → `promoted_theorems` (they are derived). Until then an imported system
 cannot answer "what are your axioms?", and the namespace separation does no work.
+
+It now also owns a **storage** decision, which §1.3 made concrete. `inference_rules`
+have a table (`rules`); `promoted_theorems` have none, so a stored import carries
+its grammar and none of its library, and an imported proof cannot be re-checked
+from its own rows. Sequencing this item behind §1.3 is deliberate — the shape of
+what to store is exactly the question this item answers, and storing 49,000
+derived theorems as `rules` would answer it wrongly, declaring every proved
+theorem a primitive of the system.
 
 ---
 
@@ -551,9 +583,11 @@ argument. General because the justification is always a cited lemma.
    are ours, small, and one of them cascades — then diagnose the 1,026 kernel
    rejections, which are still unexplained.
 5. ~~**Persist the parse.**~~ *Done* (§1.3) — the walk stores the system, its
-   proofs, their line graphs and their terms. What is left is scale: extend a
-   live system's grammar in place so a whole-corpus store does not re-promote
-   the library at each notation change.
+   proofs, their line graphs and their terms. Two things are left: **storing the
+   library**, which is item 2's to decide (§3.2) and is what would let an
+   imported proof be re-checked from its rows; and scale — extend a live
+   system's grammar in place so a whole-corpus store does not re-promote the
+   library at each notation change.
 6. **B1 + B2**, then **B4** and **B3**; then the stretch items **B5 / B6**. The
    tactic framework and closure solver come first because they shorten *new*
    Edifyce proofs as well as imported ones.

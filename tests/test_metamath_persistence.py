@@ -31,6 +31,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from app.db import Base, load_term
+from app.db import metamath_store
 from app.db.metamath_store import import_corpus
 from app.db.models import FormalSystem, Proof
 from app.db.proof_lines import ProofLineAntecedentRow, ProofLineRow
@@ -319,6 +320,57 @@ def test_equal_subterms_are_one_row_across_the_whole_corpus(session, imported):
     assert len(ph) == 1
 
 
+def test_an_import_is_ownerless_so_no_verify_can_overwrite_it(session, imported):
+    # A stored system holds a grammar, definitions, axioms and rules — it has
+    # nowhere to hold a *promoted theorem*, which is what the Metamath library is
+    # made of (roadmap §3.2). So an imported proof cannot be re-checked from its
+    # own rows, and the danger is a verify that tries: `_record_verdict` would
+    # write `valid=False` and call `store_proof_lines`, whose first act is to drop
+    # the imported structure.
+    #
+    # Ownerlessness is the guard. `POST /proofs/{id}/verify` writes back only for
+    # `user is not None and proof.owner_id == user.id`, and reads at all only for
+    # a published proof or its owner — neither of which an import produces.
+    system = session.scalars(select(FormalSystem)).one()
+    assert system.owner_id is None
+    assert system.published_at is None
+    assert all(p.owner_id is None for p in session.scalars(select(Proof)))
+    assert all(p.published_at is None for p in session.scalars(select(Proof)))
+
+    # The gap itself, pinned so §3.2 closing it is a visible change: the stored
+    # system carries the grammar and nothing citable.
+    spec = system_to_spec(system)
+    assert [p.name for p in spec.productions] == ["wn", "wi", "wff_var"]
+    assert (spec.rules, spec.axioms) == ([], [])
+
+    rebuilt = build_from_spec(spec)["system"]
+    proof = session.scalars(select(Proof).where(Proof.name == "a1i")).one()
+    assert proof.valid is True
+    assert rebuilt.parse(proof.source).valid is False
+
+
+def test_a_given_that_will_not_register_is_a_failure_not_a_rejection(
+    session, database, monkeypatch
+):
+    # A theorem proves *under* its `$e` hypotheses. Checking one without a given
+    # it needs does not refute it — it never checked it — so booking that as a
+    # kernel rejection would file an import defect of ours as mathematics that
+    # failed, and store `valid=False` against a theorem set.mm proves.
+    real = corpus.promote_from_source
+
+    def refuse(system, *, label, **kwargs):
+        if label == "a1i.1":
+            raise RuntimeError("cannot promote this given")
+        return real(system, label=label, **kwargs)
+
+    monkeypatch.setattr(corpus, "promote_from_source", refuse)
+    report = import_corpus(session, database, name="Propositional")
+
+    assert (report.verified, report.rejected, report.failed) == (3, 0, 1)
+    assert report.failures == [("a1i", "cannot promote this given")]
+    assert "a1i" not in session.scalars(select(Proof.name)).all()
+
+
 def test_a_theorem_that_never_reached_the_kernel_is_reported_not_stored(session):
     # A proof that terminates on some *other* well-formed result is refused by
     # the importer, so there is no checked proof to store — the walk records why
@@ -352,6 +404,60 @@ def test_the_limit_stops_the_walk(session, database):
 
     assert report.checked == 2
     assert session.scalars(select(Proof.name)).all() == ["mp2", "a1i"]
+
+
+def test_a_nonsense_limit_or_batch_is_refused_before_anything_is_written(
+    session, database
+):
+    # `walk` would fall silently empty on `limit=0` while `corpus_spec` blamed the
+    # database for declaring no theorems, so the two entry points disagreed about
+    # a caller's mistake. Both now refuse it, and neither leaves a system row.
+    for bad in ({"limit": 0}, {"limit": -1}):
+        with pytest.raises(ValueError, match="limit must be at least 1"):
+            import_corpus(session, database, name="Propositional", **bad)
+
+    # `batch` reached a `% batch` unguarded: zero raised ZeroDivisionError partway
+    # through, and a negative one committed on every theorem instead of never.
+    for bad in (0, -5):
+        with pytest.raises(ValueError, match="batch must be at least 1"):
+            import_corpus(session, database, name="Propositional", batch=bad)
+
+    assert session.scalars(select(FormalSystem.id)).all() == []
+
+
+def test_nothing_is_committed_unless_a_batch_size_asks_for_it(session, database):
+    # The transaction is the caller's: `import_corpus` is public API, so
+    # committing (and expunging) a session it was merely handed would take
+    # unrelated work with it. Passing `batch` is what hands that over.
+    import_corpus(session, database, name="Propositional")
+    assert session.in_transaction()
+
+    session.rollback()
+    assert session.scalars(select(Proof.name)).all() == []
+
+
+def test_an_unstorable_theorem_costs_that_theorem_not_the_run(
+    session, database, monkeypatch
+):
+    # A whole-corpus pass is 23 minutes and commits as it goes, so a raise on one
+    # proof must not replace the report with a traceback. The savepoint is what
+    # keeps the rest of the batch: a plain rollback would discard it too.
+    real = metamath_store.store_proof_lines
+
+    def explode(session_, proof, *args, **kwargs):
+        if proof.name == "a1i":
+            raise RuntimeError("no room at the inn")
+        return real(session_, proof, *args, **kwargs)
+
+    monkeypatch.setattr(metamath_store, "store_proof_lines", explode)
+    report = import_corpus(session, database, name="Propositional")
+
+    assert (report.checked, report.verified, report.failed) == (4, 3, 1)
+    assert report.failures == [("a1i", "no room at the inn")]
+    # The counters describe what is *stored*, so the failed proof is in neither
+    # the tallies nor the tables — while its neighbours in the batch survive.
+    assert session.scalars(select(Proof.name)).all() == ["mp2", "2a1i", "a2i"]
+    assert report.lines == len(session.scalars(select(ProofLineRow)).all())
 
 
 def _lines(session: Session, proof: str) -> list[ProofLineRow]:

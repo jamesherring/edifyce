@@ -18,6 +18,17 @@ as long as the stored system is the union of both — which
 the corpus lands in one term graph, so a subterm shared by two theorems is one
 row and the theorem search indexes them together.
 
+**What is stored is the parse, not yet the means to repeat it.** A system row
+holds a grammar, definitions, axioms and rules; it has nowhere to hold a
+*promoted theorem*, and the Metamath library is 49,000 of them. So the stored
+system is grammar-only, and re-parsing an imported proof against it fails on the
+first citation — the rows record a check that happened, not one that can be
+re-run from them. That is roadmap §3.2 (the axiom-vs-theorem split), which owns
+the storage decision; until it lands, an import is deliberately **ownerless**, so
+the owner-scoped proof routes cannot reach it — and in particular
+``POST /proofs/{id}/verify`` cannot re-check it, record ``valid=False`` and drop
+the imported structure on the way. ``test_metamath_persistence`` pins both halves.
+
 Synchronous, like the rest of the mapping layer; an async caller reaches it
 through ``AsyncSession.run_sync`` (see ``scripts/import_metamath.py``).
 """
@@ -52,9 +63,9 @@ class ImportReport:
 
     ``verified`` and ``rejected`` are both *stored*: a rejected proof is one the
     kernel checked and refused, and its structure is what says where it went
-    wrong. ``failed`` never reached the kernel — the stored proof did not decode,
-    cited out of scope, or reached a statement other than the declared one — so
-    there is nothing to store for it.
+    wrong. ``failed`` never got that far — the stored proof did not decode, cited
+    out of scope, reached a statement other than the declared one, or could not
+    be written — so there is nothing to store for it.
     """
 
     system_id: uuid.UUID
@@ -72,18 +83,25 @@ def import_corpus(
     database: Database,
     limit: int | None = None,
     name: str = "Metamath",
-    owner_id: uuid.UUID | None = None,
-    batch: int = 50,
+    batch: int | None = None,
     progress: Callable[[ImportReport, CheckedTheorem], None] | None = None,
 ) -> ImportReport:
     """Import ``database``'s first ``limit`` theorems into ``session``.
 
-    ``batch`` commits (and empties the identity map) every that many theorems, so
-    a long run's memory stays flat and a crash keeps what it had already stored.
-    ``progress`` is called after each theorem with the running report.
+    The transaction is the caller's by default: nothing here commits, so an
+    import composes with whatever else the caller is doing. Pass ``batch`` to
+    hand that over — the run then commits and empties the identity map every that
+    many theorems, which is what keeps a whole-corpus run's memory flat and its
+    per-proof cost from growing with the transaction. ``progress`` is called
+    after each theorem with the running report.
+
+    The system is created ownerless; see this module's docstring for why.
     """
+    if batch is not None and batch < 1:
+        raise ValueError(f"batch must be at least 1 if given, not {batch}.")
+
+    # Raises for a `limit` below 1 (`corpus.theorems`) before anything is written.
     system = spec_to_system(corpus_spec(database, limit, name))
-    system.owner_id = owner_id
     session.add(system)
     session.flush()
     report = ImportReport(system_id=system.id)
@@ -91,44 +109,77 @@ def import_corpus(
     for position, checked in enumerate(walk(database, limit, name)):
         report.checked += 1
         if checked.proof is None:
-            report.failed += 1
-            if len(report.failures) < _FAILURES_KEPT:
-                report.failures.append((checked.label, checked.error or ""))
+            _record_failure(report, checked.label, checked.error or "")
         else:
-            _store(session, system, report, position, checked)
+            # Contained per theorem, so one unstorable proof costs that proof
+            # rather than the run: a whole-corpus pass is 23 minutes, and a
+            # traceback in place of the report would discard what it learnt about
+            # the tens of thousands that stored fine. The savepoint is what keeps
+            # the rest of the batch — a plain rollback would take it too.
+            #
+            # Counted after it closes, not inside: leaving the block is what
+            # flushes the line rows, so a write that fails there must not already
+            # have been booked as stored.
+            try:
+                with session.begin_nested():
+                    stored = _store(session, system, position, checked)
+            except Exception as exc:  # noqa: BLE001 - reported, not fatal
+                _record_failure(report, checked.label, str(exc))
+            else:
+                report.verified += stored.valid
+                report.rejected += not stored.valid
+                report.lines += stored.lines
+                report.formulas += stored.formulas
 
         if progress is not None:
             progress(report, checked)
-        if report.checked % batch == 0:
-            session.commit()
-            # The mapping holds every line and term row written so far, and
-            # nothing downstream reads them back. Dropping it is what keeps a
-            # whole-corpus run's memory flat; the system is re-attached because
-            # `store_term` interns against it.
-            session.expunge_all()
-            system = session.get(FormalSystem, report.system_id)
+        if batch is not None and report.checked % batch == 0:
+            system = _checkpoint(session, report)
 
-    session.commit()
+    if batch is not None:
+        session.commit()
     return report
+
+
+def _record_failure(report: ImportReport, label: str, message: str) -> None:
+    report.failed += 1
+    if len(report.failures) < _FAILURES_KEPT:
+        report.failures.append((label, message))
+
+
+def _checkpoint(session: Session, report: ImportReport) -> FormalSystem:
+    """Commit what is held and start again from an empty identity map.
+
+    The map holds every line and term row written so far and nothing downstream
+    reads them back, so dropping it is what keeps a long run's memory flat — and
+    keeps the per-proof flush from scanning an ever-growing set. The system is
+    re-attached because ``store_term`` interns against it.
+    """
+    session.commit()
+    session.expunge_all()
+    return session.get(FormalSystem, report.system_id)
+
+
+@dataclass(frozen=True)
+class _Stored:
+    """What one theorem contributed, tallied only once its write succeeded."""
+
+    valid: bool
+    lines: int
+    formulas: int
 
 
 def _store(
     session: Session,
     system: FormalSystem,
-    report: ImportReport,
     position: int,
     checked: CheckedTheorem,
-) -> None:
+) -> _Stored:
     engine_proof = checked.proof
     valid = bool(engine_proof.valid)
-    if valid:
-        report.verified += 1
-    else:
-        report.rejected += 1
 
     proof = Proof(
         formal_system_id=system.id,
-        owner_id=system.owner_id,
         # The Metamath label is the identity here, so it is both the display name
         # and the slug — imported labels are already URL-safe (letters, digits,
         # `-_.`) and unique across the database, which is what a slug wants.
@@ -145,6 +196,12 @@ def _store(
     session.add(proof)
     session.flush()
 
-    rows = store_proof_lines(session, proof, system, engine_proof)
-    report.lines += len(rows)
-    report.formulas += sum(1 for row in rows if row.term is not None)
+    # `replace=False`: the proof was created three lines ago, so there is no
+    # earlier structure to clear, and the delete is not free to issue anyway.
+    rows = store_proof_lines(session, proof, system, engine_proof, replace=False)
+
+    return _Stored(
+        valid=valid,
+        lines=len(rows),
+        formulas=sum(1 for row in rows if row.term is not None),
+    )
