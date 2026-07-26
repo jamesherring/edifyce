@@ -92,7 +92,11 @@ Modernised from the original Django app (`website/models.py` on `main`):
   against, so it invalidates every proof in the system
   (`proofs_mapping.discard_system_checks`, called from every part route; a
   published system is frozen, so this only ever runs for a draft). Read back at
-  `GET /api/proofs/{id}/structure`.
+  `GET /api/proofs/{id}/structure` — and, today, by nothing else: a verify
+  re-parses `proofs.source` rather than reading these rows.
+  [`docs/verification-from-rows.md`](../../docs/verification-from-rows.md)
+  proposes inverting that, making the stored terms the authoritative parse so a
+  check runs on the graph and parses nothing.
 - **`terms`** / **`term_children`** — the **term graph** (`terms.py`): kernel
   term DAGs stored as shared rows, interned per system by a structural
   `digest` so equal subterms are stored once. This is the structural-search
