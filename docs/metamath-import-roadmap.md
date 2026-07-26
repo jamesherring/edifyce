@@ -35,7 +35,7 @@ are not relitigated), and what remains.
 | Whole-corpus ordered pass (§1.1) | done — 47,546 checked, **all 47,546 verify** |
 | Persisting the parse (§1.3) | done — one system, proofs, lines, terms |
 | Whole-corpus walk, strictly scoped (§1.4) | done — `corpus.walk` |
-| Scale (§5, A5) | **measured** — 26 min, 3.3 GB (§1.1) |
+| Scale (§5, A5) | **measured** — 28 min, 3.6 GB (§1.1) |
 | Token-collision defects (§1.2) | fixed — four instances of one shape |
 | `$t` typesetting / notation (§4) | **next** |
 | Axiom-vs-theorem split (§3.2) | **blocker** |
@@ -79,12 +79,22 @@ own kernel.
 | verified | **47,546 (100%)** |
 | rejected by the kernel | 0 |
 | failed to promote | 0 |
-| wall clock | 26 min 24 s |
-| peak memory | 3.3 GB |
+| wall clock | 27 min 46 s |
+| peak memory | 3.6 GB |
 
 Cost is dominated by `check`; `promote` and `emit` are each under a fifth of it.
-Per-theorem cost grows with the grammar, which reaches 1,441 productions: single-
-digit milliseconds over the first 5,000, tens of milliseconds by 45,000.
+Per-theorem cost grows with the grammar, which reaches 1,441 productions, and with
+the library promoted into the system:
+
+| theorems | ms each |
+|---|---|
+| 0 – 5,000 | 5.0 |
+| 5,000 – 10,000 | 14.6 |
+| 20,000 – 25,000 | 42.3 |
+| 40,000 – 45,000 | 59.8 |
+
+Roughly a twelve-fold spread end to end, which is the number to beat if the corpus
+is ever walked at several times this size.
 
 The parse is no longer thrown away: the walk stores the system, each proof, its
 line graph and its interned terms (§1.3).
@@ -195,12 +205,11 @@ linear, and is the natural next step if the whole corpus is to be stored.
 
 ### 1.4 The walk, and the scope it enforces
 
-The pass is `corpus.walk`. It rebuilds its system when a syntax axiom is declared
-— notation is the only thing that changes the grammar a theorem is checked
-against — and *grows* the variable leaves between rebuilds, since those change
-with every statement. That is what `import_theorem` establishes per theorem, made
-affordable over 47,546 of them, where rebuilding a 1,441-production grammar each
-time is quadratic.
+The pass is `corpus.walk`: **one** system, built covering the whole walk and then
+*grown*. Every production is declared up front and admitted to its sort at the
+position it becomes available — notation at the syntax axiom that declares it, a
+variable at its first mention (`importer.grammar_schedule`). That is what
+`import_theorem` establishes per theorem, made affordable over 47,546 of them.
 
 Both halves of the grammar are scoped. Notation is the half that has to be: a
 syntax axiom declares a *constructor*, and one declared later can capture the parse
@@ -226,10 +235,38 @@ grows through. The sub-sort is what keeps `$d` expressible: a proviso restricts 
 the leaves that *are* variables, and with them spread over the typecode's own sort
 there would be no name for just those.
 
-One thing is still derived at whole-database scope: sort *admission*. A union's
+**Growing beats rebuilding, by a factor of sixteen.** The walk used to rebuild its
+system whenever notation was declared, which is correct and was the obvious way to
+scope notation exactly. It costs the library: a `PromotedTheorem` holds patterns of
+the system it was built against, so none survive a rebuild and every one has to be
+re-promoted. Over set.mm's first 20,000 theorems that is 255 rebuilds and 3,224,504
+re-promotions, against 20,544 promotions when the system is built once — quadratic
+in the corpus, and by measurement the whole cost of the pass:
+
+| 20,000 theorems | |
+|---|---|
+| rebuild per notation change | 5,234 s |
+| build once, admit as reached | **330 s** |
+
+Two things a single build has to get right. Productions are admitted at every
+logical assertion, not only the checked ones: an axiom is promoted as the walk
+passes it and a `PromotedTheorem` is built by parsing its statement, so it needs
+the grammar as of its own position. And the *logical sort* is the one thing a
+single build cannot scope, since the line type is fixed when the system is built —
+so a theorem stated before any prefix could name that sort is reported rather than
+checked, which is the refusal `_logical_sort` already makes when the system is
+built from that prefix.
+
+Two things are still derived at whole-database scope. **Sort admission**: a union's
 kernel constructor fixes its branches when the system is built, before any of the
-replaying. It costs nothing, because admission is only ever asked about a term that
-already parsed, and parsing is scoped.
+replaying — which costs nothing, because admission is only ever asked about a term
+that already parsed, and parsing is scoped. And **a variable's typecode**:
+`_declared_variables` reads every `$f` in the database and filters by mention, never
+by scope, so a variable typed differently in two blocks carries both leaves from its
+earliest use. That one predates the scoping work and applies to `build_spec` — and
+so to `import_theorem` — identically, which is why the walk and a per-theorem build
+still agree; the fix is to key availability on each assertion's *active* floating
+hypotheses.
 ---
 
 ## 2. Why imported proofs look the way they do
@@ -533,7 +570,7 @@ lemmas as cited premises. Default on "does not reduce to fold/unfold" must be
 import means re-importing everything.
 
 **A5. Scale — *measured; no longer a risk*.**
-The whole corpus checks in 26 minutes at 3.3 GB (§1.1). Both risks this item
+The whole corpus checks in 28 minutes at 3.6 GB (§1.1). Both risks this item
 named were real and are now addressed. The backtracking string matcher was the
 dominant cost and was *exponential in nesting depth* — `cbvral8vw` (16 binders)
 did not finish at all — until substring parses were memoised per parse; reading a
@@ -543,9 +580,10 @@ instead of trying every leaf, which is what stops cost growing with the grammar'
 1,441 productions. Resolution of 49,000 promoted theorems never became the
 bottleneck the item predicted; the parse did.
 
-What remains is memory — 3.3 GB, growing roughly linearly with theorems promoted
-— and the fact that per-theorem cost still rises with grammar size. Neither blocks
-a bulk import; both would matter for a corpus several times larger.
+What remains is memory — 3.6 GB, growing roughly linearly with theorems promoted
+— and the fact that per-theorem cost still rises with grammar size (5 ms early,
+60 ms late). Neither blocks a bulk import; both would matter for a corpus several
+times larger.
 
 ### Tier B — the human-altitude layer
 
@@ -600,11 +638,12 @@ argument. General because the justification is always a cited lemma.
 2. **Axiom-vs-theorem split** (§3.2) — the modelling blocker.
 3. **A4 definition classification** — cheaper before bulk than after.
 4. ~~**Persist the parse.**~~ *Done* (§1.3) — the walk stores the system, its
-   proofs, their line graphs and their terms. Two things are left: **storing the
-   library**, which is item 2's to decide (§3.2) and is what would let an
-   imported proof be re-checked from its rows; and scale — extend a live
-   system's grammar in place so a whole-corpus store does not re-promote the
-   library at each notation change.
+   proofs, their line graphs and their terms. The scale half of this item is
+   done too: the walk extends one live system's grammar in place rather than
+   rebuilding it, so a whole-corpus store no longer re-promotes the library at
+   each notation change (§1.4, 16× on 20,000 theorems). What is left is
+   **storing the library**, which is item 2's to decide (§3.2) and is what would
+   let an imported proof be re-checked from its rows.
 5. **B1 + B2**, then **B4** and **B3**; then the stretch items **B5 / B6**. The
    tactic framework and closure solver come first because they shorten *new*
    Edifyce proofs as well as imported ones.
