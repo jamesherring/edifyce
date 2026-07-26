@@ -2,10 +2,10 @@
 
 **Status:** whole corpus imported and checked — **all 47,546 theorems verify**,
 each against only the notation and theorems preceding it, every proof emitted from
-its stored compressed proof and checked by Edifyce's own kernel (§1.1). Two
-qualifications on what that establishes: `df-` statements still import as axioms
-rather than definitions (§3.2, A4), and variable-sort leaves are not yet scoped to
-the walk (§1.3).
+its stored compressed proof and checked by Edifyce's own kernel (§1.1). One
+qualification on what that establishes: `df-` statements still import as axioms
+rather than definitions (§3.2, A4), so this verifies `set.mm` against a larger
+primitive basis than a faithful import would use.
 
 Goal: import Metamath's `set.mm` while keeping **full verifiability** and **full
 generality** (Edifyce stays a general proof assistant — any formal system, not a
@@ -35,7 +35,7 @@ are not relitigated), and what remains.
 | Whole-corpus ordered pass (§1.1) | done — 47,546 checked, **all 47,546 verify** |
 | Scale (§5, A5) | **measured** — 26 min, 3.3 GB (§1.1) |
 | Token-collision defects (§1.2) | fixed — four instances of one shape |
-| Variable-sort scope (§1.3) | **open** — the one discipline gap left in the pass |
+| Whole-corpus walk, strictly scoped (§1.3) | done — `importer.walk` |
 | `$t` typesetting / notation (§4) | **next** |
 | Axiom-vs-theorem split (§3.2) | **blocker** |
 | Definition classification (§5, A4) | not a blocker; front-load |
@@ -66,10 +66,11 @@ for browsing, but `import_theorem` is the entry point for *checking* a proof.
 
 ### 1.1 The whole corpus
 
-One ordered pass over `set.mm`: walk the file, add each syntax axiom to the
-grammar as it is declared, check each theorem against only the notation and
-theorems that precede it, then promote it. Every proof is emitted from its stored
-compressed proof and checked by Edifyce's own kernel.
+One ordered pass over `set.mm` (`importer.walk`, §1.3): walk the file, add each
+syntax axiom and each variable to the grammar as it becomes available, check each
+theorem against only the notation and theorems that precede it, then promote it.
+Every proof is emitted from its stored compressed proof and checked by Edifyce's
+own kernel.
 
 | | |
 |---|---|
@@ -113,24 +114,44 @@ depth (a 16-binder statement took over 30 minutes; a parse memo per line brought
 to under a second), and `MAX_CITED_ANTECEDENTS` was 16 when 437 `set.mm`
 assertions cite more than that.
 
-### 1.3 The scope gap that remains
+### 1.3 The walk, and the scope it enforces
 
-One discipline gap is left in the pass. Notation is grown with the walk — a syntax
-axiom joins the grammar only when the walk reaches it — but the *variable-sort*
-leaves are seeded once, at whole-database scope. A theorem at position 200 can
-therefore parse against a variable `set.mm` does not declare until position 40,000.
+The pass is `importer.walk`: one system, built once and then *grown*. Each
+production joins its sort at the position it becomes available, each assertion is
+promoted once the theorem yielded for it has been checked, and a theorem's own
+`$e` hypotheses are registered as givens and withdrawn after. That is what
+`import_theorem` establishes per theorem — it rebuilds the whole system with
+`before=label` — made affordable over 47,546 of them, where rebuilding a
+1,441-production grammar each time is quadratic.
 
-This is weaker than it sounds and stronger than it should be. A variable leaf adds
-no constructor, so it cannot capture a parse the way forward notation can; that is
-why `bj-0` needed the notation ordering and no variable ever has. But it is not the
-strict discipline, and it is exactly what hid a real bug: a proof using an optional
-floating hypothesis as a dummy variable parsed fine under whole-database seeding,
-and only failed once the scope was tightened.
+Both halves of the grammar are scoped. Notation is the half that has to be: a
+syntax axiom declares a *constructor*, and one declared later can capture the parse
+of an earlier theorem's formulas — set.mm's mathbox theorem `bj-0` overlaps the
+nesting of `wi` and, unscoped, reaches back 600k lines. Variables were the half
+that was not, seeded once at whole-database scope, so a theorem at position 200
+could parse against a variable `set.mm` does not declare until position 40,000.
 
-`import_theorem` already scopes variables correctly, by rebuilding the spec with
-`before=label`. The reason the corpus pass does not use it is cost — rebuilding a
-1,441-production grammar per theorem is quadratic in the corpus. Closing the gap
-means growing the variable leaves incrementally, as notation already is.
+A variable leaf adds no constructor, so it never captured anything the way `bj-0`
+does. But the loose scope hid a real bug — a proof using an optional floating
+hypothesis as a dummy variable parsed fine under whole-database seeding and failed
+the moment the scope was tightened — and it costs about 2% to close, measured
+against the same walk seeded the old way.
+
+Closing it meant changing how a variable is represented. It is now its own atom
+leaf of a `<typecode>_var` sub-sort included into its typecode, where it used to be
+one alternation regex per sort. A sort's variables have to be able to grow, and an
+alternation cannot be extended in place: a regex leaf's kernel constructor is
+identified by its regex *text*, so rewriting it would split one variable into two
+non-interchangeable terms either side of the rewrite. An atom is identified by its
+own token and joins a sort through `add_pattern` — the mechanism notation already
+grows through. The sub-sort is what keeps `$d` expressible: a proviso restricts to
+the leaves that *are* variables, and with them spread over the typecode's own sort
+there would be no name for just those.
+
+One thing is still derived at whole-database scope: sort *admission*. A union's
+kernel constructor fixes its branches when the system is built, before any of the
+replaying. It costs nothing, because admission is only ever asked about a term that
+already parsed, and parsing is scoped.
 
 ---
 
@@ -493,13 +514,10 @@ argument. General because the justification is always a cited lemma.
 1. **`$t` + Unicode source + term-fold renderer** (§4) — wanted now, and part of A3.
 2. **Axiom-vs-theorem split** (§3.2) — the modelling blocker.
 3. **A4 definition classification** — cheaper before bulk than after.
-4. **Close the variable-sort scope gap** (§1.3) — grow the variable leaves with
-   the walk, as notation already is, so the whole-corpus pass runs under the same
-   discipline `import_theorem` enforces per theorem.
-5. **Persist the parse.** Every check re-parses from source text today; `terms` /
+4. **Persist the parse.** Every check re-parses from source text today; `terms` /
    `proof_lines` exist for the structure but the import does not populate them,
    so the corpus is re-parsed in full on every run.
-6. **B1 + B2**, then **B4** and **B3**; then the stretch items **B5 / B6**. The
+5. **B1 + B2**, then **B4** and **B3**; then the stretch items **B5 / B6**. The
    tactic framework and closure solver come first because they shorten *new*
    Edifyce proofs as well as imported ones.
 

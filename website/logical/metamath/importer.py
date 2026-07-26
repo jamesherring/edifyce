@@ -624,9 +624,7 @@ def import_theorem(
     return system, import_proof(database, label)
 
 
-def _givens(
-    assertion: Assertion, system: FormalSystem
-) -> list[str]:
+def _givens(assertion: Assertion, system: FormalSystem) -> list[str]:
     # Register `assertion`'s own `$e` hypotheses as premises of the proof about to
     # be checked, and report their labels so a caller can withdraw them again.
     metavariables = {h.variable: h.typecode for h in assertion.floatings}
@@ -659,9 +657,7 @@ def _first_mention(database: Database) -> dict[str, int]:
     return first
 
 
-def _grammar_schedule(
-    database: Database, spec: SystemSpec
-) -> dict[int, list[tuple[str, str]]]:
+def _grammar_schedule(database: Database) -> dict[int, list[tuple[str, str]]]:
     # When each production joins the grammar, as `{position: [(sort, name), ...]}`.
     #
     # Notation joins at the syntax axiom that declares it. A variable joins at its
@@ -685,7 +681,8 @@ def _grammar_schedule(
             if sub_sort not in included:
                 included.add(sub_sort)
                 at(position, typecode, sub_sort)
-            at(position, sub_sort, variable_production_name(database, typecode, variable))
+            leaf = variable_production_name(database, typecode, variable)
+            at(position, sub_sort, leaf)
     return schedule
 
 
@@ -721,7 +718,7 @@ def walk(
     for union in sorts.values():
         union.clear_patterns()
 
-    schedule = _grammar_schedule(database, spec)
+    schedule = _grammar_schedule(database)
 
     for index, label in enumerate(database.order):
         for sort, production in schedule.get(index, ()):
@@ -736,7 +733,9 @@ def walk(
             try:
                 yield label, system, import_proof(database, label)
             finally:
+                # Metamath labels are unique across hypotheses and assertions, so
+                # each of these is the given just registered and nothing else.
                 for hypothesis_label in given:
-                    system.promoted_theorems.pop(hypothesis_label, None)
+                    del system.promoted_theorems[hypothesis_label]
 
         system.promote(promoted_theorem(assertion, database, system))

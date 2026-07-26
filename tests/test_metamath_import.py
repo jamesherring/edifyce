@@ -39,10 +39,12 @@ from website.logical.metamath import (
     import_proof,
     import_theorem,
     parse,
+    promote_assertions,
     split_proof,
 )
 from website.logical.metamath.importer import (
     _distinct_provisos,
+    _givens,
     _grammar_schedule,
     _proviso_safe_names,
     walk,
@@ -892,7 +894,7 @@ def test_the_walk_scopes_a_theorem_exactly_as_a_per_theorem_build_does():
     # whole-database scope, which let a theorem parse against a name declared tens
     # of thousands of statements later.
     database = parse(LATE_VARIABLE_FRAGMENT)
-    schedule = _grammar_schedule(database, build_spec(database))
+    schedule = _grammar_schedule(database)
 
     live: set[tuple[str, str]] = set()
     checked = []
@@ -939,3 +941,30 @@ def test_the_walk_agrees_with_building_each_theorem_on_its_own():
         alone, alone_text = import_theorem(database, label)
         assert text == alone_text
         assert system.parse(text).valid is alone.parse(alone_text).valid is True
+
+
+def test_an_imported_grammar_survives_the_database_round_trip():
+    # A variable leaf is an atom, and the production including its sub-sort into
+    # the typecode carries no shape at all - neither template, regex, nor atom.
+    # Persistence had never seen a shapeless production, and an import that cannot
+    # be stored is an import that has to be redone from source every time.
+    from app.db import spec_to_system, system_to_spec
+
+    database = parse(SQRT2RE_FRAGMENT)
+    spec = build_spec(database, name="mm")
+
+    def shape(candidate):
+        return [
+            (p.sort, p.name, p.template, p.regex, p.atom_value, p.atom_base,
+             p.denotes_constant)
+            for p in candidate.productions
+        ]
+
+    rebuilt = system_to_spec(spec_to_system(spec))
+    assert shape(rebuilt) == shape(spec)
+
+    # And the rebuilt grammar still reads a proof.
+    system = build_system(rebuilt)
+    promote_assertions(database, system, before="sqrt2re")
+    _givens(database.assertions["sqrt2re"], system)
+    assert system.parse(import_proof(database, "sqrt2re")).valid is True
