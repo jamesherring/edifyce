@@ -55,7 +55,10 @@ class _Entry:
 
 
 def build_spec(
-    database: Database, name: str = "Metamath", before: str | None = None
+    database: Database,
+    name: str = "Metamath",
+    before: str | None = None,
+    variable_scope: str | None = None,
 ) -> SystemSpec:
     """Build the Edifyce grammar declared by ``database``'s syntax axioms.
 
@@ -66,6 +69,15 @@ def build_spec(
     depends on notation that did not exist yet. set.mm makes this concrete: the
     mathbox theorem `bj-0` overlaps the nesting of `wi`, and without this limit
     it captures the parse of formulas in theorems 600k lines earlier.
+
+    ``variable_scope`` moves that limit for the *variable* leaves alone,
+    defaulting to ``before``. An ordered walk (:mod:`.corpus`) rebuilds the
+    grammar only when notation is declared, so between rebuilds the leaves would
+    lag behind the theorem being checked and a statement mentioning a
+    newly-declared variable would fail to parse; seeding them to the end of the
+    walk avoids that. It is a genuine weakening, but a much smaller one than
+    moving ``before``: a variable leaf only admits more *names*, and adds no
+    constructor that could capture a parse.
     """
     productions: list[Production] = []
 
@@ -100,8 +112,11 @@ def build_spec(
                 )
             )
 
-    productions.extend(_variable_sort_productions(database, before))
-    logical_sort = _logical_sort(database, before)
+    variables = _variable_sort_productions(
+        database, before if variable_scope is None else variable_scope
+    )
+    productions.extend(variables)
+    logical_sort = _logical_sort(productions, variables)
 
     return SystemSpec(
         name=name,
@@ -245,17 +260,35 @@ def _variable_sort_productions(
     ]
 
 
-def _logical_sort(database: Database, before: str | None = None) -> str:
+def _logical_sort(productions: list[Production], variables: list[Production]) -> str:
     # The sort a `|-` statement is written in. Metamath does not say so directly:
     # the assertion typecode `|-` is not itself a grammar sort, so infer it from
-    # the syntax axioms - conventionally `wff`, but read rather than assumed.
-    sorts = [a.typecode for a in _syntax_before(database, before)]
+    # the productions the grammar has - conventionally `wff`, but read rather
+    # than assumed.
+    #
+    # The conventional names are looked for across *every* production, the
+    # variable leaves included: a `$f`-declared typecode is a sort in its own
+    # right (`wph $f wff ph` makes a bare `ph` a wff), so a statement can be
+    # written in one before any syntax axiom builds it. set.mm opens with two
+    # such theorems - `idi` and `a1ii`, both `|- ph` - which are otherwise
+    # unreadable, and an ordered walk reaches them before anything else.
+    #
+    # The fallback stays narrow, though: with no conventional name to go on, only
+    # a *notation* sort is a defensible guess. Choosing among variable-only sorts
+    # would as happily pick a binder sort (`setvar`) as the logical one.
+    named = {p.sort for p in productions}
     for candidate in ("wff", "formula"):
-        if candidate in sorts:
+        if candidate in named:
             return candidate
-    if not sorts:
-        raise MetamathError("Database declares no syntax axioms, so it has no grammar.")
-    return sorts[0]
+
+    leaves = {p.name for p in variables}
+    notation = [p.sort for p in productions if p.name not in leaves]
+    if not notation:
+        raise MetamathError(
+            "Database declares no syntax axioms and no sort named 'wff' or "
+            "'formula', so which sort a '|-' statement is written in cannot be told."
+        )
+    return notation[0]
 
 
 def promote_assertions(

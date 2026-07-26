@@ -1,5 +1,10 @@
 # `scripts/` — running Edifyce in a sandbox
 
+| Script | Does |
+|---|---|
+| `edifyce-dev` | Run the whole app (Postgres, migrations, API, SPA) with one command |
+| `import_metamath.py` | Import a Metamath `.mm` database — system, proofs, line graphs, terms |
+
 ## `edifyce-dev` — run the whole app with one command
 
 Edifyce isn't just `uvicorn`: anything auth-backed (systems, proofs, login) needs
@@ -92,3 +97,32 @@ node .claude/skills/run-server/scripts/screenshot.cjs http://127.0.0.1:8000/ hom
 
 For richer interaction (fill the editor, click Verify), write a one-off script
 against that same helper's module-resolution preamble.
+
+## `import_metamath.py` — load a Metamath database
+
+Checks each theorem of a `.mm` file with Edifyce's own kernel, in declaration
+order, and stores what checked: one formal system, one proof per theorem, and the
+proof's structure — its lines, the justification edges between them, and their
+formulas interned into the system's shared term graph. See
+`docs/metamath-import-roadmap.md` §1.3.
+
+```bash
+scripts/edifyce-dev db up && scripts/edifyce-dev migrate
+curl -L -o set.mm https://raw.githubusercontent.com/metamath/set.mm/develop/set.mm
+
+DATABASE_URL="$(scripts/edifyce-dev env | sed -n 's/^DATABASE_URL=\([^ ]*\).*/\1/p')" \
+  uv run python scripts/import_metamath.py set.mm --limit 1000
+```
+
+`--limit` takes the first N theorems in file order; leave it off for the whole
+corpus (slow, and see the roadmap's note on the rebuild cost). `--batch` sets how
+often the run commits and empties the identity map, which is what keeps a long
+import's memory flat.
+
+After a run the corpus is queryable in plain SQL, with nothing recompiled:
+
+```sql
+-- the theorems these proofs lean on most
+select rule, count(*) from proof_lines where rule is not null
+group by rule order by 2 desc limit 10;
+```

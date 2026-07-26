@@ -30,6 +30,7 @@ are not relitigated), and what remains.
 | Proof emission + kernel check | done |
 | Proofs *under* `$e` hypotheses (`import_theorem`) | done |
 | Whole-corpus ordered pass (§1.1) | done — 47,546 checked, 46,520 verify |
+| Persisting the parse (§1.3) | done — one system, proofs, lines, terms |
 | Scale (§5, A5) | **measured** — 23 min, 3.0 GB (§1.1) |
 | Token-collision defects (§1.2) | **open** — 32 theorems, two causes, both ours |
 | `$t` typesetting / notation (§4) | **next** |
@@ -113,6 +114,14 @@ Bracket parity is an optimisation (it prunes candidate splits), not a grammatica
 rule, so the fix is to profile brackets over *tokens* rather than characters and
 let a declared constant be opaque to the scan.
 
+One rejection cause has since been removed. set.mm opens with **two theorems
+declared before any syntax axiom** — `idi` and `a1ii`, both `|- ph` — and the
+grammar had no sort to state them in, because the logical sort was read off the
+syntax axioms alone. A `$f`-declared typecode is a sort in its own right (`wph $f
+wff ph` makes a bare `ph` a wff), which is already what makes `setvar` a sort, so
+`_logical_sort` now reads every production. Two theorems, and the first two an
+ordered walk meets.
+
 The 1,026 kernel rejections are **not yet diagnosed**. They are not uniform —
 they cluster (299 in the 25,000s, 389 in the 45,000s) and are absent below 10,000
 — which suggests a small number of causes tied to particular notation rather than
@@ -120,6 +129,61 @@ a broad soundness gap. A promotion failure *does* cascade (a theorem that never
 promoted cannot justify a later citation of it), so the 32 above may account for
 some share of the 1,026; a failed *check* does not cascade, since the harness
 promotes regardless of the verdict.
+
+### 1.3 The parse is now kept
+
+The pass above threw its work away. Each run re-read the `.mm` file, rebuilt the
+grammar, re-parsed every proof and stored none of it — while `terms` and
+`proof_lines` sat empty, describing exactly that structure. That is closed:
+
+`website/logical/metamath/corpus.py` is the ordered pass, checked in rather than
+run ad hoc. `walk(database, limit)` yields one `CheckedTheorem` per theorem, and
+`corpus_spec(database, limit)` is the grammar it ends with.
+`app/db/metamath_store.py` drives it and writes, per theorem, the same rows a
+verify through the API writes (`store_proof_lines`): a `proof_lines` row per
+line with the theorem that justified it, `proof_line_antecedents` edges for the
+lines it was derived from, and the line's formula interned into the system's
+shared `terms` DAG. `scripts/import_metamath.py` is the CLI.
+
+**One system row for the whole walk.** The grammar grows as set.mm declares
+notation, but a term row is keyed by *constructor name* and interned per system,
+so terms built under an early grammar and a late one share rows correctly as long
+as the stored system is the union — which `corpus_spec` is. That is the point:
+the corpus lands in **one** term graph, so a subterm shared by two theorems is
+one row and the theorem search indexes them together.
+
+On the first 1,000 theorems of set.mm:
+
+| | |
+|---|---|
+| theorems checked | 1,000 |
+| verified | **1,000 (100%)** |
+| wall clock | 26 s (of which 3 s reading the 51 MB file) |
+| `proof_lines` rows | 3,521, every one carrying a term |
+| `proof_line_antecedents` edges | 2,539 |
+| `terms` / `term_children` rows | 1,951 / 3,828 |
+| on disk | 6 MB |
+
+The 3,521 formula-bearing lines intern to **1,337 distinct statements**, so the
+sharing is real rather than nominal. And the rows stand alone: rebuilding the
+system from `systems` rows and reloading each stored term renders back the exact
+formula its line states, for all 3,521 — with no `.mm` file, no importer, and no
+re-parse.
+
+What the walk trades for that speed is the exactness of the grammar limit
+*between* rebuilds. The system is rebuilt when a syntax axiom is declared, not
+per theorem, so a run of theorems declaring no notation shares one grammar —
+identical, since notation is what changes it. The variable leaves are the
+exception: they grow with every statement, so they are seeded once at the far end
+of the walk. That is the §1.1 caveat, now explicit in the signature
+(`build_spec(..., variable_scope=)`) rather than implied.
+
+The rebuild itself is the remaining scale question. Re-promoting the library
+after each notation change is fine over a slice (five rebuilds and ~3,500
+promotions over the first 1,000 theorems) and is `O(theorems × notation)` over
+the whole corpus. Extending a live system's grammar in place — teaching a sort
+union and its projected constructor to accept a new branch — would make it
+linear, and is the natural next step if the whole corpus is to be stored.
 
 ---
 
@@ -486,9 +550,10 @@ argument. General because the justification is always a cited lemma.
 4. **Close out the 2.2%** (§1.2): the two token-collision defects first — they
    are ours, small, and one of them cascades — then diagnose the 1,026 kernel
    rejections, which are still unexplained.
-5. **Persist the parse.** Every check re-parses from source text today; `terms` /
-   `proof_lines` exist for the structure but the import does not populate them,
-   so the corpus is re-parsed in full on every run.
+5. ~~**Persist the parse.**~~ *Done* (§1.3) — the walk stores the system, its
+   proofs, their line graphs and their terms. What is left is scale: extend a
+   live system's grammar in place so a whole-corpus store does not re-promote
+   the library at each notation change.
 6. **B1 + B2**, then **B4** and **B3**; then the stretch items **B5 / B6**. The
    tactic framework and closure solver come first because they shorten *new*
    Edifyce proofs as well as imported ones.
