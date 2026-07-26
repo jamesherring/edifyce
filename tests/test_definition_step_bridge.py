@@ -506,8 +506,12 @@ def guarded_system():
 
 def test_fresh_clause_is_captured_on_the_definition(fresh_system):
     definition = only_definition(fresh_system)
-    # `fresh` pairs each declared binder with its sort.
-    assert {name for name, _sort in definition.fresh} == {"z"}
+    # `fresh` carries each declared binder: its name, its sort, and the leaf
+    # its declared name denotes.
+    assert {binder.name for binder in definition.fresh} == {"z"}
+    (binder,) = definition.fresh
+    assert binder.sort.name == "setvar"
+    assert binder.default.to_string() == "z"
 
 
 def test_declared_binder_builds_a_kernel_definition(fresh_system):

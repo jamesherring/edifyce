@@ -186,8 +186,9 @@ wherever you run it:
   all kernel data. That is what lets `terms`, `unify`, `side_conditions` and
   `definitions` be written against the kernel alone — so resolve a production at
   the projection rather than importing `matching` into another kernel module.
-  (Two parse handles are deliberate exceptions, both because they read a
-  *string* at check time: `Definition.fresh` and `promotion`.)
+  The kernel also reads no *strings*: turning surface syntax into terms is
+  `formal_system`'s job (`parse_definition`), so nothing in the trusted core
+  re-parses at check time.
 
 ## On comments
 

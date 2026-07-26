@@ -102,7 +102,12 @@ def test_fresh_builds_a_kernel_definition_and_no_fresh_fails_the_build():
         "∀z (z ∈ x → z ∈ y)",
         _context_of(fresh_system),
         condition=fresh_def.condition,
-        fresh=dict(fresh_def.fresh),
+        # `fresh` arrives as kernel data; rebuilding needs the sort *patterns*
+        # it was built from, recovered by name from the grammar.
+        fresh={
+            binder.name: _context_of(fresh_system).variables[binder.sort.name]
+            for binder in fresh_def.fresh
+        },
         label=fresh_def.label,
     )
     assert rebuilt == fresh_def
