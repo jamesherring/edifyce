@@ -488,3 +488,48 @@ def test_search_rules_by_antecedent_count(session, stored_system):
         .having(func.count(RuleAntecedentRow.id) == 2)
     ).all()
     assert two_premise == ["MP"]
+
+
+def token_separated_spec() -> SystemSpec:
+    """A system in Metamath's shape: separated tokens, a constant spelling a bracket."""
+    return SystemSpec(
+        name="Separated",
+        brackets=brackets(),
+        token_separated=True,
+        productions=[
+            atom_const_prod("formula", "ph", "ph", denotes_constant=True),
+            atom_const_prod("formula", "ico", "[,)", denotes_constant=True),
+            template_prod(
+                "formula", "implication", "( a -> b )",
+                [("a", "formula"), ("b", "formula")],
+            ),
+        ],
+        lines=[statement_line()],
+        rules=[hyp_rule()],
+    )
+
+
+def test_token_separated_round_trips_through_the_database(session):
+    # An authored declaration, so it is stored rather than re-derived - and the
+    # constant it licenses has to survive the trip with it.
+    session.add(spec_to_system(token_separated_spec()))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Separated"))
+
+    assert stored.token_separated is True
+    assert system_to_spec(stored) == token_separated_spec()
+
+    system = build_spec(system_to_spec(stored))["system"]
+    assert system.context.variables["formula"].bracket_opaque == ("[,)",)
+    assert system.parse("( ph -> ph ) [HYP]").valid is True
+
+
+def test_a_system_that_declares_nothing_stores_false(session):
+    session.add(spec_to_system(two_line_spec()))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "TwoLines"))
+
+    assert stored.token_separated is False
+    assert system_to_spec(stored).token_separated is False

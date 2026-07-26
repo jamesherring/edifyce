@@ -230,6 +230,8 @@ class FormalSystemSummary(BaseModel):
 
 class FormalSystemDetail(FormalSystemSummary):
     brackets: list[BracketPair] = Field(default_factory=list)
+    # See declarative.SystemSpec.token_separated.
+    token_separated: bool = False
     sorts: list[Sort] = Field(default_factory=list)
     productions: list[Production] = Field(default_factory=list)
     lines: list[LineType] = Field(default_factory=list)
@@ -248,6 +250,10 @@ class FormalSystemUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=256)
     description: str | None = None
     inherits_from_id: uuid.UUID | None = None
+    # See declarative.SystemSpec.token_separated. Declaring it holds the system's
+    # production templates to it, so a system that means to be token-separated is
+    # told where it is not.
+    token_separated: bool | None = None
     # True sets published_at to now, False clears it. Absent leaves it unchanged.
     published: bool | None = None
 

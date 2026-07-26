@@ -143,6 +143,12 @@ class FormalSystem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ForeignKey("formal_systems.id", ondelete="SET NULL"), index=True
     )
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Whether the system's notation is written with every token whitespace-
+    # separated (see declarative.SystemSpec.token_separated). A promise about how
+    # proofs are written, so it is stored with the system rather than derived.
+    token_separated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
 
     owner: Mapped["User | None"] = relationship(back_populates="formal_systems")
     inherits_from: Mapped["FormalSystem | None"] = relationship(

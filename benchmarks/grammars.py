@@ -126,6 +126,36 @@ def adjacent() -> UnionPattern:
     return term
 
 
+def bracket_spelling_constants(count: int = 15) -> UnionPattern:
+    """A grammar naming constants that are *spelled* with a parenthesis.
+
+    The shape a Metamath import produces — set.mm declares fourteen such tokens
+    (`[,)`, `((`, `O(1)`) — and the only one where `Pattern._opaque_positions`
+    does any work. Every other scenario here leaves `bracket_opaque` empty, so
+    without this the opaque path is unmeasured and a regression in it would not
+    show up in a `--compare`.
+    """
+    expression = UnionPattern(name="expression", patterns=[], respect_brackets=BRACKETS)
+
+    binary = StringPattern(name="binary", pattern="( a b c )", respect_brackets=BRACKETS)
+    expression.add_pattern(binary)
+
+    spelt = ["[,)", "(,]", "(,)", "[,]", "((", "))", "O(1)", "(x)", "(+)", "(/)",
+             "(,)", "[.)", "(.]", "<_O(1)", "(cn)"][:count]
+
+    for i, token in enumerate(spelt):
+        expression.add_pattern(AtomPattern(name=f"spelt_{i}", value=token))
+    for token in ("A", "B", "0", "RR"):
+        expression.add_pattern(AtomPattern(name=f"const_{token}", value=token))
+
+    binary.add_variables({"a": expression, "b": expression, "c": expression})
+
+    for pattern in (expression, binary):
+        pattern.bracket_opaque = tuple(sorted(set(spelt)))
+
+    return expression
+
+
 def sequent(separators: int = 1) -> tuple[StringPattern, UnionPattern]:
     """A turnstile line ``Γ ⊢ φ`` over a propositional formula sort.
 

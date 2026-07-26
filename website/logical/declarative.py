@@ -31,7 +31,7 @@ the engine already supports.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from copy import copy
 from dataclasses import InitVar, dataclass, field
 
@@ -201,6 +201,18 @@ class LineSpec:
 class SystemSpec:
     name: str = ""
     brackets: list[tuple[str, str]] = field(default_factory=list)
+    # Whether every token of this system's notation is written whitespace-
+    # separated, as Metamath's is (`( ph -> ps )`, never `(ph->ps)`).
+    #
+    # Declared rather than inferred: it is a claim about how proofs will be
+    # *written*, which no set of templates settles. Nothing depends on it being
+    # true - a constant spelled with a bracket is read correctly either way,
+    # because `Pattern._opaque_positions` decides token by token rather than
+    # trusting the system (and a glued system simply cannot write such a
+    # constant glued). What declaring it buys is that the production templates
+    # are then held to it, so a system meaning to be token-separated is told
+    # where it is not.
+    token_separated: bool = False
     productions: list[Production] = field(default_factory=list)
     # Logical line types, in order. A system typically has one (`statement`), but
     # may declare several (e.g. a `claim` line and a scoped `assume` line); the
@@ -391,6 +403,51 @@ def _bracket_opaque_tokens(
     return tuple(sorted(tokens))
 
 
+def _glued_to_a_slot(template: str, labels: Iterable[str]) -> str | None:
+    # The first slot label in `template` that shares a whitespace-delimited token
+    # with anything else, or None. `( a -> b )` keeps every token apart;
+    # `(a -> b)` glues the slot `a` to the opening paren.
+    #
+    # Compared token-wise rather than by scanning for the label, so a label that
+    # merely *occurs inside* a literal is not mistaken for a slot - `A` sits
+    # inside the quantifier `A.` throughout set.mm, which is the collision
+    # `metamath.importer._uncollide` exists for.
+    tokens = template.split()
+
+    for label in labels:
+        if any(label in token and token != label for token in tokens):
+            return label
+
+    return None
+
+
+def _check_token_separation(spec: SystemSpec) -> None:
+    # A system declaring `token_separated` is held to it, so that the declaration
+    # means something and a system meaning to be token-separated is told where it
+    # is not. Nothing depends on the answer - see `SystemSpec.token_separated` -
+    # so this refuses a *mis-declaration*, never a system that simply did not
+    # declare.
+    #
+    # Production templates only. They are what a formula is read against; a line
+    # shape carries its own field syntax (`<wff> [<reference>]`), and definitions
+    # and rule schemas never receive `bracket_opaque` at all.
+    if not spec.token_separated:
+        return
+
+    for prod in spec.productions:
+        if not prod.template:
+            continue
+
+        glued = _glued_to_a_slot(prod.template, (label for label, _ in prod.bindings))
+
+        if glued is not None:
+            raise DeclarativeError(
+                f"Production {prod.name!r} declares token_separated but writes "
+                f"{glued!r} against another token in {prod.template!r}. Separate every "
+                f"token with a space, or declare token_separated=False."
+            )
+
+
 def _binding_patterns(bindings: list[tuple[str, str]], ctx: FormalSystemContext) -> dict[str, Pattern]:
     # Map a `with`-style binding list `[(var, sort)]` to `{var: sort_pattern}`,
     # the string-variable dict the engine's pattern/rule builders consume.
@@ -477,6 +534,7 @@ def build_system(spec: SystemSpec) -> FormalSystem:
 
     brackets = _bracket_map(spec)
     opaque = _bracket_opaque_tokens(spec, brackets)
+    _check_token_separation(spec)
 
     def register(pattern: Pattern) -> Pattern:
         # Every named pattern respects the system's brackets (parity with the

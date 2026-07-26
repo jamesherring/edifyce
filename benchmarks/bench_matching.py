@@ -157,6 +157,14 @@ def _adjacent(depth: int) -> Scenario:
     return Scenario(name=f"adjacent-{depth}", setup=setup, iterations=50, tags=("adjacent",))
 
 
+def _opaque(label: str, text: str) -> Scenario:
+    def setup():
+        expression = grammars.bracket_spelling_constants()
+        return expression, text, _context()
+
+    return Scenario(name=f"opaque-{label}", setup=setup, tags=("opaque",))
+
+
 def _sequent(depth: int) -> Scenario:
     def setup():
         line, _ = grammars.sequent()
@@ -218,6 +226,11 @@ SCENARIOS: list[Scenario] = [
     # A line whose one literal occurs many times in the string being read.
     _sequent(4),
     _sequent(8),
+    # The one shape where a constant spelled with a bracket has to be stepped
+    # over; every other scenario leaves that path idle.
+    _opaque("plain", "( A B RR )"),
+    _opaque("uses-one", "( 0 [,) RR )"),
+    _opaque("nested", "( ( 0 [,) RR ) (+) ( A (x) B ) )"),
     # Metavariables in scope, consulted at every candidate variable position.
     _metavariables(4),
     _metavariables(32),

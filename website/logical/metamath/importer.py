@@ -121,6 +121,11 @@ def build_spec(
     return SystemSpec(
         name=name,
         brackets=[("(", ")")],
+        # Metamath's file format *is* token-separated - every statement is a list
+        # of space-delimited tokens - so the promise costs nothing to make and is
+        # what lets a `$c` spelled with a parenthesis (`[,)`, `((`, `O(1)`) be
+        # read as the constant it is (see declarative.SystemSpec).
+        token_separated=True,
         productions=productions,
         lines=[
             LineSpec(

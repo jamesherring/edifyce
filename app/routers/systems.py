@@ -389,6 +389,7 @@ def _detail(system: FormalSystem) -> FormalSystemDetail:
     return FormalSystemDetail(
         **_summary(system).model_dump(),
         brackets=[bracket_out(b) for b in system.brackets],
+        token_separated=system.token_separated,
         sorts=[sort_out(s) for s in system.symbols if s.kind == "union"],
         productions=[production_out(s) for s in system.symbols if s.kind != "union"],
         lines=[line_out(line) for line in system.lines],
@@ -504,6 +505,8 @@ async def update_system(
         system.description = changes["description"]
     if "inherits_from_id" in changes:
         system.inherits_from_id = changes["inherits_from_id"]
+    if changes.get("token_separated") is not None:
+        system.token_separated = changes["token_separated"]
 
     # Publishing makes a system world-readable and is a one-way door — once set,
     # the freeze above rejects any later edit or unpublish. `published: false`

@@ -208,6 +208,8 @@ export interface FormalSystemSummary {
 /** Full system aggregate. Note the line-types collection is keyed `lines`. */
 export interface FormalSystemDetail extends FormalSystemSummary {
 	brackets: BracketPair[];
+	/** Whether the system writes every token whitespace-separated. */
+	token_separated: boolean;
 	sorts: Sort[];
 	productions: Production[];
 	lines: LineType[];
@@ -238,6 +240,8 @@ export interface FormalSystemUpdate {
 	inherits_from_id?: string | null;
 	/** true → publish (public), false → unpublish (draft), omitted → unchanged. */
 	published?: boolean;
+	/** See declarative.SystemSpec.token_separated. */
+	token_separated?: boolean;
 }
 
 export interface BracketCreate {
