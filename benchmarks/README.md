@@ -52,6 +52,31 @@ Each one isolates a cost that behaves differently as something grows:
 A scenario declares a `budget`; one that exceeds it is reported as over budget
 rather than left to hang, so a pathological case can be *stated* here.
 
+## What has been tried and did not pay
+
+Measured, implemented, and then dropped — recorded so the next person can spend
+their afternoon on something else.
+
+**Sharing a bracket profile with substrings.** Ablate the bracket profile (cache
+it across iterations, so building one is free) and a parse gets 10–49% faster,
+which makes it far and away the largest single cost left. A substring's brackets
+*are* its parent's, restricted to its span, so a parent that has certified a
+split balanced can hand the slot's text its own lists with an offset instead of
+letting it measure a string already measured. That works — it takes `balanced-7`
+from 8 profile scans per parse to 1 — and it is still not worth shipping. To lend
+a profile you must first certify the span, and certifying the splits a template
+already pins down costs a walk over the brackets it spans; certify them and the
+shallow cases pay, skip them and the deep cases stop benefiting. Three variants
+(certify everything; certify only the ambiguous splits; certify everything with
+an O(1) horizon from a next-shallower index) all landed in the same place on an
+interleaved A/B: **+7 to +11% on deeply nested inputs, −10 to −14% on shallow
+ones**. Proof lines are mostly shallow.
+
+The general lesson, if you are about to profile this layer: **cProfile lies here.**
+It attributed 40–55% of a parse to `_one_pair_profile`, which has many short
+calls; removing almost all of those calls bought 10%. Ablate a component and time
+the difference instead.
+
 ## Correctness is not measured here
 
 `tests/test_matching_stress.py` is the other half: it compares the search against

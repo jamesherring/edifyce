@@ -452,3 +452,71 @@ def test_many_metavariables_do_not_change_what_parses(context):
     assert template.match("(m7 → m199)", crowded) is not None
     assert template.match("((p → q) → m0)", crowded) is not None
     assert template.match("(m200 → p)", crowded) is None
+
+
+# ---------------------------------------------------------------------------
+# The selective literal
+# ---------------------------------------------------------------------------
+
+
+def keyword_template(sort):
+    """``if a then b end`` — a template whose literals are words, not brackets."""
+    template = StringPattern(name="conditional", pattern="if a then b end")
+    template.add_variables({"a": sort, "b": sort})
+    return template
+
+
+def test_a_string_missing_the_selective_literal_is_refused(context):
+    # A production is offered every string its sort is asked about, so the first
+    # thing it does is look for the one literal a match cannot do without.
+    formula = propositional()
+    template = keyword_template(formula)
+
+    assert template.selective_literal == " then "
+
+    assert template.match("if p then q end", context) is not None
+    assert template.match("if p else q end", context) is None
+
+
+def test_the_selective_literal_is_a_filter_and_not_the_check(context):
+    # It says only that the literal occurs *somewhere*. Order, position and the
+    # rest of the template are the walk's business, and this is what would catch
+    # the walk quietly relying on the ordered scan that used to run first.
+    formula = propositional()
+    template = keyword_template(formula)
+
+    # Present, but in the wrong place, with the other literals scattered around it
+    assert template.match("if p end q then r", context) is None
+    assert template.match("q then p", context) is None
+    assert template.match("if p then q end r", context) is None
+    assert template.match("r if p then q end", context) is None
+
+
+def test_a_template_whose_only_literal_opens_it_has_no_selective_literal(context):
+    # `¬a` owes nothing after its opening, which the walk checks at position 0
+    # anyway - so there is no second literal worth scanning for.
+    formula = propositional()
+
+    negation = StringPattern(name="negation", pattern="¬a", respect_brackets=BRACKETS)
+    negation.add_variables({"a": formula})
+
+    assert negation.selective_literal is None
+    assert negation.match("¬p", context) is not None
+    assert negation.match("¬(p → q)", context) is not None
+    assert negation.match("p", context) is None
+    assert negation.match("(p → q)¬", context) is None
+
+
+def test_a_template_of_nothing_but_slots_has_no_selective_literal(context):
+    # Two slots and no literal at all: nothing to scan for, and the walk carries
+    # the whole decision.
+    word = UnionPattern(name="word", patterns=[])
+    for base in "xy":
+        word.add_pattern(AtomPattern(name=f"atom_{base}", base=base))
+
+    both = StringPattern(name="both", pattern="ab")
+    both.add_variables({"a": word, "b": word})
+
+    assert both.selective_literal is None
+    assert both.match("xy", context) is not None
+    assert both.match("x", context) is None

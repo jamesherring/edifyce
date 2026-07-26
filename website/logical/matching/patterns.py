@@ -621,9 +621,8 @@ class StringPattern(Pattern):
         # Build the non-variable locations, and everything `match` derives from
         # them on every attempt (see get_non_variable_locations).
         self.non_variable_locations = None
-        self.non_variable_order = []
-        self.last_variable_location = -1
         self.segments: tuple[Segment, ...] = ()
+        self.selective_literal: str | None = None
         self.segment_at_offset: dict[int, int] = {}
         self.literal_tail: tuple[int, ...] = (0,)
         self.first_literal_after: tuple[int, ...] = (-1,)
@@ -662,13 +661,6 @@ class StringPattern(Pattern):
 
         # Update the certainty - the number of non-variable characters
         self.certainty = sum(len(self.non_variable_locations[i]) for i in self.non_variable_locations)
-
-        # The literal parts in positional order, and the last position a variable
-        # occupies. Both follow from the locations just built and `match` needs
-        # them on every attempt, so derive them here instead of re-sorting the
-        # pattern a million times over a run.
-        self.non_variable_order = sorted(self.non_variable_locations)
-        self.last_variable_location = max(self.variable_locations, default=-1)
 
         self.build_segments()
 
@@ -750,6 +742,13 @@ class StringPattern(Pattern):
         labels = [segment[1] for segment in segments if segment[0] == _VARIABLE]
         self.has_repeated_variables = len(labels) != len(set(labels))
 
+        # The longest literal the template owes somewhere other than its opening -
+        # a string not containing it cannot match, and one scan for it rejects most
+        # of what a union offers this production. The opening literal is excluded
+        # because the walk's first step already checks it, at position 0.
+        interior = [text for kind, text, _, _ in segments[1:] if kind == _LITERAL]
+        self.selective_literal = max(interior, key=len) if interior else None
+
     def match(
         self, s: str, context: Context, pattern_offset: int = 0, debug: int | None = None
     ) -> Match | None:
@@ -821,8 +820,8 @@ class StringPattern(Pattern):
                 # A defined notation applies
                 return result
 
-            if not self._literals_appear_in_order(s):
-                # Cannot match, on the literals alone
+            if self.selective_literal is not None and self.selective_literal not in s:
+                # Cannot match, on that literal alone
                 return None
 
         if not self.variables:
@@ -856,38 +855,6 @@ class StringPattern(Pattern):
             m.add_submatch(label, sub)
 
         return m
-
-    def _literals_appear_in_order(self, s: str) -> bool:
-        # Whether `s` could match this template, judged on its literal parts alone
-        # - a necessary condition, and a cheap one. Every literal part must occur,
-        # in template order; a template opening with a literal must find it at
-        # position 0, and one ending with a literal must find it at the end.
-        # Nearly every candidate a union offers a production dies here, before the
-        # search proper allocates anything.
-        i = 0
-        for index in self.non_variable_order:
-            part = self.non_variable_locations[index]
-
-            j = s.find(part, i)
-
-            if j == -1:
-                # Missing entirely
-                return False
-
-            if index == 0 and j > 0:
-                # The template opens with it, so the string must too
-                return False
-
-            i = j + len(part)
-
-        if self.non_variable_order:
-            last = self.non_variable_order[-1]
-
-            if last > self.last_variable_location and not s.endswith(self.non_variable_locations[last]):
-                # The template ends with it, so the string must too
-                return False
-
-        return True
 
     def _walk(
         self,
