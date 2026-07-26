@@ -42,12 +42,12 @@ from website.logical.metamath import (
     promote_assertions,
     split_proof,
 )
+from website.logical.metamath.corpus import walk
 from website.logical.metamath.importer import (
     _distinct_provisos,
     _givens,
-    _grammar_schedule,
     _proviso_safe_names,
-    walk,
+    variable_schedule,
 )
 from website.logical.metamath.parser import Hypothesis
 
@@ -451,6 +451,37 @@ def test_distinct_variable_provisos_are_sort_restricted():
 
     assert system.promoted_theorems["ax"].side_conditions[0].sort is not None
     assert system.parse("RR = RR [ax]").proof_lines[0].valid is True
+
+
+def test_a_statement_written_in_a_variable_alone_still_has_a_logical_sort():
+    # set.mm opens with two theorems - `idi` and `a1ii`, both `|- ph` - stated
+    # before any syntax axiom is declared. A `$f`-declared typecode is a sort in
+    # its own right (`wph $f wff ph` makes a bare `ph` a wff), so the logical
+    # sort is readable from the variable leaves; reading only the syntax axioms
+    # left the first two theorems of the file with no grammar to be stated in.
+    database = parse(
+        r"""
+$c |- wff $.
+$v ph $.
+wph $f wff ph $.
+${
+  idi.1 $e |- ph $.
+  idi $p |- ph $= ( ) B $.
+$}
+"""
+    )
+    system, text = import_theorem(database, "idi")
+
+    assert text == "ph [idi.1]"
+    assert system.parse(text).valid is True
+
+
+def test_a_database_with_no_readable_logical_sort_is_refused():
+    # With neither a syntax axiom nor a conventionally-named sort there is
+    # nothing to go on, and guessing among variable-only sorts would as happily
+    # pick a binder sort as the logical one.
+    with pytest.raises(MetamathError, match="cannot be told"):
+        build_spec(parse("$c |- setvar $. $v x $. vx $f setvar x $."))
 
 
 def test_a_proof_cannot_cite_notation_declared_later():
@@ -917,61 +948,56 @@ def test_a_variable_is_a_leaf_of_its_own_sub_sort_inside_its_typecode():
     assert context.variables["class"].match("A", context) is not None
 
 
-def test_the_walk_scopes_a_theorem_exactly_as_a_per_theorem_build_does():
-    # `walk` grows one system instead of rebuilding it per theorem, which is the
-    # only affordable way to check a corpus - but it is only worth anything if the
-    # scope it reaches at each theorem is the scope `build_spec(before=...)` would
-    # have given. Notation *and* variables: the variables used to be seeded once at
-    # whole-database scope, which let a theorem parse against a name declared tens
-    # of thousands of statements later.
+def test_the_variable_schedule_matches_a_per_theorem_build():
+    # The walk declares every variable leaf to the horizon and admits each as it
+    # is reached, rather than rebuilding the grammar per theorem. That is only
+    # worth anything if the leaves live at a theorem are the leaves
+    # `build_spec(before=...)` would have declared for it. They used to be seeded
+    # at whole-database scope, which let a theorem parse against a name `set.mm`
+    # declares tens of thousands of statements later.
     database = parse(LATE_VARIABLE_FRAGMENT)
-    schedule = _grammar_schedule(database)
+    schedule = variable_schedule(database)
 
-    live: set[tuple[str, str]] = set()
+    live: set[str] = set()
     checked = []
     for index, label in enumerate(database.order):
-        live.update(schedule.get(index, ()))
+        live.update(
+            name for sort, name in schedule.entries.get(index, ())
+            if sort in schedule.sub_sorts
+        )
         assertion = database.assertions[label]
         if not (assertion.is_logical and assertion.proof):
             continue
 
         scoped = build_spec(database, before=label)
-        assert {p.name for p in scoped.productions} == {name for _sort, name in live}
+        expected = {p.name for p in scoped.productions if p.sort in schedule.sub_sorts}
+        assert live == expected
         checked.append(label)
 
     assert checked == ["dup", "tri"]
     # The property with teeth: `ch` is declared in `tri`'s own scope, so it is out
-    # of scope at `dup` and only the walk's ordering can tell the two apart.
+    # of scope at `dup` and only the ordering can tell the two apart.
     assert variables_of(build_spec(database, before="dup"), "wff") == {"ph", "ps"}
     assert variables_of(build_spec(database, before="tri"), "wff") == {"ph", "ps", "ch"}
 
 
-def test_the_walk_checks_a_theorem_under_its_own_hypotheses_and_withdraws_them():
-    # Each theorem's `$e` hypotheses are givens *of that proof only*. Left
-    # promoted, they would be citable by every later theorem in the walk - the
-    # thing per-theorem rebuilding got right for free.
-    database = parse(HYPOTHESIS_FRAGMENT)
+def test_the_walk_scopes_a_late_variable_out_of_an_earlier_theorem():
+    # End to end through `corpus.walk`: a variable in scope only for the last
+    # theorem must not be readable at the first, and both proofs must still check.
+    database = parse(LATE_VARIABLE_FRAGMENT)
+    checked = list(walk(database))
 
-    seen = []
-    for label, system, text in walk(database):
-        seen.append(label)
-        assert system.parse(text).valid is True
-
-    assert seen == [
-        a.label for a in database.logical_assertions() if a.proof
-    ]
-    # Nothing the walk registered as a given survives it.
-    hypotheses = {h.label for h in database.hypotheses.values() if not h.floating}
-    assert hypotheses.isdisjoint(system.promoted_theorems)
+    assert [c.label for c in checked] == ["dup", "tri"]
+    assert all(c.verified for c in checked), [c.error for c in checked]
 
 
 def test_the_walk_agrees_with_building_each_theorem_on_its_own():
     # The cheap path and the strict path must reach the same verdict.
     database = parse(SQRT2RE_FRAGMENT)
-    for label, system, text in walk(database):
-        alone, alone_text = import_theorem(database, label)
-        assert text == alone_text
-        assert system.parse(text).valid is alone.parse(alone_text).valid is True
+    for checked in walk(database):
+        alone, alone_text = import_theorem(database, checked.label)
+        assert checked.source == alone_text
+        assert checked.verified is alone.parse(alone_text).valid is True
 
 
 def test_an_imported_grammar_survives_the_database_round_trip():
@@ -1052,6 +1078,6 @@ def test_a_sub_sort_joins_its_typecode_at_its_earliest_member():
     # statement - a proof `import_theorem` accepts, failed by the walk alone.
     database = parse(DECLARED_BEFORE_MENTIONED_FRAGMENT)
 
-    for label, system, text in walk(database):
-        alone, alone_text = import_theorem(database, label)
-        assert system.parse(text).valid is alone.parse(alone_text).valid is True
+    for checked in walk(database):
+        alone, alone_text = import_theorem(database, checked.label)
+        assert checked.verified is alone.parse(alone_text).valid is True

@@ -27,7 +27,6 @@ syntax axioms state.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -55,7 +54,10 @@ class _Entry:
 
 
 def build_spec(
-    database: Database, name: str = "Metamath", before: str | None = None
+    database: Database,
+    name: str = "Metamath",
+    before: str | None = None,
+    variable_scope: str | None = None,
 ) -> SystemSpec:
     """Build the Edifyce grammar declared by ``database``'s syntax axioms.
 
@@ -66,6 +68,18 @@ def build_spec(
     depends on notation that did not exist yet. set.mm makes this concrete: the
     mathbox theorem `bj-0` overlaps the nesting of `wi`, and without this limit
     it captures the parse of formulas in theorems 600k lines earlier.
+
+    ``variable_scope`` moves that limit for the *variable* leaves alone,
+    defaulting to ``before``. An ordered walk (:mod:`.corpus`) rebuilds the
+    grammar only when notation is declared, so between rebuilds the leaves would
+    lag behind the theorem being checked and a statement mentioning a
+    newly-declared variable would fail to parse.
+
+    It no longer weakens the scope the walk checks under. A variable is declared
+    as its own leaf, so the walk *declares* them to the far end and then admits
+    each into its sort as the theorem that may mention it is reached
+    (:func:`.corpus.variable_schedule`) - the same discipline notation gets, on a
+    grammar that can grow rather than one that has to be rebuilt.
     """
     productions: list[Production] = []
 
@@ -100,8 +114,11 @@ def build_spec(
                 )
             )
 
-    productions.extend(_variable_productions(database, before))
-    logical_sort = _logical_sort(database, before)
+    variables = _variable_productions(
+        database, before if variable_scope is None else variable_scope
+    )
+    productions.extend(variables)
+    logical_sort = _logical_sort(productions, variables)
 
     return SystemSpec(
         name=name,
@@ -282,17 +299,35 @@ def _variable_productions(
     return productions
 
 
-def _logical_sort(database: Database, before: str | None = None) -> str:
+def _logical_sort(productions: list[Production], variables: list[Production]) -> str:
     # The sort a `|-` statement is written in. Metamath does not say so directly:
     # the assertion typecode `|-` is not itself a grammar sort, so infer it from
-    # the syntax axioms - conventionally `wff`, but read rather than assumed.
-    sorts = [a.typecode for a in _syntax_before(database, before)]
+    # the productions the grammar has - conventionally `wff`, but read rather
+    # than assumed.
+    #
+    # The conventional names are looked for across *every* production, the
+    # variable leaves included: a `$f`-declared typecode is a sort in its own
+    # right (`wph $f wff ph` makes a bare `ph` a wff), so a statement can be
+    # written in one before any syntax axiom builds it. set.mm opens with two
+    # such theorems - `idi` and `a1ii`, both `|- ph` - which are otherwise
+    # unreadable, and an ordered walk reaches them before anything else.
+    #
+    # The fallback stays narrow, though: with no conventional name to go on, only
+    # a *notation* sort is a defensible guess. Choosing among variable-only sorts
+    # would as happily pick a binder sort (`setvar`) as the logical one.
+    named = {p.sort for p in productions}
     for candidate in ("wff", "formula"):
-        if candidate in sorts:
+        if candidate in named:
             return candidate
-    if not sorts:
-        raise MetamathError("Database declares no syntax axioms, so it has no grammar.")
-    return sorts[0]
+
+    leaves = {p.name for p in variables}
+    notation = [p.sort for p in productions if p.name not in leaves]
+    if not notation:
+        raise MetamathError(
+            "Database declares no syntax axioms and no sort named 'wff' or "
+            "'formula', so which sort a '|-' statement is written in cannot be told."
+        )
+    return notation[0]
 
 
 def promote_assertions(
@@ -657,83 +692,48 @@ def _first_mention(database: Database) -> dict[str, int]:
     return first
 
 
-def _grammar_schedule(database: Database) -> dict[int, list[tuple[str, str]]]:
-    # When each production joins the grammar, as `{position: [(sort, name), ...]}`.
-    #
-    # Notation joins at the syntax axiom that declares it. A variable joins at its
-    # first mention, and its `<typecode>_var` sub-sort joins the typecode at the
-    # *earliest* of them - held back until then so an empty sub-sort is never a
-    # branch of a live sort, but no later, or a variable whose leaf is already live
-    # would not read as its typecode. `_declared_variables` yields `$f` declaration
-    # order, which is not first-mention order once a `$f` is scoped.
-    schedule: dict[int, list[tuple[str, str]]] = {}
+@dataclass(frozen=True)
+class VariableSchedule:
+    """Which variable leaves join which sort, and when.
+
+    ``entries`` maps a position to the ``(sort, production)`` pairs that become
+    admissible there. ``sub_sorts`` names the ``<typecode>_var`` unions those
+    leaves live in, so a caller replaying the schedule can empty them first -
+    :func:`build_spec` declares every leaf its ``variable_scope`` reaches and
+    fills its sort with all of them, which is the state a replay starts from.
+    """
+
+    sub_sorts: tuple[str, ...]
+    entries: dict[int, list[tuple[str, str]]]
+
+
+def variable_schedule(database: Database) -> VariableSchedule:
+    """When each variable leaf may join its sort.
+
+    A variable joins at its first mention, and its ``<typecode>_var`` sub-sort
+    joins the typecode at the *earliest* of them - held back until then so an
+    empty sub-sort is never a branch of a live sort, but no later, or a variable
+    whose leaf is already live would not read as its typecode.
+    ``_declared_variables`` yields ``$f`` declaration order, which stops matching
+    first-mention order the moment a ``$f`` is scoped.
+
+    Read by :func:`.corpus.walk`, which declares every leaf up front and then
+    admits each as the walk reaches it. Notation is not here: the walk rebuilds
+    its system when a syntax axiom is declared, so notation is already exact.
+    """
+    entries: dict[int, list[tuple[str, str]]] = {}
+    sub_sorts: list[str] = []
 
     def at(position: int, sort: str, name: str) -> None:
-        schedule.setdefault(position, []).append((sort, name))
-
-    for assertion in _syntax_before(database, None):
-        at(database.position(assertion.label), assertion.typecode, assertion.label)
+        entries.setdefault(position, []).append((sort, name))
 
     first = _first_mention(database)
     for typecode, members in _declared_variables(database).items():
         sub_sort = f"{typecode}_var"
+        sub_sorts.append(sub_sort)
         at(min(first[variable] for variable in members), typecode, sub_sort)
         for variable in members:
             leaf = variable_production_name(database, typecode, variable)
             at(first[variable], sub_sort, leaf)
-    return schedule
 
-
-def walk(
-    database: Database, name: str = "Metamath"
-) -> Iterator[tuple[str, FormalSystem, str]]:
-    """Yield ``(label, system, proof_text)`` for every ``$p`` theorem, in file order.
-
-    What :func:`import_theorem` establishes per theorem, established for a whole
-    database in one pass. The scoping is the same and is the point: when a theorem
-    is yielded, the system carries exactly the notation and the theorems that
-    *precede* it, plus that theorem's own ``$e`` hypotheses as givens.
-
-    The difference is cost. `import_theorem` rebuilds the system per theorem, which
-    over a corpus is quadratic - `set.mm`'s grammar reaches 1,441 productions, and
-    rebuilding it 47,546 times is not affordable. Here one system is built and then
-    *grown*: each production is added to its sort at the position it becomes
-    available, and each assertion is promoted once the theorem yielded for it has
-    been checked.
-
-    The yielded system is the walk's own and is mutated on every step, so a caller
-    must finish with it before advancing. Sort *admission* is the one thing derived
-    at whole-database scope: a union's kernel constructor fixes its branches when
-    the system is built (``Constructor.admits``), before any of this replaying. It
-    costs nothing, because admission is only ever asked about a term that already
-    parsed, and parsing is scoped.
-    """
-    spec = build_spec(database, name)
-    system = build_system(spec)
-    context = system.build_context
-
-    sorts = {sort: context.variables[sort] for sort in spec.sort_names()}
-    for union in sorts.values():
-        union.clear_patterns()
-
-    schedule = _grammar_schedule(database)
-
-    for index, label in enumerate(database.order):
-        for sort, production in schedule.get(index, ()):
-            sorts[sort].add_pattern(context.variables[production])
-
-        assertion = database.assertions[label]
-        if not assertion.is_logical:
-            continue
-
-        if assertion.proof:
-            given = _givens(assertion, system)
-            try:
-                yield label, system, import_proof(database, label)
-            finally:
-                # Metamath labels are unique across hypotheses and assertions, so
-                # each of these is the given just registered and nothing else.
-                for hypothesis_label in given:
-                    del system.promoted_theorems[hypothesis_label]
-
-        system.promote(promoted_theorem(assertion, database, system))
+    return VariableSchedule(sub_sorts=tuple(sub_sorts), entries=entries)

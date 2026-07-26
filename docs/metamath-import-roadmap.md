@@ -33,9 +33,10 @@ are not relitigated), and what remains.
 | Proof emission + kernel check | done |
 | Proofs *under* `$e` hypotheses (`import_theorem`) | done |
 | Whole-corpus ordered pass (§1.1) | done — 47,546 checked, **all 47,546 verify** |
+| Persisting the parse (§1.3) | done — one system, proofs, lines, terms |
+| Whole-corpus walk, strictly scoped (§1.4) | done — `corpus.walk` |
 | Scale (§5, A5) | **measured** — 26 min, 3.3 GB (§1.1) |
 | Token-collision defects (§1.2) | fixed — four instances of one shape |
-| Whole-corpus walk, strictly scoped (§1.3) | done — `importer.walk` |
 | `$t` typesetting / notation (§4) | **next** |
 | Axiom-vs-theorem split (§3.2) | **blocker** |
 | Definition classification (§5, A4) | not a blocker; front-load |
@@ -66,7 +67,7 @@ for browsing, but `import_theorem` is the entry point for *checking* a proof.
 
 ### 1.1 The whole corpus
 
-One ordered pass over `set.mm` (`importer.walk`, §1.3): walk the file, add each
+One ordered pass over `set.mm` (`corpus.walk`, §1.4): walk the file, add each
 syntax axiom and each variable to the grammar as it becomes available, check each
 theorem against only the notation and theorems that precede it, then promote it.
 Every proof is emitted from its stored compressed proof and checked by Edifyce's
@@ -85,9 +86,8 @@ Cost is dominated by `check`; `promote` and `emit` are each under a fifth of it.
 Per-theorem cost grows with the grammar, which reaches 1,441 productions: single-
 digit milliseconds over the first 5,000, tens of milliseconds by 45,000.
 
-The corpus is re-parsed in full on every run. `terms` and `proof_lines` exist and
-the schema is right, but the import does not populate them, so nothing survives
-the pass (A5, §5).
+The parse is no longer thrown away: the walk stores the system, each proof, its
+line graph and its interned terms (§1.3).
 
 ### 1.2 The token collisions, and the shape they shared
 
@@ -114,15 +114,93 @@ depth (a 16-binder statement took over 30 minutes; a parse memo per line brought
 to under a second), and `MAX_CITED_ANTECEDENTS` was 16 when 437 `set.mm`
 assertions cite more than that.
 
-### 1.3 The walk, and the scope it enforces
+### 1.3 The parse is now kept
 
-The pass is `importer.walk`: one system, built once and then *grown*. Each
-production joins its sort at the position it becomes available, each assertion is
-promoted once the theorem yielded for it has been checked, and a theorem's own
-`$e` hypotheses are registered as givens and withdrawn after. That is what
-`import_theorem` establishes per theorem — it rebuilds the whole system with
-`before=label` — made affordable over 47,546 of them, where rebuilding a
-1,441-production grammar each time is quadratic.
+The pass above threw its work away. Each run re-read the `.mm` file, rebuilt the
+grammar, re-parsed every proof and stored none of it — while `terms` and
+`proof_lines` sat empty, describing exactly that structure. That is closed:
+
+`website/logical/metamath/corpus.py` is the ordered pass, checked in rather than
+run ad hoc. `walk(database, limit)` yields one `CheckedTheorem` per theorem, and
+`corpus_spec(database, limit)` is the grammar it ends with.
+`app/db/metamath_store.py` drives it and writes, per theorem, the same rows a
+verify through the API writes (`store_proof_lines`): a `proof_lines` row per
+line with the theorem that justified it, `proof_line_antecedents` edges for the
+lines it was derived from, and the line's formula interned into the system's
+shared `terms` DAG. `scripts/import_metamath.py` is the CLI.
+
+**One system row for the whole walk.** The grammar grows as set.mm declares
+notation, but a term row is keyed by *constructor name* and interned per system,
+so terms built under an early grammar and a late one share rows correctly as long
+as the stored system is the union — which `corpus_spec` is. That is the point:
+the corpus lands in **one** term graph, so a subterm shared by two theorems is
+one row and the theorem search indexes them together.
+
+On the first 1,000 theorems of set.mm:
+
+| | |
+|---|---|
+| theorems checked | 1,000 |
+| verified | **1,000 (100%)** |
+| wall clock | 26 s (of which 3 s reading the 51 MB file) |
+| `proof_lines` rows | 3,521, every one carrying a term |
+| `proof_line_antecedents` edges | 2,539 |
+| `terms` / `term_children` rows | 1,951 / 3,828 |
+| on disk | 6 MB |
+
+The 3,521 formula-bearing lines intern to **1,337 distinct statements**, so the
+sharing is real rather than nominal. And the rows stand alone: rebuilding the
+system from `systems` rows and reloading each stored term renders back the exact
+formula its line states, for all 3,521 — with no `.mm` file, no importer, and no
+re-parse.
+
+**What is stored is the parse, not yet the means to repeat it.** A system row
+holds a grammar, definitions, axioms and rules. It has nowhere to hold a
+*promoted theorem* — and the Metamath library is 49,000 of them — so the stored
+system is grammar-only, and re-parsing an imported proof against it fails on its
+first citation (`Invalid reference: ax-mp`). The rows record a check that
+happened; they are not yet enough to re-run it. That is **§3.2's** storage
+decision, and this is its sharpest consequence: until it lands, an imported
+`proofs.valid` is a claim its own `formal_system_id` cannot reproduce.
+
+So an import is deliberately **ownerless and unpublished**. `POST
+/proofs/{id}/verify` writes a verdict back only for `user is not None and
+proof.owner_id == user.id`, and reads at all only for a published proof or its
+owner — so no request can reach an imported proof, re-check it against the
+grammar-only system, and have `_record_verdict` drop the imported structure via
+`store_proof_lines`'s clear. The same reason it is not re-checkable is the reason
+it must not be *offered* for re-checking. `test_metamath_persistence` pins both
+halves, so §3.2 closing the gap is a visible change rather than a silent one.
+
+A related consequence of the same split: a theorem is checked under
+`before=label` but stored under the union grammar, which is exactly the
+forward-notation capture `before` exists to prevent. It costs nothing today —
+the stored *terms* come from the correct parse, and nothing re-parses — but it is
+another reason an imported proof must not be handed back to the checker.
+
+What the walk trades for that speed is the exactness of the grammar limit
+*between* rebuilds. The system is rebuilt when a syntax axiom is declared, not
+per theorem, so a run of theorems declaring no notation shares one grammar —
+identical, since notation is what changes it. The variable leaves are the
+exception: they grow with every statement, so they are seeded once at the far end
+of the walk. That is the §1.1 caveat, now explicit in the signature
+(`build_spec(..., variable_scope=)`) rather than implied.
+
+The rebuild itself is the remaining scale question. Re-promoting the library
+after each notation change is fine over a slice (five rebuilds and ~3,500
+promotions over the first 1,000 theorems) and is `O(theorems × notation)` over
+the whole corpus. Extending a live system's grammar in place — teaching a sort
+union and its projected constructor to accept a new branch — would make it
+linear, and is the natural next step if the whole corpus is to be stored.
+
+### 1.4 The walk, and the scope it enforces
+
+The pass is `corpus.walk`. It rebuilds its system when a syntax axiom is declared
+— notation is the only thing that changes the grammar a theorem is checked
+against — and *grows* the variable leaves between rebuilds, since those change
+with every statement. That is what `import_theorem` establishes per theorem, made
+affordable over 47,546 of them, where rebuilding a 1,441-production grammar each
+time is quadratic.
 
 Both halves of the grammar are scoped. Notation is the half that has to be: a
 syntax axiom declares a *constructor*, and one declared later can capture the parse
@@ -152,7 +230,6 @@ One thing is still derived at whole-database scope: sort *admission*. A union's
 kernel constructor fixes its branches when the system is built, before any of the
 replaying. It costs nothing, because admission is only ever asked about a term that
 already parsed, and parsing is scoped.
-
 ---
 
 ## 2. Why imported proofs look the way they do
@@ -261,6 +338,14 @@ ${  min $e |- ph $.   maj $e |- ( ph -> ps ) $.   ax-mp $a |- ps $.  $}
 **The split to make:** logical `$a` → the system's `inference_rules` (they define
 it); `$p` → `promoted_theorems` (they are derived). Until then an imported system
 cannot answer "what are your axioms?", and the namespace separation does no work.
+
+It now also owns a **storage** decision, which §1.3 made concrete. `inference_rules`
+have a table (`rules`); `promoted_theorems` have none, so a stored import carries
+its grammar and none of its library, and an imported proof cannot be re-checked
+from its own rows. Sequencing this item behind §1.3 is deliberate — the shape of
+what to store is exactly the question this item answers, and storing 49,000
+derived theorems as `rules` would answer it wrongly, declaring every proved
+theorem a primitive of the system.
 
 ---
 
@@ -514,9 +599,12 @@ argument. General because the justification is always a cited lemma.
 1. **`$t` + Unicode source + term-fold renderer** (§4) — wanted now, and part of A3.
 2. **Axiom-vs-theorem split** (§3.2) — the modelling blocker.
 3. **A4 definition classification** — cheaper before bulk than after.
-4. **Persist the parse.** Every check re-parses from source text today; `terms` /
-   `proof_lines` exist for the structure but the import does not populate them,
-   so the corpus is re-parsed in full on every run.
+4. ~~**Persist the parse.**~~ *Done* (§1.3) — the walk stores the system, its
+   proofs, their line graphs and their terms. Two things are left: **storing the
+   library**, which is item 2's to decide (§3.2) and is what would let an
+   imported proof be re-checked from its rows; and scale — extend a live
+   system's grammar in place so a whole-corpus store does not re-promote the
+   library at each notation change.
 5. **B1 + B2**, then **B4** and **B3**; then the stretch items **B5 / B6**. The
    tactic framework and closure solver come first because they shorten *new*
    Edifyce proofs as well as imported ones.
