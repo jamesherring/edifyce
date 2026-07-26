@@ -420,16 +420,19 @@ def _unusable_errors(
     unverified one leaves `[alias.n]` unresolved — which reads as a mistake in
     the citing proof unless we say what actually happened.
 
-    Narrowed twice, because this is an explanation and not a warning. Only the
-    proof's **own** references can explain its failure: `unusable` spans the
-    whole transitive closure, and a lemma two hops away is nothing this proof
-    cites. And only a proof that **failed** needs explaining — one that verified
-    did not need the lemma, so saying anything would be noise beside a success.
+    Narrowed three ways, because this is an explanation and not a warning.
+    `unusable` spans the whole transitive closure, so only the proof's **own**
+    references can explain its failure — a lemma two hops away is nothing this
+    proof cites. Only a proof that **failed** needs explaining at all. And of its
+    own references, only those a *failing line actually names*: an unusable lemma
+    the proof merely declares and never cites explains nothing, and saying it did
+    would bury the real error under a claim the reader can see is false.
     """
     if root.valid:
         return []
-    named = sorted({unusable[target] for _alias, target, _pos in references
-                    if target in unusable})
+    cited = _cited_aliases(root)
+    named = sorted({unusable[target] for alias, target, _pos in references
+                    if target in unusable and alias in cited})
     if not named:
         return []
     return [
@@ -437,6 +440,26 @@ def _unusable_errors(
         + ", ".join(named)
         + " — a lemma must be verified, and stand, before a proof may rest on it."
     ]
+
+
+def _cited_aliases(root: EngineProof) -> set[str]:
+    """The lemma aliases the proof's *failing* lines name.
+
+    A citation into a lemma is written `[rule, alias.n, …]`, so an alias is the
+    part before the first dot of a reference component that has one; a component
+    without a dot is a rule label or a local line number and names no lemma.
+    Read off the invalid lines only — a lemma some other line cited successfully
+    is not what went wrong here.
+    """
+    aliases: set[str] = set()
+    for line in root.proof_lines:
+        if line.valid or not line.reference_string:
+            continue
+        for part in line.reference_string.split(", "):
+            head, dot, _rest = part.partition(".")
+            if dot:
+                aliases.add(head)
+    return aliases
 
 
 async def _record_verdict(

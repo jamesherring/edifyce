@@ -870,6 +870,28 @@ def test_an_unverified_reference_the_proof_never_cites_is_not_reported(client, d
     assert body["errors"] == []
 
 
+def test_an_unverified_reference_no_failing_line_names_is_not_blamed(client, db):
+    # A proof can fail for its own reasons while also declaring a reference it
+    # never cites. Blaming the lemma then buries the real error under a claim the
+    # reader can see is false — the failing line names no alias at all.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    unverified = _create_proof(client, sid, "Unverified", source=_LEMMA_SRC)
+    main = _create_proof(client, sid, "Main", source=INVALID_PROOF)
+    _set_refs(client, main, [{"referenced_proof_id": unverified, "alias": "A"}])
+
+    body = client.post(f"/api/proofs/{main}/verify").json()
+    assert body["success"] is False
+    assert body["errors"] == []
+
+    # ...but a line that *does* cite it is still explained.
+    citing = _create_proof(client, sid, "Citing", source=_USER_SRC)
+    _set_refs(client, citing, [{"referenced_proof_id": unverified, "alias": "A"}])
+    explained = client.post(f"/api/proofs/{citing}/verify").json()
+    assert explained["success"] is False
+    assert any("must be verified" in error for error in explained["errors"])
+
+
 def test_a_lemma_that_cannot_be_read_is_a_verdict_not_a_500(client, db, monkeypatch):
     # A stored row that no longer matches its system raises out of `load_term`,
     # and the line-numbering guard raises deliberately. Both are defects in
