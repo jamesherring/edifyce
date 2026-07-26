@@ -125,6 +125,14 @@ hypothetical grammar that wanted otherwise is the safe direction. This is open
 question 1 of [binding-slots-design.md](binding-slots-design.md) — "a
 comprehension with two binders would settle it" — settled conservatively.
 
+Sibling slots raise a second question the nesting rule cannot answer: what if the
+defining form puts *the same leaf* in both, as `⟪s,s⟫.P(s)`? They are
+simultaneous rather than nested, so neither shadows the other and the `s` in `P`
+belongs to neither in particular. Binding it to whichever slot the grammar lists
+second would make the form's meaning depend on declaration order — reversing an
+otherwise identical `scopes_over` flips which renaming the checker accepts. That
+form is refused.
+
 ## What did not widen
 
 **Capture against a parameter is still refused, for every binder.** A parameter's

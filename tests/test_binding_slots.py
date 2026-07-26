@@ -583,28 +583,35 @@ def test_a_notation_cannot_reach_a_binder_sort_as_a_constant():
     assert "Production 'seed' (sort 'setvar') is declared" in message
 
 
-def test_two_binders_on_one_production_must_differ():
+@pytest.fixture(scope="module")
+def pair_theory():
+    # `⟪u,v⟫.phi` — one production with *two* binder slots over one body.
+    return build(
+        SystemSpec(
+            name="Pair",
+            brackets=brackets(),
+            productions=[
+                regex_prod("setvar", "letter", "[a-z]"),
+                template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+                template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
+                template_prod(
+                    "formula", "pair", "⟪u,v⟫.phi",
+                    [("u", "setvar"), ("v", "setvar"), ("phi", "formula")],
+                    scopes_over={"u": ["phi"], "v": ["phi"]},
+                ),
+                template_prod("formula", "subset", "(x ⊆ y)", [("x", "setvar"), ("y", "setvar")]),
+            ],
+            lines=[statement_line()],
+        )
+    )
+
+
+def test_two_binders_on_one_production_must_differ(pair_theory):
     # `⟪u,v⟫.phi` scopes *both* binders over the same body, and neither is inside
     # the other — so nesting alone would call them disjoint and let a step spell
     # both the same, merging two binders into one. Binders opened at one node
     # constrain each other for exactly this reason.
-    spec = SystemSpec(
-        name="Pair",
-        brackets=brackets(),
-        productions=[
-            regex_prod("setvar", "letter", "[a-z]"),
-            template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
-            template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
-            template_prod(
-                "formula", "pair", "⟪u,v⟫.phi",
-                [("u", "setvar"), ("v", "setvar"), ("phi", "formula")],
-                scopes_over={"u": ["phi"], "v": ["phi"]},
-            ),
-            template_prod("formula", "subset", "(x ⊆ y)", [("x", "setvar"), ("y", "setvar")]),
-        ],
-        lines=[statement_line()],
-    )
-    system, context = build(spec)
+    system, context = pair_theory
     variables = system.build_context.variables
     definition = parse_definition(
         variables["formula"],
@@ -627,3 +634,22 @@ def test_two_binders_on_one_production_must_differ():
     assert not check_definitional_step(
         term("(a ⊆ b)"), term("⟪q,q⟫.((q ∈ a) → (q ∈ b))"), definition, context
     )
+
+
+def test_two_sibling_binders_may_not_share_a_name(pair_theory):
+    # `⟪s,s⟫` binds one name at two simultaneous slots: neither shadows the
+    # other, so an occurrence in the scope they share belongs to neither. Left
+    # unrefused, the walk hands it to whichever slot the grammar happens to list
+    # second — so a form's meaning would turn on declaration order, which is not
+    # something an author can see.
+    system, context = pair_theory
+    variables = system.build_context.variables
+
+    with pytest.raises(ValueError, match="both bind 's'"):
+        parse_definition(
+            variables["formula"],
+            "(x ⊆ y)",
+            "⟪s,s⟫.((s ∈ x) → (s ∈ y))",
+            {"x": variables["setvar"], "y": variables["setvar"]},
+            context,
+        )

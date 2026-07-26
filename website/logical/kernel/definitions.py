@@ -228,6 +228,24 @@ def bind_scoped(term: Term, first_index: int) -> tuple[Term, tuple[FreshBinder, 
             if name is not None:
                 opening.append((slot, targets, name, child))
 
+        # Two sibling slots binding *the same* leaf is not a form with a meaning.
+        # They are simultaneous rather than nested, so neither shadows the other,
+        # and an occurrence in the scope they share belongs to neither in
+        # particular — the walk below would hand it to whichever slot the grammar
+        # happened to list second. Refused rather than resolved by declaration
+        # order, which is not something an author can see.
+        claimed: dict[str, str] = {}
+        for slot, _targets, name, _child in opening:
+            if name in claimed:
+                raise ValueError(
+                    f"Binder slots {claimed[name]!r} and {slot!r} of "
+                    f"{current.constructor.name!r} both bind {name!r} in the "
+                    f"defining form. Neither shadows the other, so an occurrence "
+                    f"of {name!r} in the scope they share belongs to neither. "
+                    f"Give the two binders different names."
+                )
+            claimed[name] = slot
+
         # Binders opened at *one* node constrain each other, whatever the nesting
         # says. A production with two binder slots (`⟪u,v⟫.phi`) scopes both over
         # the same body, so spelling them alike would merge two binders into one —
