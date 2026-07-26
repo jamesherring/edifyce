@@ -108,6 +108,22 @@
 				The proof is empty — add some lines.
 			</p>
 		{:else}
+			<!-- A checked proof can still carry errors that explain the check rather
+			     than replace it: a cited lemma that has not been verified leaves its
+			     citation unresolved, and without this the line just looks wrong. -->
+			{#if result.errors.length > 0}
+				<Alert.Root variant="destructive">
+					<TriangleAlert />
+					<Alert.Title>A cited proof could not be used</Alert.Title>
+					<Alert.Description>
+						<div class="mt-1 space-y-1">
+							{#each result.errors as error, i (i)}
+								<p class="text-xs">{error}</p>
+							{/each}
+						</div>
+					</Alert.Description>
+				</Alert.Root>
+			{/if}
 			<ol class="flex flex-col gap-2">
 				{#each result.proof.lines as line, i (i)}
 					{@const tone = lineTone(line)}

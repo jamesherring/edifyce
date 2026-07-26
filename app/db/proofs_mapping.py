@@ -1,4 +1,4 @@
-"""Project a checked engine :class:`Proof` into ``proof_lines`` rows.
+"""A checked engine :class:`Proof` to ``proof_lines`` rows, and back.
 
 The counterpart to :mod:`app.db.systems_mapping` on the proof side, and the
 consumer of :mod:`app.db.terms_mapping` on the storage side: where a system is
@@ -8,9 +8,13 @@ parser hands the parse to the kernel as it goes — so storing a proof is intern
 those terms into the system's shared term graph, landing a proof's statements in
 the same DAG the theorem search indexes.
 
-The snapshot is derived from ``proofs.source``, never authoritative:
-:func:`clear_proof_lines` drops it wherever the cached verdict is invalidated,
-and the next verify rewrites it. Two calls therefore replace rather than
+:func:`store_proof_lines` writes that; :func:`load_proof_lines` reads it back.
+The read direction is what makes the rows load-bearing rather than a render:
+verifying a proof now takes its lemmas from *their* rows instead of re-parsing
+and re-checking them (``docs/verification-from-rows.md``). So the snapshot is no
+longer merely derived — it is the parse, and everything that invalidates a
+verdict (:func:`clear_proof_lines`, :func:`discard_system_checks`, the routes'
+dependent invalidation) is what keeps it honest. Two writes replace rather than
 accumulate.
 
 Synchronous (a :class:`~sqlalchemy.orm.Session`), like ``terms_mapping`` — the
@@ -36,14 +40,19 @@ from app.db.proof_lines import (
     ProofLineRow,
 )
 from app.db.terms import TermRow
-from app.db.terms_mapping import store_term
+from app.db.terms_mapping import load_term, prefetch_terms, store_term
+from website.logical.formal_system.proof import Proof as EngineProof
+from website.logical.formal_system.proof import ProofLine as EngineProofLine
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
 
     from app.db.models import FormalSystem, Proof
-    from website.logical.formal_system.proof import Proof as EngineProof
+    from website.logical.formal_system import FormalSystem as EngineSystem
+    from website.logical.formal_system.line_type import LineType
     from website.logical.formal_system.proof import ProofLine
+    from website.logical.kernel.terms import Term
+    from website.logical.matching.context import Context
 
     # A lemma this proof may cite, paired with its stored id. A sequence of live
     # objects rather than a map keyed by `id()`: an id is only meaningful while
@@ -170,6 +179,134 @@ def store_proof_lines(
         row.antecedents = list(_antecedent_rows(line, row_of, cited))
 
     return rows
+
+
+def load_proof_lines(
+    session: Session,
+    proof_ids: Sequence[uuid.UUID],
+    system: EngineSystem,
+    context: Context,
+) -> dict[uuid.UUID, EngineProof]:
+    """Rebuild several checked proofs' citable lines from their stored rows.
+
+    The inverse of :func:`store_proof_lines`, and what the rows were written for:
+    a proof citing these as lemmas needs their numbered lines and formulae, and
+    all of that is stored — so it needs no source text, no parse, and no
+    re-check. This is the read half of ``docs/verification-from-rows.md``'s P1.
+
+    **Batched deliberately.** Reading a proof back costs a couple of round trips
+    and almost no CPU, so done one proof at a time it is *latency* — and against
+    a short proof in a small grammar that loses to simply re-parsing it. Taking
+    the whole reference closure at once makes it two queries for the lot, which
+    is what makes reading rows beat re-parsing however many lemmas are cited.
+
+    What comes back is each proof as a **citable surface**, not a re-checkable
+    object. The lines carry their formulae, types and verdicts; they do not carry
+    the antecedent edges or scope tree that justified them, because nothing here
+    re-derives a verdict that was already recorded — the citing proof reads a
+    cited line's formula and nothing else. ``valid`` and ``has_warnings`` are read
+    off the lines rather than off ``proofs``, which is exactly how
+    ``FormalSystem.check_proof`` defines them and cannot disagree with the
+    structure being returned.
+
+    A proof with no stored lines is **absent from the result**: it has never been
+    verified, or its snapshot was invalidated. Either way it is not a usable
+    lemma, and saying so is the whole guarantee — a proof may rest only on a
+    lemma that stands.
+    """
+    if not proof_ids:
+        return {}
+
+    rows = list(
+        session.scalars(
+            select(ProofLineRow)
+            .where(ProofLineRow.proof_id.in_(proof_ids))
+            .order_by(ProofLineRow.proof_id, ProofLineRow.position)
+        )
+    )
+    if not rows:
+        return {}
+
+    # One sweep for every term of every proof, before any of it is walked:
+    # rebuilding a term through lazy relationships costs a query per node, which
+    # is what would make reading rows slower than the parse they replace. Seeded
+    # from `term_id` rather than `term` so the roots are not fetched twice. The
+    # result is bound because the identity map holds it weakly (see
+    # prefetch_terms) — dropping it here would undo the sweep.
+    prefetched = prefetch_terms(  # noqa: F841 - held so the rows stay loaded
+        session, [row.term_id for row in rows if row.term_id is not None]
+    )
+
+    line_types = {line_type.name: line_type for line_type in system.line_types}
+    # One memo for the batch: term rows are interned per system, so a subterm is
+    # shared across a proof's lines and across the proofs citing it.
+    memo: dict[object, Term] = {}
+    # A term's flat string is only ever read by the string-rewriting rule path,
+    # and rendering one is not free. Ask the system once rather than per line.
+    needs_strings = any(rule.matching == "string" for rule in system.inference_rules)
+
+    proofs: dict[uuid.UUID, EngineProof] = {}
+    for row in rows:
+        proof = proofs.get(row.proof_id)
+        if proof is None:
+            proof = proofs[row.proof_id] = EngineProof(formal_system=system)
+        _load_line(proof, row, line_types, context, memo, needs_strings)
+
+    for proof in proofs.values():
+        proof.valid = all(line.valid for line in proof.proof_lines)
+        proof.has_warnings = any(
+            line.warning_message is not None for line in proof.proof_lines
+        )
+    return proofs
+
+
+def _load_line(
+    proof: EngineProof,
+    row: ProofLineRow,
+    line_types: dict[str, LineType],
+    context: Context,
+    memo: dict[object, Term],
+    needs_strings: bool,
+) -> None:
+    # `indent` and `display` are stored apart precisely so the source line
+    # reconstructs; ProofLine derives its own `indent` and `empty` from text.
+    line = EngineProofLine(
+        proof=proof,
+        text=" " * row.indent + row.display,
+        context=context,
+        reference_string=row.reference,
+        label=row.label,
+    )
+    line.line_type = line_types.get(row.line_type) if row.line_type else None
+    if row.term is not None:
+        line.formula_term = load_term(row.term, context, memo)
+        if needs_strings:
+            # A string-rewriting rule matches on flat text rather than structure
+            # (InferenceRule._string_pairs). A term renders back to the string it
+            # was parsed from, so the flat form is recovered rather than stored a
+            # second time and kept in step by hand.
+            line.formula_string = line.formula_term.to_string()
+    line.valid = row.valid
+    line.invalid_message = row.invalid_message
+    line.warning_message = row.warning_message
+    line.number = row.number
+
+    proof.proof_lines.append(line)
+    if row.number is not None:
+        proof.numbered_lines.append(line)
+        if row.number != len(proof.numbered_lines):
+            # `get_proof_line` indexes `numbered_lines[n - 1]`, so a gap here
+            # would silently resolve a citation to the wrong line. Rows are
+            # written in the order numbers were assigned, so this cannot happen —
+            # raise rather than let it pass if it ever does.
+            raise ValueError(
+                f"Proof {row.proof_id}: line numbering is not contiguous "
+                f"({row.number} at position {len(proof.numbered_lines)})."
+            )
+    if row.label is not None:
+        # What `ProofLine.execute` does for a labelled line: its own proof cites
+        # it by name, and a proof citing into this one may too.
+        proof.reference_context[row.label] = line
 
 
 def _definition_id(

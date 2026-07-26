@@ -38,9 +38,11 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
+from copy import copy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from graphlib import CycleError
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete as sa_delete
@@ -57,11 +59,18 @@ from app.db import (
     ProofReference,
     clear_proof_lines,
     get_session,
+    load_proof_lines,
     store_proof_lines,
     system_to_spec,
 )
 from app.db.models import User
-from app.routers._common import PageParams, page_params, paginate_summaries, unique_slug
+from app.routers._common import (
+    PageParams,
+    lock_system,
+    page_params,
+    paginate_summaries,
+    unique_slug,
+)
 from app.routers.systems import load_system
 from website.logical.formal_system.proof import Proof as EngineProof
 from app.schemas import (
@@ -82,6 +91,12 @@ from app.schemas import (
 )
 from website.logical.declarative import build_spec
 from website.logical.graphs import topological_order
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from website.logical.formal_system import FormalSystem as EngineSystem
+    from website.logical.matching.context import Context
 
 router = APIRouter(prefix="/proofs", tags=["proofs"])
 
@@ -275,6 +290,12 @@ async def _verify_with_references(
     line. Pass ``system`` to reuse an already-loaded system (a publish gate has
     one in hand); otherwise it is loaded here.
     """
+    # Before anything is read. A verify now trusts the lemmas' stored rows
+    # instead of re-checking them, so the read and the write must sit inside one
+    # critical section: otherwise an invalidation can commit between them and
+    # this transaction writes a valid snapshot back over it. See lock_system.
+    await lock_system(session, proof.formal_system_id)
+
     if system is None:
         system = await load_system(session, proof.formal_system_id)
     if system is None:
@@ -301,46 +322,156 @@ async def _verify_with_references(
             VerifyProofResponse(success=False, errors=["Circular proof reference."]), None
         )
 
-    compiled: dict[uuid.UUID, EngineProof] = {}
-    for pid in order:
-        reference_context = {
-            alias: compiled[target]
-            for alias, target, _pos in edges.get(pid, ())
-            if target in compiled and _is_usable_lemma(compiled[target])
-        }
-        engine_proof = EngineProof(formal_system=compiled_system)
-        engine_proof.reference_context = reference_context
-        # The checker raises on malformed proofs against otherwise-valid systems;
-        # reshape into a structured error for the target, and just don't seed a
-        # broken lemma downstream.
-        try:
-            compiled_system.parse(closure[pid].source, proof=engine_proof)
-        except Exception as exc:  # noqa: BLE001
-            if pid == proof.id:
-                return _Verification(
-                    VerifyProofResponse(success=False, errors=[str(exc)]), None
-                )
-            engine_proof.valid = False
-        compiled[pid] = engine_proof
-
     # The root can be absent if the proof was deleted concurrently between the
     # caller's load and the closure query — a structured failure, not a 500.
-    root = compiled.get(proof.id)
-    if root is None:
+    if proof.id not in closure:
         return _Verification(
             VerifyProofResponse(success=False, errors=["Proof not found."]), None
         )
+
+    # Every lemma is *loaded* from its stored lines rather than re-parsed and
+    # re-checked. A cited line's formula is already a term in the system's graph,
+    # and whether the lemma stands is already recorded — so a verify reads what
+    # the lemma's own verify wrote instead of redoing it. See
+    # docs/verification-from-rows.md; the root is still parsed (that is P2).
+    #
+    # Dependency order still matters, but only for *seeding*: a citation may
+    # reach through a lemma into its own lemma, so a lemma's references must be
+    # resolved before anything cites it.
+    context = _term_context(compiled_system)
+    lemma_ids = [pid for pid in order if pid != proof.id]
+    # The whole closure in one go: reading a proof back is latency, not work, so
+    # batching is what makes it cheaper than re-parsing (see load_proof_lines).
+    # A stored row that no longer matches its system raises out of `load_term`,
+    # and the line-numbering guard raises deliberately. Both are defects in
+    # stored data rather than in the proof being checked, but this function
+    # reshapes every other failure into a verdict rather than a 500, and a
+    # corrupt lemma should not be the one exception.
+    try:
+        loaded = await session.run_sync(
+            lambda sync: load_proof_lines(sync, lemma_ids, compiled_system, context)
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _Verification(
+            VerifyProofResponse(
+                success=False, errors=[f"A cited proof could not be read: {exc}"]
+            ),
+            None,
+        )
+
+    compiled: dict[uuid.UUID, EngineProof] = {}
+    unusable: dict[uuid.UUID, str] = {}
+    for pid in lemma_ids:
+        lemma = loaded.get(pid)
+        if lemma is None or not _is_usable_lemma(lemma):
+            unusable[pid] = closure[pid].name
+            continue
+        # A citation may reach through a lemma into its own lemma, so a lemma's
+        # references are resolved before anything cites it — which is all the
+        # dependency order is still for, now that nothing is re-checked.
+        #
+        # Aliases go *under* the labels `load_proof_lines` installed, matching
+        # the parse path: there the context is seeded with aliases and each
+        # labelled line then overwrites its own name as it executes. Updating the
+        # other way round would silently give an alias precedence over a line
+        # label of the same name.
+        lemma.reference_context = {
+            **{
+                alias: compiled[target]
+                for alias, target, _pos in edges.get(pid, ())
+                if target in compiled
+            },
+            **lemma.reference_context,
+        }
+        compiled[pid] = lemma
+
+    root = EngineProof(formal_system=compiled_system)
+    root.reference_context = {
+        alias: compiled[target]
+        for alias, target, _pos in edges.get(proof.id, ())
+        if target in compiled
+    }
+    # The checker raises on malformed proofs against otherwise-valid systems;
+    # reshape into a structured error rather than a 500.
+    try:
+        compiled_system.parse(proof.source, proof=root)
+    except Exception as exc:  # noqa: BLE001
+        return _Verification(
+            VerifyProofResponse(success=False, errors=[str(exc)]), None
+        )
+
     return _Verification(
-        response=VerifyProofResponse(success=root.valid, proof=root.data()),
+        response=VerifyProofResponse(
+            success=root.valid,
+            proof=root.data(),
+            errors=_unusable_errors(root, edges.get(proof.id, ()), unusable),
+        ),
         valid=root.valid,
         engine_proof=root,
         system=system,
         # The root's lines may cite lines of any lemma in the closure, and this
         # is how the snapshot names the proof they belong to.
-        cited_proofs=[
-            (engine, pid) for pid, engine in compiled.items() if pid != proof.id
-        ],
+        cited_proofs=[(engine, pid) for pid, engine in compiled.items()],
     )
+
+
+def _term_context(system: EngineSystem) -> Context:
+    # The context stored terms are rebuilt against: the proof context (which
+    # carries the defined notations) plus the build context's productions, which
+    # is what `load_term` resolves a constructor name in.
+    context = copy(system.context)
+    context.variables.update(system.build_context.variables)
+    return context
+
+
+def _unusable_errors(
+    root: EngineProof, references: Sequence[_Edge], unusable: dict[uuid.UUID, str]
+) -> list[str]:
+    """Why a citation did not resolve, when the reason is a lemma rather than the
+    proof. A lemma is citable only once it has been verified and stands, so an
+    unverified one leaves `[alias.n]` unresolved — which reads as a mistake in
+    the citing proof unless we say what actually happened.
+
+    Narrowed three ways, because this is an explanation and not a warning.
+    `unusable` spans the whole transitive closure, so only the proof's **own**
+    references can explain its failure — a lemma two hops away is nothing this
+    proof cites. Only a proof that **failed** needs explaining at all. And of its
+    own references, only those a *failing line actually names*: an unusable lemma
+    the proof merely declares and never cites explains nothing, and saying it did
+    would bury the real error under a claim the reader can see is false.
+    """
+    if root.valid:
+        return []
+    cited = _cited_aliases(root)
+    named = sorted({unusable[target] for alias, target, _pos in references
+                    if target in unusable and alias in cited})
+    if not named:
+        return []
+    return [
+        "Not cited: "
+        + ", ".join(named)
+        + " — a lemma must be verified, and stand, before a proof may rest on it."
+    ]
+
+
+def _cited_aliases(root: EngineProof) -> set[str]:
+    """The lemma aliases the proof's *failing* lines name.
+
+    A citation into a lemma is written `[rule, alias.n, …]`, so an alias is the
+    part before the first dot of a reference component that has one; a component
+    without a dot is a rule label or a local line number and names no lemma.
+    Read off the invalid lines only — a lemma some other line cited successfully
+    is not what went wrong here.
+    """
+    aliases: set[str] = set()
+    for line in root.proof_lines:
+        if line.valid or not line.reference_string:
+            continue
+        for part in line.reference_string.split(", "):
+            head, dot, _rest = part.partition(".")
+            if dot:
+                aliases.add(head)
+    return aliases
 
 
 async def _record_verdict(
@@ -370,12 +501,10 @@ async def _record_verdict(
 
     system = verification.system
     cited = verification.cited_proofs
-    # Term rows are interned per system by a unique digest, and interning is a
-    # read-then-insert: two proofs in one system verified concurrently can both
-    # miss the same new subterm and both insert it, and the loser of that race
-    # gets a unique violation rather than a stored proof. Serialize the write on
-    # the system, as the reference-graph edit does for its own read-then-write.
-    await _lock_system(session, system.id)
+    # No acquire here: `_verify_with_references` took the system lock before it
+    # read anything, and holds it for this transaction. That is what makes the
+    # term interning below safe (a read-then-insert two proofs can both lose)
+    # *and* what stops an invalidation landing between the read and this write.
     await session.run_sync(
         lambda sync: store_proof_lines(sync, proof, system, engine_proof, cited)
     )
@@ -387,17 +516,30 @@ async def _discard_check(session: AsyncSession, proof: Proof) -> None:
     The cached verdict and the stored structure are one artefact of one check, so
     they are discarded together — a snapshot describing a source that has since
     changed is worse than no snapshot at all. Both are rebuilt on the next verify.
+
+    Takes the system lock itself rather than trusting each call site to: a verify
+    reading these rows must not have them invalidated out from under it between
+    its read and its write, and forgetting the lock at one new call site is
+    exactly how that guarantee would be lost (see `_common.lock_system`).
     """
+    await lock_system(session, proof.formal_system_id)
     proof.valid = None
     proof.result = None
     await session.run_sync(lambda sync: clear_proof_lines(sync, [proof.id]))
 
 
-async def _invalidate_dependents(session: AsyncSession, proof_id: uuid.UUID) -> None:
+async def _invalidate_dependents(
+    session: AsyncSession, proof_id: uuid.UUID, system_id: uuid.UUID
+) -> None:
     """Invalidate every proof that transitively references ``proof_id``, so a
     stale verdict can't survive a change to a lemma it leans on (a source edit,
     or the proof's deletion). Those proofs re-verify on demand.
+
+    ``system_id`` is the system they all live in — references are same-system, so
+    one key locks the lot. Taken here for the same reason as `_discard_check`: a
+    verify in flight is reading exactly these rows.
     """
+    await lock_system(session, system_id)
     dependents: set[uuid.UUID] = set()
     frontier = [proof_id]
     while frontier:
@@ -657,7 +799,7 @@ async def update_proof(
         # proof — and the cached verdict of anything that cites it as a lemma —
         # is stale.
         await _discard_check(session, proof)
-        await _invalidate_dependents(session, proof.id)
+        await _invalidate_dependents(session, proof.id, proof.formal_system_id)
 
     # Publishing is the write that makes a proof world-readable, so gate it —
     # after the field changes above so the checks see this request's final state.
@@ -681,25 +823,6 @@ async def update_proof(
 
     await session.commit()
     return _detail(await _get_owned_or_404(session, proof_id, user.id), user)
-
-
-async def _lock_system(session: AsyncSession, system_id: uuid.UUID) -> None:
-    """Serialize this transaction's read-then-write against one system.
-
-    Two writes in this router are read-then-write and race: the reference-graph
-    cycle check (two concurrent PUTs of A→B and B→A each pass against the
-    committed graph and together commit a cycle) and term interning when a proof
-    is checked (two proofs in one system both miss the same new subterm and both
-    insert it). A transaction-scoped advisory lock keyed by the system makes both
-    serialize, so each sees the other's rows. Postgres only; a no-op on SQLite
-    (the test DB, where requests don't run concurrently anyway). Verification
-    re-checks for cycles as a defensive backstop (``_dependency_order``).
-    """
-    if session.bind is not None and session.bind.dialect.name == "postgresql":
-        await session.execute(
-            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
-            {"key": str(system_id)},
-        )
 
 
 async def _reference_would_cycle(
@@ -764,7 +887,7 @@ async def set_proof_references(
 
     # Serialize concurrent reference edits in this system so the cycle check
     # below can't be raced into committing a cycle.
-    await _lock_system(session, proof.formal_system_id)
+    await lock_system(session, proof.formal_system_id)
 
     target_ids = [r.referenced_proof_id for r in payload.references]
     aliases = [r.alias for r in payload.references]
@@ -825,7 +948,7 @@ async def set_proof_references(
     # References feed verification now, so this proof's check and every
     # dependent's are stale.
     await _discard_check(session, proof)
-    await _invalidate_dependents(session, proof.id)
+    await _invalidate_dependents(session, proof.id, proof.formal_system_id)
     await session.commit()
     return _detail(await _get_owned_or_404(session, proof_id, user.id), user)
 
@@ -838,11 +961,16 @@ async def delete_proof(
 ) -> None:
     # Establish ownership first (404 for a stranger's id, so nothing leaks) before
     # any dependency checks reveal the proof exists.
-    owned = await session.scalar(
-        select(Proof.id).where(Proof.id == proof_id, Proof.owner_id == user.id)
-    )
+    owned = (
+        await session.execute(
+            select(Proof.id, Proof.formal_system_id).where(
+                Proof.id == proof_id, Proof.owner_id == user.id
+            )
+        )
+    ).first()
     if owned is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Proof not found.")
+    _, system_id = owned
 
     # Deleting a proof drops its reference edges (FK cascade), so a dependent's
     # `[alias.line]` citation would dangle. If a *published* proof rests on it,
@@ -853,7 +981,7 @@ async def delete_proof(
             status.HTTP_409_CONFLICT,
             "Cannot delete a proof that a published proof references.",
         )
-    await _invalidate_dependents(session, proof_id)
+    await _invalidate_dependents(session, proof_id, system_id)
 
     await session.execute(sa_delete(Proof).where(Proof.id == proof_id))
     await session.commit()

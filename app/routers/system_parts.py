@@ -57,6 +57,7 @@ from app.db.systems import (
     RuleRow,
     SymbolRow,
 )
+from app.routers._common import lock_system
 from app.routers.systems import (
     axiom_out,
     bracket_out,
@@ -134,6 +135,10 @@ async def _owned(session: AsyncSession, system_id: uuid.UUID, user: User) -> Non
     # each mutation because this is the single point every part route passes
     # through; the two land in one transaction, so a failed edit rolls the
     # invalidation back with it.
+    # Under the system lock: a verify in flight is reading these proofs' stored
+    # lines and trusting them, so the invalidation must not land between its read
+    # and its write (see _common.lock_system).
+    await lock_system(session, system_id)
     await session.run_sync(lambda sync: discard_system_checks(sync, system_id))
 
 

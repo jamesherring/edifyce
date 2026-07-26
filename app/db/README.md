@@ -96,7 +96,14 @@ Modernised from the original Django app (`website/models.py` on `main`):
   against, so it invalidates every proof in the system
   (`proofs_mapping.discard_system_checks`, called from every part route; a
   published system is frozen, so this only ever runs for a draft). Read back at
-  `GET /api/proofs/{id}/structure`.
+  `GET /api/proofs/{id}/structure` — and by **verify**, which reads a cited
+  lemma's lines from here instead of re-parsing and re-checking it
+  (`proofs_mapping.load_proof_lines`). That is what makes these rows
+  load-bearing rather than a render, and why the invalidation above is now
+  soundness-critical rather than merely tidy: a proof may rest only on a lemma
+  whose rows say it stands. See
+  [`docs/verification-from-rows.md`](../../docs/verification-from-rows.md); the
+  proof's *own* source is still parsed (its P2).
 - **`terms`** / **`term_children`** — the **term graph** (`terms.py`): kernel
   term DAGs stored as shared rows, interned per system by a structural
   `digest` so equal subterms are stored once. This is the structural-search

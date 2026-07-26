@@ -8,6 +8,7 @@ is queryable in plain SQL (including transitively, via a recursive CTE) with no
 JSON scans and no recompiling.
 """
 
+import time
 from copy import copy
 
 import pytest
@@ -19,6 +20,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, aliased
 
 from app.db import Base, digest_term, load_term, store_term
+from app.db.terms_mapping import prefetch_terms
 from app.db.models import FormalSystem, Theorem
 from app.db.terms import TermChildRow, TermRow
 from tests.spec_helpers import (
@@ -328,3 +330,40 @@ def test_defined_nodes_reload_with_their_stored_sort(session):
         reloaded = load_term(session.get(TermRow, ids[label]), context)
         assert reloaded.sort.name == label
         assert reloaded.equal(original, context)
+
+
+def test_prefetch_does_not_enumerate_paths_through_a_shared_dag(session):
+    """The sweep must be linear in *nodes*, not in root-to-node paths.
+
+    A term graph is a DAG with heavy sharing — that is what interning buys — so a
+    recursive walk joined with `UNION ALL` enumerates every distinct path and is
+    exponential in depth. Measured on this shape at depth 21: 4,194,302 rows
+    against 21. The result set is identical either way, so nothing fails; it just
+    gets slower the more sharing there is, in the function written to make
+    loading cheap. Hence a shape whose path count is astronomical and a wall
+    clock with an enormous margin, rather than an assertion on rows.
+    """
+    system = FormalSystem(name="Deep", slug="deep")
+    session.add(system)
+    session.flush()
+
+    # A chain of `depth` nodes, each reaching the next by *two* slots: 2**depth
+    # distinct paths from the root, and `depth + 1` distinct nodes.
+    depth = 40
+    nodes = [
+        TermRow(formal_system=system, kind="node", constructor="c", digest=f"d{i}")
+        for i in range(depth + 1)
+    ]
+    session.add_all(nodes)
+    for i in range(depth):
+        nodes[i].children.append(TermChildRow(slot="l", position=0, child=nodes[i + 1]))
+        nodes[i].children.append(TermChildRow(slot="r", position=1, child=nodes[i + 1]))
+    session.flush()
+
+    started = time.monotonic()
+    loaded = prefetch_terms(session, [nodes[0].id])
+    elapsed = time.monotonic() - started
+
+    assert {row.digest for row in loaded} == {f"d{i}" for i in range(depth + 1)}
+    # 2**40 paths would not finish this decade; the node walk is milliseconds.
+    assert elapsed < 5

@@ -182,6 +182,11 @@ grammar-only system, and have `_record_verdict` drop the imported structure via
 it must not be *offered* for re-checking. `test_metamath_persistence` pins both
 halves, so §3.2 closing the gap is a visible change rather than a silent one.
 
+Both of those — storing the library, and reading stored terms back instead of
+re-parsing — are the subject of
+[docs/verification-from-rows.md](verification-from-rows.md), which takes the
+same question from the engine side rather than the import's.
+
 A related consequence of the same split: a theorem is checked under
 `before=label` but stored under the union grammar, which is exactly the
 forward-notation capture `before` exists to prevent. It costs nothing today —

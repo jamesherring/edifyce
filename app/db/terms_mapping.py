@@ -16,10 +16,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import or_, select
+from sqlalchemy.orm import Session, selectinload
 
 from app.db.terms import (
     TERM_KIND_BOUND,
@@ -31,7 +32,7 @@ from app.db.terms import (
 from website.logical.kernel import Bound, Node, Term, Var, constructor_for, intern
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from app.db.models import FormalSystem
     from website.logical.kernel.constructors import Constructor
@@ -343,7 +344,79 @@ def store_term(
     return rows[root_digest]
 
 
-def load_term(row: TermRow, context: Context) -> Term:
+def prefetch_terms(session: Session, root_ids: Sequence[uuid.UUID]) -> list[TermRow]:
+    """Load every row reachable from ``root_ids`` into ``session`` in one sweep.
+
+    :func:`load_term` walks a stored term through its ORM relationships, and
+    those fetch lazily — a query for each node's children and each edge's child.
+    That is a query per *node*, which made rebuilding a statement cost several
+    times what re-parsing it did, and it is the one thing that would make
+    verifying from rows slower than the text path it replaces.
+
+    So walk the edge table recursively and load every reachable row in *one*
+    query with its edges eager — two round trips for a whole proof's terms,
+    whatever their size or depth. Afterwards ``load_term``
+    touches no database: ``TermRow.children`` is populated, and
+    ``TermChildRow.child`` is a many-to-one onto the primary key, so it resolves
+    from the identity map.
+
+    **The caller must keep the returned list alive** for as long as it is loading
+    terms. A session's identity map holds *weak* references, so rows nothing else
+    refers to are collected the moment this returns — and every lookup that was
+    meant to hit memory goes back to the database, which is the exact failure
+    this function exists to prevent.
+    """
+    # Deduplicated: the roots are a proof's line terms, and interning means the
+    # same statement is commonly the term of several lines.
+    root_ids = list(dict.fromkeys(rid for rid in root_ids if rid is not None))
+    if not root_ids:
+        return []
+
+    # Transitive closure over parent -> child, seeded at the roots' own edges.
+    # Left as a subquery rather than run for its ids first: the closure is only
+    # ever wanted as the filter below, and one statement is one round trip.
+    #
+    # `union`, emphatically not `union_all`. A term graph is a DAG with heavy
+    # sharing — that is what interning is for — and `union_all` enumerates every
+    # root-to-node *path* rather than every reachable node, which is exponential
+    # in depth. Measured on a chain of 21 nodes whose children are shared two
+    # ways: 4,194,302 rows and 2.5 s, against 21 rows and no measurable time.
+    # The result set is identical either way, so nothing fails — it just gets
+    # slower the more sharing there is, in the function that exists to make
+    # loading cheap.
+    edges = (
+        select(TermChildRow.parent_id, TermChildRow.child_id)
+        .where(TermChildRow.parent_id.in_(root_ids))
+        .cte("reachable_terms", recursive=True)
+    )
+    edges = edges.union(
+        select(TermChildRow.parent_id, TermChildRow.child_id).join(
+            edges, TermChildRow.parent_id == edges.c.child_id
+        )
+    )
+    # `populate_existing` matters for exactly the rows that count: a root term is
+    # already in the identity map (the line rows loaded it), and a query returns
+    # an existing instance *without* filling in attributes it has not loaded — so
+    # without this every `children` collection would still be fetched one at a
+    # time. Terms are immutable once written, so re-populating overwrites nothing.
+    return list(
+        session.scalars(
+            select(TermRow)
+            .where(
+                or_(
+                    TermRow.id.in_(root_ids),
+                    TermRow.id.in_(select(edges.c.child_id)),
+                )
+            )
+            .options(selectinload(TermRow.children))
+            .execution_options(populate_existing=True)
+        )
+    )
+
+
+def load_term(
+    row: TermRow, context: Context, memo: dict[object, Term] | None = None
+) -> Term:
     """Rebuild an interned kernel term from its stored row.
 
     Constructor names resolve against ``context`` (a compiled system's proof
@@ -351,8 +424,14 @@ def load_term(row: TermRow, context: Context) -> Term:
     defined notations by name among ``context.definitions``. An
     unresolvable name raises — a stored term that no longer matches its system
     is data corruption, not something to paper over.
+
+    Pass a shared ``memo`` to rebuild several terms as one graph. Rows are
+    interned per system, so a subterm is shared across a proof's lines and across
+    the proofs of a corpus — in the Metamath slice, 3,521 statements are 1,337
+    distinct terms. A memo per call rebuilds each of those once per *use*; one
+    memo per batch rebuilds it once.
     """
-    return intern(_load(row, context, {}))
+    return intern(_load(row, context, {} if memo is None else memo))
 
 
 def _constructor_named(name: str, context: Context) -> Constructor:

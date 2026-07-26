@@ -9,6 +9,7 @@ scoping. A proof is attached to a seeded formal system and verified against it.
 
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from copy import copy
 from datetime import datetime, timezone
 
 import pytest
@@ -19,11 +20,14 @@ pytest.importorskip("aiosqlite")
 pytest.importorskip("regex")
 
 from fastapi.testclient import TestClient
-from sqlalchemy import NullPool, create_engine, event, select
+from sqlalchemy import NullPool, create_engine, event, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
 import app.auth.backend as backend
+import app.routers._common as _common
+import app.routers.proofs as proofs_router
+import app.routers.system_parts as system_parts_router
 from app.db import (
     Base,
     FormalSystem,
@@ -38,6 +42,7 @@ from app.db import (
     spec_to_system,
 )
 from app.db.models import OAuthAccount, User
+from app.db.proofs_mapping import load_proof_lines
 from app.db.session import get_session
 from app.db.systems import (
     AxiomBindingRow,
@@ -55,6 +60,7 @@ from app.db.systems import (
     RuleRow,
     SymbolRow,
 )
+from app.db.systems_mapping import system_to_spec
 from app.main import app
 from tests.spec_helpers import (
     axiom,
@@ -68,8 +74,16 @@ from tests.spec_helpers import (
     statement_line,
     variable_prod,
 )
+from tests.database import (
+    ON_POSTGRES,
+    async_url,
+    create_tables,
+    database_url,
+    enable_foreign_keys,
+)
 from tests.zfc_systems import scoped_zfc_spec
-from website.logical.declarative import SystemSpec
+from website.logical.declarative import SystemSpec, build_spec
+from website.logical.formal_system import FormalSystem as EngineFormalSystem
 
 # Auth tables + the system-decomposition tables + the proof tables + the term
 # graph a verified proof's lines are stored into (all SQLite-creatable). The
@@ -112,18 +126,14 @@ INVALID_PROOF = "this is not a formula"
 
 @pytest.fixture
 def db(tmp_path):
-    db_path = tmp_path / "proofs.db"
+    # Yields the *synchronous URL* of a throwaway database: a per-test SQLite
+    # file by default, or the one `EDIFYCE_TEST_DATABASE_URL` names (see
+    # tests/database.py) so the same suite can run against real Postgres.
+    url = database_url(tmp_path, "proofs")
+    create_tables(url, _TABLES)
 
-    sync_engine = create_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(sync_engine, tables=_TABLES)
-    sync_engine.dispose()
-
-    async_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", poolclass=NullPool)
-
-    # SQLite ignores ON DELETE unless foreign keys are enabled per connection.
-    @event.listens_for(async_engine.sync_engine, "connect")
-    def _fk_pragma(dbapi_connection, _record):
-        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+    async_engine = create_async_engine(async_url(url), poolclass=NullPool)
+    enable_foreign_keys(async_engine.sync_engine)
 
     sessionmaker = async_sessionmaker(async_engine, expire_on_commit=False)
 
@@ -132,7 +142,7 @@ def db(tmp_path):
             yield session
 
     app.dependency_overrides[get_session] = override_get_session
-    yield db_path
+    yield url
     app.dependency_overrides.pop(get_session, None)
 
 
@@ -162,7 +172,7 @@ def _seed_system(
     # Insert a system owned by the given user directly, so a proof has a real
     # system to attach to and verify against. Defaults to the ZFC fragment above;
     # pass `spec` for a scenario that needs different machinery (e.g. subproofs).
-    engine = create_engine(f"sqlite:///{db_path}")
+    engine = create_engine(db_path)
     try:
         with Session(engine) as session:
             system = spec_to_system(spec if spec is not None else zfc_spec())
@@ -516,7 +526,7 @@ def _seed_proof(db_path, owner_id: str, system_id: str, name: str, published: bo
     # requires owning the proof's system, so a second owner can only get a proof
     # into someone else's system by seeding — which is exactly the cross-owner
     # case the reference-scope rule guards.
-    engine = create_engine(f"sqlite:///{db_path}")
+    engine = create_engine(db_path)
     try:
         with Session(engine) as session:
             proof = Proof(
@@ -635,7 +645,7 @@ def test_reference_scope_allows_others_published_but_not_draft(client, db):
 
 
 def _seed_reference(db_path, proof_id: str, referenced_id: str, alias: str) -> None:
-    engine = create_engine(f"sqlite:///{db_path}")
+    engine = create_engine(db_path)
     try:
         with Session(engine) as session:
             session.add(
@@ -724,6 +734,8 @@ def test_reference_resolves_a_cited_lemma_at_verify(client, db):
     sid = _seed_system(db, uid)
     lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
     main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    # A lemma is cited from its *stored* lines, so it must have been verified.
+    assert client.post(f"/api/proofs/{lemma}/verify").json()["success"] is True
 
     # Without the reference, `A.1` doesn't resolve, so the step fails.
     assert client.post(f"/api/proofs/{main}/verify").json()["success"] is False
@@ -740,9 +752,320 @@ def test_reference_to_an_invalid_lemma_does_not_prove(client, db):
     # Valid line 1, but invalid overall (line 2 cites MP with one antecedent).
     broken = _create_proof(client, sid, "Broken", source="(x ∈ y → x = y) [HYP]\nx = y [MP, 1]")
     main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    client.post(f"/api/proofs/{broken}/verify")
     _set_refs(client, main, [{"referenced_proof_id": broken, "alias": "A"}])
     # An invalid proof isn't a usable lemma, so `A.1` is not seeded.
     assert client.post(f"/api/proofs/{main}/verify").json()["success"] is False
+
+
+def test_an_unverified_lemma_cannot_be_cited_and_the_reason_is_reported(client, db):
+    # A lemma is cited from its *stored* lines, so one that has never been
+    # verified has nothing to cite — a proof may rest only on a lemma that
+    # stands. Previously the closure quietly verified it on the way past, which
+    # meant a proof could be "proved" by a lemma nobody had ever checked.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
+    main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
+
+    body = client.post(f"/api/proofs/{main}/verify").json()
+    assert body["success"] is False
+    # ...and it says so, rather than leaving `[MP, A.1, 1]` looking like a typo.
+    assert any("Lemma" in error and "must be verified" in error for error in body["errors"])
+
+    # Verifying the lemma is all it takes.
+    assert client.post(f"/api/proofs/{lemma}/verify").json()["success"] is True
+    assert client.post(f"/api/proofs/{main}/verify").json()["success"] is True
+
+
+def test_verifying_parses_the_proof_and_none_of_its_lemmas(client, db, monkeypatch):
+    # P1's measure (docs/verification-from-rows.md): a lemma is *loaded* from its
+    # stored lines, not re-parsed and re-checked, so the cost of a verify stops
+    # scaling with the size of the reference closure. Two levels deep, because
+    # the seeding is transitive even though the checking is not.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+
+    base = _create_proof(client, sid, "Base", source=_LEMMA_SRC)
+    middle = _create_proof(client, sid, "Middle", source=_USER_SRC)
+    _set_refs(client, middle, [{"referenced_proof_id": base, "alias": "A"}])
+    assert client.post(f"/api/proofs/{base}/verify").json()["success"] is True
+    assert client.post(f"/api/proofs/{middle}/verify").json()["success"] is True
+
+    # Cites Middle's line 2 (`x = y`) as one of MP's premises.
+    main = _create_proof(
+        client, sid, "Main", source="(x = y → x ∈ y) [HYP]\nx ∈ y [MP, M.2, 1]"
+    )
+    _set_refs(client, main, [{"referenced_proof_id": middle, "alias": "M"}])
+
+    parses: list[str] = []
+    original = EngineFormalSystem.parse
+
+    def counted(self, text, *args, **kwargs):
+        parses.append(text)
+        return original(self, text, *args, **kwargs)
+
+    monkeypatch.setattr(EngineFormalSystem, "parse", counted)
+    assert client.post(f"/api/proofs/{main}/verify").json()["success"] is True
+
+    # Exactly one parse: the proof being verified. Neither lemma is re-read.
+    assert len(parses) == 1
+    assert parses[0].startswith("(x = y → x ∈ y)")
+
+
+def test_the_reference_closure_is_read_in_a_fixed_number_of_queries(client, db):
+    # Reading a proof back is latency, not work: per-lemma it loses to simply
+    # re-parsing, and only batching the whole closure makes it win. So the query
+    # count must not scale with the number of lemmas — that regressing would undo
+    # the point of reading rows at all, silently and without failing anything.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+
+    lemmas = []
+    for i in range(6):
+        pid = _create_proof(client, sid, f"L{i}", source=_LEMMA_SRC)
+        assert client.post(f"/api/proofs/{pid}/verify").json()["success"] is True
+        lemmas.append(pid)
+
+    main = _create_proof(client, sid, "Main", source=_USER_SRC)
+
+    def queries_for(count: int) -> int:
+        _set_refs(client, main, [
+            {"referenced_proof_id": pid, "alias": f"A{n}" if n else "A"}
+            for n, pid in enumerate(lemmas[:count])
+        ])
+        statements: list[str] = []
+        engine = create_engine(db)
+        event.listen(engine, "before_cursor_execute",
+                     lambda *a, **k: statements.append(a[2]))
+        try:
+            with Session(engine) as session:
+                system = session.scalar(select(FormalSystem))
+                built = build_spec(system_to_spec(system))["system"]
+                context = copy(built.context)
+                context.variables.update(built.build_context.variables)
+                statements.clear()
+                load_proof_lines(
+                    session, [uuid.UUID(pid) for pid in lemmas[:count]], built, context
+                )
+                return len(statements)
+        finally:
+            engine.dispose()
+
+    # Same number of round trips for one lemma as for six.
+    assert queries_for(1) == queries_for(6)
+    assert queries_for(6) <= 3
+
+
+def test_an_unverified_reference_the_proof_never_cites_is_not_reported(client, db):
+    # "Not cited" explains a *failure*. A proof that stands on its own and merely
+    # references something unverified has nothing to explain, and reporting it
+    # alongside `success: true` reads as a contradiction. The scope is the
+    # proof's own references, not the whole transitive closure.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    unverified = _create_proof(client, sid, "Unverified", source=_LEMMA_SRC)
+    main = _create_proof(client, sid, "Main", source=VALID_PROOF)
+    _set_refs(client, main, [{"referenced_proof_id": unverified, "alias": "A"}])
+
+    body = client.post(f"/api/proofs/{main}/verify").json()
+    assert body["success"] is True
+    assert body["errors"] == []
+
+
+def test_an_unverified_reference_no_failing_line_names_is_not_blamed(client, db):
+    # A proof can fail for its own reasons while also declaring a reference it
+    # never cites. Blaming the lemma then buries the real error under a claim the
+    # reader can see is false — the failing line names no alias at all.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    unverified = _create_proof(client, sid, "Unverified", source=_LEMMA_SRC)
+    main = _create_proof(client, sid, "Main", source=INVALID_PROOF)
+    _set_refs(client, main, [{"referenced_proof_id": unverified, "alias": "A"}])
+
+    body = client.post(f"/api/proofs/{main}/verify").json()
+    assert body["success"] is False
+    assert body["errors"] == []
+
+    # ...but a line that *does* cite it is still explained.
+    citing = _create_proof(client, sid, "Citing", source=_USER_SRC)
+    _set_refs(client, citing, [{"referenced_proof_id": unverified, "alias": "A"}])
+    explained = client.post(f"/api/proofs/{citing}/verify").json()
+    assert explained["success"] is False
+    assert any("must be verified" in error for error in explained["errors"])
+
+
+def test_a_lemma_that_cannot_be_read_is_a_verdict_not_a_500(client, db, monkeypatch):
+    # A stored row that no longer matches its system raises out of `load_term`,
+    # and the line-numbering guard raises deliberately. Both are defects in
+    # stored data, but every other failure on this path becomes a structured
+    # verdict, and a corrupt lemma should not be the one that 500s.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
+    main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    client.post(f"/api/proofs/{lemma}/verify")
+    _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
+
+    def explode(*args, **kwargs):
+        raise LookupError("No production or defined notation named 'gone'")
+
+    monkeypatch.setattr(proofs_router, "load_proof_lines", explode)
+    response = client.post(f"/api/proofs/{main}/verify")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert any("could not be read" in error for error in body["errors"])
+
+
+# ---------------------------------------------------------------------------
+# Serialising verification against invalidation
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def locked(monkeypatch) -> list:
+    """Record every system id `lock_system` is asked for.
+
+    The lock itself is a Postgres advisory lock and a no-op on SQLite, so what a
+    SQLite run can prove is that each path *takes* it. That the lock then
+    excludes anything is a separate, Postgres-only test below.
+    """
+    taken: list = []
+    real = _common.lock_system
+
+    async def spy(session, system_id):
+        taken.append(system_id)
+        return await real(session, system_id)
+
+    monkeypatch.setattr(_common, "lock_system", spy)
+    monkeypatch.setattr(proofs_router, "lock_system", spy)
+    monkeypatch.setattr(system_parts_router, "lock_system", spy)
+    return taken
+
+
+def test_verification_takes_the_system_lock_before_reading(client, db, locked):
+    # The point of the whole exercise: a verify trusts its lemmas' stored rows,
+    # so the read and the write must be one critical section. Locking just before
+    # the write would let an invalidation commit in between.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    pid = _create_proof(client, sid, "P", source=VALID_PROOF)
+
+    locked.clear()
+    assert client.post(f"/api/proofs/{pid}/verify").json()["success"] is True
+    assert uuid.UUID(sid) in locked
+
+
+@pytest.mark.parametrize(
+    "invalidate",
+    [
+        pytest.param(
+            lambda client, sid, pid: client.patch(
+                f"/api/proofs/{pid}", json={"source": "x ∈ y [HYP]"}
+            ),
+            id="source-edit",
+        ),
+        pytest.param(
+            lambda client, sid, pid: client.put(
+                f"/api/proofs/{pid}/references", json={"references": []}
+            ),
+            id="reference-edit",
+        ),
+        pytest.param(
+            lambda client, sid, pid: client.delete(f"/api/proofs/{pid}"),
+            id="delete",
+        ),
+        pytest.param(
+            lambda client, sid, pid: client.patch(
+                f"/api/formal-systems/{sid}/rules/"
+                + next(
+                    r["id"]
+                    for r in client.get(f"/api/formal-systems/{sid}").json()["rules"]
+                    if r["label"] == "HYP"
+                ),
+                json={"name": "Hypothesis"},
+            ),
+            id="system-part-edit",
+        ),
+    ],
+)
+def test_every_invalidation_path_takes_the_system_lock(client, db, locked, invalidate):
+    # A verify's read is only safe if *every* way of invalidating those rows
+    # serialises against it. Forgetting one is how the guarantee would be lost,
+    # and it would fail nothing else — hence a case per path.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    pid = _create_proof(client, sid, "P", source=VALID_PROOF)
+    client.post(f"/api/proofs/{pid}/verify")
+
+    locked.clear()
+    response = invalidate(client, sid, pid)
+    assert response.status_code in (200, 204), response.text
+    assert uuid.UUID(sid) in locked
+
+
+@pytest.mark.skipif(not ON_POSTGRES, reason="advisory locks are a no-op off Postgres")
+def test_the_system_lock_actually_excludes_a_second_transaction(db):
+    # The spy tests above prove the paths ask for the lock; this proves the lock
+    # means something. Two transactions, one key: the second cannot take it until
+    # the first commits, which is what serialises a verify against an edit.
+    import asyncio
+
+    system_id = uuid.uuid4()
+
+    async def exercise() -> tuple[bool, bool]:
+        engine = create_async_engine(async_url(db), poolclass=NullPool)
+        try:
+            async with AsyncSession(engine) as holder, AsyncSession(engine) as other:
+                await _common.lock_system(holder, system_id)
+                # `try_` rather than the blocking form: a blocked acquire would
+                # hang the test rather than fail it.
+                blocked = await other.scalar(
+                    text("SELECT pg_try_advisory_xact_lock(hashtextextended(:k, 0))"),
+                    {"k": str(system_id)},
+                )
+                await holder.rollback()
+                free = await other.scalar(
+                    text("SELECT pg_try_advisory_xact_lock(hashtextextended(:k, 0))"),
+                    {"k": str(system_id)},
+                )
+                return blocked, free
+        finally:
+            await engine.dispose()
+
+    blocked, free = asyncio.run(exercise())
+    assert blocked is False, "a second transaction took a lock the first was holding"
+    assert free is True, "the lock outlived the transaction that took it"
+
+
+def test_a_lemma_whose_structure_was_discarded_is_no_longer_citable(client, db):
+    # The guarantee P1 rests on: a verdict is only as good as the invalidation
+    # that clears it. Editing the system drops every proof's structure
+    # (`discard_system_checks`), so a lemma checked against the old grammar stops
+    # being citable — rather than a dependent silently resting on stored terms
+    # whose constructors have since changed meaning.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
+    main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    client.post(f"/api/proofs/{lemma}/verify")
+    _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
+    assert client.post(f"/api/proofs/{main}/verify").json()["success"] is True
+
+    # Any part edit invalidates every proof in the system, structure included.
+    rules = client.get(f"/api/formal-systems/{sid}").json()["rules"]
+    rule_id = next(r["id"] for r in rules if r["label"] == "HYP")
+    assert client.patch(
+        f"/api/formal-systems/{sid}/rules/{rule_id}", json={"name": "Hypothesis"}
+    ).status_code == 200
+
+    assert _structure(client, lemma)["lines"] == []
+    body = client.post(f"/api/proofs/{main}/verify").json()
+    assert body["success"] is False
+    assert any("Lemma" in error for error in body["errors"])
 
 
 def test_publish_requires_referenced_proofs_published(client, db):
@@ -764,6 +1087,7 @@ def test_editing_a_lemma_invalidates_dependents(client, db):
     sid = _seed_system(db, uid)
     lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
     main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    client.post(f"/api/proofs/{lemma}/verify")
     _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
     assert client.post(f"/api/proofs/{main}/verify").json()["success"] is True
     assert client.get(f"/api/proofs/{main}").json()["valid"] is True
@@ -845,7 +1169,7 @@ def _structure(client: TestClient, proof_id: str) -> dict:
 
 
 def _terms(db_path) -> list[TermRow]:
-    engine = create_engine(f"sqlite:///{db_path}")
+    engine = create_engine(db_path)
     try:
         with Session(engine) as session:
             return list(session.scalars(select(TermRow)))
@@ -970,6 +1294,7 @@ def test_a_citation_into_a_lemma_is_stored_by_proof_and_number(client, db):
     sid = _seed_system(db, uid)
     lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
     main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    client.post(f"/api/proofs/{lemma}/verify")
     _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
     assert client.post(f"/api/proofs/{main}/verify").json()["success"] is True
 
