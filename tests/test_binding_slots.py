@@ -2,10 +2,13 @@
 infer.
 
 A production declares which of its slots *bind* and over what
-(``Production.scopes_over``). One thing reads it today: a definition's ``fresh``
-clause — "which leaves of the defining form sit in a binder slot" — which is now
-derivable from the parsed defining form rather than written by hand. See
-``docs/binding-slots-design.md`` for the two uses this leaves open.
+(``Production.scopes_over``). Two things read it. A definition's ``fresh``
+clause — "which leaves of the defining form sit in a binder slot" — is derivable
+from the parsed defining form rather than written by hand; and a
+``denotes_constant`` declaration on a production the binder can *bind* is
+refused, since a bindable token is a variable of the object language whatever
+the author ticked. See ``docs/binding-slots-design.md`` for the use this leaves
+open.
 
 The load-bearing property throughout is that the declaration is *optional*: a
 grammar that declares nothing infers nothing and behaves exactly as it did
@@ -18,10 +21,24 @@ import pytest
 
 pytest.importorskip("regex")
 
-from website.logical.declarative import DeclarativeError, SystemSpec, build_system
+from website.logical.declarative import Definition as Definition_
+from website.logical.declarative import (
+    DeclarativeError,
+    Production,
+    SystemSpec,
+    build_spec,
+    build_system,
+)
 from website.logical.formal_system.definitions import DefinitionError, parse_definition
 from website.logical.kernel import constructor_for, from_match, introduced_leaves, unfold
-from tests.spec_helpers import brackets, regex_prod, statement_line, template_prod
+from tests.spec_helpers import (
+    atom_const_prod,
+    atom_family_prod,
+    brackets,
+    regex_prod,
+    statement_line,
+    template_prod,
+)
 
 
 # Set theory, as in test_definitions, but with `∀x.phi` free to declare that `x`
@@ -352,3 +369,156 @@ def test_a_declared_sort_the_grammar_contradicts_is_refused():
 
     with pytest.raises(DefinitionError, match="binder slot of sort 'setvar'"):
         df_subset(built, fresh={"z": system.build_context.variables["classvar"]})
+
+
+# ---------------------------------------------------------------------------
+# What it buys: a `denotes_constant` declaration the grammar contradicts
+# ---------------------------------------------------------------------------
+
+
+def atom_variable(scopes_over=None, denotes_constant=False):
+    """`setvar ::= [A-Z] | c`, with `c` an atom the author may declare constant.
+
+    The grammar from ``test_definitions.ATOM_VARIABLE`` — `c` is a *variable* of
+    the object language spelled as a one-token atom, and nothing about its shape
+    says so. `T ≝ (c ∈ c)` is admitted only if `c` is excused as a constant, and
+    `∀c.T ⟶ ∀c.(c ∈ c)` then captures.
+    """
+    return SystemSpec(
+        name="AtomVariable",
+        brackets=brackets(),
+        productions=[
+            regex_prod("setvar", "setvar_atom", "[A-Z]"),
+            atom_const_prod("setvar", "cee", "c", denotes_constant=denotes_constant),
+            template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+            template_prod(
+                "formula", "forall", "∀x.phi",
+                [("x", "setvar"), ("phi", "formula")],
+                scopes_over=scopes_over,
+            ),
+            template_prod("formula", "tee", "T", []),
+        ],
+        lines=[statement_line()],
+        definitions=[
+            Definition_(sort="formula", name="d", higher="T", lower="(c ∈ c)", bindings=[])
+        ],
+    )
+
+
+def test_a_constant_in_a_sort_a_binder_ranges_over_is_refused():
+    # The documented hole, now closed for a grammar that says what binds. `∀`
+    # ranges over `setvar`, `c` is one, so `c` is a variable of the object
+    # language however it was declared — and the declaration is what would let
+    # `T ≝ (c ∈ c)` through.
+    with pytest.raises(DeclarativeError, match="binds 'setvar' through its slot 'x'"):
+        build_system(atom_variable({"x": ["phi"]}, denotes_constant=True))
+
+
+def test_the_declaration_stays_trusted_where_nothing_binds():
+    # The boundary this narrows rather than removes: a sort no binder mentions is
+    # still the author's call, so the same spec without the binding declaration
+    # builds exactly as it did before. This is the pinned hole in
+    # `test_definitions.test_declaring_a_bindable_atom_constant_is_the_author_s_to_get_wrong`.
+    assert "errors" not in build_spec(atom_variable(denotes_constant=True))
+
+
+def test_an_undeclared_atom_is_refused_for_the_ordinary_reason():
+    # Without the declaration the leaf is variable-like, so the definition is
+    # refused as introducing a name from nowhere — the pre-existing path, which
+    # the new check must not shadow.
+    result = build_spec(atom_variable({"x": ["phi"]}))
+
+    assert "errors" in result
+    (message,) = result["errors"]
+    assert "introduces 'c'" in message
+
+
+def test_a_constant_outside_every_binder_sort_is_untouched():
+    # `⊥` is a `formula`, and no binder ranges over `formula` — only over
+    # `setvar`. The check must reach the bindable sorts and no further.
+    spec = atom_variable({"x": ["phi"]})
+    spec.productions.append(atom_const_prod("formula", "falsum", "⊥", denotes_constant=True))
+    spec.definitions = [
+        Definition_(sort="formula", name="d", higher="T", lower="(⊥ → ⊥)", bindings=[])
+    ]
+    spec.productions.append(
+        template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")])
+    )
+
+    assert "errors" not in build_spec(spec)
+
+
+def test_the_check_reaches_through_a_nested_sort_union():
+    # A sort admits its branches *transitively*, so a constant two levels down is
+    # as bindable as one declared directly in the sort the binder names. A member
+    # production with no regex/template/atom of its own leaves the forward-declared
+    # union of that name in place, which is how a sort comes to nest.
+    spec = SystemSpec(
+        name="Nested",
+        brackets=brackets(),
+        productions=[
+            Production(sort="setvar", name="inner"),
+            regex_prod("inner", "inner_atom", "[A-Z]"),
+            atom_const_prod("inner", "cee", "c", denotes_constant=True),
+            template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+            template_prod(
+                "formula", "forall", "∀x.phi",
+                [("x", "setvar"), ("phi", "formula")],
+                scopes_over={"x": ["phi"]},
+            ),
+        ],
+        lines=[statement_line()],
+    )
+
+    # `setvar` admits `inner`, which admits `cee` — and the message says so.
+    with pytest.raises(DeclarativeError, match="'setvar' admits 'inner'"):
+        build_system(spec)
+
+
+def test_an_atom_family_is_still_refused_before_any_binder_is_declared():
+    # An indexed family is refused outright wherever it sits, declaration or no
+    # binder — a supply of interchangeable tokens can never name one fixed thing.
+    # Kept distinct from the new check, which needs a binder to say anything.
+    spec = atom_variable()
+    spec.productions.append(atom_family_prod("formula", "prop", "p"))
+    spec.productions[-1].denotes_constant = True
+
+    with pytest.raises(DeclarativeError, match="indexed atom family"):
+        build_system(spec)
+
+
+def test_a_notation_cannot_reach_a_binder_sort_as_a_constant():
+    # A nullary defined form is marked constant by the *engine*, not the author
+    # (`denotes_a_constant`), so it bypasses the check above. It cannot reach a
+    # binder sort anyway: a definition into that sort needs a defining form of
+    # that sort, everything there is bindable and so refused as conjured, and the
+    # only way to prime the chain is a declared constant the check now catches.
+    spec = SystemSpec(
+        name="NotationInBinderSort",
+        brackets=brackets(),
+        productions=[
+            regex_prod("setvar", "letter", "[a-z]"),
+            atom_const_prod("setvar", "seed", "§"),
+            template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+            template_prod(
+                "formula", "forall", "∀x.phi",
+                [("x", "setvar"), ("phi", "formula")],
+                scopes_over={"x": ["phi"]},
+            ),
+            template_prod("formula", "tee", "T", []),
+        ],
+        lines=[statement_line()],
+        definitions=[
+            Definition_(sort="setvar", name="d1", higher="S", lower="§", bindings=[]),
+            Definition_(sort="formula", name="d2", higher="T", lower="(S ∈ S)", bindings=[]),
+        ],
+    )
+
+    # Undeclared, the seed is conjured and the chain never starts.
+    (message,) = build_spec(spec)["errors"]
+    assert "introduces '§'" in message
+
+    # Declared, the seed is exactly what the new check refuses.
+    spec.productions[1].denotes_constant = True
+    (message,) = build_spec(spec)["errors"]
+    assert "Production 'seed' (sort 'setvar') is declared" in message

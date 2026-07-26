@@ -34,6 +34,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from copy import copy
 from dataclasses import InitVar, dataclass, field
+from typing import TYPE_CHECKING
 
 from .build_context import (
     FormalSystemContext,
@@ -47,8 +48,11 @@ from .formal_system.definitions import (
     denotes_a_constant,
 )
 from .formal_system.side_condition_syntax import parse_side_condition
-from .kernel.constructors import project_grammar
+from .kernel.constructors import constructor_for, project_grammar
 from .matching import AtomPattern, Pattern, RegexPattern, StringPattern, UnionPattern
+
+if TYPE_CHECKING:
+    from .kernel.constructors import Constructor
 
 
 class DeclarativeError(Exception):
@@ -500,6 +504,80 @@ def _binding_scopes(prod: Production, pattern: StringPattern) -> dict[str, tuple
     return scopes
 
 
+def _bindable_sorts(
+    spec: SystemSpec, ctx: FormalSystemContext
+) -> dict[Constructor, tuple[str, str, str]]:
+    """Every production a binder can bind, mapped to the binder that can bind it
+    — ``(binding production, binder slot, the sort that slot ranges over)``.
+
+    A binder slot names the sort it ranges over, and a sort admits its own
+    branches — so ``∀x.phi`` declaring ``x : setvar`` says that *everything
+    `setvar` admits* is bindable, including the atoms enumerating it. That is the
+    whole of the deduction; ``Constructor.admits`` already computes the closure.
+
+    Keyed by constructor rather than name because it is the constructor a
+    production is compared by, and two productions may spell the same token.
+    Where several binders reach one production the first in spec order is kept,
+    which only decides which binder the error names — ``admits`` is a frozenset,
+    so nothing may depend on *its* order.
+    """
+    bindable: dict[Constructor, tuple[str, str, str]] = {}
+    for prod in spec.productions:
+        constructor = constructor_for(ctx.variables[prod.name])
+        # The projected `scopes_over`, not the spec's: it is the validated and
+        # normalised one (`_binding_scopes` drops a slot that scopes over nothing,
+        # which declares no binding at all).
+        for binder in constructor.scopes_over:
+            sort = constructor.slot_sorts[binder]
+            for admitted in sort.admits:
+                bindable.setdefault(admitted, (prod.name, binder, sort.name))
+    return bindable
+
+
+def _validate_constant_declarations(spec: SystemSpec, ctx: FormalSystemContext) -> None:
+    """Refuse a ``denotes_constant`` declaration the grammar contradicts.
+
+    ``denotes_constant`` is trusted — nothing about a production's shape settles
+    it, so the author declares it (see :class:`Production`). Binding slots make
+    exactly one class of mistake checkable: a production in the sort a binder
+    ranges over yields tokens that binder can *bind*, and a token that can be
+    bound is not a constant of the object language whatever the author ticked.
+
+    This is the hole ``test_an_atom_constant_in_the_variable_sort_is_not_excused``
+    documents. ``setvar ::= [A-Z] | c`` with ``c`` declared constant admits
+    ``T ≝ (c ∈ c)``, and ``∀c.T ⟶ ∀c.(c ∈ c)`` then captures ``c`` — the one
+    direction of the declaration that costs soundness. Refused here, naming the
+    binder that settles it.
+
+    It narrows the trusted surface rather than removing it: a sort no binder
+    mentions is still the author's call, and a grammar that declares no binding
+    slots is checked exactly as much as it was before — which is not at all.
+    """
+    bindable = _bindable_sorts(spec, ctx)
+    for prod in spec.productions:
+        if not prod.denotes_constant:
+            continue
+        binder = bindable.get(constructor_for(ctx.variables[prod.name]))
+        if binder is None:
+            continue
+        binder_production, binder_slot, binder_sort = binder
+        # A sort admits its branches transitively, so the production's own sort
+        # need not be the one the binder names — say both when they differ.
+        reached = (
+            "" if binder_sort == prod.sort else f", and {binder_sort!r} admits {prod.sort!r}"
+        )
+        raise DeclarativeError(
+            f"Production {prod.name!r} (sort {prod.sort!r}) is declared to denote "
+            f"a constant of the object language, but production "
+            f"{binder_production!r} binds {binder_sort!r} through its slot "
+            f"{binder_slot!r}{reached}. A token a binder can bind is a variable of "
+            f"the object language, not a constant: declaring it one would let a "
+            f"definition introduce it, and an unfold under that binder would "
+            f"capture it. Drop the declaration; or, if it really names one fixed "
+            f"thing, move it out of the sort the binder ranges over."
+        )
+
+
 def build_system(spec: SystemSpec) -> FormalSystem:
     """Build a :class:`FormalSystem` directly from a :class:`SystemSpec`.
 
@@ -639,6 +717,11 @@ def build_system(spec: SystemSpec) -> FormalSystem:
     # `ctx.variables` is the whole build namespace, which also holds referenced
     # systems; only the productions are projectable.
     project_grammar(p for p in ctx.variables.values() if isinstance(p, Pattern))
+
+    # 4b. Now that every sort knows what it admits, cross-check the one class of
+    # `denotes_constant` mistake the grammar can actually settle: a token a binder
+    # ranges over is not a constant of the object language.
+    _validate_constant_declarations(spec, ctx)
 
     # 5. Lines: a statement pattern + logical line type per declared line. Each
     # line's inline parts are registered just before it is built (see step 1).

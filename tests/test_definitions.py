@@ -917,8 +917,12 @@ def test_declaring_a_bindable_atom_constant_is_the_author_s_to_get_wrong():
     # the trust boundary is visible in the suite rather than only in prose — this
     # is the one direction that costs soundness, and it takes a positive act.
     #
-    # Detecting it needs to know which sorts a binder ranges over, which no
-    # production declares yet (see the binding-slots follow-up in AGENTS.md).
+    # Detecting it needs to know which sorts a binder ranges over, and `forall`
+    # here declares no binding slots — so nothing contradicts the declaration and
+    # it stands. A grammar that *does* declare them has this refused at build
+    # (`declarative._validate_constant_declarations`); see
+    # tests/test_binding_slots.py for the same spec with the declaration added.
+    # What remains trusted is a sort no binder mentions.
     spec = SystemSpec(
         name="AtomVariableDeclared",
         brackets=ATOM_VARIABLE.brackets,
