@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import Session
 
 import app.auth.backend as backend
+import app.routers.proofs as proofs_router
 from app.db import (
     Base,
     FormalSystem,
@@ -851,6 +852,46 @@ def test_the_reference_closure_is_read_in_a_fixed_number_of_queries(client, db):
     # Same number of round trips for one lemma as for six.
     assert queries_for(1) == queries_for(6)
     assert queries_for(6) <= 3
+
+
+def test_an_unverified_reference_the_proof_never_cites_is_not_reported(client, db):
+    # "Not cited" explains a *failure*. A proof that stands on its own and merely
+    # references something unverified has nothing to explain, and reporting it
+    # alongside `success: true` reads as a contradiction. The scope is the
+    # proof's own references, not the whole transitive closure.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    unverified = _create_proof(client, sid, "Unverified", source=_LEMMA_SRC)
+    main = _create_proof(client, sid, "Main", source=VALID_PROOF)
+    _set_refs(client, main, [{"referenced_proof_id": unverified, "alias": "A"}])
+
+    body = client.post(f"/api/proofs/{main}/verify").json()
+    assert body["success"] is True
+    assert body["errors"] == []
+
+
+def test_a_lemma_that_cannot_be_read_is_a_verdict_not_a_500(client, db, monkeypatch):
+    # A stored row that no longer matches its system raises out of `load_term`,
+    # and the line-numbering guard raises deliberately. Both are defects in
+    # stored data, but every other failure on this path becomes a structured
+    # verdict, and a corrupt lemma should not be the one that 500s.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
+    main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    client.post(f"/api/proofs/{lemma}/verify")
+    _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
+
+    def explode(*args, **kwargs):
+        raise LookupError("No production or defined notation named 'gone'")
+
+    monkeypatch.setattr(proofs_router, "load_proof_lines", explode)
+    response = client.post(f"/api/proofs/{main}/verify")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert any("could not be read" in error for error in body["errors"])
 
 
 def test_a_lemma_whose_structure_was_discarded_is_no_longer_citable(client, db):

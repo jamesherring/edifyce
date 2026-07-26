@@ -87,6 +87,8 @@ from website.logical.declarative import build_spec
 from website.logical.graphs import topological_order
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from website.logical.formal_system import FormalSystem as EngineSystem
     from website.logical.matching.context import Context
 
@@ -328,27 +330,47 @@ async def _verify_with_references(
     lemma_ids = [pid for pid in order if pid != proof.id]
     # The whole closure in one go: reading a proof back is latency, not work, so
     # batching is what makes it cheaper than re-parsing (see load_proof_lines).
-    loaded = await session.run_sync(
-        lambda sync: load_proof_lines(sync, lemma_ids, compiled_system, context)
-    )
+    # A stored row that no longer matches its system raises out of `load_term`,
+    # and the line-numbering guard raises deliberately. Both are defects in
+    # stored data rather than in the proof being checked, but this function
+    # reshapes every other failure into a verdict rather than a 500, and a
+    # corrupt lemma should not be the one exception.
+    try:
+        loaded = await session.run_sync(
+            lambda sync: load_proof_lines(sync, lemma_ids, compiled_system, context)
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _Verification(
+            VerifyProofResponse(
+                success=False, errors=[f"A cited proof could not be read: {exc}"]
+            ),
+            None,
+        )
 
     compiled: dict[uuid.UUID, EngineProof] = {}
-    unusable: list[str] = []
+    unusable: dict[uuid.UUID, str] = {}
     for pid in lemma_ids:
         lemma = loaded.get(pid)
         if lemma is None or not _is_usable_lemma(lemma):
-            unusable.append(closure[pid].name)
+            unusable[pid] = closure[pid].name
             continue
         # A citation may reach through a lemma into its own lemma, so a lemma's
         # references are resolved before anything cites it — which is all the
         # dependency order is still for, now that nothing is re-checked.
-        lemma.reference_context.update(
-            {
+        #
+        # Aliases go *under* the labels `load_proof_lines` installed, matching
+        # the parse path: there the context is seeded with aliases and each
+        # labelled line then overwrites its own name as it executes. Updating the
+        # other way round would silently give an alias precedence over a line
+        # label of the same name.
+        lemma.reference_context = {
+            **{
                 alias: compiled[target]
                 for alias, target, _pos in edges.get(pid, ())
                 if target in compiled
-            }
-        )
+            },
+            **lemma.reference_context,
+        }
         compiled[pid] = lemma
 
     root = EngineProof(formal_system=compiled_system)
@@ -368,7 +390,9 @@ async def _verify_with_references(
 
     return _Verification(
         response=VerifyProofResponse(
-            success=root.valid, proof=root.data(), errors=_unusable_errors(unusable)
+            success=root.valid,
+            proof=root.data(),
+            errors=_unusable_errors(root, edges.get(proof.id, ()), unusable),
         ),
         valid=root.valid,
         engine_proof=root,
@@ -388,16 +412,29 @@ def _term_context(system: EngineSystem) -> Context:
     return context
 
 
-def _unusable_errors(names: list[str]) -> list[str]:
+def _unusable_errors(
+    root: EngineProof, references: Sequence[_Edge], unusable: dict[uuid.UUID, str]
+) -> list[str]:
     """Why a citation did not resolve, when the reason is a lemma rather than the
     proof. A lemma is citable only once it has been verified and stands, so an
     unverified one leaves `[alias.n]` unresolved — which reads as a mistake in
-    the citing proof unless we say what actually happened."""
-    if not names:
+    the citing proof unless we say what actually happened.
+
+    Narrowed twice, because this is an explanation and not a warning. Only the
+    proof's **own** references can explain its failure: `unusable` spans the
+    whole transitive closure, and a lemma two hops away is nothing this proof
+    cites. And only a proof that **failed** needs explaining — one that verified
+    did not need the lemma, so saying anything would be noise beside a success.
+    """
+    if root.valid:
+        return []
+    named = sorted({unusable[target] for _alias, target, _pos in references
+                    if target in unusable})
+    if not named:
         return []
     return [
         "Not cited: "
-        + ", ".join(sorted(names))
+        + ", ".join(named)
         + " — a lemma must be verified, and stand, before a proof may rest on it."
     ]
 

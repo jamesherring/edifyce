@@ -26,9 +26,13 @@ last thing still held only as text:
   reaching into a cited lemma is recorded by proof id and citation number, since
   that proof owns its own line rows).
 
-The snapshot is derived, never authoritative: it is dropped whenever the proof's
-verdict is invalidated and rewritten on the next verify, so it can never
-disagree with ``source``.
+These rows are written when a proof is verified and dropped whenever its verdict
+is invalidated, so they can never disagree with ``source``. They are no longer
+only a *record* of that check: a verify reads a cited lemma's lines from here
+rather than re-parsing it (``proofs_mapping.load_proof_lines``), which is what
+makes the invalidation soundness-critical rather than merely tidy — a proof may
+rest only on a lemma whose rows say it stands. See
+``docs/verification-from-rows.md``.
 """
 
 from __future__ import annotations

@@ -366,19 +366,30 @@ def prefetch_terms(session: Session, root_ids: Sequence[uuid.UUID]) -> list[Term
     meant to hit memory goes back to the database, which is the exact failure
     this function exists to prevent.
     """
-    root_ids = [rid for rid in root_ids if rid is not None]
+    # Deduplicated: the roots are a proof's line terms, and interning means the
+    # same statement is commonly the term of several lines.
+    root_ids = list(dict.fromkeys(rid for rid in root_ids if rid is not None))
     if not root_ids:
         return []
 
     # Transitive closure over parent -> child, seeded at the roots' own edges.
     # Left as a subquery rather than run for its ids first: the closure is only
     # ever wanted as the filter below, and one statement is one round trip.
+    #
+    # `union`, emphatically not `union_all`. A term graph is a DAG with heavy
+    # sharing — that is what interning is for — and `union_all` enumerates every
+    # root-to-node *path* rather than every reachable node, which is exponential
+    # in depth. Measured on a chain of 21 nodes whose children are shared two
+    # ways: 4,194,302 rows and 2.5 s, against 21 rows and no measurable time.
+    # The result set is identical either way, so nothing fails — it just gets
+    # slower the more sharing there is, in the function that exists to make
+    # loading cheap.
     edges = (
         select(TermChildRow.parent_id, TermChildRow.child_id)
         .where(TermChildRow.parent_id.in_(root_ids))
         .cte("reachable_terms", recursive=True)
     )
-    edges = edges.union_all(
+    edges = edges.union(
         select(TermChildRow.parent_id, TermChildRow.child_id).join(
             edges, TermChildRow.parent_id == edges.c.child_id
         )
