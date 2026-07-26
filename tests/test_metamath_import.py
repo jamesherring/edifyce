@@ -446,18 +446,20 @@ late $a wff LATE $.
     ] == ["wi"]
 
 
-def test_variable_sorts_carry_only_reachable_variables():
+def test_variable_sorts_carry_the_variables_a_proof_may_cite():
     # A sort's leaf pattern enumerates its variables, so taking *every* declared
-    # variable makes the pattern grow with the database - at set.mm's 355 it no
-    # longer fits its column. Only variables a statement in scope can mention are
-    # needed.
+    # variable makes the pattern grow with the database rather than with what is
+    # reachable. What a proof may cite is the test: a statement's own tokens, and
+    # the variables of the hypotheses *active* where it sits - including an
+    # optional floating one it never mentions, which Metamath permits a proof to
+    # use as a dummy. A `$v` with no `$f` at all can be cited by nothing.
     database = parse(
         r"""
 $c |- wff $.
-$v ph ps unused $.
+$v ph ps dummy typeless $.
 wph $f wff ph $.
 wps $f wff ps $.
-wunused $f wff unused $.
+wdummy $f wff dummy $.
 wff_a $a wff ph $.
 ax $a |- ph $.
 """
@@ -465,8 +467,14 @@ ax $a |- ph $.
     variable_pattern = next(
         p.regex for p in build_spec(database).productions if p.name == "wff_var"
     )
-    assert "unused" not in variable_pattern
     assert "ph" in variable_pattern
+
+    # Active `$f`, mentioned by no statement: a proof may still use it as a dummy
+    # variable, so the grammar must be able to read one (set.mm's `ax7` does).
+    assert "dummy" in variable_pattern
+
+    # Declared by `$v` but typed by no `$f`: nothing can cite it.
+    assert "typeless" not in variable_pattern
 
 
 def test_comment_stripping_is_linear():
@@ -610,3 +618,32 @@ def test_the_proviso_is_emitted_for_each_variable_sort():
         "disjoint(A, B, setvar_var)",
         "disjoint(A, B, class_var)",
     }
+
+
+# A proof using a *dummy* variable: `t` is typed by a floating hypothesis active
+# where `ax7` sits, but mentioned by neither its statement nor its mandatory
+# hypotheses. This is the shape of set.mm's own `ax7`.
+DUMMY_VARIABLE_FRAGMENT = r"""
+$c |- wff setvar = -> $.
+$v x y t $.
+vx $f setvar x $.
+vy $f setvar y $.
+vt $f setvar t $.
+wceq $a wff x = y $.
+wi $a wff ( x = y -> x = y ) $.
+${
+  step.1 $e |- ( x = t -> x = y ) $.
+  step $a |- ( x = y -> x = y ) $.
+$}
+"""
+
+
+def test_a_dummy_variable_is_in_the_grammar_of_a_theorem_that_may_cite_it():
+    # `t` is mentioned only by `step`'s own essential hypothesis, so it is
+    # reachable; the point of the test is that a variable typed by an active
+    # floating hypothesis reaches the grammar at all.
+    database = parse(DUMMY_VARIABLE_FRAGMENT)
+    variable_pattern = next(
+        p.regex for p in build_spec(database).productions if p.name == "setvar_var"
+    )
+    assert "t" in variable_pattern

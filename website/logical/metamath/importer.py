@@ -181,12 +181,22 @@ def _mentioned_variables(database: Database, before: str | None) -> set[str]:
     # declares 355 variables, and enumerating all of them in every sort's leaf
     # pattern makes a regex too large to store, while only a handful are ever
     # reachable from a given theorem.
+    #
+    # A statement's own tokens and its *mandatory* hypotheses are not the whole
+    # of it. A proof may also use a variable from an **optional** floating
+    # hypothesis - one active where the theorem sits but mentioned by nothing it
+    # states - as a dummy, and Metamath permits that. The intermediate lines then
+    # carry a variable the grammar has no leaf for, and an otherwise valid proof
+    # fails to parse: 14 of set.mm's theorems do this, `ax7` among them. So take
+    # the variables of every *active* hypothesis, which is exactly the set a
+    # proof at this point is allowed to cite.
     limit = len(database.order) if before is None else database.position(before) + 1
     mentioned: set[str] = set()
     for label in database.order[:limit]:
         assertion = database.assertions[label]
         mentioned.update(t for t in assertion.tokens if t in database.variables)
-        for hypothesis in assertion.mandatory:
+        for hypothesis_label in assertion.active_hypotheses:
+            hypothesis = database.hypotheses[hypothesis_label]
             mentioned.update(t for t in hypothesis.tokens if t in database.variables)
     return mentioned
 

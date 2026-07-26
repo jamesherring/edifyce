@@ -23,7 +23,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, text
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, uuid_pk_column
@@ -65,7 +65,11 @@ class SymbolRow(Base):
     # "union" (a sort), or a production: "regex", "composite", or "atom".
     kind: Mapped[str] = mapped_column(String(16))
     template: Mapped[str | None] = mapped_column(String(512))
-    regex: Mapped[str | None] = mapped_column(String(512))
+    # Unbounded: a leaf that enumerates a sort's variables grows with the system,
+    # and a set.mm import already exceeds 512 for `class`. Postgres stores a
+    # bounded varchar and an unbounded one identically, so the limit bought
+    # nothing but a ceiling to collide with.
+    regex: Mapped[str | None] = mapped_column(Text)
     # For kind="atom": the constant's literal token (`atom_value`) XOR the
     # indexed family's base (`atom_base`, e.g. "p" for the p_# family).
     atom_value: Mapped[str | None] = mapped_column(String(512))
