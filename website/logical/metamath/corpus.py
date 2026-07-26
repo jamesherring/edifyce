@@ -13,14 +13,23 @@ it, and its own ``$e`` hypotheses are registered as givens for the length of its
 check and withdrawn afterwards, so nothing later can cite a hypothesis that was
 scoped to somebody else's block.
 
-What the walk trades away is exactness of the *grammar* limit between rebuilds.
-The system is rebuilt whenever a syntax axiom is declared, not on every theorem,
-so within a run of theorems declaring no notation each is checked against the
-grammar as of the run's first -- identical, since notation is what changes it.
-The variable leaves are the exception: they grow with every statement, so they
-are seeded once at the far end of the walk (``variable_scope``), which admits
-more variable *names* than a given theorem could mention. That is the weakening
-§1.1 already records; it adds no constructor, so it cannot capture a parse.
+The grammar limit is exact, and nothing is traded for it. One system is built
+covering the whole walk and then *grown*: every production is declared up front
+and admitted to its sort at the position it becomes available, notation at the
+syntax axiom that declares it and a variable at its first mention
+(:func:`~.importer.grammar_schedule`).
+
+Rebuilding the system when notation is declared would be simpler, and is what
+this did. It costs the library: a ``PromotedTheorem`` holds patterns of the system
+it was built against, so none survive a rebuild and every one has to be
+re-promoted. Over set.mm that is 255 rebuilds and 3.2M re-promotions across the
+first 20,000 theorems, against 20,544 promotions here -- quadratic in the corpus,
+and by measurement the whole cost of the pass (5,234s before, 330s after).
+
+The one thing a single build cannot scope is the *logical sort*, since the line
+type is fixed when the system is built. A theorem stated before any prefix could
+name that sort is reported rather than checked, which is the same refusal
+:func:`~.importer._logical_sort` makes when the system is built from the prefix.
 """
 
 from __future__ import annotations
@@ -31,7 +40,13 @@ from typing import TYPE_CHECKING
 
 from ..declarative import build_system
 from ..promotion import promote_from_source
-from .importer import build_spec, import_proof, promoted_theorem
+from .importer import (
+    GrammarSchedule,
+    build_spec,
+    grammar_schedule,
+    import_proof,
+    promoted_theorem,
+)
 from .parser import MetamathError
 
 if TYPE_CHECKING:
@@ -112,54 +127,90 @@ def walk(
     horizon = walked[-1].label
     wanted = {a.label for a in walked}
 
-    system: FormalSystem | None = None
-    # The library promoted into `system`, in file order. Kept so a rebuild can
-    # re-promote it: a PromotedTheorem holds patterns of the system it was built
-    # against, so none of them survive one.
-    library: list[Assertion] = []
-    # Rebuild when the count of declared notation changes, which is the only
-    # thing that changes the grammar a theorem is checked against.
-    declared = 0
-    built_with = -1
+    # One system for the whole walk, built to the far end and then *grown*: each
+    # production is admitted to its sort at the position it becomes available.
+    #
+    # Rebuilding when notation is declared would be simpler, and is what this did.
+    # It costs the library, though: a `PromotedTheorem` holds patterns of the
+    # system it was built against, so none survive a rebuild and all of them have
+    # to be re-promoted. Over set.mm that is 255 rebuilds and 3.2M re-promotions in
+    # the first 20,000 theorems against 20,544 promotions here - quadratic in the
+    # corpus, and the whole cost of the pass.
+    schedule = grammar_schedule(database, before=horizon)
+    try:
+        system = build_system(
+            build_spec(database, name, before=horizon, variable_scope=horizon)
+        )
+    except Exception as exc:  # noqa: BLE001 - reported per theorem, not fatal
+        for assertion in walked:
+            yield CheckedTheorem(
+                assertion.label, database.position(assertion.label), "", error=str(exc)
+            )
+        return
+
+    _reset_sorts(system, schedule)
+    admitted = 0
 
     for label in database.order[: database.position(horizon) + 1]:
         assertion = database.assertions[label]
-        if assertion.declares_notation:
-            declared += 1
-            continue
         if not assertion.is_logical:
             continue
 
+        # Admitted at every logical assertion, not only the checked ones: an
+        # axiom is promoted here too, and a `PromotedTheorem` is built by parsing
+        # its statement, so it needs the grammar as of its own position.
+        position = database.position(label)
+        admitted = _admit(system, schedule, admitted, position)
+
         if label in wanted:
-            if system is None or built_with != declared:
-                try:
-                    rebuilt = build_system(
-                        build_spec(database, name, before=label, variable_scope=horizon)
-                    )
-                except Exception as exc:  # noqa: BLE001 - reported, not fatal
-                    # A prefix of the file the grammar cannot be built from --
-                    # nothing yet says which sort a `|-` statement is written in,
-                    # say. It is the prefix that is short, not the database, so
-                    # the walk reports this theorem and carries on; `built_with`
-                    # is left alone so the next one retries.
-                    yield CheckedTheorem(
-                        label, database.position(label), "", error=str(exc)
-                    )
-                    library.append(assertion)
-                    continue
-                system = rebuilt
-                built_with = declared
-                for earlier in library:
-                    _promote(system, earlier, database)
+            if schedule.logical_from is None or position < schedule.logical_from:
+                # Nothing yet says which sort a `|-` statement is written in. The
+                # line type was built from the grammar the walk *ends* with, so
+                # reading this one would borrow a sort nothing has declared - the
+                # forward leak the ordering exists to prevent, and the same refusal
+                # `_logical_sort` makes when the system is built from the prefix.
+                yield CheckedTheorem(
+                    label, position, "",
+                    error=(
+                        "Database declares no syntax axioms and no sort named "
+                        "'wff' or 'formula', so which sort a '|-' statement is "
+                        "written in cannot be told."
+                    ),
+                )
+                _promote(system, assertion, database)
+                continue
             yield _check(database, assertion, system)
 
-        library.append(assertion)
-        if system is not None:
-            # Promoted whatever the verdict was, exactly as `import_theorem`
-            # would have: a rejected proof does not retract its statement from
-            # the library, so a later theorem citing it fails for its own
-            # reasons rather than for a missing label.
-            _promote(system, assertion, database)
+        # Promoted whatever the verdict was, exactly as `import_theorem`
+        # would have: a rejected proof does not retract its statement from
+        # the library, so a later theorem citing it fails for its own
+        # reasons rather than for a missing label.
+        _promote(system, assertion, database)
+
+
+def _reset_sorts(system: FormalSystem, schedule: GrammarSchedule) -> None:
+    # Empty every sort the schedule fills. `build_spec` was given the walk's far
+    # end, so it declared the whole grammar *and* filled each sort with all of it;
+    # the schedule refills them in order. Emptying `patterns` directly would leave
+    # the flattening memos keyed to a membership that no longer holds, which is
+    # what `clear_patterns` exists for.
+    context = system.build_context
+    for sort in schedule.sorts:
+        context.variables[sort].clear_patterns()
+
+
+def _admit(
+    system: FormalSystem, schedule: GrammarSchedule, admitted: int, position: int
+) -> int:
+    # Admit every production scheduled at or before `position` and not already in,
+    # and report the watermark to resume from.
+    context = system.build_context
+    for at in range(admitted, position + 1):
+        for sort, production in schedule.entries.get(at, ()):
+            union = context.variables[sort]
+            if context.variables[production] not in union.patterns:
+                union.add_pattern(context.variables[production])
+    return position + 1
 
 
 def _promote(system: FormalSystem, assertion: Assertion, database: Database) -> None:

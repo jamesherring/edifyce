@@ -27,7 +27,6 @@ syntax axioms state.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -74,10 +73,13 @@ def build_spec(
     defaulting to ``before``. An ordered walk (:mod:`.corpus`) rebuilds the
     grammar only when notation is declared, so between rebuilds the leaves would
     lag behind the theorem being checked and a statement mentioning a
-    newly-declared variable would fail to parse; seeding them to the end of the
-    walk avoids that. It is a genuine weakening, but a much smaller one than
-    moving ``before``: a variable leaf only admits more *names*, and adds no
-    constructor that could capture a parse.
+    newly-declared variable would fail to parse.
+
+    It no longer weakens the scope the walk checks under. A variable is declared
+    as its own leaf, so the walk *declares* them to the far end and then admits
+    each into its sort as the theorem that may mention it is reached
+    (:func:`.corpus.variable_schedule`) - the same discipline notation gets, on a
+    grammar that can grow rather than one that has to be rebuilt.
     """
     productions: list[Production] = []
 
@@ -112,7 +114,7 @@ def build_spec(
                 )
             )
 
-    variables = _variable_sort_productions(
+    variables = _variable_productions(
         database, before if variable_scope is None else variable_scope
     )
     productions.extend(variables)
@@ -195,47 +197,24 @@ def _syntax_before(database: Database, before: str | None) -> list[Assertion]:
     return [a for a in syntax if database.position(a.label) < limit]
 
 
-def _mentioned_variables(database: Database, before: str | None) -> set[str]:
-    # The variables that can appear in statements available to `before` - its own
-    # included. Restricting to these keeps the grammar proportionate: set.mm
-    # declares 355 variables, and enumerating all of them in every sort's leaf
-    # pattern makes a regex too large to store, while only a handful are ever
-    # reachable from a given theorem.
-    #
-    # A statement's own tokens and its *mandatory* hypotheses are not the whole
-    # of it. A proof may also use a variable from an **optional** floating
-    # hypothesis - one active where the theorem sits but mentioned by nothing it
-    # states - as a dummy, and Metamath permits that. The intermediate lines then
-    # carry a variable the grammar has no leaf for, and an otherwise valid proof
-    # fails to parse: 14 of set.mm's theorems do this, `ax7` among them. So take
-    # the variables of every *active* hypothesis, which is exactly the set a
-    # proof at this point is allowed to cite.
-    limit = len(database.order) if before is None else database.position(before) + 1
-    mentioned: set[str] = set()
-    for label in database.order[:limit]:
-        assertion = database.assertions[label]
-        mentioned.update(t for t in assertion.tokens if t in database.variables)
-        for hypothesis_label in assertion.active_hypotheses:
-            hypothesis = database.hypotheses[hypothesis_label]
-            mentioned.update(t for t in hypothesis.tokens if t in database.variables)
-    return mentioned
-
-
 def _declared_variables(
     database: Database, before: str | None = None
 ) -> dict[str, list[str]]:
-    # Every `$f`-declared typecode, mapped to the variables inhabiting it. A
-    # variable is a member of its sort in its own right - `wph $f wff ph` makes a
-    # bare `ph` a wff - so this holds for sorts that *also* have syntax axioms,
-    # not only for variable-only ones.
-    mentioned = _mentioned_variables(database, before)
+    # Every `$f`-declared typecode, mapped to the variables inhabiting it where
+    # `before` sits. A variable is a member of its sort in its own right - `wph $f
+    # wff ph` makes a bare `ph` a wff - so this holds for sorts that *also* have
+    # syntax axioms, not only for variable-only ones.
+    #
+    # Keyed on the (typecode, variable) *pair*, because a `$f` is scoped: the same
+    # `x` may be a class in one block and a wff in a later one, and typing it as
+    # both from its earliest use would make an unambiguous grammar ambiguous. It
+    # also keeps the grammar proportionate - set.mm declares 355 variables, and a
+    # theorem can reach only the handful its scope types.
+    limit = len(database.order) if before is None else database.position(before) + 1
     sorts: dict[str, list[str]] = {}
-    for hypothesis in database.hypotheses.values():
-        if not hypothesis.floating or hypothesis.variable not in mentioned:
-            continue
-        members = sorts.setdefault(hypothesis.typecode, [])
-        if hypothesis.variable not in members:
-            members.append(hypothesis.variable)
+    for (typecode, variable), position in database.typed_from().items():
+        if position < limit:
+            sorts.setdefault(typecode, []).append(variable)
     return sorts
 
 
@@ -247,22 +226,59 @@ def _binder_sorts(database: Database) -> list[str]:
     return [t for t in database.floating_typecodes() if t not in built]
 
 
-def _variable_sort_productions(
+def variable_production_name(database: Database, typecode: str, variable: str) -> str:
+    """The production name carrying `variable` as a leaf of sort `typecode`.
+
+    Metamath keeps labels and variable names in separate namespaces; Edifyce
+    resolves productions out of one, so a name that collides with an assertion
+    label would silently rebind it. Salt until free rather than trusting that no
+    `set.mm`-alike ever labels a theorem `wff_var_ph`.
+    """
+    name = f"{typecode}_var_{variable}"
+    while name in database.assertions:
+        name += "_"
+    return name
+
+
+def _variable_productions(
     database: Database, before: str | None = None
 ) -> list[Production]:
-    # A leaf production per sort carrying the variables declared for it. Anchored
-    # alternation rather than a general identifier pattern, so a sort admits the
-    # variables the database declares and nothing else. Without these a bare
+    # A sub-sort `<typecode>_var` per typecode, holding one atom leaf per declared
+    # variable, and included into the typecode's own sort. Without these a bare
     # variable does not parse as its sort, and any statement mentioning one - every
     # `$e` hypothesis, most schemas - fails to read.
-    return [
-        Production(
-            sort=typecode,
-            name=f"{typecode}_var",
-            regex="(?:" + "|".join(re.escape(v) for v in sorted(members)) + ")",
+    #
+    # One leaf *each*, rather than a single regex leaf alternating over all of
+    # them, because a sort's variables have to be able to grow. The corpus pass
+    # adds notation as the walk reaches it and must add variables the same way
+    # (see `walk`), and an alternation cannot be extended in place: a regex leaf's
+    # kernel constructor is identified by its regex *text* (`kernel.constructors`),
+    # so rewriting it would split one variable into two non-interchangeable terms
+    # either side of the rewrite. An atom is identified by its own token, and joins
+    # a sort through `add_pattern` - the mechanism notation already grows through.
+    #
+    # The sub-sort is what keeps `$d` expressible. A proviso restricts to the
+    # leaves that *are* variables (`_distinct_provisos`), and with the variables
+    # spread over the typecode's own sort there would be no name for just those -
+    # `disjoint(A, B, class)` would wrongly separate constants like `RR` too.
+    #
+    # `denotes_constant` is left False: these are `$v` variables, the things a
+    # binder binds, as opposed to the `$c`-derived nullary constants above.
+    productions: list[Production] = []
+    for typecode, members in _declared_variables(database, before).items():
+        sort = f"{typecode}_var"
+        productions.extend(
+            Production(
+                sort=sort,
+                name=variable_production_name(database, typecode, variable),
+                atom_value=variable,
+            )
+            for variable in members
         )
-        for typecode, members in _declared_variables(database, before).items()
-    ]
+        # Shapeless: a production naming another sort *includes* that sort, so a
+        # variable reads as its typecode as well as as a variable.
+        productions.append(Production(sort=typecode, name=sort))
+    return productions
 
 
 def _logical_sort(productions: list[Production], variables: list[Production]) -> str:
@@ -620,7 +636,14 @@ def import_theorem(
 
     system = build_system(build_spec(database, name, before=label))
     promote_assertions(database, system, before=label)
+    _givens(assertion, system)
 
+    return system, import_proof(database, label)
+
+
+def _givens(assertion: Assertion, system: FormalSystem) -> list[str]:
+    # Register `assertion`'s own `$e` hypotheses as premises of the proof about to
+    # be checked, and report their labels so a caller can withdraw them again.
     metavariables = {h.variable: h.typecode for h in assertion.floatings}
     for hypothesis in assertion.essentials:
         system.promote(
@@ -631,5 +654,93 @@ def import_theorem(
                 metavariables=metavariables,
             )
         )
+    return [h.label for h in assertion.essentials]
 
-    return system, import_proof(database, label)
+
+@dataclass(frozen=True)
+class GrammarSchedule:
+    """Which productions join which sort, and when.
+
+    ``entries`` maps a position to the ``(sort, production)`` pairs that become
+    admissible there - notation at the syntax axiom that declares it, a variable
+    at its first mention. ``sorts`` names every union a replaying caller must
+    empty first: :func:`build_spec` built to the walk's far end declares the whole
+    grammar and fills each sort with all of it, which is the state a replay starts
+    from.
+
+    ``logical_from`` is the earliest position at which :func:`_logical_sort` could
+    name a sort for a ``|-`` statement - the first conventional name to appear, or
+    failing that the first syntax axiom. Before it the walk's line type would
+    borrow a sort nothing has declared, which is the forward leak the ordering
+    exists to prevent. None when no prefix ever determines one.
+    """
+
+    sorts: tuple[str, ...]
+    entries: dict[int, list[tuple[str, str]]]
+    logical_from: int | None
+
+
+def grammar_schedule(
+    database: Database, before: str | None = None
+) -> GrammarSchedule:
+    """When each production may join its sort, for a walk that grows one system.
+
+    Notation joins at the syntax axiom that declares it - the limit that has to
+    hold, since a constructor declared later can capture an earlier theorem's
+    parse. A variable joins where its ``$f`` first types it
+    (:meth:`~.parser.Database.typed_from`), and its ``<typecode>_var`` sub-sort
+    joins the typecode at the *earliest* of them: held back until then so an empty
+    sub-sort is never a branch of a live sort, but no later, or a variable whose
+    leaf is already live would not read as its typecode. Neither order follows
+    declaration order once a ``$f`` is scoped.
+
+    ``before`` bounds the schedule exactly as it bounds :func:`build_spec`, and a
+    caller replaying against a system must pass the *same* label. A database may
+    declare a sort after the last theorem a walk checks - a `limit` short of the
+    end, or notation trailing the final ``$p`` - and scheduling it would name a
+    sort the horizon-scoped system never built.
+
+    Read by :func:`.corpus.walk`, which builds one system covering the whole walk
+    and then admits each production as it is reached, rather than rebuilding when
+    notation is declared. Rebuilding costs the library: a ``PromotedTheorem`` holds
+    patterns of the system it was built against, so none survive one, and
+    re-promoting 47,000 of them at each of set.mm's 1,441 syntax axioms is
+    quadratic in the corpus.
+    """
+    entries: dict[int, list[tuple[str, str]]] = {}
+    sorts: list[str] = []
+
+    def at(position: int, sort: str, name: str) -> None:
+        entries.setdefault(position, []).append((sort, name))
+        if sort not in sorts:
+            sorts.append(sort)
+
+    notation = _syntax_before(database, before)
+    for assertion in notation:
+        at(database.position(assertion.label), assertion.typecode, assertion.label)
+
+    typed = database.typed_from()
+    for typecode, members in _declared_variables(database, before).items():
+        sub_sort = f"{typecode}_var"
+        at(min(typed[typecode, variable] for variable in members), typecode, sub_sort)
+        for variable in members:
+            leaf = variable_production_name(database, typecode, variable)
+            at(typed[typecode, variable], sub_sort, leaf)
+
+    # Mirrors `_logical_sort`'s two branches over a prefix: a conventional name
+    # counts however it was introduced - a `$f`-declared typecode is a sort in its
+    # own right, which is what makes set.mm's opening `idi`/`a1ii` readable before
+    # any syntax axiom - and otherwise only notation will do.
+    candidates = [
+        position
+        for position, added in entries.items()
+        if any(sort in ("wff", "formula") for sort, _name in added)
+    ]
+    if notation:
+        candidates.append(database.position(notation[0].label))
+
+    return GrammarSchedule(
+        sorts=tuple(sorts),
+        entries=entries,
+        logical_from=min(candidates) if candidates else None,
+    )

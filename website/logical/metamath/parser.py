@@ -137,6 +137,9 @@ class Database:
     _positions: dict[str, int] | None = field(default=None, repr=False, compare=False)
     _floating_typecodes: list[str] | None = field(default=None, repr=False, compare=False)
     _syntax_typecodes: set[str] | None = field(default=None, repr=False, compare=False)
+    _typed_from: dict[tuple[str, str], int] | None = field(
+        default=None, repr=False, compare=False
+    )
 
     def logical_assertions(self) -> list[Assertion]:
         return [a for a in self.iter_assertions() if a.is_logical]
@@ -162,6 +165,32 @@ class Database:
                     seen.append(hypothesis.typecode)
             self._floating_typecodes = seen
         return self._floating_typecodes
+
+    def typed_from(self) -> dict[tuple[str, str], int]:
+        """``(typecode, variable)`` -> the first position it is typed at.
+
+        A ``$f`` is *scoped*: `${ vx $f class x $. … $}` types `x` as a class only
+        inside that block, and a later block may type the same `x` as a `wff`. So
+        availability is a property of the pair, not of the variable — read off each
+        assertion's *active* floating hypotheses, which is exactly the set in scope
+        where it sits.
+
+        Active rather than mandatory, because a proof may use a variable from an
+        optional floating hypothesis as a dummy and Metamath permits it: 14 of
+        set.mm's theorems do, `ax7` among them, and their intermediate lines carry
+        a variable the grammar would otherwise have no leaf for.
+        """
+        if self._typed_from is None:
+            first: dict[tuple[str, str], int] = {}
+            for index, label in enumerate(self.order):
+                for name in self.assertions[label].active_hypotheses:
+                    hypothesis = self.hypotheses[name]
+                    if hypothesis.floating:
+                        first.setdefault(
+                            (hypothesis.typecode, hypothesis.variable), index
+                        )
+            self._typed_from = first
+        return self._typed_from
 
     def position(self, label: str) -> int:
         """Index of assertion ``label`` in file order."""

@@ -232,7 +232,11 @@ $}
 def test_the_stored_grammar_is_the_union_the_walk_ended_with(database):
     spec = corpus_spec(database, name="Propositional")
 
-    assert [p.name for p in spec.productions] == ["wn", "wi", "wff_var"]
+    # Notation, then a leaf per `$v` variable, then the shapeless production
+    # including their `wff_var` sub-sort into `wff`.
+    assert [p.name for p in spec.productions] == [
+        "wn", "wi", "wff_var_ph", "wff_var_ps", "wff_var_ch", "wff_var",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +345,9 @@ def test_an_import_is_ownerless_so_no_verify_can_overwrite_it(session, imported)
     # The gap itself, pinned so §3.2 closing it is a visible change: the stored
     # system carries the grammar and nothing citable.
     spec = system_to_spec(system)
-    assert [p.name for p in spec.productions] == ["wn", "wi", "wff_var"]
+    assert sorted(p.name for p in spec.productions) == [
+        "wff_var", "wff_var_ch", "wff_var_ph", "wff_var_ps", "wi", "wn",
+    ]
     assert (spec.rules, spec.axioms) == ([], [])
 
     rebuilt = build_from_spec(spec)["system"]

@@ -39,13 +39,38 @@ from website.logical.metamath import (
     import_proof,
     import_theorem,
     parse,
+    promote_assertions,
     split_proof,
 )
+from website.logical.metamath.corpus import walk
 from website.logical.metamath.importer import (
     _distinct_provisos,
+    _givens,
     _proviso_safe_names,
+    grammar_schedule,
 )
 from website.logical.metamath.parser import Hypothesis
+
+
+def notation_names(spec) -> list[str]:
+    """The productions a syntax axiom declared, in order.
+
+    Everything else in a spec's grammar is machinery the import adds: the atom
+    leaf per `$v` variable, and the shapeless production including each
+    `<typecode>_var` sub-sort into its typecode.
+    """
+    return [
+        p.name
+        for p in spec.productions
+        if not p.sort.endswith("_var") and not p.name.endswith("_var")
+    ]
+
+
+def variables_of(spec, typecode: str) -> set[str]:
+    """The variable tokens the grammar admits as leaves of `typecode`."""
+    return {
+        p.atom_value for p in spec.productions if p.sort == f"{typecode}_var"
+    }
 
 
 # A self-contained fragment of set.mm: every statement below is quoted from it.
@@ -102,6 +127,65 @@ $}
 ${
   dup.1 $e |- ph $.
   dup $p |- ( ph /\ ph ) $= ( jca ) AABBC $.
+$}
+"""
+
+
+# Two proved theorems, the second under a `$f` declared inside its own scope, so
+# `ch` is out of scope at `dup` and in scope at `tri`. A `$v`/`$f` at top level
+# would not do: an *active* floating hypothesis is citable as a dummy variable
+# from the first assertion onward, so only a scoped one comes into scope late.
+LATE_VARIABLE_FRAGMENT = r"""
+$c |- wff ( ) -> /\ $.
+$v ph ps ch $.
+wph $f wff ph $.
+wps $f wff ps $.
+wi $a wff ( ph -> ps ) $.
+wa $a wff ( ph /\ ps ) $.
+${
+  jca.1 $e |- ph $.
+  jca.2 $e |- ps $.
+  jca $a |- ( ph /\ ps ) $.
+$}
+${
+  dup.1 $e |- ph $.
+  dup $p |- ( ph /\ ph ) $= ( jca ) AABBC $.
+$}
+${
+  wch $f wff ch $.
+  tri.1 $e |- ch $.
+  tri $p |- ( ch /\ ch ) $= ( jca ) AABBC $.
+$}
+"""
+
+
+# As above, but `ch`'s first `$f` sits in a block with no assertion in it, so the
+# earliest-*declared* `wff` variable is the latest-*mentioned* one. That is what
+# tells apart scheduling the `wff_var` sub-sort at its first member's position and
+# scheduling it at the earliest of them.
+DECLARED_BEFORE_MENTIONED_FRAGMENT = r"""
+$c |- wff ( ) -> /\ $.
+$v ph ps ch $.
+${
+  wch $f wff ch $.
+$}
+wph $f wff ph $.
+wps $f wff ps $.
+wi $a wff ( ph -> ps ) $.
+wa $a wff ( ph /\ ps ) $.
+${
+  jca.1 $e |- ph $.
+  jca.2 $e |- ps $.
+  jca $a |- ( ph /\ ps ) $.
+$}
+${
+  dup.1 $e |- ph $.
+  dup $p |- ( ph /\ ph ) $= ( jca ) AABBC $.
+$}
+${
+  wch2 $f wff ch $.
+  tri.1 $e |- ch $.
+  tri $p |- ( ch /\ ch ) $= ( jca ) AABBC $.
 $}
 """
 
@@ -471,13 +555,8 @@ early $a |- ( ph -> ps ) $.
 late $a wff LATE $.
 """
     )
-    assert [p.name for p in build_spec(database).productions if p.name != "wff_var"] == [
-        "wi", "late",
-    ]
-    assert [
-        p.name for p in build_spec(database, before="early").productions
-        if p.name != "wff_var"
-    ] == ["wi"]
+    assert notation_names(build_spec(database)) == ["wi", "late"]
+    assert notation_names(build_spec(database, before="early")) == ["wi"]
 
 
 def test_variable_sorts_carry_the_variables_a_proof_may_cite():
@@ -498,17 +577,10 @@ wff_a $a wff ph $.
 ax $a |- ph $.
 """
     )
-    variable_pattern = next(
-        p.regex for p in build_spec(database).productions if p.name == "wff_var"
-    )
-    assert "ph" in variable_pattern
-
     # Active `$f`, mentioned by no statement: a proof may still use it as a dummy
     # variable, so the grammar must be able to read one (set.mm's `ax7` does).
-    assert "dummy" in variable_pattern
-
-    # Declared by `$v` but typed by no `$f`: nothing can cite it.
-    assert "typeless" not in variable_pattern
+    # `typeless` is declared by `$v` but typed by no `$f`, so nothing can cite it.
+    assert variables_of(build_spec(database), "wff") == {"ph", "ps", "dummy"}
 
 
 def test_comment_stripping_is_linear():
@@ -677,10 +749,7 @@ def test_a_dummy_variable_is_in_the_grammar_of_a_theorem_that_may_cite_it():
     # reachable; the point of the test is that a variable typed by an active
     # floating hypothesis reaches the grammar at all.
     database = parse(DUMMY_VARIABLE_FRAGMENT)
-    variable_pattern = next(
-        p.regex for p in build_spec(database).productions if p.name == "setvar_var"
-    )
-    assert "t" in variable_pattern
+    assert "t" in variables_of(build_spec(database), "setvar")
 
 
 # set.mm names its half-open intervals `[,)` and `(,]` — constants that *contain*
@@ -852,3 +921,258 @@ def test_opaque_tokens_apply_to_multi_character_delimiters():
     assert pattern.check_brackets("<< a >>") is True
     # Still catches a real imbalance around the opaque token.
     assert pattern.check_brackets("<< x>>") is False
+
+
+def test_a_variable_is_a_leaf_of_its_own_sub_sort_inside_its_typecode():
+    # A `$v` variable is declared as its own atom leaf of a `<typecode>_var`
+    # sub-sort, and that sub-sort is included into the typecode. The sub-sort is
+    # what a `$d` proviso restricts to (see _distinct_provisos): without it there
+    # would be no name for "the leaves that are variables" as distinct from the
+    # typecode's constants.
+    database = parse(SQRT2RE_FRAGMENT)
+    spec = build_spec(database)
+
+    assert variables_of(spec, "class") == {"A", "B", "F", "R"}
+    # One shapeless production, naming the sub-sort: that is what includes it.
+    inclusion = [p for p in spec.productions if p.name == "class_var"]
+    assert len(inclusion) == 1
+    assert inclusion[0].sort == "class"
+    assert inclusion[0].template is inclusion[0].atom_value is inclusion[0].regex is None
+
+    # A variable reads as its typecode, and the sub-sort admits it while excluding
+    # a constant of the same typecode.
+    system = build_system(spec)
+    context = system.build_context
+    assert context.variables["class_var"].match("A", context) is not None
+    assert context.variables["class_var"].match("2", context) is None
+    assert context.variables["class"].match("A", context) is not None
+
+
+def test_the_variable_schedule_matches_a_per_theorem_build():
+    # The walk declares every variable leaf to the horizon and admits each as it
+    # is reached, rather than rebuilding the grammar per theorem. That is only
+    # worth anything if the leaves live at a theorem are the leaves
+    # `build_spec(before=...)` would have declared for it. They used to be seeded
+    # at whole-database scope, which let a theorem parse against a name `set.mm`
+    # declares tens of thousands of statements later.
+    database = parse(LATE_VARIABLE_FRAGMENT)
+    schedule = grammar_schedule(database)
+
+    live: set[str] = set()
+    checked = []
+    for index, label in enumerate(database.order):
+        live.update(
+            name for sort, name in schedule.entries.get(index, ())
+            if sort.endswith("_var")
+        )
+        assertion = database.assertions[label]
+        if not (assertion.is_logical and assertion.proof):
+            continue
+
+        scoped = build_spec(database, before=label)
+        expected = {p.name for p in scoped.productions if p.sort.endswith("_var")}
+        assert live == expected
+        checked.append(label)
+
+    assert checked == ["dup", "tri"]
+    # The property with teeth: `ch` is declared in `tri`'s own scope, so it is out
+    # of scope at `dup` and only the ordering can tell the two apart.
+    assert variables_of(build_spec(database, before="dup"), "wff") == {"ph", "ps"}
+    assert variables_of(build_spec(database, before="tri"), "wff") == {"ph", "ps", "ch"}
+
+
+def test_the_walk_scopes_a_late_variable_out_of_an_earlier_theorem():
+    # End to end through `corpus.walk`: a variable in scope only for the last
+    # theorem must not be readable at the first, and both proofs must still check.
+    database = parse(LATE_VARIABLE_FRAGMENT)
+    checked = list(walk(database))
+
+    assert [c.label for c in checked] == ["dup", "tri"]
+    assert all(c.verified for c in checked), [c.error for c in checked]
+
+
+def test_the_walk_agrees_with_building_each_theorem_on_its_own():
+    # The cheap path and the strict path must reach the same verdict.
+    database = parse(SQRT2RE_FRAGMENT)
+    for checked in walk(database):
+        alone, alone_text = import_theorem(database, checked.label)
+        assert checked.source == alone_text
+        assert checked.verified is alone.parse(alone_text).valid is True
+
+
+def test_an_imported_grammar_survives_the_database_round_trip():
+    # A variable leaf is an atom, and the `<typecode>_var` sub-sort is included
+    # into its typecode by a production carrying no shape at all - neither
+    # template, regex, nor atom. Persistence had never seen either, and an import
+    # that cannot be stored has to be redone from source on every run.
+    #
+    # Through a real session, because the failure this pins is an INSERT: symbols
+    # share one namespace under `uq_symbols_system_name`, and the inclusion names
+    # the sub-sort it includes. In memory a second row of that name merely rebinds
+    # the first in `spec_to_system`'s dict and nothing looks wrong.
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from app.db import Base, spec_to_system, system_to_spec
+    from app.db.models import FormalSystem as FormalSystemRow
+
+    database = parse(SQRT2RE_FRAGMENT)
+    spec = build_spec(database, name="mm")
+
+    def shape(candidate):
+        return sorted(
+            (p.sort, p.name, p.template, p.regex, p.atom_value, p.atom_base,
+             p.denotes_constant)
+            for p in candidate.productions
+        )
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        session.add(spec_to_system(spec))
+        session.commit()
+        rebuilt = system_to_spec(session.query(FormalSystemRow).one())
+
+    assert shape(rebuilt) == shape(spec)
+
+    # And the grammar read back out of the database still reads a proof.
+    system = build_system(rebuilt)
+    promote_assertions(database, system, before="sqrt2re")
+    _givens(database.assertions["sqrt2re"], system)
+    assert system.parse(import_proof(database, "sqrt2re")).valid is True
+
+
+def test_a_metavariable_outranks_a_production_spelt_the_same_way():
+    # Metamath keeps labels and variable names in separate namespaces, so a syntax
+    # axiom may be labelled `ph` while `ph` is also a `$v`. Edifyce resolves
+    # productions out of one namespace, so a premise stated as the bare
+    # metavariable `ph` resolved to that production and matched only what it
+    # matches - rejecting a proof that instantiates `ph` at anything else.
+    database = parse(
+        r"""
+$c |- wff ( ) -> TOP $.
+$v ph ps $.
+wph $f wff ph $.
+wps $f wff ps $.
+ph $a wff TOP $.
+wi $a wff ( ph -> ps ) $.
+${
+  jca.1 $e |- ph $.
+  jca $a |- ( ph -> ph ) $.
+$}
+${
+  dup.1 $e |- ( TOP -> TOP ) $.
+  dup $p |- ( ( TOP -> TOP ) -> ( TOP -> TOP ) ) $= ( ph wi jca ) BBCAD $.
+$}
+"""
+    )
+    system, text = import_theorem(database, "dup")
+    assert system.parse(text).valid is True
+
+
+def test_a_sub_sort_joins_its_typecode_at_its_earliest_member():
+    # `_declared_variables` yields `$f` declaration order, which stops matching
+    # first-mention order the moment a `$f` is scoped. Scheduling the `wff_var`
+    # sub-sort at its first *declared* member's position leaves `ph`'s leaf live
+    # while the sub-sort is not yet a branch of `wff`, so `dup` cannot read its own
+    # statement - a proof `import_theorem` accepts, failed by the walk alone.
+    database = parse(DECLARED_BEFORE_MENTIONED_FRAGMENT)
+
+    for checked in walk(database):
+        alone, alone_text = import_theorem(database, checked.label)
+        assert checked.verified is alone.parse(alone_text).valid is True
+
+
+# `x` is typed `class` inside one block and `wff` inside a later one — legal
+# Metamath, since a `$f` is scoped. Both typings must not be live at once.
+RETYPED_VARIABLE_FRAGMENT = r"""
+$c |- wff class ( ) -> e. $.
+$v ph x $.
+wph $f wff ph $.
+${
+  vx1 $f class x $.
+  cls.1 $e |- ( x e. x ) $.
+  cls $a |- ( x e. x ) $.
+$}
+wi $a wff ( ph -> ph ) $.
+we $a wff ( x e. x ) $.
+${
+  vx2 $f wff x $.
+  wf.1 $e |- x $.
+  wf $a |- x $.
+$}
+"""
+
+
+def test_a_variable_is_typed_only_where_its_floating_hypothesis_is_active():
+    # A `$f` is scoped, so availability is a property of the (typecode, variable)
+    # *pair*, not of the token. Reading every `$f` in the database and filtering by
+    # mention alone gave `x` both typings from its earliest use — admitting the
+    # later one before its `$f` exists, and leaving both live afterwards, which can
+    # make an unambiguous grammar ambiguous.
+    database = parse(RETYPED_VARIABLE_FRAGMENT)
+
+    assert {k: database.order[v] for k, v in database.typed_from().items()} == {
+        ("wff", "ph"): "cls",
+        ("class", "x"): "cls",
+        ("wff", "x"): "wf",
+    }
+
+    # At `cls` only the `class` typing is in scope; the `wff` one arrives with its
+    # own block.
+    assert variables_of(build_spec(database, before="cls"), "class") == {"x"}
+    assert variables_of(build_spec(database, before="cls"), "wff") == {"ph"}
+    assert variables_of(build_spec(database, before="wf"), "wff") == {"ph", "x"}
+
+    # And the walk's schedule agrees with the per-theorem build, as ever.
+    schedule = grammar_schedule(database)
+    live: set[str] = set()
+    for index, label in enumerate(database.order):
+        live.update(
+            name for sort, name in schedule.entries.get(index, ())
+            if sort.endswith("_var")
+        )
+        if database.assertions[label].is_logical:
+            scoped = build_spec(database, before=label)
+            expected = {p.name for p in scoped.productions if p.sort.endswith("_var")}
+            assert live == expected, label
+
+
+# A sort declared *after* a theorem: `class` arrives with `cset`, which follows
+# `id`. A walk stopping at `id` builds no `class` sort, so a schedule covering the
+# whole database would name one the system never built.
+SORT_AFTER_THEOREM_FRAGMENT = r"""
+$c |- wff class ( ) -> SET $.
+$v ph ps A $.
+wph $f wff ph $.
+wps $f wff ps $.
+wi $a wff ( ph -> ps ) $.
+${
+  id.1 $e |- ph $.
+  id $p |- ph $= ( ) B $.
+$}
+cA $f class A $.
+cset $a class SET $.
+${
+  late.1 $e |- ph $.
+  late $p |- ph $= ( ) B $.
+$}
+"""
+
+
+def test_the_schedule_is_bounded_by_the_walk_horizon():
+    # `grammar_schedule` has to be bounded the same way `build_spec` is, and by the
+    # *same* label. Unbounded, it scheduled a sort declared past the horizon —
+    # which `_reset_sorts` then looked up in a system that never built it, so a
+    # `limit` short of the end aborted the whole walk on a KeyError instead of
+    # checking the prefix it was asked for.
+    database = parse(SORT_AFTER_THEOREM_FRAGMENT)
+
+    assert [(c.label, c.verified) for c in walk(database, limit=1)] == [("id", True)]
+    assert [(c.label, c.verified) for c in walk(database)] == [
+        ("id", True), ("late", True),
+    ]
+
+    # Bounded at `id`, the schedule names only sorts that system has.
+    assert "class" not in grammar_schedule(database, before="id").sorts
+    assert "class" in grammar_schedule(database).sorts
