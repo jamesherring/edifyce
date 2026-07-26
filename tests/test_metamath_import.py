@@ -159,6 +159,37 @@ $}
 """
 
 
+# As above, but `ch`'s first `$f` sits in a block with no assertion in it, so the
+# earliest-*declared* `wff` variable is the latest-*mentioned* one. That is what
+# tells apart scheduling the `wff_var` sub-sort at its first member's position and
+# scheduling it at the earliest of them.
+DECLARED_BEFORE_MENTIONED_FRAGMENT = r"""
+$c |- wff ( ) -> /\ $.
+$v ph ps ch $.
+${
+  wch $f wff ch $.
+$}
+wph $f wff ph $.
+wps $f wff ps $.
+wi $a wff ( ph -> ps ) $.
+wa $a wff ( ph /\ ps ) $.
+${
+  jca.1 $e |- ph $.
+  jca.2 $e |- ps $.
+  jca $a |- ( ph /\ ps ) $.
+$}
+${
+  dup.1 $e |- ph $.
+  dup $p |- ( ph /\ ph ) $= ( jca ) AABBC $.
+$}
+${
+  wch2 $f wff ch $.
+  tri.1 $e |- ch $.
+  tri $p |- ( ch /\ ch ) $= ( jca ) AABBC $.
+$}
+"""
+
+
 # A fragment with a binder sort (`setvar`, which no syntax axiom builds) and a
 # `$d`, for the sort-restriction and variable-membership tests.
 BINDER_FRAGMENT = r"""
@@ -944,27 +975,83 @@ def test_the_walk_agrees_with_building_each_theorem_on_its_own():
 
 
 def test_an_imported_grammar_survives_the_database_round_trip():
-    # A variable leaf is an atom, and the production including its sub-sort into
-    # the typecode carries no shape at all - neither template, regex, nor atom.
-    # Persistence had never seen a shapeless production, and an import that cannot
-    # be stored is an import that has to be redone from source every time.
-    from app.db import spec_to_system, system_to_spec
+    # A variable leaf is an atom, and the `<typecode>_var` sub-sort is included
+    # into its typecode by a production carrying no shape at all - neither
+    # template, regex, nor atom. Persistence had never seen either, and an import
+    # that cannot be stored has to be redone from source on every run.
+    #
+    # Through a real session, because the failure this pins is an INSERT: symbols
+    # share one namespace under `uq_symbols_system_name`, and the inclusion names
+    # the sub-sort it includes. In memory a second row of that name merely rebinds
+    # the first in `spec_to_system`'s dict and nothing looks wrong.
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from app.db import Base, spec_to_system, system_to_spec
+    from app.db.models import FormalSystem as FormalSystemRow
 
     database = parse(SQRT2RE_FRAGMENT)
     spec = build_spec(database, name="mm")
 
     def shape(candidate):
-        return [
+        return sorted(
             (p.sort, p.name, p.template, p.regex, p.atom_value, p.atom_base,
              p.denotes_constant)
             for p in candidate.productions
-        ]
+        )
 
-    rebuilt = system_to_spec(spec_to_system(spec))
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        session.add(spec_to_system(spec))
+        session.commit()
+        rebuilt = system_to_spec(session.query(FormalSystemRow).one())
+
     assert shape(rebuilt) == shape(spec)
 
-    # And the rebuilt grammar still reads a proof.
+    # And the grammar read back out of the database still reads a proof.
     system = build_system(rebuilt)
     promote_assertions(database, system, before="sqrt2re")
     _givens(database.assertions["sqrt2re"], system)
     assert system.parse(import_proof(database, "sqrt2re")).valid is True
+
+
+def test_a_metavariable_outranks_a_production_spelt_the_same_way():
+    # Metamath keeps labels and variable names in separate namespaces, so a syntax
+    # axiom may be labelled `ph` while `ph` is also a `$v`. Edifyce resolves
+    # productions out of one namespace, so a premise stated as the bare
+    # metavariable `ph` resolved to that production and matched only what it
+    # matches - rejecting a proof that instantiates `ph` at anything else.
+    database = parse(
+        r"""
+$c |- wff ( ) -> TOP $.
+$v ph ps $.
+wph $f wff ph $.
+wps $f wff ps $.
+ph $a wff TOP $.
+wi $a wff ( ph -> ps ) $.
+${
+  jca.1 $e |- ph $.
+  jca $a |- ( ph -> ph ) $.
+$}
+${
+  dup.1 $e |- ( TOP -> TOP ) $.
+  dup $p |- ( ( TOP -> TOP ) -> ( TOP -> TOP ) ) $= ( ph wi jca ) BBCAD $.
+$}
+"""
+    )
+    system, text = import_theorem(database, "dup")
+    assert system.parse(text).valid is True
+
+
+def test_a_sub_sort_joins_its_typecode_at_its_earliest_member():
+    # `_declared_variables` yields `$f` declaration order, which stops matching
+    # first-mention order the moment a `$f` is scoped. Scheduling the `wff_var`
+    # sub-sort at its first *declared* member's position leaves `ph`'s leaf live
+    # while the sub-sort is not yet a branch of `wff`, so `dup` cannot read its own
+    # statement - a proof `import_theorem` accepts, failed by the walk alone.
+    database = parse(DECLARED_BEFORE_MENTIONED_FRAGMENT)
+
+    for label, system, text in walk(database):
+        alone, alone_text = import_theorem(database, label)
+        assert system.parse(text).valid is alone.parse(alone_text).valid is True

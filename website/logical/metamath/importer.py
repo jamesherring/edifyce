@@ -661,9 +661,11 @@ def _grammar_schedule(database: Database) -> dict[int, list[tuple[str, str]]]:
     # When each production joins the grammar, as `{position: [(sort, name), ...]}`.
     #
     # Notation joins at the syntax axiom that declares it. A variable joins at its
-    # first mention, and brings its `<typecode>_var` sub-sort into the typecode
-    # with it - the sub-sort is held back until then so that an empty one is never
-    # a branch of a live sort.
+    # first mention, and its `<typecode>_var` sub-sort joins the typecode at the
+    # *earliest* of them - held back until then so an empty sub-sort is never a
+    # branch of a live sort, but no later, or a variable whose leaf is already live
+    # would not read as its typecode. `_declared_variables` yields `$f` declaration
+    # order, which is not first-mention order once a `$f` is scoped.
     schedule: dict[int, list[tuple[str, str]]] = {}
 
     def at(position: int, sort: str, name: str) -> None:
@@ -673,16 +675,12 @@ def _grammar_schedule(database: Database) -> dict[int, list[tuple[str, str]]]:
         at(database.position(assertion.label), assertion.typecode, assertion.label)
 
     first = _first_mention(database)
-    included: set[str] = set()
     for typecode, members in _declared_variables(database).items():
         sub_sort = f"{typecode}_var"
+        at(min(first[variable] for variable in members), typecode, sub_sort)
         for variable in members:
-            position = first[variable]
-            if sub_sort not in included:
-                included.add(sub_sort)
-                at(position, typecode, sub_sort)
             leaf = variable_production_name(database, typecode, variable)
-            at(position, sub_sort, leaf)
+            at(first[variable], sub_sort, leaf)
     return schedule
 
 

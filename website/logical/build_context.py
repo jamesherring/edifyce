@@ -98,16 +98,20 @@ def build_schema_pattern(
     # different constructors and the (now term-based) checker would reject the
     # step. A referenced pattern name is used directly; anything else becomes a
     # StringPattern template with the ambient string variables applied.
-    if text in context.variables:
-        return context.variables[text]
-
+    #
     # A metavariable of this very rule is never a literal, whatever the grammar
-    # also spells that way. It matters once a grammar declares its object-language
-    # *variables* as atoms - a Metamath import does, one leaf per `$v` - because a
-    # premise stated as the bare metavariable `ph` would otherwise resolve to the
-    # atom `ph` and match only that one token, instead of standing for any wff.
+    # also spells that way - so it outranks both lookups below. Two ways a grammar
+    # can spell one, and a Metamath import supplies both: a production *named* for
+    # the metavariable (labels and variable names share no namespace in Metamath,
+    # so a syntax axiom may be labelled `ph`), and, since every `$v` is declared as
+    # its own atom leaf, an atom whose token is `ph`. Either way a premise stated
+    # as the bare `ph` would resolve to that production and match only what it
+    # matches, instead of standing for any wff.
     # `side_condition_syntax._arg` gives a proviso argument the same precedence.
     if text not in context.string_variables:
+        if text in context.variables:
+            return context.variables[text]
+
         constant = _grammar_index(context).constant_atoms.get(text)
         if constant is not None:
             return constant

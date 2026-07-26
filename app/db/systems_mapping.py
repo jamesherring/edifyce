@@ -76,6 +76,16 @@ def spec_to_system(spec: SystemSpec) -> FormalSystem:
 
     production_symbols: list[tuple[Production, SymbolRow]] = []
     for prod in spec.productions:
+        # A shapeless production naming a sort *includes* that sort into another —
+        # `setvar_var` into `setvar`, so a Metamath `$v` reads as its typecode as
+        # well as as a variable. That is membership, which this schema already has
+        # an edge for, so record it on the sub-sort rather than inventing a second
+        # symbol: symbols share one namespace, and a row named for a sort that
+        # already exists violates `uq_symbols_system_name`.
+        if prod.name in symbols and symbols[prod.name].kind == "union":
+            symbols[prod.name].union = symbols[prod.sort]
+            continue
+
         is_atom = prod.atom_value is not None or prod.atom_base is not None
         symbol = SymbolRow(
             position=position,
@@ -151,7 +161,10 @@ def system_to_spec(system: FormalSystem) -> SystemSpec:
     spec.brackets = [(b.opening, b.closing) for b in system.brackets]
 
     # Productions are the non-union symbols, in declaration (position) order;
-    # each names its sort by the union it belongs to.
+    # each names its sort by the union it belongs to. A *union* that belongs to
+    # one is a sub-sort included into it, which the spec spells as a shapeless
+    # production (see spec_to_system); emit those last, so a sub-sort's own
+    # members are declared before it joins its parent.
     spec.productions = [
         Production(
             sort=symbol.union.name,
@@ -165,6 +178,10 @@ def system_to_spec(system: FormalSystem) -> SystemSpec:
         )
         for symbol in system.symbols
         if symbol.kind != "union"
+    ] + [
+        Production(sort=symbol.union.name, name=symbol.name)
+        for symbol in system.symbols
+        if symbol.kind == "union" and symbol.union is not None
     ]
 
     spec.lines = [
