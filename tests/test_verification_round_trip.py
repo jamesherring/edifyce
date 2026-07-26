@@ -26,7 +26,9 @@ hundred proofs cost a second rather than a minute.
 from __future__ import annotations
 
 import itertools
+import uuid
 from copy import copy
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -62,6 +64,17 @@ from app.db.terms import TermChildRow, TermRow
 from tests.zfc_systems import scoped_zfc_spec
 from website.logical.declarative import build_spec
 
+if TYPE_CHECKING:
+    from sqlalchemy.engine import Engine
+
+    from website.logical.formal_system import FormalSystem as EngineSystem
+    from website.logical.formal_system.proof import Proof as EngineProof
+    from website.logical.matching.context import Context
+
+    # The compiled system a round trip runs against: its stored id, the engine
+    # object built from those rows, and the context stored terms resolve in.
+    Compiled = tuple[uuid.UUID, "EngineSystem", "Context"]
+
 _TABLES = [
     model.__table__
     for model in (
@@ -94,14 +107,14 @@ _SHAPES = {
 
 
 @pytest.fixture(scope="module")
-def engine():
+def engine() -> Engine:
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine, tables=_TABLES)
     return engine
 
 
 @pytest.fixture(scope="module")
-def system(engine):
+def system(engine: Engine) -> Compiled:
     """One stored system, compiled once: the proofs are what vary."""
     with Session(engine) as session:
         row = spec_to_system(scoped_zfc_spec())
@@ -113,7 +126,7 @@ def system(engine):
         return row.id, built, context
 
 
-def _fingerprint(proof) -> list[tuple]:
+def _fingerprint(proof: EngineProof) -> list[tuple]:
     """Everything the checker decided about every line, in source order.
 
     The whole line, not the verdict: a divergence usually shows first in *which*
@@ -141,7 +154,9 @@ def _fingerprint(proof) -> list[tuple]:
     ]
 
 
-def _round_trip(engine, system, source: str, name: str):
+def _round_trip(
+    engine: Engine, system: Compiled, source: str, name: str
+) -> tuple[EngineProof, EngineProof | None, uuid.UUID]:
     """Check ``source`` by parsing it, store that, then check it from the rows."""
     system_id, built, context = system
     with Session(engine) as session:
@@ -182,7 +197,9 @@ def _sources() -> list[tuple[str, str]]:
 
 
 @pytest.mark.parametrize("name,source", _sources(), ids=lambda v: v if isinstance(v, str) else "")
-def test_the_row_path_agrees_with_the_parse_path(engine, system, name, source):
+def test_the_row_path_agrees_with_the_parse_path(
+    engine: Engine, system: Compiled, name: str, source: str
+) -> None:
     slug = name.replace("+", "-").replace(":", "-")
     parsed, loaded, _ = _round_trip(engine, system, source, slug)
 
@@ -216,7 +233,9 @@ _ERASURES = ("term_id", "line_type")
         ),
     ],
 )
-def test_erasing_a_line_never_makes_a_proof_more_valid(engine, system, name, source, column):
+def test_erasing_a_line_never_makes_a_proof_more_valid(
+    engine: Engine, system: Compiled, name: str, source: str, column: str
+) -> None:
     """The bug class, stated directly.
 
     Take a proof that stands, remove one line's content from its row, and check
