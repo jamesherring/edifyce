@@ -4,7 +4,7 @@ A proved theorem is reused exactly as an inference rule is: its metavariables ar
 re-instantiated at each citation by unification, subject to its distinct-variable
 provisos. To the checker a rule and a schematic theorem are the same shape -
 premises + conclusion + side-conditions over metavariables (see
-``docs/setmm-import-recommendations-detail.md``, section A1).
+``docs/metamath-import-roadmap.md``, section A1).
 
 A :class:`PromotedTheorem` records that schematic statement *without* placing it
 in the system's primitive ``inference_rules``: derived theorems - tens of

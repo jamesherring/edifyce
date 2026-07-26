@@ -20,8 +20,15 @@ if TYPE_CHECKING:
 # Generous upper bound on how many antecedents a single line may cite. The
 # assignment search is pruned and fast-rejected (see Proof._first_valid_assignment),
 # so this is only a guard against a pathological citation, not the old factorial
-# permutation limit; no real proof approaches it.
-MAX_CITED_ANTECEDENTS = 16
+# permutation limit.
+#
+# It was 16, on the reasoning that no real proof approaches it. Real proofs do:
+# 437 of set.mm's assertions take more than 16 essential hypotheses, so a proof
+# applying one cites more than 16 lines, and the largest (`aks6d1c2lem3`) takes
+# 35. A citation that big is still cheap here, because a proof imported from
+# Metamath cites in the rule's own hypothesis order, so the first assignment the
+# search tries is the one that works.
+MAX_CITED_ANTECEDENTS = 64
 
 # The justification keyword for a definitional step: a line cited as
 # `[Def, <line>]` claims to be the cited line with one definition unfolded (or
