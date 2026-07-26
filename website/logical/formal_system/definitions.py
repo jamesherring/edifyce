@@ -84,7 +84,7 @@ from typing import TYPE_CHECKING
 from ..kernel import Definition, introduced_leaves, unbound_parameters
 from ..kernel.constructors import constructor_for, project_sorts
 from ..kernel.definitions import FreshBinder
-from ..kernel.terms import _bound, abstract, bind, from_match
+from ..kernel.terms import Bound, _bound, abstract, bind, from_match
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -181,7 +181,7 @@ def parse_definition(
     # a name that is not of its own sort is the author's error, and is refused
     # at build rather than silently failing every unfold later.
     binders: list[FreshBinder] = []
-    bound_nodes: dict[str, Term] = {}
+    bound_nodes: dict[str, Bound] = {}
     for index, (name, binder_sort) in enumerate(fresh_items):
         # Against the *binder's* sort, not the definition's: `z` is a `setvar`,
         # and it is the sort it ranges over that says what may name it.
@@ -211,8 +211,9 @@ def build_kernel_definition(
     lower: str | None,
     context: Context,
     condition: SideCondition | None = None,
-    # Sort *patterns*, not constructors: `fresh` becomes a parse handle on the
-    # kernel definition, which reads a chosen binder name at check time.
+    # Sort *patterns*, not constructors: this is the build boundary, where a
+    # declaration still names productions. `parse_definition` projects them, and
+    # the definition it returns holds no pattern.
     fresh: dict[str, Pattern] | None = None,
     label: str | None = None,
 ) -> Definition:
