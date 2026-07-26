@@ -51,6 +51,7 @@ from app.db.systems import (
     LinePartRow,
     LineRow,
     ProductionBindingRow,
+    ProductionBindingScopeRow,
     RuleAntecedentRow,
     RuleBindingRow,
     RuleRow,
@@ -82,6 +83,7 @@ from app.schemas import (
     LineTypeCreate,
     LineTypeUpdate,
     Production,
+    ProductionBinding,
     ProductionCreate,
     ProductionUpdate,
     ReorderRequest,
@@ -208,7 +210,13 @@ async def _apply_order(
 # Symbol helpers (sorts + productions live in one table)
 # ---------------------------------------------------------------------------
 
-_PRODUCTION_LOADS = (selectinload(SymbolRow.union), selectinload(SymbolRow.bindings).selectinload(ProductionBindingRow.symbol))
+_PRODUCTION_LOADS = (
+    selectinload(SymbolRow.union),
+    selectinload(SymbolRow.bindings).selectinload(ProductionBindingRow.symbol),
+    selectinload(SymbolRow.bindings)
+    .selectinload(ProductionBindingRow.scopes)
+    .selectinload(ProductionBindingScopeRow.scoped),
+)
 
 
 async def _resolve_symbol(session: AsyncSession, system_id: uuid.UUID, name: str) -> SymbolRow:
@@ -242,6 +250,46 @@ async def _binding_rows(
     for i, b in enumerate(bindings):
         symbol = await _resolve_symbol(session, system_id, b.sort)
         rows.append(row_cls(position=i, var=b.var, symbol=symbol))
+    return rows
+
+
+async def _production_binding_rows(
+    session: AsyncSession, system_id: uuid.UUID, bindings: Sequence[ProductionBinding]
+) -> list[ProductionBindingRow]:
+    """A production's binding rows, with each binder's scope links.
+
+    Unlike a rule's or a definition's, a production's slot may *bind* over its
+    siblings, and that relation is stored as rows pointing at those siblings —
+    so it can only be built once the whole list exists.
+
+    Checked here for the same reason a binding's sort is: a payload naming a slot
+    the production does not have is a 400, not a row to store and surface as an
+    opaque build failure later. The engine's own check
+    (``declarative._binding_scopes``) is the stricter one — it knows the template,
+    so it also rejects a declared variable that occupies no slot.
+    """
+    rows: list[ProductionBindingRow] = []
+    for i, b in enumerate(bindings):
+        symbol = await _resolve_symbol(session, system_id, b.sort)
+        rows.append(ProductionBindingRow(position=i, var=b.var, symbol=symbol))
+
+    by_var = {row.var: row for row in rows}
+    for binding, row in zip(bindings, rows, strict=True):
+        for j, target in enumerate(binding.scopes_over):
+            if target == binding.var:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"Slot '{binding.var}' cannot scope over itself.",
+                )
+            if target not in by_var:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"Slot '{binding.var}' scopes over '{target}', which is not a "
+                    f"slot of this production.",
+                )
+            row.scopes.append(
+                ProductionBindingScopeRow(position=j, scoped=by_var[target])
+            )
     return rows
 
 
@@ -430,7 +478,7 @@ async def create_production(
         denotes_constant=payload.denotes_constant, union=union,
         position=await _next_symbol_position(session, system_id, union=False),
     )
-    row.bindings = await _binding_rows(session, system_id, ProductionBindingRow, payload.bindings)
+    row.bindings = await _production_binding_rows(session, system_id, payload.bindings)
     session.add(row)
     await _commit(session)
     return production_out(await _get_symbol_or_404(session, system_id, row.id, False, *_PRODUCTION_LOADS))
@@ -462,7 +510,7 @@ async def update_production(
     if fields & {"template", "regex", "atom_value", "atom_base"}:
         row.kind = _production_kind(row.template, row.regex, row.atom_value, row.atom_base)
     if "bindings" in fields and payload.bindings is not None:
-        row.bindings = await _binding_rows(session, system_id, ProductionBindingRow, payload.bindings)
+        row.bindings = await _production_binding_rows(session, system_id, payload.bindings)
     await _commit(session)
     return production_out(await _get_symbol_or_404(session, system_id, production_id, False, *_PRODUCTION_LOADS))
 

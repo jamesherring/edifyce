@@ -92,6 +92,19 @@ class Production:
     # variable-like — so omitting it costs a refused definition, never a
     # capturing one.
     denotes_constant: bool = False
+    # Which of this production's slots *bind*, and over what: a binding's `var`
+    # mapped to the sibling vars it scopes over. `∀x phi` declares
+    # `{"x": ["phi"]}`. Empty — the default — means the production says nothing
+    # about binding, which is what every production said before this field
+    # existed and is read exactly as it was then.
+    #
+    # Declared, like `denotes_constant`, and for the same reason: `∀x phi` and a
+    # two-argument connective are the same shape. What it buys is that a
+    # definition's `fresh` clause need no longer be written by hand — a leaf
+    # sitting in a binder slot of the defining form *is* a binder, and
+    # `formal_system.definitions` reads it off the parsed term. See
+    # docs/binding-slots-design.md.
+    scopes_over: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -384,6 +397,52 @@ def _binding_patterns(bindings: list[tuple[str, str]], ctx: FormalSystemContext)
     return {var: ctx.variables[sort] for var, sort in bindings}
 
 
+def _binding_scopes(prod: Production, pattern: StringPattern) -> dict[str, tuple[str, ...]]:
+    """Validate ``prod.scopes_over`` against the template and return it in the
+    projected form (``{slot: (slot, ...)}``).
+
+    A binding slot is a claim about *this* production's slots, so everything it
+    can get wrong is decidable here: both sides must name slots the template
+    actually has, and nothing scopes over itself. Checked at build rather than
+    trusted, because the whole point of the declaration is that a later stage
+    (a definition's inferred ``fresh`` clause) reads it as fact.
+    """
+    # The pattern's variables are exactly the declared bindings that occur in the
+    # template — one that does not occupies no slot, so there is no position for
+    # it to bind at and no child for it to scope over.
+    slots = set(pattern.variables)
+
+    def require_slot(var: str, role: str) -> None:
+        if var not in slots:
+            raise DeclarativeError(
+                f"Production {prod.name!r} declares that {role} names a slot "
+                f"{var!r}, but its template '{prod.template}' has no such slot. "
+                f"A binding slot may only name this production's own slots "
+                f"({', '.join(sorted(slots)) or 'none'})."
+            )
+
+    scopes: dict[str, tuple[str, ...]] = {}
+    for binder, scoped in prod.scopes_over.items():
+        require_slot(binder, "a binder")
+        if not scoped:
+            # A slot that binds over nothing is not a binder — a binding that
+            # reaches into no slot is no binding. Dropped rather than stored as an
+            # empty entry, because presence in this mapping is what marks a slot
+            # as binding, and storage records the scopes rather than the keys, so
+            # an empty entry would not survive a round trip anyway.
+            continue
+        for target in scoped:
+            require_slot(target, f"the scope of binder {binder!r}")
+            if target == binder:
+                raise DeclarativeError(
+                    f"Production {prod.name!r} declares that slot {binder!r} "
+                    f"scopes over itself. A binder scopes over the slots its "
+                    f"binding reaches into, which never includes its own."
+                )
+        scopes[binder] = tuple(scoped)
+    return scopes
+
+
 def build_system(spec: SystemSpec) -> FormalSystem:
     """Build a :class:`FormalSystem` directly from a :class:`SystemSpec`.
 
@@ -436,6 +495,17 @@ def build_system(spec: SystemSpec) -> FormalSystem:
         # *leaf* production can ever be the term this decides about, but setting
         # it uniformly keeps one path and costs nothing.
         pattern.denotes_constant = prod.denotes_constant
+        # A binder is a *slot* of a template, so an atomic production has nowhere
+        # to put one. Refused rather than ignored: silently dropping it would
+        # leave a definition's `fresh` clause inferred from a grammar the author
+        # thinks says something it does not (see `_binding_scopes`).
+        if prod.template is None and prod.scopes_over:
+            raise DeclarativeError(
+                f"Production {prod.name!r} declares binding slots "
+                f"({', '.join(sorted(prod.scopes_over))}), but it is atomic and has "
+                f"no template, so it has no slots. Binding slots belong on the "
+                f"production whose notation does the binding."
+            )
         return pattern
 
     # 1. Atomic productions: regex leaves, atom constants, and atom families.
@@ -490,6 +560,7 @@ def build_system(spec: SystemSpec) -> FormalSystem:
             continue
         pattern = StringPattern(name=prod.name, pattern=prod.template)
         pattern.add_variables(_binding_patterns(prod.bindings, ctx))
+        pattern.scopes_over = _binding_scopes(prod, pattern)
         # A nullary template (`S`, `∅`) parses to a ground leaf, so it too can be
         # the leaf a definition introduces and carries the declaration.
         ctx.variables[prod.name] = declare(register(pattern), prod)

@@ -41,6 +41,7 @@ from app.db.systems import (
     DefinitionRow,
     LineRow,
     ProductionBindingRow,
+    ProductionBindingScopeRow,
     RuleBindingRow,
     RuleRow,
     SymbolRow,
@@ -58,6 +59,7 @@ from app.schemas import (
     LineType,
     Page,
     Production,
+    ProductionBinding,
     ProofVerifyRequest,
     Rule,
     Sort,
@@ -81,6 +83,10 @@ _CHILD_LOADS = (
     selectinload(FormalSystem.symbols)
     .selectinload(SymbolRow.bindings)
     .selectinload(ProductionBindingRow.symbol),
+    selectinload(FormalSystem.symbols)
+    .selectinload(SymbolRow.bindings)
+    .selectinload(ProductionBindingRow.scopes)
+    .selectinload(ProductionBindingScopeRow.scoped),
     selectinload(FormalSystem.lines).selectinload(LineRow.parts),
     selectinload(FormalSystem.lines).selectinload(LineRow.logical_symbol),
     selectinload(FormalSystem.definitions).selectinload(DefinitionRow.symbol),
@@ -315,7 +321,14 @@ def production_out(p: SymbolRow) -> Production:
         atom_value=p.atom_value,
         atom_base=p.atom_base,
         denotes_constant=p.denotes_constant,
-        bindings=_bindings_out(p.bindings),
+        bindings=[
+            ProductionBinding(
+                var=b.var,
+                sort=b.symbol.name,
+                scopes_over=[s.scoped.var for s in b.scopes],
+            )
+            for b in p.bindings
+        ],
     )
 
 

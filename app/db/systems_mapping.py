@@ -45,6 +45,7 @@ from app.db.systems import (
     LinePartRow,
     LineRow,
     ProductionBindingRow,
+    ProductionBindingScopeRow,
     RuleAntecedentRow,
     RuleBindingRow,
     RuleRow,
@@ -96,8 +97,22 @@ def spec_to_system(spec: SystemSpec) -> FormalSystem:
     # Bindings are resolved after every symbol exists (a binding may reference a
     # production, e.g. `x : variable`, not only a sort).
     for prod, symbol in production_symbols:
+        rows: dict[str, ProductionBindingRow] = {}
         for j, (var, sort) in enumerate(prod.bindings):
-            symbol.bindings.append(ProductionBindingRow(position=j, var=var, symbol=symbols[sort]))
+            rows[var] = ProductionBindingRow(position=j, var=var, symbol=symbols[sort])
+            symbol.bindings.append(rows[var])
+        # A binding slot points at *sibling slots of the same production*, so its
+        # targets are the rows just built. Indexed rather than probed, on the same
+        # assumption as the `symbols[sort]` lookups above: a spec reaching storage
+        # names things that exist. A scope naming a slot the *template* lacks is a
+        # different matter — it stores fine and fails at build
+        # (`declarative._binding_scopes`), which is the draft-tolerant behaviour
+        # every other part of a system already has.
+        for var, scoped in prod.scopes_over.items():
+            rows[var].scopes = [
+                ProductionBindingScopeRow(position=j, scoped=rows[target])
+                for j, target in enumerate(scoped)
+            ]
 
     for i, line_spec in enumerate(spec.lines):
         logical = symbols[line_spec.logical_sort] if line_spec.logical_sort else None
@@ -162,6 +177,11 @@ def system_to_spec(system: FormalSystem) -> SystemSpec:
             atom_base=symbol.atom_base,
             denotes_constant=symbol.denotes_constant,
             bindings=[(b.var, b.symbol.name) for b in symbol.bindings],
+            scopes_over={
+                b.var: [s.scoped.var for s in b.scopes]
+                for b in symbol.bindings
+                if b.scopes
+            },
         )
         for symbol in system.symbols
         if symbol.kind != "union"

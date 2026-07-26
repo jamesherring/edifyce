@@ -66,13 +66,17 @@ genuine judgement about the grammar that nothing yet can check.
 
 Two follow-ups this leaves open:
 
-- **Binding slots on productions.** Nothing declares which slot of `∀x p` *binds*,
-  or what it scopes over. With that, the engine could validate a `denotes_constant`
-  declaration (a token in a binder slot's sort is not a constant, whatever the
-  author ticked), infer a definition's `fresh` clause instead of asking for it, and
-  make a definitional step scope-aware — which is what admitting an open
-  abbreviation like `S ≝ (a ∈ b)` would need. Metamath has none of this and does
-  not miss it, so this is a capability change, not a soundness fix. Specced in
+- **Binding slots on productions.** A production may now declare which of its slots
+  *binds* and over what — `Production.scopes_over`, `{"x": ["phi"]}` for `∀x.phi`.
+  It is optional and empty by default, so a grammar that declares nothing behaves
+  exactly as it did before it existed. One thing reads it: a definition's `fresh`
+  clause is now **inferred** from the parsed defining form rather than written by
+  hand (`formal_system/definitions.py`), which is what a Metamath `$a`/`$p` carries
+  no trace of. Two uses remain: validating a `denotes_constant` declaration (a token
+  in a binder slot's sort is not a constant, whatever the author ticked), and
+  scope-aware definitional steps — which is what admitting an open abbreviation
+  like `S ≝ (a ∈ b)` would need, and the only one that *widens* what the checker
+  accepts. Both are specced in
   [docs/binding-slots-design.md](docs/binding-slots-design.md).
 - **Conservativity.** That a defined symbol is fresh and the definition
   non-circular is still untreated, as in Metamath. Only the *capture* half of
