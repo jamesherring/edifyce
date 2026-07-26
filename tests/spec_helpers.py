@@ -36,11 +36,14 @@ def template_prod(
     template: str,
     bindings: Iterable[Binding] = (),
     denotes_constant: bool = False,
+    scopes_over: dict[str, list[str]] | None = None,
 ) -> Production:
     """A composite (notation) production, e.g. ``formula | membership | s ∈ t``.
 
     ``denotes_constant`` matters only for a *nullary* template, which parses to a
-    ground leaf a definition could introduce.
+    ground leaf a definition could introduce. ``scopes_over`` declares which slots
+    bind — ``{"x": ["phi"]}`` for ``∀x.phi`` — and is what lets a definition's
+    ``fresh`` clause be inferred rather than written.
     """
     return Production(
         sort=sort,
@@ -48,6 +51,7 @@ def template_prod(
         template=template,
         bindings=list(bindings),
         denotes_constant=denotes_constant,
+        scopes_over={k: list(v) for k, v in (scopes_over or {}).items()},
     )
 
 

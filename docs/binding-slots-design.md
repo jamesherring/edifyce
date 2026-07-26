@@ -1,7 +1,9 @@
 # Design: binding slots on productions
 
-**Status:** proposal (no code yet) · **Prerequisite work:** merged (#115, #117,
-#118, #119, and the kernel-takes-terms change)
+**Status:** partly built — steps 1, 2 and 4 below have shipped (the declaration,
+its storage/API round-trip, and `fresh` inference). Steps 3, 5 and 6 are open.
+**Prerequisite work:** merged (#115, #117, #118, #119, and the kernel-takes-terms
+change)
 
 > Written as the spec for the last open item in AGENTS.md's *Constants vs
 > variables of the object language* section. Nothing here is a soundness fix —
@@ -45,21 +47,35 @@ engine could reject the *declaration* and say why.
 It does not become fully inferable — a sort that no binder mentions is still the
 author's call — so this narrows the trusted surface rather than removing it.
 
-### 2. Inferring a definition's `fresh` clause
+### 2. Inferring a definition's `fresh` clause — **built**
 
-A definition currently declares its defining form's binders by hand:
+A definition used to declare its defining form's binders by hand:
 
 ```
 Define (x ⊆ y) as ∀z.((z ∈ x) → (z ∈ y))   fresh: z → setvar
 ```
 
 `fresh` is exactly "which leaves of the defining form sit in a binder slot", and
-with binding slots that is derivable from the parsed term. The clause becomes
-optional — inferred when omitted, and *checked* when given, so an author who
-writes a wrong one is told.
+with binding slots that is derivable from the parsed term. The clause is now
+optional: `formal_system.definitions._resolve_binders` reads the binders off the
+parsed defining form, and an inferred clause produces the same `Definition` —
+same `fresh` tuple, same interned schemas — as the hand-written one.
 
 This is the highest-value item for import work: a Metamath `$a`/`$p` carries no
-`fresh` clause, so today an importer has to reconstruct one per definition.
+`fresh` clause, so an importer would otherwise reconstruct one per definition.
+
+**Inference only ever adds.** A binder the author declared and the grammar does
+not show may still be one — the production it sits in need not have declared its
+slots — so silence in the grammar is never read as denial. The one contradiction
+worth refusing is a shared name at a *different sort*: the grammar puts the leaf
+in a slot of one sort and the author declared another, and both cannot be true.
+That is narrower than "checked when given" as first written here, and it is the
+only direction that is actually decidable while the declaration is optional.
+
+Two things are deliberately not binders. A slot holding a `Var` is a *parameter*
+the defined form supplies, so an unfold substitutes it rather than conjuring it;
+and a production with no `scopes_over` contributes nothing, which is what keeps
+every system authored before this field behaving as it did.
 
 ### 3. Scope-aware definitional steps
 
@@ -79,51 +95,55 @@ what proofs are accepted, so it wants its own soundness argument.
 
 ## Shape of the change
 
-### Engine
+### Engine — **built**
 
-`Production.bindings` is `list[tuple[str, str]]` — `(slot, sort)`. The natural
-extension is a third, optional element or a parallel field:
+`Production.bindings` stays `list[tuple[str, str]]` — `(slot, sort)` — and the
+binding structure sits beside it as a parallel field, rather than replacing the
+tuples with a `BindingSlot` dataclass as first sketched here:
 
 ```python
-@dataclass
-class BindingSlot:
-    name: str
-    sort: str
-    # Slots this one binds *over*. Empty for an ordinary argument slot; for the
-    # `x` of `∀x phi`, `["phi"]`.
-    scopes_over: list[str] = field(default_factory=list)
+scopes_over: dict[str, list[str]] = field(default_factory=dict)
 ```
 
-A production is a binder iff some slot has a non-empty `scopes_over`. The
-constraint worth enforcing at build: a name in `scopes_over` must be another slot
-of the same production.
+A parallel field because `bindings` means two different things in this codebase:
+a production's *slots*, and a rule's or definition's *metavariables*. Only the
+first can bind, so widening the shared tuple would have put the field on three
+records that cannot use it.
 
-This reaches `kernel.constructors.Constructor` as projected data (a slot label →
-the labels it scopes over), which keeps the pattern/kernel boundary as it now
-stands: `constructors` reads the production, nothing downstream holds one.
+A production is a binder iff some slot has a non-empty entry. Everything the
+declaration can get wrong is decidable from the template, so
+`declarative._binding_scopes` settles it at build: both sides must name slots the
+template actually has, nothing scopes over itself, and an atomic production
+(which has no slots at all) may not declare any.
 
-### Storage
+This reaches `kernel.constructors.Constructor.scopes_over` as projected data (a
+slot label → the labels it scopes over), read in `_build` rather than `_link`
+because a binder slot names *siblings*, so nothing about it reaches back into the
+grammar. The pattern/kernel boundary is unchanged: `constructors` reads the
+production, nothing downstream holds one.
 
-`app/db/systems.py`'s production row gains the relation. Two options:
+### Storage — **built**
 
-- a `scopes_over` text column on the existing binding row, holding a slot name —
-  simplest, and a binder over several slots is rare enough to encode as a list;
-- a join table, if a slot binding several slots is expected to be common.
+`production_binding_scopes`: a join table whose two ends are both
+`production_bindings` rows, so a binder points at the sibling *row* it scopes
+over rather than at its name. The text column sketched here would have been the
+one free-text grammar reference in a schema whose whole premise is that renaming
+a symbol updates one row. A foreign key cannot express the *same-production*
+half of the constraint, which is why the engine check above still matters.
 
-Either way it is an Atlas migration (`atlas migrate diff`), and the models are
-the source of truth — see AGENTS.md.
+### API — **built**
 
-### API
+`ProductionBinding` extends `Binding` with `scopes_over: list[str]`, and only the
+production payloads use it. `app/routers/system_parts.py` rejects a scope naming
+a non-sibling slot (400), mirroring how it validates a binding's sort;
+`app/db/systems_mapping.py` round-trips it.
 
-`app/schemas.py` production payloads gain the field; `app/routers/system_parts.py`
-validates that `scopes_over` names sibling slots, mirroring how it already
-validates a binding's sort. `app/db/systems_mapping.py` round-trips it.
+### Frontend — **partly built**
 
-### Frontend
-
-The production editor gains per-slot "binds over" selection. This is the part
-that can lag: the field is optional and defaults to empty, so a system authored
-without it behaves exactly as today.
+The client type carries the field and the production editor round-trips it, so an
+edit through the UI cannot silently drop a declared binding slot. Per-slot "binds
+over" *selection* is still to do — the part that can safely lag, since the field
+is optional and defaults to empty.
 
 ## Open questions
 
@@ -135,21 +155,26 @@ without it behaves exactly as today.
    empty means "no binding information", which is exactly today's behaviour. All
    three uses above are opt-in per system, so this cannot regress a stored
    system.
-3. **Should `fresh` inference be silent or explicit?** Inferring it changes what
-   an omitted clause means. Safer: infer, and *report* the inferred clause back
-   through the API so an author sees what the engine concluded.
+3. **Should `fresh` inference be silent or explicit?** Currently silent: an
+   omitted clause is filled from the grammar, and the built `Definition.fresh`
+   carries the answer. **Still open** — the definitions API returns the *declared*
+   clause (rows), not the inferred one, which needs the built system. Reporting it
+   back is the remaining half of this question.
 4. **Item 3 (scope-aware steps) needs a soundness argument** before any code. It
    widens what the checker accepts, which is the one direction that can be wrong.
 
 ## Recommended sequencing
 
-1. Engine field + build-time validation of `scopes_over` (no behaviour change).
-2. Storage + API round-trip, with a migration.
+1. ~~Engine field + build-time validation of `scopes_over`~~ — **done**.
+2. ~~Storage + API round-trip, with a migration~~ — **done**.
 3. Use it for `denotes_constant` validation — narrow, safe, and immediately
    catches the documented hole.
-4. Use it to infer/check `fresh`.
-5. Frontend editing.
+4. ~~Use it to infer/check `fresh`~~ — **done**, in the add-only form described
+   above.
+5. Frontend editing (the per-slot "binds over" control) + reporting the inferred
+   clause back, per open question 3.
 6. Scope-aware definitional steps — separately, with its own design note.
 
-Steps 1–2 are mechanical; step 3 is where the value starts. Stopping after 4
-would already be worthwhile, and each step is independently shippable.
+Step 4 shipped ahead of 3 because it is the one with a caller waiting: a Metamath
+import reconstructs a `fresh` clause per definition without it. Each remaining
+step is still independently shippable.

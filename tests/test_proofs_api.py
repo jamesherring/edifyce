@@ -49,6 +49,7 @@ from app.db.systems import (
     LinePartRow,
     LineRow,
     ProductionBindingRow,
+    ProductionBindingScopeRow,
     RuleAntecedentRow,
     RuleBindingRow,
     RuleRow,
@@ -77,7 +78,7 @@ _TABLES = [
     m.__table__
     for m in (
         User, OAuthAccount, FormalSystem, BracketRow, SymbolRow,
-        ProductionBindingRow, LineRow, LinePartRow, DefinitionRow,
+        ProductionBindingRow, ProductionBindingScopeRow, LineRow, LinePartRow, DefinitionRow,
         DefinitionBindingRow, DefinitionFreshRow, AxiomRow, AxiomBindingRow, RuleRow,
         RuleAntecedentRow, RuleBindingRow, SideConditionRow,
         ProofFolder, Proof, ProofReference,

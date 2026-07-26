@@ -84,7 +84,7 @@ from typing import TYPE_CHECKING
 from ..kernel import Definition, introduced_leaves, unbound_parameters
 from ..kernel.constructors import constructor_for, project_sorts
 from ..kernel.definitions import FreshBinder
-from ..kernel.terms import _bound, abstract, bind, from_match
+from ..kernel.terms import Node, _bound, abstract, bind, from_match
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -161,13 +161,19 @@ def parse_definition(
     :class:`~website.logical.kernel.terms.Bound` node (in ``fresh`` order), and
     the capture-avoidance proviso is generated from it.
 
+    It may be omitted. A grammar that declares its binding slots
+    (``Production.scopes_over``) already says which leaves of the defining form
+    are binders, so :func:`_resolve_binders` reads them off the parsed term —
+    what an author writes by hand today, and what a Metamath ``$a`` carries no
+    trace of. A declaration is still honoured, and still needed wherever the
+    binding production has not declared its slots.
+
     This lives here, not on ``Definition``, because it is the one thing a
     definition needed the *grammar* for. The kernel checks a step against terms;
     turning surface syntax into those terms is this layer's job, and keeping the
     two apart is what lets the trusted core read no strings at all.
     """
     parameter_sorts = project_sorts(variables)
-    fresh_items = tuple((fresh or {}).items())
 
     def parse(against: Pattern, text: str, what: str) -> Term:
         matched = against.match(text, context)
@@ -175,35 +181,121 @@ def parse_definition(
             raise ValueError(f"{what} {text!r} does not parse as '{against.name}'.")
         return from_match(matched)
 
-    # Each declared binder becomes an abstract, indexed node in the defining
-    # form, and carries the leaf its declared name denotes. Parsing that name
-    # here is what lets an unfold fall back to it without re-reading a string:
-    # a name that is not of its own sort is the author's error, and is refused
-    # at build rather than silently failing every unfold later.
-    binders: list[FreshBinder] = []
-    bound_nodes: dict[str, Bound] = {}
-    for index, (name, binder_sort) in enumerate(fresh_items):
-        # Against the *binder's* sort, not the definition's: `z` is a `setvar`,
-        # and it is the sort it ranges over that says what may name it.
-        default = parse(binder_sort, name, "Declared bound variable")
-        binders.append(
-            FreshBinder(name=name, sort=constructor_for(binder_sort), default=default)
-        )
-        bound_nodes[name] = _bound(index, constructor_for(binder_sort))
+    def schema(text: str) -> Term:
+        return abstract(parse(sort, text, "Definition form"), parameter_sorts)
 
-    def schema(text: str, abstract_binders: bool) -> Term:
-        term = abstract(parse(sort, text, "Definition form"), parameter_sorts)
-        if abstract_binders and bound_nodes:
-            term = bind(term, bound_nodes)
-        return term
+    higher_term = schema(higher)
+    lower_term = schema(lower)
+
+    # Each declared binder carries the leaf its name denotes. Parsing that name
+    # here is what lets an unfold fall back to it without re-reading a string: a
+    # name that is not of its own sort is the author's error, and is refused at
+    # build rather than silently failing every unfold later.
+    declared = [
+        FreshBinder(
+            name=name,
+            sort=constructor_for(binder_sort),
+            # Against the *binder's* sort, not the definition's: `z` is a
+            # `setvar`, and it is the sort it ranges over that says what may
+            # name it.
+            default=parse(binder_sort, name, "Declared bound variable"),
+        )
+        for name, binder_sort in (fresh or {}).items()
+    ]
+    binders = _resolve_binders(declared, lower_term)
+
+    # Each binder becomes an abstract, indexed node in the defining form, so the
+    # form stores its binders by position rather than by a fixed concrete name.
+    bound_nodes: dict[str, Bound] = {
+        binder.name: _bound(index, binder.sort) for index, binder in enumerate(binders)
+    }
+    if bound_nodes:
+        lower_term = bind(lower_term, bound_nodes)
 
     return Definition(
-        higher=schema(higher, abstract_binders=False),
-        lower=schema(lower, abstract_binders=True),
+        higher=higher_term,
+        lower=lower_term,
         condition=condition,
         fresh=tuple(binders),
         label=label,
     )
+
+
+def _binders_in_binding_slots(term: Term) -> dict[str, FreshBinder]:
+    """The binders ``term`` declares by *shape*: every ground leaf sitting in a
+    slot some production declared as binding, keyed by surface name.
+
+    This is what `fresh` has always meant — "which leaves of the defining form
+    sit in a binder slot" — asked of the grammar instead of the author. It is
+    silent for a production with no `scopes_over` declaration, which is every
+    production until one is written, so a system that declares nothing infers
+    nothing and reads exactly as it did before.
+
+    A slot holding a :class:`~website.logical.kernel.terms.Var` is skipped: that
+    is a *parameter* the defined form supplies, so the unfold substitutes it
+    rather than conjuring it, and it needs no capture-avoidance of its own. Only
+    a leaf the defining form names itself is a binder.
+
+    Pre-order, first occurrence winning, so the resulting order — and hence the
+    :class:`~website.logical.kernel.terms.Bound` index each binder gets — is a
+    function of the defining form alone.
+    """
+    found: dict[str, FreshBinder] = {}
+
+    def walk(current: Term) -> None:
+        if not isinstance(current, Node) or not current.children:
+            return
+        for label, child in current.children.items():
+            name = _leaf_name(child) if label in current.constructor.scopes_over else None
+            if name is not None and name not in found:
+                found[name] = FreshBinder(
+                    name=name,
+                    # The slot's *declared* sort, not the leaf's own constructor:
+                    # it is the sort the binder ranges over that decides what may
+                    # name it, exactly as for a declared binder above.
+                    sort=current.constructor.slot_sorts[label],
+                    default=child,
+                )
+            walk(child)
+
+    walk(term)
+    return found
+
+
+def _leaf_name(term: Term) -> str | None:
+    """The surface name of a ground leaf, or ``None`` for anything else — a
+    compound, a parameter (:class:`Var`), or an already-abstract binder."""
+    if isinstance(term, Node) and not term.children:
+        return term.literal
+    return None
+
+
+def _resolve_binders(
+    declared: Sequence[FreshBinder], lower: Term
+) -> list[FreshBinder]:
+    """The definition's binders: those declared, plus those the grammar shows.
+
+    Inference only ever *adds*. A binder the author declared and the grammar does
+    not show may still be one — the production it sits in need not have declared
+    its binding slots — so an undetected binder is no evidence against the
+    declaration, and silence is never read as denial.
+
+    The one genuine contradiction is a shared name at a different sort: the
+    grammar puts the leaf in a slot of one sort and the author declared another.
+    That cannot both be true, and the grammar is the thing that was checked.
+    """
+    inferred = _binders_in_binding_slots(lower)
+    for binder in declared:
+        found = inferred.get(binder.name)
+        if found is not None and found.sort is not binder.sort:
+            raise DefinitionError(
+                f"Bound variable {binder.name!r} is declared fresh at sort "
+                f"{binder.sort.name!r}, but the defining form puts it in a binder "
+                f"slot of sort {found.sort.name!r}. Drop the `fresh` clause and let "
+                f"it be inferred, or declare the sort the grammar gives it."
+            )
+    names = {binder.name for binder in declared}
+    return [*declared, *(b for name, b in inferred.items() if name not in names)]
 
 
 def build_kernel_definition(

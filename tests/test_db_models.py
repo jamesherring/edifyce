@@ -30,6 +30,7 @@ def test_expected_tables_present():
         "notation_brackets",
         "symbols",
         "production_bindings",
+        "production_binding_scopes",
         "line_types",
         "line_parts",
         "definitions",

@@ -6,7 +6,7 @@
 	import { Label } from '$lib/components/ui/label';
 	import { Input } from '$lib/components/ui/input';
 	import { Button } from '$lib/components/ui/button';
-	import { api, type Production, type Binding } from '$lib/api';
+	import { api, type Production, type ProductionBinding } from '$lib/api';
 	import type { SymbolEntry } from '$lib/symbols';
 	import type { NotationGroup } from '$lib/notation';
 	import { createSectionController } from './section.svelte';
@@ -41,7 +41,7 @@
 	let mode = $state<Mode>('template');
 	let value = $state('');
 	let denotesConstant = $state(false);
-	let bindings = $state<Binding[]>([]);
+	let bindings = $state<ProductionBinding[]>([]);
 
 	// A composite with slots is never a leaf, so the question cannot arise for it;
 	// a nullary template (`S`, `∅`) *is* a leaf, so it keeps the toggle. An indexed

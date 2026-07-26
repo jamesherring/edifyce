@@ -44,6 +44,7 @@ from app.db.systems import (
     LinePartRow,
     LineRow,
     ProductionBindingRow,
+    ProductionBindingScopeRow,
     RuleAntecedentRow,
     RuleBindingRow,
     RuleRow,
@@ -55,7 +56,7 @@ _TABLES = [
     m.__table__
     for m in (
         User, OAuthAccount, FormalSystem, BracketRow, SymbolRow,
-        ProductionBindingRow, LineRow, LinePartRow, DefinitionRow,
+        ProductionBindingRow, ProductionBindingScopeRow, LineRow, LinePartRow, DefinitionRow,
         DefinitionBindingRow, DefinitionFreshRow, AxiomRow, AxiomBindingRow, RuleRow,
         RuleAntecedentRow, RuleBindingRow,
         SideConditionRow,
@@ -1018,6 +1019,64 @@ def test_object_language_role_round_trips_and_defaults_off(client):
     assert by_name["setvar"]["denotes_constant"] is True
 
 
+def test_binding_slots_round_trip_and_default_empty(client):
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/api/formal-systems/{sid}/sorts", {"name": "setvar"})
+    _post(client, f"/api/formal-systems/{sid}/sorts", {"name": "formula"})
+    _post(client, f"/api/formal-systems/{sid}/productions",
+          {"name": "letter", "sort": "setvar", "regex": "[a-z]"})
+
+    created = _post(
+        client, f"/api/formal-systems/{sid}/productions",
+        {
+            "name": "forall", "sort": "formula", "template": "∀x.phi",
+            "bindings": [
+                {"var": "x", "sort": "setvar", "scopes_over": ["phi"]},
+                {"var": "phi", "sort": "formula"},
+            ],
+        },
+    )
+    assert [b["scopes_over"] for b in created["bindings"]] == [["phi"], []]
+
+    # An ordinary slot list omits the field entirely; it reads back as empty
+    # rather than absent, so a client need not special-case it.
+    plain = _post(
+        client, f"/api/formal-systems/{sid}/productions",
+        {
+            "name": "membership", "sort": "formula", "template": "(x ∈ y)",
+            "bindings": [{"var": "x", "sort": "setvar"}, {"var": "y", "sort": "setvar"}],
+        },
+    )
+    assert [b["scopes_over"] for b in plain["bindings"]] == [[], []]
+
+    by_name = {p["name"]: p for p in client.get(f"/api/formal-systems/{sid}").json()["productions"]}
+    assert by_name["forall"]["bindings"][0]["scopes_over"] == ["phi"]
+
+
+def test_binding_slot_must_name_a_sibling_slot(client):
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/api/formal-systems/{sid}/sorts", {"name": "setvar"})
+    _post(client, f"/api/formal-systems/{sid}/sorts", {"name": "formula"})
+    _post(client, f"/api/formal-systems/{sid}/productions",
+          {"name": "letter", "sort": "setvar", "regex": "[a-z]"})
+
+    for scopes_over, detail in [(["psi"], "not a slot"), (["x"], "scope over itself")]:
+        response = client.post(
+            f"/api/formal-systems/{sid}/productions",
+            json={
+                "name": "forall", "sort": "formula", "template": "∀x.phi",
+                "bindings": [
+                    {"var": "x", "sort": "setvar", "scopes_over": scopes_over},
+                    {"var": "phi", "sort": "formula"},
+                ],
+            },
+        )
+        assert response.status_code == 400
+        assert detail in response.json()["detail"]
+
+
 def test_production_rejects_mixing_atom_with_another_kind(client):
     _login(client, "ada@example.com")
     sid = _new_system(client)
@@ -1187,7 +1246,7 @@ def test_production_update_replaces_bindings(client):
         json={"bindings": [{"var": "s", "sort": "term"}]},
     )
     assert updated.status_code == 200
-    assert updated.json()["bindings"] == [{"var": "s", "sort": "term"}]
+    assert updated.json()["bindings"] == [{"var": "s", "sort": "term", "scopes_over": []}]
 
 
 # ---------------------------------------------------------------------------
