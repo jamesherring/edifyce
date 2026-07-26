@@ -39,7 +39,7 @@ are not relitigated), and what remains.
 | Token-collision defects (§1.2) | fixed — four instances of one shape |
 | `$t` typesetting / notation (§4) | **next** |
 | Axiom-vs-theorem split (§3.2) | engine done; storing the library open |
-| Definition classification (§5, A4) | not a blocker; front-load |
+| Definition classification (§5, A4) | classifier done — 1,429/130; wiring open |
 
 `tests/test_metamath_import.py` imports `sqrt2re` from its verbatim `set.mm` proof
 and has Edifyce's kernel check the result:
@@ -535,18 +535,44 @@ split (§3.2)** — the real gap; the `$t` block (§4); typecodes beyond
 self-contained). Import faithfully as Metamath's own sorts first; a richer type
 discipline risks needing to re-prove things and is best deferred.
 
-**A4. Definition classification — *not a blocker; front-load anyway*.**
-Not every `$a` is fold/unfold-shaped, and Metamath relies on an *external*
-definitional-soundness checker. Importing every logical `$a` as an axiom is still
-**fully verifiable** — it is exactly what Metamath does. What is given up:
+**A4. Definition classification — *classifier done; not yet wired in*.**
+Metamath does not distinguish a definition from an axiom: both are `$a`, `df-` is
+a convention its verifier never reads, and soundness of the definitional ones is
+left to an *external* checker. Importing every logical `$a` as an axiom is
+faithful and fully verifiable — it is what Metamath itself does — but it gives up
 conservativity-by-construction, which Edifyce's `Define` supplies for free, and
-definitional steps `[Def, n]` (without them a proof cites the biconditional and
-reasons propositionally — sound, but longer). Clean cases map directly
-(`df-nel`: `A e/ B ↔ ¬(A ∈ B)`; `df-2`: `2 = (1+1)`); `df-div`/`df-sqrt` define via
-`iota`, so route them through the `fresh`-aware path and keep their existence
-lemmas as cited premises. Default on "does not reduce to fold/unfold" must be
-*axiom + flag*, never a silent `Define`. Do it early: reclassifying after a bulk
-import means re-importing everything.
+definitional steps `[Def, n]` in a proof. It also overstates the basis: §3.2's
+split counted 1,433 `df-` declared primitives of the imported system.
+
+`metamath/definitions.classify` decides structurally, never by label. Three tests,
+then the kernel:
+
+1. the statement is a **relation between two things of one sort** — its root takes
+   two slots of the same sort, which admits `=` and `↔` without naming either;
+2. its defined side is **not a bare metavariable**;
+3. its defined side is **built from notation not yet in use**.
+
+Over `set.mm`: **1,429 definitions, 130 axioms**, and it agrees with the `df-`
+convention on 1,429 of 1,433. All four disagreements are the classifier's:
+`df-bi` defines `↔` and so cannot use it (its root is `-.`), and `df-clab`,
+`df-cleq`, `df-clel` have ordinary `e.`/`=` on the defined side — they are the
+axioms connecting class notation to set theory, not eliminable definitions. No
+assertion Metamath names `ax-` is classified as a definition.
+
+None of the three tests is load-bearing alone, and the set is not trusted to be
+complete. Test 1 admits an implication, since `( ph -> ps )` has a
+biconditional's shape; test 3 then admits `ax-1`, because `ph` is notation not yet
+in use the first time it appears — which is what test 2 is for, and which was
+found by running the classifier over `set.mm` rather than by reasoning about it.
+**The kernel is the arbiter**: a proposal that will not build as a definition is
+refused there and stays an axiom. Any doubt defaults to axiom, which costs a
+longer proof rather than an unsound one.
+
+*What remains* is wiring it into the import, which changes the basis every
+imported proof is checked against and so wants the corpus re-verified as one
+step. `df-div`/`df-sqrt` define via `iota` and will need the `fresh`-aware path
+with their existence lemmas as cited premises — the first real test of whether
+the kernel's refusal is the right arbiter or too strict.
 
 **A5. Scale — *measured; no longer a risk*.**
 The whole corpus checks in 24 minutes at 3.6 GB (§1.1). Both risks this item named
