@@ -83,8 +83,11 @@ Two follow-ups this leaves open:
   ([docs/scope-aware-binding.md](docs/scope-aware-binding.md), which carries the
   soundness argument). One use remains — scope-aware definitional *steps*, which
   is what admitting an open abbreviation like `S ≝ (a ∈ b)` would need, and the
-  only one that widens what a *proof* may do. Specced in
-  [docs/binding-slots-design.md](docs/binding-slots-design.md).
+  only one that widens what a *proof* may do. Analysed and **blocked**: deciding
+  capture at the redex turns out to be the easy half, and the hard half is that a
+  defined form is a leaf, so `Occurs` answers differently either side of a
+  definitional equality
+  ([docs/scope-aware-definitional-steps.md](docs/scope-aware-definitional-steps.md)).
 - **Conservativity.** That a defined symbol is fresh and the definition
   non-circular is still untreated, as in Metamath. Only the *capture* half of
   admissibility is checked.
