@@ -352,6 +352,33 @@ def _bracket_map(spec: SystemSpec) -> dict[str, str] | None:
     return {o: c for o, c in brackets} or None
 
 
+def _opaque_tokens(spec: SystemSpec, brackets: dict[str, str] | None) -> tuple[str, ...]:
+    # Declared constants whose *spelling* contains a delimiter. Those characters
+    # name a constant, they do not group, and the bracket scan must step over them
+    # or a well-formed statement reads as unbalanced - `set.mm` declares fourteen,
+    # among them the half-open interval `[,)` and the doubled paren `((`, and a
+    # statement mentioning one was refused before it was parsed.
+    #
+    # A nullary template counts as well as an atom: both name one fixed token.
+    # Empty for a system that declares no such constant, which is nearly all of
+    # them, and nothing downstream then changes.
+    if not brackets:
+        return ()
+
+    delimiters = frozenset((*brackets, *brackets.values()))
+
+    def spelt_with_a_delimiter(token: str) -> bool:
+        return token not in delimiters and any(d in token for d in delimiters)
+
+    tokens = set()
+    for prod in spec.productions:
+        token = prod.atom_value or (prod.template if prod.template and not prod.bindings else None)
+        if token and spelt_with_a_delimiter(token):
+            tokens.add(token)
+
+    return tuple(sorted(tokens))
+
+
 def _binding_patterns(bindings: list[tuple[str, str]], ctx: FormalSystemContext) -> dict[str, Pattern]:
     # Map a `with`-style binding list `[(var, sort)]` to `{var: sort_pattern}`,
     # the string-variable dict the engine's pattern/rule builders consume.
@@ -391,10 +418,13 @@ def build_system(spec: SystemSpec) -> FormalSystem:
     ctx.variables[name] = system
 
     brackets = _bracket_map(spec)
+    opaque = _opaque_tokens(spec, brackets)
 
     def register(pattern: Pattern) -> Pattern:
         # Every named pattern respects the system's brackets (parity with the
-        # old post-compile `_patch_brackets`, which walked the same set).
+        # old post-compile `_patch_brackets`, which walked the same set), and
+        # steps over the constants that merely spell one (see `_opaque_tokens`).
+        pattern.opaque_tokens = opaque
         pattern.respect_brackets = brackets
         return pattern
 
