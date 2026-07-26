@@ -352,6 +352,32 @@ def _bracket_map(spec: SystemSpec) -> dict[str, str] | None:
     return {o: c for o, c in brackets} or None
 
 
+def _bracket_opaque_tokens(
+    spec: SystemSpec, brackets: dict[str, str] | None
+) -> tuple[str, ...]:
+    # Declared constants that *contain* a bracket delimiter without being one.
+    # Whether a character groups is a property of the grammar, not of the
+    # character, and only the grammar knows which of its tokens merely spell one:
+    # set.mm names its half-open intervals `[,)` and `(,]`, so `( 0 [,) +oo )`
+    # counts three closing brackets against two openings and reads as unbalanced.
+    # Sorted for a deterministic order only. Overlap needs no care from the
+    # caller: `_opaque_positions` unions the spans of *every* occurrence of
+    # *every* token, so one token containing another (set.mm has `O(1)` inside
+    # `<_O(1)`) covers the same indices whichever is seen first.
+    if not brackets:
+        return ()
+
+    delimiters = (*brackets, *brackets.values())
+    tokens = {
+        production.atom_value
+        for production in spec.productions
+        if production.atom_value is not None
+        and production.atom_value not in delimiters
+        and any(delimiter in production.atom_value for delimiter in delimiters)
+    }
+    return tuple(sorted(tokens))
+
+
 def _binding_patterns(bindings: list[tuple[str, str]], ctx: FormalSystemContext) -> dict[str, Pattern]:
     # Map a `with`-style binding list `[(var, sort)]` to `{var: sort_pattern}`,
     # the string-variable dict the engine's pattern/rule builders consume.
@@ -391,11 +417,14 @@ def build_system(spec: SystemSpec) -> FormalSystem:
     ctx.variables[name] = system
 
     brackets = _bracket_map(spec)
+    opaque = _bracket_opaque_tokens(spec, brackets)
 
     def register(pattern: Pattern) -> Pattern:
         # Every named pattern respects the system's brackets (parity with the
-        # old post-compile `_patch_brackets`, which walked the same set).
+        # old post-compile `_patch_brackets`, which walked the same set), and
+        # steps over any declared constant that merely spells one.
         pattern.respect_brackets = brackets
+        pattern.bracket_opaque = opaque
         return pattern
 
     def unregistered(pattern: Pattern) -> Pattern:

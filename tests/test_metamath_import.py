@@ -41,7 +41,10 @@ from website.logical.metamath import (
     parse,
     split_proof,
 )
-from website.logical.metamath.importer import _distinct_provisos
+from website.logical.metamath.importer import (
+    _distinct_provisos,
+    _proviso_safe_names,
+)
 from website.logical.metamath.parser import Hypothesis
 
 
@@ -647,3 +650,174 @@ def test_a_dummy_variable_is_in_the_grammar_of_a_theorem_that_may_cite_it():
         p.regex for p in build_spec(database).productions if p.name == "setvar_var"
     )
     assert "t" in variable_pattern
+
+
+# set.mm names its half-open intervals `[,)` and `(,]` — constants that *contain*
+# a bracket without being one. `( 0 [,) +oo )` has two openings and three
+# closings by character, so counting them all reads it as unbalanced.
+INTERVAL_FRAGMENT = r"""
+$c |- wff class ( ) [,) (,] +oo C_ RR 0 $.
+$v A B F $.
+cA $f class A $.
+cB $f class B $.
+cF $f class F $.
+wss $a wff A C_ B $.
+$( `[,)` is a class *constant* used as the operator of `( A F B )` - which is
+   exactly how set.mm spells a half-open interval. $)
+cico $a class [,) $.
+cioc $a class (,] $.
+co $a class ( A F B ) $.
+cpnf $a class +oo $.
+cr $a class RR $.
+cc0 $a class 0 $.
+ax $a |- ( 0 [,) +oo ) C_ RR $.
+"""
+
+
+def test_a_constant_that_spells_a_bracket_is_not_one():
+    # The interval token's `)` is part of its name. Counting it as a delimiter
+    # made every statement mentioning one fail bracket parity before it reached a
+    # parse, which is most of what an import of set.mm rejected.
+    system = import_database(parse(INTERVAL_FRAGMENT))
+    formula = system.build_context.variables["wff"]
+
+    assert formula.check_brackets("( 0 [,) +oo ) C_ RR") is True
+    assert formula.check_brackets("( 0 (,] +oo ) C_ RR") is True
+
+    # The builder found them from the grammar, not from a hard-coded list.
+    assert set(formula.bracket_opaque) == {"[,)", "(,]"}
+
+
+def test_genuinely_unbalanced_brackets_are_still_refused():
+    # The opaque tokens must not turn the check off: a real imbalance still fails.
+    system = import_database(parse(INTERVAL_FRAGMENT))
+    formula = system.build_context.variables["wff"]
+
+    assert formula.check_brackets("( 0 [,) +oo C_ RR") is False
+    assert formula.check_brackets("0 [,) +oo ) C_ RR") is False
+
+
+def test_a_grammar_without_such_constants_declares_none():
+    # Nothing is opaque unless a declared constant actually spells a delimiter,
+    # so an ordinary system pays only a truthiness check.
+    system = import_database(parse(HYPOTHESIS_FRAGMENT))
+    assert system.build_context.variables["wff"].bracket_opaque == ()
+
+
+# set.mm spells its inner product `.,` — a metavariable whose *name* contains the
+# character a proviso uses to separate arguments.
+COMMA_VARIABLE_FRAGMENT = r"""
+$c |- wff class setvar = A. e. $.
+$v x ., A $.
+vx $f setvar x $.
+cip $f class ., $.
+cA $f class A $.
+wceq $a wff A = A $.
+wal $a wff A. x A = A $.
+${
+  $d ., x $.
+  $( `.,` must be *mentioned* to be a metavariable of `ax` - a `$d` over
+     something the statement does not bind constrains nothing. $)
+  ax.1 $e |- ., = A $.
+  ax $a |- A. x A = A $.
+$}
+"""
+
+
+def test_a_metavariable_spelt_with_a_comma_can_still_carry_a_proviso():
+    # `disjoint(left, right, sort)` is read by splitting on top-level commas, so
+    # `$d ., x` came out as `disjoint(.,, x, setvar)` - four arguments where three
+    # were meant. The proviso parser refused it, the theorem never promoted, and
+    # every theorem citing it failed too.
+    database = parse(COMMA_VARIABLE_FRAGMENT)
+    system = build_system(build_spec(database))
+
+    rename = _proviso_safe_names(database.assertions["ax"])
+    assert rename == {".,": "._0"}
+
+    provisos = _distinct_provisos(database.assertions["ax"], database, system, rename)
+    assert all("._0" in p for p in provisos)
+    assert not any(".,," in p for p in provisos)
+
+    # And the theorem promotes, which it could not before.
+    system = import_database(database)
+    assert "ax" in system.promoted_theorems
+
+
+def test_a_metavariable_without_a_comma_is_left_alone():
+    # The rename is driven by a real collision, so ordinary names are untouched.
+    database = parse(BINDER_FRAGMENT)
+    assert _proviso_safe_names(database.assertions["ax"]) == {}
+
+
+def test_one_opaque_token_may_contain_another():
+    # set.mm declares both `O(1)` and `<_O(1)`. The spans are unioned rather than
+    # matched greedily, so neither ordering nor nesting can leave a delimiter
+    # inside the longer token counted.
+    database = parse(
+        r"""
+$c |- wff class ( ) O(1) <_O(1) e. $.
+$v A B $.
+cA $f class A $.
+cB $f class B $.
+wcel $a wff A e. B $.
+cbig $a class O(1) $.
+cbigle $a class <_O(1) $.
+cop $a class ( A B ) $.
+ax $a |- O(1) e. <_O(1) $.
+"""
+    )
+    formula = build_system(build_spec(database)).build_context.variables["wff"]
+
+    assert set(formula.bracket_opaque) == {"O(1)", "<_O(1)"}
+    assert formula.check_brackets("O(1) e. <_O(1)") is True
+    assert formula.check_brackets("( O(1) e. <_O(1) )") is True
+    # A real imbalance around them is still caught.
+    assert formula.check_brackets("( O(1) e. <_O(1)") is False
+
+
+def test_a_replacement_name_avoids_tokens_the_premises_use():
+    # `._0` is a declared *constant* the premise spells. Renaming `.,` onto it
+    # would leave that constant's spelling alone while registering it as the
+    # metavariable, so the premise would parse as depending on the metavariable
+    # and the theorem would accept premises Metamath does not.
+    database = parse(
+        r"""
+$c |- wff class setvar = ._0 A. e. $.
+$v x ., A $.
+vx $f setvar x $.
+cip $f class ., $.
+cA $f class A $.
+wceq $a wff A = A $.
+wal $a wff A. x A = A $.
+cconst $a class ._0 $.
+${
+  $d ., x $.
+  ax.1 $e |- ., = ._0 $.
+  ax $a |- A. x A = A $.
+$}
+"""
+    )
+    rename = _proviso_safe_names(database.assertions["ax"])
+
+    assert rename[".,"] != "._0"
+    premise_tokens = {
+        token for h in database.assertions["ax"].mandatory for token in h.tokens
+    }
+    assert rename[".,"] not in premise_tokens
+
+
+def test_opaque_tokens_apply_to_multi_character_delimiters():
+    # A system whose delimiters are longer than a character takes the general
+    # bracket scan rather than the single-character fast path. Both must step
+    # over a constant that merely spells a delimiter.
+    from website.logical.matching import StringPattern
+
+    pattern = StringPattern(name="p", pattern="a")
+    pattern.respect_brackets = {"<<": ">>"}
+    pattern.bracket_opaque = ("x>>",)
+
+    assert pattern.check_brackets("<< x>> >>") is True
+    assert pattern.check_brackets("<< a >>") is True
+    # Still catches a real imbalance around the opaque token.
+    assert pattern.check_brackets("<< x>>") is False
