@@ -278,8 +278,19 @@ def _resolve_bound_names(
 
 def _names_a_leaf_of(term: Term, sort: Constructor) -> bool:
     """Whether ``term`` is something a binder of ``sort`` could be called: a
-    ground leaf the sort admits."""
-    return isinstance(term, Node) and not term.children and sort_admits(sort, term)
+    ground leaf the sort admits.
+
+    "Ground leaf" is the same three-part test :func:`_ground_leaves` applies -
+    a childless node that *carries a literal*. The literal is what makes it a
+    name: a childless node without one spells nothing, so it could not be the
+    binder a reader sees.
+    """
+    return (
+        isinstance(term, Node)
+        and not term.children
+        and term.literal is not None
+        and sort_admits(sort, term)
+    )
 
 
 def _bounds_are_fresh(

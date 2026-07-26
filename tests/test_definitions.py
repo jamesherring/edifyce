@@ -16,6 +16,7 @@ pytest.importorskip("regex")
 from website.logical.declarative import Definition as Definition_
 from website.logical.declarative import SystemSpec, build_spec, build_system
 from website.logical.kernel import (
+    Node,
     constructor_for,
     DisjointLeaves,
     Var,
@@ -660,6 +661,14 @@ def test_rejects_a_chosen_binder_name_that_is_not_a_leaf_of_its_sort(theory, for
 
     # Nor is a schematic variable — it stands for a term, it does not name one.
     assert unfold(d, redex, context, names={"z": Var("q", constructor_for(setvar))}) is None
+
+    # Nor a childless node carrying no literal: it spells nothing, so it could
+    # not be the binder a reader sees. Only reachable by hand-building a term —
+    # every producer gives a ground leaf its literal — but the guard replaced a
+    # *parse*, which could not have admitted it either.
+    nameless = Node(constructor=constructor_for(setvar))
+    assert nameless.literal is None and not nameless.children
+    assert unfold(d, redex, context, names={"z": nameless}) is None
 
     # A genuine leaf of the binder's sort is still accepted, confirming only the
     # ill-typed choices are refused.
