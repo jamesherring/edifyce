@@ -13,12 +13,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from fastapi import Query
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import selectinload
 
 from app.schemas import Page
 
 if TYPE_CHECKING:
+    import uuid
+
     from sqlalchemy import ColumnElement
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -158,3 +160,38 @@ async def unique_slug(
         slug = f"{base}-{n}"
         n += 1
     return slug
+
+
+async def lock_system(session: AsyncSession, system_id: uuid.UUID) -> None:
+    """Serialize this transaction against every other one touching ``system_id``.
+
+    Several writes across these routers are read-then-write and race:
+
+    * the reference-graph cycle check — two concurrent PUTs of A→B and B→A each
+      pass against the committed graph and together commit a cycle;
+    * term interning when a proof is checked — two proofs in one system both miss
+      the same new subterm and both insert it;
+    * **verification against invalidation** — a verify reads a lemma's stored
+      lines, a concurrent source edit invalidates them and commits, and the
+      verify then writes a valid snapshot back over that invalidation. Since a
+      verify now *trusts* those rows rather than re-checking the lemma
+      (``docs/verification-from-rows.md``), a later proof would rest on a
+      theorem no longer in the lemma's source.
+
+    The third is why this is taken at the **start** of a verify rather than just
+    before its write, and why every invalidation takes it too: the read and the
+    write have to be inside one critical section, or the invalidation can land
+    between them. One key per system, always acquired first, so there is no lock
+    ordering to get wrong — and a proof may only reference proofs in its own
+    system, so one key covers a whole reference closure.
+
+    Postgres only; a no-op on SQLite (the test database, where requests do not
+    run concurrently anyway), which is why the routes are covered by asserting
+    that they *take* the lock and the exclusion itself is tested against a real
+    Postgres.
+    """
+    if session.bind is not None and session.bind.dialect.name == "postgresql":
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": str(system_id)},
+        )

@@ -101,15 +101,15 @@ merely tidy:
   a corrupted or stale row is a soundness problem, where today it is a stale
   render. Worth deciding whether rows carry a schema/engine version stamp; the
   digest covers structure and names, not the kernel semantics that read them.
-- **Invalidation must serialise against verification** — and it does not.
-  `_lock_system` is taken by `_record_verdict` immediately before writing, and by
-  the reference-graph edit; a **source** edit, a delete, and a system-part edit
-  take nothing. So a verify can read a lemma's rows, a concurrent `PATCH` can
-  invalidate them and commit, and the verify then writes a valid snapshot back
-  over that invalidation. The lost update predates P1 — the same interleaving
-  overwrote `proofs.valid` when lemmas were re-parsed — but its *consequence* did
+- **Invalidation must serialise against verification.** It did not: the lock was
+  taken by `_record_verdict` immediately before writing and by the
+  reference-graph edit, while a source edit, a delete and a system-part edit took
+  nothing — so a verify could read a lemma's rows, a concurrent `PATCH` could
+  invalidate them and commit, and the verify would write a valid snapshot back
+  over that invalidation. The lost update predates P1 (the same interleaving
+  overwrote `proofs.valid` when lemmas were re-parsed), but its *consequence* did
   not: a stale verdict used to be corrected by the next verify that re-checked
-  the lemma, and now it is trusted instead. Open; see below.
+  the lemma, and is now trusted instead. **Closed** — see §3.1.
 
 Recording the decision matters more than the mechanism: it should be taken
 deliberately, once, rather than arrived at by a series of caching optimisations.
@@ -122,30 +122,35 @@ invalidation paths above are now soundness-critical, so they are tested rather
 than trusted. The engine-version stamp remains open; the digest covers structure
 and names, not the kernel semantics that read them.
 
-### 3.1 Open: serialising edits against verification
+### 3.1 Serialising edits against verification
 
-The gap above is the one thing P1 leaves genuinely unsound, and it is a product
-decision rather than a mechanical one, so it is recorded rather than guessed at.
-Three ways to close it:
+`_common.lock_system` — a transaction-scoped Postgres advisory lock keyed by the
+system — is now taken at the **start** of a verify, before it reads anything, and
+by every path that invalidates: a source edit, a reference edit, a delete, and a
+system-part edit. The read and the write are one critical section, so an
+invalidation can no longer land between them.
 
-- **Lock the read and the write together.** Move `_lock_system` to the start of
-  `_verify_with_references` and add it to the source-edit, delete and
-  system-part invalidation paths — about five one-line additions in the idiom the
-  file already uses. Airtight. It also serialises *all* verification in a system
-  behind any edit to it, and cannot be demonstrated by the test suite:
-  `pg_advisory_xact_lock` is a no-op on SQLite, so it would need verifying by
-  hand against Postgres.
-- **Optimistic re-check before caching.** Under the existing lock, re-read the
-  verdicts of the lemmas actually relied on and skip *caching* if any has
-  changed. Contained to one module, serialises nothing, and fails safe — a lost
-  cache entry, never a false verdict. Without a version column it narrows the
-  window rather than closing it.
-- **A version column** on `proofs`, bumped by every invalidation and checked at
-  write time. Closes it properly without a global lock, at the cost of a
-  migration and a new invariant to maintain.
+Two choices worth recording:
 
-Until one is chosen, the window is: a concurrent edit and verify of the same
-system, which needs two sessions acting at once.
+- **The invalidation helpers take the lock themselves** (`_discard_check`,
+  `_invalidate_dependents`), rather than each call site taking it. Forgetting it
+  at one new call site is exactly how the guarantee would be lost, and it would
+  fail nothing else.
+- **One key, always acquired first.** A proof may only reference proofs in its
+  own system, so a single system key covers a whole reference closure and there
+  is no lock ordering to get wrong.
+
+The cost is real and worth stating: **all verification in a system now serialises
+behind any edit to it.** That is the right trade at present scale — a verify is
+seconds at worst and edits are interactive — but it is a global lock, and a
+busier deployment would want the finer-grained alternative (a version column on
+`proofs`, bumped by every invalidation and checked at write time, which closes
+the race without excluding concurrent verifies).
+
+Testing it needed two halves, because the lock is a no-op on SQLite. Each route
+is covered by asserting it *takes* the lock (`test_every_invalidation_path_takes_
+the_system_lock`, one case per path); that the lock then excludes anything is a
+Postgres-only test which fails if the acquire is removed.
 
 ## 4. The one honest exception
 

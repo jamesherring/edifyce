@@ -20,12 +20,14 @@ pytest.importorskip("aiosqlite")
 pytest.importorskip("regex")
 
 from fastapi.testclient import TestClient
-from sqlalchemy import NullPool, create_engine, event, select
+from sqlalchemy import NullPool, create_engine, event, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
 import app.auth.backend as backend
+import app.routers._common as _common
 import app.routers.proofs as proofs_router
+import app.routers.system_parts as system_parts_router
 from app.db import (
     Base,
     FormalSystem,
@@ -72,6 +74,7 @@ from tests.spec_helpers import (
     variable_prod,
 )
 from tests.database import (
+    ON_POSTGRES,
     async_url,
     create_tables,
     database_url,
@@ -914,6 +917,127 @@ def test_a_lemma_that_cannot_be_read_is_a_verdict_not_a_500(client, db, monkeypa
     body = response.json()
     assert body["success"] is False
     assert any("could not be read" in error for error in body["errors"])
+
+
+# ---------------------------------------------------------------------------
+# Serialising verification against invalidation
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def locked(monkeypatch) -> list:
+    """Record every system id `lock_system` is asked for.
+
+    The lock itself is a Postgres advisory lock and a no-op on SQLite, so what a
+    SQLite run can prove is that each path *takes* it. That the lock then
+    excludes anything is a separate, Postgres-only test below.
+    """
+    taken: list = []
+    real = _common.lock_system
+
+    async def spy(session, system_id):
+        taken.append(system_id)
+        return await real(session, system_id)
+
+    monkeypatch.setattr(_common, "lock_system", spy)
+    monkeypatch.setattr(proofs_router, "lock_system", spy)
+    monkeypatch.setattr(system_parts_router, "lock_system", spy)
+    return taken
+
+
+def test_verification_takes_the_system_lock_before_reading(client, db, locked):
+    # The point of the whole exercise: a verify trusts its lemmas' stored rows,
+    # so the read and the write must be one critical section. Locking just before
+    # the write would let an invalidation commit in between.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    pid = _create_proof(client, sid, "P", source=VALID_PROOF)
+
+    locked.clear()
+    assert client.post(f"/api/proofs/{pid}/verify").json()["success"] is True
+    assert uuid.UUID(sid) in locked
+
+
+@pytest.mark.parametrize(
+    "invalidate",
+    [
+        pytest.param(
+            lambda client, sid, pid: client.patch(
+                f"/api/proofs/{pid}", json={"source": "x ∈ y [HYP]"}
+            ),
+            id="source-edit",
+        ),
+        pytest.param(
+            lambda client, sid, pid: client.put(
+                f"/api/proofs/{pid}/references", json={"references": []}
+            ),
+            id="reference-edit",
+        ),
+        pytest.param(
+            lambda client, sid, pid: client.delete(f"/api/proofs/{pid}"),
+            id="delete",
+        ),
+        pytest.param(
+            lambda client, sid, pid: client.patch(
+                f"/api/formal-systems/{sid}/rules/"
+                + next(
+                    r["id"]
+                    for r in client.get(f"/api/formal-systems/{sid}").json()["rules"]
+                    if r["label"] == "HYP"
+                ),
+                json={"name": "Hypothesis"},
+            ),
+            id="system-part-edit",
+        ),
+    ],
+)
+def test_every_invalidation_path_takes_the_system_lock(client, db, locked, invalidate):
+    # A verify's read is only safe if *every* way of invalidating those rows
+    # serialises against it. Forgetting one is how the guarantee would be lost,
+    # and it would fail nothing else — hence a case per path.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    pid = _create_proof(client, sid, "P", source=VALID_PROOF)
+    client.post(f"/api/proofs/{pid}/verify")
+
+    locked.clear()
+    response = invalidate(client, sid, pid)
+    assert response.status_code in (200, 204), response.text
+    assert uuid.UUID(sid) in locked
+
+
+@pytest.mark.skipif(not ON_POSTGRES, reason="advisory locks are a no-op off Postgres")
+def test_the_system_lock_actually_excludes_a_second_transaction(db):
+    # The spy tests above prove the paths ask for the lock; this proves the lock
+    # means something. Two transactions, one key: the second cannot take it until
+    # the first commits, which is what serialises a verify against an edit.
+    import asyncio
+
+    system_id = uuid.uuid4()
+
+    async def exercise() -> tuple[bool, bool]:
+        engine = create_async_engine(async_url(db), poolclass=NullPool)
+        try:
+            async with AsyncSession(engine) as holder, AsyncSession(engine) as other:
+                await _common.lock_system(holder, system_id)
+                # `try_` rather than the blocking form: a blocked acquire would
+                # hang the test rather than fail it.
+                blocked = await other.scalar(
+                    text("SELECT pg_try_advisory_xact_lock(hashtextextended(:k, 0))"),
+                    {"k": str(system_id)},
+                )
+                await holder.rollback()
+                free = await other.scalar(
+                    text("SELECT pg_try_advisory_xact_lock(hashtextextended(:k, 0))"),
+                    {"k": str(system_id)},
+                )
+                return blocked, free
+        finally:
+            await engine.dispose()
+
+    blocked, free = asyncio.run(exercise())
+    assert blocked is False, "a second transaction took a lock the first was holding"
+    assert free is True, "the lock outlived the transaction that took it"
 
 
 def test_a_lemma_whose_structure_was_discarded_is_no_longer_citable(client, db):

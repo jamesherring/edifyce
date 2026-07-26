@@ -64,7 +64,13 @@ from app.db import (
     system_to_spec,
 )
 from app.db.models import User
-from app.routers._common import PageParams, page_params, paginate_summaries, unique_slug
+from app.routers._common import (
+    PageParams,
+    lock_system,
+    page_params,
+    paginate_summaries,
+    unique_slug,
+)
 from app.routers.systems import load_system
 from website.logical.formal_system.proof import Proof as EngineProof
 from app.schemas import (
@@ -284,6 +290,12 @@ async def _verify_with_references(
     line. Pass ``system`` to reuse an already-loaded system (a publish gate has
     one in hand); otherwise it is loaded here.
     """
+    # Before anything is read. A verify now trusts the lemmas' stored rows
+    # instead of re-checking them, so the read and the write must sit inside one
+    # critical section: otherwise an invalidation can commit between them and
+    # this transaction writes a valid snapshot back over it. See lock_system.
+    await lock_system(session, proof.formal_system_id)
+
     if system is None:
         system = await load_system(session, proof.formal_system_id)
     if system is None:
@@ -489,12 +501,10 @@ async def _record_verdict(
 
     system = verification.system
     cited = verification.cited_proofs
-    # Term rows are interned per system by a unique digest, and interning is a
-    # read-then-insert: two proofs in one system verified concurrently can both
-    # miss the same new subterm and both insert it, and the loser of that race
-    # gets a unique violation rather than a stored proof. Serialize the write on
-    # the system, as the reference-graph edit does for its own read-then-write.
-    await _lock_system(session, system.id)
+    # No acquire here: `_verify_with_references` took the system lock before it
+    # read anything, and holds it for this transaction. That is what makes the
+    # term interning below safe (a read-then-insert two proofs can both lose)
+    # *and* what stops an invalidation landing between the read and this write.
     await session.run_sync(
         lambda sync: store_proof_lines(sync, proof, system, engine_proof, cited)
     )
@@ -506,17 +516,30 @@ async def _discard_check(session: AsyncSession, proof: Proof) -> None:
     The cached verdict and the stored structure are one artefact of one check, so
     they are discarded together — a snapshot describing a source that has since
     changed is worse than no snapshot at all. Both are rebuilt on the next verify.
+
+    Takes the system lock itself rather than trusting each call site to: a verify
+    reading these rows must not have them invalidated out from under it between
+    its read and its write, and forgetting the lock at one new call site is
+    exactly how that guarantee would be lost (see `_common.lock_system`).
     """
+    await lock_system(session, proof.formal_system_id)
     proof.valid = None
     proof.result = None
     await session.run_sync(lambda sync: clear_proof_lines(sync, [proof.id]))
 
 
-async def _invalidate_dependents(session: AsyncSession, proof_id: uuid.UUID) -> None:
+async def _invalidate_dependents(
+    session: AsyncSession, proof_id: uuid.UUID, system_id: uuid.UUID
+) -> None:
     """Invalidate every proof that transitively references ``proof_id``, so a
     stale verdict can't survive a change to a lemma it leans on (a source edit,
     or the proof's deletion). Those proofs re-verify on demand.
+
+    ``system_id`` is the system they all live in — references are same-system, so
+    one key locks the lot. Taken here for the same reason as `_discard_check`: a
+    verify in flight is reading exactly these rows.
     """
+    await lock_system(session, system_id)
     dependents: set[uuid.UUID] = set()
     frontier = [proof_id]
     while frontier:
@@ -776,7 +799,7 @@ async def update_proof(
         # proof — and the cached verdict of anything that cites it as a lemma —
         # is stale.
         await _discard_check(session, proof)
-        await _invalidate_dependents(session, proof.id)
+        await _invalidate_dependents(session, proof.id, proof.formal_system_id)
 
     # Publishing is the write that makes a proof world-readable, so gate it —
     # after the field changes above so the checks see this request's final state.
@@ -800,25 +823,6 @@ async def update_proof(
 
     await session.commit()
     return _detail(await _get_owned_or_404(session, proof_id, user.id), user)
-
-
-async def _lock_system(session: AsyncSession, system_id: uuid.UUID) -> None:
-    """Serialize this transaction's read-then-write against one system.
-
-    Two writes in this router are read-then-write and race: the reference-graph
-    cycle check (two concurrent PUTs of A→B and B→A each pass against the
-    committed graph and together commit a cycle) and term interning when a proof
-    is checked (two proofs in one system both miss the same new subterm and both
-    insert it). A transaction-scoped advisory lock keyed by the system makes both
-    serialize, so each sees the other's rows. Postgres only; a no-op on SQLite
-    (the test DB, where requests don't run concurrently anyway). Verification
-    re-checks for cycles as a defensive backstop (``_dependency_order``).
-    """
-    if session.bind is not None and session.bind.dialect.name == "postgresql":
-        await session.execute(
-            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
-            {"key": str(system_id)},
-        )
 
 
 async def _reference_would_cycle(
@@ -883,7 +887,7 @@ async def set_proof_references(
 
     # Serialize concurrent reference edits in this system so the cycle check
     # below can't be raced into committing a cycle.
-    await _lock_system(session, proof.formal_system_id)
+    await lock_system(session, proof.formal_system_id)
 
     target_ids = [r.referenced_proof_id for r in payload.references]
     aliases = [r.alias for r in payload.references]
@@ -944,7 +948,7 @@ async def set_proof_references(
     # References feed verification now, so this proof's check and every
     # dependent's are stale.
     await _discard_check(session, proof)
-    await _invalidate_dependents(session, proof.id)
+    await _invalidate_dependents(session, proof.id, proof.formal_system_id)
     await session.commit()
     return _detail(await _get_owned_or_404(session, proof_id, user.id), user)
 
@@ -957,11 +961,16 @@ async def delete_proof(
 ) -> None:
     # Establish ownership first (404 for a stranger's id, so nothing leaks) before
     # any dependency checks reveal the proof exists.
-    owned = await session.scalar(
-        select(Proof.id).where(Proof.id == proof_id, Proof.owner_id == user.id)
-    )
+    owned = (
+        await session.execute(
+            select(Proof.id, Proof.formal_system_id).where(
+                Proof.id == proof_id, Proof.owner_id == user.id
+            )
+        )
+    ).first()
     if owned is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Proof not found.")
+    _, system_id = owned
 
     # Deleting a proof drops its reference edges (FK cascade), so a dependent's
     # `[alias.line]` citation would dangle. If a *published* proof rests on it,
@@ -972,7 +981,7 @@ async def delete_proof(
             status.HTTP_409_CONFLICT,
             "Cannot delete a proof that a published proof references.",
         )
-    await _invalidate_dependents(session, proof_id)
+    await _invalidate_dependents(session, proof_id, system_id)
 
     await session.execute(sa_delete(Proof).where(Proof.id == proof_id))
     await session.commit()
