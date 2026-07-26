@@ -134,7 +134,6 @@ class FormalSystem:
 
         line = proof_line.text.rstrip()
 
-        found = False
         # Check the line is of a given line type
         for line_type in self.line_types:
 
@@ -143,9 +142,6 @@ class FormalSystem:
 
             if result is None:
                 continue
-
-            # Otherwise meets this line type
-            found = True
 
             # Record the line_type of this line
             proof_line.line_type = line_type
@@ -195,11 +191,6 @@ class FormalSystem:
             # No need to check other line types
             break
 
-        if not found:
-            # The line doesn't match any of the line types. Invalid proof
-            proof_line.invalid_message = "Could not parse line."
-            proof_line.valid = False
-
     def check_proof(self, proof, context=None):
         """Check a proof whose lines are already populated, and return it.
 
@@ -229,7 +220,16 @@ class FormalSystem:
             # no scope openers - every line then lands in the root scope).
             proof.assign_scope(proof_line)
 
-            if proof_line.line_type is not None:
+            if proof_line.line_type is None:
+                # The line matched no line type, so it asserts nothing and
+                # cannot stand. Decided here rather than where the match failed,
+                # because it is equally true of a line *loaded* from a row that
+                # records no line type — and a line that arrives with no verdict
+                # must not keep `ProofLine`'s optimistic default.
+                proof_line.valid = False
+                if proof_line.invalid_message is None:
+                    proof_line.invalid_message = "Could not parse line."
+            else:
                 # Execute the proof line
                 proof_line.execute(context)
 

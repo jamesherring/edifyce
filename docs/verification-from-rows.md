@@ -50,29 +50,36 @@ checking does.
 
 ## 2. What is stored, and what is thrown away
 
-| Verification needs | Stored today | Used today |
+This table is what the phases below work through; **used** is the state after P1
+and P2.
+
+| Verification needs | Stored | Used |
 |---|---|---|
-| A line's formula as a term | **yes** — `proof_lines.term_id` → `terms` | **no** — `load_term` has no callers outside tests |
-| Line type and behaviour | yes — `proof_lines.line_type` / `behaviour` | no — re-derived by re-matching the source line |
-| Justification edges | yes — `proof_line_antecedents` | no — re-derived from the citation string |
-| Scope tree (for discharge) | yes — `proof_lines.opens_scope` / `scope_id` | no — re-derived |
-| Whether a cited lemma stands | **yes** — `proofs.valid`, and warnings via `proof_lines.warning_message` | **no** — the whole transitive closure is re-parsed and re-checked |
-| Rule schema terms | **no** | composed at build time by parsing the `rules` template strings |
-| Definition higher/lower forms | **no** | same — stored as strings, parsed at build |
-| Promoted theorems | **no** | not persisted at all (metamath roadmap §3.2) |
+| A line's formula as a term | yes — `proof_lines.term_id` → `terms` | **yes** (P2) |
+| Line type and behaviour | yes — `proof_lines.line_type` / `behaviour` | **yes** (P2) |
+| The citation a line was written with | yes — `proof_lines.reference` | **yes** (P2) |
+| Whether a cited lemma stands | yes — its lines' verdicts | **yes** (P1) |
+| Justification edges | yes — `proof_line_antecedents` | no — *re-derived* from the citation, deliberately |
+| Scope tree (for discharge) | yes — `proof_lines.opens_scope` / `scope_id` | no — *re-derived*, deliberately |
+| Rule schema terms | **no** | composed at build time by parsing the `rules` template strings (P3) |
+| Definition higher/lower forms | **no** | same — stored as strings, parsed at build (P3) |
+| Promoted theorems | **no** | not persisted at all (P4; metamath roadmap §3.2) |
 
-Two distinct gaps, and they are different sizes.
+The two *deliberate* nos are the point rather than an omission. Edges and scope
+are stored so the graph is queryable, and re-derived so a check is a check: if a
+row could supply a line's justification, a corrupted row could assert one.
+Everything a verdict rests on is recomputed; the rows supply only what each line
+*states*.
 
-**The proof side is nearly closed.** Everything a proof contributes is in rows
-already; `store_proof_lines` writes it on every verify and nothing reads it back
-except `GET /proofs/{id}` for display. The rows are a **write-only read-model**.
+**The proof side is closed.** Everything a proof contributes is in rows and read
+back on every check.
 
 **The system side is not started.** Rule and definition schemas live as template
 strings, so compiling a system parses them every time — `compose_schema_term`
 parses each rule template against the productions at build. That is per-verify,
 not per-line, but under this model it should not happen either. Promoted
 theorems are the extreme case: nothing at all, which is why an imported Metamath
-proof cannot currently be re-checked from its own rows.
+proof cannot yet be re-checked from its own rows.
 
 ## 3. The contract this inverts
 
@@ -293,10 +300,40 @@ the set.mm walk against 49 ms by 45,000) where the row path does not. The
 crossover is a bigger proof and a bigger library, both of which the Metamath work
 produces.
 
-Two levers remain unpulled, and neither is architectural: the three queries could
-be two, and term rows are still hydrated through the ORM rather than read as Core
-rows. As with P1, the case for P2 today is that it makes the rows load-bearing —
-the parse happens once, at the write — not that it is quicker yet.
+As with P1, the case for P2 today is that it makes the rows load-bearing — the
+parse happens once, at the write — not that it is quicker yet.
+
+**One correctness lesson worth keeping.** A first cut let a proof with an
+unparseable line come back *valid* on the second verify: the row records no line
+type, so nothing executed, so the line kept `ProofLine`'s optimistic default.
+Every other verdict was re-derived and that one was not. Deciding "no line type
+⇒ cannot stand" in `check_proof` rather than where the match failed fixes it, and
+the shape of the mistake is the thing to remember — a check from rows is only
+sound if *every* verdict is re-derived, including the ones that look like they
+were settled by the absence of something.
+
+### P2a. The constant factor — *follow-up*
+
+Deliberately not done here, because the phase is about where the parse happens
+rather than how fast the read is, and because both levers are self-contained
+enough to land on their own evidence.
+
+- **Three round trips could be two.** A load is the line rows, the recursive
+  closure over `term_children`, then the term rows with their edges. The first
+  two could be one statement; the closure is only ever the filter for the third.
+- **Term rows are hydrated through the ORM.** `prefetch_terms` builds a
+  `TermRow` object graph and `load_term` walks relationships, when the shape
+  needed is flat tuples fed straight to the kernel's constructors. P1's profile
+  put most of the remaining time in SQLAlchemy's instance machinery, not in the
+  term rebuild.
+- **A single-proof load pays the batching penalty P1 documented.** Verifying one
+  proof is inherently one proof, so the fixed cost cannot be amortised the way a
+  reference closure's is. That argues for cutting the per-load floor rather than
+  batching harder.
+
+Worth measuring against a *large* grammar before choosing: the crossover moves
+with grammar size, and set.mm's full 1,441 productions may put it below the
+current numbers without any of this.
 
 ### P3. Store schema terms
 

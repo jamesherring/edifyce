@@ -989,6 +989,48 @@ def test_checking_from_rows_is_idempotent(client, db):
     assert once, "the proof stored no lines at all"
 
 
+@pytest.mark.parametrize(
+    "name,source",
+    [
+        ("valid", VALID_PROOF),
+        ("unjustified", "(x ∈ y → x = y) [HYP]\nx = y [MP, 1]"),
+        # Matches no line type at all: the case that caught a real divergence —
+        # the row records no line type, so nothing executed, so the line kept
+        # `ProofLine`'s optimistic default and the proof flipped to valid.
+        ("unparseable", INVALID_PROOF),
+        ("unparseable-among-valid", VALID_PROOF + "\n" + INVALID_PROOF),
+        ("blank-and-comment", VALID_PROOF + "\n\n" + VALID_PROOF),
+        ("unknown-rule", "x = x [NOPE]"),
+        ("indented", "    " + VALID_PROOF),
+    ],
+)
+def test_the_row_path_and_the_parse_path_agree(client, db, name, source):
+    # The property the whole phase rests on: a check from rows is the *same*
+    # check, not a cheaper approximation of one. Asserted per line rather than on
+    # the verdict alone, so a line agreeing by accident cannot hide a divergence.
+    uid = _register_login(client, f"ada-{name}@example.com")
+    sid = _seed_system(db, uid)
+    pid = _create_proof(client, sid, name, source=source)
+
+    def lines(body) -> list[tuple]:
+        # Everything the checker decides about a line, not just its verdict: a
+        # line agreeing by accident must not hide a divergence.
+        return [
+            (
+                line["number"], line["display"], line["indent"], line["name"],
+                line["behaviour"], line["reference"], line["label"],
+                line["valid"], line["invalid_message"], line["warning_message"],
+            )
+            for line in body["proof"]["lines"]
+        ]
+
+    parsed = client.post(f"/api/proofs/{pid}/verify").json()   # nothing stored yet
+    from_rows = client.post(f"/api/proofs/{pid}/verify").json()  # reads its own rows
+
+    assert from_rows["success"] == parsed["success"]
+    assert lines(from_rows) == lines(parsed)
+
+
 def test_a_proof_checked_from_rows_still_fails_when_it_should(client, db):
     # The rows supply what a line *says*, never whether it stands: the verdict is
     # re-derived. So a proof that fails, fails identically on the row path — and
