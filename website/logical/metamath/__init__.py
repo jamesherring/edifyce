@@ -23,6 +23,7 @@ from .importer import (
     import_theorem,
     promote_assertions,
     promoted_theorem,
+    walk,
 )
 from .parser import (
     ASSERTION_TYPECODE,
@@ -49,4 +50,5 @@ __all__ = [
     "promote_assertions",
     "promoted_theorem",
     "split_proof",
+    "walk",
 ]

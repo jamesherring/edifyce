@@ -27,7 +27,7 @@ syntax axioms state.
 
 from __future__ import annotations
 
-import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -100,7 +100,7 @@ def build_spec(
                 )
             )
 
-    productions.extend(_variable_sort_productions(database, before))
+    productions.extend(_variable_productions(database, before))
     logical_sort = _logical_sort(database, before)
 
     return SystemSpec(
@@ -227,22 +227,59 @@ def _binder_sorts(database: Database) -> list[str]:
     return [t for t in database.floating_typecodes() if t not in built]
 
 
-def _variable_sort_productions(
+def variable_production_name(database: Database, typecode: str, variable: str) -> str:
+    """The production name carrying `variable` as a leaf of sort `typecode`.
+
+    Metamath keeps labels and variable names in separate namespaces; Edifyce
+    resolves productions out of one, so a name that collides with an assertion
+    label would silently rebind it. Salt until free rather than trusting that no
+    `set.mm`-alike ever labels a theorem `wff_var_ph`.
+    """
+    name = f"{typecode}_var_{variable}"
+    while name in database.assertions:
+        name += "_"
+    return name
+
+
+def _variable_productions(
     database: Database, before: str | None = None
 ) -> list[Production]:
-    # A leaf production per sort carrying the variables declared for it. Anchored
-    # alternation rather than a general identifier pattern, so a sort admits the
-    # variables the database declares and nothing else. Without these a bare
+    # A sub-sort `<typecode>_var` per typecode, holding one atom leaf per declared
+    # variable, and included into the typecode's own sort. Without these a bare
     # variable does not parse as its sort, and any statement mentioning one - every
     # `$e` hypothesis, most schemas - fails to read.
-    return [
-        Production(
-            sort=typecode,
-            name=f"{typecode}_var",
-            regex="(?:" + "|".join(re.escape(v) for v in sorted(members)) + ")",
+    #
+    # One leaf *each*, rather than a single regex leaf alternating over all of
+    # them, because a sort's variables have to be able to grow. The corpus pass
+    # adds notation as the walk reaches it and must add variables the same way
+    # (see `walk`), and an alternation cannot be extended in place: a regex leaf's
+    # kernel constructor is identified by its regex *text* (`kernel.constructors`),
+    # so rewriting it would split one variable into two non-interchangeable terms
+    # either side of the rewrite. An atom is identified by its own token, and joins
+    # a sort through `add_pattern` - the mechanism notation already grows through.
+    #
+    # The sub-sort is what keeps `$d` expressible. A proviso restricts to the
+    # leaves that *are* variables (`_distinct_provisos`), and with the variables
+    # spread over the typecode's own sort there would be no name for just those -
+    # `disjoint(A, B, class)` would wrongly separate constants like `RR` too.
+    #
+    # `denotes_constant` is left False: these are `$v` variables, the things a
+    # binder binds, as opposed to the `$c`-derived nullary constants above.
+    productions: list[Production] = []
+    for typecode, members in _declared_variables(database, before).items():
+        sort = f"{typecode}_var"
+        productions.extend(
+            Production(
+                sort=sort,
+                name=variable_production_name(database, typecode, variable),
+                atom_value=variable,
+            )
+            for variable in members
         )
-        for typecode, members in _declared_variables(database, before).items()
-    ]
+        # Shapeless: a production naming another sort *includes* that sort, so a
+        # variable reads as its typecode as well as as a variable.
+        productions.append(Production(sort=typecode, name=sort))
+    return productions
 
 
 def _logical_sort(database: Database, before: str | None = None) -> str:
@@ -582,7 +619,16 @@ def import_theorem(
 
     system = build_system(build_spec(database, name, before=label))
     promote_assertions(database, system, before=label)
+    _givens(assertion, system)
 
+    return system, import_proof(database, label)
+
+
+def _givens(
+    assertion: Assertion, system: FormalSystem
+) -> list[str]:
+    # Register `assertion`'s own `$e` hypotheses as premises of the proof about to
+    # be checked, and report their labels so a caller can withdraw them again.
     metavariables = {h.variable: h.typecode for h in assertion.floatings}
     for hypothesis in assertion.essentials:
         system.promote(
@@ -593,5 +639,104 @@ def import_theorem(
                 metavariables=metavariables,
             )
         )
+    return [h.label for h in assertion.essentials]
 
-    return system, import_proof(database, label)
+
+def _first_mention(database: Database) -> dict[str, int]:
+    # For each variable, the earliest position at which some statement can mention
+    # it - its own tokens, or those of a hypothesis active where it sits. This is
+    # `_mentioned_variables`' rule read the other way round: a variable is in
+    # `_mentioned_variables(before=L)` exactly when its first mention is at or
+    # before `L`. One pass serves the whole walk.
+    first: dict[str, int] = {}
+    for index, label in enumerate(database.order):
+        assertion = database.assertions[label]
+        tokens = set(assertion.tokens)
+        for hypothesis_label in assertion.active_hypotheses:
+            tokens.update(database.hypotheses[hypothesis_label].tokens)
+        for token in tokens & database.variables:
+            first.setdefault(token, index)
+    return first
+
+
+def _grammar_schedule(
+    database: Database, spec: SystemSpec
+) -> dict[int, list[tuple[str, str]]]:
+    # When each production joins the grammar, as `{position: [(sort, name), ...]}`.
+    #
+    # Notation joins at the syntax axiom that declares it. A variable joins at its
+    # first mention, and brings its `<typecode>_var` sub-sort into the typecode
+    # with it - the sub-sort is held back until then so that an empty one is never
+    # a branch of a live sort.
+    schedule: dict[int, list[tuple[str, str]]] = {}
+
+    def at(position: int, sort: str, name: str) -> None:
+        schedule.setdefault(position, []).append((sort, name))
+
+    for assertion in _syntax_before(database, None):
+        at(database.position(assertion.label), assertion.typecode, assertion.label)
+
+    first = _first_mention(database)
+    included: set[str] = set()
+    for typecode, members in _declared_variables(database).items():
+        sub_sort = f"{typecode}_var"
+        for variable in members:
+            position = first[variable]
+            if sub_sort not in included:
+                included.add(sub_sort)
+                at(position, typecode, sub_sort)
+            at(position, sub_sort, variable_production_name(database, typecode, variable))
+    return schedule
+
+
+def walk(
+    database: Database, name: str = "Metamath"
+) -> Iterator[tuple[str, FormalSystem, str]]:
+    """Yield ``(label, system, proof_text)`` for every ``$p`` theorem, in file order.
+
+    What :func:`import_theorem` establishes per theorem, established for a whole
+    database in one pass. The scoping is the same and is the point: when a theorem
+    is yielded, the system carries exactly the notation and the theorems that
+    *precede* it, plus that theorem's own ``$e`` hypotheses as givens.
+
+    The difference is cost. `import_theorem` rebuilds the system per theorem, which
+    over a corpus is quadratic - `set.mm`'s grammar reaches 1,441 productions, and
+    rebuilding it 47,546 times is not affordable. Here one system is built and then
+    *grown*: each production is added to its sort at the position it becomes
+    available, and each assertion is promoted once the theorem yielded for it has
+    been checked.
+
+    The yielded system is the walk's own and is mutated on every step, so a caller
+    must finish with it before advancing. Sort *admission* is the one thing derived
+    at whole-database scope: a union's kernel constructor fixes its branches when
+    the system is built (``Constructor.admits``), before any of this replaying. It
+    costs nothing, because admission is only ever asked about a term that already
+    parsed, and parsing is scoped.
+    """
+    spec = build_spec(database, name)
+    system = build_system(spec)
+    context = system.build_context
+
+    sorts = {sort: context.variables[sort] for sort in spec.sort_names()}
+    for union in sorts.values():
+        union.clear_patterns()
+
+    schedule = _grammar_schedule(database, spec)
+
+    for index, label in enumerate(database.order):
+        for sort, production in schedule.get(index, ()):
+            sorts[sort].add_pattern(context.variables[production])
+
+        assertion = database.assertions[label]
+        if not assertion.is_logical:
+            continue
+
+        if assertion.proof:
+            given = _givens(assertion, system)
+            try:
+                yield label, system, import_proof(database, label)
+            finally:
+                for hypothesis_label in given:
+                    system.promoted_theorems.pop(hypothesis_label, None)
+
+        system.promote(promoted_theorem(assertion, database, system))

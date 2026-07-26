@@ -1519,6 +1519,17 @@ class UnionPattern(Pattern):
         pattern.union_member = True
         invalidate_union_memos()
 
+    def clear_patterns(self) -> None:
+        """Drop every member, invalidating any memoised flattening.
+
+        For a caller that builds a system and then replays its grammar in
+        declaration order - a corpus import checking each theorem against only the
+        notation preceding it. Emptying ``patterns`` directly leaves the memos
+        keyed to a membership that no longer holds.
+        """
+        self.patterns.clear()
+        invalidate_union_memos()
+
     def add_variables(self, variable_dict):
         # Add variables to all patterns in the union
 

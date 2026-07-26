@@ -101,9 +101,16 @@ def build_schema_pattern(
     if text in context.variables:
         return context.variables[text]
 
-    constant = _grammar_index(context).constant_atoms.get(text)
-    if constant is not None:
-        return constant
+    # A metavariable of this very rule is never a literal, whatever the grammar
+    # also spells that way. It matters once a grammar declares its object-language
+    # *variables* as atoms - a Metamath import does, one leaf per `$v` - because a
+    # premise stated as the bare metavariable `ph` would otherwise resolve to the
+    # atom `ph` and match only that one token, instead of standing for any wff.
+    # `side_condition_syntax._arg` gives a proviso argument the same precedence.
+    if text not in context.string_variables:
+        constant = _grammar_index(context).constant_atoms.get(text)
+        if constant is not None:
+            return constant
 
     pattern = StringPattern(name=name, pattern=text)
     pattern.add_variables(context.string_variables)
