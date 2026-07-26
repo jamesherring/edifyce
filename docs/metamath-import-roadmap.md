@@ -1,6 +1,8 @@
 # Metamath import: analysis and roadmap
 
-**Status:** working vertical slice; bulk import not yet attempted.
+**Status:** whole corpus imported and checked — 47,546 theorems, 97.8% verifying.
+The remaining 2.2% is characterised in §1.1, and is import defects, not
+unprovable mathematics.
 
 Goal: import Metamath's `set.mm` while keeping **full verifiability** and **full
 generality** (Edifyce stays a general proof assistant — any formal system, not a
@@ -27,10 +29,12 @@ are not relitigated), and what remains.
 | Logical assertions promoted as citable theorems | done, but see §3.2 |
 | Proof emission + kernel check | done |
 | Proofs *under* `$e` hypotheses (`import_theorem`) | done |
+| Whole-corpus ordered pass (§1.1) | done — 47,546 checked, 46,520 verify |
+| Scale (§5, A5) | **measured** — 23 min, 3.0 GB (§1.1) |
+| Token-collision defects (§1.2) | **open** — 32 theorems, two causes, both ours |
 | `$t` typesetting / notation (§4) | **next** |
 | Axiom-vs-theorem split (§3.2) | **blocker** |
 | Definition classification (§5, A4) | not a blocker; front-load |
-| Scale (§5, A5) | unmeasured |
 
 `tests/test_metamath_import.py` imports `sqrt2re` from its verbatim `set.mm` proof
 and has Edifyce's kernel check the result:
@@ -55,6 +59,67 @@ Two properties make that claim hold, both enforced:
 
 `import_database` (the whole library, everything promoted) remains the right view
 for browsing, but `import_theorem` is the entry point for *checking* a proof.
+
+### 1.1 The whole corpus
+
+One ordered pass over `set.mm`: walk the file, add each syntax axiom to the
+grammar as it is declared, check each theorem against only the notation and
+theorems that precede it, then promote it. Every proof is emitted from its stored
+compressed proof and checked by Edifyce's own kernel.
+
+| | |
+|---|---|
+| theorems checked | 47,546 |
+| verified | **46,520 (97.8%)** |
+| rejected by the kernel | 1,026 |
+| failed to promote | 32 |
+| wall clock | 23 min 12 s |
+| peak memory | 3.0 GB |
+
+Cost is `check` 1,132 s, `promote` 218 s, `emit` 41 s. Per-theorem cost grows with
+the grammar, which reaches 1,441 productions: 2.7 ms/theorem over the first 5,000,
+28.8 ms/theorem by 45,000.
+
+Two caveats on what that number means. The *variable-sort* leaves are seeded at
+whole-database scope rather than grown with the walk — much weaker than the
+notation ordering (a variable leaf admits more names; it adds no constructor that
+could capture a parse), but not the strict discipline. And all 1,433 `df-`
+statements are still imported as axioms (§3.2, A4), so this verifies `set.mm`
+against a larger primitive basis than a faithful import would use.
+
+### 1.2 Why the rejections happen
+
+The 32 promotion failures have two root causes, both **defects on our side**, and
+both the same shape: a `set.mm` constant token containing a character Edifyce
+reads structurally. This is the third instance of that shape — the first was the
+class variable `A` found inside the quantifier `A.`, fixed by renaming the
+production's variable (`_uncollide`).
+
+**A variable named `.,` breaks a `$d` proviso (17 theorems).** `set.mm` spells its
+inner product `.,`, and `_distinct_provisos` emits `disjoint(.,, x, setvar)` — the
+comma *in the name* is indistinguishable from the argument separator, so the
+side-condition parser refuses it. Exactly one declared variable contains a comma,
+so the blast radius is small, but the fix is a quoting or escaping convention in
+the proviso syntax rather than anything Metamath-specific.
+
+**Interval notation defeats the bracket check (15 theorems).** `set.mm` declares
+14 constants that contain a parenthesis — `[,)`, `(,]`, `(,)`, `(x)`, `O(1)`, `((`
+among them. A statement mentioning one, such as `( 0 [,) +oo ) C_ RR`, fails
+`check_brackets` outright: the `)` inside the token `[,)` is counted as a
+delimiter, so the string reads as unbalanced and never reaches a parse. Confirmed
+directly — `check_brackets` returns False on each failing statement.
+
+Bracket parity is an optimisation (it prunes candidate splits), not a grammatical
+rule, so the fix is to profile brackets over *tokens* rather than characters and
+let a declared constant be opaque to the scan.
+
+The 1,026 kernel rejections are **not yet diagnosed**. They are not uniform —
+they cluster (299 in the 25,000s, 389 in the 45,000s) and are absent below 10,000
+— which suggests a small number of causes tied to particular notation rather than
+a broad soundness gap. A promotion failure *does* cascade (a theorem that never
+promoted cannot justify a later citation of it), so the 32 above may account for
+some share of the 1,026; a failed *check* does not cascade, since the harness
+promotes regardless of the verdict.
 
 ---
 
@@ -350,14 +415,21 @@ lemmas as cited premises. Default on "does not reduce to fold/unfold" must be
 *axiom + flag*, never a silent `Define`. Do it early: reclassifying after a bulk
 import means re-importing everything.
 
-**A5. Scale — *unmeasured*.**
-~40 000 theorems, 51 MB, proofs hundreds of steps deep. Two risks: the notation
-matcher is a hand-written backtracking string matcher with a `certainty` heuristic
-— validate at `set.mm` grammar size, and prefer the declarative/precompiled build
-path for bulk import; and 40 000 promoted theorems must resolve fast — index by
-conclusion head symbol so a citation resolves against a handful of candidates, and
-exercise the antecedent-assignment and unification paths at library scale.
-Correctness on a dozen theorems says nothing about wall-clock on forty thousand.
+**A5. Scale — *measured; no longer a risk*.**
+The whole corpus checks in 23 minutes at 3.0 GB (§1.1). Both risks this item
+named were real and are now addressed. The backtracking string matcher was the
+dominant cost and was *exponential in nesting depth* — `cbvral8vw` (16 binders)
+did not finish at all — until substring parses were memoised per parse; reading a
+template by its declared slots rather than character by character then halved
+what remained. Candidate productions are picked by the string's leading character
+instead of trying every leaf, which is what stops cost growing with the grammar's
+1,441 productions. Resolution of 49,000 promoted theorems never became the
+bottleneck the item predicted; the parse did.
+
+What remains is memory — 3.0 GB, growing roughly linearly with theorems promoted
+— and the fact that per-theorem cost still rises with grammar size (2.7 ms early,
+28.8 ms late). Neither blocks a bulk import; both would matter for a corpus
+several times larger.
 
 ### Tier B — the human-altitude layer
 
@@ -411,9 +483,12 @@ argument. General because the justification is always a cited lemma.
 1. **`$t` + Unicode source + term-fold renderer** (§4) — wanted now, and part of A3.
 2. **Axiom-vs-theorem split** (§3.2) — the modelling blocker.
 3. **A4 definition classification** — cheaper before bulk than after.
-4. **A5 benchmarks**, in parallel from step 2 onward.
-5. **Widen the slice**: `sqrt2irr` and its dependency closure — the first target
-   large enough to hurt.
+4. **Close out the 2.2%** (§1.2): the two token-collision defects first — they
+   are ours, small, and one of them cascades — then diagnose the 1,026 kernel
+   rejections, which are still unexplained.
+5. **Persist the parse.** Every check re-parses from source text today; `terms` /
+   `proof_lines` exist for the structure but the import does not populate them,
+   so the corpus is re-parsed in full on every run.
 6. **B1 + B2**, then **B4** and **B3**; then the stretch items **B5 / B6**. The
    tactic framework and closure solver come first because they shorten *new*
    Edifyce proofs as well as imported ones.
