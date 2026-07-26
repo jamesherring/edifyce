@@ -45,6 +45,7 @@ from app.db.systems import (
     LinePartRow,
     LineRow,
     ProductionBindingRow,
+    ProductionBindingScopeRow,
     RuleAntecedentRow,
     RuleBindingRow,
     RuleRow,
@@ -116,7 +117,7 @@ def database():
 _TABLES = [
     model.__table__
     for model in (
-        FormalSystem, BracketRow, SymbolRow, ProductionBindingRow,
+        FormalSystem, BracketRow, SymbolRow, ProductionBindingRow, ProductionBindingScopeRow,
         LineRow, LinePartRow, DefinitionRow, DefinitionBindingRow,
         DefinitionFreshRow, AxiomRow, AxiomBindingRow, RuleRow,
         RuleAntecedentRow, RuleBindingRow, SideConditionRow,
