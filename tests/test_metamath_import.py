@@ -774,3 +774,50 @@ ax $a |- O(1) e. <_O(1) $.
     assert formula.check_brackets("( O(1) e. <_O(1) )") is True
     # A real imbalance around them is still caught.
     assert formula.check_brackets("( O(1) e. <_O(1)") is False
+
+
+def test_a_replacement_name_avoids_tokens_the_premises_use():
+    # `._0` is a declared *constant* the premise spells. Renaming `.,` onto it
+    # would leave that constant's spelling alone while registering it as the
+    # metavariable, so the premise would parse as depending on the metavariable
+    # and the theorem would accept premises Metamath does not.
+    database = parse(
+        r"""
+$c |- wff class setvar = ._0 A. e. $.
+$v x ., A $.
+vx $f setvar x $.
+cip $f class ., $.
+cA $f class A $.
+wceq $a wff A = A $.
+wal $a wff A. x A = A $.
+cconst $a class ._0 $.
+${
+  $d ., x $.
+  ax.1 $e |- ., = ._0 $.
+  ax $a |- A. x A = A $.
+$}
+"""
+    )
+    rename = _proviso_safe_names(database.assertions["ax"])
+
+    assert rename[".,"] != "._0"
+    premise_tokens = {
+        token for h in database.assertions["ax"].mandatory for token in h.tokens
+    }
+    assert rename[".,"] not in premise_tokens
+
+
+def test_opaque_tokens_apply_to_multi_character_delimiters():
+    # A system whose delimiters are longer than a character takes the general
+    # bracket scan rather than the single-character fast path. Both must step
+    # over a constant that merely spells a delimiter.
+    from website.logical.matching import StringPattern
+
+    pattern = StringPattern(name="p", pattern="a")
+    pattern.respect_brackets = {"<<": ">>"}
+    pattern.bracket_opaque = ("x>>",)
+
+    assert pattern.check_brackets("<< x>> >>") is True
+    assert pattern.check_brackets("<< a >>") is True
+    # Still catches a real imbalance around the opaque token.
+    assert pattern.check_brackets("<< x>>") is False

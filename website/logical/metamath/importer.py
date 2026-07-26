@@ -308,7 +308,15 @@ def _proviso_safe_names(assertion: Assertion) -> dict[str, str]:
     # in the statement, the premises and the provisos together changes nothing
     # about what the theorem says or what it applies to - the same argument that
     # licenses `_uncollide` renaming a production's variable.
-    used = {h.variable for h in assertion.floatings} | set(assertion.tokens)
+    # Every token the theorem already spells, not just its statement's. A
+    # replacement colliding with a *constant* in a premise would leave that
+    # constant's spelling alone while registering it as the metavariable, so the
+    # premise would parse as depending on the metavariable and the theorem would
+    # accept premises its Metamath assertion does not. Reported by Codex review.
+    used = {h.variable for h in assertion.floatings}
+    used.update(assertion.tokens)
+    for hypothesis in assertion.mandatory:
+        used.update(hypothesis.tokens)
     rename: dict[str, str] = {}
     for hypothesis in assertion.floatings:
         if "," not in hypothesis.variable:

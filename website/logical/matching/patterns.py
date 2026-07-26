@@ -394,9 +394,16 @@ class Pattern:
                     stack.pop()
             return not stack
 
+        # Multi-character delimiters: the same opaque tokens apply, so a constant
+        # spelling one is stepped over here as well as on the fast path above.
+        opaque = self._opaque_positions(s)
         i = 0
         stack = []
         while i < len(s):
+
+            if opaque is not None and i in opaque:
+                i += 1
+                continue
 
             found = False
 
