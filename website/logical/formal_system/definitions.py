@@ -89,6 +89,7 @@ from ..kernel.terms import Node, _bound, abstract, bind, from_match
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from ..kernel.constructors import Constructor
     from ..kernel.side_conditions import SideCondition
     from ..kernel.terms import Bound, Term
     from ..matching.context import Context
@@ -238,7 +239,9 @@ def _binders_in_binding_slots(term: Term) -> dict[str, FreshBinder]:
 
     Pre-order, first occurrence winning, so the resulting order — and hence the
     :class:`~website.logical.kernel.terms.Bound` index each binder gets — is a
-    function of the defining form alone.
+    function of the defining form alone. Repeats of a name at the *same* sort are
+    one binder, which is the ordinary case (``∀z.… → ∀z.…``); a repeat at a
+    different sort is refused, see below.
     """
     found: dict[str, FreshBinder] = {}
 
@@ -247,19 +250,49 @@ def _binders_in_binding_slots(term: Term) -> dict[str, FreshBinder]:
             return
         for label, child in current.children.items():
             name = _leaf_name(child) if label in current.constructor.scopes_over else None
-            if name is not None and name not in found:
-                found[name] = FreshBinder(
-                    name=name,
-                    # The slot's *declared* sort, not the leaf's own constructor:
-                    # it is the sort the binder ranges over that decides what may
-                    # name it, exactly as for a declared binder above.
-                    sort=current.constructor.slot_sorts[label],
-                    default=child,
-                )
+            if name is not None:
+                # The slot's *declared* sort, not the leaf's own constructor: it
+                # is the sort the binder ranges over that decides what may name
+                # it, exactly as for a declared binder above.
+                sort = current.constructor.slot_sorts[label]
+                seen = found.get(name)
+                if seen is None:
+                    found[name] = FreshBinder(name=name, sort=sort, default=child)
+                elif seen.sort is not sort:
+                    raise _conflicting_binder_sorts(name, seen.sort, sort)
             walk(child)
 
     walk(term)
     return found
+
+
+def _conflicting_binder_sorts(
+    name: str, first: Constructor, second: Constructor
+) -> DefinitionError:
+    """The build error for one name used as a binder at two different sorts.
+
+    A binder is stored as a single indexed
+    :class:`~website.logical.kernel.terms.Bound` carrying one sort, and
+    :func:`~website.logical.kernel.terms.bind` keys on the surface string — so
+    every occurrence of the name becomes *that* node. Keeping the first and
+    dropping the rest would put a binder of one sort into a slot declared for
+    another: with ``setvar ::= [a-z]`` inside ``classvar ::= [a-zA-Z]``, the form
+    ``(∃z.(z ⋴ y) → ∀z.(z ∈ x))`` builds, and renaming the binder to ``Q`` gives
+    ``∀Q.(Q ∈ a)`` — a term its own grammar cannot parse.
+
+    Refused rather than resolved, because a `fresh` clause cannot express it
+    either (it maps a name to *one* sort), so telling the author to declare one
+    would send them somewhere that cannot help. Two binders of different sorts
+    are two binders, and the defining form has to say so by spelling them apart.
+    """
+    return DefinitionError(
+        f"Bound variable {name!r} is used as a binder at two different sorts in "
+        f"the defining form — {first.name!r} and {second.name!r}. A binder is "
+        f"stored once, under one sort, and every occurrence of the name refers to "
+        f"it, so one of the two slots would receive a binder of the wrong sort. "
+        f"Give the two binders different names in the defining form; a `fresh` "
+        f"clause cannot resolve this, since it maps a name to a single sort."
+    )
 
 
 def _leaf_name(term: Term) -> str | None:

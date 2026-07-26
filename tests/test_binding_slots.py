@@ -285,6 +285,63 @@ def test_a_second_binder_over_the_same_name_still_infers(binding_theory):
     assert sorts(definition) == [("z", "setvar")]
 
 
+def two_binder_sorts():
+    # `classvar` is strictly wider than `setvar`, and each has its own binder. A
+    # name admitted by both can therefore reach a binder slot of either sort.
+    return build(
+        set_theory(
+            {"x": ["phi"]},
+            extra_productions=[
+                regex_prod("classvar", "cletter", "[a-zA-Z]"),
+                template_prod(
+                    "formula", "cmembership", "(x ⋴ y)",
+                    [("x", "classvar"), ("y", "setvar")],
+                ),
+                template_prod(
+                    "formula", "exists", "∃x.phi",
+                    [("x", "classvar"), ("phi", "formula")],
+                    scopes_over={"x": ["phi"]},
+                ),
+            ],
+        )
+    )
+
+
+def test_one_name_binding_at_two_sorts_is_refused():
+    # A binder is one indexed node carrying one sort, and `bind` keys on the
+    # surface string — so keeping the first and dropping the second would put a
+    # `classvar` binder in `∀`'s `setvar` slot. Renaming it to `Q` then yields
+    # `∀Q.(Q ∈ a)`, which this grammar cannot parse. Refused at build instead.
+    built = two_binder_sorts()
+    system, context = built
+    variables = system.build_context.variables
+
+    with pytest.raises(DefinitionError, match="two different sorts"):
+        parse_definition(
+            variables["formula"],
+            "(x ⊆ y)",
+            "(∃z.(z ⋴ y) → ∀z.(z ∈ x))",
+            {"x": variables["setvar"], "y": variables["setvar"]},
+            context,
+        )
+
+
+def test_a_repeated_binder_at_one_sort_is_still_one_binder(binding_theory):
+    # The ordinary case the conflict check must not disturb: the same name bound
+    # twice at the same sort is one binder, not a conflict.
+    system, context = binding_theory
+    variables = system.build_context.variables
+    definition = parse_definition(
+        variables["formula"],
+        "(x ⊆ y)",
+        "(∀z.(z ∈ x) → ∀z.(z ∈ y))",
+        {"x": variables["setvar"], "y": variables["setvar"]},
+        context,
+    )
+
+    assert sorts(definition) == [("z", "setvar")]
+
+
 def test_a_declared_sort_the_grammar_contradicts_is_refused():
     # `classvar` spells the same tokens as `setvar`, so `z` parses as one — but
     # the slot `∀` binds is a `setvar`, and both cannot be true.

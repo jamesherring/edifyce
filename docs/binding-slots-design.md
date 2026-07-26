@@ -89,6 +89,22 @@ happened before binding slots existed. A hand-written `fresh` clause still
 reaches outside the scope: it is the author's positive act, and narrowing it
 would break systems that predate the field.
 
+**One name cannot bind at two sorts.** A binder is stored as a single indexed
+`Bound` carrying one sort, and `bind` keys on the surface string, so every
+occurrence of the name becomes that node. Where a grammar has two binders over
+overlapping sorts — `setvar ::= [a-z]` inside `classvar ::= [a-zA-Z]`, each with
+its own quantifier — `(∃z.(z ⋴ y) → ∀z.(z ∈ x))` would put a `classvar` binder
+into `∀`'s `setvar` slot; renaming it to `Q` then gives `∀Q.(Q ∈ a)`, a term the
+grammar cannot parse. Refused at build. Not resolved, because a `fresh` clause
+maps a name to *one* sort and so cannot express it either: two binders of
+different sorts are two binders, and the defining form has to spell them apart.
+Representing the occurrences separately instead would need a scope-aware `bind`,
+which belongs with item 3 rather than here.
+
+This check is inside the inference walk, which is silent for a production with no
+`scopes_over` — so it cannot fire for a system authored before this field, and it
+covers a declared clause over such a grammar for free.
+
 ### 3. Scope-aware definitional steps
 
 The kernel's admissibility check has two halves; only the **capture** half is
