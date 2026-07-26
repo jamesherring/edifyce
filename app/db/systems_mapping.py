@@ -59,7 +59,9 @@ def _slug(name: str) -> str:
 def spec_to_system(spec: SystemSpec) -> FormalSystem:
     """Build the ORM graph for ``spec`` (unsaved; add it to a session to persist)."""
 
-    system = FormalSystem(name=spec.name, slug=_slug(spec.name))
+    system = FormalSystem(
+        name=spec.name, slug=_slug(spec.name), token_separated=spec.token_separated
+    )
 
     for i, (opening, closing) in enumerate(spec.brackets):
         system.brackets.append(BracketRow(position=i, opening=opening, closing=closing))
@@ -149,6 +151,7 @@ def system_to_spec(system: FormalSystem) -> SystemSpec:
 
     spec = SystemSpec(name=system.name)
     spec.brackets = [(b.opening, b.closing) for b in system.brackets]
+    spec.token_separated = system.token_separated
 
     # Productions are the non-union symbols, in declaration (position) order;
     # each names its sort by the union it belongs to.

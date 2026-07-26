@@ -62,6 +62,7 @@ def setmm_shaped_system(constants):
     spec = SystemSpec(
         name="setmmish",
         brackets=[("(", ")")],
+        token_separated=True,
         productions=productions,
         lines=[
             LineSpec(
@@ -200,3 +201,108 @@ def test_multi_character_delimiters_step_over_them_too():
     assert sort.match("begin A end", context) is not None
     assert sort.match("begin beginend end", context) is not None
     assert sort.match("begin A", context) is None
+
+
+# ---------------------------------------------------------------------------
+# The promise itself
+# ---------------------------------------------------------------------------
+
+
+def test_a_bracketed_constant_without_the_promise_is_refused():
+    # Reading one needs the token boundary, so a system that has not promised its
+    # tokens are separated is told so at build time - rather than building
+    # happily and failing to parse the statements that mention it.
+    spec_productions = [
+        Production(sort="class", name="cA", atom_value="A", denotes_constant=True),
+        Production(sort="class", name="ico", atom_value="[,)", denotes_constant=True),
+        Production(
+            sort="wff", name="wi", template="( a -> b )",
+            bindings=[("a", "wff"), ("b", "wff")],
+        ),
+        Production(sort="wff", name="wph", atom_value="ph", denotes_constant=True),
+    ]
+    spec = SystemSpec(
+        name="unseparated",
+        brackets=[("(", ")")],
+        productions=spec_productions,
+        lines=[
+            LineSpec(
+                name="statement", shape="<wff> [<reference>]",
+                parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,.]+")],
+                logical_sort="wff",
+            )
+        ],
+        rules=[],
+    )
+
+    with pytest.raises(ValueError) as raised:
+        build_system(spec)
+
+    assert "[,)" in str(raised.value)
+    assert "token_separated" in str(raised.value)
+
+
+def test_the_promise_is_checked_against_the_templates():
+    # Declaring it while writing `(a -> b)` would be a lie: the slot is glued to
+    # the paren, so no token boundary separates them and a bracketed constant
+    # could not be told apart after all.
+    spec = SystemSpec(
+        name="glued",
+        brackets=[("(", ")")],
+        token_separated=True,
+        productions=[
+            Production(sort="wff", name="wph", atom_value="ph", denotes_constant=True),
+            Production(
+                sort="wff", name="wi", template="(a -> b)",
+                bindings=[("a", "wff"), ("b", "wff")],
+            ),
+        ],
+        lines=[
+            LineSpec(
+                name="statement", shape="<wff> [<reference>]",
+                parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,.]+")],
+                logical_sort="wff",
+            )
+        ],
+        rules=[],
+    )
+
+    with pytest.raises(ValueError) as raised:
+        build_system(spec)
+
+    assert "wi" in str(raised.value)
+    assert "token_separated" in str(raised.value)
+
+
+def test_a_system_that_keeps_its_tokens_apart_builds():
+    system = setmm_shaped_system([])
+
+    assert reads(system, "( ph -> ps )")
+
+
+def test_the_promise_is_not_needed_when_no_constant_spells_a_bracket():
+    # The overwhelmingly common case: nothing declares it, nothing checks it, and
+    # a template may glue its tokens together as most systems do.
+    spec = SystemSpec(
+        name="ordinary",
+        brackets=[("(", ")")],
+        productions=[
+            Production(sort="wff", name="wph", atom_value="ph", denotes_constant=True),
+            Production(
+                sort="wff", name="wi", template="(a -> b)",
+                bindings=[("a", "wff"), ("b", "wff")],
+            ),
+        ],
+        lines=[
+            LineSpec(
+                name="statement", shape="<wff> [<reference>]",
+                parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,.]+")],
+                logical_sort="wff",
+            )
+        ],
+        rules=[],
+    )
+    system = build_system(spec)
+
+    assert system.context.variables["wff"].opaque_tokens == frozenset()
+    assert reads(system, "(ph -> ph)")

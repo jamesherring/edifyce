@@ -376,6 +376,7 @@ def _detail(system: FormalSystem) -> FormalSystemDetail:
     return FormalSystemDetail(
         **_summary(system).model_dump(),
         brackets=[bracket_out(b) for b in system.brackets],
+        token_separated=system.token_separated,
         sorts=[sort_out(s) for s in system.symbols if s.kind == "union"],
         productions=[production_out(s) for s in system.symbols if s.kind != "union"],
         lines=[line_out(line) for line in system.lines],

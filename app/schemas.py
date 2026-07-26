@@ -215,6 +215,8 @@ class FormalSystemSummary(BaseModel):
 
 class FormalSystemDetail(FormalSystemSummary):
     brackets: list[BracketPair] = Field(default_factory=list)
+    # See declarative.SystemSpec.token_separated.
+    token_separated: bool = False
     sorts: list[Sort] = Field(default_factory=list)
     productions: list[Production] = Field(default_factory=list)
     lines: list[LineType] = Field(default_factory=list)

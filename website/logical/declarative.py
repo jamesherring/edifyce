@@ -31,7 +31,7 @@ the engine already supports.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Sequence
 from copy import copy
 from dataclasses import InitVar, dataclass, field
 
@@ -188,6 +188,17 @@ class LineSpec:
 class SystemSpec:
     name: str = ""
     brackets: list[tuple[str, str]] = field(default_factory=list)
+    # Whether every token of this system's notation is written whitespace-
+    # separated, as Metamath's is (`( ph -> ps )`, never `(ph->ps)`).
+    #
+    # Declared rather than inferred, because it is a promise about how proofs
+    # will be *written*, which no set of templates settles. It buys one thing: a
+    # constant may then be spelled with a bracket - `set.mm` names fourteen,
+    # among them the half-open interval `[,)` - because the token boundary tells
+    # that bracket apart from a grouping one. Without the promise such a constant
+    # is refused at build time rather than silently mis-read (see
+    # `_opaque_tokens`), and with it the templates are checked to keep it honest.
+    token_separated: bool = False
     productions: list[Production] = field(default_factory=list)
     # Logical line types, in order. A system typically has one (`statement`), but
     # may declare several (e.g. a `claim` line and a scoped `assume` line); the
@@ -352,7 +363,9 @@ def _bracket_map(spec: SystemSpec) -> dict[str, str] | None:
     return {o: c for o, c in brackets} or None
 
 
-def _opaque_tokens(spec: SystemSpec, brackets: dict[str, str] | None) -> tuple[str, ...]:
+def _constants_spelt_with_a_delimiter(
+    spec: SystemSpec, brackets: dict[str, str] | None
+) -> tuple[str, ...]:
     # Declared constants whose *spelling* contains a delimiter. Those characters
     # name a constant, they do not group, and the bracket scan must step over them
     # or a well-formed statement reads as unbalanced - `set.mm` declares fourteen,
@@ -377,6 +390,54 @@ def _opaque_tokens(spec: SystemSpec, brackets: dict[str, str] | None) -> tuple[s
             tokens.add(token)
 
     return tuple(sorted(tokens))
+
+
+def _glued_to_a_slot(template: str, labels: Iterable[str]) -> str | None:
+    # The first slot label in `template` that touches a non-space character, or
+    # None. That is what "token separated" forbids: `( a -> b )` keeps every token
+    # apart, `(a -> b)` glues the slot `a` to the opening paren, and only in the
+    # first can a bracket inside a constant's name be told from a grouping one.
+    for label in labels:
+        at = template.find(label)
+        while at != -1:
+            before = at and not template[at - 1].isspace()
+            after = at + len(label) < len(template) and not template[at + len(label)].isspace()
+
+            if before or after:
+                return label
+
+            at = template.find(label, at + 1)
+
+    return None
+
+
+def _check_token_separation(spec: SystemSpec, constants: Sequence[str]) -> None:
+    # Two halves of one promise. Without `token_separated`, a constant spelled
+    # with a delimiter cannot be read, so refuse it here with the remedy named
+    # rather than let the statement mentioning it fail to parse much later. With
+    # it, the templates have to actually keep their tokens apart, or the promise
+    # is a lie and the same mis-reading follows.
+    if not spec.token_separated:
+        if constants:
+            raise ValueError(
+                f"Constant {constants[0]!r} is spelled with a bracket. Reading one "
+                f"needs the system's tokens to be whitespace-separated; declare "
+                f"token_separated=True."
+            )
+        return
+
+    for prod in spec.productions:
+        if not prod.template or not prod.bindings:
+            continue
+
+        glued = _glued_to_a_slot(prod.template, (label for label, _ in prod.bindings))
+
+        if glued is not None:
+            raise ValueError(
+                f"Production {prod.name!r} declares token_separated but writes "
+                f"{glued!r} against another token in {prod.template!r}. Separate "
+                f"every token with a space, or drop token_separated."
+            )
 
 
 def _binding_patterns(bindings: list[tuple[str, str]], ctx: FormalSystemContext) -> dict[str, Pattern]:
@@ -418,7 +479,8 @@ def build_system(spec: SystemSpec) -> FormalSystem:
     ctx.variables[name] = system
 
     brackets = _bracket_map(spec)
-    opaque = _opaque_tokens(spec, brackets)
+    opaque = _constants_spelt_with_a_delimiter(spec, brackets)
+    _check_token_separation(spec, opaque)
 
     def register(pattern: Pattern) -> Pattern:
         # Every named pattern respects the system's brackets (parity with the
