@@ -208,65 +208,60 @@ linear, and is the natural next step if the whole corpus is to be stored.
 The pass is `corpus.walk`: **one** system, built covering the whole walk and then
 *grown*. Every production is declared up front and admitted to its sort at the
 position it becomes available — notation at the syntax axiom that declares it, a
-variable at its first mention (`importer.grammar_schedule`). That is what
+variable where its `$f` first types it (`importer.grammar_schedule`). That is what
 `import_theorem` establishes per theorem, made affordable over 47,546 of them.
 
-Both halves of the grammar are scoped. Notation is the half that has to be: a
-syntax axiom declares a *constructor*, and one declared later can capture the parse
-of an earlier theorem's formulas — set.mm's mathbox theorem `bj-0` overlaps the
-nesting of `wi` and, unscoped, reaches back 600k lines. Variables were the half
-that was not, seeded once at whole-database scope, so a theorem at position 200
-could parse against a variable `set.mm` does not declare until position 40,000.
+Notation is the half that *has* to be scoped: a syntax axiom declares a
+**constructor**, and one declared later can capture the parse of an earlier
+theorem's formulas — set.mm's mathbox theorem `bj-0` overlaps the nesting of `wi`
+and, unscoped, reaches back 600k lines. Variables were the half that was not,
+seeded once at whole-database scope. A variable leaf adds no constructor, so it
+never captured anything the way `bj-0` does — but the loose scope hid a real bug (a
+proof using an optional floating hypothesis as a dummy parsed fine under it and
+failed the moment it was tightened), and closing it costs about 2%.
 
-A variable leaf adds no constructor, so it never captured anything the way `bj-0`
-does. But the loose scope hid a real bug — a proof using an optional floating
-hypothesis as a dummy variable parsed fine under whole-database seeding and failed
-the moment the scope was tightened — and it costs about 2% to close, measured
-against the same walk seeded the old way.
+**A variable is its own atom leaf** of a `<typecode>_var` sub-sort included into
+its typecode, where it used to be one alternation regex per sort. A sort's
+variables have to be able to grow, and an alternation cannot be extended in place:
+a regex leaf's kernel constructor is identified by its regex *text*, so rewriting
+it would split one variable into two non-interchangeable terms either side of the
+rewrite. An atom is identified by its own token and joins a sort through
+`add_pattern`, the mechanism notation already grows through. The sub-sort is what
+keeps `$d` expressible — a proviso restricts to the leaves that *are* variables,
+and spread over the typecode's own sort there would be no name for just those.
 
-Closing it meant changing how a variable is represented. It is now its own atom
-leaf of a `<typecode>_var` sub-sort included into its typecode, where it used to be
-one alternation regex per sort. A sort's variables have to be able to grow, and an
-alternation cannot be extended in place: a regex leaf's kernel constructor is
-identified by its regex *text*, so rewriting it would split one variable into two
-non-interchangeable terms either side of the rewrite. An atom is identified by its
-own token and joins a sort through `add_pattern` — the mechanism notation already
-grows through. The sub-sort is what keeps `$d` expressible: a proviso restricts to
-the leaves that *are* variables, and with them spread over the typecode's own sort
-there would be no name for just those.
+**A `$f` is itself scoped**, so availability is a property of the `(typecode,
+variable)` **pair**: the same `x` may be a class in one block and a wff in a later
+one. Reading every `$f` in the database and filtering by mention gave it both
+typings from its earliest use — admitting the later one before its `$f` existed and
+leaving both live, which can make an unambiguous grammar ambiguous.
+`Database.typed_from` reads each assertion's *active* floating hypotheses instead.
 
-**Growing beats rebuilding, by a factor of sixteen.** The walk used to rebuild its
-system whenever notation was declared, which is correct and was the obvious way to
-scope notation exactly. It costs the library: a `PromotedTheorem` holds patterns of
-the system it was built against, so none survive a rebuild and every one has to be
-re-promoted. Over set.mm's first 20,000 theorems that is 255 rebuilds and 3,224,504
-re-promotions, against 20,544 promotions when the system is built once — quadratic
-in the corpus, and by measurement the whole cost of the pass:
+**Growing beats rebuilding, by a factor of sixteen.** The walk used to rebuild
+whenever notation was declared — correct, and the obvious way to scope notation
+exactly. It costs the library: a `PromotedTheorem` holds patterns of the system it
+was built against, so none survive a rebuild and every one is re-promoted. Over
+set.mm's first 20,000 theorems that is 255 rebuilds and 3,224,504 re-promotions
+against 20,544 promotions when built once — quadratic in the corpus, and by
+measurement the whole cost of the pass:
 
 | 20,000 theorems | |
 |---|---|
 | rebuild per notation change | 5,234 s |
 | build once, admit as reached | **330 s** |
 
-Two things a single build has to get right. Productions are admitted at every
+Two things a single build must get right. Productions are admitted at **every**
 logical assertion, not only the checked ones: an axiom is promoted as the walk
-passes it and a `PromotedTheorem` is built by parsing its statement, so it needs
-the grammar as of its own position. And the *logical sort* is the one thing a
-single build cannot scope, since the line type is fixed when the system is built —
-so a theorem stated before any prefix could name that sort is reported rather than
-checked, which is the refusal `_logical_sort` already makes when the system is
-built from that prefix.
+passes it, and building a `PromotedTheorem` parses its statement. And the *logical
+sort* is the one thing a single build cannot scope, since the line type is fixed at
+build time — so a theorem stated before any prefix could name that sort is reported
+rather than checked, the same refusal `_logical_sort` makes when built from that
+prefix.
 
-Two things are still derived at whole-database scope. **Sort admission**: a union's
-kernel constructor fixes its branches when the system is built, before any of the
-replaying — which costs nothing, because admission is only ever asked about a term
-that already parsed, and parsing is scoped. And **a variable's typecode**:
-`_declared_variables` reads every `$f` in the database and filters by mention, never
-by scope, so a variable typed differently in two blocks carries both leaves from its
-earliest use. That one predates the scoping work and applies to `build_spec` — and
-so to `import_theorem` — identically, which is why the walk and a per-theorem build
-still agree; the fix is to key availability on each assertion's *active* floating
-hypotheses.
+What is still whole-database is **sort admission**: a union's kernel constructor
+fixes its branches when the system is built. It costs nothing, because admission is
+only ever asked about a term that already parsed, and parsing is scoped.
+
 ---
 
 ## 2. Why imported proofs look the way they do
@@ -395,24 +390,15 @@ the logical source.
 
 The deciding argument is where failures land. A **display** collision (two tokens
 render alike) is cosmetic: the proof still checks. A **grammar** collision (two
-tokens *parse* alike) is a correctness bug: the checker cannot tell them apart.
-Storing LaTeX as source converts every cosmetic problem into a correctness one.
-LaTeX is also a poor canonical form — `\left(` vs `(`, optional braces,
-discretionary spacing, competing macros for one symbol — so it would import a
-normalisation problem that otherwise does not exist.
+tokens *parse* alike) is a correctness bug. Storing LaTeX as source converts every
+cosmetic problem into a correctness one, and imports a normalisation problem
+besides (`\left(` vs `(`, optional braces, competing macros for one symbol).
 
-Two further reasons:
-
-- **One source, many renderings.** `set.mm` ships *three* maps (`latexdef`,
-  `htmldef`, `althtmldef`). Separation gives LaTeX (papers), Unicode (terminal,
-  plaintext, diffs), MathML/HTML (web) and screen-reader text from one checked
-  source; LaTeX-as-source forecloses the alternates.
-- **Generality.** Edifyce targets *any* formal system. MIU, semi-Thue systems and
-  propositional Hilbert systems have no use for LaTeX; presentation does not
-  belong in the logical layer.
-
-Edifyce already models this: `StringPattern` carries `display_pattern` /
-`display_variables` beside its matching pattern.
+Two further reasons: `set.mm` ships *three* display maps, and separation gives
+LaTeX, Unicode, MathML and screen-reader text from one checked source; and Edifyce
+targets *any* formal system, where MIU and semi-Thue systems have no use for LaTeX.
+`StringPattern` already carries `display_pattern` / `display_variables` beside its
+matching pattern.
 
 ### 4.2 Decision: Unicode as the imported source
 
@@ -433,43 +419,26 @@ readily. A collision/unmapped-token report is still wanted (§4.4).
 
 ### 4.3 Decision: render by folding kernel terms, not `Match` trees
 
-The renderer walks the **kernel `Term` graph**, not the matching layer's `Match`
-tree. The mechanism already exists: `Node.to_string()` walks a production's
-template emitting literal chunks and recursing into `children`. A display render
-is that same fold with `display_pattern` in place of `pattern`.
+The renderer walks the **kernel `Term` graph**. `Node.to_string()` already walks a
+production's template emitting literals and recursing into `children`; a display
+render is that same fold with `display_pattern` in place of `pattern`.
 
-Why the term graph:
+The decisive reason is that **terms exist where matches do not**. A rule schema, a
+promoted theorem's statement, a definition's higher/lower form: all are terms with
+no `Match`, so match-based rendering would cover proof lines and nothing else.
+Terms are also canonical (`from_match` collapses union-coercion wrappers) and
+interned, so rendering memoises for free.
 
-- **`Node` retains what rendering needs** — `pattern` (the constructor, so the
-  display template is reachable), `children` as `{slot_label: Term}` keyed by the
-  production's own variable slots (so placeholders resolve directly), `literal`
-  for ground leaves.
-- **Terms are canonical.** `from_match` collapses union-coercion wrappers, so a
-  formula has one term however many union layers parsed it. Folding a `Match`
-  means walking scaffolding with no mathematical content.
-- **Terms exist where matches do not** — decisive. A rule schema (`schema_term`),
-  a promoted theorem's statement, a definition's higher/lower forms: all are terms
-  with no `Match`. Match-based rendering would cover proof lines and nothing else,
-  leaving no way to display a rule, an imported theorem's statement, or an
-  instantiated schema. The frontend will want all of those.
-- Interning means shared subterms are physically shared, so rendering memoises.
+Constraints when building it:
 
-**Constraints to respect when building it:**
-
-- **The renderer lives outside the kernel.** The kernel's virtue is that it
-  hard-codes no logic and stays small; LaTeX is presentation. `to_string` is
-  defensible *in* the kernel (source round-tripping is a term-layer concern), but
-  a display renderer belongs in a presentation module that *reads* terms. No new
-  coupling either way: `Node.pattern` is already a `matching.Pattern`.
-- **Canonical ≠ verbatim.** Rendering from the term gives the canonical form,
-  which may differ from what an author typed (redundant brackets normalised,
-  coercions gone). Usually desirable; but a verbatim echo must come from the
-  stored source string, not the term.
+- **The renderer lives outside the kernel**, which hard-codes no logic and stays
+  small. `Node.pattern` is already a `matching.Pattern`, so this adds no coupling.
+- **Canonical ≠ verbatim.** Rendering from the term normalises redundant brackets
+  and drops coercions; a verbatim echo must come from the stored source string.
 - **Definition-backed nodes** use `defn.higher` as their constructor, so display
-  templates key on *patterns generally*, not productions only.
-- `to_string` reaches for `getattr(pattern, "pattern", None)` probes. The repo's
-  guidance discourages that idiom; the new renderer should dispatch on pattern
-  type rather than copy it.
+  templates key on patterns generally, not productions only.
+- `to_string` probes with `getattr(pattern, "pattern", None)`. AGENTS.md
+  discourages that idiom; dispatch on pattern type instead of copying it.
 
 ### 4.4 Beyond per-token substitution
 
@@ -504,48 +473,29 @@ criterion) or only re-renders an already-checked proof.
 **A1. Schematic theorem application — *done*.**
 A `set.mm` proof is ~90 applications of previously proved theorems, each
 re-instantiated at the call site; Metamath makes no distinction between citing a
-`$a` and a `$p`. What shipped: `PromotedTheorem` records a theorem's schematic
-statement (conclusion, premises, metavariables, `$d` provisos, matching regime)
-and `as_rule()` builds the *ephemeral* `InferenceRule` a citation is checked
-against. `FormalSystem.promoted_theorems` keeps derived theorems out of
-`inference_rules`, and `Proof.get_reference` resolves `[Thm]` / `[Thm, i, …]` per
-citation — nothing per-theorem is persisted as a rule.
-`compiler.promote_from_source` is the import-facing builder (`$e`→premises,
-`$f`→metavariables, `$d`→distinct). Closed theorems (`2re`) and string-matching
-regimes are supported, and `$d` is demonstrably load-bearing: an `ax-5`-shaped
-theorem rejects the capturing instance with the proviso and *accepts* it without.
+`$a` and a `$p`. `PromotedTheorem` records the schematic statement (conclusion,
+premises, metavariables, `$d` provisos, matching regime) and `as_rule()` builds the
+*ephemeral* `InferenceRule` a citation is checked against, so nothing per-theorem
+is persisted as a rule. `$d` is demonstrably load-bearing: an `ax-5`-shaped theorem
+rejects the capturing instance with the proviso and accepts it without.
 
-Two findings worth keeping, both of which contradicted a reasonable guess:
-promotion is a **graph** operation (`from_match` → re-variabilise → schema shell;
-the string-layer `create_pattern` is not on the path), and a schema with no
-composed term is **not** automatically broken — defined notation composes none yet
-applies fine, while only a *ground* compound needs its term composed explicitly,
-at the system's declared **logical sorts**.
+Promotion turned out to be a **graph** operation (`from_match` → re-variabilise →
+schema shell), not a string one, and a schema with no composed term is not broken —
+only a *ground* compound needs its term composed, at the system's logical sorts.
 
 *Still open:* promoting a **natively-authored** Edifyce proof needs a
 generalisation policy the importer gets free from `$f`/`$d` — which leaves are
-general, what sort to widen to, and (the part with real soundness surface)
-deriving `$d` from the proof's ∀I freshness steps. Deferred; imports never hit it.
+general, what sort to widen to, and deriving `$d` from the proof's ∀I freshness
+steps. Deferred; imports never hit it.
 
-**A2. Compressed-proof decoder — *done as a vertical slice*.**
-The whole proof of `sqrt2re`:
-
-```
-sqrt2re $p |- ( sqrt ` 2 ) e. RR $=
-  ( c2 2re 2pos sqrtpclii ) ABCD $.
-```
-
-Label table `[c2, 2re, 2pos, sqrtpclii]`; `ABCD` selects entries 1–4. Executed on a
-stack: `c2` builds the class `2` (**syntax** — no line emitted), `2re` and `2pos`
-push `|- 2 e. RR` and `|- 0 < 2`, then `sqrtpclii` pops **three** entries — its
-mandatory hypotheses are the floating `$f class A` *then* the two essentials, in
-declaration order. The floating slot supplies the substitution (`A := 2`); the
-essential slots become the cited lines. Wrong order or count silently misaligns
-every application, so it is computed at parse time (`Assertion.mandatory`).
-
-Four stored steps → three proof lines (§1). Imported notation stays Metamath's own
-(`e.`, `` ` ``) until §4 lands, since the grammar is built from set.mm's syntax
-axioms and its tokens *are* the surface syntax.
+**A2. Compressed-proof decoder — *done*.**
+`sqrt2re $p |- ( sqrt \` 2 ) e. RR $= ( c2 2re 2pos sqrtpclii ) ABCD $.` — the
+label table is indexed by `ABCD` and executed on a stack: `c2` builds the class `2`
+(**syntax**, no line emitted), `2re`/`2pos` push their statements, then
+`sqrtpclii` pops **three** — its floating `$f class A` *then* its two essentials,
+in declaration order. The floating slot supplies the substitution (`A := 2`); the
+essentials become the cited lines. Wrong order or count silently misaligns every
+application, so it is computed at parse time (`Assertion.mandatory`).
 
 **A3. Statement mapping — *partly done; blocker***.
 `$c`→terminals, `$v`→metavariable names, `$f`→sort bindings, `$e`→antecedents,
@@ -570,20 +520,18 @@ lemmas as cited premises. Default on "does not reduce to fold/unfold" must be
 import means re-importing everything.
 
 **A5. Scale — *measured; no longer a risk*.**
-The whole corpus checks in 28 minutes at 3.6 GB (§1.1). Both risks this item
-named were real and are now addressed. The backtracking string matcher was the
-dominant cost and was *exponential in nesting depth* — `cbvral8vw` (16 binders)
-did not finish at all — until substring parses were memoised per parse; reading a
-template by its declared slots rather than character by character then halved
-what remained. Candidate productions are picked by the string's leading character
-instead of trying every leaf, which is what stops cost growing with the grammar's
-1,441 productions. Resolution of 49,000 promoted theorems never became the
-bottleneck the item predicted; the parse did.
+The whole corpus checks in 28 minutes at 3.6 GB (§1.1). Both risks this item named
+were real and are addressed. The backtracking string matcher was the dominant cost
+and *exponential in nesting depth* — `cbvral8vw` (16 binders) did not finish at all
+— until substring parses were memoised per parse; reading a template by its
+declared slots then halved what remained, and picking candidate productions by the
+string's leading character is what stops cost growing with the grammar's 1,441.
+Resolution of 49,000 promoted theorems never became the bottleneck this item
+predicted; the parse did, and then the library re-promotion did (§1.4).
 
-What remains is memory — 3.6 GB, growing roughly linearly with theorems promoted
-— and the fact that per-theorem cost still rises with grammar size (5 ms early,
-60 ms late). Neither blocks a bulk import; both would matter for a corpus several
-times larger.
+What remains is memory — 3.6 GB, growing roughly linearly with theorems promoted —
+and per-theorem cost still rising with grammar size (5 ms early, 60 ms late).
+Neither blocks a bulk import; both would matter for a corpus several times larger.
 
 ### Tier B — the human-altitude layer
 

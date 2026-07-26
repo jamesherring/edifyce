@@ -192,47 +192,24 @@ def _syntax_before(database: Database, before: str | None) -> list[Assertion]:
     return [a for a in syntax if database.position(a.label) < limit]
 
 
-def _mentioned_variables(database: Database, before: str | None) -> set[str]:
-    # The variables that can appear in statements available to `before` - its own
-    # included. Restricting to these keeps the grammar proportionate: set.mm
-    # declares 355 variables, and enumerating all of them in every sort's leaf
-    # pattern makes a regex too large to store, while only a handful are ever
-    # reachable from a given theorem.
-    #
-    # A statement's own tokens and its *mandatory* hypotheses are not the whole
-    # of it. A proof may also use a variable from an **optional** floating
-    # hypothesis - one active where the theorem sits but mentioned by nothing it
-    # states - as a dummy, and Metamath permits that. The intermediate lines then
-    # carry a variable the grammar has no leaf for, and an otherwise valid proof
-    # fails to parse: 14 of set.mm's theorems do this, `ax7` among them. So take
-    # the variables of every *active* hypothesis, which is exactly the set a
-    # proof at this point is allowed to cite.
-    limit = len(database.order) if before is None else database.position(before) + 1
-    mentioned: set[str] = set()
-    for label in database.order[:limit]:
-        assertion = database.assertions[label]
-        mentioned.update(t for t in assertion.tokens if t in database.variables)
-        for hypothesis_label in assertion.active_hypotheses:
-            hypothesis = database.hypotheses[hypothesis_label]
-            mentioned.update(t for t in hypothesis.tokens if t in database.variables)
-    return mentioned
-
-
 def _declared_variables(
     database: Database, before: str | None = None
 ) -> dict[str, list[str]]:
-    # Every `$f`-declared typecode, mapped to the variables inhabiting it. A
-    # variable is a member of its sort in its own right - `wph $f wff ph` makes a
-    # bare `ph` a wff - so this holds for sorts that *also* have syntax axioms,
-    # not only for variable-only ones.
-    mentioned = _mentioned_variables(database, before)
+    # Every `$f`-declared typecode, mapped to the variables inhabiting it where
+    # `before` sits. A variable is a member of its sort in its own right - `wph $f
+    # wff ph` makes a bare `ph` a wff - so this holds for sorts that *also* have
+    # syntax axioms, not only for variable-only ones.
+    #
+    # Keyed on the (typecode, variable) *pair*, because a `$f` is scoped: the same
+    # `x` may be a class in one block and a wff in a later one, and typing it as
+    # both from its earliest use would make an unambiguous grammar ambiguous. It
+    # also keeps the grammar proportionate - set.mm declares 355 variables, and a
+    # theorem can reach only the handful its scope types.
+    limit = len(database.order) if before is None else database.position(before) + 1
     sorts: dict[str, list[str]] = {}
-    for hypothesis in database.hypotheses.values():
-        if not hypothesis.floating or hypothesis.variable not in mentioned:
-            continue
-        members = sorts.setdefault(hypothesis.typecode, [])
-        if hypothesis.variable not in members:
-            members.append(hypothesis.variable)
+    for (typecode, variable), position in database.typed_from().items():
+        if position < limit:
+            sorts.setdefault(typecode, []).append(variable)
     return sorts
 
 
@@ -675,23 +652,6 @@ def _givens(assertion: Assertion, system: FormalSystem) -> list[str]:
     return [h.label for h in assertion.essentials]
 
 
-def _first_mention(database: Database) -> dict[str, int]:
-    # For each variable, the earliest position at which some statement can mention
-    # it - its own tokens, or those of a hypothesis active where it sits. This is
-    # `_mentioned_variables`' rule read the other way round: a variable is in
-    # `_mentioned_variables(before=L)` exactly when its first mention is at or
-    # before `L`. One pass serves the whole walk.
-    first: dict[str, int] = {}
-    for index, label in enumerate(database.order):
-        assertion = database.assertions[label]
-        tokens = set(assertion.tokens)
-        for hypothesis_label in assertion.active_hypotheses:
-            tokens.update(database.hypotheses[hypothesis_label].tokens)
-        for token in tokens & database.variables:
-            first.setdefault(token, index)
-    return first
-
-
 @dataclass(frozen=True)
 class GrammarSchedule:
     """Which productions join which sort, and when.
@@ -720,12 +680,12 @@ def grammar_schedule(database: Database) -> GrammarSchedule:
 
     Notation joins at the syntax axiom that declares it - the limit that has to
     hold, since a constructor declared later can capture an earlier theorem's
-    parse. A variable joins at its first mention, and its ``<typecode>_var``
-    sub-sort joins the typecode at the *earliest* of them: held back until then so
-    an empty sub-sort is never a branch of a live sort, but no later, or a
-    variable whose leaf is already live would not read as its typecode.
-    ``_declared_variables`` yields ``$f`` declaration order, which stops matching
-    first-mention order the moment a ``$f`` is scoped.
+    parse. A variable joins where its ``$f`` first types it
+    (:meth:`~.parser.Database.typed_from`), and its ``<typecode>_var`` sub-sort
+    joins the typecode at the *earliest* of them: held back until then so an empty
+    sub-sort is never a branch of a live sort, but no later, or a variable whose
+    leaf is already live would not read as its typecode. Neither order follows
+    declaration order once a ``$f`` is scoped.
 
     Read by :func:`.corpus.walk`, which builds one system covering the whole walk
     and then admits each production as it is reached, rather than rebuilding when
@@ -746,13 +706,13 @@ def grammar_schedule(database: Database) -> GrammarSchedule:
     for assertion in notation:
         at(database.position(assertion.label), assertion.typecode, assertion.label)
 
-    first = _first_mention(database)
+    typed = database.typed_from()
     for typecode, members in _declared_variables(database).items():
         sub_sort = f"{typecode}_var"
-        at(min(first[variable] for variable in members), typecode, sub_sort)
+        at(min(typed[typecode, variable] for variable in members), typecode, sub_sort)
         for variable in members:
             leaf = variable_production_name(database, typecode, variable)
-            at(first[variable], sub_sort, leaf)
+            at(typed[typecode, variable], sub_sort, leaf)
 
     # Mirrors `_logical_sort`'s two branches over a prefix: a conventional name
     # counts however it was introduced - a `$f`-declared typecode is a sort in its

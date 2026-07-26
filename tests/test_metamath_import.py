@@ -1081,3 +1081,58 @@ def test_a_sub_sort_joins_its_typecode_at_its_earliest_member():
     for checked in walk(database):
         alone, alone_text = import_theorem(database, checked.label)
         assert checked.verified is alone.parse(alone_text).valid is True
+
+
+# `x` is typed `class` inside one block and `wff` inside a later one — legal
+# Metamath, since a `$f` is scoped. Both typings must not be live at once.
+RETYPED_VARIABLE_FRAGMENT = r"""
+$c |- wff class ( ) -> e. $.
+$v ph x $.
+wph $f wff ph $.
+${
+  vx1 $f class x $.
+  cls.1 $e |- ( x e. x ) $.
+  cls $a |- ( x e. x ) $.
+$}
+wi $a wff ( ph -> ph ) $.
+we $a wff ( x e. x ) $.
+${
+  vx2 $f wff x $.
+  wf.1 $e |- x $.
+  wf $a |- x $.
+$}
+"""
+
+
+def test_a_variable_is_typed_only_where_its_floating_hypothesis_is_active():
+    # A `$f` is scoped, so availability is a property of the (typecode, variable)
+    # *pair*, not of the token. Reading every `$f` in the database and filtering by
+    # mention alone gave `x` both typings from its earliest use — admitting the
+    # later one before its `$f` exists, and leaving both live afterwards, which can
+    # make an unambiguous grammar ambiguous.
+    database = parse(RETYPED_VARIABLE_FRAGMENT)
+
+    assert {k: database.order[v] for k, v in database.typed_from().items()} == {
+        ("wff", "ph"): "cls",
+        ("class", "x"): "cls",
+        ("wff", "x"): "wf",
+    }
+
+    # At `cls` only the `class` typing is in scope; the `wff` one arrives with its
+    # own block.
+    assert variables_of(build_spec(database, before="cls"), "class") == {"x"}
+    assert variables_of(build_spec(database, before="cls"), "wff") == {"ph"}
+    assert variables_of(build_spec(database, before="wf"), "wff") == {"ph", "x"}
+
+    # And the walk's schedule agrees with the per-theorem build, as ever.
+    schedule = grammar_schedule(database)
+    live: set[str] = set()
+    for index, label in enumerate(database.order):
+        live.update(
+            name for sort, name in schedule.entries.get(index, ())
+            if sort.endswith("_var")
+        )
+        if database.assertions[label].is_logical:
+            scoped = build_spec(database, before=label)
+            expected = {p.name for p in scoped.productions if p.sort.endswith("_var")}
+            assert live == expected, label
