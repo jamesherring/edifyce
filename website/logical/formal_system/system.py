@@ -32,6 +32,15 @@ class FormalSystem:
         # A list of valid inference rules for the system
         self.inference_rules = inference_rules if inference_rules is not None else []
 
+        # `inference_rules` keyed by label, for `rule_by_label`. A list is the
+        # public shape - order is declaration order and callers render it - but a
+        # citation resolves by label, and an imported system's primitives are not
+        # a handful: set.mm contributes 1,559 logical `$a`, against ~4M citations
+        # across the corpus. Guarded by length, so a caller that appends to the
+        # list directly still gets a correct answer (see `_rules_by_label`).
+        self._rule_index: dict = {}
+        self._rule_index_size: int = -1
+
         # The system's definitional axioms (kernel Definitions). A proof cites
         # one by label, or lets the generic keyword search them all. Held here
         # rather than in the proof context because they are fixed once the system
@@ -229,13 +238,32 @@ class FormalSystem:
         self.definitions.append(definition)
 
     def add_inference_rule(self, rule):
-        # Add an inference rule
+        # Add an inference rule, replacing any existing one with the same label.
+        #
+        # The scan is skipped unless the label is actually taken: an import adds
+        # its axioms one by one and none of them collides, so rebuilding the list
+        # every time made registering `n` rules quadratic in `n`.
+        if self._rules_by_label().get(rule.label) is not None:
+            self.inference_rules = [
+                ir for ir in self.inference_rules if not ir.label == rule.label
+            ]
 
-        # Remove existing inference rules with the same label
-        self.inference_rules = [ir for ir in self.inference_rules if not ir.label == rule.label]
-
-        # Add the new rule
         self.inference_rules.append(rule)
+        self._rule_index[rule.label] = rule
+        self._rule_index_size = len(self.inference_rules)
+
+    def rule_by_label(self, label):
+        """The primitive inference rule labelled ``label``, or None."""
+        return self._rules_by_label().get(label)
+
+    def _rules_by_label(self) -> dict:
+        # Rebuilt when `inference_rules` has changed length behind the index -
+        # a caller building a system by assigning the list, or appending to it.
+        # `add_inference_rule` keeps the two in step itself.
+        if self._rule_index_size != len(self.inference_rules):
+            self._rule_index = {ir.label: ir for ir in self.inference_rules}
+            self._rule_index_size = len(self.inference_rules)
+        return self._rule_index
 
     def promote(self, theorem: PromotedTheorem) -> None:
         # Register a proved/imported theorem for schematic reuse under its label.

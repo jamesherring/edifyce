@@ -312,6 +312,27 @@ def _logical_sort(productions: list[Production], variables: list[Production]) ->
     return notation[0]
 
 
+def register(assertion: Assertion, database: Database, system: FormalSystem) -> None:
+    """Register one logical assertion on ``system``, as what it is.
+
+    A logical ``$a`` is a **primitive** of the system - `ax-mp` is literally an
+    inference rule - so it joins ``inference_rules``. A ``$p`` is *derived*, and
+    joins ``promoted_theorems``, the namespace that exists to keep tens of
+    thousands of derived results out of the system's primitives.
+
+    Both are the same shape to the checker (premises, conclusion, provisos over
+    metavariables), which is why one construction serves both: the difference is
+    which namespace answers a citation, and therefore what the system can say
+    about itself. Until this split an imported system could not answer "what are
+    your axioms?" - everything was derived.
+    """
+    theorem = promoted_theorem(assertion, database, system)
+    if assertion.proof:
+        system.promote(theorem)
+    else:
+        system.add_inference_rule(theorem.as_rule())
+
+
 def promote_assertions(
     database: Database, system: FormalSystem, before: str | None = None
 ) -> None:
@@ -319,12 +340,12 @@ def promote_assertions(
 
     ``before`` stops at that label, exclusive. A proof may only cite what
     *precedes* it, so checking one theorem must not have that theorem - nor
-    anything later - already promoted, or it could justify itself.
+    anything later - already registered, or it could justify itself.
     """
     for assertion in database.logical_assertions():
         if assertion.label == before:
             return
-        system.promote(promoted_theorem(assertion, database, system))
+        register(assertion, database, system)
 
 
 def promoted_theorem(

@@ -45,7 +45,7 @@ from .importer import (
     build_spec,
     grammar_schedule,
     import_proof,
-    promoted_theorem,
+    register,
 )
 from .parser import MetamathError
 
@@ -219,7 +219,7 @@ def _promote(system: FormalSystem, assertion: Assertion, database: Database) -> 
     # bracket scans (roadmap §1.2), and the theorems citing them are the ones
     # that should fail, not the 47,000 that do not.
     try:
-        system.promote(promoted_theorem(assertion, database, system))
+        register(assertion, database, system)
     except Exception:  # noqa: BLE001 - any promotion defect, reported by its citers
         pass
 
