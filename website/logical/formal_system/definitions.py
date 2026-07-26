@@ -84,13 +84,13 @@ from typing import TYPE_CHECKING
 from ..kernel import Definition, introduced_leaves, unbound_parameters
 from ..kernel.constructors import constructor_for, project_sorts
 from ..kernel.definitions import FreshBinder
-from ..kernel.terms import Bound, _bound, abstract, bind, from_match
+from ..kernel.terms import _bound, abstract, bind, from_match
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from ..kernel.side_conditions import SideCondition
-    from ..kernel.terms import Term
+    from ..kernel.terms import Bound, Term
     from ..matching.context import Context
     from ..matching.definitions import DefinedNotation
     from ..matching.patterns import Pattern
