@@ -492,6 +492,8 @@ async def update_system(
         system.description = changes["description"]
     if "inherits_from_id" in changes:
         system.inherits_from_id = changes["inherits_from_id"]
+    if changes.get("token_separated") is not None:
+        system.token_separated = changes["token_separated"]
 
     # Publishing makes a system world-readable and is a one-way door — once set,
     # the freeze above rejects any later edit or unpublish. `published: false`

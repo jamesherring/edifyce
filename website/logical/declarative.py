@@ -31,7 +31,7 @@ the engine already supports.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable
 from copy import copy
 from dataclasses import InitVar, dataclass, field
 
@@ -191,13 +191,14 @@ class SystemSpec:
     # Whether every token of this system's notation is written whitespace-
     # separated, as Metamath's is (`( ph -> ps )`, never `(ph->ps)`).
     #
-    # Declared rather than inferred, because it is a promise about how proofs
-    # will be *written*, which no set of templates settles. It is what makes a
-    # constant spelled with a bracket readable: the token boundary is the only
-    # thing telling the `)` in `[,)` from a grouping one, and telling the
-    # constant `((` from two grouping parens written together. Without the
-    # promise such a constant is refused at build time rather than silently
-    # mis-read; with it, the templates are checked to keep it honest.
+    # Declared rather than inferred: it is a claim about how proofs will be
+    # *written*, which no set of templates settles. Nothing depends on it being
+    # true - a constant spelled with a bracket is read correctly either way,
+    # because `Pattern._opaque_positions` decides token by token rather than
+    # trusting the system (and a glued system simply cannot write such a
+    # constant glued). What declaring it buys is that the production templates
+    # are then held to it, so a system meaning to be token-separated is told
+    # where it is not.
     token_separated: bool = False
     productions: list[Production] = field(default_factory=list)
     # Logical line types, in order. A system typically has one (`statement`), but
@@ -390,50 +391,47 @@ def _bracket_opaque_tokens(
 
 
 def _glued_to_a_slot(template: str, labels: Iterable[str]) -> str | None:
-    # The first slot label in `template` that touches a non-space character, or
-    # None. That is what `token_separated` forbids: `( a -> b )` keeps every token
-    # apart, `(a -> b)` glues the slot `a` to the opening paren, and only in the
-    # first can a bracket inside a constant's name be told from a grouping one.
+    # The first slot label in `template` that shares a whitespace-delimited token
+    # with anything else, or None. `( a -> b )` keeps every token apart;
+    # `(a -> b)` glues the slot `a` to the opening paren.
+    #
+    # Compared token-wise rather than by scanning for the label, so a label that
+    # merely *occurs inside* a literal is not mistaken for a slot - `A` sits
+    # inside the quantifier `A.` throughout set.mm, which is the collision
+    # `metamath.importer._uncollide` exists for.
+    tokens = template.split()
+
     for label in labels:
-        at = template.find(label)
-        while at != -1:
-            before = at and not template[at - 1].isspace()
-            after = at + len(label) < len(template) and not template[at + len(label)].isspace()
-
-            if before or after:
-                return label
-
-            at = template.find(label, at + 1)
+        if any(label in token and token != label for token in tokens):
+            return label
 
     return None
 
 
-def _check_token_separation(spec: SystemSpec, opaque: Sequence[str]) -> None:
-    # Two halves of one promise. Without `token_separated`, a constant spelled
-    # with a delimiter cannot be told from a grouping one, so refuse it here with
-    # the remedy named rather than let the statements mentioning it fail to parse
-    # much later. With it, the templates have to actually keep their tokens apart,
-    # or the promise is a lie and the same mis-reading follows.
+def _check_token_separation(spec: SystemSpec) -> None:
+    # A system declaring `token_separated` is held to it, so that the declaration
+    # means something and a system meaning to be token-separated is told where it
+    # is not. Nothing depends on the answer - see `SystemSpec.token_separated` -
+    # so this refuses a *mis-declaration*, never a system that simply did not
+    # declare.
+    #
+    # Production templates only. They are what a formula is read against; a line
+    # shape carries its own field syntax (`<wff> [<reference>]`), and definitions
+    # and rule schemas never receive `bracket_opaque` at all.
     if not spec.token_separated:
-        if opaque:
-            raise ValueError(
-                f"Constant {opaque[0]!r} is spelled with a bracket. Reading one needs "
-                f"the system's tokens to be whitespace-separated; declare "
-                f"token_separated=True."
-            )
         return
 
     for prod in spec.productions:
-        if not prod.template or not prod.bindings:
+        if not prod.template:
             continue
 
         glued = _glued_to_a_slot(prod.template, (label for label, _ in prod.bindings))
 
         if glued is not None:
-            raise ValueError(
+            raise DeclarativeError(
                 f"Production {prod.name!r} declares token_separated but writes "
                 f"{glued!r} against another token in {prod.template!r}. Separate every "
-                f"token with a space, or drop token_separated."
+                f"token with a space, or declare token_separated=False."
             )
 
 
@@ -477,7 +475,7 @@ def build_system(spec: SystemSpec) -> FormalSystem:
 
     brackets = _bracket_map(spec)
     opaque = _bracket_opaque_tokens(spec, brackets)
-    _check_token_separation(spec, opaque)
+    _check_token_separation(spec)
 
     def register(pattern: Pattern) -> Pattern:
         # Every named pattern respects the system's brackets (parity with the

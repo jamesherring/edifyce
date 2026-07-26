@@ -214,29 +214,31 @@ class Pattern:
         if not self.bracket_opaque:
             return None
 
-        covered: set[int] = set()
+        # Only where the token stands *whole*, between whitespace or the ends of
+        # the string. Nothing else tells the constant `((` from two grouping
+        # parens written together, and a bare `(` still has to be closed.
+        covered: set[int] | None = None
         length = len(s)
 
         for token in self.bracket_opaque:
-            size = len(token)
             at = s.find(token)
 
-            while at != -1:
-                # Only where the token stands alone. Nothing else tells the
-                # constant `((` from two grouping parens written together, and a
-                # bare `(` inside a statement must still be closed - so a system
-                # naming such a constant promises its tokens are separated
-                # (declarative.SystemSpec.token_separated) and this holds it to
-                # the same boundary the promise is about.
-                before = at and not s[at - 1].isspace()
-                after = at + size < length and not s[at + size].isspace()
+            if at == -1:
+                continue
 
-                if not before and not after:
+            size = len(token)
+
+            while at != -1:
+                if (at == 0 or s[at - 1].isspace()) and (
+                    at + size == length or s[at + size].isspace()
+                ):
+                    if covered is None:
+                        covered = set()
                     covered.update(range(at, at + size))
 
                 at = s.find(token, at + 1)
 
-        return covered or None
+        return covered
 
     def brackets_respected(self, s: str, context: Context) -> bool:
         # `check_brackets`, memoised for the length of one parse.
