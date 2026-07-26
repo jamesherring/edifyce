@@ -35,7 +35,7 @@ are not relitigated), and what remains.
 | Whole-corpus ordered pass (§1.1) | done — 47,546 checked, **all 47,546 verify** |
 | Persisting the parse (§1.3) | done — one system, proofs, lines, terms |
 | Whole-corpus walk, strictly scoped (§1.4) | done — `corpus.walk` |
-| Scale (§5, A5) | **measured** — 28 min, 3.6 GB (§1.1) |
+| Scale (§5, A5) | **measured** — 24 min, 3.6 GB (§1.1) |
 | Token-collision defects (§1.2) | fixed — four instances of one shape |
 | `$t` typesetting / notation (§4) | **next** |
 | Axiom-vs-theorem split (§3.2) | **blocker** |
@@ -79,7 +79,7 @@ own kernel.
 | verified | **47,546 (100%)** |
 | rejected by the kernel | 0 |
 | failed to promote | 0 |
-| wall clock | 27 min 46 s |
+| wall clock | 23 min 57 s |
 | peak memory | 3.6 GB |
 
 Cost is dominated by `check`; `promote` and `emit` are each under a fifth of it.
@@ -88,12 +88,12 @@ the library promoted into the system:
 
 | theorems | ms each |
 |---|---|
-| 0 – 5,000 | 5.0 |
-| 5,000 – 10,000 | 14.6 |
-| 20,000 – 25,000 | 42.3 |
-| 40,000 – 45,000 | 59.8 |
+| 0 – 5,000 | 3.2 |
+| 5,000 – 10,000 | 13.5 |
+| 20,000 – 25,000 | 36.9 |
+| 40,000 – 45,000 | 49.0 |
 
-Roughly a twelve-fold spread end to end, which is the number to beat if the corpus
+Roughly a fifteen-fold spread end to end, which is the number to beat if the corpus
 is ever walked at several times this size.
 
 The parse is no longer thrown away: the walk stores the system, each proof, its
@@ -520,7 +520,7 @@ lemmas as cited premises. Default on "does not reduce to fold/unfold" must be
 import means re-importing everything.
 
 **A5. Scale — *measured; no longer a risk*.**
-The whole corpus checks in 28 minutes at 3.6 GB (§1.1). Both risks this item named
+The whole corpus checks in 24 minutes at 3.6 GB (§1.1). Both risks this item named
 were real and are addressed. The backtracking string matcher was the dominant cost
 and *exponential in nesting depth* — `cbvral8vw` (16 binders) did not finish at all
 — until substring parses were memoised per parse; reading a template by its
