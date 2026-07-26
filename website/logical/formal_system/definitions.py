@@ -82,11 +82,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..kernel import Definition, introduced_leaves, unbound_parameters
+from ..kernel.constructors import constructor_for, project_sorts
+from ..kernel.definitions import FreshBinder
+from ..kernel.terms import _bound, abstract, bind, from_match
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from ..kernel.side_conditions import SideCondition
+    from ..kernel.terms import Bound, Term
     from ..matching.context import Context
     from ..matching.definitions import DefinedNotation
     from ..matching.patterns import Pattern
@@ -130,13 +134,86 @@ def _introduced_name_error(
     )
 
 
+def parse_definition(
+    sort: Pattern,
+    higher: str,
+    lower: str,
+    variables: dict[str, Pattern],
+    context: Context,
+    condition: SideCondition | None = None,
+    fresh: dict[str, Pattern] | None = None,
+    label: str | None = None,
+) -> Definition:
+    """Build a kernel :class:`~website.logical.kernel.definitions.Definition` by
+    parsing its two surface forms.
+
+    ``sort`` is the production both forms parse against (e.g. the ``formula``
+    union); ``variables`` maps each parameter name to its sort; ``context`` is an
+    ordinary ground parsing context. Each form is parsed through the grammar and
+    its parameters abstracted (see
+    :func:`~website.logical.kernel.terms.abstract`), so a multi-level defining
+    form keeps its structure - which is why this uses parse + abstract rather
+    than ``from_pattern`` (see that helper's note).
+
+    ``fresh`` maps each bound variable of the defining form to its sort (for
+    ``df-subset``, ``{"z": setvar}``); in the parsed defining form each such
+    variable is replaced by an abstract, indexed
+    :class:`~website.logical.kernel.terms.Bound` node (in ``fresh`` order), and
+    the capture-avoidance proviso is generated from it.
+
+    This lives here, not on ``Definition``, because it is the one thing a
+    definition needed the *grammar* for. The kernel checks a step against terms;
+    turning surface syntax into those terms is this layer's job, and keeping the
+    two apart is what lets the trusted core read no strings at all.
+    """
+    parameter_sorts = project_sorts(variables)
+    fresh_items = tuple((fresh or {}).items())
+
+    def parse(against: Pattern, text: str, what: str) -> Term:
+        matched = against.match(text, context)
+        if matched is None:
+            raise ValueError(f"{what} {text!r} does not parse as '{against.name}'.")
+        return from_match(matched)
+
+    # Each declared binder becomes an abstract, indexed node in the defining
+    # form, and carries the leaf its declared name denotes. Parsing that name
+    # here is what lets an unfold fall back to it without re-reading a string:
+    # a name that is not of its own sort is the author's error, and is refused
+    # at build rather than silently failing every unfold later.
+    binders: list[FreshBinder] = []
+    bound_nodes: dict[str, Bound] = {}
+    for index, (name, binder_sort) in enumerate(fresh_items):
+        # Against the *binder's* sort, not the definition's: `z` is a `setvar`,
+        # and it is the sort it ranges over that says what may name it.
+        default = parse(binder_sort, name, "Declared bound variable")
+        binders.append(
+            FreshBinder(name=name, sort=constructor_for(binder_sort), default=default)
+        )
+        bound_nodes[name] = _bound(index, constructor_for(binder_sort))
+
+    def schema(text: str, abstract_binders: bool) -> Term:
+        term = abstract(parse(sort, text, "Definition form"), parameter_sorts)
+        if abstract_binders and bound_nodes:
+            term = bind(term, bound_nodes)
+        return term
+
+    return Definition(
+        higher=schema(higher, abstract_binders=False),
+        lower=schema(lower, abstract_binders=True),
+        condition=condition,
+        fresh=tuple(binders),
+        label=label,
+    )
+
+
 def build_kernel_definition(
     notation: DefinedNotation,
     lower: str | None,
     context: Context,
     condition: SideCondition | None = None,
-    # Sort *patterns*, not constructors: `fresh` becomes a parse handle on the
-    # kernel definition, which reads a chosen binder name at check time.
+    # Sort *patterns*, not constructors: this is the build boundary, where a
+    # declaration still names productions. `parse_definition` projects them, and
+    # the definition it returns holds no pattern.
     fresh: dict[str, Pattern] | None = None,
     label: str | None = None,
 ) -> Definition:
@@ -170,7 +247,7 @@ def build_kernel_definition(
     variables = dict(notation.variables)
 
     try:
-        kernel_def = Definition.parse(
+        kernel_def = parse_definition(
             sort=notation.sort,
             higher=notation.template.pattern,
             lower=lower,

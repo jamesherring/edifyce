@@ -16,7 +16,7 @@ pytest.importorskip("regex")
 from website.logical.declarative import Definition as Definition_
 from website.logical.declarative import SystemSpec, build_spec, build_system
 from website.logical.kernel import (
-    Definition,
+    Node,
     constructor_for,
     DisjointLeaves,
     Var,
@@ -27,6 +27,7 @@ from website.logical.kernel import (
     unbound_parameters,
     unfold,
 )
+from website.logical.formal_system.definitions import parse_definition
 from website.logical.matching import Context, RegexPattern, StringPattern, UnionPattern
 from tests.spec_helpers import (
     atom_const_prod,
@@ -121,7 +122,7 @@ def df_bicon(prop):
     # formula arguments (no binders, so no `fresh`).
     _system, context = prop
     formula = _system.build_context.variables["formula"]
-    return Definition.parse(
+    return parse_definition(
         formula,
         "(p ↔ q)",
         "((p → q) ∧ (q → p))",
@@ -134,7 +135,7 @@ def df_subset(theory, setvar, condition=None, fresh=None):
     # (x ⊆ y)  :=  ∀z.((z ∈ x) → (z ∈ y))
     _system, context = theory
     formula = _system.build_context.variables["formula"]
-    return Definition.parse(
+    return parse_definition(
         formula,
         "(x ⊆ y)",
         "∀z.((z ∈ x) → (z ∈ y))",
@@ -383,12 +384,12 @@ def test_unfold_renames_the_binder_to_a_chosen_fresh_name(theory, formula, setva
     _system, context = theory
     d = df_subset(theory, setvar, fresh={"z": setvar})
 
-    renamed = unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": "w"})
+    renamed = unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": term(theory, setvar, "w")})
     assert renamed is not None
     assert renamed.to_string() == "∀w.((w ∈ z) → (w ∈ b))"  # binder renamed, no capture
 
     # The other slot behaves symmetrically: `(a ⊆ z)` -> ∀w.(w ∈ a → w ∈ z).
-    other = unfold(d, term(theory, formula, "(a ⊆ z)"), context, names={"z": "w"})
+    other = unfold(d, term(theory, formula, "(a ⊆ z)"), context, names={"z": term(theory, setvar, "w")})
     assert other is not None
     assert other.to_string() == "∀w.((w ∈ a) → (w ∈ z))"
 
@@ -399,10 +400,10 @@ def test_a_chosen_name_that_still_collides_is_rejected(theory, formula, setvar):
     _system, context = theory
     d = df_subset(theory, setvar, fresh={"z": setvar})
 
-    assert unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": "z"}) is None
-    assert unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": "b"}) is None
+    assert unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": term(theory, setvar, "z")}) is None
+    assert unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": term(theory, setvar, "b")}) is None
     # A clear name still works, confirming only the colliding choices are refused.
-    assert unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": "w"}) is not None
+    assert unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": term(theory, setvar, "w")}) is not None
 
 
 def test_check_step_recovers_the_renamed_binder_from_the_target(theory, formula, setvar):
@@ -643,23 +644,79 @@ def test_binder_recovery_does_not_instantiate_parameters(theory, formula, setvar
 
 
 # ---------------------------------------------------------------------------
-# A caller-supplied binder name must denote a leaf of its sort; a name that does
-# not parse as the sort is rejected rather than producing a bogus formula.
+# A caller-supplied binder name must *be* a leaf of its sort. The check used to
+# parse the caller's string against the sort pattern; it is now structural, over
+# the term, which is what keeps the grammar out of the kernel at check time.
 # ---------------------------------------------------------------------------
 
 
-def test_rejects_a_chosen_name_that_is_not_a_leaf_of_its_sort(theory, formula, setvar):
+def test_rejects_a_chosen_binder_name_that_is_not_a_leaf_of_its_sort(theory, formula, setvar):
     _system, context = theory
     d = df_subset(theory, setvar, fresh={"z": setvar})
     redex = term(theory, formula, "(a ⊆ b)")
 
-    # `setvar` is `^[a-z]$`: neither a multi-letter name nor a compound formula
-    # parses as a single variable, so the unfold is refused (no bogus `∀aa...`).
-    assert unfold(d, redex, context, names={"z": "aa"}) is None
-    assert unfold(d, redex, context, names={"z": "(a ∈ b)"}) is None
-    # A genuine single-letter name is still accepted, confirming only the
+    # A compound is not a name: `∀(a ∈ b).…` is not a formula anyone meant.
+    compound = term(theory, formula, "(a ∈ b)")
+    assert unfold(d, redex, context, names={"z": compound}) is None
+
+    # Nor is a schematic variable — it stands for a term, it does not name one.
+    assert unfold(d, redex, context, names={"z": Var("q", constructor_for(setvar))}) is None
+
+    # Nor a childless node carrying no literal: it spells nothing, so it could
+    # not be the binder a reader sees. Only reachable by hand-building a term —
+    # every producer gives a ground leaf its literal — but the guard replaced a
+    # *parse*, which could not have admitted it either.
+    nameless = Node(constructor=constructor_for(setvar))
+    assert nameless.literal is None and not nameless.children
+    assert unfold(d, redex, context, names={"z": nameless}) is None
+
+    # A genuine leaf of the binder's sort is still accepted, confirming only the
     # ill-typed choices are refused.
-    assert unfold(d, redex, context, names={"z": "w"}) is not None
+    assert unfold(d, redex, context, names={"z": term(theory, setvar, "w")}) is not None
+
+
+# Two leaf sorts, so a chosen binder name can be a perfectly good leaf of the
+# *wrong* one — which "is it a leaf" alone would let through.
+TWO_LEAF_SORTS = SystemSpec(
+    name="TwoLeafSorts",
+    brackets=brackets(),
+    productions=[
+        regex_prod("setvar", "letter", "[a-z]"),
+        regex_prod("predicate", "predicate_letter", "[A-Z]"),
+        template_prod("formula", "application", "P(x)", [("P", "predicate"), ("x", "setvar")]),
+        template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
+        template_prod("formula", "forall", "∀x.phi", [("x", "setvar"), ("phi", "formula")]),
+        template_prod("formula", "holds", "(x holds y)", [("x", "setvar"), ("y", "setvar")]),
+    ],
+    lines=[statement_line()],
+)
+
+
+def test_rejects_a_chosen_binder_name_of_the_wrong_sort():
+    # A `predicate` letter is a ground leaf, but not one this `setvar` binder
+    # admits — the guard is sort admission, not merely "is it a leaf".
+    system, context = build(TWO_LEAF_SORTS)
+    formula = system.build_context.variables["formula"]
+    setvar = system.build_context.variables["setvar"]
+    predicate = system.build_context.variables["predicate"]
+
+    d = parse_definition(
+        formula,
+        "(x holds y)",
+        "∀z.(P(z) → P(z))",
+        {"x": setvar, "y": setvar},
+        context,
+        fresh={"z": setvar},
+    )
+    # Not admissible as a definition (it drops x/y), but well-formed enough to
+    # unfold — this test is about the binder-name guard, nothing else.
+    redex = from_match(formula.match("(a holds b)", context))
+
+    wrong_sort = from_match(predicate.match("P", context))
+    assert unfold(d, redex, context, names={"z": wrong_sort}) is None
+
+    right_sort = from_match(setvar.match("w", context))
+    assert unfold(d, redex, context, names={"z": right_sort}) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -701,7 +758,7 @@ def test_a_parameter_the_defined_form_cannot_supply_is_reported(theory, setvar):
     # it would be free in the result and open to capture where the step is taken.
     _system, context = theory
     formula = _system.build_context.variables["formula"]
-    d = Definition.parse(
+    d = parse_definition(
         formula,
         "(x ⊆ y)",
         "∀z.((z ∈ x) → (z ∈ w))",
@@ -718,7 +775,7 @@ def test_introduced_leaves_are_deduplicated_and_ordered(theory, setvar):
     # every time.
     _system, context = theory
     formula = _system.build_context.variables["formula"]
-    d = Definition.parse(
+    d = parse_definition(
         formula, "(x ⊆ y)", "∀q.((z ∈ z) → (q ∈ y))", {"x": setvar, "y": setvar}, context
     )
     assert [leaf.literal for leaf in introduced_leaves(d)] == ["q", "z"]
@@ -746,7 +803,7 @@ MASKED = SystemSpec(
 def test_a_leaf_is_not_excused_by_a_same_spelled_other_constructor():
     system, context = build(MASKED)
     formula = system.build_context.variables["formula"]
-    d = Definition.parse(formula, "S", "(S ∈ c)", {}, context)
+    d = parse_definition(formula, "S", "(S ∈ c)", {}, context)
 
     # The `S` of `higher` is the nullary formula notation; the `S` of `lower` is a
     # setvar. Same token, different constructors, so the second is still

@@ -192,12 +192,12 @@ class SystemSpec:
     # separated, as Metamath's is (`( ph -> ps )`, never `(ph->ps)`).
     #
     # Declared rather than inferred, because it is a promise about how proofs
-    # will be *written*, which no set of templates settles. It buys one thing: a
-    # constant may then be spelled with a bracket - `set.mm` names fourteen,
-    # among them the half-open interval `[,)` - because the token boundary tells
-    # that bracket apart from a grouping one. Without the promise such a constant
-    # is refused at build time rather than silently mis-read (see
-    # `_opaque_tokens`), and with it the templates are checked to keep it honest.
+    # will be *written*, which no set of templates settles. It is what makes a
+    # constant spelled with a bracket readable: the token boundary is the only
+    # thing telling the `)` in `[,)` from a grouping one, and telling the
+    # constant `((` from two grouping parens written together. Without the
+    # promise such a constant is refused at build time rather than silently
+    # mis-read; with it, the templates are checked to keep it honest.
     token_separated: bool = False
     productions: list[Production] = field(default_factory=list)
     # Logical line types, in order. A system typically has one (`statement`), but
@@ -363,38 +363,35 @@ def _bracket_map(spec: SystemSpec) -> dict[str, str] | None:
     return {o: c for o, c in brackets} or None
 
 
-def _constants_spelt_with_a_delimiter(
+def _bracket_opaque_tokens(
     spec: SystemSpec, brackets: dict[str, str] | None
 ) -> tuple[str, ...]:
-    # Declared constants whose *spelling* contains a delimiter. Those characters
-    # name a constant, they do not group, and the bracket scan must step over them
-    # or a well-formed statement reads as unbalanced - `set.mm` declares fourteen,
-    # among them the half-open interval `[,)` and the doubled paren `((`, and a
-    # statement mentioning one was refused before it was parsed.
-    #
-    # A nullary template counts as well as an atom: both name one fixed token.
-    # Empty for a system that declares no such constant, which is nearly all of
-    # them, and nothing downstream then changes.
+    # Declared constants that *contain* a bracket delimiter without being one.
+    # Whether a character groups is a property of the grammar, not of the
+    # character, and only the grammar knows which of its tokens merely spell one:
+    # set.mm names its half-open intervals `[,)` and `(,]`, so `( 0 [,) +oo )`
+    # counts three closing brackets against two openings and reads as unbalanced.
+    # Sorted for a deterministic order only. Overlap needs no care from the
+    # caller: `_opaque_positions` unions the spans of *every* occurrence of
+    # *every* token, so one token containing another (set.mm has `O(1)` inside
+    # `<_O(1)`) covers the same indices whichever is seen first.
     if not brackets:
         return ()
 
-    delimiters = frozenset((*brackets, *brackets.values()))
-
-    def spelt_with_a_delimiter(token: str) -> bool:
-        return token not in delimiters and any(d in token for d in delimiters)
-
-    tokens = set()
-    for prod in spec.productions:
-        token = prod.atom_value or (prod.template if prod.template and not prod.bindings else None)
-        if token and spelt_with_a_delimiter(token):
-            tokens.add(token)
-
+    delimiters = (*brackets, *brackets.values())
+    tokens = {
+        production.atom_value
+        for production in spec.productions
+        if production.atom_value is not None
+        and production.atom_value not in delimiters
+        and any(delimiter in production.atom_value for delimiter in delimiters)
+    }
     return tuple(sorted(tokens))
 
 
 def _glued_to_a_slot(template: str, labels: Iterable[str]) -> str | None:
     # The first slot label in `template` that touches a non-space character, or
-    # None. That is what "token separated" forbids: `( a -> b )` keeps every token
+    # None. That is what `token_separated` forbids: `( a -> b )` keeps every token
     # apart, `(a -> b)` glues the slot `a` to the opening paren, and only in the
     # first can a bracket inside a constant's name be told from a grouping one.
     for label in labels:
@@ -411,17 +408,17 @@ def _glued_to_a_slot(template: str, labels: Iterable[str]) -> str | None:
     return None
 
 
-def _check_token_separation(spec: SystemSpec, constants: Sequence[str]) -> None:
+def _check_token_separation(spec: SystemSpec, opaque: Sequence[str]) -> None:
     # Two halves of one promise. Without `token_separated`, a constant spelled
-    # with a delimiter cannot be read, so refuse it here with the remedy named
-    # rather than let the statement mentioning it fail to parse much later. With
-    # it, the templates have to actually keep their tokens apart, or the promise
-    # is a lie and the same mis-reading follows.
+    # with a delimiter cannot be told from a grouping one, so refuse it here with
+    # the remedy named rather than let the statements mentioning it fail to parse
+    # much later. With it, the templates have to actually keep their tokens apart,
+    # or the promise is a lie and the same mis-reading follows.
     if not spec.token_separated:
-        if constants:
+        if opaque:
             raise ValueError(
-                f"Constant {constants[0]!r} is spelled with a bracket. Reading one "
-                f"needs the system's tokens to be whitespace-separated; declare "
+                f"Constant {opaque[0]!r} is spelled with a bracket. Reading one needs "
+                f"the system's tokens to be whitespace-separated; declare "
                 f"token_separated=True."
             )
         return
@@ -435,8 +432,8 @@ def _check_token_separation(spec: SystemSpec, constants: Sequence[str]) -> None:
         if glued is not None:
             raise ValueError(
                 f"Production {prod.name!r} declares token_separated but writes "
-                f"{glued!r} against another token in {prod.template!r}. Separate "
-                f"every token with a space, or drop token_separated."
+                f"{glued!r} against another token in {prod.template!r}. Separate every "
+                f"token with a space, or drop token_separated."
             )
 
 
@@ -479,15 +476,15 @@ def build_system(spec: SystemSpec) -> FormalSystem:
     ctx.variables[name] = system
 
     brackets = _bracket_map(spec)
-    opaque = _constants_spelt_with_a_delimiter(spec, brackets)
+    opaque = _bracket_opaque_tokens(spec, brackets)
     _check_token_separation(spec, opaque)
 
     def register(pattern: Pattern) -> Pattern:
         # Every named pattern respects the system's brackets (parity with the
         # old post-compile `_patch_brackets`, which walked the same set), and
-        # steps over the constants that merely spell one (see `_opaque_tokens`).
-        pattern.opaque_tokens = opaque
+        # steps over any declared constant that merely spells one.
         pattern.respect_brackets = brackets
+        pattern.bracket_opaque = opaque
         return pattern
 
     def unregistered(pattern: Pattern) -> Pattern:

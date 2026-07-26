@@ -282,18 +282,67 @@ def promoted_theorem(
     assertion: Assertion, database: Database, system: FormalSystem
 ) -> PromotedTheorem:
     """Promote one logical ``$a``/``$p`` to a citable schematic theorem."""
+    rename = _proviso_safe_names(assertion)
+    substitute = (lambda tokens: tuple(rename.get(t, t) for t in tokens)) if rename else tuple
+
     return promote_from_source(
         system,
         label=assertion.label,
-        statement=" ".join(assertion.tokens),
-        metavariables={h.variable: h.typecode for h in assertion.floatings},
-        premises=tuple(" ".join(h.tokens) for h in assertion.essentials),
-        distinct=_distinct_provisos(assertion, database, system),
+        statement=" ".join(substitute(assertion.tokens)),
+        metavariables={
+            rename.get(h.variable, h.variable): h.typecode for h in assertion.floatings
+        },
+        premises=tuple(" ".join(substitute(h.tokens)) for h in assertion.essentials),
+        distinct=_distinct_provisos(assertion, database, system, rename),
     )
 
 
+def _proviso_safe_names(assertion: Assertion) -> dict[str, str]:
+    # Rename a metavariable whose name contains the character a proviso uses to
+    # separate its arguments, and give back the mapping.
+    #
+    # `disjoint(left, right, sort)` is read by splitting on top-level commas, so
+    # a metavariable with a comma *in its name* cannot be named in one. set.mm
+    # spells its inner product `.,`, and `$d ., x` came out as
+    # `disjoint(.,, x, setvar)` - four arguments where three were meant, refused
+    # by the proviso parser, so the theorem never promoted and everything citing
+    # it failed with it. 17 statements and the 52 that cite them.
+    #
+    # A metavariable's name is private to the promoted theorem: it names a slot,
+    # and a citation fills that slot by unification, not by name. So renaming it
+    # in the statement, the premises and the provisos together changes nothing
+    # about what the theorem says or what it applies to - the same argument that
+    # licenses `_uncollide` renaming a production's variable.
+    # Every token the theorem already spells, not just its statement's. A
+    # replacement colliding with a *constant* in a premise would leave that
+    # constant's spelling alone while registering it as the metavariable, so the
+    # premise would parse as depending on the metavariable and the theorem would
+    # accept premises its Metamath assertion does not. Reported by Codex review.
+    used = {h.variable for h in assertion.floatings}
+    used.update(assertion.tokens)
+    for hypothesis in assertion.mandatory:
+        used.update(hypothesis.tokens)
+    rename: dict[str, str] = {}
+    for hypothesis in assertion.floatings:
+        if "," not in hypothesis.variable:
+            continue
+
+        stem = hypothesis.variable.replace(",", "")
+        index = 0
+        while True:
+            candidate = f"{stem}_{index}"
+            if candidate not in used and candidate not in rename.values():
+                rename[hypothesis.variable] = candidate
+                break
+            index += 1
+    return rename
+
+
 def _distinct_provisos(
-    assertion: Assertion, database: Database, system: FormalSystem
+    assertion: Assertion,
+    database: Database,
+    system: FormalSystem,
+    rename: dict[str, str] | None = None,
 ) -> tuple[str, ...]:
     # A `$d x y z` constrains every *pair* among its variables, and Edifyce's
     # algebra takes one pair per proviso, so expand. Only variables the assertion
@@ -318,10 +367,11 @@ def _distinct_provisos(
         if name in system.build_context.variables
     ]
 
+    rename = rename or {}
     bound = {h.variable for h in assertion.floatings}
     provisos: list[str] = []
     for group in assertion.distinct:
-        members = sorted(v for v in group if v in bound)
+        members = sorted(rename.get(v, v) for v in group if v in bound)
         for i, left in enumerate(members):
             for right in members[i + 1:]:
                 for sort in variable_leaves or [None]:

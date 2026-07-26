@@ -43,135 +43,6 @@ _METAVARIABLES = "metavariables"
 _NO_BRACKETS = ()
 
 
-def _one_pair_profile(s: str, opener: str, closer: str) -> BracketProfile | None:
-    # One grouping pair - which is what every bracketed system here declares - so
-    # the delimiters can be *found* rather than the string walked. The two `find`
-    # scans run in C and the loop turns once per bracket instead of once per
-    # character, which matters because this runs on every substring of every
-    # formula. With one pair there is also nothing to match up: a depth that never
-    # goes negative and ends at zero is the whole condition.
-    positions = []
-    levels = []
-    depth = 0
-
-    opening = s.find(opener)
-    closing = s.find(closer)
-
-    while True:
-        if opening == -1:
-            if closing == -1:
-                break
-            at = closing
-        elif closing == -1 or opening < closing:
-            at = opening
-        else:
-            at = closing
-
-        if at == opening:
-            depth += 1
-            opening = s.find(opener, at + 1)
-        else:
-            depth -= 1
-
-            if depth < 0:
-                # No corresponding opening bracket
-                return None
-
-            closing = s.find(closer, at + 1)
-
-        positions.append(at)
-        levels.append(depth)
-
-    if depth:
-        # Left open at the end
-        return None
-
-    return positions, levels
-
-
-def _one_pair_profile_opaque(
-    pattern: Pattern, s: str, opener: str, closer: str
-) -> BracketProfile | None:
-    # `_one_pair_profile`, for the rare grammar that names a constant spelled with
-    # a delimiter (see `Pattern.opaque_tokens`). Kept separate rather than branched
-    # into the loop above, because that loop runs on every substring of every
-    # formula in every system, and almost none of them declare such a constant.
-    positions = []
-    levels = []
-    depth = 0
-    opaque = pattern._opaque_tokens
-
-    opening = s.find(opener)
-    closing = s.find(closer)
-
-    while True:
-        if opening == -1:
-            if closing == -1:
-                break
-            at = closing
-        elif closing == -1 or opening < closing:
-            at = opening
-        else:
-            at = closing
-
-        was_opening = at == opening
-
-        if was_opening:
-            opening = s.find(opener, at + 1)
-        else:
-            closing = s.find(closer, at + 1)
-
-        if _spells_a_constant(s, at, opaque):
-            # A letter of a declared constant's name, not a delimiter
-            continue
-
-        if was_opening:
-            depth += 1
-        else:
-            depth -= 1
-
-            if depth < 0:
-                # No corresponding opening bracket
-                return None
-
-        positions.append(at)
-        levels.append(depth)
-
-    if depth:
-        # Left open at the end
-        return None
-
-    return positions, levels
-
-
-def _spells_a_constant(s: str, i: int, opaque: frozenset) -> bool:
-    # Whether the delimiter at `i` is a letter of a declared constant's name
-    # rather than a grouping delimiter (see `Pattern.opaque_tokens`).
-    #
-    # A delimiter standing alone as its own token is always a delimiter: an opaque
-    # token is by construction spelled with something *besides* the delimiter, so
-    # it can never be one. Checking that first is what keeps this cheap - in a
-    # token-separated grammar every grouping delimiter stands alone, so the common
-    # case is two character tests and the token is only extracted for the handful
-    # of delimiters glued to something else.
-    before = i and not s[i - 1].isspace()
-    after = i + 1 < len(s) and not s[i + 1].isspace()
-
-    if not before and not after:
-        return False
-
-    left = i
-    while left and not s[left - 1].isspace():
-        left -= 1
-
-    right = i + 1
-    length = len(s)
-    while right < length and not s[right].isspace():
-        right += 1
-
-    return s[left:right] in opaque
-
-
 def _occurrences(s: str, text: str, start: int, limit: int) -> Iterator[int]:
     # Every position in `s[start:limit]` where `text` occurs, in increasing order.
     # A generator, because a slot's first candidate usually parses and the rest of
@@ -251,10 +122,6 @@ class Pattern:
 
         self.name = name
 
-        # Constants whose spelling contains a delimiter (see `opaque_tokens`).
-        # Assigned before the bracket table, whose setter is a property too.
-        self.opaque_tokens = ()
-
         # Note any bracket pairs that should be respected
         self.respect_brackets = respect_brackets
 
@@ -281,6 +148,12 @@ class Pattern:
         # global root keeps the whole graph alive for the process's lifetime.
         # Opaque to matching, which never reads it — as with `schema_term`.
         self.kernel_constructor = None
+
+        # Declared tokens that *contain* a bracket delimiter, and so must be
+        # stepped over rather than counted when brackets are profiled. Set by the
+        # system builder beside `respect_brackets`; empty for every grammar whose
+        # constants avoid its delimiters. See `_opaque_positions`.
+        self.bracket_opaque = ()
 
         # Default certainty of 0
         self.certainty = 0
@@ -327,40 +200,43 @@ class Pattern:
         if self._opening_of is not None and len(pairs) == 1:
             self._one_pair = next(iter(pairs.items()))
 
-    @property
-    def opaque_tokens(self):
-        return self._opaque_tokens
+    def _opaque_positions(self, s: str) -> set[int] | None:
+        # The indices of `s` covered by a declared token that contains a bracket
+        # delimiter, or None when the grammar has no such token.
+        #
+        # set.mm names its half-open intervals `[,)` and `(,]`, and thirteen more
+        # of its constants spell a parenthesis (`O(1)`, `(x)`, `((`). The `)` in
+        # `[,)` is part of the token, not a bracket, so counting it makes
+        # `( 0 [,) +oo ) C_ RR` read as unbalanced and the formula never parses -
+        # which is the same collision as a variable found inside a constant, one
+        # level down. Whether a character delimits is a property of the *grammar*,
+        # so the grammar is what answers it.
+        if not self.bracket_opaque:
+            return None
 
-    @opaque_tokens.setter
-    def opaque_tokens(self, tokens) -> None:
-        """Declared constant tokens that *spell* a delimiter without being one.
+        covered: set[int] = set()
+        length = len(s)
 
-        A grammar may name a constant whose spelling contains a bracket
-        character - `set.mm` declares fourteen, among them the half-open interval
-        `[,)`, the doubled paren `((`, and `O(1)`. Those characters are letters of
-        a name, not grouping delimiters, and counting them makes a perfectly
-        well-formed statement read as unbalanced: `( 0 [,) +oo ) C_ RR` is
-        refused before a parse is attempted.
+        for token in self.bracket_opaque:
+            size = len(token)
+            at = s.find(token)
 
-        Declaring them here makes the bracket scan step over them. A token counts
-        as opaque only where it occurs *whole* - bounded by whitespace or the ends
-        of the string - so `((` is opaque when it is the token `((` and not when
-        it is two grouping parens written together.
+            while at != -1:
+                # Only where the token stands alone. Nothing else tells the
+                # constant `((` from two grouping parens written together, and a
+                # bare `(` inside a statement must still be closed - so a system
+                # naming such a constant promises its tokens are separated
+                # (declarative.SystemSpec.token_separated) and this holds it to
+                # the same boundary the promise is about.
+                before = at and not s[at - 1].isspace()
+                after = at + size < length and not s[at + size].isspace()
 
-        Empty for every system that names no such constant, which is nearly all of
-        them, and the scan then costs exactly what it did before.
-        """
-        self._opaque_tokens = frozenset(tokens)
+                if not before and not after:
+                    covered.update(range(at, at + size))
 
-    def _names_a_constant(self, s: str) -> bool:
-        # Whether any opaque token occurs in `s` at all, ignoring token
-        # boundaries - a cheap over-approximation that decides whether the
-        # boundary-aware walk is needed.
-        for token in self._opaque_tokens:
-            if token in s:
-                return True
+                at = s.find(token, at + 1)
 
-        return False
+        return covered or None
 
     def brackets_respected(self, s: str, context: Context) -> bool:
         # `check_brackets`, memoised for the length of one parse.
@@ -422,33 +298,23 @@ class Pattern:
             return _NO_BRACKETS if self.check_brackets(s) else None
 
         if self._one_pair is not None:
-            # Whether any opaque token is even present is one C-level scan per
-            # declared token, decided once for the string; a string with none -
-            # which is most of them, in most systems all of them - then takes the
-            # untouched walk, with nothing to pay per delimiter.
-            if self._opaque_tokens and self._names_a_constant(s):
-                return _one_pair_profile_opaque(self, s, *self._one_pair)
-
-            return _one_pair_profile(s, *self._one_pair)
+            return self._one_pair_profile(s, *self._one_pair, self._opaque_positions(s))
 
         pairs = self._respect_brackets
+        opaque = self._opaque_positions(s)
 
         positions = []
         levels = []
         stack = []
         depth = 0
 
-        opaque = self._opaque_tokens if self._opaque_tokens and self._names_a_constant(s) else None
-
         for i, character in enumerate(s):
+            if opaque is not None and i in opaque:
+                continue
             if character in pairs:
-                if opaque and _spells_a_constant(s, i, opaque):
-                    continue
                 stack.append(character)
                 depth += 1
             elif character in opening_of:
-                if opaque and _spells_a_constant(s, i, opaque):
-                    continue
                 if not stack or stack[-1] != opening_of[character]:
                     # No corresponding opening bracket
                     return None
@@ -466,6 +332,57 @@ class Pattern:
 
         return positions, levels
 
+    @staticmethod
+    def _one_pair_profile(
+        s: str, opener: str, closer: str, opaque: set[int] | None = None
+    ) -> BracketProfile | None:
+        # One grouping pair - which is what every bracketed system here declares -
+        # so the delimiters can be *found* rather than the string walked. The two
+        # `find` scans run in C and the loop turns once per bracket instead of once
+        # per character, which matters because this runs on every substring of
+        # every formula. With one pair there is also nothing to match up: a depth
+        # that never goes negative and ends at zero is the whole condition.
+        positions = []
+        levels = []
+        depth = 0
+
+        opening = s.find(opener)
+        closing = s.find(closer)
+
+        while True:
+            if opening == -1:
+                if closing == -1:
+                    break
+                at = closing
+            elif closing == -1 or opening < closing:
+                at = opening
+            else:
+                at = closing
+
+            if at == opening:
+                opening = s.find(opener, at + 1)
+                if opaque is not None and at in opaque:
+                    # Inside a declared token that merely spells a delimiter.
+                    continue
+                depth += 1
+            else:
+                closing = s.find(closer, at + 1)
+                if opaque is not None and at in opaque:
+                    continue
+                depth -= 1
+
+                if depth < 0:
+                    # No corresponding opening bracket
+                    return None
+
+            positions.append(at)
+            levels.append(depth)
+
+        if depth:
+            # Left open at the end
+            return None
+
+        return positions, levels
 
     def check_brackets(self, s):
         # Return a boolean indicating if the string s respects brackets
@@ -479,8 +396,11 @@ class Pattern:
         # rather than re-slicing the string once per bracket pair per character.
         opening_of = self._opening_of
         if opening_of is not None:
+            opaque = self._opaque_positions(s)
             stack = []
-            for character in s:
+            for i, character in enumerate(s):
+                if opaque is not None and i in opaque:
+                    continue
                 if character in pairs:
                     stack.append(character)
                 elif character in opening_of:
@@ -490,17 +410,18 @@ class Pattern:
                     stack.pop()
             return not stack
 
+        # Multi-character delimiters: the same opaque tokens apply, so a constant
+        # spelling one is stepped over here as well as on the fast path above.
+        opaque = self._opaque_positions(s)
         i = 0
         stack = []
-        opaque = self._opaque_tokens if self._opaque_tokens and self._names_a_constant(s) else None
         while i < len(s):
 
-            found = False
-
-            if opaque and _spells_a_constant(s, i, opaque):
-                # A letter of a declared constant's name, not a delimiter
+            if opaque is not None and i in opaque:
                 i += 1
                 continue
+
+            found = False
 
             for opening in self.respect_brackets:
                 closing = self.respect_brackets[opening]
