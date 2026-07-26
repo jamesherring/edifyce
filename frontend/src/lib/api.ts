@@ -240,6 +240,8 @@ export interface FormalSystemUpdate {
 	inherits_from_id?: string | null;
 	/** true → publish (public), false → unpublish (draft), omitted → unchanged. */
 	published?: boolean;
+	/** See declarative.SystemSpec.token_separated. */
+	token_separated?: boolean;
 }
 
 export interface BracketCreate {
