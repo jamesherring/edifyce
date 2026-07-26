@@ -99,6 +99,7 @@ def _one_pair_profile_opaque(
     positions = []
     levels = []
     depth = 0
+    opaque = pattern._opaque_tokens
 
     opening = s.find(opener)
     closing = s.find(closer)
@@ -120,7 +121,7 @@ def _one_pair_profile_opaque(
         else:
             closing = s.find(closer, at + 1)
 
-        if _token_around(s, at) in pattern._opaque_tokens:
+        if _spells_a_constant(s, at, opaque):
             # A letter of a declared constant's name, not a delimiter
             continue
 
@@ -143,8 +144,22 @@ def _one_pair_profile_opaque(
     return positions, levels
 
 
-def _token_around(s: str, i: int) -> str:
-    # The maximal run of non-whitespace characters containing index `i`.
+def _spells_a_constant(s: str, i: int, opaque: frozenset) -> bool:
+    # Whether the delimiter at `i` is a letter of a declared constant's name
+    # rather than a grouping delimiter (see `Pattern.opaque_tokens`).
+    #
+    # A delimiter standing alone as its own token is always a delimiter: an opaque
+    # token is by construction spelled with something *besides* the delimiter, so
+    # it can never be one. Checking that first is what keeps this cheap - in a
+    # token-separated grammar every grouping delimiter stands alone, so the common
+    # case is two character tests and the token is only extracted for the handful
+    # of delimiters glued to something else.
+    before = i and not s[i - 1].isspace()
+    after = i + 1 < len(s) and not s[i + 1].isspace()
+
+    if not before and not after:
+        return False
+
     left = i
     while left and not s[left - 1].isspace():
         left -= 1
@@ -154,7 +169,7 @@ def _token_around(s: str, i: int) -> str:
     while right < length and not s[right].isspace():
         right += 1
 
-    return s[left:right]
+    return s[left:right] in opaque
 
 
 def _occurrences(s: str, text: str, start: int, limit: int) -> Iterator[int]:
@@ -337,13 +352,15 @@ class Pattern:
         """
         self._opaque_tokens = frozenset(tokens)
 
-    def _is_opaque(self, s: str, i: int) -> bool:
-        # Whether the delimiter at `i` is a letter of a declared constant's name
-        # rather than a grouping delimiter.
-        if not self._opaque_tokens:
-            return False
+    def _names_a_constant(self, s: str) -> bool:
+        # Whether any opaque token occurs in `s` at all, ignoring token
+        # boundaries - a cheap over-approximation that decides whether the
+        # boundary-aware walk is needed.
+        for token in self._opaque_tokens:
+            if token in s:
+                return True
 
-        return _token_around(s, i) in self._opaque_tokens
+        return False
 
     def brackets_respected(self, s: str, context: Context) -> bool:
         # `check_brackets`, memoised for the length of one parse.
@@ -405,7 +422,11 @@ class Pattern:
             return _NO_BRACKETS if self.check_brackets(s) else None
 
         if self._one_pair is not None:
-            if self._opaque_tokens:
+            # Whether any opaque token is even present is one C-level scan per
+            # declared token, decided once for the string; a string with none -
+            # which is most of them, in most systems all of them - then takes the
+            # untouched walk, with nothing to pay per delimiter.
+            if self._opaque_tokens and self._names_a_constant(s):
                 return _one_pair_profile_opaque(self, s, *self._one_pair)
 
             return _one_pair_profile(s, *self._one_pair)
@@ -417,16 +438,16 @@ class Pattern:
         stack = []
         depth = 0
 
-        opaque = self._opaque_tokens
+        opaque = self._opaque_tokens if self._opaque_tokens and self._names_a_constant(s) else None
 
         for i, character in enumerate(s):
             if character in pairs:
-                if opaque and self._is_opaque(s, i):
+                if opaque and _spells_a_constant(s, i, opaque):
                     continue
                 stack.append(character)
                 depth += 1
             elif character in opening_of:
-                if opaque and self._is_opaque(s, i):
+                if opaque and _spells_a_constant(s, i, opaque):
                     continue
                 if not stack or stack[-1] != opening_of[character]:
                     # No corresponding opening bracket
@@ -471,13 +492,13 @@ class Pattern:
 
         i = 0
         stack = []
-        opaque = self._opaque_tokens
+        opaque = self._opaque_tokens if self._opaque_tokens and self._names_a_constant(s) else None
         while i < len(s):
 
             found = False
 
-            if opaque and self._is_opaque(s, i):
-                # Inside a declared constant's name; step over the whole token
+            if opaque and _spells_a_constant(s, i, opaque):
+                # A letter of a declared constant's name, not a delimiter
                 i += 1
                 continue
 
