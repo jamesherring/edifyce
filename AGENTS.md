@@ -72,7 +72,8 @@ Two follow-ups this leaves open:
   author ticked), infer a definition's `fresh` clause instead of asking for it, and
   make a definitional step scope-aware — which is what admitting an open
   abbreviation like `S ≝ (a ∈ b)` would need. Metamath has none of this and does
-  not miss it, so this is a capability change, not a soundness fix.
+  not miss it, so this is a capability change, not a soundness fix. Specced in
+  [docs/binding-slots-design.md](docs/binding-slots-design.md).
 - **Conservativity.** That a defined symbol is fresh and the definition
   non-circular is still untreated, as in Metamath. Only the *capture* half of
   admissibility is checked.
