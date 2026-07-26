@@ -1,8 +1,11 @@
 # Metamath import: analysis and roadmap
 
-**Status:** whole corpus imported and checked — 47,546 theorems, 97.8% verifying.
-The remaining 2.2% is characterised in §1.1, and is import defects, not
-unprovable mathematics.
+**Status:** whole corpus imported and checked — **all 47,546 theorems verify**,
+each against only the notation and theorems preceding it, every proof emitted from
+its stored compressed proof and checked by Edifyce's own kernel (§1.1). Two
+qualifications on what that establishes: `df-` statements still import as axioms
+rather than definitions (§3.2, A4), and variable-sort leaves are not yet scoped to
+the walk (§1.3).
 
 Goal: import Metamath's `set.mm` while keeping **full verifiability** and **full
 generality** (Edifyce stays a general proof assistant — any formal system, not a
@@ -29,9 +32,10 @@ are not relitigated), and what remains.
 | Logical assertions promoted as citable theorems | done, but see §3.2 |
 | Proof emission + kernel check | done |
 | Proofs *under* `$e` hypotheses (`import_theorem`) | done |
-| Whole-corpus ordered pass (§1.1) | done — 47,546 checked, 46,520 verify |
-| Scale (§5, A5) | **measured** — 23 min, 3.0 GB (§1.1) |
-| Token-collision defects (§1.2) | **open** — 32 theorems, two causes, both ours |
+| Whole-corpus ordered pass (§1.1) | done — 47,546 checked, **all 47,546 verify** |
+| Scale (§5, A5) | **measured** — 26 min, 3.3 GB (§1.1) |
+| Token-collision defects (§1.2) | fixed — four instances of one shape |
+| Variable-sort scope (§1.3) | **open** — the one discipline gap left in the pass |
 | `$t` typesetting / notation (§4) | **next** |
 | Axiom-vs-theorem split (§3.2) | **blocker** |
 | Definition classification (§5, A4) | not a blocker; front-load |
@@ -70,56 +74,63 @@ compressed proof and checked by Edifyce's own kernel.
 | | |
 |---|---|
 | theorems checked | 47,546 |
-| verified | **46,520 (97.8%)** |
-| rejected by the kernel | 1,026 |
-| failed to promote | 32 |
-| wall clock | 23 min 12 s |
-| peak memory | 3.0 GB |
+| verified | **47,546 (100%)** |
+| rejected by the kernel | 0 |
+| failed to promote | 0 |
+| wall clock | 26 min 24 s |
+| peak memory | 3.3 GB |
 
-Cost is `check` 1,132 s, `promote` 218 s, `emit` 41 s. Per-theorem cost grows with
-the grammar, which reaches 1,441 productions: 2.7 ms/theorem over the first 5,000,
-28.8 ms/theorem by 45,000.
+Cost is dominated by `check`; `promote` and `emit` are each under a fifth of it.
+Per-theorem cost grows with the grammar, which reaches 1,441 productions: single-
+digit milliseconds over the first 5,000, tens of milliseconds by 45,000.
 
-Two caveats on what that number means. The *variable-sort* leaves are seeded at
-whole-database scope rather than grown with the walk — much weaker than the
-notation ordering (a variable leaf admits more names; it adds no constructor that
-could capture a parse), but not the strict discipline. And all 1,433 `df-`
-statements are still imported as axioms (§3.2, A4), so this verifies `set.mm`
-against a larger primitive basis than a faithful import would use.
+The corpus is re-parsed in full on every run. `terms` and `proof_lines` exist and
+the schema is right, but the import does not populate them, so nothing survives
+the pass (A5, §5).
 
-### 1.2 Why the rejections happen
+### 1.2 The token collisions, and the shape they shared
 
-The 32 promotion failures have two root causes, both **defects on our side**, and
-both the same shape: a `set.mm` constant token containing a character Edifyce
-reads structurally. This is the third instance of that shape — the first was the
-class variable `A` found inside the quantifier `A.`, fixed by renaming the
-production's variable (`_uncollide`).
+Getting from the first whole-corpus pass (97.8%) to 100% took four fixes. All four
+were **defects on our side**, and all four were the same shape: *a Metamath name
+containing a character Edifyce reads structurally*. Worth recording, because it is
+the failure mode any corpus with a rich constant vocabulary will provoke.
 
-**A variable named `.,` breaks a `$d` proviso (17 theorems).** `set.mm` spells its
-inner product `.,`, and `_distinct_provisos` emits `disjoint(.,, x, setvar)` — the
-comma *in the name* is indistinguishable from the argument separator, so the
-side-condition parser refuses it. Exactly one declared variable contains a comma,
-so the blast radius is small, but the fix is a quoting or escaping convention in
-the proviso syntax rather than anything Metamath-specific.
+| collision | cost | fix |
+|---|---|---|
+| class variable `A` found inside the quantifier `A.` | 1,096 theorems | `_uncollide` renames the production's variable |
+| a `$d` over a `class`/`wff` variable constrained nothing | soundness | sort-restricted `disjoint` per variable sort |
+| interval constants `[,)`, `(,]` defeat the bracket check | ~1,000 theorems | `bracket_opaque`: a declared constant is opaque to the parity scan |
+| a variable named `.,` cannot be named in a proviso | 69 theorems | `_proviso_safe_names` renames it, avoiding statement *and* premise tokens |
 
-**Interval notation defeats the bracket check (15 theorems).** `set.mm` declares
-14 constants that contain a parenthesis — `[,)`, `(,]`, `(,)`, `(x)`, `O(1)`, `((`
-among them. A statement mentioning one, such as `( 0 [,) +oo ) C_ RR`, fails
-`check_brackets` outright: the `)` inside the token `[,)` is counted as a
-delimiter, so the string reads as unbalanced and never reaches a parse. Confirmed
-directly — `check_brackets` returns False on each failing statement.
+Two of these were found only by triaging the rejections directly, and both were
+badly under-estimated first time round — the bracket collision was booked at 15
+theorems when it accounted for around a thousand, because only the theorems that
+failed to *promote* had been counted, not those whose *proofs* then failed to
+check. A promotion failure cascades; a check failure does not.
 
-Bracket parity is an optimisation (it prunes candidate splits), not a grammatical
-rule, so the fix is to profile brackets over *tokens* rather than characters and
-let a declared constant be opaque to the scan.
+Two engine limits surfaced alongside them: parsing was exponential in nesting
+depth (a 16-binder statement took over 30 minutes; a parse memo per line brought it
+to under a second), and `MAX_CITED_ANTECEDENTS` was 16 when 437 `set.mm`
+assertions cite more than that.
 
-The 1,026 kernel rejections are **not yet diagnosed**. They are not uniform —
-they cluster (299 in the 25,000s, 389 in the 45,000s) and are absent below 10,000
-— which suggests a small number of causes tied to particular notation rather than
-a broad soundness gap. A promotion failure *does* cascade (a theorem that never
-promoted cannot justify a later citation of it), so the 32 above may account for
-some share of the 1,026; a failed *check* does not cascade, since the harness
-promotes regardless of the verdict.
+### 1.3 The scope gap that remains
+
+One discipline gap is left in the pass. Notation is grown with the walk — a syntax
+axiom joins the grammar only when the walk reaches it — but the *variable-sort*
+leaves are seeded once, at whole-database scope. A theorem at position 200 can
+therefore parse against a variable `set.mm` does not declare until position 40,000.
+
+This is weaker than it sounds and stronger than it should be. A variable leaf adds
+no constructor, so it cannot capture a parse the way forward notation can; that is
+why `bj-0` needed the notation ordering and no variable ever has. But it is not the
+strict discipline, and it is exactly what hid a real bug: a proof using an optional
+floating hypothesis as a dummy variable parsed fine under whole-database seeding,
+and only failed once the scope was tightened.
+
+`import_theorem` already scopes variables correctly, by rebuilding the spec with
+`before=label`. The reason the corpus pass does not use it is cost — rebuilding a
+1,441-production grammar per theorem is quadratic in the corpus. Closing the gap
+means growing the variable leaves incrementally, as notation already is.
 
 ---
 
@@ -416,7 +427,7 @@ lemmas as cited premises. Default on "does not reduce to fold/unfold" must be
 import means re-importing everything.
 
 **A5. Scale — *measured; no longer a risk*.**
-The whole corpus checks in 23 minutes at 3.0 GB (§1.1). Both risks this item
+The whole corpus checks in 26 minutes at 3.3 GB (§1.1). Both risks this item
 named were real and are now addressed. The backtracking string matcher was the
 dominant cost and was *exponential in nesting depth* — `cbvral8vw` (16 binders)
 did not finish at all — until substring parses were memoised per parse; reading a
@@ -426,10 +437,9 @@ instead of trying every leaf, which is what stops cost growing with the grammar'
 1,441 productions. Resolution of 49,000 promoted theorems never became the
 bottleneck the item predicted; the parse did.
 
-What remains is memory — 3.0 GB, growing roughly linearly with theorems promoted
-— and the fact that per-theorem cost still rises with grammar size (2.7 ms early,
-28.8 ms late). Neither blocks a bulk import; both would matter for a corpus
-several times larger.
+What remains is memory — 3.3 GB, growing roughly linearly with theorems promoted
+— and the fact that per-theorem cost still rises with grammar size. Neither blocks
+a bulk import; both would matter for a corpus several times larger.
 
 ### Tier B — the human-altitude layer
 
@@ -483,9 +493,9 @@ argument. General because the justification is always a cited lemma.
 1. **`$t` + Unicode source + term-fold renderer** (§4) — wanted now, and part of A3.
 2. **Axiom-vs-theorem split** (§3.2) — the modelling blocker.
 3. **A4 definition classification** — cheaper before bulk than after.
-4. **Close out the 2.2%** (§1.2): the two token-collision defects first — they
-   are ours, small, and one of them cascades — then diagnose the 1,026 kernel
-   rejections, which are still unexplained.
+4. **Close the variable-sort scope gap** (§1.3) — grow the variable leaves with
+   the walk, as notation already is, so the whole-corpus pass runs under the same
+   discipline `import_theorem` enforces per theorem.
 5. **Persist the parse.** Every check re-parses from source text today; `terms` /
    `proof_lines` exist for the structure but the import does not populate them,
    so the corpus is re-parsed in full on every run.
