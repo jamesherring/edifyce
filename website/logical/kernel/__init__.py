@@ -25,6 +25,7 @@ about any of them.
 
 from .definitions import (
     Definition,
+    FreshBinder,
     check_definitional_step,
     introduced_leaves,
     unbound_parameters,
@@ -50,6 +51,7 @@ __all__ = [
     "Bound",
     "Constructor",
     "Definition",
+    "FreshBinder",
     "DisjointLeaves",
     "Equal",
     "IsAtom",

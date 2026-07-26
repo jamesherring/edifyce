@@ -45,6 +45,11 @@ one unfold followed by a structural compare. Searching for *which* definition
 applies *where* - to keep proofs terse - is the elaboration layer's job; the
 trusted core only ever checks a step it is handed.
 
+Everything here is stated over *terms*. Building a definition from the two
+surface forms an author writes is ``formal_system.definitions.parse_definition``,
+and a binder's chosen name arrives as the leaf it denotes rather than the string
+that spells it - so no grammar is consulted while a step is being checked.
+
 Admissibility - what an unfold may introduce
 --------------------------------------------
 :func:`unbound_parameters` and :func:`introduced_leaves` answer the structural
@@ -85,15 +90,34 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .side_conditions import And, DisjointLeaves
-from .constructors import constructor_for
-from .terms import Node, abstract, bind, from_match, _bound, _bound_label
-from .unify import match
+from .terms import Node, _bound_label
+from .unify import match, sort_admits
 
 if TYPE_CHECKING:
     from ..matching.context import Context
-    from ..matching.patterns import Pattern
+    from .constructors import Constructor
     from .side_conditions import SideCondition
     from .terms import Binding, Term
+
+
+@dataclass(frozen=True)
+class FreshBinder:
+    """A defining form's declared bound variable, as kernel data.
+
+    ``name`` is what the definition's author called it - the key an unfold names
+    to rename that binder. ``sort`` is the sort it ranges over, and ``default``
+    the leaf its declared name denotes: the name the binder keeps when an unfold
+    chooses none, which is the reject-collision fallback.
+
+    ``default`` is a *term* because deciding it is a parsing question, settled
+    once when the definition is built (``formal_system.definitions``). Holding the
+    answer rather than the sort to re-parse against is what keeps the kernel free
+    of the grammar at check time.
+    """
+
+    name: str
+    sort: Constructor
+    default: Term
 
 
 @dataclass(frozen=True)
@@ -108,9 +132,9 @@ class Definition:
     is the term for ``x ⊆ y`` and ``lower`` the term for ``∀z.(z ∈ x → z ∈ y)``,
     sharing the variables ``x`` and ``y``.
 
-    ``fresh`` names the defining form's bound variables (each with its sort),
-    e.g. ``(("z", setvar),)`` for ``df-subset``. In ``lower`` each is stored as
-    an abstract, indexed :class:`~website.logical.kernel.terms.Bound` node (in
+    ``fresh`` names the defining form's bound variables (see :class:`FreshBinder`),
+    one entry for ``df-subset``'s ``z``. In ``lower`` each is stored as an
+    abstract, indexed :class:`~website.logical.kernel.terms.Bound` node (in
     ``fresh`` order), so an unfold's consumer chooses each binder's concrete name;
     from ``fresh`` the kernel generates the disjoint-variable proviso that keeps
     that choice capture-free (see the module docstring). ``condition`` is any
@@ -120,77 +144,13 @@ class Definition:
     higher: Term
     lower: Term
     condition: SideCondition | None = None
-    # Each binder with the *sort pattern* it ranges over. A pattern rather than a
-    # constructor because this one is a parse handle: an unfold parses the
-    # caller's chosen binder name against it (see `_resolve_bound_names`), which
-    # is the one place a definition still reads a string at check time.
-    fresh: tuple[tuple[str, Pattern], ...] = ()
+    fresh: tuple[FreshBinder, ...] = ()
     # The name a proof cites this definition by (`[<label>, <line>]`), or None
     # for an unnamed one (still reachable through the generic keyword). It lives
     # here, not on the notation that parses the defined form, because a citation
     # names an *axiom*: two definitions may share one defined form, and each
     # stays separately citable.
     label: str | None = None
-
-    @classmethod
-    def parse(
-        cls,
-        sort: Pattern,
-        higher: str,
-        lower: str,
-        variables: dict[str, Pattern],
-        context: Context,
-        condition: SideCondition | None = None,
-        fresh: dict[str, Pattern] | None = None,
-        label: str | None = None,
-    ) -> Definition:
-        """Build a definition by parsing its two surface forms.
-
-        ``sort`` is the ``Pattern`` both forms parse against (e.g. the ``formula``
-        union); ``variables`` maps each parameter name to its sort; ``context``
-        is an ordinary ground parsing context. Each form is parsed through the
-        grammar and its parameters abstracted (see
-        :func:`~website.logical.kernel.terms.abstract`), so a multi-level
-        defining form keeps its structure - which is why this uses parse +
-        abstract rather than ``from_pattern`` (see that helper's note).
-
-        ``fresh`` maps each bound variable of the defining form to its sort (for
-        ``df-subset``, ``{"z": setvar}``); in the parsed defining form each such
-        variable is replaced by an abstract, indexed
-        :class:`~website.logical.kernel.terms.Bound` node (in ``fresh`` order),
-        and the capture-avoidance proviso is generated from it. The engine's
-        legacy condition DSL is not translated: pass a step-3 ``condition``
-        explicitly for any *additional* proviso.
-        """
-        # Sorts arrive as productions - this is a parse entry point - and are
-        # projected here, so nothing past it holds a pattern.
-        parameter_sorts = {
-            name: constructor_for(pattern) for name, pattern in variables.items()
-        }
-        fresh_items = tuple((fresh or {}).items())
-        # Each declared bound variable becomes an abstract, indexed node; the
-        # defining form (only) is rewritten to reference binders by index.
-        bound_nodes = {
-            name: _bound(index, constructor_for(sort))
-            for index, (name, sort) in enumerate(fresh_items)
-        }
-
-        def schema(text: str, abstract_binders: bool) -> Term:
-            matched = sort.match(text, context)
-            if matched is None:
-                raise ValueError(f"Definition form {text!r} does not parse as '{sort.name}'.")
-            term = abstract(from_match(matched), parameter_sorts)
-            if abstract_binders and bound_nodes:
-                term = bind(term, bound_nodes)
-            return term
-
-        return cls(
-            higher=schema(higher, abstract_binders=False),
-            lower=schema(lower, abstract_binders=True),
-            condition=condition,
-            fresh=fresh_items,
-            label=label,
-        )
 
 
 def _ground_leaves(term: Term) -> list[Node]:
@@ -260,15 +220,17 @@ def unfold(
     definition: Definition,
     redex: Term,
     context: Context,
-    names: dict[str, str] | None = None,
+    names: dict[str, Term] | None = None,
 ) -> Term | None:
     """Apply ``definition`` to ``redex`` once (defined form -> defining form).
 
     ``names`` maps each declared bound variable (by its ``fresh`` name) to the
-    concrete name its binder should take in the result, e.g. ``{"z": "w"}`` to
-    unfold ``z ⊆ b`` as ``∀w.(w ∈ z → w ∈ b)``. An unnamed binder keeps its
-    declared name; that is the reject-collision fallback (unfolding ``z ⊆ b``
-    without renaming ``z`` fails the freshness proviso).
+    leaf its binder should take in the result - ``{"z": <term w>}`` to unfold
+    ``z ⊆ b`` as ``∀w.(w ∈ z → w ∈ b)``. Terms, not strings: naming a binder is a
+    choice about the *term*, and reading a name out of a string would put the
+    grammar back in the trusted core. An unnamed binder keeps its declared name
+    (:attr:`FreshBinder.default`); that is the reject-collision fallback
+    (unfolding ``z ⊆ b`` without renaming ``z`` fails the freshness proviso).
 
     Returns the unfolded term, or ``None`` if ``redex`` is not an instance of the
     definition's ``higher`` form, a chosen bound name would capture (violating the
@@ -281,9 +243,9 @@ def unfold(
         return None
     if definition.condition is not None and not definition.condition.check(binding, context):
         return None
-    bound_binding = _resolve_bound_names(definition, names, context)
+    bound_binding = _resolve_bound_names(definition, names)
     if bound_binding is None:
-        # A chosen name does not parse as its binder's sort.
+        # A chosen name is not a leaf of its binder's sort.
         return None
     if not _bounds_are_fresh(definition, binding, bound_binding, context):
         return None
@@ -293,24 +255,31 @@ def unfold(
 
 
 def _resolve_bound_names(
-    definition: Definition, names: dict[str, str] | None, context: Context
+    definition: Definition, names: dict[str, Term] | None
 ) -> Binding | None:
     """The binding that instantiates each abstract binder to its chosen concrete
-    leaf, chosen from ``names`` and falling back to the declared ``fresh`` name.
+    leaf, taken from ``names`` and falling back to the binder's declared default.
 
-    Each chosen name is parsed against the binder's sort, so a caller cannot
-    smuggle in a string that does not denote a leaf of that sort (e.g. ``"aa"``
-    or ``"(a ∈ b)"`` for a single-letter ``setvar``): an unparsable name yields
-    ``None``, rejecting the unfold rather than building a bogus leaf.
+    Each choice is checked structurally - a childless leaf, of a sort the binder
+    admits - so a caller cannot smuggle in a term that is not a name of that sort
+    (a compound ``(a ∈ b)``, or a leaf of the wrong sort). A choice that fails
+    yields ``None``, rejecting the unfold rather than binding a bogus leaf. That
+    check used to be a *parse* of the chosen string against the binder's sort
+    pattern, which is the same question asked of the grammar instead of the term.
     """
     resolved: Binding = {}
-    for index, (name, sort) in enumerate(definition.fresh):
-        chosen = names.get(name, name) if names else name
-        matched = sort.match(chosen, context)
-        if matched is None:
+    for index, binder in enumerate(definition.fresh):
+        chosen = binder.default if names is None else names.get(binder.name, binder.default)
+        if not _names_a_leaf_of(chosen, binder.sort):
             return None
-        resolved[_bound_label(index)] = from_match(matched)
+        resolved[_bound_label(index)] = chosen
     return resolved
+
+
+def _names_a_leaf_of(term: Term, sort: Constructor) -> bool:
+    """Whether ``term`` is something a binder of ``sort`` could be called: a
+    ground leaf the sort admits."""
+    return isinstance(term, Node) and not term.children and sort_admits(sort, term)
 
 
 def _bounds_are_fresh(
@@ -331,18 +300,17 @@ def _bounds_are_fresh(
     combined = {**binding, **bound_binding}
     provisos: list[DisjointLeaves] = []
     prior_keys: list[str] = []
-    for index, (_name, sort) in enumerate(definition.fresh):
+    for index, binder in enumerate(definition.fresh):
         key = _bound_label(index)
         if key not in bound_binding:
             # The step never pinned this binder's concrete name (e.g. a target
             # whose structure did not determine it): nothing to admit.
             return False
-        leaf_sort = constructor_for(sort)
         provisos.extend(
-            DisjointLeaves(key, parameter, sort=leaf_sort) for parameter in parameters
+            DisjointLeaves(key, parameter, sort=binder.sort) for parameter in parameters
         )
         provisos.extend(
-            DisjointLeaves(key, prior, sort=leaf_sort) for prior in prior_keys
+            DisjointLeaves(key, prior, sort=binder.sort) for prior in prior_keys
         )
         prior_keys.append(key)
 
