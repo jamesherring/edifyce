@@ -41,7 +41,10 @@ from website.logical.metamath import (
     parse,
     split_proof,
 )
-from website.logical.metamath.importer import _distinct_provisos
+from website.logical.metamath.importer import (
+    _distinct_provisos,
+    _proviso_safe_names,
+)
 from website.logical.metamath.parser import Hypothesis
 
 
@@ -699,3 +702,49 @@ def test_a_grammar_without_such_constants_declares_none():
     # so an ordinary system pays only a truthiness check.
     system = import_database(parse(HYPOTHESIS_FRAGMENT))
     assert system.build_context.variables["wff"].bracket_opaque == ()
+
+
+# set.mm spells its inner product `.,` — a metavariable whose *name* contains the
+# character a proviso uses to separate arguments.
+COMMA_VARIABLE_FRAGMENT = r"""
+$c |- wff class setvar = A. e. $.
+$v x ., A $.
+vx $f setvar x $.
+cip $f class ., $.
+cA $f class A $.
+wceq $a wff A = A $.
+wal $a wff A. x A = A $.
+${
+  $d ., x $.
+  $( `.,` must be *mentioned* to be a metavariable of `ax` - a `$d` over
+     something the statement does not bind constrains nothing. $)
+  ax.1 $e |- ., = A $.
+  ax $a |- A. x A = A $.
+$}
+"""
+
+
+def test_a_metavariable_spelt_with_a_comma_can_still_carry_a_proviso():
+    # `disjoint(left, right, sort)` is read by splitting on top-level commas, so
+    # `$d ., x` came out as `disjoint(.,, x, setvar)` - four arguments where three
+    # were meant. The proviso parser refused it, the theorem never promoted, and
+    # every theorem citing it failed too.
+    database = parse(COMMA_VARIABLE_FRAGMENT)
+    system = build_system(build_spec(database))
+
+    rename = _proviso_safe_names(database.assertions["ax"])
+    assert rename == {".,": "._0"}
+
+    provisos = _distinct_provisos(database.assertions["ax"], database, system, rename)
+    assert all("._0" in p for p in provisos)
+    assert not any(".,," in p for p in provisos)
+
+    # And the theorem promotes, which it could not before.
+    system = import_database(database)
+    assert "ax" in system.promoted_theorems
+
+
+def test_a_metavariable_without_a_comma_is_left_alone():
+    # The rename is driven by a real collision, so ordinary names are untouched.
+    database = parse(BINDER_FRAGMENT)
+    assert _proviso_safe_names(database.assertions["ax"]) == {}
