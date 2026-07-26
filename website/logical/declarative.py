@@ -360,8 +360,10 @@ def _bracket_opaque_tokens(
     # character, and only the grammar knows which of its tokens merely spell one:
     # set.mm names its half-open intervals `[,)` and `(,]`, so `( 0 [,) +oo )`
     # counts three closing brackets against two openings and reads as unbalanced.
-    # Longest first, so a scan matching greedily cannot stop at a shorter token
-    # that prefixes a longer one.
+    # Sorted for a deterministic order only. Overlap needs no care from the
+    # caller: `_opaque_positions` unions the spans of *every* occurrence of
+    # *every* token, so one token containing another (set.mm has `O(1)` inside
+    # `<_O(1)`) covers the same indices whichever is seen first.
     if not brackets:
         return ()
 
@@ -373,7 +375,7 @@ def _bracket_opaque_tokens(
         and production.atom_value not in delimiters
         and any(delimiter in production.atom_value for delimiter in delimiters)
     }
-    return tuple(sorted(tokens, key=len, reverse=True))
+    return tuple(sorted(tokens))
 
 
 def _binding_patterns(bindings: list[tuple[str, str]], ctx: FormalSystemContext) -> dict[str, Pattern]:

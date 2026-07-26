@@ -748,3 +748,29 @@ def test_a_metavariable_without_a_comma_is_left_alone():
     # The rename is driven by a real collision, so ordinary names are untouched.
     database = parse(BINDER_FRAGMENT)
     assert _proviso_safe_names(database.assertions["ax"]) == {}
+
+
+def test_one_opaque_token_may_contain_another():
+    # set.mm declares both `O(1)` and `<_O(1)`. The spans are unioned rather than
+    # matched greedily, so neither ordering nor nesting can leave a delimiter
+    # inside the longer token counted.
+    database = parse(
+        r"""
+$c |- wff class ( ) O(1) <_O(1) e. $.
+$v A B $.
+cA $f class A $.
+cB $f class B $.
+wcel $a wff A e. B $.
+cbig $a class O(1) $.
+cbigle $a class <_O(1) $.
+cop $a class ( A B ) $.
+ax $a |- O(1) e. <_O(1) $.
+"""
+    )
+    formula = build_system(build_spec(database)).build_context.variables["wff"]
+
+    assert set(formula.bracket_opaque) == {"O(1)", "<_O(1)"}
+    assert formula.check_brackets("O(1) e. <_O(1)") is True
+    assert formula.check_brackets("( O(1) e. <_O(1) )") is True
+    # A real imbalance around them is still caught.
+    assert formula.check_brackets("( O(1) e. <_O(1)") is False
