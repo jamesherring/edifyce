@@ -26,6 +26,7 @@ from app.db.systems import (
     LinePartRow,
     LineRow,
     ProductionBindingRow,
+    ProductionBindingScopeRow,
     RuleAntecedentRow,
     RuleBindingRow,
     RuleRow,
@@ -65,7 +66,7 @@ from website.logical.declarative import LinePart, LineSpec, Rule, SystemSpec, bu
 _SYSTEM_TABLES = [
     m.__table__
     for m in (
-        FormalSystem, BracketRow, SymbolRow, ProductionBindingRow,
+        FormalSystem, BracketRow, SymbolRow, ProductionBindingRow, ProductionBindingScopeRow,
         LineRow, LinePartRow, DefinitionRow, DefinitionBindingRow, DefinitionFreshRow,
         AxiomRow, AxiomBindingRow, RuleRow, RuleAntecedentRow, RuleBindingRow,
         SideConditionRow,
@@ -214,6 +215,35 @@ def test_object_language_role_round_trips_through_the_database(session):
     assert roles == {
         "setvar_atom": False, "cee": False, "falsum": True, "membership": False
     }
+    assert system_to_spec(stored) == spec
+
+
+def test_binding_slots_round_trip_through_the_database(session):
+    # A binder's scope is stored as a link to the *sibling slot row*, not as a
+    # name — so this also pins that the link is resolved back to the right slot
+    # rather than to whichever happens to sit at the same position.
+    spec = SystemSpec(
+        name="Binders",
+        brackets=brackets(),
+        productions=[
+            regex_prod("setvar", "letter", "[a-z]"),
+            template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+            template_prod(
+                "formula", "forall", "∀x.phi",
+                [("x", "setvar"), ("phi", "formula")],
+                scopes_over={"x": ["phi"]},
+            ),
+        ],
+        lines=[statement_line()],
+    )
+    session.add(spec_to_system(spec))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Binders"))
+
+    forall = next(s for s in stored.symbols if s.name == "forall")
+    scopes = {b.var: [s.scoped.var for s in b.scopes] for b in forall.bindings}
+    assert scopes == {"x": ["phi"], "phi": []}
     assert system_to_spec(stored) == spec
 
 

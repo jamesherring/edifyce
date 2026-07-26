@@ -120,6 +120,41 @@ class ProductionBindingRow(Base):
         foreign_keys=[production_id], back_populates="bindings"
     )
     symbol: Mapped[SymbolRow] = relationship(foreign_keys=[symbol_id])
+    # The sibling slots this one *binds over*, empty for an ordinary argument.
+    scopes: Mapped[list[ProductionBindingScopeRow]] = relationship(
+        back_populates="binding",
+        cascade="all, delete-orphan",
+        order_by="ProductionBindingScopeRow.position",
+        foreign_keys="ProductionBindingScopeRow.binding_id",
+    )
+
+
+class ProductionBindingScopeRow(Base):
+    """One slot a binder scopes over — the ``phi`` of ``∀x.phi``.
+
+    A row rather than a name list on the binding for the same reason every other
+    grammar reference here is a foreign key: a slot renamed in one place must not
+    leave a dangling spelling in another. Both ends are ``production_bindings``
+    rows, so the relation is within one production's own slots, which is the only
+    thing a binding slot may name (``declarative._binding_scopes`` enforces the
+    *same-production* half, which a foreign key cannot).
+    """
+
+    __tablename__ = "production_binding_scopes"
+
+    id: Mapped[uuid.UUID] = uuid_pk_column()
+    binding_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("production_bindings.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = _position()
+    scoped_binding_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("production_bindings.id", ondelete="CASCADE"), index=True
+    )
+
+    binding: Mapped[ProductionBindingRow] = relationship(
+        foreign_keys=[binding_id], back_populates="scopes"
+    )
+    scoped: Mapped[ProductionBindingRow] = relationship(foreign_keys=[scoped_binding_id])
 
 
 # ---------------------------------------------------------------------------

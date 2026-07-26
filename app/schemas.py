@@ -80,6 +80,21 @@ class Binding(BaseModel):
     sort: str = Field(..., max_length=128)
 
 
+class ProductionBinding(Binding):
+    """A production's slot, which — unlike a rule's or a definition's
+    metavariable — may *bind*.
+
+    ``scopes_over`` names the sibling slots this one's binding reaches into:
+    ``["phi"]`` for the ``x`` of ``∀x.phi``, empty for an ordinary argument slot.
+    Declared, not inferred, because ``∀x.phi`` and a two-argument connective are
+    the same shape; what it buys is that a definition whose defining form binds
+    need no longer spell out a `fresh` clause — the engine reads it off the
+    grammar (see `docs/binding-slots-design.md`).
+    """
+
+    scopes_over: list[str] = Field(default_factory=list)
+
+
 class BracketPair(BaseModel):
     id: uuid.UUID
     opening: str
@@ -106,7 +121,7 @@ class Production(BaseModel):
     # same shape and opposite answers. Only a constant may appear in a
     # definition's defining form without the defined form supplying it.
     denotes_constant: bool = False
-    bindings: list[Binding] = Field(default_factory=list)
+    bindings: list[ProductionBinding] = Field(default_factory=list)
 
 
 class LinePart(BaseModel):
@@ -295,7 +310,7 @@ class ProductionCreate(BaseModel):
     # production as variable-like, which costs a refused definition rather than a
     # capturing one.
     denotes_constant: bool = False
-    bindings: list[Binding] = Field(default_factory=list)
+    bindings: list[ProductionBinding] = Field(default_factory=list)
 
 
 class ProductionUpdate(BaseModel):
@@ -306,7 +321,7 @@ class ProductionUpdate(BaseModel):
     atom_value: str | None = Field(None, min_length=1, max_length=512)
     atom_base: str | None = Field(None, min_length=1, max_length=128)
     denotes_constant: bool | None = None
-    bindings: list[Binding] | None = None
+    bindings: list[ProductionBinding] | None = None
 
 
 class LinePartInput(BaseModel):

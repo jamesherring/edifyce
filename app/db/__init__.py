@@ -15,6 +15,7 @@ from app.db.models import (
     Theorem,
     User,
 )
+from app.db.metamath_store import ImportReport, import_corpus
 from app.db.proof_lines import ProofLineAntecedentRow, ProofLineRow
 from app.db.proofs_mapping import (
     clear_proof_lines,
@@ -32,6 +33,7 @@ from app.db.systems import (
     LinePartRow,
     LineRow,
     ProductionBindingRow,
+    ProductionBindingScopeRow,
     RuleAntecedentRow,
     RuleBindingRow,
     RuleRow,
@@ -69,6 +71,7 @@ __all__ = [
     "LinePartRow",
     "LineRow",
     "ProductionBindingRow",
+    "ProductionBindingScopeRow",
     "RuleAntecedentRow",
     "RuleBindingRow",
     "RuleRow",
@@ -83,4 +86,7 @@ __all__ = [
     "digest_term",
     "load_term",
     "store_term",
+    # Metamath corpus import (app/db/metamath_store.py).
+    "ImportReport",
+    "import_corpus",
 ]

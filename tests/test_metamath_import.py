@@ -369,6 +369,37 @@ def test_distinct_variable_provisos_are_sort_restricted():
     assert system.parse("RR = RR [ax]").proof_lines[0].valid is True
 
 
+def test_a_statement_written_in_a_variable_alone_still_has_a_logical_sort():
+    # set.mm opens with two theorems - `idi` and `a1ii`, both `|- ph` - stated
+    # before any syntax axiom is declared. A `$f`-declared typecode is a sort in
+    # its own right (`wph $f wff ph` makes a bare `ph` a wff), so the logical
+    # sort is readable from the variable leaves; reading only the syntax axioms
+    # left the first two theorems of the file with no grammar to be stated in.
+    database = parse(
+        r"""
+$c |- wff $.
+$v ph $.
+wph $f wff ph $.
+${
+  idi.1 $e |- ph $.
+  idi $p |- ph $= ( ) B $.
+$}
+"""
+    )
+    system, text = import_theorem(database, "idi")
+
+    assert text == "ph [idi.1]"
+    assert system.parse(text).valid is True
+
+
+def test_a_database_with_no_readable_logical_sort_is_refused():
+    # With neither a syntax axiom nor a conventionally-named sort there is
+    # nothing to go on, and guessing among variable-only sorts would as happily
+    # pick a binder sort as the logical one.
+    with pytest.raises(MetamathError, match="cannot be told"):
+        build_spec(parse("$c |- setvar $. $v x $. vx $f setvar x $."))
+
+
 def test_a_proof_cannot_cite_notation_declared_later():
     # Promoting only the *preceding* logical assertions does not cover syntax: a
     # syntax step never reaches the kernel (`_apply` folds it into the expression

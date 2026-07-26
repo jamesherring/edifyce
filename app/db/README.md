@@ -22,6 +22,7 @@ evolve it.
 | `app/db/terms_mapping.py` | `store_term` / `load_term` round trip between kernel `Term`s and the rows |
 | `app/db/proof_lines.py` | Proof structure: a checked proof's lines + the justification edges between them |
 | `app/db/proofs_mapping.py` | `store_proof_lines`: project a checked engine `Proof` into those rows |
+| `app/db/metamath_store.py` | `import_corpus`: walk a Metamath `.mm` database and store the system, its proofs, and their line graphs |
 | `app/db/session.py` | Lazy async engine + `get_session` FastAPI dependency |
 | `tools/atlas/schema.py` | Single-file schema entrypoint Atlas loads the models through |
 | `atlas.hcl` | Atlas config (env `local`) |
@@ -44,7 +45,8 @@ Modernised from the original Django app (`website/models.py` on `main`):
   `slug`, optional `owner`, self-referential `inherits_from_id` (system
   inheritance), and `published_at`. Its grammar/rules/definitions are **not** a
   blob here — they live in the decomposition tables below.
-- **`sorts`, `productions`, `production_bindings`, `line_types`, `line_parts`,
+- **`sorts`, `productions`, `production_bindings`, `production_binding_scopes`,
+  `line_types`, `line_parts`,
   `definitions`, `definition_bindings`, `axioms`, `axiom_bindings`, `rules`,
   `rule_antecedents`, `rule_bindings`, `notation_brackets`** — the **normalised
   system decomposition** (`systems.py`): one row per declaration, with real FKs
@@ -52,7 +54,10 @@ Modernised from the original Django app (`website/models.py` on `main`):
   first-class, indexable, searchable entity — "which systems define `⊆`", "which
   rules take two premises" — answerable in plain SQL with no recompile. The
   bridge to the engine is `systems_mapping`: rows → `SystemSpec` →
-  `FormalSystem` (`declarative.build_system`).
+  `FormalSystem` (`declarative.build_system`). `production_binding_scopes` is
+  the odd one out in referencing `production_bindings` at both ends: it records
+  which sibling slot a binder scopes over (the `phi` of `∀x.phi`), which is what
+  lets a definition's `fresh` clause be inferred rather than declared.
 - **`side_conditions`** — a definition's proviso (`where` clause) stored as the
   kernel's closed side-condition algebra (`side_conditions.py`) rather than an
   opaque string: one row per algebra node (`occurs`/`equal`/`disjoint`/`atom`/

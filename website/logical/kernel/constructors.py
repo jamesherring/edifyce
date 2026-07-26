@@ -86,6 +86,7 @@ class Constructor:
         atom_base: str | None = None,
         has_declared_variables: bool = False,
         denotes_constant: bool = False,
+        scopes_over: dict[str, tuple[str, ...]] | None = None,
     ) -> None:
         self.kind: str = kind
         self.name: str = name
@@ -112,6 +113,13 @@ class Constructor:
         # kernel's definition builder to decide which leaves a defining form may
         # introduce from nowhere.
         self.denotes_constant: bool = denotes_constant
+        # Which slots bind, and over which siblings: `{"x": ("phi",)}` for
+        # `∀x phi`. A slot named here holds a *binder occurrence*, which is what
+        # lets a definition's `fresh` clause be read off the parsed defining form
+        # instead of declared (see formal_system.definitions). Empty for a
+        # production whose author declared no binding structure — every
+        # production, until one does.
+        self.scopes_over: dict[str, tuple[str, ...]] = scopes_over or {}
         # Lazily filled by `admits`.
         self._admits: frozenset[Constructor] | None = None
 
@@ -276,6 +284,9 @@ def _build(pattern: Pattern) -> Constructor:
             pieces=pieces,
             template=pattern.pattern,
             has_declared_variables=bool(pattern.variables),
+            # Read here rather than in `_link`: a binder slot names *siblings of
+            # this production*, so nothing about it reaches back into the grammar.
+            scopes_over=dict(pattern.scopes_over),
         )
 
     if isinstance(pattern, AtomPattern):

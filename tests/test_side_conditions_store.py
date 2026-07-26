@@ -37,6 +37,7 @@ from app.db.systems import (
     LinePartRow,
     LineRow,
     ProductionBindingRow,
+    ProductionBindingScopeRow,
     RuleAntecedentRow,
     RuleBindingRow,
     RuleRow,
@@ -64,7 +65,7 @@ from website.logical.formal_system.side_condition_syntax import parse_side_condi
 _TABLES = [
     m.__table__
     for m in (
-        FormalSystem, SymbolRow, ProductionBindingRow, BracketRow,
+        FormalSystem, SymbolRow, ProductionBindingRow, ProductionBindingScopeRow, BracketRow,
         LineRow, LinePartRow, DefinitionRow, DefinitionBindingRow, DefinitionFreshRow,
         AxiomRow, AxiomBindingRow, RuleRow, RuleAntecedentRow, RuleBindingRow,
         SideConditionRow,

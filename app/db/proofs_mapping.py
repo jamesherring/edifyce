@@ -91,6 +91,7 @@ def store_proof_lines(
     system: FormalSystem,
     engine_proof: EngineProof,
     cited_proofs: CitedProofs = (),
+    replace: bool = True,
 ) -> list[ProofLineRow]:
     """Replace ``proof``'s stored structure with ``engine_proof``'s.
 
@@ -101,10 +102,17 @@ def store_proof_lines(
     lemmas seeded into ``reference_context``) with its stored id. A citation
     reaching into one of those is recorded by proof id and citation number rather
     than by a foreign key, since that proof owns its own line rows.
+
+    ``replace`` clears the proof's existing rows first, which every *re*-check
+    needs and a proof created moments ago does not. It is not free to skip
+    pointlessly: the delete's identity-map synchronisation walks the pending
+    rows, so a bulk import (which never has anything to replace) pays it for
+    every proof and degrades as its transaction grows.
     """
-    # The delete runs as a statement, so it is on the wire before any of the ORM
-    # inserts below — which flush later — can reach it.
-    clear_proof_lines(session, [proof.id])
+    if replace:
+        # The delete runs as a statement, so it is on the wire before any of the
+        # ORM inserts below — which flush later — can reach it.
+        clear_proof_lines(session, [proof.id])
 
     # Safe to key by identity: `cited_proofs` holds every proof it names for the
     # duration of the call, so no entry can outlive its object.

@@ -140,6 +140,19 @@ class Pattern:
         # so a definition introducing it is refused rather than excused.
         self.denotes_constant = False
 
+        # Which of this production's slots *bind*, and over what: a slot label
+        # mapped to the sibling labels it scopes over. For `formula ::= ∀x phi`,
+        # `{"x": ("phi",)}`. Empty — the default, and what every production says
+        # unless its author declares otherwise — means the production carries no
+        # binding information, which is how the engine has always read it.
+        #
+        # Declared by the author for the same reason `denotes_constant` is: no
+        # property of a template's shape says which slot binds. Opaque to
+        # matching, which never reads it; the kernel projects it
+        # (kernel.constructors) and the definition builder infers a `fresh`
+        # clause from it.
+        self.scopes_over: dict[str, tuple[str, ...]] = {}
+
         # Memo slot for the kernel's projection of this production (see
         # kernel.constructors). Filled by the kernel on first use and *owned by
         # this pattern*, so it lives and dies with the production. A module-level

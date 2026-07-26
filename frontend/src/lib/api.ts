@@ -59,6 +59,17 @@ export interface Binding {
 	sort: string;
 }
 
+/** A production's slot, which — unlike a rule's or a definition's metavariable —
+ * may *bind*. `scopes_over` names the sibling slots its binding reaches into:
+ * `["phi"]` for the `x` of `∀x.phi`, empty for an ordinary argument slot.
+ * Declared, not inferred, and what lets a definition's `fresh` clause be read off
+ * the grammar instead of written by hand. */
+export interface ProductionBinding extends Binding {
+	/** Optional on the way in — omitted means "binds nothing", which is what a
+	 * slot says unless declared otherwise. Always present on the way out. */
+	scopes_over?: string[];
+}
+
 export interface BracketPair {
 	id: string;
 	opening: string;
@@ -87,7 +98,7 @@ export interface Production {
 	 * opposite answers. Only a constant may appear in a definition's defining
 	 * form without the defined form supplying it. */
 	denotes_constant: boolean;
-	bindings: Binding[];
+	bindings: ProductionBinding[];
 }
 
 export interface LinePart {
@@ -254,7 +265,7 @@ export interface ProductionCreate {
 	atom_base?: string | null;
 	/** See `Production.denotes_constant`. Omitted means variable-like. */
 	denotes_constant?: boolean;
-	bindings?: Binding[];
+	bindings?: ProductionBinding[];
 }
 export type ProductionUpdate = Partial<ProductionCreate>;
 
