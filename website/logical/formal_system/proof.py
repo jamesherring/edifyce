@@ -368,10 +368,9 @@ class Proof:
         if ref in self.reference_context:
             return self.reference_context[ref]
 
-        for ir in self.formal_system.inference_rules:
-            # Compare against the ir label and formatted label
-            if ref == ir.label:
-                return InferenceReference(inference_rule=ir, key=ref)
+        rule = self.formal_system.rule_by_label(ref)
+        if rule is not None:
+            return InferenceReference(inference_rule=rule, key=ref)
 
         # A zero-premise proved/imported theorem cited by its label alone. The
         # ephemeral rule is built per citation (see promotion) rather than kept
@@ -385,13 +384,12 @@ class Proof:
             ref_parts = ref.split(", ")
             key = ref_parts[0]
 
-            for ir in self.formal_system.inference_rules:
-                if key == ir.label:
-                    # It's an inference rule
-                    antecedents, mapping = self._resolve_antecedents(ref_parts[1:], context)
-                    return InferenceReference(
-                        inference_rule=ir, key=key, antecedents=antecedents, mapping=mapping
-                    )
+            rule = self.formal_system.rule_by_label(key)
+            if rule is not None:
+                antecedents, mapping = self._resolve_antecedents(ref_parts[1:], context)
+                return InferenceReference(
+                    inference_rule=rule, key=key, antecedents=antecedents, mapping=mapping
+                )
 
             # A proved/imported theorem applied to cited premises, `[<Thm>, i, ...]`.
             # Resolved exactly like a rule - its schematic statement is

@@ -38,7 +38,7 @@ are not relitigated), and what remains.
 | Scale (§5, A5) | **measured** — 24 min, 3.6 GB (§1.1) |
 | Token-collision defects (§1.2) | fixed — four instances of one shape |
 | `$t` typesetting / notation (§4) | **next** |
-| Axiom-vs-theorem split (§3.2) | **blocker** |
+| Axiom-vs-theorem split (§3.2) | engine done; storing the library open |
 | Definition classification (§5, A4) | not a blocker; front-load |
 
 `tests/test_metamath_import.py` imports `sqrt2re` from its verbatim `set.mm` proof
@@ -360,29 +360,53 @@ imported proofs *keep* their deduction-form plumbing (§2.2 item 3), because in 
 Hilbert system that plumbing is load-bearing. Moving them to ND form is a separate
 translation — essentially B5, not something the importer gets for free.
 
-### 3.2 The axiom-vs-theorem split (blocker)
+### 3.2 The axiom-vs-theorem split
 
-`promote_assertions` currently promotes **every** logical assertion, including the
-`$a` axioms. That erases exactly the distinction `promoted_theorems` was built to
-preserve: a system's *primitive* rules versus its *derived* results.
-
-`ax-mp` is the clearest case — it is literally an inference rule:
+**The engine half is done.** `promote_assertions` used to register *every* logical
+assertion as a promoted theorem, erasing the distinction that namespace exists to
+preserve — a system's primitive rules against its derived results. `ax-mp` is the
+clearest case; it is literally an inference rule:
 
 ```
 ${  min $e |- ph $.   maj $e |- ( ph -> ps ) $.   ax-mp $a |- ps $.  $}
 ```
 
-**The split to make:** logical `$a` → the system's `inference_rules` (they define
-it); `$p` → `promoted_theorems` (they are derived). Until then an imported system
-cannot answer "what are your axioms?", and the namespace separation does no work.
+A logical `$a` now joins `inference_rules`, a `$p` joins `promoted_theorems`
+(`importer.register`). One construction serves both — they are the same shape to
+the checker, and `PromotedTheorem.as_rule` was already the bridge — so the split
+decides which namespace answers a citation, not how one is checked. An imported
+system can now answer "what are your axioms?": on `set.mm`, **1,559 logical `$a`**
+(126 `ax-`, 1,433 `df-`) against **47,546 `$p`**.
 
-It now also owns a **storage** decision, which §1.3 made concrete. `inference_rules`
-have a table (`rules`); `promoted_theorems` have none, so a stored import carries
-its grammar and none of its library, and an imported proof cannot be re-checked
-from its own rows. Sequencing this item behind §1.3 is deliberate — the shape of
-what to store is exactly the question this item answers, and storing 49,000
-derived theorems as `rules` would answer it wrongly, declaring every proved
-theorem a primitive of the system.
+That count is also the argument for A4. All 1,433 `df-` are currently primitives
+of the imported system, which is a much larger basis than `set.mm` actually
+assumes — the definitional ones should be `Define`, not axioms, and the split is
+what makes the overstatement visible rather than hidden among 49,000 theorems.
+
+Resolving a citation needed an index first. `Proof.get_reference` scanned
+`inference_rules` linearly, twice per citation — free at a handful of rules, not
+at 1,559 against roughly 4M citations. `FormalSystem.rule_by_label` keys them.
+
+**The storage half is what remains**, and the split is what makes it answerable.
+`inference_rules` have a table (`rules`); `promoted_theorems` have none, so a
+stored import carries its grammar and none of its library, and an imported proof
+cannot be re-checked from its own rows (§1.3, and
+[docs/verification-from-rows.md](verification-from-rows.md) from the engine side).
+Storing 49,000 derived theorems as `rules` would have answered it wrongly by
+declaring every proved theorem a primitive; with the split, the two halves can be
+answered separately:
+
+- **Axioms** need no schema work. A declarative `Rule` is all strings — label,
+  deduction, antecedents, bindings, side-conditions — and `promoted_theorem`
+  already computes exactly those before turning them into patterns, with
+  `_distinct_provisos` returning proviso strings directly. Lifting that string
+  computation into a helper both callers share, and having the walk collect a
+  `Rule` per logical `$a`, is enough for `spec_to_system` to persist them into the
+  existing table. (The walk has to be the collector: provisos need the built
+  system, which `corpus_spec` has no access to.)
+- **Derived theorems** are the open question — 47,546 of them, needing either a
+  table of their own or reconstruction from the `proof_lines` rows §1.3 already
+  stores.
 
 ---
 
@@ -588,7 +612,9 @@ argument. General because the justification is always a cited lemma.
 ## 6. Sequencing
 
 1. **`$t` + Unicode source + term-fold renderer** (§4) — wanted now, and part of A3.
-2. **Axiom-vs-theorem split** (§3.2) — the modelling blocker.
+2. **Store the imported library** (§3.2) — the axioms first, which need no
+   schema work now the split names them; then the 47,546 derived theorems,
+   which is the question still open.
 3. **A4 definition classification** — cheaper before bulk than after.
 4. ~~**Persist the parse.**~~ *Done* (§1.3) — the walk stores the system, its
    proofs, their line graphs and their terms. The scale half of this item is

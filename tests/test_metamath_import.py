@@ -66,6 +66,16 @@ def notation_names(spec) -> list[str]:
     ]
 
 
+def registered(system) -> set[str]:
+    """Every label a citation can resolve, whichever namespace answers it.
+
+    For tests about something *other* than the axiom/theorem split (§3.2): a
+    logical `$a` is a primitive rule and a `$p` a promoted theorem, and a test
+    checking that an assertion registered at all should not have to care which.
+    """
+    return set(system.promoted_theorems) | {r.label for r in system.inference_rules}
+
+
 def variables_of(spec, typecode: str) -> set[str]:
     """The variable tokens the grammar admits as leaves of `typecode`."""
     return {
@@ -343,21 +353,26 @@ def test_syntax_axioms_become_the_grammar(database):
     assert productions["c2"].template is None
 
 
-def test_logical_assertions_are_promoted_not_made_rules(database):
+def test_an_axiom_is_a_primitive_and_a_proved_theorem_is_derived(database):
+    # The distinction `promoted_theorems` exists to preserve. A logical `$a` is a
+    # *primitive* of the system — `ax-mp` is literally an inference rule — so it
+    # belongs in `inference_rules`; a `$p` is derived. Registering both as
+    # promoted theorems erased that, and an imported system could not answer
+    # "what are your axioms?".
     system = import_database(database)
 
-    assert set(system.promoted_theorems) == {"2re", "2pos", "sqrtpclii", "sqrt2re"}
-    # They are derived results, so they stay out of the system's primitive rules.
-    assert system.inference_rules == []
+    assert set(system.promoted_theorems) == {"sqrt2re"}
+    assert [r.label for r in system.inference_rules] == ["2re", "2pos", "sqrtpclii"]
 
-    # `sqrtpclii` keeps its premises and its metavariable, so it re-instantiates.
-    promoted = system.promoted_theorems["sqrtpclii"]
-    assert len(promoted.antecedents) == 2
-    assert set(promoted.variables) == {"A"}
+    # The shape is the same either side of the split: `sqrtpclii` keeps its
+    # premises and its metavariable, so it re-instantiates at a citation.
+    rule = system.rule_by_label("sqrtpclii")
+    assert len(rule.antecedents) == 2
+    assert set(rule.variables) == {"A"}
 
     # `2re` is closed: nothing to instantiate.
-    assert system.promoted_theorems["2re"].antecedents == ()
-    assert system.promoted_theorems["2re"].variables == {}
+    assert system.rule_by_label("2re").antecedents == []
+    assert system.rule_by_label("2re").variables == {}
 
 
 def test_sqrt2re_imports_to_the_expected_proof(database):
@@ -449,7 +464,7 @@ def test_distinct_variable_provisos_are_sort_restricted():
     # which Metamath permits under `$d A B`.
     system = import_database(parse(BINDER_FRAGMENT))
 
-    assert system.promoted_theorems["ax"].side_conditions[0].sort is not None
+    assert system.rule_by_label("ax").side_conditions[0].sort is not None
     assert system.parse("RR = RR [ax]").proof_lines[0].valid is True
 
 
@@ -841,7 +856,7 @@ def test_a_metavariable_spelt_with_a_comma_can_still_carry_a_proviso():
 
     # And the theorem promotes, which it could not before.
     system = import_database(database)
-    assert "ax" in system.promoted_theorems
+    assert "ax" in registered(system)
 
 
 def test_a_metavariable_without_a_comma_is_left_alone():
