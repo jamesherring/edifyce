@@ -303,14 +303,28 @@ produces.
 As with P1, the case for P2 today is that it makes the rows load-bearing — the
 parse happens once, at the write — not that it is quicker yet.
 
-**One correctness lesson worth keeping.** A first cut let a proof with an
-unparseable line come back *valid* on the second verify: the row records no line
-type, so nothing executed, so the line kept `ProofLine`'s optimistic default.
-Every other verdict was re-derived and that one was not. Deciding "no line type
-⇒ cannot stand" in `check_proof` rather than where the match failed fixes it, and
-the shape of the mistake is the thing to remember — a check from rows is only
-sound if *every* verdict is re-derived, including the ones that look like they
-were settled by the absence of something.
+**One correctness lesson worth keeping, and it cost two bugs to learn.** Both
+were a proof coming back *valid* on the second verify that had been invalid on
+the first, and both had the same cause: a verdict the parse path reached by
+noticing something was **missing**, which the row path then could not reach
+because a row records the absence and not the reason for it.
+
+- A line matching **no line type** stored no line type, so nothing executed and
+  the line kept `ProofLine`'s optimistic default.
+- A line whose type matched but whose formula would not **project** stored its
+  type and a null term. An axiom line asserts its formula by fiat and a scope
+  opener is granted by fiat, so neither consults the formula and both accepted a
+  line stating nothing.
+
+Both are now decided in `check_proof`, structurally — no line type, or a declared
+formula field with no term, means the line cannot stand — so they hold for a line
+rebuilt from a row exactly as for one just parsed. `read_line` reports what it
+found and judges nothing.
+
+The generalisation is the thing to keep: **a check from rows is sound only if
+every verdict is re-derived, and the ones that hide are those settled by an
+absence.** A test that only exercises proofs which fail *loudly* will not find
+them, which is why the agreement test runs over shapes rather than cases.
 
 ### P2a. The constant factor — *follow-up*
 

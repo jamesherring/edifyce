@@ -1,12 +1,14 @@
 """The top-level :class:`FormalSystem`."""
 
+from __future__ import annotations
+
 from copy import copy
 
 from ..kernel.definitions import Definition as KernelDefinition
 from ..kernel.terms import from_match
 from ..matching import Context, Match, Pattern, StringPattern, UnionPattern
 from .promotion import PromotedTheorem
-from .proof import Proof
+from .proof import Proof, ProofLine
 
 
 def _line_field(match: Match, field: str) -> Match:
@@ -95,7 +97,9 @@ class FormalSystem:
             # Add the pattern
             add_pattern(self.pattern_dictionary, item)
 
-    def parse(self, text, proof=None, context=None):
+    def parse(
+        self, text: str, proof: Proof | None = None, context: Context | None = None
+    ) -> Proof:
         # Parse the text into a proof. To let the proof cite lemmas from other
         # proofs, build the `Proof` yourself, seed its `reference_context` with
         # them, and pass it as `proof` (see app/routers/proofs.py).
@@ -120,7 +124,7 @@ class FormalSystem:
 
         return self.check_proof(proof, context)
 
-    def read_line(self, proof_line, context):
+    def read_line(self, proof_line: ProofLine, context: Context) -> None:
         """Populate one line's content from its text, against this grammar.
 
         Sets exactly what a check needs and nothing derived: the matched line
@@ -191,7 +195,7 @@ class FormalSystem:
             # No need to check other line types
             break
 
-    def check_proof(self, proof, context=None):
+    def check_proof(self, proof: Proof, context: Context | None = None) -> Proof:
         """Check a proof whose lines are already populated, and return it.
 
         The half of `parse` that is not parsing: number each line, place it in
@@ -229,6 +233,24 @@ class FormalSystem:
                 proof_line.valid = False
                 if proof_line.invalid_message is None:
                     proof_line.invalid_message = "Could not parse line."
+            elif (
+                proof_line.line_type.formula_field is not None
+                and proof_line.formula_term is None
+            ):
+                # The line type declares a formula and none projected. Two of the
+                # three behaviours never look: an axiom line asserts its formula
+                # by fiat and a scope opener is granted by fiat, so both would
+                # accept a line stating nothing. `check_logical_line` would catch
+                # it for an ordinary logical line, but not before the other two
+                # had already been let through.
+                #
+                # Stated structurally, and here, so it holds for a line rebuilt
+                # from a row as well as one just parsed — a row records the line
+                # type and a null term, and nothing in it says the projection was
+                # what failed.
+                proof_line.valid = False
+                if proof_line.invalid_message is None:
+                    proof_line.invalid_message = "No formula could be read on this line."
             else:
                 # Execute the proof line
                 proof_line.execute(context)

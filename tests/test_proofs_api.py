@@ -1031,6 +1031,41 @@ def test_the_row_path_and_the_parse_path_agree(client, db, name, source):
     assert lines(from_rows) == lines(parsed)
 
 
+def test_a_typed_line_with_no_term_cannot_stand(client, db):
+    # The second shape of "a row asserts a line valid". A line whose type matched
+    # but whose formula would not project is stored with its type and a *null*
+    # term, and nothing in the row says the projection was what failed. Two of
+    # the three behaviours never consult the formula — an axiom line asserts
+    # itself by fiat, a scope opener is granted by fiat — so both would accept a
+    # line stating nothing.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid, spec=scoped_zfc_spec())
+    pid = _create_proof(client, sid, "CP", source=_SUBPROOF_SRC)
+    assert client.post(f"/api/proofs/{pid}/verify").json()["success"] is True
+
+    # Reproduce that stored state directly: the opener keeps its line type and
+    # loses its term, which is exactly what a failed projection leaves behind.
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            opener = session.scalars(
+                select(ProofLineRow)
+                .join(Proof)
+                .where(Proof.id == uuid.UUID(pid), ProofLineRow.position == 0)
+            ).one()
+            assert opener.line_type is not None and opener.term_id is not None
+            opener.term_id = None
+            session.commit()
+    finally:
+        engine.dispose()
+
+    body = client.post(f"/api/proofs/{pid}/verify").json()
+    assert body["success"] is False
+    opener_line = body["proof"]["lines"][0]
+    assert opener_line["valid"] is False
+    assert "formula" in (opener_line["invalid_message"] or "")
+
+
 def test_a_proof_checked_from_rows_still_fails_when_it_should(client, db):
     # The rows supply what a line *says*, never whether it stands: the verdict is
     # re-derived. So a proof that fails, fails identically on the row path — and
