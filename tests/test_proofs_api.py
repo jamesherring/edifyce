@@ -118,6 +118,11 @@ def zfc_spec() -> SystemSpec:
     )
 
 
+# A subproof plus a discharge, against `scoped_zfc_spec`: the two structural
+# things a flat proof cannot exercise — a line that opens a scope, and a line
+# justified by a *block* rather than by cited lines.
+_SUBPROOF_SRC = "assume x ∈ y\n    x ∈ y [R, 1]\n(x ∈ y → x ∈ y) [CP, 1]"
+
 # A single hypothesis line; verifies against the ZFC spec above.
 VALID_PROOF = "x = x [HYP]"
 # Matches no line type — reported as an invalid line, not raised.
@@ -918,6 +923,170 @@ def test_a_lemma_that_cannot_be_read_is_a_verdict_not_a_500(client, db, monkeypa
     body = response.json()
     assert body["success"] is False
     assert any("could not be read" in error for error in body["errors"])
+
+
+def test_re_verifying_checks_from_rows_and_parses_nothing(client, db, monkeypatch):
+    # P2's measure (docs/verification-from-rows.md). The first verify parses,
+    # because there is nothing stored yet. The second has rows for the proof's
+    # own lines too, and everything `read_line` takes off the grammar is in them
+    # — so it re-checks without touching the parser at all.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid, spec=scoped_zfc_spec())
+    # A proof with a subproof and a discharge, so the scope tree and the
+    # justification graph are both rebuilt, not just flat lines.
+    pid = _create_proof(client, sid, "CP", source=_SUBPROOF_SRC)
+
+    parses: list[str] = []
+    original = EngineFormalSystem.parse
+
+    def counted(self, text, *args, **kwargs):
+        parses.append(text)
+        return original(self, text, *args, **kwargs)
+
+    monkeypatch.setattr(EngineFormalSystem, "parse", counted)
+
+    first = client.post(f"/api/proofs/{pid}/verify").json()
+    assert first["success"] is True
+    assert len(parses) == 1, "the first check has nothing stored, so it parses"
+
+    parses.clear()
+    second = client.post(f"/api/proofs/{pid}/verify").json()
+    assert second["success"] is True
+    assert parses == [], "a proof checked once never needs its text again"
+
+
+def test_checking_from_rows_is_idempotent(client, db):
+    # The other half of the measure: same verdict, and byte-identical structure.
+    # Numbering, scope and justification are all re-derived from the loaded
+    # lines, so this says the rows are a faithful, self-sufficient record — not
+    # that a cached verdict was handed back.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid, spec=scoped_zfc_spec())
+    pid = _create_proof(client, sid, "CP", source=_SUBPROOF_SRC)
+
+    def snapshot() -> list[tuple]:
+        lines = _structure(client, pid)["lines"]
+        by_id = {line["id"]: line["number"] for line in lines}
+        return [
+            (
+                line["position"], line["number"], line["display"], line["line_type"],
+                line["rule"], line["valid"], line["opens_scope"],
+                by_id.get(line["scope_id"]),
+                tuple(
+                    (edge["role"], edge["position"], by_id.get(edge["line_id"]))
+                    for edge in line["antecedents"]
+                ),
+                (line["term"] or {}).get("digest"),
+            )
+            for line in lines
+        ]
+
+    assert client.post(f"/api/proofs/{pid}/verify").json()["success"] is True
+    once = snapshot()
+    assert client.post(f"/api/proofs/{pid}/verify").json()["success"] is True
+
+    assert snapshot() == once
+    assert once, "the proof stored no lines at all"
+
+
+@pytest.mark.parametrize(
+    "name,source",
+    [
+        ("valid", VALID_PROOF),
+        ("unjustified", "(x ∈ y → x = y) [HYP]\nx = y [MP, 1]"),
+        # Matches no line type at all: the case that caught a real divergence —
+        # the row records no line type, so nothing executed, so the line kept
+        # `ProofLine`'s optimistic default and the proof flipped to valid.
+        ("unparseable", INVALID_PROOF),
+        ("unparseable-among-valid", VALID_PROOF + "\n" + INVALID_PROOF),
+        ("blank-and-comment", VALID_PROOF + "\n\n" + VALID_PROOF),
+        ("unknown-rule", "x = x [NOPE]"),
+        ("indented", "    " + VALID_PROOF),
+    ],
+)
+def test_the_row_path_and_the_parse_path_agree(client, db, name, source):
+    # The property the whole phase rests on: a check from rows is the *same*
+    # check, not a cheaper approximation of one. Asserted per line rather than on
+    # the verdict alone, so a line agreeing by accident cannot hide a divergence.
+    uid = _register_login(client, f"ada-{name}@example.com")
+    sid = _seed_system(db, uid)
+    pid = _create_proof(client, sid, name, source=source)
+
+    def lines(body) -> list[tuple]:
+        # Everything the checker decides about a line, not just its verdict: a
+        # line agreeing by accident must not hide a divergence.
+        return [
+            (
+                line["number"], line["display"], line["indent"], line["name"],
+                line["behaviour"], line["reference"], line["label"],
+                line["valid"], line["invalid_message"], line["warning_message"],
+            )
+            for line in body["proof"]["lines"]
+        ]
+
+    parsed = client.post(f"/api/proofs/{pid}/verify").json()   # nothing stored yet
+    from_rows = client.post(f"/api/proofs/{pid}/verify").json()  # reads its own rows
+
+    assert from_rows["success"] == parsed["success"]
+    assert lines(from_rows) == lines(parsed)
+
+
+def test_a_typed_line_with_no_term_cannot_stand(client, db):
+    # The second shape of "a row asserts a line valid". A line whose type matched
+    # but whose formula would not project is stored with its type and a *null*
+    # term, and nothing in the row says the projection was what failed. Two of
+    # the three behaviours never consult the formula — an axiom line asserts
+    # itself by fiat, a scope opener is granted by fiat — so both would accept a
+    # line stating nothing.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid, spec=scoped_zfc_spec())
+    pid = _create_proof(client, sid, "CP", source=_SUBPROOF_SRC)
+    assert client.post(f"/api/proofs/{pid}/verify").json()["success"] is True
+
+    # Reproduce that stored state directly: the opener keeps its line type and
+    # loses its term, which is exactly what a failed projection leaves behind.
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            opener = session.scalars(
+                select(ProofLineRow)
+                .join(Proof)
+                .where(Proof.id == uuid.UUID(pid), ProofLineRow.position == 0)
+            ).one()
+            assert opener.line_type is not None and opener.term_id is not None
+            opener.term_id = None
+            session.commit()
+    finally:
+        engine.dispose()
+
+    body = client.post(f"/api/proofs/{pid}/verify").json()
+    assert body["success"] is False
+    opener_line = body["proof"]["lines"][0]
+    assert opener_line["valid"] is False
+    assert "formula" in (opener_line["invalid_message"] or "")
+
+
+def test_a_proof_checked_from_rows_still_fails_when_it_should(client, db):
+    # The rows supply what a line *says*, never whether it stands: the verdict is
+    # re-derived. So a proof that fails, fails identically on the row path — and
+    # a stored row cannot assert a line valid that the kernel would refuse.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    # Line 2 cites MP with one antecedent, so it cannot be justified.
+    pid = _create_proof(
+        client, sid, "Broken", source="(x ∈ y → x = y) [HYP]\nx = y [MP, 1]"
+    )
+
+    first = client.post(f"/api/proofs/{pid}/verify").json()
+    assert first["success"] is False
+    # The failed check still stores its structure, so the re-check reads rows.
+    assert _structure(client, pid)["lines"], "a failed check stores no lines"
+
+    second = client.post(f"/api/proofs/{pid}/verify").json()
+    assert second["success"] is False
+    assert [line["valid"] for line in second["proof"]["lines"]] == [
+        line["valid"] for line in first["proof"]["lines"]
+    ]
 
 
 # ---------------------------------------------------------------------------

@@ -28,10 +28,12 @@ last thing still held only as text:
 
 These rows are written when a proof is verified and dropped whenever its verdict
 is invalidated, so they can never disagree with ``source``. They are no longer
-only a *record* of that check: a verify reads a cited lemma's lines from here
-rather than re-parsing it (``proofs_mapping.load_proof_lines``), which is what
-makes the invalidation soundness-critical rather than merely tidy — a proof may
-rest only on a lemma whose rows say it stands. See
+only a *record* of that check: a verify reads its lines from here — the proof's
+own and every cited lemma's — rather than parsing anything
+(``proofs_mapping.load_proof_for_check``, ``load_proof_lines``). That is what
+makes the invalidation soundness-critical rather than merely tidy. What a row
+never supplies is a verdict: numbering, scope and justification are re-derived on
+every check, so a row says what a line states and never whether it stands. See
 ``docs/verification-from-rows.md``.
 """
 

@@ -1,12 +1,14 @@
 """The top-level :class:`FormalSystem`."""
 
+from __future__ import annotations
+
 from copy import copy
 
 from ..kernel.definitions import Definition as KernelDefinition
 from ..kernel.terms import from_match
 from ..matching import Context, Match, Pattern, StringPattern, UnionPattern
 from .promotion import PromotedTheorem
-from .proof import Proof
+from .proof import Proof, ProofLine
 
 
 def _line_field(match: Match, field: str) -> Match:
@@ -95,104 +97,124 @@ class FormalSystem:
             # Add the pattern
             add_pattern(self.pattern_dictionary, item)
 
-    def parse(self, text, proof=None, context=None):
+    def parse(
+        self, text: str, proof: Proof | None = None, context: Context | None = None
+    ) -> Proof:
         # Parse the text into a proof. To let the proof cite lemmas from other
         # proofs, build the `Proof` yourself, seed its `reference_context` with
         # them, and pass it as `proof` (see app/routers/proofs.py).
-
-        lines = text.split("\n")
-
+        #
+        # Two steps, deliberately separable: read each line's *content* off the
+        # grammar, then check the proof those lines make. Only the first step
+        # needs the text — everything it produces (line type, formula term,
+        # formula string, citation string) is also what a stored proof line
+        # carries, so a caller that has those rows can populate the lines itself
+        # and call `check_proof` directly, with no parse at all. See
+        # docs/verification-from-rows.md.
         if proof is None:
-            # Create a new proof instance
             proof = Proof(formal_system=self)
 
         if context is None:
-            # Create a new proof context instance
             context = copy(self.context)
 
-        i = -1
-        while i + 1 < len(lines):
+        for raw in text.split("\n"):
+            proof_line = proof.add_proof_line(raw.rstrip(), context)
+            if not proof_line.empty:
+                self.read_line(proof_line, context)
 
-            # Increment at the start so we can use 'continue' without concern
-            i += 1
+        return self.check_proof(proof, context)
 
-            line = lines[i].rstrip()
+    def read_line(self, proof_line: ProofLine, context: Context) -> None:
+        """Populate one line's content from its text, against this grammar.
 
-            # Create a proof line for this line
-            proof_line = proof.add_proof_line(line, context)
+        Sets exactly what a check needs and nothing derived: the matched line
+        type, the formula as a kernel term (and its flat string, for the
+        string-rewriting rule path), and the citation string. Numbering, scope
+        and justification are `check_proof`'s, because they depend on the other
+        lines and this does not.
+        """
+        # Assume valid unless we find an issue
+        proof_line.valid = True
 
-            # Assume valid unless we find an issue
-            proof_line.valid = True
+        line = proof_line.text.rstrip()
 
+        # Check the line is of a given line type
+        for line_type in self.line_types:
+
+            line = line.lstrip()
+            result = line_type.parse_line(line, context)
+
+            if result is None:
+                continue
+
+            # Record the line_type of this line
+            proof_line.line_type = line_type
+
+            # Project the line type's declared formula/reference fields off
+            # the match. (`label`, `display` and axiom-marking are handled by
+            # ProofLine's defaults and the `behaviour: axiom` line type - not
+            # by string `get_by_path` accessors, which could no longer be
+            # defined since the accessor-function syntax was removed.)
+            if line_type.formula_field is not None:
+                # The logical formula is the sub-field the line type declares
+                # (or the whole match, for `formula: self`). Project it into a
+                # kernel term *here*, while the match is still in hand: the
+                # term is what every later check runs on, and the match itself
+                # does not outlive this loop body.
+                try:
+                    formula = _line_field(result, line_type.formula_field)
+                except KeyError:
+                    # The line type names a field this line has no sub-match
+                    # for: the line simply carries no formula.
+                    formula = None
+
+                if formula is not None:
+                    proof_line.formula_string = formula.string
+                    try:
+                        proof_line.formula_term = from_match(formula)
+                    except Exception as exc:
+                        # The parse produced a shape the term layer cannot
+                        # read. That used to surface as a raise out of the
+                        # whole parse, from whichever rule check projected it
+                        # first; failing the one line names where the problem
+                        # is and lets the rest of the proof still report.
+                        proof_line.valid = False
+                        proof_line.invalid_message = f"Could not read the formula on this line: {exc}"
+
+            if line_type.reference_field is not None:
+                # The citation reference is the declared sub-field.
+                try:
+                    reference_match = _line_field(result, line_type.reference_field)
+                except KeyError:
+                    reference_match = None
+
+                if reference_match is not None:
+                    proof_line.reference_string = reference_match.string
+                    proof_line.reference_string_display = reference_match.string
+
+            # No need to check other line types
+            break
+
+    def check_proof(self, proof: Proof, context: Context | None = None) -> Proof:
+        """Check a proof whose lines are already populated, and return it.
+
+        The half of `parse` that is not parsing: number each line, place it in
+        its subproof, justify it, then read the proof's verdict off the lines.
+        Public because a proof loaded from its stored rows arrives here with the
+        same fields `read_line` would have set, and needs no text.
+
+        The three steps stay interleaved **per line**, exactly as parsing does
+        them. That ordering is load-bearing: a discharge cites its subproof by
+        the opener's line number, and what stops it reaching a subproof *below*
+        it is that later lines are not numbered or scoped yet when it runs.
+        """
+        if context is None:
+            context = copy(self.context)
+
+        for proof_line in proof.proof_lines:
             if proof_line.empty:
                 # Ignore blank lines
                 continue
-
-            found = False
-            # Check the line is of a given line type
-            for line_type in self.line_types:
-
-                line = line.lstrip()
-                result = line_type.parse_line(line, context)
-
-                if result is None:
-                    continue
-
-                # Otherwise meets this line type
-                found = True
-
-                # Record the line_type of this line
-                proof_line.line_type = line_type
-
-                # Project the line type's declared formula/reference fields off
-                # the match. (`label`, `display` and axiom-marking are handled by
-                # ProofLine's defaults and the `behaviour: axiom` line type - not
-                # by string `get_by_path` accessors, which could no longer be
-                # defined since the accessor-function syntax was removed.)
-                if line_type.formula_field is not None:
-                    # The logical formula is the sub-field the line type declares
-                    # (or the whole match, for `formula: self`). Project it into a
-                    # kernel term *here*, while the match is still in hand: the
-                    # term is what every later check runs on, and the match itself
-                    # does not outlive this loop body.
-                    try:
-                        formula = _line_field(result, line_type.formula_field)
-                    except KeyError:
-                        # The line type names a field this line has no sub-match
-                        # for: the line simply carries no formula.
-                        formula = None
-
-                    if formula is not None:
-                        proof_line.formula_string = formula.string
-                        try:
-                            proof_line.formula_term = from_match(formula)
-                        except Exception as exc:
-                            # The parse produced a shape the term layer cannot
-                            # read. That used to surface as a raise out of the
-                            # whole parse, from whichever rule check projected it
-                            # first; failing the one line names where the problem
-                            # is and lets the rest of the proof still report.
-                            proof_line.valid = False
-                            proof_line.invalid_message = f"Could not read the formula on this line: {exc}"
-
-                if line_type.reference_field is not None:
-                    # The citation reference is the declared sub-field.
-                    try:
-                        reference_match = _line_field(result, line_type.reference_field)
-                    except KeyError:
-                        reference_match = None
-
-                    if reference_match is not None:
-                        proof_line.reference_string = reference_match.string
-                        proof_line.reference_string_display = reference_match.string
-
-                # No need to check other line types
-                break
-
-            if not found:
-                # The line doesn't match any of the line types. Invalid proof
-                proof_line.invalid_message = "Could not parse line."
-                proof_line.valid = False
 
             # Give the line its citation number. Done here, after the line type
             # is known, because whether a line can be cited depends on it.
@@ -202,7 +224,34 @@ class FormalSystem:
             # no scope openers - every line then lands in the root scope).
             proof.assign_scope(proof_line)
 
-            if found:
+            if proof_line.line_type is None:
+                # The line matched no line type, so it asserts nothing and
+                # cannot stand. Decided here rather than where the match failed,
+                # because it is equally true of a line *loaded* from a row that
+                # records no line type — and a line that arrives with no verdict
+                # must not keep `ProofLine`'s optimistic default.
+                proof_line.valid = False
+                if proof_line.invalid_message is None:
+                    proof_line.invalid_message = "Could not parse line."
+            elif (
+                proof_line.line_type.formula_field is not None
+                and proof_line.formula_term is None
+            ):
+                # The line type declares a formula and none projected. Two of the
+                # three behaviours never look: an axiom line asserts its formula
+                # by fiat and a scope opener is granted by fiat, so both would
+                # accept a line stating nothing. `check_logical_line` would catch
+                # it for an ordinary logical line, but not before the other two
+                # had already been let through.
+                #
+                # Stated structurally, and here, so it holds for a line rebuilt
+                # from a row as well as one just parsed — a row records the line
+                # type and a null term, and nothing in it says the projection was
+                # what failed.
+                proof_line.valid = False
+                if proof_line.invalid_message is None:
+                    proof_line.invalid_message = "No formula could be read on this line."
+            else:
                 # Execute the proof line
                 proof_line.execute(context)
 
