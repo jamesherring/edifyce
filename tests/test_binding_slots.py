@@ -30,6 +30,7 @@ from website.logical.declarative import (
     build_system,
 )
 from website.logical.formal_system.definitions import DefinitionError, parse_definition
+from website.logical.kernel.terms import _bound_label
 from website.logical.kernel import (
     check_definitional_step,
     constructor_for,
@@ -376,9 +377,28 @@ def test_two_binders_of_different_sorts_may_be_named_apart():
         assert matched is not None, text
         return from_match(matched)
 
+    def term_of(sort, text):
+        matched = variables[sort].match(text, context)
+        assert matched is not None, text
+        return from_match(matched)
+
     assert check_definitional_step(
         term("(a ⊆ b)"), term("(∃Q.(Q ⋴ b) → ∀w.(w ∈ a))"), definition, context
     )
+
+    # And through the explicit-rename API, which needs the *index*: both binders
+    # are spelled `z`, so naming by spelling cannot tell them apart — and here it
+    # cannot even succeed, since no one leaf is of both sorts.
+    assert unfold(definition, term("(a ⊆ b)"), context,
+                  names={"z": term_of("setvar", "w")}) is None
+    renamed = unfold(
+        definition, term("(a ⊆ b)"), context,
+        names={_bound_label(0): term_of("classvar", "Q"),
+               _bound_label(1): term_of("setvar", "w")},
+    )
+    assert renamed is not None
+    assert renamed.to_string() == "(∃Q.(Q ⋴ b) → ∀w.(w ∈ a))"
+
 
 def test_a_nested_binder_records_the_one_it_sits_inside(binding_theory):
     # Nesting is what the freshness proviso needs: an inner binder spelled like

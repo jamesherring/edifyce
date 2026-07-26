@@ -42,6 +42,16 @@ and an occurrence outside every scope stays the ground leaf it is.
 scope contains this one; `scoped` says whether the binder was placed by scope at
 all.
 
+One consequence reaches the `unfold` API. Several binders may now share a
+spelling, so `names` — which keyed renames by the binder's name — cannot always
+say which one is meant, and where the two have different sorts it cannot succeed
+at all (no single leaf is of both). `names` therefore accepts a binder's reserved
+index label as well, and prefers it; naming by spelling still works and still
+renames every binder of that spelling together, which is what a caller asking for
+one consistent rename means. The path a proof actually takes,
+`check_definitional_step`, is unaffected: it recovers each binder's name from the
+target rather than being told.
+
 ## What is unchanged
 
 **A declared `fresh` clause still binds by name, across the whole form.** This

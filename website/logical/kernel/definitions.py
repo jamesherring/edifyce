@@ -338,8 +338,9 @@ def unfold(
 ) -> Term | None:
     """Apply ``definition`` to ``redex`` once (defined form -> defining form).
 
-    ``names`` maps each declared bound variable (by its ``fresh`` name) to the
-    leaf its binder should take in the result - ``{"z": <term w>}`` to unfold
+    ``names`` maps a binder to the leaf it should take in the result, keyed
+    either by its reserved index label (:func:`~website.logical.kernel.terms._bound_label`)
+    or by its ``fresh`` name - ``{"z": <term w>}`` to unfold
     ``z ⊆ b`` as ``∀w.(w ∈ z → w ∈ b)``. Terms, not strings: naming a binder is a
     choice about the *term*, and reading a name out of a string would put the
     grammar back in the trusted core. An unnamed binder keeps its declared name
@@ -383,10 +384,19 @@ def _resolve_bound_names(
     """
     resolved: Binding = {}
     for index, binder in enumerate(definition.fresh):
-        chosen = binder.default if names is None else names.get(binder.name, binder.default)
+        key = _bound_label(index)
+        chosen = binder.default
+        if names is not None:
+            # By index first, then by name. Binders are placed per *occurrence*
+            # now, so several may share a spelling — `(∃z.… → ∀z.…)` over two
+            # sorts is two binders both called `z`, and only the index tells them
+            # apart. Naming by spelling still works, and still renames every
+            # binder of that spelling together, which is what a caller wanting
+            # one consistent rename means; it is simply unable to say more.
+            chosen = names.get(key, names.get(binder.name, binder.default))
         if not _names_a_leaf_of(chosen, binder.sort):
             return None
-        resolved[_bound_label(index)] = chosen
+        resolved[key] = chosen
     return resolved
 
 
@@ -460,9 +470,17 @@ def _bounds_are_fresh(
         provisos.extend(
             DisjointLeaves(key, parameter, sort=binder.sort) for parameter in parameters
         )
-        # Symmetric, so a pair may be stated twice; `And` is idempotent and the
-        # clarity is worth more than the duplicate.
-        others = set(binder.enclosing) | (unscoped - {index})
+        others = set(binder.enclosing)
+        if binder.scoped:
+            # A name-placed binder's scope is the whole form, so it encloses
+            # every scoped one.
+            others |= unscoped
+        else:
+            # Between two name-placed binders, state the pair once, from the
+            # later one — exactly the rule that applied before binders had
+            # scopes, so a definition with only a declared `fresh` clause
+            # generates the same provisos it always did.
+            others |= {other for other in unscoped if other < index}
         provisos.extend(
             DisjointLeaves(key, _bound_label(other), sort=binder.sort)
             for other in sorted(others)
