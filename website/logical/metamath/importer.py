@@ -273,24 +273,35 @@ def promoted_theorem(
         statement=" ".join(assertion.tokens),
         metavariables={h.variable: h.typecode for h in assertion.floatings},
         premises=tuple(" ".join(h.tokens) for h in assertion.essentials),
-        distinct=_distinct_provisos(assertion, database),
+        distinct=_distinct_provisos(assertion, database, system),
     )
 
 
-def _distinct_provisos(assertion: Assertion, database: Database) -> tuple[str, ...]:
+def _distinct_provisos(
+    assertion: Assertion, database: Database, system: FormalSystem
+) -> tuple[str, ...]:
     # A `$d x y z` constrains every *pair* among its variables, and Edifyce's
     # algebra takes one pair per proviso, so expand. Only variables the assertion
     # actually binds are kept: a $d naming something outside its metavariables
     # would fail to resolve, and constrains nothing here anyway.
     #
-    # The proviso is *sort-restricted* to the variable sort (set.mm's `setvar`).
-    # `$d` forbids the substitutions sharing a **variable**, not any leaf at all:
-    # sortless `disjoint(A, B)` also separates constants, so it would reject
-    # `RR = RR` under `$d A B`, which Metamath permits. Where the variable sort
-    # cannot be identified the sort is omitted, which is over-strict - it can
-    # reject a legitimate proof, never accept an illegitimate one.
-    variable_sorts = _binder_sorts(database)
-    sort = f", {variable_sorts[0]}" if len(variable_sorts) == 1 else ""
+    # `$d` forbids the two substitutions sharing a **variable** - of any typecode,
+    # not only the binder one - while leaving them free to share a *constant*:
+    # `RR = RR` is permitted under `$d A B`, `C = C` is not. So the proviso is
+    # restricted to the leaves that *are* the variables, which is exactly what the
+    # `<typecode>_var` productions enumerate (see _variable_sort_productions);
+    # a constant like `RR` is built by its own production and is not among them.
+    #
+    # One proviso per variable sort, conjoined. Restricting instead to the single
+    # binder sort - which is what this did - silently dropped every `$d` over
+    # class or wff variables, since none of their leaves are `setvar`.
+    # `floating_typecodes` is a cached view; `_declared_variables` would rescan
+    # the whole database, and this runs once per theorem promoted.
+    variable_leaves = [
+        name
+        for name in (f"{typecode}_var" for typecode in database.floating_typecodes())
+        if name in system.build_context.variables
+    ]
 
     bound = {h.variable for h in assertion.floatings}
     provisos: list[str] = []
@@ -298,9 +309,15 @@ def _distinct_provisos(assertion: Assertion, database: Database) -> tuple[str, .
         members = sorted(v for v in group if v in bound)
         for i, left in enumerate(members):
             for right in members[i + 1:]:
-                proviso = f"disjoint({left}, {right}{sort})"
-                if proviso not in provisos:
-                    provisos.append(proviso)
+                for sort in variable_leaves or [None]:
+                    # No variable production at all: fall back to a sortless
+                    # proviso, which also separates constants. Over-strict - it
+                    # can refuse a legitimate proof, never admit an illegitimate
+                    # one - and unreachable for any database declaring a `$v`.
+                    arguments = f"{left}, {right}" + (f", {sort}" if sort else "")
+                    proviso = f"disjoint({arguments})"
+                    if proviso not in provisos:
+                        provisos.append(proviso)
     return tuple(provisos)
 
 

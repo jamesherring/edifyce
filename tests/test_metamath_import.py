@@ -41,6 +41,7 @@ from website.logical.metamath import (
     parse,
     split_proof,
 )
+from website.logical.metamath.importer import _distinct_provisos
 from website.logical.metamath.parser import Hypothesis
 
 
@@ -559,3 +560,53 @@ wi $a wff ( ph -> ps ) $.
 
     assert production.template == "( ph -> ps )"
     assert dict(production.bindings) == {"ph": "wff", "ps": "wff"}
+
+
+# A `$d` over two *class* variables, in a database shaped like set.mm: `class`
+# has a syntax axiom (so it is not a binder sort) and `setvar` has none (so it
+# is). `C` is mentioned so the class leaf carries it.
+CLASS_DISTINCT_FRAGMENT = r"""
+$c |- wff class setvar = RR A. e. $.
+$v x ph A B C $.
+vx $f setvar x $.
+wph $f wff ph $.
+cA $f class A $.
+cB $f class B $.
+cC $f class C $.
+wceq $a wff A = B $.
+wal $a wff A. x ph $.
+cr $a class RR $.
+mentionC $a |- C = RR $.
+${
+  $d A B $.
+  ax $a |- A = B $.
+$}
+"""
+
+
+def test_a_distinct_variable_proviso_covers_every_variable_sort():
+    # `$d` forbids the substitutions sharing a *variable* of any typecode. Keying
+    # the proviso to the single binder sort dropped every `$d` over class or wff
+    # variables, since none of their leaves are `setvar` - so a $d over two class
+    # variables constrained nothing at all.
+    system = import_database(parse(CLASS_DISTINCT_FRAGMENT))
+
+    # Both substituted with the same *class variable*: Metamath rejects.
+    assert system.parse("C = C [ax]").valid is False
+
+    # Distinct variables, and a shared *constant*, are both fine: `$d` separates
+    # variables, not every leaf.
+    assert system.parse("A = B [ax]").valid is True
+    assert system.parse("RR = RR [ax]").valid is True
+
+
+def test_the_proviso_is_emitted_for_each_variable_sort():
+    database = parse(CLASS_DISTINCT_FRAGMENT)
+    system = import_database(database)
+    provisos = _distinct_provisos(database.assertions["ax"], database, system)
+
+    assert set(provisos) == {
+        "disjoint(A, B, wff_var)",
+        "disjoint(A, B, setvar_var)",
+        "disjoint(A, B, class_var)",
+    }
