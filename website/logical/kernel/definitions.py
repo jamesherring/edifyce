@@ -90,14 +90,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .side_conditions import And, DisjointLeaves
-from .terms import Node, _bound_label
+from .terms import Node, _bound, _bound_label, _node
 from .unify import match, sort_admits
 
 if TYPE_CHECKING:
     from ..matching.context import Context
     from .constructors import Constructor
     from .side_conditions import SideCondition
-    from .terms import Binding, Term
+    from .terms import Binding, Bound, Term
 
 
 @dataclass(frozen=True)
@@ -113,11 +113,27 @@ class FreshBinder:
     once when the definition is built (``formal_system.definitions``). Holding the
     answer rather than the sort to re-parse against is what keeps the kernel free
     of the grammar at check time.
+
+    ``scoped`` says how the binder was placed, and the two answers have different
+    scopes. A **scoped** binder (:func:`bind_scoped`) binds only within the slots
+    the grammar declared it to reach, and ``enclosing`` names the binders it sits
+    inside, by index. A binder placed **by name**
+    (:func:`~website.logical.kernel.terms.bind`, which is what a declared
+    ``fresh`` clause still uses) binds every occurrence of its spelling, so its
+    scope is the whole defining form and ``enclosing`` says nothing.
+
+    That distinction is what makes the freshness proviso scope-sensitive: a binder
+    must differ from the binders whose scope contains it, and need not differ from
+    one in a disjoint scope. ``(∀z.P → ∀z.Q)`` is two scoped binders that may share
+    a name; ``∀z.∀z.P`` is two that may not; and a name-bound binder must differ
+    from all of them, since its scope covers them.
     """
 
     name: str
     sort: Constructor
     default: Term
+    enclosing: tuple[int, ...] = ()
+    scoped: bool = False
 
 
 @dataclass(frozen=True)
@@ -151,6 +167,104 @@ class Definition:
     # names an *axiom*: two definitions may share one defined form, and each
     # stays separately citable.
     label: str | None = None
+
+
+def _leaf_name(term: Term) -> str | None:
+    """The surface name of a ground leaf, or ``None`` for anything else."""
+    if isinstance(term, Node) and not term.children:
+        return term.literal
+    return None
+
+
+def bind_scoped(term: Term, first_index: int) -> tuple[Term, tuple[FreshBinder, ...]]:
+    """Bind each leaf sitting in a binder slot to its own indexed
+    :class:`~website.logical.kernel.terms.Bound`, *within that binder's declared
+    scope only*.
+
+    This is what the grammar's ``scopes_over`` buys the term layer. The older
+    :func:`~website.logical.kernel.terms.bind` keys on the surface string, so a
+    binder rewrites its name everywhere the defining form spells it — which is
+    right only when every occurrence happens to be in scope, and silently wrong
+    when one is not. Here an occurrence outside the scope is simply left alone:
+    it stays a ground leaf, and ``introduced_leaves`` reports it as the free name
+    it is.
+
+    Two consequences follow from binding *per occurrence* rather than per name.
+    ``(∀z.P(z) → ∀z.Q(z))`` becomes two independent binders, so an unfold may
+    spell them differently — they are separate binders that happen to share a
+    name, and alpha-variance says so. And two binder slots of *different sorts*
+    holding the same name are two binders with their own sorts, rather than one
+    carrying whichever sort was seen first.
+
+    ``first_index`` is where this allocation starts, so a caller that has already
+    placed binders (a declared ``fresh`` clause, still bound by name) can append
+    to them without colliding. Returns the rewritten term and the binders it
+    allocated, in allocation order — a pre-order walk, so the indices are a
+    function of the defining form alone.
+    """
+    binders: list[FreshBinder] = []
+
+    def walk(current: Term, env: dict[str, Bound], enclosing: tuple[int, ...]) -> Term:
+        if not isinstance(current, Node):
+            # A Var is a parameter the defined form supplies; a Bound is already
+            # placed. Neither spells a leaf this walk may bind.
+            return current
+        if not current.children:
+            name = current.literal
+            return env[name] if name is not None and name in env else current
+
+        # Open a binder for each binder slot holding a name, then hand each child
+        # only the bindings that actually reach it: the binder's own slot, and the
+        # slots it was declared to scope over.
+        scoped: dict[str, dict[str, Bound]] = {label: env for label in current.children}
+        opened: dict[str, tuple[int, ...]] = {label: enclosing for label in current.children}
+
+        opening: list[tuple[str, tuple[str, ...], str, Term]] = []
+        for slot, targets in current.constructor.scopes_over.items():
+            child = current.children.get(slot)
+            if child is None:
+                continue
+            name = _leaf_name(child)
+            if name is not None:
+                opening.append((slot, targets, name, child))
+
+        # Binders opened at *one* node constrain each other, whatever the nesting
+        # says. A production with two binder slots (`⟪u,v⟫.phi`) scopes both over
+        # the same body, so spelling them alike would merge two binders into one —
+        # and neither is "inside" the other, so nesting alone would not catch it.
+        # Deliberately blanket across siblings rather than restricted to those
+        # whose targets actually overlap: two binders on one production are meant
+        # to be distinct, and refusing a hypothetical grammar that wanted
+        # otherwise is the safe direction.
+        base = first_index + len(binders)
+        siblings = tuple(range(base, base + len(opening)))
+        for offset, (slot, targets, name, child) in enumerate(opening):
+            index = base + offset
+            sort = current.constructor.slot_sorts[slot]
+            binders.append(
+                FreshBinder(
+                    name=name, sort=sort, default=child,
+                    enclosing=(*enclosing, *(s for s in siblings if s != index)),
+                    scoped=True,
+                )
+            )
+            node = _bound(index, sort)
+            for label in (slot, *targets):
+                if label not in current.children:
+                    continue
+                scoped[label] = {**scoped[label], name: node}
+                opened[label] = (*opened[label], index)
+
+        return _node(
+            constructor=current.constructor,
+            children={
+                label: walk(child, scoped[label], opened[label])
+                for label, child in current.children.items()
+            },
+            sort=current.sort,
+        )
+
+    return walk(term, {}, ()), tuple(binders)
 
 
 def _ground_leaves(term: Term) -> list[Node]:
@@ -298,11 +412,30 @@ def _bounds_are_fresh(
 ) -> bool:
     """Whether the chosen bound names avoid capture - the ``$d`` proviso.
 
-    Each declared bound variable's chosen name (looked up in ``bound_binding``)
-    must be disjoint from every ``higher``-form parameter's substitution and from
-    every other chosen name. We expose the chosen names in the binding (as their
-    own leaves, under their reserved keys) so ``DisjointLeaves`` can reference
-    them alongside the parameters.
+    Each bound variable's chosen name (looked up in ``bound_binding``) must be
+    disjoint from every ``higher``-form parameter's substitution, and from the
+    chosen names of the binders it sits *inside*. We expose the chosen names in
+    the binding (as their own leaves, under their reserved keys) so
+    ``DisjointLeaves`` can reference them alongside the parameters.
+
+    **Parameters: every binder, always.** A parameter's substitution is whatever
+    the redex supplied, and the unfold drops it into the defining form wherever
+    that parameter occurs; a binder spelled the same would capture it. Which
+    parameters occur inside which binder's scope is knowable, but requiring all of
+    them is the conservative reading and is what this has always done.
+
+    **Binders: only where the scopes nest.** Two binders in disjoint scopes cannot
+    capture each other - nothing in one's scope is in the other's - so
+    ``(∀z.P → ∀z.Q)`` may spell both ``z``. Requiring every pair to differ would
+    reject that, and it is a term the older name-keyed representation accepted
+    (as a single binder), so a blanket pairwise check would be a regression rather
+    than a tightening. ``∀z.∀z.P`` *does* nest, and is still refused: the inner
+    would shadow the outer.
+
+    ``FreshBinder.enclosing`` carries the relation, and is empty for a binder
+    placed by name across the whole form (a declared ``fresh`` clause) - which
+    reproduces the old blanket behaviour for those, since a name-bound binder's
+    scope is everything.
     """
     if not definition.fresh:
         return True
@@ -310,7 +443,14 @@ def _bounds_are_fresh(
     parameters = tuple(binding)  # the higher form's variables
     combined = {**binding, **bound_binding}
     provisos: list[DisjointLeaves] = []
-    prior_keys: list[str] = []
+    # A binder placed by *name* has no recorded scope because its scope is the
+    # whole defining form - so it both encloses and is enclosed by every other
+    # binder, which is the blanket pairwise rule the name-keyed representation
+    # always applied. Keeping it that way is what makes a declared `fresh` clause
+    # behave exactly as it did.
+    unscoped = {
+        index for index, binder in enumerate(definition.fresh) if not binder.scoped
+    }
     for index, binder in enumerate(definition.fresh):
         key = _bound_label(index)
         if key not in bound_binding:
@@ -320,10 +460,13 @@ def _bounds_are_fresh(
         provisos.extend(
             DisjointLeaves(key, parameter, sort=binder.sort) for parameter in parameters
         )
+        # Symmetric, so a pair may be stated twice; `And` is idempotent and the
+        # clarity is worth more than the duplicate.
+        others = set(binder.enclosing) | (unscoped - {index})
         provisos.extend(
-            DisjointLeaves(key, prior, sort=binder.sort) for prior in prior_keys
+            DisjointLeaves(key, _bound_label(other), sort=binder.sort)
+            for other in sorted(others)
         )
-        prior_keys.append(key)
 
     return And(tuple(provisos)).check(combined, context)
 

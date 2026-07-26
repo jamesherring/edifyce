@@ -83,7 +83,7 @@ from typing import TYPE_CHECKING
 
 from ..kernel import Definition, introduced_leaves, unbound_parameters
 from ..kernel.constructors import constructor_for, project_sorts
-from ..kernel.definitions import FreshBinder
+from ..kernel.definitions import FreshBinder, bind_scoped
 from ..kernel.terms import Node, _bound, abstract, bind, from_match
 
 if TYPE_CHECKING:
@@ -160,14 +160,19 @@ def parse_definition(
     ``df-subset``, ``{"z": setvar}``); in the parsed defining form each such
     variable is replaced by an abstract, indexed
     :class:`~website.logical.kernel.terms.Bound` node (in ``fresh`` order), and
-    the capture-avoidance proviso is generated from it.
+    the capture-avoidance proviso is generated from it. A declared binder is
+    placed **by name**, across the whole form — the only reading available on a
+    grammar that declares no binding slots, and so the one that keeps every
+    system written before they existed behaving exactly as it did.
 
     It may be omitted. A grammar that declares its binding slots
-    (``Production.scopes_over``) already says which leaves of the defining form
-    are binders, so :func:`_resolve_binders` reads them off the parsed term —
-    what an author writes by hand today, and what a Metamath ``$a`` carries no
-    trace of. A declaration is still honoured, and still needed wherever the
-    binding production has not declared its slots.
+    (``Production.scopes_over``) already says which leaves are binders and how far
+    each one reaches, so
+    :func:`~website.logical.kernel.definitions.bind_scoped` places them **by
+    scope** — one binder per binding occurrence, and an occurrence outside every
+    scope left as the free leaf it is. That is what a Metamath ``$a`` carries no
+    trace of, and what an author would otherwise write by hand. The two may be
+    mixed: a declared name is bound first, so the scoped walk steps over it.
 
     This lives here, not on ``Definition``, because it is the one thing a
     definition needed the *grammar* for. The kernel checks a step against terms;
@@ -203,96 +208,67 @@ def parse_definition(
         )
         for name, binder_sort in (fresh or {}).items()
     ]
-    binders = _resolve_binders(declared, lower_term)
 
-    # Each binder becomes an abstract, indexed node in the defining form, so the
-    # form stores its binders by position rather than by a fixed concrete name.
+    # Taken before anything is bound: once a declared name becomes a `Bound` the
+    # grammar's view of it is gone, and this is the only thing that still wants it.
+    _reject_declared_sort_the_grammar_contradicts(declared, _binder_slot_sorts(lower_term))
+
+    # A *declared* binder is placed by name, across the whole defining form. That
+    # is what it has always meant, and it is the only reading available on a
+    # grammar that declares no binding slots — so it stays, unchanged, and every
+    # system written before those slots existed keeps its behaviour exactly.
     bound_nodes: dict[str, Bound] = {
-        binder.name: _bound(index, binder.sort) for index, binder in enumerate(binders)
+        binder.name: _bound(index, binder.sort) for index, binder in enumerate(declared)
     }
     if bound_nodes:
         lower_term = bind(lower_term, bound_nodes)
+
+    # Everything still spelled out goes to the grammar. `bind_scoped` binds a leaf
+    # only inside the slots its binder was declared to reach, giving one binder per
+    # *binding occurrence* rather than one per name — so a name used outside a
+    # binder's scope stays the free leaf it is, and two binders that merely share a
+    # spelling stay two binders. A declared name is already a `Bound` by now, so
+    # the walk steps over it.
+    lower_term, inferred = bind_scoped(lower_term, first_index=len(declared))
 
     return Definition(
         higher=higher_term,
         lower=lower_term,
         condition=condition,
-        fresh=tuple(binders),
+        fresh=(*declared, *inferred),
         label=label,
     )
 
 
-def _binders_in_binding_slots(term: Term) -> dict[str, FreshBinder]:
-    """The binders ``term`` declares by *shape*: every ground leaf sitting in a
-    slot some production declared as binding, keyed by surface name.
+def _binder_slot_sorts(term: Term) -> dict[str, set[Constructor]]:
+    """For each name the grammar puts in a binder slot of ``term``, the sorts of
+    the slots it appears in.
 
-    This is what `fresh` has always meant — "which leaves of the defining form
-    sit in a binder slot" — asked of the grammar instead of the author. It is
-    silent for a production with no `scopes_over` declaration, which is every
-    production until one is written, so a system that declares nothing infers
-    nothing and reads exactly as it did before.
+    A read-only view, taken *before* anything is bound, and used for one thing:
+    telling an author their declared `fresh` sort is not the one the grammar
+    gives (see :func:`_reject_declared_sort_the_grammar_contradicts`). The
+    binding itself is :func:`~website.logical.kernel.definitions.bind_scoped`'s
+    job now, and it needs no name-keyed view at all.
 
     A slot holding a :class:`~website.logical.kernel.terms.Var` is skipped: that
     is a *parameter* the defined form supplies, so the unfold substitutes it
-    rather than conjuring it, and it needs no capture-avoidance of its own. Only
-    a leaf the defining form names itself is a binder.
-
-    Pre-order, first occurrence winning, so the resulting order — and hence the
-    :class:`~website.logical.kernel.terms.Bound` index each binder gets — is a
-    function of the defining form alone. Repeats of a name at the *same* sort are
-    one binder, which is the ordinary case (``∀z.… → ∀z.…``); a repeat at a
-    different sort is refused, see below.
+    rather than conjuring it. Silent for a production with no `scopes_over`, which
+    is every production until one is written.
     """
-    found: dict[str, FreshBinder] = {}
+    found: dict[str, set[Constructor]] = {}
 
     def walk(current: Term) -> None:
         if not isinstance(current, Node) or not current.children:
             return
         for label, child in current.children.items():
-            name = _leaf_name(child) if label in current.constructor.scopes_over else None
-            if name is not None:
-                # The slot's *declared* sort, not the leaf's own constructor: it
-                # is the sort the binder ranges over that decides what may name
-                # it, exactly as for a declared binder above.
-                sort = current.constructor.slot_sorts[label]
-                seen = found.get(name)
-                if seen is None:
-                    found[name] = FreshBinder(name=name, sort=sort, default=child)
-                elif seen.sort is not sort:
-                    raise _conflicting_binder_sorts(name, seen.sort, sort)
+            if label in current.constructor.scopes_over:
+                name = _leaf_name(child)
+                if name is not None:
+                    found.setdefault(name, set()).add(current.constructor.slot_sorts[label])
             walk(child)
 
     walk(term)
     return found
-
-
-def _conflicting_binder_sorts(
-    name: str, first: Constructor, second: Constructor
-) -> DefinitionError:
-    """The build error for one name used as a binder at two different sorts.
-
-    A binder is stored as a single indexed
-    :class:`~website.logical.kernel.terms.Bound` carrying one sort, and
-    :func:`~website.logical.kernel.terms.bind` keys on the surface string — so
-    every occurrence of the name becomes *that* node. Keeping the first and
-    dropping the rest would put a binder of one sort into a slot declared for
-    another: with ``setvar ::= [a-z]`` inside ``classvar ::= [a-zA-Z]``, the form
-    ``(∃z.(z ⋴ y) → ∀z.(z ∈ x))`` builds, and renaming the binder to ``Q`` gives
-    ``∀Q.(Q ∈ a)`` — a term its own grammar cannot parse.
-
-    Refused rather than resolved, because a `fresh` clause cannot express it
-    either (it maps a name to *one* sort), so telling the author to declare one
-    would send them somewhere that cannot help. Two binders of different sorts
-    are two binders, and the defining form has to say so by spelling them apart.
-    """
-    return DefinitionError(
-        f"Bound variable {name!r} is used as a binder at two different sorts in "
-        f"the defining form — {first.name!r} and {second.name!r}. A binder is "
-        f"stored once, under one sort, and every occurrence of the name refers to "
-        f"it, so one of the two slots would receive a binder of the wrong sort. "
-        f"Give the two binders different names in the defining form; a `fresh` "
-        f"clause cannot resolve this, since it maps a name to a single sort."
-    )
 
 
 def _leaf_name(term: Term) -> str | None:
@@ -303,87 +279,37 @@ def _leaf_name(term: Term) -> str | None:
     return None
 
 
-def _binds_every_occurrence(term: Term, name: str) -> bool:
-    """Whether every leaf spelled ``name`` in ``term`` lies under a binder slot
-    that binds it — the half of a `scopes_over` declaration that says *over what*.
+def _reject_declared_sort_the_grammar_contradicts(
+    declared: Sequence[FreshBinder], slot_sorts: dict[str, set[Constructor]]
+) -> None:
+    """Refuse a declared `fresh` sort the grammar disagrees with.
 
-    Abstracting a binder replaces the name everywhere it is spelled
-    (:func:`~website.logical.kernel.terms.bind` keys on the surface string), so
-    inferring one for a defining form that also uses the name *outside* the
-    binder's scope would quietly capture a genuinely free occurrence: an unfold
-    would rename both together and the definition would mean something the author
-    did not write. Whether that is so is exactly what the declared scope decides,
-    which is why inference reads it rather than only the binder slot's label.
+    A declared binder is placed *by name*, across the whole defining form, so it
+    carries one sort into every slot its name occupies. If the grammar says one of
+    those slots ranges over a different sort, the two cannot both be right, and
+    the binder would sit in a slot of the wrong sort — a term the grammar cannot
+    parse once the binder is renamed.
 
-    So an occurrence out of scope withholds the inference, and the name stays one
-    the defining form conjures — refused by ``introduced_leaves`` with the message
-    that names the remedy, which is what happened before binding slots existed. A
-    declared ``fresh`` clause is untouched: it is the author's positive act.
+    Only the declared side needs this. A binder the grammar places gets its slot's
+    own sort by construction, so two binder slots of different sorts holding the
+    same name are simply two binders — which is what
+    :func:`~website.logical.kernel.definitions.bind_scoped` produces, and what the
+    name-keyed representation could not express.
     """
-
-    def walk(current: Term, bound: bool) -> bool:
-        if not isinstance(current, Node):
-            # A Var is a parameter the defined form supplies; it spells no leaf.
-            return True
-        if not current.children:
-            return bound or current.literal != name
-
-        # The slots this node binds `name` in: its own binder occurrences, and
-        # everything those binders were declared to scope over.
-        inner: set[str] = set()
-        for slot, targets in current.constructor.scopes_over.items():
-            child = current.children.get(slot)
-            if child is not None and _leaf_name(child) == name:
-                inner.add(slot)
-                inner.update(targets)
-
-        return all(
-            walk(child, bound or label in inner)
-            for label, child in current.children.items()
-        )
-
-    return walk(term, False)
-
-
-def _resolve_binders(
-    declared: Sequence[FreshBinder], lower: Term
-) -> list[FreshBinder]:
-    """The definition's binders: those declared, plus those the grammar shows.
-
-    Inference only ever *adds*. A binder the author declared and the grammar does
-    not show may still be one — the production it sits in need not have declared
-    its binding slots — so an undetected binder is no evidence against the
-    declaration, and silence is never read as denial.
-
-    The one genuine contradiction is a shared name at a different sort: the
-    grammar puts the leaf in a slot of one sort and the author declared another.
-    That cannot both be true, and the grammar is the thing that was checked.
-
-    An inferred binder must also *cover* its name — every occurrence of it in the
-    defining form inside the binder's declared scope (see
-    :func:`_binds_every_occurrence`). Only inference is held to this: a declared
-    clause is the author's own claim, and honouring it is the behaviour every
-    system written before binding slots existed relies on.
-    """
-    inferred = _binders_in_binding_slots(lower)
     for binder in declared:
-        found = inferred.get(binder.name)
-        if found is not None and found.sort is not binder.sort:
-            raise DefinitionError(
-                f"Bound variable {binder.name!r} is declared fresh at sort "
-                f"{binder.sort.name!r}, but the defining form puts it in a binder "
-                f"slot of sort {found.sort.name!r}. Drop the `fresh` clause and let "
-                f"it be inferred, or declare the sort the grammar gives it."
-            )
-    names = {binder.name for binder in declared}
-    return [
-        *declared,
-        *(
-            binder
-            for name, binder in inferred.items()
-            if name not in names and _binds_every_occurrence(lower, name)
-        ),
-    ]
+        conflicting = sorted(
+            sort.name for sort in slot_sorts.get(binder.name, set()) if sort is not binder.sort
+        )
+        if not conflicting:
+            continue
+        raise DefinitionError(
+            f"Bound variable {binder.name!r} is declared fresh at sort "
+            f"{binder.sort.name!r}, but the defining form puts it in a binder slot "
+            f"of sort {conflicting[0]!r}. A declared binder is placed by name "
+            f"throughout the form, so it would carry the wrong sort into that "
+            f"slot. Drop the `fresh` clause and let the grammar place it, or "
+            f"declare the sort the grammar gives it."
+        )
 
 
 def build_kernel_definition(

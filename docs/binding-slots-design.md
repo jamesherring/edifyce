@@ -1,8 +1,10 @@
 # Design: binding slots on productions
 
 **Status:** partly built — steps 1–4 below have shipped (the declaration, its
-storage/API round-trip, `denotes_constant` validation, and `fresh` inference).
-Steps 5 and 6 are open.
+storage/API round-trip, `denotes_constant` validation, and `fresh` inference),
+and step 6's *representation* prerequisite has too — see
+[scope-aware-binding.md](scope-aware-binding.md). Step 5 and the rest of step 6
+are open.
 **Prerequisite work:** merged (#115, #117, #118, #119, and the kernel-takes-terms
 change)
 
@@ -76,9 +78,9 @@ Define (x ⊆ y) as ∀z.((z ∈ x) → (z ∈ y))   fresh: z → setvar
 
 `fresh` is exactly "which leaves of the defining form sit in a binder slot", and
 with binding slots that is derivable from the parsed term. The clause is now
-optional: `formal_system.definitions._resolve_binders` reads the binders off the
-parsed defining form, and an inferred clause produces the same `Definition` —
-same `fresh` tuple, same interned schemas — as the hand-written one.
+optional: `kernel.definitions.bind_scoped` places the binders while walking the
+parsed defining form, and for a form whose binder scopes over the whole body it
+builds the same interned schemas the hand-written clause does.
 
 This is the highest-value item for import work: a Metamath `$a`/`$p` carries no
 `fresh` clause, so an importer would otherwise reconstruct one per definition.
@@ -94,35 +96,30 @@ only direction that is actually decidable while the declaration is optional.
 Three things are deliberately not binders. A slot holding a `Var` is a
 *parameter* the defined form supplies, so an unfold substitutes it rather than
 conjuring it; a production with no `scopes_over` contributes nothing, which is
-what keeps every system authored before this field behaving as it did; and a name
-the defining form *also* uses outside the binder's declared scope is left alone.
+what keeps every system authored before this field behaving as it did; and an
+occurrence of a name *outside* the binder's declared scope is not bound by it.
 
-That last one is why inference reads the "over what" half of the declaration and
-not just the binder slot's label. `bind` keys on the surface string, so
-abstracting a binder rewrites the name everywhere it is spelled: for
-`(∀z.(z ∈ x) → (z ∈ y))` the free `z` on the right would be renamed along with
-the bound one, and the definition would mean something its author did not write.
-Withholding the inference leaves `z` a name the form conjures, which
-`introduced_leaves` refuses with the message that names the remedy — exactly what
-happened before binding slots existed. A hand-written `fresh` clause still
-reaches outside the scope: it is the author's positive act, and narrowing it
-would break systems that predate the field.
+That last one is why placement reads the "over what" half of the declaration and
+not just the binder slot's label. In `(∀z.(z ∈ x) → (z ∈ y))` the right-hand `z`
+is free, and binding it along with the bound one would make the definition mean
+something its author did not write. It stays a ground leaf, so `introduced_leaves`
+reports it and the build refuses the definition with the message that names the
+remedy — the same outcome as before binding slots existed, now for the reason
+that is actually true of the form. A hand-written `fresh` clause still reaches
+outside the scope: it is placed by name, which is the author's positive act and
+the only reading available on a grammar that declares nothing.
 
-**One name cannot bind at two sorts.** A binder is stored as a single indexed
-`Bound` carrying one sort, and `bind` keys on the surface string, so every
-occurrence of the name becomes that node. Where a grammar has two binders over
-overlapping sorts — `setvar ::= [a-z]` inside `classvar ::= [a-zA-Z]`, each with
-its own quantifier — `(∃z.(z ⋴ y) → ∀z.(z ∈ x))` would put a `classvar` binder
-into `∀`'s `setvar` slot; renaming it to `Q` then gives `∀Q.(Q ∈ a)`, a term the
-grammar cannot parse. Refused at build. Not resolved, because a `fresh` clause
-maps a name to *one* sort and so cannot express it either: two binders of
-different sorts are two binders, and the defining form has to spell them apart.
-Representing the occurrences separately instead would need a scope-aware `bind`,
-which belongs with item 3 rather than here.
+**One name cannot bind at two sorts** — *superseded*. This was true while a
+binder was stored per *name*, and was refused at build. Binding is now per
+*occurrence* ([scope-aware-binding.md](scope-aware-binding.md)), so two binder
+slots of different sorts holding one name are simply two binders, each with its
+slot's own sort, and `(∃z.(z ⋴ y) → ∀z.(z ∈ x))` builds correctly. The same
+change retires the withheld-inference rule two paragraphs up: an occurrence
+outside a binder's scope is no longer bound, so it stays the free leaf it is
+rather than needing a guard to notice.
 
-This check is inside the inference walk, which is silent for a production with no
-`scopes_over` — so it cannot fire for a system authored before this field, and it
-covers a declared clause over such a grammar for free.
+What survives is the check on a *declared* clause, which is still placed by name
+and so still carries one sort into every slot its name occupies.
 
 ### 3. Scope-aware definitional steps
 
