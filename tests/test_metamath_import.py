@@ -1136,3 +1136,43 @@ def test_a_variable_is_typed_only_where_its_floating_hypothesis_is_active():
             scoped = build_spec(database, before=label)
             expected = {p.name for p in scoped.productions if p.sort.endswith("_var")}
             assert live == expected, label
+
+
+# A sort declared *after* a theorem: `class` arrives with `cset`, which follows
+# `id`. A walk stopping at `id` builds no `class` sort, so a schedule covering the
+# whole database would name one the system never built.
+SORT_AFTER_THEOREM_FRAGMENT = r"""
+$c |- wff class ( ) -> SET $.
+$v ph ps A $.
+wph $f wff ph $.
+wps $f wff ps $.
+wi $a wff ( ph -> ps ) $.
+${
+  id.1 $e |- ph $.
+  id $p |- ph $= ( ) B $.
+$}
+cA $f class A $.
+cset $a class SET $.
+${
+  late.1 $e |- ph $.
+  late $p |- ph $= ( ) B $.
+$}
+"""
+
+
+def test_the_schedule_is_bounded_by_the_walk_horizon():
+    # `grammar_schedule` has to be bounded the same way `build_spec` is, and by the
+    # *same* label. Unbounded, it scheduled a sort declared past the horizon —
+    # which `_reset_sorts` then looked up in a system that never built it, so a
+    # `limit` short of the end aborted the whole walk on a KeyError instead of
+    # checking the prefix it was asked for.
+    database = parse(SORT_AFTER_THEOREM_FRAGMENT)
+
+    assert [(c.label, c.verified) for c in walk(database, limit=1)] == [("id", True)]
+    assert [(c.label, c.verified) for c in walk(database)] == [
+        ("id", True), ("late", True),
+    ]
+
+    # Bounded at `id`, the schedule names only sorts that system has.
+    assert "class" not in grammar_schedule(database, before="id").sorts
+    assert "class" in grammar_schedule(database).sorts

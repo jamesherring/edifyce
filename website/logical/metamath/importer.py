@@ -675,7 +675,9 @@ class GrammarSchedule:
     logical_from: int | None
 
 
-def grammar_schedule(database: Database) -> GrammarSchedule:
+def grammar_schedule(
+    database: Database, before: str | None = None
+) -> GrammarSchedule:
     """When each production may join its sort, for a walk that grows one system.
 
     Notation joins at the syntax axiom that declares it - the limit that has to
@@ -686,6 +688,12 @@ def grammar_schedule(database: Database) -> GrammarSchedule:
     sub-sort is never a branch of a live sort, but no later, or a variable whose
     leaf is already live would not read as its typecode. Neither order follows
     declaration order once a ``$f`` is scoped.
+
+    ``before`` bounds the schedule exactly as it bounds :func:`build_spec`, and a
+    caller replaying against a system must pass the *same* label. A database may
+    declare a sort after the last theorem a walk checks - a `limit` short of the
+    end, or notation trailing the final ``$p`` - and scheduling it would name a
+    sort the horizon-scoped system never built.
 
     Read by :func:`.corpus.walk`, which builds one system covering the whole walk
     and then admits each production as it is reached, rather than rebuilding when
@@ -702,12 +710,12 @@ def grammar_schedule(database: Database) -> GrammarSchedule:
         if sort not in sorts:
             sorts.append(sort)
 
-    notation = _syntax_before(database, None)
+    notation = _syntax_before(database, before)
     for assertion in notation:
         at(database.position(assertion.label), assertion.typecode, assertion.label)
 
     typed = database.typed_from()
-    for typecode, members in _declared_variables(database).items():
+    for typecode, members in _declared_variables(database, before).items():
         sub_sort = f"{typecode}_var"
         at(min(typed[typecode, variable] for variable in members), typecode, sub_sort)
         for variable in members:

@@ -136,7 +136,7 @@ def walk(
     # to be re-promoted. Over set.mm that is 255 rebuilds and 3.2M re-promotions in
     # the first 20,000 theorems against 20,544 promotions here - quadratic in the
     # corpus, and the whole cost of the pass.
-    schedule = grammar_schedule(database)
+    schedule = grammar_schedule(database, before=horizon)
     try:
         system = build_system(
             build_spec(database, name, before=horizon, variable_scope=horizon)
