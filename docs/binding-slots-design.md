@@ -1,7 +1,8 @@
 # Design: binding slots on productions
 
-**Status:** partly built — steps 1, 2 and 4 below have shipped (the declaration,
-its storage/API round-trip, and `fresh` inference). Steps 3, 5 and 6 are open.
+**Status:** partly built — steps 1–4 below have shipped (the declaration, its
+storage/API round-trip, `denotes_constant` validation, and `fresh` inference).
+Steps 5 and 6 are open.
 **Prerequisite work:** merged (#115, #117, #118, #119, and the kernel-takes-terms
 change)
 
@@ -28,7 +29,7 @@ this is a deliberate gap, not an oversight.
 
 Three open problems, one cause.
 
-### 1. Validating `denotes_constant`
+### 1. Validating `denotes_constant` — **built**
 
 `Production.denotes_constant` is Metamath's `$c` vs `$v`, and like Metamath's it
 is **declared, not inferred** — no property of a production's shape settles it,
@@ -40,12 +41,30 @@ With binding slots, one class of mistake becomes checkable: **a token whose sort
 appears in some production's binder slot is not a constant**, whatever the author
 ticked. That is exactly the hole `test_an_atom_constant_in_the_variable_sort_is_not_excused`
 documents — `setvar ::= [A-Z] | c` with `c` marked constant admits
-`T ≝ (c ∈ c)`, and `∀c.T ⟶ ∀c.(c ∈ c)` captures. Today the build refuses it for
-a different reason (the leaf is reported as conjured); with binding slots the
-engine could reject the *declaration* and say why.
+`T ≝ (c ∈ c)`, and `∀c.T ⟶ ∀c.(c ∈ c)` captures. The build used to refuse it for
+a different reason (the leaf is reported as conjured); it now rejects the
+*declaration* and says which binder settles it
+(`declarative._validate_constant_declarations`).
+
+The deduction is one step: a binder slot names the sort it ranges over, a sort
+admits its own branches, so everything in `Constructor.admits` of a binder slot's
+sort is bindable. The closure is transitive, so a constant declared in a nested
+sub-sort is caught too, and the message names both the sort the binder holds and
+the one the production is in.
 
 It does not become fully inferable — a sort that no binder mentions is still the
-author's call — so this narrows the trusted surface rather than removing it.
+author's call — so this narrows the trusted surface rather than removing it. It
+is silent for a grammar that declares no binding slots, which is what keeps it
+safe for every system authored before the field existed.
+
+One case does *not* go through this check, and does not need to. A nullary
+defined form is marked constant by the engine rather than the author
+(`denotes_a_constant`), so it never appears in `spec.productions`. It cannot
+reach a binder's sort anyway: a definition into that sort needs a defining form
+of that sort, everything there is bindable and so refused as a conjured name, and
+the only way to prime the chain is a declared constant — which is what the check
+above catches. Pinned by
+`test_a_notation_cannot_reach_a_binder_sort_as_a_constant`.
 
 ### 2. Inferring a definition's `fresh` clause — **built**
 
@@ -201,7 +220,7 @@ Adding the control removes the need for that, and is the reason to add it.
 
 1. ~~Engine field + build-time validation of `scopes_over`~~ — **done**.
 2. ~~Storage + API round-trip, with a migration~~ — **done**.
-3. Use it for `denotes_constant` validation — narrow, safe, and immediately
+3. ~~Use it for `denotes_constant` validation~~ — **done**. Narrow, safe, and
    catches the documented hole.
 4. ~~Use it to infer/check `fresh`~~ — **done**, in the add-only form described
    above.
@@ -210,5 +229,6 @@ Adding the control removes the need for that, and is the reason to add it.
 6. Scope-aware definitional steps — separately, with its own design note.
 
 Step 4 shipped ahead of 3 because it is the one with a caller waiting: a Metamath
-import reconstructs a `fresh` clause per definition without it. Each remaining
-step is still independently shippable.
+import reconstructs a `fresh` clause per definition without it. Both remaining
+steps are still independently shippable, and 6 still wants its own soundness
+argument before any code.

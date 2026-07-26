@@ -59,24 +59,27 @@ nothing else — not unification, equality, side-conditions, or rule checking. T
 default is `False`, variable-like, so a forgotten declaration costs a refused
 definition rather than a capturing one; the unsafe direction takes a positive act.
 
-One declaration the engine refuses outright: an **indexed atom family** (`p_#`)
+Two declarations the engine refuses outright. An **indexed atom family** (`p_#`)
 is a supply of interchangeable tokens — `AtomPattern.fresh` mints new ones — so no
-grammar makes it a constant and no author could mean it. Every other case is a
-genuine judgement about the grammar that nothing yet can check.
+grammar makes it a constant and no author could mean it. And a production in a
+sort some **binder ranges over** is bindable, so it names a variable of the object
+language whatever the author ticked (`declarative._validate_constant_declarations`);
+that needs binding slots to see, so it is silent for a grammar that declares none.
+What is still trusted is a sort no binder mentions — a genuine judgement about the
+grammar, now the only one left.
 
 Two follow-ups this leaves open:
 
 - **Binding slots on productions.** A production may now declare which of its slots
   *binds* and over what — `Production.scopes_over`, `{"x": ["phi"]}` for `∀x.phi`.
   It is optional and empty by default, so a grammar that declares nothing behaves
-  exactly as it did before it existed. One thing reads it: a definition's `fresh`
-  clause is now **inferred** from the parsed defining form rather than written by
+  exactly as it did before it existed. Two things read it: a definition's `fresh`
+  clause is **inferred** from the parsed defining form rather than written by
   hand (`formal_system/definitions.py`), which is what a Metamath `$a`/`$p` carries
-  no trace of. Two uses remain: validating a `denotes_constant` declaration (a token
-  in a binder slot's sort is not a constant, whatever the author ticked), and
-  scope-aware definitional steps — which is what admitting an open abbreviation
-  like `S ≝ (a ∈ b)` would need, and the only one that *widens* what the checker
-  accepts. Both are specced in
+  no trace of; and a `denotes_constant` declaration the grammar contradicts is
+  refused, as above. One use remains — scope-aware definitional steps, which is what
+  admitting an open abbreviation like `S ≝ (a ∈ b)` would need, and the only one
+  that *widens* what the checker accepts. Specced in
   [docs/binding-slots-design.md](docs/binding-slots-design.md).
 - **Conservativity.** That a defined symbol is fresh and the definition
   non-circular is still untreated, as in Metamath. Only the *capture* half of
