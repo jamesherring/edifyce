@@ -647,3 +647,55 @@ def test_a_dummy_variable_is_in_the_grammar_of_a_theorem_that_may_cite_it():
         p.regex for p in build_spec(database).productions if p.name == "setvar_var"
     )
     assert "t" in variable_pattern
+
+
+# set.mm names its half-open intervals `[,)` and `(,]` — constants that *contain*
+# a bracket without being one. `( 0 [,) +oo )` has two openings and three
+# closings by character, so counting them all reads it as unbalanced.
+INTERVAL_FRAGMENT = r"""
+$c |- wff class ( ) [,) (,] +oo C_ RR 0 $.
+$v A B F $.
+cA $f class A $.
+cB $f class B $.
+cF $f class F $.
+wss $a wff A C_ B $.
+$( `[,)` is a class *constant* used as the operator of `( A F B )` - which is
+   exactly how set.mm spells a half-open interval. $)
+cico $a class [,) $.
+cioc $a class (,] $.
+co $a class ( A F B ) $.
+cpnf $a class +oo $.
+cr $a class RR $.
+cc0 $a class 0 $.
+ax $a |- ( 0 [,) +oo ) C_ RR $.
+"""
+
+
+def test_a_constant_that_spells_a_bracket_is_not_one():
+    # The interval token's `)` is part of its name. Counting it as a delimiter
+    # made every statement mentioning one fail bracket parity before it reached a
+    # parse, which is most of what an import of set.mm rejected.
+    system = import_database(parse(INTERVAL_FRAGMENT))
+    formula = system.build_context.variables["wff"]
+
+    assert formula.check_brackets("( 0 [,) +oo ) C_ RR") is True
+    assert formula.check_brackets("( 0 (,] +oo ) C_ RR") is True
+
+    # The builder found them from the grammar, not from a hard-coded list.
+    assert set(formula.bracket_opaque) == {"[,)", "(,]"}
+
+
+def test_genuinely_unbalanced_brackets_are_still_refused():
+    # The opaque tokens must not turn the check off: a real imbalance still fails.
+    system = import_database(parse(INTERVAL_FRAGMENT))
+    formula = system.build_context.variables["wff"]
+
+    assert formula.check_brackets("( 0 [,) +oo C_ RR") is False
+    assert formula.check_brackets("0 [,) +oo ) C_ RR") is False
+
+
+def test_a_grammar_without_such_constants_declares_none():
+    # Nothing is opaque unless a declared constant actually spells a delimiter,
+    # so an ordinary system pays only a truthiness check.
+    system = import_database(parse(HYPOTHESIS_FRAGMENT))
+    assert system.build_context.variables["wff"].bracket_opaque == ()

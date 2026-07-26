@@ -149,6 +149,12 @@ class Pattern:
         # Opaque to matching, which never reads it — as with `schema_term`.
         self.kernel_constructor = None
 
+        # Declared tokens that *contain* a bracket delimiter, and so must be
+        # stepped over rather than counted when brackets are profiled. Set by the
+        # system builder beside `respect_brackets`; empty for every grammar whose
+        # constants avoid its delimiters. See `_opaque_positions`.
+        self.bracket_opaque = ()
+
         # Default certainty of 0
         self.certainty = 0
 
@@ -193,6 +199,28 @@ class Pattern:
         self._one_pair = None
         if self._opening_of is not None and len(pairs) == 1:
             self._one_pair = next(iter(pairs.items()))
+
+    def _opaque_positions(self, s: str) -> set[int] | None:
+        # The indices of `s` covered by a declared token that contains a bracket
+        # delimiter, or None when the grammar has no such token.
+        #
+        # set.mm names its half-open intervals `[,)` and `(,]`, and thirteen more
+        # of its constants spell a parenthesis (`O(1)`, `(x)`, `((`). The `)` in
+        # `[,)` is part of the token, not a bracket, so counting it makes
+        # `( 0 [,) +oo ) C_ RR` read as unbalanced and the formula never parses -
+        # which is the same collision as a variable found inside a constant, one
+        # level down. Whether a character delimits is a property of the *grammar*,
+        # so the grammar is what answers it.
+        if not self.bracket_opaque:
+            return None
+
+        covered: set[int] = set()
+        for token in self.bracket_opaque:
+            at = s.find(token)
+            while at != -1:
+                covered.update(range(at, at + len(token)))
+                at = s.find(token, at + 1)
+        return covered or None
 
     def brackets_respected(self, s: str, context: Context) -> bool:
         # `check_brackets`, memoised for the length of one parse.
@@ -254,9 +282,10 @@ class Pattern:
             return _NO_BRACKETS if self.check_brackets(s) else None
 
         if self._one_pair is not None:
-            return self._one_pair_profile(s, *self._one_pair)
+            return self._one_pair_profile(s, *self._one_pair, self._opaque_positions(s))
 
         pairs = self._respect_brackets
+        opaque = self._opaque_positions(s)
 
         positions = []
         levels = []
@@ -264,6 +293,8 @@ class Pattern:
         depth = 0
 
         for i, character in enumerate(s):
+            if opaque is not None and i in opaque:
+                continue
             if character in pairs:
                 stack.append(character)
                 depth += 1
@@ -286,7 +317,9 @@ class Pattern:
         return positions, levels
 
     @staticmethod
-    def _one_pair_profile(s: str, opener: str, closer: str) -> BracketProfile | None:
+    def _one_pair_profile(
+        s: str, opener: str, closer: str, opaque: set[int] | None = None
+    ) -> BracketProfile | None:
         # One grouping pair - which is what every bracketed system here declares -
         # so the delimiters can be *found* rather than the string walked. The two
         # `find` scans run in C and the loop turns once per bracket instead of once
@@ -311,16 +344,20 @@ class Pattern:
                 at = closing
 
             if at == opening:
-                depth += 1
                 opening = s.find(opener, at + 1)
+                if opaque is not None and at in opaque:
+                    # Inside a declared token that merely spells a delimiter.
+                    continue
+                depth += 1
             else:
+                closing = s.find(closer, at + 1)
+                if opaque is not None and at in opaque:
+                    continue
                 depth -= 1
 
                 if depth < 0:
                     # No corresponding opening bracket
                     return None
-
-                closing = s.find(closer, at + 1)
 
             positions.append(at)
             levels.append(depth)
@@ -343,8 +380,11 @@ class Pattern:
         # rather than re-slicing the string once per bracket pair per character.
         opening_of = self._opening_of
         if opening_of is not None:
+            opaque = self._opaque_positions(s)
             stack = []
-            for character in s:
+            for i, character in enumerate(s):
+                if opaque is not None and i in opaque:
+                    continue
                 if character in pairs:
                     stack.append(character)
                 elif character in opening_of:
