@@ -77,9 +77,13 @@ Two follow-ups this leaves open:
   clause is **inferred** from the parsed defining form rather than written by
   hand (`formal_system/definitions.py`), which is what a Metamath `$a`/`$p` carries
   no trace of; and a `denotes_constant` declaration the grammar contradicts is
-  refused, as above. One use remains — scope-aware definitional steps, which is what
-  admitting an open abbreviation like `S ≝ (a ∈ b)` would need, and the only one
-  that *widens* what the checker accepts. Specced in
+  refused, as above. They also drive **scope-aware binding**: a defining form's
+  binders are placed per *occurrence* rather than per name, so an occurrence
+  outside a binder's scope stays free and two binders sharing a spelling stay two
+  ([docs/scope-aware-binding.md](docs/scope-aware-binding.md), which carries the
+  soundness argument). One use remains — scope-aware definitional *steps*, which
+  is what admitting an open abbreviation like `S ≝ (a ∈ b)` would need, and the
+  only one that widens what a *proof* may do. Specced in
   [docs/binding-slots-design.md](docs/binding-slots-design.md).
 - **Conservativity.** That a defined symbol is fresh and the definition
   non-circular is still untreated, as in Metamath. Only the *capture* half of

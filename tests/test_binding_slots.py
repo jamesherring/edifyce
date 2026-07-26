@@ -30,7 +30,14 @@ from website.logical.declarative import (
     build_system,
 )
 from website.logical.formal_system.definitions import DefinitionError, parse_definition
-from website.logical.kernel import constructor_for, from_match, introduced_leaves, unfold
+from website.logical.kernel.terms import _bound_label
+from website.logical.kernel import (
+    check_definitional_step,
+    constructor_for,
+    from_match,
+    introduced_leaves,
+    unfold,
+)
 from tests.spec_helpers import (
     atom_const_prod,
     atom_family_prod,
@@ -178,17 +185,22 @@ def test_fresh_is_inferred_from_the_binding_slot(binding_theory):
     assert sorts(df_subset(binding_theory)) == [("z", "setvar")]
 
 
-def test_an_inferred_clause_is_the_declared_one(binding_theory):
-    # Inference is not an approximation of the hand-written clause; it produces
-    # the same definition, down to the interned term the two schemas share.
+def test_an_inferred_clause_builds_the_same_defining_form(binding_theory):
+    # Inference and a hand-written clause agree on the *term*: for a form whose
+    # binder scopes over the whole body, binding by scope and binding by name
+    # place exactly the same nodes, down to the interned object.
     inferred = df_subset(binding_theory)
     declared = df_subset(
         binding_theory, fresh={"z": binding_theory[0].build_context.variables["setvar"]}
     )
 
-    assert inferred.fresh == declared.fresh
     assert inferred.lower is declared.lower
     assert inferred.higher is declared.higher
+    assert sorts(inferred) == sorts(declared) == [("z", "setvar")]
+    # They differ in how the binder was *placed*, which is what decides its scope
+    # and so which other binders it must differ from.
+    assert [b.scoped for b in inferred.fresh] == [True]
+    assert [b.scoped for b in declared.fresh] == [False]
 
 
 def test_an_inferred_binder_unfolds_capture_avoidingly(binding_theory):
@@ -250,11 +262,11 @@ def test_inference_adds_to_a_partial_declaration(binding_theory):
     assert sorts(definition) == [("z", "setvar"), ("w", "setvar")]
 
 
-def test_an_occurrence_outside_the_scope_withholds_the_inference(binding_theory):
-    # `z` is bound in the left branch and *free* in the right one. Abstracting it
-    # would rename both together, so an unfold would capture a genuinely free
-    # variable — the very thing a defining form may not do. Inference declines,
-    # and the name goes back to being one the form conjures.
+def test_an_occurrence_outside_the_scope_stays_free(binding_theory):
+    # `z` is bound in the left branch and *free* in the right one. Binding by
+    # scope reaches only the first: the free occurrence stays a ground leaf, and
+    # `introduced_leaves` reports it as the name the form conjures — so the
+    # definition is still refused, now for the reason that is actually true of it.
     system, context = binding_theory
     variables = system.build_context.variables
     definition = parse_definition(
@@ -265,7 +277,7 @@ def test_an_occurrence_outside_the_scope_withholds_the_inference(binding_theory)
         context,
     )
 
-    assert definition.fresh == ()
+    assert sorts(definition) == [("z", "setvar")]
     assert sorted(leaf.literal for leaf in introduced_leaves(definition)) == ["z"]
 
 
@@ -286,9 +298,9 @@ def test_a_declared_clause_still_reaches_outside_the_scope(binding_theory):
     assert sorts(definition) == [("z", "setvar")]
 
 
-def test_a_second_binder_over_the_same_name_still_infers(binding_theory):
-    # Every occurrence is in *some* binder's scope, which is what is asked — not
-    # that one binder covers them all.
+def test_two_binders_over_one_name_are_two_binders(binding_theory):
+    # Sharing a spelling does not make them one binder. Each binding occurrence
+    # gets its own indexed node, which is what lets a step spell them differently.
     system, context = binding_theory
     variables = system.build_context.variables
     definition = parse_definition(
@@ -299,7 +311,10 @@ def test_a_second_binder_over_the_same_name_still_infers(binding_theory):
         context,
     )
 
-    assert sorts(definition) == [("z", "setvar")]
+    assert sorts(definition) == [("z", "setvar"), ("z", "setvar")]
+    # Siblings, so neither encloses the other — and neither need differ from the
+    # other when a step names them.
+    assert [b.enclosing for b in definition.fresh] == [(), ()]
 
 
 def two_binder_sorts():
@@ -324,39 +339,83 @@ def two_binder_sorts():
     )
 
 
-def test_one_name_binding_at_two_sorts_is_refused():
-    # A binder is one indexed node carrying one sort, and `bind` keys on the
-    # surface string — so keeping the first and dropping the second would put a
-    # `classvar` binder in `∀`'s `setvar` slot. Renaming it to `Q` then yields
-    # `∀Q.(Q ∈ a)`, which this grammar cannot parse. Refused at build instead.
-    built = two_binder_sorts()
-    system, context = built
+def test_one_name_at_two_sorts_is_two_binders():
+    # The payoff, and what the name-keyed representation could not express. Each
+    # binding occurrence carries its slot's own sort, so `∃`'s `classvar` binder
+    # and `∀`'s `setvar` binder are distinct — where before, one was stored and
+    # the other silently received it, giving a term the grammar cannot parse once
+    # the binder is renamed.
+    system, context = two_binder_sorts()
     variables = system.build_context.variables
+    definition = parse_definition(
+        variables["formula"],
+        "(x ⊆ y)",
+        "(∃z.(z ⋴ y) → ∀z.(z ∈ x))",
+        {"x": variables["setvar"], "y": variables["setvar"]},
+        context,
+    )
 
-    with pytest.raises(DefinitionError, match="two different sorts"):
-        parse_definition(
-            variables["formula"],
-            "(x ⊆ y)",
-            "(∃z.(z ⋴ y) → ∀z.(z ∈ x))",
-            {"x": variables["setvar"], "y": variables["setvar"]},
-            context,
-        )
+    assert sorts(definition) == [("z", "classvar"), ("z", "setvar")]
 
 
-def test_a_repeated_binder_at_one_sort_is_still_one_binder(binding_theory):
-    # The ordinary case the conflict check must not disturb: the same name bound
-    # twice at the same sort is one binder, not a conflict.
+def test_two_binders_of_different_sorts_may_be_named_apart():
+    # And the consequence a step can see: the two are independently nameable, so
+    # a target that spells them differently checks. `Q` is a `classvar` and not a
+    # `setvar`, which is exactly the naming the shared binder made impossible.
+    system, context = two_binder_sorts()
+    variables = system.build_context.variables
+    definition = parse_definition(
+        variables["formula"],
+        "(x ⊆ y)",
+        "(∃z.(z ⋴ y) → ∀z.(z ∈ x))",
+        {"x": variables["setvar"], "y": variables["setvar"]},
+        context,
+    )
+
+    def term(text):
+        matched = variables["formula"].match(text, context)
+        assert matched is not None, text
+        return from_match(matched)
+
+    def term_of(sort, text):
+        matched = variables[sort].match(text, context)
+        assert matched is not None, text
+        return from_match(matched)
+
+    assert check_definitional_step(
+        term("(a ⊆ b)"), term("(∃Q.(Q ⋴ b) → ∀w.(w ∈ a))"), definition, context
+    )
+
+    # And through the explicit-rename API, which needs the *index*: both binders
+    # are spelled `z`, so naming by spelling cannot tell them apart — and here it
+    # cannot even succeed, since no one leaf is of both sorts.
+    assert unfold(definition, term("(a ⊆ b)"), context,
+                  names={"z": term_of("setvar", "w")}) is None
+    renamed = unfold(
+        definition, term("(a ⊆ b)"), context,
+        names={_bound_label(0): term_of("classvar", "Q"),
+               _bound_label(1): term_of("setvar", "w")},
+    )
+    assert renamed is not None
+    assert renamed.to_string() == "(∃Q.(Q ⋴ b) → ∀w.(w ∈ a))"
+
+
+def test_a_nested_binder_records_the_one_it_sits_inside(binding_theory):
+    # Nesting is what the freshness proviso needs: an inner binder spelled like
+    # the one it sits inside would shadow it, so those two must differ while
+    # siblings need not.
     system, context = binding_theory
     variables = system.build_context.variables
     definition = parse_definition(
         variables["formula"],
         "(x ⊆ y)",
-        "(∀z.(z ∈ x) → ∀z.(z ∈ y))",
+        "∀z.∀w.((z ∈ x) → (w ∈ y))",
         {"x": variables["setvar"], "y": variables["setvar"]},
         context,
     )
 
-    assert sorts(definition) == [("z", "setvar")]
+    assert sorts(definition) == [("z", "setvar"), ("w", "setvar")]
+    assert [b.enclosing for b in definition.fresh] == [(), (0,)]
 
 
 def test_a_declared_sort_the_grammar_contradicts_is_refused():
@@ -522,3 +581,75 @@ def test_a_notation_cannot_reach_a_binder_sort_as_a_constant():
     spec.productions[1].denotes_constant = True
     (message,) = build_spec(spec)["errors"]
     assert "Production 'seed' (sort 'setvar') is declared" in message
+
+
+@pytest.fixture(scope="module")
+def pair_theory():
+    # `⟪u,v⟫.phi` — one production with *two* binder slots over one body.
+    return build(
+        SystemSpec(
+            name="Pair",
+            brackets=brackets(),
+            productions=[
+                regex_prod("setvar", "letter", "[a-z]"),
+                template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+                template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
+                template_prod(
+                    "formula", "pair", "⟪u,v⟫.phi",
+                    [("u", "setvar"), ("v", "setvar"), ("phi", "formula")],
+                    scopes_over={"u": ["phi"], "v": ["phi"]},
+                ),
+                template_prod("formula", "subset", "(x ⊆ y)", [("x", "setvar"), ("y", "setvar")]),
+            ],
+            lines=[statement_line()],
+        )
+    )
+
+
+def test_two_binders_on_one_production_must_differ(pair_theory):
+    # `⟪u,v⟫.phi` scopes *both* binders over the same body, and neither is inside
+    # the other — so nesting alone would call them disjoint and let a step spell
+    # both the same, merging two binders into one. Binders opened at one node
+    # constrain each other for exactly this reason.
+    system, context = pair_theory
+    variables = system.build_context.variables
+    definition = parse_definition(
+        variables["formula"],
+        "(x ⊆ y)",
+        "⟪s,t⟫.((s ∈ x) → (t ∈ y))",
+        {"x": variables["setvar"], "y": variables["setvar"]},
+        context,
+    )
+
+    assert [b.enclosing for b in definition.fresh] == [(1,), (0,)]
+
+    def term(text):
+        matched = variables["formula"].match(text, context)
+        assert matched is not None, text
+        return from_match(matched)
+
+    assert check_definitional_step(
+        term("(a ⊆ b)"), term("⟪s,t⟫.((s ∈ a) → (t ∈ b))"), definition, context
+    )
+    assert not check_definitional_step(
+        term("(a ⊆ b)"), term("⟪q,q⟫.((q ∈ a) → (q ∈ b))"), definition, context
+    )
+
+
+def test_two_sibling_binders_may_not_share_a_name(pair_theory):
+    # `⟪s,s⟫` binds one name at two simultaneous slots: neither shadows the
+    # other, so an occurrence in the scope they share belongs to neither. Left
+    # unrefused, the walk hands it to whichever slot the grammar happens to list
+    # second — so a form's meaning would turn on declaration order, which is not
+    # something an author can see.
+    system, context = pair_theory
+    variables = system.build_context.variables
+
+    with pytest.raises(ValueError, match="both bind 's'"):
+        parse_definition(
+            variables["formula"],
+            "(x ⊆ y)",
+            "⟪s,s⟫.((s ∈ x) → (s ∈ y))",
+            {"x": variables["setvar"], "y": variables["setvar"]},
+            context,
+        )
