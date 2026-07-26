@@ -22,6 +22,7 @@ evolve it.
 | `app/db/terms_mapping.py` | `store_term` / `load_term` round trip between kernel `Term`s and the rows |
 | `app/db/proof_lines.py` | Proof structure: a checked proof's lines + the justification edges between them |
 | `app/db/proofs_mapping.py` | `store_proof_lines`: project a checked engine `Proof` into those rows |
+| `app/db/metamath_store.py` | `import_corpus`: walk a Metamath `.mm` database and store the system, its proofs, and their line graphs |
 | `app/db/session.py` | Lazy async engine + `get_session` FastAPI dependency |
 | `tools/atlas/schema.py` | Single-file schema entrypoint Atlas loads the models through |
 | `atlas.hcl` | Atlas config (env `local`) |
