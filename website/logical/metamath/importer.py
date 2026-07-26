@@ -693,47 +693,81 @@ def _first_mention(database: Database) -> dict[str, int]:
 
 
 @dataclass(frozen=True)
-class VariableSchedule:
-    """Which variable leaves join which sort, and when.
+class GrammarSchedule:
+    """Which productions join which sort, and when.
 
     ``entries`` maps a position to the ``(sort, production)`` pairs that become
-    admissible there. ``sub_sorts`` names the ``<typecode>_var`` unions those
-    leaves live in, so a caller replaying the schedule can empty them first -
-    :func:`build_spec` declares every leaf its ``variable_scope`` reaches and
-    fills its sort with all of them, which is the state a replay starts from.
+    admissible there - notation at the syntax axiom that declares it, a variable
+    at its first mention. ``sorts`` names every union a replaying caller must
+    empty first: :func:`build_spec` built to the walk's far end declares the whole
+    grammar and fills each sort with all of it, which is the state a replay starts
+    from.
+
+    ``logical_from`` is the earliest position at which :func:`_logical_sort` could
+    name a sort for a ``|-`` statement - the first conventional name to appear, or
+    failing that the first syntax axiom. Before it the walk's line type would
+    borrow a sort nothing has declared, which is the forward leak the ordering
+    exists to prevent. None when no prefix ever determines one.
     """
 
-    sub_sorts: tuple[str, ...]
+    sorts: tuple[str, ...]
     entries: dict[int, list[tuple[str, str]]]
+    logical_from: int | None
 
 
-def variable_schedule(database: Database) -> VariableSchedule:
-    """When each variable leaf may join its sort.
+def grammar_schedule(database: Database) -> GrammarSchedule:
+    """When each production may join its sort, for a walk that grows one system.
 
-    A variable joins at its first mention, and its ``<typecode>_var`` sub-sort
-    joins the typecode at the *earliest* of them - held back until then so an
-    empty sub-sort is never a branch of a live sort, but no later, or a variable
-    whose leaf is already live would not read as its typecode.
+    Notation joins at the syntax axiom that declares it - the limit that has to
+    hold, since a constructor declared later can capture an earlier theorem's
+    parse. A variable joins at its first mention, and its ``<typecode>_var``
+    sub-sort joins the typecode at the *earliest* of them: held back until then so
+    an empty sub-sort is never a branch of a live sort, but no later, or a
+    variable whose leaf is already live would not read as its typecode.
     ``_declared_variables`` yields ``$f`` declaration order, which stops matching
     first-mention order the moment a ``$f`` is scoped.
 
-    Read by :func:`.corpus.walk`, which declares every leaf up front and then
-    admits each as the walk reaches it. Notation is not here: the walk rebuilds
-    its system when a syntax axiom is declared, so notation is already exact.
+    Read by :func:`.corpus.walk`, which builds one system covering the whole walk
+    and then admits each production as it is reached, rather than rebuilding when
+    notation is declared. Rebuilding costs the library: a ``PromotedTheorem`` holds
+    patterns of the system it was built against, so none survive one, and
+    re-promoting 47,000 of them at each of set.mm's 1,441 syntax axioms is
+    quadratic in the corpus.
     """
     entries: dict[int, list[tuple[str, str]]] = {}
-    sub_sorts: list[str] = []
+    sorts: list[str] = []
 
     def at(position: int, sort: str, name: str) -> None:
         entries.setdefault(position, []).append((sort, name))
+        if sort not in sorts:
+            sorts.append(sort)
+
+    notation = _syntax_before(database, None)
+    for assertion in notation:
+        at(database.position(assertion.label), assertion.typecode, assertion.label)
 
     first = _first_mention(database)
     for typecode, members in _declared_variables(database).items():
         sub_sort = f"{typecode}_var"
-        sub_sorts.append(sub_sort)
         at(min(first[variable] for variable in members), typecode, sub_sort)
         for variable in members:
             leaf = variable_production_name(database, typecode, variable)
             at(first[variable], sub_sort, leaf)
 
-    return VariableSchedule(sub_sorts=tuple(sub_sorts), entries=entries)
+    # Mirrors `_logical_sort`'s two branches over a prefix: a conventional name
+    # counts however it was introduced - a `$f`-declared typecode is a sort in its
+    # own right, which is what makes set.mm's opening `idi`/`a1ii` readable before
+    # any syntax axiom - and otherwise only notation will do.
+    candidates = [
+        position
+        for position, added in entries.items()
+        if any(sort in ("wff", "formula") for sort, _name in added)
+    ]
+    if notation:
+        candidates.append(database.position(notation[0].label))
+
+    return GrammarSchedule(
+        sorts=tuple(sorts),
+        entries=entries,
+        logical_from=min(candidates) if candidates else None,
+    )

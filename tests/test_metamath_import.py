@@ -47,7 +47,7 @@ from website.logical.metamath.importer import (
     _distinct_provisos,
     _givens,
     _proviso_safe_names,
-    variable_schedule,
+    grammar_schedule,
 )
 from website.logical.metamath.parser import Hypothesis
 
@@ -956,21 +956,21 @@ def test_the_variable_schedule_matches_a_per_theorem_build():
     # at whole-database scope, which let a theorem parse against a name `set.mm`
     # declares tens of thousands of statements later.
     database = parse(LATE_VARIABLE_FRAGMENT)
-    schedule = variable_schedule(database)
+    schedule = grammar_schedule(database)
 
     live: set[str] = set()
     checked = []
     for index, label in enumerate(database.order):
         live.update(
             name for sort, name in schedule.entries.get(index, ())
-            if sort in schedule.sub_sorts
+            if sort.endswith("_var")
         )
         assertion = database.assertions[label]
         if not (assertion.is_logical and assertion.proof):
             continue
 
         scoped = build_spec(database, before=label)
-        expected = {p.name for p in scoped.productions if p.sort in schedule.sub_sorts}
+        expected = {p.name for p in scoped.productions if p.sort.endswith("_var")}
         assert live == expected
         checked.append(label)
 
