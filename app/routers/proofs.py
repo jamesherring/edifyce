@@ -59,6 +59,7 @@ from app.db import (
     ProofReference,
     clear_proof_lines,
     get_session,
+    load_proof_for_check,
     load_proof_lines,
     store_proof_lines,
     system_to_spec,
@@ -391,10 +392,25 @@ async def _verify_with_references(
         for alias, target, _pos in edges.get(proof.id, ())
         if target in compiled
     }
+    # The proof's own lines come from its rows too, when it has any: everything
+    # `read_line` would take off the grammar is stored, so a proof checked once
+    # never needs its text parsed again (P2). Its verdict is *not* taken from the
+    # rows — numbering, scope and justification are all re-derived — so this is a
+    # re-check that happens to skip the parse, not a cache read.
+    #
+    # Rows are absent exactly when there is nothing to trust: the proof has never
+    # been checked, or an edit invalidated it. Then, and only then, parse.
+    #
     # The checker raises on malformed proofs against otherwise-valid systems;
     # reshape into a structured error rather than a 500.
     try:
-        compiled_system.parse(proof.source, proof=root)
+        checked = await session.run_sync(
+            lambda sync: load_proof_for_check(
+                sync, proof.id, compiled_system, context, proof=root
+            )
+        )
+        if checked is None:
+            compiled_system.parse(proof.source, proof=root)
     except Exception as exc:  # noqa: BLE001
         return _Verification(
             VerifyProofResponse(success=False, errors=[str(exc)]), None

@@ -1,6 +1,6 @@
 # Design: verification from rows, not from text
 
-**Status:** P1 shipped, P2–P5 proposed · **Prerequisite work:** merged (the term
+**Status:** P1 and P2 shipped, P3–P5 proposed · **Prerequisite work:** merged (the term
 graph, `proof_lines`, the kernel-takes-terms change #121, and the Metamath
 corpus import #124)
 
@@ -248,16 +248,55 @@ part edit. Those existed to keep a *cache* honest and now keep a *verdict*
 honest, so they are covered by tests rather than assumed
 (`test_a_lemma_whose_structure_was_discarded_is_no_longer_citable`).
 
-### P2. Rebuild a proof from its rows instead of parsing it
+### P2. Rebuild a proof from its rows instead of parsing it — *done*
 
-Reconstruct `ProofLine`s directly: formula via `load_term`, line type by stored
-name, antecedents from the edges, scope from `scope_id`, then run the existing
-`check` over them. No `FormalSystem.parse` on the path.
+`FormalSystem.parse` splits in two, which is the thesis of this document made
+literal:
 
-This is where §3's contract inversion actually lands.
+- **`read_line`** takes a line's content off the grammar — the matched line type,
+  the formula as a kernel term, its flat string, the citation string. Exactly
+  four things, and every one of them is a column on `proof_lines`.
+- **`check_proof`** numbers each line, places it in its subproof and justifies
+  it, then reads the verdict off the lines. It needs no text.
 
-**Measure:** re-verifying an unedited proof produces the identical verdict *and*
-byte-identical rows (an idempotence test), with no parse invoked.
+So `proofs_mapping.load_proof_for_check` populates the lines from rows and hands
+them to `check_proof`. A proof checked once never has its text parsed again; the
+route falls back to parsing exactly when there are no rows, which is exactly when
+there is nothing to trust — never checked, or invalidated.
+
+**The verdict is not read back.** Numbering, scope and justification are all
+re-derived, so a stored row supplies what a line *says* and never whether it
+stands. That is what keeps this a check rather than a cache read, and it is why
+`test_a_proof_checked_from_rows_still_fails_when_it_should` is not redundant.
+
+One ordering property is load-bearing and easy to lose. `check_proof` keeps
+number/scope/execute interleaved **per line**, as parsing did. A discharge cites
+its subproof by the opener's line number and is validated structurally; what
+stops it reaching a subproof *below* it is that later lines are not yet numbered
+or scoped when it runs. Doing the three as separate passes would quietly admit a
+forward discharge.
+
+**Still not faster.** Measured against dev Postgres over a 6,600-theorem set.mm
+import (221 productions), 20 proofs per bucket:
+
+| proof size | parse + check | rows + check |
+|---|---|---|
+| ~4 lines | **1.2 ms** | 21.0 ms |
+| ~10 lines | **4.5 ms** | 24.0 ms |
+| ~32 lines | **18.9 ms** | 59.2 ms |
+
+Reading a proof back is three round trips whatever it contains, and that floor
+dominates everything at this scale. But the curves converge fast: over an
+eight-fold increase in lines the parse grows sixteen-fold and the row path under
+threefold, and the parse also grows with the *grammar* (2.7 ms/theorem early in
+the set.mm walk against 49 ms by 45,000) where the row path does not. The
+crossover is a bigger proof and a bigger library, both of which the Metamath work
+produces.
+
+Two levers remain unpulled, and neither is architectural: the three queries could
+be two, and term rows are still hydrated through the ORM rather than read as Core
+rows. As with P1, the case for P2 today is that it makes the rows load-bearing —
+the parse happens once, at the write — not that it is quicker yet.
 
 ### P3. Store schema terms
 

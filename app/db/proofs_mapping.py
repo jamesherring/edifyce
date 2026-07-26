@@ -250,7 +250,9 @@ def load_proof_lines(
         proof = proofs.get(row.proof_id)
         if proof is None:
             proof = proofs[row.proof_id] = EngineProof(formal_system=system)
-        _load_line(proof, row, line_types, context, memo, needs_strings)
+        _adopt_verdict(
+            proof, _load_line(proof, row, line_types, context, memo, needs_strings), row
+        )
 
     for proof in proofs.values():
         proof.valid = all(line.valid for line in proof.proof_lines)
@@ -260,6 +262,59 @@ def load_proof_lines(
     return proofs
 
 
+def load_proof_for_check(
+    session: Session,
+    proof_id: uuid.UUID,
+    system: EngineSystem,
+    context: Context,
+    proof: EngineProof | None = None,
+) -> EngineProof | None:
+    """Rebuild a proof from its rows *for re-checking*, with no parse at all.
+
+    ``docs/verification-from-rows.md``'s P2, and where the contract inversion
+    actually lands. `FormalSystem.read_line` reads four things off the grammar —
+    the line type, the formula as a term, its flat string, and the citation
+    string — and every one of them is stored, so a proof that has been checked
+    once needs the text for nothing. The lines are populated from the rows and
+    handed to `FormalSystem.check_proof`, which numbers, scopes and justifies
+    them exactly as it does after a parse.
+
+    Note what is *not* taken from the rows: the verdict. Numbering, scope and
+    justification are all re-derived, so a stored row cannot assert a line valid
+    — it can only supply what the line says. That is what keeps this a check and
+    not a cache read, and it is why re-verifying is idempotent rather than
+    merely repeatable.
+
+    Pass ``proof`` to supply one with its ``reference_context`` already seeded
+    (the lemmas it may cite). ``None`` back means the proof has no stored lines:
+    it has never been checked, or its snapshot was invalidated, so there is
+    nothing to check and the caller must parse.
+    """
+    rows = list(
+        session.scalars(
+            select(ProofLineRow)
+            .where(ProofLineRow.proof_id == proof_id)
+            .order_by(ProofLineRow.position)
+        )
+    )
+    if not rows:
+        return None
+
+    prefetched = prefetch_terms(  # noqa: F841 - held so the rows stay loaded
+        session, [row.term_id for row in rows if row.term_id is not None]
+    )
+    line_types = {line_type.name: line_type for line_type in system.line_types}
+    memo: dict[object, Term] = {}
+    needs_strings = any(rule.matching == "string" for rule in system.inference_rules)
+
+    if proof is None:
+        proof = EngineProof(formal_system=system)
+    for row in rows:
+        _load_line(proof, row, line_types, context, memo, needs_strings)
+
+    return system.check_proof(proof, context)
+
+
 def _load_line(
     proof: EngineProof,
     row: ProofLineRow,
@@ -267,7 +322,7 @@ def _load_line(
     context: Context,
     memo: dict[object, Term],
     needs_strings: bool,
-) -> None:
+) -> EngineProofLine:
     # `indent` and `display` are stored apart precisely so the source line
     # reconstructs; ProofLine derives its own `indent` and `empty` from text.
     line = EngineProofLine(
@@ -286,12 +341,23 @@ def _load_line(
             # was parsed from, so the flat form is recovered rather than stored a
             # second time and kept in step by hand.
             line.formula_string = line.formula_term.to_string()
+    proof.proof_lines.append(line)
+    return line
+
+
+def _adopt_verdict(proof: EngineProof, line: EngineProofLine, row: ProofLineRow) -> None:
+    """Take the line's *recorded* verdict and citation number from its row.
+
+    For a lemma, which is read to be cited and never re-checked. A proof being
+    re-checked instead has `FormalSystem.check_proof` derive both — the number
+    through `assign_line_number`, so it agrees with the scope tree being built
+    beside it.
+    """
     line.valid = row.valid
     line.invalid_message = row.invalid_message
     line.warning_message = row.warning_message
     line.number = row.number
 
-    proof.proof_lines.append(line)
     if row.number is not None:
         proof.numbered_lines.append(line)
         if row.number != len(proof.numbered_lines):

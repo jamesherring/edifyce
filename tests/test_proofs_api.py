@@ -118,6 +118,11 @@ def zfc_spec() -> SystemSpec:
     )
 
 
+# A subproof plus a discharge, against `scoped_zfc_spec`: the two structural
+# things a flat proof cannot exercise — a line that opens a scope, and a line
+# justified by a *block* rather than by cited lines.
+_SUBPROOF_SRC = "assume x ∈ y\n    x ∈ y [R, 1]\n(x ∈ y → x ∈ y) [CP, 1]"
+
 # A single hypothesis line; verifies against the ZFC spec above.
 VALID_PROOF = "x = x [HYP]"
 # Matches no line type — reported as an invalid line, not raised.
@@ -918,6 +923,93 @@ def test_a_lemma_that_cannot_be_read_is_a_verdict_not_a_500(client, db, monkeypa
     body = response.json()
     assert body["success"] is False
     assert any("could not be read" in error for error in body["errors"])
+
+
+def test_re_verifying_checks_from_rows_and_parses_nothing(client, db, monkeypatch):
+    # P2's measure (docs/verification-from-rows.md). The first verify parses,
+    # because there is nothing stored yet. The second has rows for the proof's
+    # own lines too, and everything `read_line` takes off the grammar is in them
+    # — so it re-checks without touching the parser at all.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid, spec=scoped_zfc_spec())
+    # A proof with a subproof and a discharge, so the scope tree and the
+    # justification graph are both rebuilt, not just flat lines.
+    pid = _create_proof(client, sid, "CP", source=_SUBPROOF_SRC)
+
+    parses: list[str] = []
+    original = EngineFormalSystem.parse
+
+    def counted(self, text, *args, **kwargs):
+        parses.append(text)
+        return original(self, text, *args, **kwargs)
+
+    monkeypatch.setattr(EngineFormalSystem, "parse", counted)
+
+    first = client.post(f"/api/proofs/{pid}/verify").json()
+    assert first["success"] is True
+    assert len(parses) == 1, "the first check has nothing stored, so it parses"
+
+    parses.clear()
+    second = client.post(f"/api/proofs/{pid}/verify").json()
+    assert second["success"] is True
+    assert parses == [], "a proof checked once never needs its text again"
+
+
+def test_checking_from_rows_is_idempotent(client, db):
+    # The other half of the measure: same verdict, and byte-identical structure.
+    # Numbering, scope and justification are all re-derived from the loaded
+    # lines, so this says the rows are a faithful, self-sufficient record — not
+    # that a cached verdict was handed back.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid, spec=scoped_zfc_spec())
+    pid = _create_proof(client, sid, "CP", source=_SUBPROOF_SRC)
+
+    def snapshot() -> list[tuple]:
+        lines = _structure(client, pid)["lines"]
+        by_id = {line["id"]: line["number"] for line in lines}
+        return [
+            (
+                line["position"], line["number"], line["display"], line["line_type"],
+                line["rule"], line["valid"], line["opens_scope"],
+                by_id.get(line["scope_id"]),
+                tuple(
+                    (edge["role"], edge["position"], by_id.get(edge["line_id"]))
+                    for edge in line["antecedents"]
+                ),
+                (line["term"] or {}).get("digest"),
+            )
+            for line in lines
+        ]
+
+    assert client.post(f"/api/proofs/{pid}/verify").json()["success"] is True
+    once = snapshot()
+    assert client.post(f"/api/proofs/{pid}/verify").json()["success"] is True
+
+    assert snapshot() == once
+    assert once, "the proof stored no lines at all"
+
+
+def test_a_proof_checked_from_rows_still_fails_when_it_should(client, db):
+    # The rows supply what a line *says*, never whether it stands: the verdict is
+    # re-derived. So a proof that fails, fails identically on the row path — and
+    # a stored row cannot assert a line valid that the kernel would refuse.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    # Line 2 cites MP with one antecedent, so it cannot be justified.
+    pid = _create_proof(
+        client, sid, "Broken", source="(x ∈ y → x = y) [HYP]\nx = y [MP, 1]"
+    )
+
+    first = client.post(f"/api/proofs/{pid}/verify").json()
+    assert first["success"] is False
+    # The failed check still stores its structure, so the re-check reads rows.
+    assert _structure(client, pid)["lines"], "a failed check stores no lines"
+
+    second = client.post(f"/api/proofs/{pid}/verify").json()
+    assert second["success"] is False
+    assert [line["valid"] for line in second["proof"]["lines"]] == [
+        line["valid"] for line in first["proof"]["lines"]
+    ]
 
 
 # ---------------------------------------------------------------------------
