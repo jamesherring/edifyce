@@ -1,6 +1,6 @@
 # Design: verification from rows, not from text
 
-**Status:** proposal (no code yet) · **Prerequisite work:** merged (the term
+**Status:** P1 shipped, P2–P5 proposed · **Prerequisite work:** merged (the term
 graph, `proof_lines`, the kernel-takes-terms change #121, and the Metamath
 corpus import #124)
 
@@ -105,6 +105,14 @@ merely tidy:
 Recording the decision matters more than the mechanism: it should be taken
 deliberately, once, rather than arrived at by a series of caching optimisations.
 
+**Decided, and P1 acts on it.** Stored terms are the authoritative parse. Two
+consequences were taken with it: there is **no fallback to parsing** a lemma
+whose rows are missing — a compatibility path for data written before the rows
+existed is legacy debt, and the database it would serve is empty — and the
+invalidation paths above are now soundness-critical, so they are tested rather
+than trusted. The engine-version stamp remains open; the digest covers structure
+and names, not the kernel semantics that read them.
+
 ## 4. The one honest exception
 
 String-rewriting systems (semi-Thue: MIU and friends, `matching == "string"`)
@@ -129,30 +137,77 @@ otherwise false in a way that would surface as a mysterious performance cliff.
 
 Each is independently shippable and states how we would know it worked.
 
-### P1. Trust a stored lemma verdict
+### P1. Trust a stored lemma verdict — *done*
 
-The smallest change and the largest saving. `_verify_with_references` currently
-compiles the whole transitive reference closure and re-checks every lemma, only
-to ask `_is_usable_lemma` a question the database already answers:
+`_verify_with_references` compiled the whole transitive reference closure and
+re-checked every lemma, only to ask `_is_usable_lemma` a question the database
+already answered. Lemmas are now **loaded** from their stored lines
+(`proofs_mapping.load_proof_lines`) and never re-parsed; the root proof is still
+parsed, which is P2's job. `test_verifying_parses_the_proof_and_none_of_its_lemmas`
+pins it: exactly one parse, whatever the closure.
 
-```python
-def _is_usable_lemma(engine_proof) -> bool:
-    return bool(engine_proof.valid) and not engine_proof.has_warnings
-```
+Three things this settled, none of which the plan above had right.
 
-Both halves are stored: `proofs.valid`, and `has_warnings` is exactly *any line
-carries a `warning_message`* (`FormalSystem.check_proof`), which is an `EXISTS`
-over `proof_lines`. A citation reaching into a lemma (`[alias.3]`) needs that
-lemma's line 3, which is `proof_lines` keyed by `(proof_id, number)` — already
-the coordinate `proof_line_antecedents` records for cross-proof edges.
+**A lemma must have been verified.** The closure used to check each lemma on the
+way past, so a proof could be "proved" by a lemma nobody had ever checked. Now a
+lemma with no stored lines is simply not seeded, and the response says which one
+and why. This is a **visible behaviour change**: verify the lemma first. It is
+also the honest reading of "a proof may rest only on a lemma that stands", and it
+is what makes the guarantee a guarantee rather than a cache.
 
-**Measure:** verifying a proof at the head of a chain of *N* lemmas issues zero
-parses of those lemmas, and wall clock stops growing with *N*.
+**Usability comes off the lines, not off `proofs.valid`.**
+`FormalSystem.check_proof` defines proof validity as *every line valid* and
+`has_warnings` as *any line carrying a warning*. Both are per-line and both
+columns are stored, so deriving them from the rows being returned is equivalent
+by construction and cannot disagree with the structure it ships with. No
+`proofs.valid` read is involved.
 
-**Watch for:** a lemma whose verdict is stale must not be trusted. The existing
-invalidation (`_invalidate_dependents`, `discard_system_checks`) is what makes
-`valid` safe to read; this phase's real work is proving that it is airtight, not
-the read itself.
+**Batching is not an optimisation, it is the whole point.** Reading a proof back
+is latency, not work: a couple of round trips and almost no CPU. Done one lemma
+at a time it *loses to re-parsing* — measured at 7.2 ms per proof against 0.6 ms
+to parse it, on a small grammar. Batching the closure into two queries brings it
+to 1.15 ms per proof and flat in the number of lemmas.
+`test_the_reference_closure_is_read_in_a_fixed_number_of_queries` pins the query
+count so it cannot quietly go back to per-lemma.
+
+Two traps worth recording, because both were silent:
+
+- **The identity map holds weak references.** A prefetch that loads the term
+  subgraph and returns nothing is collected immediately, and every lookup it was
+  meant to serve goes back to the database. `prefetch_terms` returns its rows and
+  the caller must hold them.
+- **A query does not populate an instance already in the identity map.** Loading
+  the line rows puts the root terms in the map with `children` unloaded, and a
+  later `selectinload` of those same rows is a no-op without
+  `populate_existing`. The sweep looked correct and did nothing.
+
+**It is not yet faster, and that should be said plainly.** Measured against dev
+Postgres over a 6,600-theorem set.mm import (221 productions), 40 cited proofs:
+
+| | per proof |
+|---|---|
+| re-parse + re-check | **2.0 ms** |
+| load from rows (3 queries total) | **2.6 – 4.5 ms** |
+
+So P1 currently costs about 1.3–2× what it replaces. Two things say the
+direction is still right. Loading is flat in grammar size — it is term nodes and
+two queries — while parsing is not: the same corpus walk costs 2.7 ms/theorem
+over the first 5,000 and 28.8 ms/theorem by 45,000 as the grammar reaches 1,441
+productions (Metamath roadmap §1.1). And the remaining cost is ORM row
+hydration, not the term rebuild, so reading `terms`/`term_children` as Core rows
+is an available lever that has not been pulled.
+
+But the honest justification for P1 today is **correctness, not speed**: a proof
+may now rest only on a lemma that has actually been checked. The speed argument
+belongs to P2–P4, where the root proof, the rule schemas and the promoted
+theorems stop being re-parsed too.
+
+**What P1 rests on.** A stored verdict is only as good as the invalidation that
+clears it — `_discard_check` on a source edit, `_invalidate_dependents`
+transitively on a lemma's edit or deletion, `discard_system_checks` on a system
+part edit. Those existed to keep a *cache* honest and now keep a *verdict*
+honest, so they are covered by tests rather than assumed
+(`test_a_lemma_whose_structure_was_discarded_is_no_longer_citable`).
 
 ### P2. Rebuild a proof from its rows instead of parsing it
 

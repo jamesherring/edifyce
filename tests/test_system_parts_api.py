@@ -26,6 +26,7 @@ from app.db import (
     Base,
     FormalSystem,
     Proof,
+    ProofFolder,
     ProofLineAntecedentRow,
     ProofLineRow,
     SideConditionRow,
@@ -50,6 +51,12 @@ from app.db.systems import (
     SymbolRow,
 )
 from app.main import app
+from tests.database import (
+    async_url,
+    create_tables,
+    database_url,
+    enable_foreign_keys,
+)
 
 _TABLES = [
     m.__table__
@@ -61,25 +68,24 @@ _TABLES = [
         SideConditionRow,
         # A part edit invalidates the system's proofs and their stored structure
         # (app/db/proofs_mapping.discard_system_checks), so those tables must
-        # exist even though this module authors no proofs.
-        Proof, ProofLineRow, ProofLineAntecedentRow, TermRow, TermChildRow,
+        # exist even though this module authors no proofs. `proof_folders` comes
+        # along because `proofs` has a foreign key into it — SQLite creates a
+        # table whose FK target is absent, Postgres refuses to.
+        ProofFolder, Proof, ProofLineRow, ProofLineAntecedentRow,
+        TermRow, TermChildRow,
     )
 ]
 
 
 @pytest.fixture
 def client(tmp_path, monkeypatch) -> Iterator[TestClient]:
-    db_path = tmp_path / "parts.db"
+    # A throwaway database, by URL: per-test SQLite by default, or the one
+    # `EDIFYCE_TEST_DATABASE_URL` names (tests/database.py) for real Postgres.
+    db_path = database_url(tmp_path, "parts")
+    create_tables(db_path, _TABLES)
 
-    sync_engine = create_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(sync_engine, tables=_TABLES)
-    sync_engine.dispose()
-
-    async_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", poolclass=NullPool)
-
-    @event.listens_for(async_engine.sync_engine, "connect")
-    def _fk_pragma(dbapi_connection, _record):
-        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+    async_engine = create_async_engine(async_url(db_path), poolclass=NullPool)
+    enable_foreign_keys(async_engine.sync_engine)
 
     sessionmaker = async_sessionmaker(async_engine, expire_on_commit=False)
 

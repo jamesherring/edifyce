@@ -9,6 +9,7 @@ scoping. A proof is attached to a seeded formal system and verified against it.
 
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from copy import copy
 from datetime import datetime, timezone
 
 import pytest
@@ -38,6 +39,7 @@ from app.db import (
     spec_to_system,
 )
 from app.db.models import OAuthAccount, User
+from app.db.proofs_mapping import load_proof_lines
 from app.db.session import get_session
 from app.db.systems import (
     AxiomBindingRow,
@@ -54,6 +56,7 @@ from app.db.systems import (
     RuleRow,
     SymbolRow,
 )
+from app.db.systems_mapping import system_to_spec
 from app.main import app
 from tests.spec_helpers import (
     axiom,
@@ -67,8 +70,15 @@ from tests.spec_helpers import (
     statement_line,
     variable_prod,
 )
+from tests.database import (
+    async_url,
+    create_tables,
+    database_url,
+    enable_foreign_keys,
+)
 from tests.zfc_systems import scoped_zfc_spec
-from website.logical.declarative import SystemSpec
+from website.logical.declarative import SystemSpec, build_spec
+from website.logical.formal_system import FormalSystem as EngineFormalSystem
 
 # Auth tables + the system-decomposition tables + the proof tables + the term
 # graph a verified proof's lines are stored into (all SQLite-creatable). The
@@ -111,18 +121,14 @@ INVALID_PROOF = "this is not a formula"
 
 @pytest.fixture
 def db(tmp_path):
-    db_path = tmp_path / "proofs.db"
+    # Yields the *synchronous URL* of a throwaway database: a per-test SQLite
+    # file by default, or the one `EDIFYCE_TEST_DATABASE_URL` names (see
+    # tests/database.py) so the same suite can run against real Postgres.
+    url = database_url(tmp_path, "proofs")
+    create_tables(url, _TABLES)
 
-    sync_engine = create_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(sync_engine, tables=_TABLES)
-    sync_engine.dispose()
-
-    async_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", poolclass=NullPool)
-
-    # SQLite ignores ON DELETE unless foreign keys are enabled per connection.
-    @event.listens_for(async_engine.sync_engine, "connect")
-    def _fk_pragma(dbapi_connection, _record):
-        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+    async_engine = create_async_engine(async_url(url), poolclass=NullPool)
+    enable_foreign_keys(async_engine.sync_engine)
 
     sessionmaker = async_sessionmaker(async_engine, expire_on_commit=False)
 
@@ -131,7 +137,7 @@ def db(tmp_path):
             yield session
 
     app.dependency_overrides[get_session] = override_get_session
-    yield db_path
+    yield url
     app.dependency_overrides.pop(get_session, None)
 
 
@@ -161,7 +167,7 @@ def _seed_system(
     # Insert a system owned by the given user directly, so a proof has a real
     # system to attach to and verify against. Defaults to the ZFC fragment above;
     # pass `spec` for a scenario that needs different machinery (e.g. subproofs).
-    engine = create_engine(f"sqlite:///{db_path}")
+    engine = create_engine(db_path)
     try:
         with Session(engine) as session:
             system = spec_to_system(spec if spec is not None else zfc_spec())
@@ -515,7 +521,7 @@ def _seed_proof(db_path, owner_id: str, system_id: str, name: str, published: bo
     # requires owning the proof's system, so a second owner can only get a proof
     # into someone else's system by seeding — which is exactly the cross-owner
     # case the reference-scope rule guards.
-    engine = create_engine(f"sqlite:///{db_path}")
+    engine = create_engine(db_path)
     try:
         with Session(engine) as session:
             proof = Proof(
@@ -634,7 +640,7 @@ def test_reference_scope_allows_others_published_but_not_draft(client, db):
 
 
 def _seed_reference(db_path, proof_id: str, referenced_id: str, alias: str) -> None:
-    engine = create_engine(f"sqlite:///{db_path}")
+    engine = create_engine(db_path)
     try:
         with Session(engine) as session:
             session.add(
@@ -723,6 +729,8 @@ def test_reference_resolves_a_cited_lemma_at_verify(client, db):
     sid = _seed_system(db, uid)
     lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
     main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    # A lemma is cited from its *stored* lines, so it must have been verified.
+    assert client.post(f"/api/proofs/{lemma}/verify").json()["success"] is True
 
     # Without the reference, `A.1` doesn't resolve, so the step fails.
     assert client.post(f"/api/proofs/{main}/verify").json()["success"] is False
@@ -739,9 +747,137 @@ def test_reference_to_an_invalid_lemma_does_not_prove(client, db):
     # Valid line 1, but invalid overall (line 2 cites MP with one antecedent).
     broken = _create_proof(client, sid, "Broken", source="(x ∈ y → x = y) [HYP]\nx = y [MP, 1]")
     main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    client.post(f"/api/proofs/{broken}/verify")
     _set_refs(client, main, [{"referenced_proof_id": broken, "alias": "A"}])
     # An invalid proof isn't a usable lemma, so `A.1` is not seeded.
     assert client.post(f"/api/proofs/{main}/verify").json()["success"] is False
+
+
+def test_an_unverified_lemma_cannot_be_cited_and_the_reason_is_reported(client, db):
+    # A lemma is cited from its *stored* lines, so one that has never been
+    # verified has nothing to cite — a proof may rest only on a lemma that
+    # stands. Previously the closure quietly verified it on the way past, which
+    # meant a proof could be "proved" by a lemma nobody had ever checked.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
+    main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
+
+    body = client.post(f"/api/proofs/{main}/verify").json()
+    assert body["success"] is False
+    # ...and it says so, rather than leaving `[MP, A.1, 1]` looking like a typo.
+    assert any("Lemma" in error and "must be verified" in error for error in body["errors"])
+
+    # Verifying the lemma is all it takes.
+    assert client.post(f"/api/proofs/{lemma}/verify").json()["success"] is True
+    assert client.post(f"/api/proofs/{main}/verify").json()["success"] is True
+
+
+def test_verifying_parses_the_proof_and_none_of_its_lemmas(client, db, monkeypatch):
+    # P1's measure (docs/verification-from-rows.md): a lemma is *loaded* from its
+    # stored lines, not re-parsed and re-checked, so the cost of a verify stops
+    # scaling with the size of the reference closure. Two levels deep, because
+    # the seeding is transitive even though the checking is not.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+
+    base = _create_proof(client, sid, "Base", source=_LEMMA_SRC)
+    middle = _create_proof(client, sid, "Middle", source=_USER_SRC)
+    _set_refs(client, middle, [{"referenced_proof_id": base, "alias": "A"}])
+    assert client.post(f"/api/proofs/{base}/verify").json()["success"] is True
+    assert client.post(f"/api/proofs/{middle}/verify").json()["success"] is True
+
+    # Cites Middle's line 2 (`x = y`) as one of MP's premises.
+    main = _create_proof(
+        client, sid, "Main", source="(x = y → x ∈ y) [HYP]\nx ∈ y [MP, M.2, 1]"
+    )
+    _set_refs(client, main, [{"referenced_proof_id": middle, "alias": "M"}])
+
+    parses: list[str] = []
+    original = EngineFormalSystem.parse
+
+    def counted(self, text, *args, **kwargs):
+        parses.append(text)
+        return original(self, text, *args, **kwargs)
+
+    monkeypatch.setattr(EngineFormalSystem, "parse", counted)
+    assert client.post(f"/api/proofs/{main}/verify").json()["success"] is True
+
+    # Exactly one parse: the proof being verified. Neither lemma is re-read.
+    assert len(parses) == 1
+    assert parses[0].startswith("(x = y → x ∈ y)")
+
+
+def test_the_reference_closure_is_read_in_a_fixed_number_of_queries(client, db):
+    # Reading a proof back is latency, not work: per-lemma it loses to simply
+    # re-parsing, and only batching the whole closure makes it win. So the query
+    # count must not scale with the number of lemmas — that regressing would undo
+    # the point of reading rows at all, silently and without failing anything.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+
+    lemmas = []
+    for i in range(6):
+        pid = _create_proof(client, sid, f"L{i}", source=_LEMMA_SRC)
+        assert client.post(f"/api/proofs/{pid}/verify").json()["success"] is True
+        lemmas.append(pid)
+
+    main = _create_proof(client, sid, "Main", source=_USER_SRC)
+
+    def queries_for(count: int) -> int:
+        _set_refs(client, main, [
+            {"referenced_proof_id": pid, "alias": f"A{n}" if n else "A"}
+            for n, pid in enumerate(lemmas[:count])
+        ])
+        statements: list[str] = []
+        engine = create_engine(db)
+        event.listen(engine, "before_cursor_execute",
+                     lambda *a, **k: statements.append(a[2]))
+        try:
+            with Session(engine) as session:
+                system = session.scalar(select(FormalSystem))
+                built = build_spec(system_to_spec(system))["system"]
+                context = copy(built.context)
+                context.variables.update(built.build_context.variables)
+                statements.clear()
+                load_proof_lines(
+                    session, [uuid.UUID(pid) for pid in lemmas[:count]], built, context
+                )
+                return len(statements)
+        finally:
+            engine.dispose()
+
+    # Same number of round trips for one lemma as for six.
+    assert queries_for(1) == queries_for(6)
+    assert queries_for(6) <= 3
+
+
+def test_a_lemma_whose_structure_was_discarded_is_no_longer_citable(client, db):
+    # The guarantee P1 rests on: a verdict is only as good as the invalidation
+    # that clears it. Editing the system drops every proof's structure
+    # (`discard_system_checks`), so a lemma checked against the old grammar stops
+    # being citable — rather than a dependent silently resting on stored terms
+    # whose constructors have since changed meaning.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
+    main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    client.post(f"/api/proofs/{lemma}/verify")
+    _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
+    assert client.post(f"/api/proofs/{main}/verify").json()["success"] is True
+
+    # Any part edit invalidates every proof in the system, structure included.
+    rules = client.get(f"/api/formal-systems/{sid}").json()["rules"]
+    rule_id = next(r["id"] for r in rules if r["label"] == "HYP")
+    assert client.patch(
+        f"/api/formal-systems/{sid}/rules/{rule_id}", json={"name": "Hypothesis"}
+    ).status_code == 200
+
+    assert _structure(client, lemma)["lines"] == []
+    body = client.post(f"/api/proofs/{main}/verify").json()
+    assert body["success"] is False
+    assert any("Lemma" in error for error in body["errors"])
 
 
 def test_publish_requires_referenced_proofs_published(client, db):
@@ -763,6 +899,7 @@ def test_editing_a_lemma_invalidates_dependents(client, db):
     sid = _seed_system(db, uid)
     lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
     main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    client.post(f"/api/proofs/{lemma}/verify")
     _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
     assert client.post(f"/api/proofs/{main}/verify").json()["success"] is True
     assert client.get(f"/api/proofs/{main}").json()["valid"] is True
@@ -844,7 +981,7 @@ def _structure(client: TestClient, proof_id: str) -> dict:
 
 
 def _terms(db_path) -> list[TermRow]:
-    engine = create_engine(f"sqlite:///{db_path}")
+    engine = create_engine(db_path)
     try:
         with Session(engine) as session:
             return list(session.scalars(select(TermRow)))
@@ -969,6 +1106,7 @@ def test_a_citation_into_a_lemma_is_stored_by_proof_and_number(client, db):
     sid = _seed_system(db, uid)
     lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
     main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    client.post(f"/api/proofs/{lemma}/verify")
     _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
     assert client.post(f"/api/proofs/{main}/verify").json()["success"] is True
 

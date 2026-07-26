@@ -38,9 +38,11 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
+from copy import copy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from graphlib import CycleError
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete as sa_delete
@@ -57,6 +59,7 @@ from app.db import (
     ProofReference,
     clear_proof_lines,
     get_session,
+    load_proof_lines,
     store_proof_lines,
     system_to_spec,
 )
@@ -82,6 +85,10 @@ from app.schemas import (
 )
 from website.logical.declarative import build_spec
 from website.logical.graphs import topological_order
+
+if TYPE_CHECKING:
+    from website.logical.formal_system import FormalSystem as EngineSystem
+    from website.logical.matching.context import Context
 
 router = APIRouter(prefix="/proofs", tags=["proofs"])
 
@@ -301,46 +308,98 @@ async def _verify_with_references(
             VerifyProofResponse(success=False, errors=["Circular proof reference."]), None
         )
 
-    compiled: dict[uuid.UUID, EngineProof] = {}
-    for pid in order:
-        reference_context = {
-            alias: compiled[target]
-            for alias, target, _pos in edges.get(pid, ())
-            if target in compiled and _is_usable_lemma(compiled[target])
-        }
-        engine_proof = EngineProof(formal_system=compiled_system)
-        engine_proof.reference_context = reference_context
-        # The checker raises on malformed proofs against otherwise-valid systems;
-        # reshape into a structured error for the target, and just don't seed a
-        # broken lemma downstream.
-        try:
-            compiled_system.parse(closure[pid].source, proof=engine_proof)
-        except Exception as exc:  # noqa: BLE001
-            if pid == proof.id:
-                return _Verification(
-                    VerifyProofResponse(success=False, errors=[str(exc)]), None
-                )
-            engine_proof.valid = False
-        compiled[pid] = engine_proof
-
     # The root can be absent if the proof was deleted concurrently between the
     # caller's load and the closure query — a structured failure, not a 500.
-    root = compiled.get(proof.id)
-    if root is None:
+    if proof.id not in closure:
         return _Verification(
             VerifyProofResponse(success=False, errors=["Proof not found."]), None
         )
+
+    # Every lemma is *loaded* from its stored lines rather than re-parsed and
+    # re-checked. A cited line's formula is already a term in the system's graph,
+    # and whether the lemma stands is already recorded — so a verify reads what
+    # the lemma's own verify wrote instead of redoing it. See
+    # docs/verification-from-rows.md; the root is still parsed (that is P2).
+    #
+    # Dependency order still matters, but only for *seeding*: a citation may
+    # reach through a lemma into its own lemma, so a lemma's references must be
+    # resolved before anything cites it.
+    context = _term_context(compiled_system)
+    lemma_ids = [pid for pid in order if pid != proof.id]
+    # The whole closure in one go: reading a proof back is latency, not work, so
+    # batching is what makes it cheaper than re-parsing (see load_proof_lines).
+    loaded = await session.run_sync(
+        lambda sync: load_proof_lines(sync, lemma_ids, compiled_system, context)
+    )
+
+    compiled: dict[uuid.UUID, EngineProof] = {}
+    unusable: list[str] = []
+    for pid in lemma_ids:
+        lemma = loaded.get(pid)
+        if lemma is None or not _is_usable_lemma(lemma):
+            unusable.append(closure[pid].name)
+            continue
+        # A citation may reach through a lemma into its own lemma, so a lemma's
+        # references are resolved before anything cites it — which is all the
+        # dependency order is still for, now that nothing is re-checked.
+        lemma.reference_context.update(
+            {
+                alias: compiled[target]
+                for alias, target, _pos in edges.get(pid, ())
+                if target in compiled
+            }
+        )
+        compiled[pid] = lemma
+
+    root = EngineProof(formal_system=compiled_system)
+    root.reference_context = {
+        alias: compiled[target]
+        for alias, target, _pos in edges.get(proof.id, ())
+        if target in compiled
+    }
+    # The checker raises on malformed proofs against otherwise-valid systems;
+    # reshape into a structured error rather than a 500.
+    try:
+        compiled_system.parse(proof.source, proof=root)
+    except Exception as exc:  # noqa: BLE001
+        return _Verification(
+            VerifyProofResponse(success=False, errors=[str(exc)]), None
+        )
+
     return _Verification(
-        response=VerifyProofResponse(success=root.valid, proof=root.data()),
+        response=VerifyProofResponse(
+            success=root.valid, proof=root.data(), errors=_unusable_errors(unusable)
+        ),
         valid=root.valid,
         engine_proof=root,
         system=system,
         # The root's lines may cite lines of any lemma in the closure, and this
         # is how the snapshot names the proof they belong to.
-        cited_proofs=[
-            (engine, pid) for pid, engine in compiled.items() if pid != proof.id
-        ],
+        cited_proofs=[(engine, pid) for pid, engine in compiled.items()],
     )
+
+
+def _term_context(system: EngineSystem) -> Context:
+    # The context stored terms are rebuilt against: the proof context (which
+    # carries the defined notations) plus the build context's productions, which
+    # is what `load_term` resolves a constructor name in.
+    context = copy(system.context)
+    context.variables.update(system.build_context.variables)
+    return context
+
+
+def _unusable_errors(names: list[str]) -> list[str]:
+    """Why a citation did not resolve, when the reason is a lemma rather than the
+    proof. A lemma is citable only once it has been verified and stands, so an
+    unverified one leaves `[alias.n]` unresolved — which reads as a mistake in
+    the citing proof unless we say what actually happened."""
+    if not names:
+        return []
+    return [
+        "Not cited: "
+        + ", ".join(sorted(names))
+        + " — a lemma must be verified, and stand, before a proof may rest on it."
+    ]
 
 
 async def _record_verdict(

@@ -42,6 +42,12 @@ from app.db.systems import (
     SymbolRow,
 )
 from app.main import app
+from tests.database import (
+    async_url,
+    create_tables,
+    database_url,
+    enable_foreign_keys,
+)
 from tests.spec_helpers import (
     axiom,
     brackets,
@@ -88,20 +94,13 @@ def zfc_spec() -> SystemSpec:
 
 @pytest.fixture
 def db(tmp_path):
-    db_path = tmp_path / "systems.db"
+    # A throwaway database, by URL: per-test SQLite by default, or the one
+    # `EDIFYCE_TEST_DATABASE_URL` names (tests/database.py) for real Postgres.
+    db_path = database_url(tmp_path, "systems")
+    create_tables(db_path, _TABLES)
 
-    sync_engine = create_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(sync_engine, tables=_TABLES)
-    sync_engine.dispose()
-
-    async_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", poolclass=NullPool)
-
-    # SQLite ignores ON DELETE CASCADE unless foreign keys are enabled per
-    # connection; turn it on so a system delete cascades to its child rows as it
-    # does on Postgres.
-    @event.listens_for(async_engine.sync_engine, "connect")
-    def _fk_pragma(dbapi_connection, _record):
-        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+    async_engine = create_async_engine(async_url(db_path), poolclass=NullPool)
+    enable_foreign_keys(async_engine.sync_engine)
 
     sessionmaker = async_sessionmaker(async_engine, expire_on_commit=False)
 
@@ -136,7 +135,7 @@ def _seed_spec(db_path, owner_id: str, spec: SystemSpec, published: bool = False
     # content. `published=True` sets published_at directly, which is the
     # only way to reach a broken-but-published state now that the publish
     # endpoint gates on the system compiling.
-    engine = create_engine(f"sqlite:///{db_path}")
+    engine = create_engine(db_path)
     try:
         with Session(engine) as session:
             system = spec_to_system(spec)
@@ -307,7 +306,7 @@ def test_delete_removes_the_system(client):
 
 
 def _count(db_path, model) -> int:
-    engine = create_engine(f"sqlite:///{db_path}")
+    engine = create_engine(db_path)
     try:
         with Session(engine) as session:
             return session.scalar(select(func.count()).select_from(model)) or 0

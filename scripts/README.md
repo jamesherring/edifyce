@@ -131,3 +131,29 @@ After a run the corpus is queryable in plain SQL, with nothing recompiled:
 select rule, count(*) from proof_lines where rule is not null
 group by rule order by 2 desc limit 10;
 ```
+
+## Running the API tests against Postgres
+
+The API suites use a throwaway SQLite database by default — fast and setup-free.
+Point them at a real Postgres to exercise the dialect the deployment actually
+runs on:
+
+```bash
+scripts/edifyce-dev db up
+psql "$(scripts/edifyce-dev env | sed -n 's/^DATABASE_URL=\([^ ]*\).*/\1/p')" \
+  -c "create database edifyce_test"
+
+EDIFYCE_TEST_DATABASE_URL="postgresql://postgres@127.0.0.1:5439/edifyce_test" \
+  uv run pytest tests/test_proofs_api.py tests/test_systems_api.py \
+                tests/test_system_parts_api.py -p no:randomly
+```
+
+Worth doing because SQLite hides what the real database enforces: it creates a
+table whose foreign-key target does not exist, ignores `ON DELETE` without a
+per-connection pragma, has no advisory locks, and stores UUID/JSONB as text. It
+also runs the recursive CTE the term-graph sweep depends on
+(`app/db/terms_mapping.prefetch_terms`) against the planner that will really see
+it. Use a **separate database** — the suites drop and recreate every table.
+
+See `tests/database.py`; it needs the dev group's `psycopg` (the app itself only
+ever uses asyncpg).

@@ -23,6 +23,10 @@ dev = [
     "httpx>=0.27",
     "atlas-provider-sqlalchemy>=0.2",
     "aiosqlite>=0.20",
+    # A *synchronous* Postgres driver, for running the API suites against a real
+    # database instead of SQLite (see tests/database.py). The app itself only
+    # ever uses asyncpg; this is test-only.
+    "psycopg[binary]>=3.2",
 ]
 
 [tool.uv]
