@@ -341,3 +341,36 @@ def test_logical_line_must_declare_a_formula_field():
 
     # A comment carries no formula by design, so it is unaffected.
     assert LineType(name="note", behaviour="comment").formula_field is None
+
+
+def test_the_rule_index_notices_a_list_replaced_behind_it():
+    # `rule_by_label` is an index over the public `inference_rules` list, and a
+    # citation resolves through it — so it has to notice when a caller changes the
+    # list rather than going through `add_inference_rule`. The scan it replaced
+    # read the list every time and could not go stale; a length-only guard would
+    # miss a same-length replacement and keep resolving a rule that is gone.
+    from website.logical.formal_system.rules import InferenceRule
+    from website.logical.formal_system.system import FormalSystem
+
+    def rule(label):
+        return InferenceRule(name=label, label=label, antecedents=[], deduction="p")
+
+    system = FormalSystem(name="t")
+    system.add_inference_rule(rule("A"))
+    assert system.rule_by_label("A") is not None
+
+    # Same length, different contents: `A` is gone and `B` is there.
+    system.inference_rules = [rule("B")]
+    assert system.rule_by_label("A") is None
+    assert system.rule_by_label("B") is not None
+
+    # An append behind the index is seen too.
+    system.inference_rules.append(rule("C"))
+    assert system.rule_by_label("C") is not None
+
+    # And replacing a label through the supported path keeps the list at one
+    # entry — the case where `add_inference_rule` itself rebuilds the list.
+    replacement = rule("C")
+    system.add_inference_rule(replacement)
+    assert [r.label for r in system.inference_rules] == ["B", "C"]
+    assert system.rule_by_label("C") is replacement

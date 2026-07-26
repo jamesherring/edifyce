@@ -1,12 +1,18 @@
 """The top-level :class:`FormalSystem`."""
 
+from __future__ import annotations
+
 from copy import copy
+from typing import TYPE_CHECKING
 
 from ..kernel.definitions import Definition as KernelDefinition
 from ..kernel.terms import from_match
 from ..matching import Context, Match, Pattern, StringPattern, UnionPattern
 from .promotion import PromotedTheorem
 from .proof import Proof
+
+if TYPE_CHECKING:
+    from .rules import InferenceRule
 
 
 def _line_field(match: Match, field: str) -> Match:
@@ -36,10 +42,9 @@ class FormalSystem:
         # public shape - order is declaration order and callers render it - but a
         # citation resolves by label, and an imported system's primitives are not
         # a handful: set.mm contributes 1,559 logical `$a`, against ~4M citations
-        # across the corpus. Guarded by length, so a caller that appends to the
-        # list directly still gets a correct answer (see `_rules_by_label`).
-        self._rule_index: dict = {}
-        self._rule_index_size: int = -1
+        # across the corpus. See `_rules_by_label` for what keeps the two in step.
+        self._rule_index: dict[str, InferenceRule] = {}
+        self._rule_index_stamp: tuple[int, int] = (0, -1)
 
         # The system's definitional axioms (kernel Definitions). A proof cites
         # one by label, or lets the generic keyword search them all. Held here
@@ -237,7 +242,7 @@ class FormalSystem:
         # builder, so a citation resolves to exactly one.
         self.definitions.append(definition)
 
-    def add_inference_rule(self, rule):
+    def add_inference_rule(self, rule: InferenceRule) -> None:
         # Add an inference rule, replacing any existing one with the same label.
         #
         # The scan is skipped unless the label is actually taken: an import adds
@@ -250,19 +255,27 @@ class FormalSystem:
 
         self.inference_rules.append(rule)
         self._rule_index[rule.label] = rule
-        self._rule_index_size = len(self.inference_rules)
+        self._rule_index_stamp = (id(self.inference_rules), len(self.inference_rules))
 
-    def rule_by_label(self, label):
+    def rule_by_label(self, label: str) -> InferenceRule | None:
         """The primitive inference rule labelled ``label``, or None."""
         return self._rules_by_label().get(label)
 
-    def _rules_by_label(self) -> dict:
-        # Rebuilt when `inference_rules` has changed length behind the index -
-        # a caller building a system by assigning the list, or appending to it.
-        # `add_inference_rule` keeps the two in step itself.
-        if self._rule_index_size != len(self.inference_rules):
+    def _rules_by_label(self) -> dict[str, InferenceRule]:
+        # `inference_rules` is a public list, so the index has to notice when one
+        # is changed behind it. The stamp is the list's identity *and* its length:
+        # identity catches a caller assigning a whole new list (including the one
+        # `__init__` may be handed, and the one `add_inference_rule` builds to drop
+        # a replaced label - both of which can keep the length), length catches an
+        # append. The scan this replaced read the list every time and so could not
+        # go stale at all; that is what is being traded for an O(1) lookup, and the
+        # one mutation still outside it is assigning *into* the list
+        # (`rules[i] = other`), which no caller does and `add_inference_rule` is
+        # the supported way to do.
+        stamp = (id(self.inference_rules), len(self.inference_rules))
+        if self._rule_index_stamp != stamp:
             self._rule_index = {ir.label: ir for ir in self.inference_rules}
-            self._rule_index_size = len(self.inference_rules)
+            self._rule_index_stamp = stamp
         return self._rule_index
 
     def promote(self, theorem: PromotedTheorem) -> None:
