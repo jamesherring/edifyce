@@ -1544,3 +1544,46 @@ def test_brackets_definitions_axioms_rules_appear_in_detail(client):
     assert detail["axioms"][0]["label"] == "AX"
     assert detail["rules"][0]["antecedents"] == ["a"]
     assert detail["definitions"][0]["name"] == "d"
+
+
+def test_validate_reports_the_fresh_clause_the_engine_settled_on(client):
+    # Inference is otherwise silent: an author who omits the `fresh` clause has
+    # no way to see what the grammar's binding slots concluded. `validate` builds
+    # the system, so it is where the answer exists.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/api/formal-systems/{sid}/brackets", {"opening": "(", "closing": ")"})
+    for sort in ("setvar", "formula"):
+        _post(client, f"/api/formal-systems/{sid}/sorts", {"name": sort})
+    _post(client, f"/api/formal-systems/{sid}/productions",
+          {"name": "letter", "sort": "setvar", "regex": "[a-z]"})
+    _post(client, f"/api/formal-systems/{sid}/productions",
+          {"name": "membership", "sort": "formula", "template": "(x ∈ y)",
+           "bindings": [{"var": "x", "sort": "setvar"}, {"var": "y", "sort": "setvar"}]})
+    _post(client, f"/api/formal-systems/{sid}/productions",
+          {"name": "implication", "sort": "formula", "template": "(p → q)",
+           "bindings": [{"var": "p", "sort": "formula"}, {"var": "q", "sort": "formula"}]})
+    # `∀x.phi` declares that `x` binds over `phi` — the whole point.
+    _post(client, f"/api/formal-systems/{sid}/productions",
+          {"name": "forall", "sort": "formula", "template": "∀x.phi",
+           "bindings": [{"var": "x", "sort": "setvar", "scopes_over": ["phi"]},
+                        {"var": "phi", "sort": "formula"}]})
+    _post(client, f"/api/formal-systems/{sid}/productions",
+          {"name": "subset", "sort": "formula", "template": "(x ⊆ y)",
+           "bindings": [{"var": "x", "sort": "setvar"}, {"var": "y", "sort": "setvar"}]})
+    _post(client, f"/api/formal-systems/{sid}/line-types",
+          {"name": "statement", "shape": "<formula> [<reference>]",
+           "logical_sort": "formula",
+           "parts": [{"name": "reference", "regex": "[A-Za-z0-9 ,.]+"}]})
+    # No `fresh` clause: `z` must be inferred from `∀`'s binding slot.
+    _post(client, f"/api/formal-systems/{sid}/definitions",
+          {"sort": "formula", "name": "df-subset", "label": "df-subset",
+           "higher": "(x ⊆ y)", "lower": "∀z.((z ∈ x) → (z ∈ y))",
+           "bindings": [{"var": "x", "sort": "setvar"}, {"var": "y", "sort": "setvar"}]})
+
+    result = client.post(f"/api/formal-systems/{sid}/validate").json()
+
+    assert result["success"] is True, result["errors"]
+    (reported,) = result["definitions"]
+    assert reported["label"] == "df-subset"
+    assert reported["binders"] == [{"var": "z", "sort": "setvar", "inferred": True}]

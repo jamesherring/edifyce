@@ -258,6 +258,29 @@ class FormalSystemUpdate(BaseModel):
     published: bool | None = None
 
 
+class DefinitionBinder(BaseModel):
+    """One bound variable of a definition's defining form, as the engine reads it."""
+
+    var: str
+    sort: str
+    # How the binder was placed. `False` means the author wrote it in the `fresh`
+    # clause; `True` means the engine read it off the grammar's binding slots
+    # (`Production.scopes_over`). Reported because inference is otherwise silent —
+    # an author who omits the clause has no other way to see what was concluded.
+    inferred: bool
+
+
+class DefinitionBinders(BaseModel):
+    """The binders a compiled definition ended up with, for one definition."""
+
+    # The name a proof cites it by, or null when unnamed.
+    label: str | None = None
+    # The defined form as the engine renders it, so an unlabelled definition is
+    # still identifiable in the list.
+    defined_form: str
+    binders: list[DefinitionBinder] = Field(default_factory=list)
+
+
 class SystemValidation(BaseModel):
     """Result of assembling the stored rows and compiling them."""
 
@@ -266,6 +289,11 @@ class SystemValidation(BaseModel):
     system_name: str | None = None
     line_type_count: int | None = None
     inference_rule_count: int | None = None
+    # Per compiled definition, the `fresh` clause the engine settled on. Only
+    # definitions that *layer* appear (one whose defining form matched nothing is
+    # dropped at build), so this is a report on what was built, not on what was
+    # stored.
+    definitions: list[DefinitionBinders] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

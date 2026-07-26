@@ -19,6 +19,7 @@ function validation(over: Partial<SystemValidation> = {}): SystemValidation {
 		system_name: 'Test system',
 		line_type_count: 1,
 		inference_rule_count: 2,
+		definitions: [],
 		...over
 	};
 }

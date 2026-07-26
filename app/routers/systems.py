@@ -48,6 +48,8 @@ from app.db.systems import (
 )
 from app.schemas import (
     Axiom,
+    DefinitionBinder,
+    DefinitionBinders,
     Binding,
     BracketPair,
     Definition,
@@ -563,6 +565,19 @@ async def validate_system(
         system_name=compiled.name or None,
         line_type_count=len(compiled.line_types),
         inference_rule_count=len(compiled.inference_rules),
+        definitions=[
+            DefinitionBinders(
+                label=definition.label,
+                defined_form=definition.higher.to_string(),
+                binders=[
+                    DefinitionBinder(
+                        var=binder.name, sort=binder.sort.name, inferred=binder.scoped
+                    )
+                    for binder in definition.fresh
+                ],
+            )
+            for definition in compiled.definitions
+        ],
     )
 
 
