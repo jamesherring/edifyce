@@ -92,6 +92,8 @@
 		// mode switch clears the others; the backend requires exactly one set.
 		// Bindings only apply to a composite template.
 		const v = value.trim();
+		const slots = mode === 'template' ? bindings.filter((b) => b.var.trim() && b.sort.trim()) : [];
+		const slotNames = new Set(slots.map((b) => b.var.trim()));
 		return {
 			name: name.trim(),
 			sort: sortName,
@@ -105,7 +107,19 @@
 			// off for a family, where it is not inert but a build error, so switching
 			// a declared constant to Family mode can't store an unbuildable row.
 			denotes_constant: mode === 'atom_base' ? false : denotesConstant,
-			bindings: mode === 'template' ? bindings.filter((b) => b.var.trim() && b.sort.trim()) : []
+			// A binder's `scopes_over` names sibling slots, and there is no control
+			// here to edit it (see docs/binding-slots-design.md) — so it rides along
+			// untouched, and renaming or removing the slot it names would send a
+			// target that no longer exists. The backend rejects that, which would
+			// dead-end an edit the user has no way to repair. Drop the stale target
+			// instead: a scope over a slot that is gone is not a declaration worth
+			// keeping.
+			bindings: slots.map((b) => ({
+				...b,
+				scopes_over: (b.scopes_over ?? []).filter(
+					(target) => slotNames.has(target) && target !== b.var.trim()
+				)
+			}))
 		};
 	}
 </script>

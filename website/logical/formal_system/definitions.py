@@ -270,6 +270,48 @@ def _leaf_name(term: Term) -> str | None:
     return None
 
 
+def _binds_every_occurrence(term: Term, name: str) -> bool:
+    """Whether every leaf spelled ``name`` in ``term`` lies under a binder slot
+    that binds it — the half of a `scopes_over` declaration that says *over what*.
+
+    Abstracting a binder replaces the name everywhere it is spelled
+    (:func:`~website.logical.kernel.terms.bind` keys on the surface string), so
+    inferring one for a defining form that also uses the name *outside* the
+    binder's scope would quietly capture a genuinely free occurrence: an unfold
+    would rename both together and the definition would mean something the author
+    did not write. Whether that is so is exactly what the declared scope decides,
+    which is why inference reads it rather than only the binder slot's label.
+
+    So an occurrence out of scope withholds the inference, and the name stays one
+    the defining form conjures — refused by ``introduced_leaves`` with the message
+    that names the remedy, which is what happened before binding slots existed. A
+    declared ``fresh`` clause is untouched: it is the author's positive act.
+    """
+
+    def walk(current: Term, bound: bool) -> bool:
+        if not isinstance(current, Node):
+            # A Var is a parameter the defined form supplies; it spells no leaf.
+            return True
+        if not current.children:
+            return bound or current.literal != name
+
+        # The slots this node binds `name` in: its own binder occurrences, and
+        # everything those binders were declared to scope over.
+        inner: set[str] = set()
+        for slot, targets in current.constructor.scopes_over.items():
+            child = current.children.get(slot)
+            if child is not None and _leaf_name(child) == name:
+                inner.add(slot)
+                inner.update(targets)
+
+        return all(
+            walk(child, bound or label in inner)
+            for label, child in current.children.items()
+        )
+
+    return walk(term, False)
+
+
 def _resolve_binders(
     declared: Sequence[FreshBinder], lower: Term
 ) -> list[FreshBinder]:
@@ -283,6 +325,12 @@ def _resolve_binders(
     The one genuine contradiction is a shared name at a different sort: the
     grammar puts the leaf in a slot of one sort and the author declared another.
     That cannot both be true, and the grammar is the thing that was checked.
+
+    An inferred binder must also *cover* its name — every occurrence of it in the
+    defining form inside the binder's declared scope (see
+    :func:`_binds_every_occurrence`). Only inference is held to this: a declared
+    clause is the author's own claim, and honouring it is the behaviour every
+    system written before binding slots existed relies on.
     """
     inferred = _binders_in_binding_slots(lower)
     for binder in declared:
@@ -295,7 +343,14 @@ def _resolve_binders(
                 f"it be inferred, or declare the sort the grammar gives it."
             )
     names = {binder.name for binder in declared}
-    return [*declared, *(b for name, b in inferred.items() if name not in names)]
+    return [
+        *declared,
+        *(
+            binder
+            for name, binder in inferred.items()
+            if name not in names and _binds_every_occurrence(lower, name)
+        ),
+    ]
 
 
 def build_kernel_definition(

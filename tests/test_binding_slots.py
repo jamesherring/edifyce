@@ -20,7 +20,7 @@ pytest.importorskip("regex")
 
 from website.logical.declarative import DeclarativeError, SystemSpec, build_system
 from website.logical.formal_system.definitions import DefinitionError, parse_definition
-from website.logical.kernel import constructor_for, from_match, unfold
+from website.logical.kernel import constructor_for, from_match, introduced_leaves, unfold
 from tests.spec_helpers import brackets, regex_prod, statement_line, template_prod
 
 
@@ -231,6 +231,58 @@ def test_inference_adds_to_a_partial_declaration(binding_theory):
     )
 
     assert sorts(definition) == [("z", "setvar"), ("w", "setvar")]
+
+
+def test_an_occurrence_outside_the_scope_withholds_the_inference(binding_theory):
+    # `z` is bound in the left branch and *free* in the right one. Abstracting it
+    # would rename both together, so an unfold would capture a genuinely free
+    # variable — the very thing a defining form may not do. Inference declines,
+    # and the name goes back to being one the form conjures.
+    system, context = binding_theory
+    variables = system.build_context.variables
+    definition = parse_definition(
+        variables["formula"],
+        "(x ⊆ y)",
+        "(∀z.(z ∈ x) → (z ∈ y))",
+        {"x": variables["setvar"], "y": variables["setvar"]},
+        context,
+    )
+
+    assert definition.fresh == ()
+    assert sorted(leaf.literal for leaf in introduced_leaves(definition)) == ["z"]
+
+
+def test_a_declared_clause_still_reaches_outside_the_scope(binding_theory):
+    # The author's own claim is honoured as it always was: a `fresh` clause is a
+    # positive act, and only inference is held to the declared scope.
+    system, context = binding_theory
+    variables = system.build_context.variables
+    definition = parse_definition(
+        variables["formula"],
+        "(x ⊆ y)",
+        "(∀z.(z ∈ x) → (z ∈ y))",
+        {"x": variables["setvar"], "y": variables["setvar"]},
+        context,
+        fresh={"z": variables["setvar"]},
+    )
+
+    assert sorts(definition) == [("z", "setvar")]
+
+
+def test_a_second_binder_over_the_same_name_still_infers(binding_theory):
+    # Every occurrence is in *some* binder's scope, which is what is asked — not
+    # that one binder covers them all.
+    system, context = binding_theory
+    variables = system.build_context.variables
+    definition = parse_definition(
+        variables["formula"],
+        "(x ⊆ y)",
+        "(∀z.(z ∈ x) → ∀z.(z ∈ y))",
+        {"x": variables["setvar"], "y": variables["setvar"]},
+        context,
+    )
+
+    assert sorts(definition) == [("z", "setvar")]
 
 
 def test_a_declared_sort_the_grammar_contradicts_is_refused():

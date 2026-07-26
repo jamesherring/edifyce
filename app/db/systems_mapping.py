@@ -102,8 +102,12 @@ def spec_to_system(spec: SystemSpec) -> FormalSystem:
             rows[var] = ProductionBindingRow(position=j, var=var, symbol=symbols[sort])
             symbol.bindings.append(rows[var])
         # A binding slot points at *sibling slots of the same production*, so its
-        # targets are the rows just built. The engine has already refused a name
-        # that is not one of them (`declarative._binding_scopes`).
+        # targets are the rows just built. Indexed rather than probed, on the same
+        # assumption as the `symbols[sort]` lookups above: a spec reaching storage
+        # names things that exist. A scope naming a slot the *template* lacks is a
+        # different matter — it stores fine and fails at build
+        # (`declarative._binding_scopes`), which is the draft-tolerant behaviour
+        # every other part of a system already has.
         for var, scoped in prod.scopes_over.items():
             rows[var].scopes = [
                 ProductionBindingScopeRow(position=j, scoped=rows[target])

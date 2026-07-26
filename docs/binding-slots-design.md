@@ -72,10 +72,22 @@ in a slot of one sort and the author declared another, and both cannot be true.
 That is narrower than "checked when given" as first written here, and it is the
 only direction that is actually decidable while the declaration is optional.
 
-Two things are deliberately not binders. A slot holding a `Var` is a *parameter*
-the defined form supplies, so an unfold substitutes it rather than conjuring it;
-and a production with no `scopes_over` contributes nothing, which is what keeps
-every system authored before this field behaving as it did.
+Three things are deliberately not binders. A slot holding a `Var` is a
+*parameter* the defined form supplies, so an unfold substitutes it rather than
+conjuring it; a production with no `scopes_over` contributes nothing, which is
+what keeps every system authored before this field behaving as it did; and a name
+the defining form *also* uses outside the binder's declared scope is left alone.
+
+That last one is why inference reads the "over what" half of the declaration and
+not just the binder slot's label. `bind` keys on the surface string, so
+abstracting a binder rewrites the name everywhere it is spelled: for
+`(∀z.(z ∈ x) → (z ∈ y))` the free `z` on the right would be renamed along with
+the bound one, and the definition would mean something its author did not write.
+Withholding the inference leaves `z` a name the form conjures, which
+`introduced_leaves` refuses with the message that names the remedy — exactly what
+happened before binding slots existed. A hand-written `fresh` clause still
+reaches outside the scope: it is the author's positive act, and narrowing it
+would break systems that predate the field.
 
 ### 3. Scope-aware definitional steps
 
@@ -144,6 +156,12 @@ The client type carries the field and the production editor round-trips it, so a
 edit through the UI cannot silently drop a declared binding slot. Per-slot "binds
 over" *selection* is still to do — the part that can safely lag, since the field
 is optional and defaults to empty.
+
+Round-tripping a field with no control to edit it has one sharp edge, and the
+editor handles it: renaming or deleting a slot another slot scopes over would
+send a target that no longer exists, which the API rejects — dead-ending an edit
+the user cannot repair from that form. A stale target is dropped on save instead.
+Adding the control removes the need for that, and is the reason to add it.
 
 ## Open questions
 
