@@ -39,7 +39,7 @@ are not relitigated), and what remains.
 | Token-collision defects (§1.2) | fixed — four instances of one shape |
 | `$t` typesetting / notation (§4) | **next** |
 | Axiom-vs-theorem split (§3.2) | engine done; storing the library open |
-| Definition classification (§5, A4) | classifier done — 1,429/130; wiring open |
+| Definition classification (§5, A4) | classifier done — 1,427/132; wiring open |
 
 `tests/test_metamath_import.py` imports `sqrt2re` from its verbatim `set.mm` proof
 and has Edifyce's kernel check the result:
@@ -552,21 +552,32 @@ then the kernel:
 2. its defined side is **not a bare metavariable**;
 3. its defined side is **built from notation not yet in use**.
 
-Over `set.mm`: **1,429 definitions, 130 axioms**, and it agrees with the `df-`
-convention on 1,429 of 1,433. All four disagreements are the classifier's:
-`df-bi` defines `↔` and so cannot use it (its root is `-.`), and `df-clab`,
-`df-cleq`, `df-clel` have ordinary `e.`/`=` on the defined side — they are the
-axioms connecting class notation to set theory, not eliminable definitions. No
-assertion Metamath names `ax-` is classified as a definition.
+Three further refusals cover what a `Definition` cannot faithfully carry: a
+defining form built from the form being defined, an assertion holding only under
+`$e` hypotheses, and a metavariable the proviso syntax cannot name. A `$d` *is*
+carried, as the definition's condition — 1,033 of the definition-shaped
+statements have one, and dropping them would licence the captures Metamath
+forbids.
+
+Over `set.mm`: **1,427 definitions, 132 axioms**, and it agrees with the `df-`
+convention on 1,427 of 1,433. All six disagreements are the classifier's:
+`df-bi` defines `↔` and so cannot use it (its root is `-.`); `df-clab`,
+`df-cleq`, `df-clel` have ordinary `e.`/`=` on the defined side — the axioms
+connecting class notation to set theory, not eliminable definitions; and
+`df-sb`/`df-mo` hold only under `$e` hypotheses. No assertion Metamath names
+`ax-` is classified as a definition.
 
 None of the three tests is load-bearing alone, and the set is not trusted to be
 complete. Test 1 admits an implication, since `( ph -> ps )` has a
 biconditional's shape; test 3 then admits `ax-1`, because `ph` is notation not yet
 in use the first time it appears — which is what test 2 is for, and which was
 found by running the classifier over `set.mm` rather than by reasoning about it.
-**The kernel is the arbiter**: a proposal that will not build as a definition is
-refused there and stays an axiom. Any doubt defaults to axiom, which costs a
-longer proof rather than an unsound one.
+Any doubt defaults to axiom, which costs a longer proof rather than an unsound
+one. What is *behind* that default is less than it sounds: the kernel refuses a
+definition whose defining form introduces a leaf the defined form does not
+supply — the capture half of admissibility — and nothing more. Non-circularity
+and conservativity are untreated there, as in Metamath, so those refusals are
+this module's and have nothing behind them.
 
 *What remains* is wiring it into the import, which changes the basis every
 imported proof is checked against and so wants the corpus re-verified as one

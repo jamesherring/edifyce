@@ -27,16 +27,26 @@ Nothing about the *label*. Two structural tests, in order, and then the kernel:
    `df-clel`, whose left sides are ordinary ``e.``/``=`` and which are genuinely
    axioms connecting class notation to set theory, whatever their names suggest.
 
-None of the three is load-bearing alone. Test 1 admits an implication, since
-`( ph -> ps )` has the shape of a biconditional; test 3 then admits `ax-1`,
+Then three refusals for what a `Definition` cannot faithfully carry: a defining
+form built from the very form being defined (a recursive alias, not something
+eliminable), an assertion holding only under `$e` hypotheses (a definition holds
+unconditionally, and there is nowhere to put a premise), and a metavariable the
+proviso syntax cannot name. A `$d` *can* be carried, as the definition's
+condition, and must be: 1,033 of set.mm's definition-shaped statements have one.
+
+None of the shape tests is load-bearing alone. Test 1 admits an implication,
+since `( ph -> ps )` has the shape of a biconditional; test 3 then admits `ax-1`,
 because `ph` is notation not yet in use the first time it appears - which is why
 test 2 is there, and which was found by running the classifier over `set.mm`
-rather than by reasoning about it. Nor is the set of them trusted to be
-complete.
-The kernel is the arbiter: a proposal that will not build as a definition - its
-defining form introducing a leaf the defined form does not supply, say - is
-refused there and stays an axiom. **The default on any doubt is axiom**, which is
-the direction that costs a longer proof rather than an unsound one.
+rather than by reasoning about it. Nor is the set of them trusted to be complete.
+
+**The default on any doubt is axiom**, which costs a longer proof rather than an
+unsound one. What is *behind* that default is worth stating precisely, because it
+is less than it sounds: the kernel refuses a definition whose defining form
+introduces a leaf the defined form does not supply - the capture half of
+admissibility - and that is all. Non-circularity and conservativity are untreated
+there, as in Metamath (see AGENTS.md), so the circularity refusal above has
+nothing behind it and every other gap of that kind is this module's to close.
 
 `df-bi` shows why the tests have to be structural. It defines ``<->`` and so
 cannot use it: its statement is a nest of negated implications, root ``-.``, and
@@ -50,10 +60,12 @@ from typing import TYPE_CHECKING
 
 from ..declarative import Definition
 from ..kernel.terms import Node
+from .importer import _distinct_provisos, _proviso_safe_names
 
 if TYPE_CHECKING:
+    from ..formal_system import FormalSystem
     from ..kernel.terms import Term
-    from .parser import Assertion
+    from .parser import Assertion, Database
 
 
 @dataclass(frozen=True)
@@ -114,14 +126,19 @@ def _sides(term: Term) -> tuple[Node, Node] | None:
 
 
 def classify(
-    assertion: Assertion, statement: Term | None, in_use: set[str]
+    assertion: Assertion,
+    statement: Term | None,
+    in_use: set[str],
+    database: Database,
+    system: FormalSystem,
 ) -> Classified:
     """Decide whether ``assertion`` is a definition, given what precedes it.
 
     ``statement`` is the parsed statement (None if it did not parse) and
     ``in_use`` the constructor names every *earlier* logical assertion used -
     both supplied by the caller, because a walk already has them and re-deriving
-    either per assertion would re-parse the corpus.
+    either per assertion would re-parse the corpus. ``database`` and ``system``
+    are needed only to render a ``$d`` into proviso syntax.
     """
     if statement is None:
         return Classified(assertion.label, reason="statement does not parse")
@@ -154,6 +171,36 @@ def classify(
             reason=f"defined side is built from notation already in use ({head})",
         )
 
+    if head in constructors_used(lower):
+        # A recursive alias, not an eliminable definition. `in_use` cannot catch
+        # this: it holds what *earlier* assertions used, and the defining form is
+        # part of this one. Nor can the kernel, which checks the capture half of
+        # admissibility and leaves non-circularity untreated, as Metamath does -
+        # so this is the one refusal with nothing behind it.
+        return Classified(
+            assertion.label,
+            reason=f"defining side is built from the form being defined ({head})",
+        )
+
+    if assertion.essentials:
+        # A definition holds unconditionally; a `$a` under `$e` hypotheses does
+        # not. `Definition` has nowhere to put a premise, so folding one in would
+        # licence unfolds the Metamath assertion forbids.
+        premises = ", ".join(h.label for h in assertion.essentials)
+        return Classified(
+            assertion.label,
+            reason=f"holds only under hypotheses ({premises})",
+        )
+
+    if _proviso_safe_names(assertion):
+        # A metavariable the proviso syntax cannot name (set.mm's `.,`). The
+        # promotion path renames it, but a rename would have to reach the defined
+        # and defining forms too, which are rendered from the parsed term.
+        return Classified(
+            assertion.label,
+            reason="a metavariable cannot be named in a proviso",
+        )
+
     sort = statement.constructor.slot_sorts[statement.constructor.slots[0]]
     return Classified(
         assertion.label,
@@ -163,6 +210,11 @@ def classify(
             higher=defined,
             lower=lower.to_string(),
             bindings=[(h.variable, h.typecode) for h in assertion.floatings],
+            # A `$d` restricts which substitutions the definition admits, so it
+            # has to travel with it: 1,033 of set.mm's definitions carry one, and
+            # dropping them would licence exactly the captures Metamath forbids.
+            condition="; ".join(_distinct_provisos(assertion, database, system))
+            or None,
             label=assertion.label,
         ),
     )

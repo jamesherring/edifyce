@@ -30,7 +30,7 @@ def classify_all(source: str) -> dict[str, object]:
             continue
         line = system.parse(" ".join(assertion.tokens) + " [x]").proof_lines[0]
         term = line.formula_term
-        out[assertion.label] = classify(assertion, term, in_use)
+        out[assertion.label] = classify(assertion, term, in_use, database, system)
         if term is not None:
             in_use |= constructors_used(term)
     return out
@@ -138,3 +138,80 @@ def test_the_classifier_reads_shape_not_the_label():
 
     assert classified.is_definition
     assert classified.definition.higher == "( ph /\\ ps )"
+
+
+# A definition whose defining side uses the very form it defines. `in_use` cannot
+# see this — it holds what *earlier* assertions used — and neither can the kernel,
+# which leaves non-circularity untreated.
+CIRCULAR = r"""
+$c |- wff ( ) -> <-> NEW $.
+$v ph ps $.
+wph $f wff ph $.
+wps $f wff ps $.
+wi $a wff ( ph -> ps ) $.
+wb $a wff ( ph <-> ps ) $.
+wnew $a wff NEW ph $.
+df-new $a |- ( NEW ph <-> ( NEW ph -> ph ) ) $.
+"""
+
+
+def test_a_recursive_alias_is_not_a_definition():
+    classified = classify_all(CIRCULAR)["df-new"]
+
+    assert not classified.is_definition
+    assert "built from the form being defined" in classified.reason
+
+
+# `df-sb` and `df-mo` are set.mm's two definition-shaped `$a` under hypotheses.
+CONDITIONAL = r"""
+$c |- wff ( ) -> <-> NEW $.
+$v ph ps $.
+wph $f wff ph $.
+wps $f wff ps $.
+wi $a wff ( ph -> ps ) $.
+wb $a wff ( ph <-> ps ) $.
+wnew $a wff NEW ph $.
+${
+  df-cond.1 $e |- ph $.
+  df-cond $a |- ( NEW ph <-> ( ph -> ph ) ) $.
+$}
+"""
+
+
+def test_an_assertion_holding_only_under_hypotheses_is_not_a_definition():
+    # A definition holds unconditionally and `Definition` has nowhere to put a
+    # premise, so folding this in would licence unfolds the `$a` forbids.
+    classified = classify_all(CONDITIONAL)["df-cond"]
+
+    assert not classified.is_definition
+    assert "holds only under hypotheses" in classified.reason
+
+
+# A `$d` restricts which substitutions the definition admits, so it has to travel
+# with it — 1,033 of set.mm's definition-shaped statements carry one.
+WITH_PROVISO = r"""
+$c |- wff class setvar ( ) <-> A. e. NEW $.
+$v x ph ps A B $.
+vx $f setvar x $.
+wph $f wff ph $.
+wps $f wff ps $.
+cA $f class A $.
+cB $f class B $.
+cv $a class x $.
+wcel $a wff A e. B $.
+wb $a wff ( ph <-> ps ) $.
+wal $a wff A. x ph $.
+wnew $a wff NEW x A $.
+${
+  $d x A $.
+  df-new $a |- ( NEW x A <-> A. x x e. A ) $.
+$}
+"""
+
+
+def test_a_distinct_variable_constraint_travels_with_the_definition():
+    classified = classify_all(WITH_PROVISO)["df-new"]
+
+    assert classified.is_definition
+    condition = classified.definition.condition
+    assert condition is not None and "disjoint(" in condition
