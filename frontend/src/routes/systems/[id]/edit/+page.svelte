@@ -146,7 +146,8 @@
 				errors: [err instanceof ApiError ? err.message : String(err)],
 				system_name: null,
 				line_type_count: null,
-				inference_rule_count: null
+				inference_rule_count: null,
+				definitions: []
 			};
 		} finally {
 			if (seq === loadSeq) validating = false;

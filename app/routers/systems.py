@@ -48,6 +48,8 @@ from app.db.systems import (
 )
 from app.schemas import (
     Axiom,
+    DefinitionBinder,
+    DefinitionBinders,
     Binding,
     BracketPair,
     Definition,
@@ -563,7 +565,43 @@ async def validate_system(
         system_name=compiled.name or None,
         line_type_count=len(compiled.line_types),
         inference_rule_count=len(compiled.inference_rules),
+        definitions=_definition_binders(system, compiled),
     )
+
+
+def _definition_binders(
+    system: FormalSystem, compiled: object
+) -> list[DefinitionBinders]:
+    """Pair each stored definition with the binders the engine settled on.
+
+    `definition_layering` is what makes the pairing sound: one flag per stored
+    definition, in the same order, true exactly when that definition's defining
+    form was recognised and a kernel definition was appended. So the compiled
+    list is the true-flagged subsequence, and a dropped definition simply has no
+    counterpart. Zipped strictly — a length mismatch would mean the builder and
+    the rows disagree about what a definition is, which is a bug rather than a
+    condition to paper over.
+    """
+    kernel_definitions = iter(compiled.definitions)
+    reported: list[DefinitionBinders] = []
+    for row, layered in zip(system.definitions, compiled.definition_layering, strict=True):
+        if not layered:
+            continue
+        definition = next(kernel_definitions)
+        reported.append(
+            DefinitionBinders(
+                definition_id=row.id,
+                label=definition.label,
+                defined_form=definition.higher.to_string(),
+                binders=[
+                    DefinitionBinder(
+                        var=binder.name, sort=binder.sort.name, inferred=binder.scoped
+                    )
+                    for binder in definition.fresh
+                ],
+            )
+        )
+    return reported
 
 
 @router.post("/{system_id}/verify", response_model=VerifyProofResponse)

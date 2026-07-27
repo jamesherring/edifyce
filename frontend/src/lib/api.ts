@@ -218,12 +218,38 @@ export interface FormalSystemDetail extends FormalSystemSummary {
 	rules: Rule[];
 }
 
+/** One bound variable of a definition's defining form, as the engine reads it.
+ * `inferred` is false when the author wrote it in the `fresh` clause and true
+ * when the engine read it off the grammar's binding slots — reported because
+ * inference is otherwise silent. */
+export interface DefinitionBinder {
+	var: string;
+	sort: string;
+	inferred: boolean;
+}
+
+export interface DefinitionBinders {
+	/** The stored definition this reports on. Neither `label` nor `defined_form`
+	 * identifies a row — a definition may be unnamed, two may share one defined
+	 * form, and one whose defining form matched nothing is dropped at build — so
+	 * join on this, not on position. */
+	definition_id: string;
+	label: string | null;
+	/** For display, not identification. */
+	defined_form: string;
+	binders: DefinitionBinder[];
+}
+
 export interface SystemValidation {
 	success: boolean;
 	errors: string[];
 	system_name: string | null;
 	line_type_count: number | null;
 	inference_rule_count: number | null;
+	/** Per compiled definition, the `fresh` clause the engine settled on. Only
+	 * definitions that *layer* appear — one whose defining form matched nothing is
+	 * dropped at build. Empty when the system did not compile. */
+	definitions: DefinitionBinders[];
 }
 
 // --- Write payloads --------------------------------------------------------

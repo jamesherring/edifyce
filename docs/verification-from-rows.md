@@ -349,16 +349,66 @@ Worth measuring against a *large* grammar before choosing: the crossover moves
 with grammar size, and set.mm's full 1,441 productions may put it below the
 current numbers without any of this.
 
-### P3. Store schema terms
+### P3. Store schema terms — *designed, not built*
 
-Rule deductions and antecedents, and definition higher/lower forms, as terms
-interned into the same `terms` DAG rather than as template strings parsed at
-build. Note that `_schema_term(pattern, occurrence, …)` freshens bare-sort
-positions per occurrence — that is a runtime step over a stored term, not a
-parse, and stays.
+Rule deductions and antecedents, and definition higher/lower forms, are template
+**strings** parsed at every system build: `_build_rule` calls
+`build_schema_pattern` per antecedent and deduction, and that composes
+`pattern.schema_term` by parsing the template against the productions
+(`compose_schema_term`). A verify compiles the system, so this is per-verify
+work, and it scales with the grammar exactly as a proof's parse does.
 
-**Measure:** compiling a system with *N* rules invokes no parse; system build
-time stops scaling with template complexity.
+**The seam is clean.** `build_schema_pattern` is the single place a schema term
+is composed, and `_schema_term(pattern, occurrence, …)` — which freshens
+bare-sort positions per occurrence — is a runtime step over whatever term is
+there, not a parse. So the change is: give `build_schema_pattern` a precomputed
+term and let it skip the compose.
+
+**The fork is how a stored term reaches it.** `SystemSpec` speaks in strings and
+names, deliberately: it is a declarative description that the persistence layer
+builds and the engine lowers, with no engine objects in it. A stored schema term
+is a kernel `Term`. Two ways to bridge that, and they differ in what they cost
+later rather than in effort now:
+
+1. **An optional term on the spec dataclasses** — `Rule.deduction_term`,
+   `Definition.higher_term`, and so on, populated by `system_to_spec` and
+   ignored when absent. Smallest diff, and the build path barely changes. It
+   makes `SystemSpec` carry engine objects, so it is no longer purely
+   declarative and a caller assembling one by hand has a field it must know to
+   leave alone.
+2. **A separate map passed into `build_spec`** — `{(kind, row id): Term}` beside
+   the spec. Keeps the spec exactly as it is and makes the cache visibly a
+   cache. More plumbing, and the map's keys have to survive the spec round trip,
+   which is what the ids are for.
+
+Recommendation: **(2)**. The spec's purity is what lets tests assemble systems by
+hand and lets the Metamath importer build one without touching the database, and
+a precomputed term is not part of a system's *definition* — it is a projection of
+it, like `proof_lines`. That is the same distinction P1 and P2 rest on.
+
+**Invalidation is the real work, not the storage.** A schema term names its
+constructors, so *any* production change invalidates every schema term in the
+system — not just the edited rule's. That is a wider blast radius than
+`discard_system_checks`, which only drops proofs. The write path has to rebuild
+the system and rewrite every schema term on every part edit, which is the same
+cost as one build moved from read time to write time. That trade is right (verifies
+outnumber part edits heavily), but it must be *complete*: a stale schema term is
+the same class of bug as a stale proof row, and §3 already records why that class
+is now soundness-critical rather than tidy.
+
+**Migration.** `rules.deduction_term_id`, `rule_antecedents.term_id`,
+`definitions.higher_term_id` / `lower_term_id`, each FK to `terms` — nullable, so
+a system whose terms have not been composed yet simply falls back to parsing,
+which is also the behaviour after an invalidation.
+
+**Measure.** Building a system with *N* rules invokes no parse, and build time
+stops scaling with template complexity. Worth taking the set.mm baseline first:
+at 1,441 productions the build is where a large system's cost has moved, and it
+is the number this phase should shift.
+
+**Not attempted here.** The fork above wants settling before the migration lands,
+and the invalidation is the part that would repeat the P1/P2 lesson if rushed —
+both of those bugs were a stale-or-absent stored value read as assent.
 
 ### P4. Store promoted theorems
 
