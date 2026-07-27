@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 import app.auth.backend as backend
 from app.db import Base, FormalSystem, SideConditionRow, spec_to_system
+from app.db.terms import TermChildRow, TermRow
 from app.db.models import OAuthAccount, User
 from app.db.session import get_session
 from app.db.systems import (
@@ -73,6 +74,11 @@ _TABLES = [
         DefinitionBindingRow, DefinitionFreshRow, AxiomRow, AxiomBindingRow, RuleRow,
         RuleAntecedentRow, RuleBindingRow,
         SideConditionRow,
+        # `rules` references `terms` for its cached schema terms
+        # (app/db/schema_terms.py), so the table must exist for a system to
+        # be deleted — SQLite creates a table whose FK target is absent,
+        # Postgres refuses to.
+        TermRow, TermChildRow,
     )
 ]
 

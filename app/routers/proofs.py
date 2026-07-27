@@ -61,7 +61,9 @@ from app.db import (
     get_session,
     load_proof_for_check,
     load_proof_lines,
+    load_schema_terms,
     store_proof_lines,
+    store_schema_terms,
     system_to_spec,
 )
 from app.db.models import User
@@ -307,12 +309,26 @@ async def _verify_with_references(
             None,
         )
 
-    build = build_spec(system_to_spec(system))
+    # The rules' schema templates are parsed against the grammar to get the terms
+    # the checker unifies with, which is about half of a build and the same
+    # answer every time. Read the terms a previous build composed, and write back
+    # anything this one had to compose itself — a system settles after one
+    # verify, and a grammar edit makes the stored terms inert rather than wrong
+    # (see app/db/schema_terms.py). Under the system lock, like everything else
+    # this function writes.
+    spec = system_to_spec(system)
+    schema_terms = await session.run_sync(
+        lambda sync: load_schema_terms(sync, system, spec)
+    )
+    build = build_spec(spec, schema_terms=schema_terms)
     if "errors" in build:
         return _Verification(
             VerifyProofResponse(success=False, errors=build["errors"]), None
         )
     compiled_system = build["system"]
+    await session.run_sync(
+        lambda sync: store_schema_terms(sync, system, compiled_system, schema_terms)
+    )
 
     closure, edges = await _reference_closure(session, proof.id)
     try:

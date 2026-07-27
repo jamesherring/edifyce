@@ -41,6 +41,7 @@ from app.db import (
     TermRow,
     spec_to_system,
 )
+from app.db.terms_mapping import prefetch_terms
 from app.db.models import OAuthAccount, User
 from app.db.proofs_mapping import load_proof_lines
 from app.db.session import get_session
@@ -1346,6 +1347,22 @@ def _terms(db_path) -> list[TermRow]:
         engine.dispose()
 
 
+def _proof_terms(db_path, proof_id) -> list[TermRow]:
+    """Every term row reachable from one proof's lines."""
+    engine = create_engine(db_path)
+    try:
+        with Session(engine) as session:
+            roots = list(session.scalars(
+                select(ProofLineRow.term_id).where(
+                    ProofLineRow.proof_id == uuid.UUID(proof_id),
+                    ProofLineRow.term_id.is_not(None),
+                )
+            ))
+            return prefetch_terms(session, roots)
+    finally:
+        engine.dispose()
+
+
 def test_structure_is_empty_until_the_proof_is_verified(client, db):
     uid = _register_login(client, "ada@example.com")
     sid = _seed_system(db, uid)
@@ -1388,9 +1405,12 @@ def test_stored_terms_are_interned_per_system_not_per_line(client, db):
     pid = _create_proof(client, sid, "MP", source=_MP_SRC)
     client.post(f"/api/proofs/{pid}/verify")
 
+    # The proof's own subgraph, not the system's: a verify also stores the rules'
+    # schema terms into the same interned graph (app/db/schema_terms.py), and
+    # those are a property of the system rather than of this proof.
     # `x = x` three times, `(x = x → x = x)` once: three distinct subterms in all
     # (the variable `x`, the equality, the implication), stored once each.
-    stored = {(term.kind, term.constructor, term.literal) for term in _terms(db)}
+    stored = {(term.kind, term.constructor, term.literal) for term in _proof_terms(db, pid)}
     assert stored == {
         ("node", "variable", "x"),
         ("node", "equality", None),
@@ -1399,7 +1419,7 @@ def test_stored_terms_are_interned_per_system_not_per_line(client, db):
 
     # Re-verifying reuses those rows rather than duplicating them.
     client.post(f"/api/proofs/{pid}/verify")
-    assert len(_terms(db)) == 3
+    assert len(_proof_terms(db, pid)) == 3
 
 
 def test_stored_edges_record_the_lines_the_checker_actually_used(client, db):
