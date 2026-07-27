@@ -19,6 +19,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.db import Base, spec_to_system, system_to_spec
+from app.db.terms import TermChildRow, TermRow
 from app.db.models import FormalSystem
 from app.db.side_conditions import SideConditionRow
 from app.db.side_conditions_mapping import (  # grammars under test
@@ -69,6 +70,9 @@ _TABLES = [
         LineRow, LinePartRow, DefinitionRow, DefinitionBindingRow, DefinitionFreshRow,
         AxiomRow, AxiomBindingRow, RuleRow, RuleAntecedentRow, RuleBindingRow,
         SideConditionRow,
+        # `rules` and `rule_antecedents` reference `terms` for their cached
+        # schema terms (app/db/schema_terms.py).
+        TermRow, TermChildRow,
     )
 ]
 

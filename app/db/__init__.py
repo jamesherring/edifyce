@@ -41,6 +41,11 @@ from app.db.systems import (
     RuleRow,
     SymbolRow,
 )
+from app.db.schema_terms import (
+    SchemaTermCache,
+    load_schema_terms,
+    store_schema_terms,
+)
 from app.db.side_conditions import SideConditionRow
 from app.db.systems_mapping import spec_to_system, system_to_spec
 from app.db.terms import TermChildRow, TermRow
@@ -90,6 +95,10 @@ __all__ = [
     "digest_term",
     "load_term",
     "store_term",
+    # Rule-schema term cache (app/db/schema_terms.py).
+    "SchemaTermCache",
+    "load_schema_terms",
+    "store_schema_terms",
     # Metamath corpus import (app/db/metamath_store.py).
     "ImportReport",
     "import_corpus",

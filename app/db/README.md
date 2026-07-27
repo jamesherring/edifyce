@@ -20,6 +20,7 @@ evolve it.
 | `app/db/side_conditions_mapping.py` | Parse/render a `where` proviso ↔ side-condition rows |
 | `app/db/terms.py` | Term graph: kernel-term DAGs as shared `terms` / `term_children` rows |
 | `app/db/terms_mapping.py` | `store_term` / `load_term` round trip between kernel `Term`s and the rows |
+| `app/db/schema_terms.py` | `store_schema_terms` / `load_schema_terms`: a rule's schema templates as composed kernel terms, so a build need not re-parse them |
 | `app/db/proof_lines.py` | Proof structure: a checked proof's lines + the justification edges between them |
 | `app/db/proofs_mapping.py` | `store_proof_lines`: project a checked engine `Proof` into those rows |
 | `app/db/metamath_store.py` | `import_corpus`: walk a Metamath `.mm` database and store the system, its proofs, and their line graphs |
@@ -58,6 +59,26 @@ Modernised from the original Django app (`website/models.py` on `main`):
   the odd one out in referencing `production_bindings` at both ends: it records
   which sibling slot a binder scopes over (the `phi` of `∀x.phi`), which is what
   lets a definition's `fresh` clause be inferred rather than declared.
+
+  `rules` and `rule_antecedents` also carry **schema terms**
+  (`schema_terms.py`): a rule's deduction, antecedents and subproof lines are
+  templates, and the build parses each against the whole grammar to get the
+  nested term the checker unifies with. That parse is roughly half of building a
+  system and gives the same answer every time, so a verify stores what it
+  composed (`rules.deduction_term_id` and friends → `terms`) and the next one
+  reads it. Unlike `proof_lines`, these rows are a **cache and not a record**:
+  `rules.schema_digest` fingerprints the grammar and the rule's own templates and
+  bindings, and a row whose digest no longer matches is simply not read — so a
+  part edit needs no invalidation sweep, and a stale row is inert rather than
+  believed. The digest also covers which grammar names a line, part or axiom
+  *shadows* in the build namespace: composing is indifferent to those (it parses
+  against the sort unions) but `load_term` resolves a stored constructor by name
+  through that namespace, so a collision is where a warm build and a cold build
+  would disagree. The FKs into `terms` are `ON DELETE SET NULL` for the same reason:
+  losing a term must cost a re-compose, never a rule. And a NULL term id is a
+  *miss* even under a matching digest — never "this template composes to
+  nothing" — because the same NULL is what a deleted term, and a slot that
+  resolved to a declared pattern instead of a composed one, both leave behind.
 - **`side_conditions`** — a definition's proviso (`where` clause) stored as the
   kernel's closed side-condition algebra (`side_conditions.py`) rather than an
   opaque string: one row per algebra node (`occurs`/`equal`/`disjoint`/`atom`/

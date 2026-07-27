@@ -15,7 +15,7 @@ AGENTS.md) — but nothing here may import ``declarative``.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from copy import copy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -85,11 +85,38 @@ class FormalSystemContext:
         return new_context
 
 
+@dataclass(frozen=True)
+class SchemaSlot:
+    """Which rule-schema template a composed term belongs to.
+
+    Positional, because a ``SystemSpec`` carries no identifiers: the persistence
+    layer produces ``spec.rules`` in row order and ``build_system`` consumes it in
+    that order, so an index names the same rule at both ends of the round trip.
+    """
+
+    rule: int
+    # "deduction", "antecedent", or the subproof's "derive" / "assume" / "fresh".
+    slot: str
+    # An antecedent's position; 0 for the single-valued slots.
+    ordinal: int = 0
+
+
+# Supplies the stored term for a schema slot, given the build context its
+# constructors resolve in. `None` always means "compose it" - nothing stored,
+# stored but no longer matching the system, or stored as the absence of a term.
+# The three are deliberately not distinguished: composing is what the build did
+# before any of this existed, so treating them alike costs time on the rare
+# template that composes to nothing and can never cost correctness. Reading an
+# absence as an answer is the shape of the two bugs P2 shipped with.
+SchemaTermSource = Callable[[SchemaSlot, "FormalSystemContext"], "Term | None"]
+
+
 def build_schema_pattern(
     text: str,
     context: FormalSystemContext,
     name: str,
     prefer: Sequence[Pattern] = (),
+    cached: Term | None = None,
 ) -> Pattern:
     # Build a rule-schema pattern from a source token. A bare constant atom
     # (e.g. a falsum `⊥`) resolves to its *declared* AtomPattern, so the rule's
@@ -129,7 +156,15 @@ def build_schema_pattern(
     # metavariables) once, here, and stash the resulting term; _schema_term uses
     # it. None when the template is a bare variable (from_pattern already nests
     # trivially) or nothing parses it (fall back to the flat projection).
-    pattern.schema_term = compose_schema_term(pattern, context, prefer)
+    #
+    # `cached` is that same term read back from storage rather than re-derived:
+    # composing is a parse against the whole grammar, which is around half of
+    # building a system of any size, and it produces the same term every time the
+    # grammar and the template are the same. Deciding *whether* it is the same is
+    # the caller's (see declarative.schema_digests).
+    pattern.schema_term = (
+        cached if cached is not None else compose_schema_term(pattern, context, prefer)
+    )
     return pattern
 
 
