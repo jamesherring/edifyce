@@ -258,6 +258,43 @@ class FormalSystemUpdate(BaseModel):
     published: bool | None = None
 
 
+class DefinitionBinder(BaseModel):
+    """One bound variable of a definition's defining form, as the engine reads it.
+
+    A projection of the engine's ``kernel.definitions.FreshBinder`` — three field
+    reads, no derivation. It exists because `app/` is the HTTP translation layer
+    and a Pydantic model is how engine data crosses that boundary, exactly as
+    `Production` and `Rule` project their engine counterparts.
+    """
+
+    var: str
+    sort: str
+    # Whether the *engine* placed this binder rather than the author. Reads
+    # `FreshBinder.scoped`, which the engine sets when a binder is placed from the
+    # grammar's binding slots rather than from a declared `fresh` clause. The two
+    # coincide by construction in `formal_system.definitions.parse_definition`,
+    # which is the only thing that builds a `FreshBinder`: declared binders come
+    # from the `fresh` argument and are placed by name, everything else comes from
+    # `bind_scoped`. Named for what an author wants to know, not for the mechanism.
+    inferred: bool
+
+
+class DefinitionBinders(BaseModel):
+    """The binders a compiled definition ended up with, for one definition."""
+
+    # The stored definition this reports on. Neither `label` nor `defined_form`
+    # identifies a row: a definition may be unnamed, two may share one defined
+    # form, and one whose defining form matched nothing is dropped at build — so
+    # position in this list does not track position in the stored list either.
+    definition_id: uuid.UUID
+    # The name a proof cites it by, or null when unnamed.
+    label: str | None = None
+    # The defined form as the engine renders it — a convenience for display, not
+    # an identifier.
+    defined_form: str
+    binders: list[DefinitionBinder] = Field(default_factory=list)
+
+
 class SystemValidation(BaseModel):
     """Result of assembling the stored rows and compiling them."""
 
@@ -266,6 +303,11 @@ class SystemValidation(BaseModel):
     system_name: str | None = None
     line_type_count: int | None = None
     inference_rule_count: int | None = None
+    # Per compiled definition, the `fresh` clause the engine settled on. Only
+    # definitions that *layer* appear (one whose defining form matched nothing is
+    # dropped at build), so this is a report on what was built, not on what was
+    # stored.
+    definitions: list[DefinitionBinders] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
