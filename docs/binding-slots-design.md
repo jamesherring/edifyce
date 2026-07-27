@@ -205,11 +205,13 @@ Adding the control removes the need for that, and is the reason to add it.
    empty means "no binding information", which is exactly today's behaviour. All
    three uses above are opt-in per system, so this cannot regress a stored
    system.
-3. **Should `fresh` inference be silent or explicit?** Currently silent: an
-   omitted clause is filled from the grammar, and the built `Definition.fresh`
-   carries the answer. **Still open** — the definitions API returns the *declared*
-   clause (rows), not the inferred one, which needs the built system. Reporting it
-   back is the remaining half of this question.
+3. **Should `fresh` inference be silent or explicit?** ~~Still open~~ —
+   **settled**. Inference stays silent at build, and `POST /{id}/validate` reports
+   what it concluded: per compiled definition, the binders it settled on, each
+   flagged `inferred` (read off the grammar) or not (written in the `fresh`
+   clause). `validate` is the surface because it is where the built system exists
+   — the definitions read model returns stored rows, which is the *declared*
+   clause by construction.
 4. **Item 3 (scope-aware steps) needs a soundness argument** before any code. It
    widens what the checker accepts, which is the one direction that can be wrong.
 
@@ -221,8 +223,10 @@ Adding the control removes the need for that, and is the reason to add it.
    catches the documented hole.
 4. ~~Use it to infer/check `fresh`~~ — **done**, in the add-only form described
    above.
-5. Frontend editing (the per-slot "binds over" control) + reporting the inferred
-   clause back, per open question 3.
+5. Frontend editing (the per-slot "binds over" control). The reporting half of
+   open question 3 is **done** — `validate` returns the settled clause; what is
+   left is the control for authoring `scopes_over`, and surfacing the report in
+   the editor.
 6. Scope-aware definitional steps — separately, with its own design note.
 
 Step 4 shipped ahead of 3 because it is the one with a caller waiting: a Metamath

@@ -31,6 +31,8 @@ the engine already supports.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable, Iterable
 from copy import copy
 from dataclasses import InitVar, dataclass, field, replace
@@ -38,6 +40,7 @@ from typing import TYPE_CHECKING
 
 from .build_context import (
     FormalSystemContext,
+    SchemaSlot,
     build_schema_pattern,
     combine_side_conditions,
 )
@@ -60,9 +63,11 @@ from .matching import AtomPattern, Pattern, RegexPattern, StringPattern, UnionPa
 from .promotion import promote_from_source
 
 if TYPE_CHECKING:
+    from .build_context import SchemaTermSource
     from .kernel import SideCondition
     from .kernel.constructors import Constructor
     from .kernel.definitions import Definition as KernelDefinition
+    from .kernel.terms import Term
     from .matching.definitions import DefinedNotation
 
 
@@ -645,12 +650,19 @@ def _validate_constant_declarations(spec: SystemSpec, ctx: FormalSystemContext) 
         )
 
 
-def build_system(spec: SystemSpec) -> FormalSystem:
+def build_system(
+    spec: SystemSpec, schema_terms: SchemaTermSource | None = None
+) -> FormalSystem:
     """Build a :class:`FormalSystem` directly from a :class:`SystemSpec`.
 
     Raises :class:`DeclarativeError` for a structurally-invalid spec (e.g. a line
     shape with no grammar-sort placeholder); :func:`build_spec` wraps that into
     the ``{"errors": [...]}`` contract.
+
+    ``schema_terms`` supplies previously-composed rule-schema terms so the build
+    need not re-parse the templates (see :func:`schema_digests`). It is a
+    *projection* of the spec, never part of it: passing none, or one that answers
+    for no slot, builds exactly the same system by the longer route.
     """
     # A string-rewriting rule is justified by associative matching over surface
     # strings, with no term binding to evaluate side-conditions against; refuse
@@ -825,9 +837,10 @@ def build_system(spec: SystemSpec) -> FormalSystem:
     for ax in spec.axioms:
         _build_axiom(ax, ctx, system, register)
 
-    # 7. Rules -> inference rules.
-    for rule in spec.rules:
-        system.add_inference_rule(_build_rule(rule, ctx))
+    # 7. Rules -> inference rules. The index is the rule's identity for
+    # `schema_terms`, and is why this stays an ordered walk over `spec.rules`.
+    for index, rule in enumerate(spec.rules):
+        system.add_inference_rule(_build_rule(rule, ctx, index, schema_terms))
 
     # 8. Publish the build variables into the proof context, then finalise
     # definitions against that (now complete) context, so `add_notation` can
@@ -932,7 +945,12 @@ def _build_axiom(axiom: Rule, ctx: FormalSystemContext, system: FormalSystem,
     system.add_line_type(line_type)
 
 
-def _build_rule(rule: Rule, ctx: FormalSystemContext) -> InferenceRule:
+def _build_rule(
+    rule: Rule,
+    ctx: FormalSystemContext,
+    index: int,
+    schema_terms: SchemaTermSource | None,
+) -> InferenceRule:
     # The rule's bindings are its metavariables; put them in a scoped copy of the
     # build context so `build_schema_pattern` treats them as variables — the
     # scope is per-rule, never the system's own.
@@ -940,24 +958,40 @@ def _build_rule(rule: Rule, ctx: FormalSystemContext) -> InferenceRule:
     rule_ctx = copy(ctx)
     rule_ctx.string_variables = dict(string_variables)
 
+    def stored(slot: str, ordinal: int = 0) -> Term | None:
+        if schema_terms is None:
+            return None
+        return schema_terms(SchemaSlot(index, slot, ordinal), rule_ctx)
+
     inference_rule = InferenceRule(
         name=_identifier(rule.name),
         label=rule.label,
         variables=dict(string_variables),
         matching=rule.matching,
-        subproof_schema=_build_subproof(rule, rule_ctx),
+        subproof_schema=_build_subproof(rule, rule_ctx, stored),
         allow_extra_antecedents=rule.allow_extra_antecedents,
     )
-    for antecedent in rule.antecedents:
-        inference_rule.antecedents.append(build_schema_pattern(antecedent, rule_ctx, "antecedent"))
-    inference_rule.deduction = build_schema_pattern(rule.deduction, rule_ctx, "deduction")
+    for ordinal, antecedent in enumerate(rule.antecedents):
+        inference_rule.antecedents.append(
+            build_schema_pattern(
+                antecedent, rule_ctx, "antecedent",
+                cached=stored("antecedent", ordinal),
+            )
+        )
+    inference_rule.deduction = build_schema_pattern(
+        rule.deduction, rule_ctx, "deduction", cached=stored("deduction")
+    )
     # Provisos are parsed later (see build_system), once definitions resolve, so a
     # proviso's term argument may use defined notation. Here we only collect them.
     inference_rule.pending_side_conditions = list(rule.side_conditions)
     return inference_rule
 
 
-def _build_subproof(rule: Rule, rule_ctx: FormalSystemContext) -> SubproofSchema | None:
+def _build_subproof(
+    rule: Rule,
+    rule_ctx: FormalSystemContext,
+    stored: Callable[[str], Term | None],
+) -> SubproofSchema | None:
     # A discharge rule consumes a subproof opened by exactly one of a hypothesis
     # (`assume`) or a fresh variable (`fresh`); its final line must match
     # `derive`. Each is a rule-schema line parsed against the rule's variables,
@@ -971,11 +1005,15 @@ def _build_subproof(rule: Rule, rule_ctx: FormalSystemContext) -> SubproofSchema
             f"'assume' or 'fresh'."
         )
     return SubproofSchema(
-        conclusion=build_schema_pattern(subproof.derive, rule_ctx, "subproof"),
-        assumption=(build_schema_pattern(subproof.assume, rule_ctx, "subproof")
-                    if subproof.assume is not None else None),
-        fresh=(build_schema_pattern(subproof.fresh, rule_ctx, "subproof")
-               if subproof.fresh is not None else None),
+        conclusion=build_schema_pattern(
+            subproof.derive, rule_ctx, "subproof", cached=stored("derive")
+        ),
+        assumption=(build_schema_pattern(
+            subproof.assume, rule_ctx, "subproof", cached=stored("assume"))
+            if subproof.assume is not None else None),
+        fresh=(build_schema_pattern(
+            subproof.fresh, rule_ctx, "subproof", cached=stored("fresh"))
+            if subproof.fresh is not None else None),
     )
 
 
@@ -1283,7 +1321,11 @@ def register_definition(defn: Definition, system: FormalSystem) -> bool:
     return layered
 
 
-def build_spec(spec: SystemSpec, system_dict: dict | None = None) -> dict:
+def build_spec(
+    spec: SystemSpec,
+    system_dict: dict | None = None,
+    schema_terms: SchemaTermSource | None = None,
+) -> dict:
     """Build a ``FormalSystem`` from a :class:`SystemSpec`.
 
     The entry point for callers that hold a ``SystemSpec`` -- e.g. a persistence
@@ -1295,9 +1337,12 @@ def build_spec(spec: SystemSpec, system_dict: dict | None = None) -> dict:
     child inherits from). The declarative path does not resolve inheritance yet,
     so it is currently unused; it is kept on the signature so callers of the
     engine's public build entry point don't break when that lands.
+
+    ``schema_terms`` is an optional cache of already-composed rule-schema terms;
+    see :func:`build_system`.
     """
     try:
-        return {"system": build_system(spec)}
+        return {"system": build_system(spec, schema_terms)}
     except DeclarativeError as exc:
         return {"errors": [str(exc)]}
     except Exception as exc:  # noqa: BLE001
@@ -1305,6 +1350,101 @@ def build_spec(spec: SystemSpec, system_dict: dict | None = None) -> dict:
         # rejected it (e.g. a malformed proviso). Preserve the build contract --
         # return errors rather than raising into the caller (a 500 at the API).
         return {"errors": [str(exc)]}
+
+
+def schema_digests(spec: SystemSpec) -> list[str]:
+    """Per rule, in ``spec.rules`` order, a digest of what determines its schema terms.
+
+    A composed schema term is a pure function of the template, the rule's
+    metavariables, and the grammar the template is parsed against — so two builds
+    that agree on this digest compose the same terms, and a caller holding stored
+    ones may hand them to :func:`build_system` instead. A caller that finds a
+    *different* digest has terms that mean nothing and must ignore them; there is
+    nothing to repair, because composing them again is the same work as checking.
+
+    Deliberately coarse in one direction and exact in the other. Coarse: **every**
+    rule's digest changes when any production does, because a schema term names
+    the constructors it was built from and a grammar edit can rewrite any of them.
+    Exact: what it covers is only what composition reads —
+
+    * the productions, which are what a template is parsed against;
+    * the bracket map and the constants that merely spell a bracket, which decide
+      where a template may be split (both are derived from more of the spec than
+      the productions, hence taken after derivation rather than before);
+    * the rule's own templates and metavariable bindings;
+    * which grammar names the *rest* of the build namespace shadows — see
+      :func:`_shadowed_grammar_names`.
+
+    What is absent: a rule's own **label**, which decides nothing composition
+    reads, so a rename keeps the terms. And the content of lines and axioms —
+    only the names they bind matter, and only where one collides.
+    """
+    grammar = _fingerprint(
+        [
+            sorted((_bracket_map(spec) or {}).items()),
+            _bracket_opaque_tokens(spec, _bracket_map(spec)),
+            [
+                [
+                    prod.sort, prod.name, prod.template, prod.regex,
+                    prod.atom_value, prod.atom_base, prod.denotes_constant,
+                    prod.bindings, sorted(prod.scopes_over.items()),
+                ]
+                for prod in spec.productions
+            ],
+            _shadowed_grammar_names(spec),
+        ]
+    )
+    return [
+        _fingerprint(
+            [
+                grammar,
+                rule.deduction,
+                rule.antecedents,
+                None if rule.subproof is None else [
+                    rule.subproof.derive, rule.subproof.assume, rule.subproof.fresh
+                ],
+                rule.bindings,
+            ]
+        )
+        for rule in spec.rules
+    ]
+
+
+def _shadowed_grammar_names(spec: SystemSpec) -> list[str]:
+    """Grammar names that something *else* in the build namespace also binds.
+
+    ``ctx.variables`` is one namespace, and lines, line parts, axioms and the
+    system itself are registered into it after the grammar (steps 5 and 6 of
+    :func:`build_system`). A name declared twice resolves to the later one — so a
+    production named ``implication`` and an axiom named ``implication`` leave
+    ``ctx.variables["implication"]`` holding the axiom's line type.
+
+    That matters to a *stored* term, which names its constructors by name and
+    resolves them back through this namespace (``app.db.terms_mapping.load_term``).
+    Composing has no such problem: it parses against the sort unions, which hold
+    the production objects themselves and are indifferent to what the name now
+    means. So a collision is exactly a case where a warm build and a cold build
+    would disagree, and it has to reach the digest.
+
+    Only the *collisions*, not every outside name: a line renamed to something no
+    production is called shadows nothing, and invalidating every schema term for
+    it would be cost with no defect behind it.
+    """
+    grammar = {prod.name for prod in spec.productions} | set(spec.sort_names())
+    outside = {_identifier(spec.name) or "System"}
+    for line in spec.lines:
+        outside.add(line.name)
+        outside.update(part.name for part in line.parts)
+    for axiom in spec.axioms:
+        outside.add(_identifier(axiom.name))
+        outside.add(f"{_identifier(axiom.name)}_axiom")
+    return sorted(grammar & outside)
+
+
+def _fingerprint(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, default=list).encode()
+    ).hexdigest()
 
 
 def registered_definition_layering(spec: SystemSpec) -> list[bool]:

@@ -41,6 +41,17 @@ def _position() -> Mapped[int]:
     return mapped_column(Integer, server_default=text("0"))
 
 
+def _schema_term_fk() -> Mapped[uuid.UUID | None]:
+    # A rule schema's composed term, in the system's own term graph. SET NULL,
+    # not CASCADE: the term is a *cache* of what the template composes to, so
+    # losing it must cost a re-compose and never a rule. Nullable throughout —
+    # a system whose schema terms have not been composed yet, or whose grammar
+    # has moved on, simply has none.
+    return mapped_column(
+        ForeignKey("terms.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+
+
 def _symbol_fk() -> Mapped[uuid.UUID]:
     # A reference into the symbol namespace (a binding's type, a definition's
     # attach-point). CASCADE keeps the DB consistent on whole-system / symbol
@@ -381,6 +392,19 @@ class RuleRow(Base):
     allow_extra_antecedents: Mapped[bool] = mapped_column(
         Boolean, server_default=text("false")
     )
+    # The composed kernel term for each of this rule's schema templates, so a
+    # build need not re-parse them (see app/db/schema_terms.py). NULL means
+    # either "not composed yet" or "composes to nothing"; `schema_digest` is what
+    # tells the two apart, and whether any of them still mean anything at all —
+    # it fingerprints the grammar and this rule's own templates and bindings
+    # (declarative.schema_digests). A mismatch makes the terms inert, never
+    # wrong: the build composes them again, which is what it did before they
+    # were stored.
+    schema_digest: Mapped[str | None] = mapped_column(String(64))
+    deduction_term_id: Mapped[uuid.UUID | None] = _schema_term_fk()
+    subproof_derive_term_id: Mapped[uuid.UUID | None] = _schema_term_fk()
+    subproof_assume_term_id: Mapped[uuid.UUID | None] = _schema_term_fk()
+    subproof_fresh_term_id: Mapped[uuid.UUID | None] = _schema_term_fk()
 
     system: Mapped[FormalSystem] = relationship(back_populates="rules")
     antecedents: Mapped[list[RuleAntecedentRow]] = relationship(
@@ -405,6 +429,9 @@ class RuleAntecedentRow(Base):
     )
     position: Mapped[int] = _position()
     pattern: Mapped[str] = mapped_column(String(512))
+    # This antecedent's composed schema term; governed by the parent rule's
+    # `schema_digest`, like the rule's own slots.
+    term_id: Mapped[uuid.UUID | None] = _schema_term_fk()
 
     rule: Mapped[RuleRow] = relationship(back_populates="antecedents")
 

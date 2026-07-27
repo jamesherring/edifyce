@@ -21,6 +21,7 @@ pytest.importorskip("regex")
 
 from fastapi.testclient import TestClient
 from sqlalchemy import NullPool, create_engine, event, select, text
+from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
@@ -41,6 +42,7 @@ from app.db import (
     TermRow,
     spec_to_system,
 )
+from app.db.terms_mapping import prefetch_terms
 from app.db.models import OAuthAccount, User
 from app.db.proofs_mapping import load_proof_lines
 from app.db.session import get_session
@@ -1346,6 +1348,22 @@ def _terms(db_path) -> list[TermRow]:
         engine.dispose()
 
 
+def _proof_terms(db_path, proof_id) -> list[TermRow]:
+    """Every term row reachable from one proof's lines."""
+    engine = create_engine(db_path)
+    try:
+        with Session(engine) as session:
+            roots = list(session.scalars(
+                select(ProofLineRow.term_id).where(
+                    ProofLineRow.proof_id == uuid.UUID(proof_id),
+                    ProofLineRow.term_id.is_not(None),
+                )
+            ))
+            return prefetch_terms(session, roots)
+    finally:
+        engine.dispose()
+
+
 def test_structure_is_empty_until_the_proof_is_verified(client, db):
     uid = _register_login(client, "ada@example.com")
     sid = _seed_system(db, uid)
@@ -1382,15 +1400,46 @@ def test_verify_stores_every_line_with_its_kernel_term(client, db):
     assert lines[0]["term"]["id"] == lines[2]["term"]["id"]
 
 
+def test_an_anonymous_verify_of_a_published_proof_writes_nothing(client, db):
+    # A non-owner's transaction is never committed: the verdict comes back and
+    # the stored state does not move. Verify now writes the schema-term cache as
+    # well as the verdict, so this pins the contract over that too — cleared
+    # first, so a write that reached the database would be visible rather than
+    # merely redundant. (Verify also *skips* that write for a non-owner; that is
+    # an efficiency guard on work the rollback would discard, so it leaves no
+    # trace either way and this cannot distinguish it.)
+    owner = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, owner, published=True)
+    pid = _create_proof(client, sid, "Public", source=VALID_PROOF)
+    assert client.patch(f"/api/proofs/{pid}", json={"published": True}).status_code == 200
+
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            session.execute(sa_update(RuleRow).values(schema_digest=None))
+            session.commit()
+
+        _logout(client)
+        assert client.post(f"/api/proofs/{pid}/verify").json()["success"] is True
+
+        with Session(engine) as session:
+            assert session.scalars(select(RuleRow.schema_digest)).all() == [None, None]
+    finally:
+        engine.dispose()
+
+
 def test_stored_terms_are_interned_per_system_not_per_line(client, db):
     uid = _register_login(client, "ada@example.com")
     sid = _seed_system(db, uid)
     pid = _create_proof(client, sid, "MP", source=_MP_SRC)
     client.post(f"/api/proofs/{pid}/verify")
 
+    # The proof's own subgraph, not the system's: a verify also stores the rules'
+    # schema terms into the same interned graph (app/db/schema_terms.py), and
+    # those are a property of the system rather than of this proof.
     # `x = x` three times, `(x = x → x = x)` once: three distinct subterms in all
     # (the variable `x`, the equality, the implication), stored once each.
-    stored = {(term.kind, term.constructor, term.literal) for term in _terms(db)}
+    stored = {(term.kind, term.constructor, term.literal) for term in _proof_terms(db, pid)}
     assert stored == {
         ("node", "variable", "x"),
         ("node", "equality", None),
@@ -1399,7 +1448,7 @@ def test_stored_terms_are_interned_per_system_not_per_line(client, db):
 
     # Re-verifying reuses those rows rather than duplicating them.
     client.post(f"/api/proofs/{pid}/verify")
-    assert len(_terms(db)) == 3
+    assert len(_proof_terms(db, pid)) == 3
 
 
 def test_stored_edges_record_the_lines_the_checker_actually_used(client, db):

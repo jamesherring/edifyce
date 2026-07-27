@@ -1,6 +1,6 @@
 # Design: verification from rows, not from text
 
-**Status:** P1 and P2 shipped, P3–P5 proposed · **Prerequisite work:** merged (the term
+**Status:** P1, P2 and P3 shipped, P4–P5 proposed · **Prerequisite work:** merged (the term
 graph, `proof_lines`, the kernel-takes-terms change #121, and the Metamath
 corpus import #124)
 
@@ -50,8 +50,8 @@ checking does.
 
 ## 2. What is stored, and what is thrown away
 
-This table is what the phases below work through; **used** is the state after P1
-and P2.
+This table is what the phases below work through; **used** is the state after P1,
+P2 and P3.
 
 | Verification needs | Stored | Used |
 |---|---|---|
@@ -61,8 +61,8 @@ and P2.
 | Whether a cited lemma stands | yes — its lines' verdicts | **yes** (P1) |
 | Justification edges | yes — `proof_line_antecedents` | no — *re-derived* from the citation, deliberately |
 | Scope tree (for discharge) | yes — `proof_lines.opens_scope` / `scope_id` | no — *re-derived*, deliberately |
-| Rule schema terms | **no** | composed at build time by parsing the `rules` template strings (P3) |
-| Definition higher/lower forms | **no** | same — stored as strings, parsed at build (P3) |
+| Rule schema terms | yes — `rules.deduction_term_id` etc. → `terms` | **yes** (P3), when `rules.schema_digest` still matches |
+| Definition higher/lower forms | **no** | stored as strings, matched against the grammar at build |
 | Promoted theorems | **no** | not persisted at all (P4; metamath roadmap §3.2) |
 
 The two *deliberate* nos are the point rather than an omission. Edges and scope
@@ -74,11 +74,11 @@ Everything a verdict rests on is recomputed; the rows supply only what each line
 **The proof side is closed.** Everything a proof contributes is in rows and read
 back on every check.
 
-**The system side is not started.** Rule and definition schemas live as template
-strings, so compiling a system parses them every time — `compose_schema_term`
-parses each rule template against the productions at build. That is per-verify,
-not per-line, but under this model it should not happen either. Promoted
-theorems are the extreme case: nothing at all, which is why an imported Metamath
+**The system side is half done.** Rule schemas are stored as composed terms and
+read back (P3), so building a system no longer parses them. What is left is a
+definition's forms — which are *registered as notation* against the finished
+grammar rather than composed against it, a different seam — and promoted
+theorems, the extreme case: nothing at all, which is why an imported Metamath
 proof cannot yet be re-checked from its own rows.
 
 ## 3. The contract this inverts
@@ -349,16 +349,154 @@ Worth measuring against a *large* grammar before choosing: the crossover moves
 with grammar size, and set.mm's full 1,441 productions may put it below the
 current numbers without any of this.
 
-### P3. Store schema terms
+### P3. Store schema terms — *done*
 
-Rule deductions and antecedents, and definition higher/lower forms, as terms
-interned into the same `terms` DAG rather than as template strings parsed at
-build. Note that `_schema_term(pattern, occurrence, …)` freshens bare-sort
-positions per occurrence — that is a runtime step over a stored term, not a
-parse, and stays.
+A rule's deduction, antecedents and subproof lines are template **strings**
+parsed at every system build: `_build_rule` calls `build_schema_pattern` per
+slot, and that composes `pattern.schema_term` by parsing the template against the
+productions (`compose_schema_term`). A verify compiles the system, so this was
+per-verify work, and it scaled with the grammar exactly as a proof's parse does.
 
-**Measure:** compiling a system with *N* rules invokes no parse; system build
-time stops scaling with template complexity.
+It now reads the term a previous build composed
+(`app/db/schema_terms.py`), and writes back anything it had to compose itself.
+This is the **last parse on the check path** other than promotion, which is P4.
+
+**The fork, settled: a map beside the spec, not fields on it.** `build_spec`
+takes an optional `schema_terms` source; `SystemSpec` is untouched, and its
+dataclass `==` — which the storage round-trip test rests on — is unchanged. What
+the design sketch got wrong is that the map cannot hold `Term`s: a stored term
+names its constructors, and those only exist part-way through the build. So the
+source is a **callable**, asked per slot with the live build context, and it is
+keyed positionally (`SchemaSlot(rule index, slot, ordinal)`) rather than by row
+id, because a `SystemSpec` carries no ids and adding them would be the thing
+option (2) exists to avoid. Positions are exact here: `system_to_spec` emits
+`spec.rules` in row order and `build_system` consumes it in that order.
+
+**Invalidation was the real work, and the answer was not to do any.** The sketch
+proposed rewriting every schema term on every part edit, and called completeness
+the risk. Instead each rule row carries `schema_digest` — a fingerprint of the
+grammar plus that rule's own templates and bindings
+(`declarative.schema_digests`) — and a row whose digest no longer matches is
+simply **not read**. No cascade, no sweep, no ordering guarantee, and a stale row
+is inert rather than believed.
+
+That inverts the risk relative to P1 and P2, and deliberately. There the row *is*
+the record, so a stale one is believed by default and only correct invalidation
+saves it. Here the template sits beside the term and composing it again is what
+the build did before any of this — so a missed cache costs time and only a
+wrongly-*hit* one could cost correctness. The digest is what makes hits
+conservative, so `tests/test_schema_terms.py` tests its **reach**: for each edit
+to the grammar or to a rule, whatever term moved, its digest must have moved too.
+
+Two details the digest gets right by being computed on the right thing:
+
+- It covers the **derived** bracket map and opaque-token set, not the declared
+  `spec.brackets`. Undeclaring `()` on a system that writes parens changes
+  nothing — the build falls back to them — and digesting the declaration would
+  have thrown away every term for no reason.
+- It covers which grammar names the *rest* of the build namespace shadows —
+  the collisions only, not every name a line, part or axiom binds. See below.
+- It omits a rule's **label**, which affects nothing composition reads. A pure
+  rename therefore keeps the terms, which is right.
+
+**The namespace has two readers, and only one of them is composition.** The
+first cut left lines, line parts and axioms out of the digest, on the argument
+that a template spelled like one of them resolves to that declared pattern and
+composes nothing — so no stored term is served for it. True, and beside the
+point. Those names share `ctx.variables` with the grammar and are registered
+after it, so an axiom named `implication` leaves that name bound to its line
+type. Composing is indifferent: it parses against the sort *unions*, which hold
+the production objects. But a stored term names its constructors by **name** and
+resolves them back through that same namespace (`terms_mapping.load_term`), and
+finds the line type. Cold build fine, warm build dead — from an edit that changes
+no composed term at all, which is why the digest-reach test could not see it and
+a warm-equals-cold test now does.
+
+`_shadowed_grammar_names` covers exactly the collisions, not every outside name:
+a line renamed to something no production is called shadows nothing, and
+invalidating for it would be cost with no defect behind it. Both directions are
+pinned by tests.
+
+Worth noting that **P2 has the same hazard and is saved by something else**: a
+stored proof-line term resolves its constructors through the same shadowed
+namespace, but `discard_system_checks` drops every proof in the system on any
+part edit, so the rows never survive the rename. P3 deliberately has no such
+blanket invalidation — that is the whole point of the digest — so it has to carry
+this itself.
+
+**One trap, and it is P1's trap again.** `prefetch_terms` loads the schema graph
+in one sweep, but the build runs *outside* the session — so a descendant row that
+nothing holds is collected, and the edge that reaches it goes back to the
+database. Inside a `run_sync` that is merely slow; here it is
+`greenlet_spawn has not been called`, which `build_spec` catches and returns as a
+build error. `StoredSchemaTerms` holds the whole graph, not just the roots.
+
+**Measure, and it is the same shape as P1 and P2.** Composing is 27% of a build
+at the ZFC fixture's five productions and 51% at seventy-six, so what the phase
+removes grows with the grammar — but what it adds is a term-row read, and that
+has the flat floor P1 and P2 both ran into. Against dev Postgres, building the
+stored system with and without the cache:
+
+| system | productions | rules | cold build | warm build | change |
+|---|---|---|---|---|---|
+| scoped ZFC | 5 | 4 | **1.5 ms** | 5.2 ms | −243% |
+| synthetic, depth 2 | 10 | 8 | **3.2 ms** | 7.1 ms | −122% |
+| synthetic, depth 3 | 20 | 16 | **7.5 ms** | 8.7 ms | −16% |
+| synthetic, depth 4 | 42 | 30 | 15.4 ms | **13.9 ms** | +10% |
+| synthetic, depth 5 | 76 | 40 | 23.1 ms | **17.8 ms** | +23% |
+
+So the crossover is around thirty productions, and below it a verify pays a few
+milliseconds it did not before. Two things about that. The overhead is *entirely*
+`prefetch_terms` — 55% of the warm path in profile, almost all SQLAlchemy
+instance hydration — which is P2a's second lever, and this makes it the lever
+under all three phases rather than P2's alone. And a real system is on the far
+side of the crossover: set.mm reaches 1,441 productions, where the build, not the
+proof, is where a verify's time has gone.
+
+As with P1 and P2, then: the case for P3 today is that the check path no longer
+parses a rule schema, not that it is quicker at every size.
+
+**One write site.** Only `_verify_with_references` stores what it composed, and
+it does so under the system lock alongside everything else it writes (§3.1). The
+other places that build a system — the compile preview, the publish gate — read
+nothing and write nothing here: they take no lock, and a system is warmed by its
+first verify anyway. It is also skipped when the caller's transaction will be
+rolled back (an anonymous viewer verifying a published proof), so the public path
+does not pay for inserts that are about to be discarded.
+
+**Rows pair with built rules by label, not by position.**
+`FormalSystem.add_inference_rule` *replaces* a rule of the same label, so a system
+with a duplicate builds to fewer rules than it has rows and index alignment
+attaches one rule's terms to another. The shadowed row's schemas were composed and
+then discarded, so it keeps no digest and composes on every build — the behaviour
+it had before this phase. A duplicate rule label is a system defect that nothing
+currently refuses; that is worth fixing, but not here, and not by way of a 500 on
+verify.
+
+**Storage.** `rules.schema_digest` plus `rules.deduction_term_id`,
+`subproof_derive_term_id`, `subproof_assume_term_id`, `subproof_fresh_term_id`,
+and `rule_antecedents.term_id` — each a nullable FK to `terms`, `ON DELETE SET
+NULL` so losing a term costs a re-compose and never a rule.
+
+**A NULL term id is a miss, even under a matching digest**, and the type the
+build sees has no way to say otherwise. The first cut let a NULL mean "this
+template composes to nothing" — a *hit*, on the reasoning that those are the
+templates nothing parses and re-composing one is the most expensive miss there
+is. That was wrong three ways over: the same NULL is what `ON DELETE SET NULL`
+leaves behind, and what a slot resolving to a declared grammar pattern rather
+than a composed one stores, and what a stale-but-digest-matching row holds after
+a line or axiom leaves the build namespace. Believing it would have degraded a
+rule to its flat projection, which unifies against nothing its nested schema used
+to match — a proof that verified yesterday failing today, silently. Composing
+again settles all three cases, costs a parse on the one template that genuinely
+composes to nothing, and is what the build did before this existed.
+
+**Not in this phase.** Definitions. The design sketch listed
+`definitions.higher_term_id` / `lower_term_id` alongside the rules, but a
+definition's forms do not go through `build_schema_pattern` at all — they are
+matched and registered as *notation* against the finished grammar
+(`_finalise_definition`), which mutates the grammar rather than reading it. That
+is a different seam and belongs with P5's tidying, not here.
 
 ### P4. Store promoted theorems
 

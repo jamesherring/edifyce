@@ -61,7 +61,9 @@ from app.db import (
     get_session,
     load_proof_for_check,
     load_proof_lines,
+    load_schema_terms,
     store_proof_lines,
+    store_schema_terms,
     system_to_spec,
 )
 from app.db.models import User
@@ -278,7 +280,10 @@ class _Verification:
 
 
 async def _verify_with_references(
-    session: AsyncSession, proof: Proof, system: FormalSystem | None = None
+    session: AsyncSession,
+    proof: Proof,
+    system: FormalSystem | None = None,
+    persist: bool = True,
 ) -> _Verification:
     """Verify a stored proof, resolving the lemmas it cites from other proofs.
 
@@ -290,6 +295,11 @@ async def _verify_with_references(
     a proof leaning on an unproven lemma fails rather than borrowing an unsound
     line. Pass ``system`` to reuse an already-loaded system (a publish gate has
     one in hand); otherwise it is loaded here.
+
+    ``persist=False`` for a caller whose transaction will be rolled back — an
+    anonymous viewer verifying a published proof. The verdict is the same either
+    way; what it skips is warming the schema-term cache, whose inserts would be
+    discarded with everything else.
     """
     # Before anything is read. A verify now trusts the lemmas' stored rows
     # instead of re-checking them, so the read and the write must sit inside one
@@ -307,12 +317,27 @@ async def _verify_with_references(
             None,
         )
 
-    build = build_spec(system_to_spec(system))
+    # The rules' schema templates are parsed against the grammar to get the terms
+    # the checker unifies with, which is about half of a build and the same
+    # answer every time. Read the terms a previous build composed, and write back
+    # anything this one had to compose itself — a system settles after one
+    # verify, and a grammar edit makes the stored terms inert rather than wrong
+    # (see app/db/schema_terms.py). Under the system lock, like everything else
+    # this function writes.
+    spec = system_to_spec(system)
+    schema_terms = await session.run_sync(
+        lambda sync: load_schema_terms(sync, system, spec)
+    )
+    build = build_spec(spec, schema_terms=schema_terms)
     if "errors" in build:
         return _Verification(
             VerifyProofResponse(success=False, errors=build["errors"]), None
         )
     compiled_system = build["system"]
+    if persist:
+        await session.run_sync(
+            lambda sync: store_schema_terms(sync, system, compiled_system, schema_terms)
+        )
 
     closure, edges = await _reference_closure(session, proof.id)
     try:
@@ -1090,13 +1115,15 @@ async def verify_stored_proof(
 ) -> VerifyProofResponse:
     proof = await _get_readable_or_404(session, proof_id, user)
 
-    verification = await _verify_with_references(session, proof)
+    # Only the owner's transaction is committed (an anonymous viewer of a
+    # published proof gets the result but leaves the stored snapshot untouched),
+    # so a non-owner's verify must not do write work that will be rolled back.
+    owned = user is not None and proof.owner_id == user.id
+    verification = await _verify_with_references(session, proof, persist=owned)
 
     # Record the verdict and the structure behind it, so a client can render the
-    # proof without re-checking and the lines are searchable as terms. Only the
-    # owner may write it back (an anonymous viewer of a published proof gets the
-    # result but leaves the stored snapshot untouched).
-    if user is not None and proof.owner_id == user.id:
+    # proof without re-checking and the lines are searchable as terms.
+    if owned:
         await _record_verdict(session, proof, verification)
         await session.commit()
 

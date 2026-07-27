@@ -15,6 +15,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, aliased
 
 from app.db import Base, SideConditionRow, spec_to_system, system_to_spec
+from app.db.terms import TermChildRow, TermRow
 from app.db.models import FormalSystem
 from app.db.systems import (
     AxiomBindingRow,
@@ -77,6 +78,9 @@ _SYSTEM_TABLES = [
         LineRow, LinePartRow, DefinitionRow, DefinitionBindingRow, DefinitionFreshRow,
         AxiomRow, AxiomBindingRow, RuleRow, RuleAntecedentRow, RuleBindingRow,
         SideConditionRow,
+        # `rules` and `rule_antecedents` reference `terms` for their cached
+        # schema terms (app/db/schema_terms.py).
+        TermRow, TermChildRow,
     )
 ]
 

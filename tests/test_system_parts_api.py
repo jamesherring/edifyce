@@ -1544,3 +1544,98 @@ def test_brackets_definitions_axioms_rules_appear_in_detail(client):
     assert detail["axioms"][0]["label"] == "AX"
     assert detail["rules"][0]["antecedents"] == ["a"]
     assert detail["definitions"][0]["name"] == "d"
+
+
+def test_validate_reports_the_fresh_clause_the_engine_settled_on(client):
+    # Inference is otherwise silent: an author who omits the `fresh` clause has
+    # no way to see what the grammar's binding slots concluded. `validate` builds
+    # the system, so it is where the answer exists.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/api/formal-systems/{sid}/brackets", {"opening": "(", "closing": ")"})
+    for sort in ("setvar", "formula"):
+        _post(client, f"/api/formal-systems/{sid}/sorts", {"name": sort})
+    _post(client, f"/api/formal-systems/{sid}/productions",
+          {"name": "letter", "sort": "setvar", "regex": "[a-z]"})
+    _post(client, f"/api/formal-systems/{sid}/productions",
+          {"name": "membership", "sort": "formula", "template": "(x ∈ y)",
+           "bindings": [{"var": "x", "sort": "setvar"}, {"var": "y", "sort": "setvar"}]})
+    _post(client, f"/api/formal-systems/{sid}/productions",
+          {"name": "implication", "sort": "formula", "template": "(p → q)",
+           "bindings": [{"var": "p", "sort": "formula"}, {"var": "q", "sort": "formula"}]})
+    # `∀x.phi` declares that `x` binds over `phi` — the whole point.
+    _post(client, f"/api/formal-systems/{sid}/productions",
+          {"name": "forall", "sort": "formula", "template": "∀x.phi",
+           "bindings": [{"var": "x", "sort": "setvar", "scopes_over": ["phi"]},
+                        {"var": "phi", "sort": "formula"}]})
+    _post(client, f"/api/formal-systems/{sid}/productions",
+          {"name": "subset", "sort": "formula", "template": "(x ⊆ y)",
+           "bindings": [{"var": "x", "sort": "setvar"}, {"var": "y", "sort": "setvar"}]})
+    _post(client, f"/api/formal-systems/{sid}/line-types",
+          {"name": "statement", "shape": "<formula> [<reference>]",
+           "logical_sort": "formula",
+           "parts": [{"name": "reference", "regex": "[A-Za-z0-9 ,.]+"}]})
+    # No `fresh` clause: `z` must be inferred from `∀`'s binding slot.
+    _post(client, f"/api/formal-systems/{sid}/definitions",
+          {"sort": "formula", "name": "df-subset", "label": "df-subset",
+           "higher": "(x ⊆ y)", "lower": "∀z.((z ∈ x) → (z ∈ y))",
+           "bindings": [{"var": "x", "sort": "setvar"}, {"var": "y", "sort": "setvar"}]})
+
+    result = client.post(f"/api/formal-systems/{sid}/validate").json()
+
+    assert result["success"] is True, result["errors"]
+    (reported,) = result["definitions"]
+    assert reported["label"] == "df-subset"
+    assert reported["binders"] == [{"var": "z", "sort": "setvar", "inferred": True}]
+
+    # The report names the stored row, so a client can join it to the detail API.
+    detail = client.get(f"/api/formal-systems/{sid}").json()
+    assert reported["definition_id"] == detail["definitions"][0]["id"]
+
+
+def test_validate_identifies_each_definition_by_row_not_by_form(client):
+    # Neither `label` nor the defined form identifies a definition: two unnamed
+    # ones may share a form, and one whose defining form matches nothing is
+    # dropped at build — so position in the report tracks neither the stored list
+    # nor anything a client could reconstruct.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/api/formal-systems/{sid}/brackets", {"opening": "(", "closing": ")"})
+    _post(client, f"/api/formal-systems/{sid}/sorts", {"name": "formula"})
+    _post(client, f"/api/formal-systems/{sid}/productions",
+          {"name": "atom", "sort": "formula", "regex": "[a-z]"})
+    _post(client, f"/api/formal-systems/{sid}/productions",
+          {"name": "implication", "sort": "formula", "template": "(p → q)",
+           "bindings": [{"var": "p", "sort": "formula"}, {"var": "q", "sort": "formula"}]})
+    _post(client, f"/api/formal-systems/{sid}/line-types",
+          {"name": "statement", "shape": "<formula> [<reference>]",
+           "logical_sort": "formula",
+           "parts": [{"name": "reference", "regex": "[A-Za-z0-9 ,.]+"}]})
+
+    # Dropped: its defining form uses notation no earlier definition supplies.
+    dropped = _post(client, f"/api/formal-systems/{sid}/definitions",
+                    {"sort": "formula", "name": "early", "higher": "(p ⊗ q)",
+                     "lower": "(p ⊙ q)",
+                     "bindings": [{"var": "p", "sort": "formula"},
+                                  {"var": "q", "sort": "formula"}]})
+    # Two unnamed definitions sharing one defined form.
+    first = _post(client, f"/api/formal-systems/{sid}/definitions",
+                  {"sort": "formula", "name": "d1", "higher": "(p ⊙ q)",
+                   "lower": "(p → q)",
+                   "bindings": [{"var": "p", "sort": "formula"},
+                                {"var": "q", "sort": "formula"}]})
+    second = _post(client, f"/api/formal-systems/{sid}/definitions",
+                   {"sort": "formula", "name": "d2", "higher": "(p ⊙ q)",
+                    "lower": "(q → p)",
+                    "bindings": [{"var": "p", "sort": "formula"},
+                                 {"var": "q", "sort": "formula"}]})
+
+    result = client.post(f"/api/formal-systems/{sid}/validate").json()
+    assert result["success"] is True, result["errors"]
+
+    reported = [d["definition_id"] for d in result["definitions"]]
+    # The dropped one has no compiled counterpart; the two survivors are told
+    # apart by id even though they share a label (none) and a defined form.
+    assert dropped["id"] not in reported
+    assert reported == [first["id"], second["id"]]
+    assert len({d["defined_form"] for d in result["definitions"]}) == 1
