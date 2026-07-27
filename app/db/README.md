@@ -70,7 +70,11 @@ Modernised from the original Django app (`website/models.py` on `main`):
   `rules.schema_digest` fingerprints the grammar and the rule's own templates and
   bindings, and a row whose digest no longer matches is simply not read — so a
   part edit needs no invalidation sweep, and a stale row is inert rather than
-  believed. The FKs into `terms` are `ON DELETE SET NULL` for the same reason:
+  believed. The digest also covers which grammar names a line, part or axiom
+  *shadows* in the build namespace: composing is indifferent to those (it parses
+  against the sort unions) but `load_term` resolves a stored constructor by name
+  through that namespace, so a collision is where a warm build and a cold build
+  would disagree. The FKs into `terms` are `ON DELETE SET NULL` for the same reason:
   losing a term must cost a re-compose, never a rule. And a NULL term id is a
   *miss* even under a matching digest — never "this template composes to
   nothing" — because the same NULL is what a deleted term, and a slot that

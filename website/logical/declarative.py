@@ -1083,12 +1083,13 @@ def schema_digests(spec: SystemSpec) -> list[str]:
     * the bracket map and the constants that merely spell a bracket, which decide
       where a template may be split (both are derived from more of the spec than
       the productions, hence taken after derivation rather than before);
-    * the rule's own templates and metavariable bindings.
+    * the rule's own templates and metavariable bindings;
+    * which grammar names the *rest* of the build namespace shadows — see
+      :func:`_shadowed_grammar_names`.
 
-    A system's *name*, its lines and its axioms are absent on purpose: they enter
-    the build namespace, so a template spelled like one of them resolves to it —
-    but that path returns a declared pattern and composes nothing at all, so no
-    stored term is ever consulted for it.
+    What is absent: a rule's own **label**, which decides nothing composition
+    reads, so a rename keeps the terms. And the content of lines and axioms —
+    only the names they bind matter, and only where one collides.
     """
     grammar = _fingerprint(
         [
@@ -1102,6 +1103,7 @@ def schema_digests(spec: SystemSpec) -> list[str]:
                 ]
                 for prod in spec.productions
             ],
+            _shadowed_grammar_names(spec),
         ]
     )
     return [
@@ -1118,6 +1120,37 @@ def schema_digests(spec: SystemSpec) -> list[str]:
         )
         for rule in spec.rules
     ]
+
+
+def _shadowed_grammar_names(spec: SystemSpec) -> list[str]:
+    """Grammar names that something *else* in the build namespace also binds.
+
+    ``ctx.variables`` is one namespace, and lines, line parts, axioms and the
+    system itself are registered into it after the grammar (steps 5 and 6 of
+    :func:`build_system`). A name declared twice resolves to the later one — so a
+    production named ``implication`` and an axiom named ``implication`` leave
+    ``ctx.variables["implication"]`` holding the axiom's line type.
+
+    That matters to a *stored* term, which names its constructors by name and
+    resolves them back through this namespace (``app.db.terms_mapping.load_term``).
+    Composing has no such problem: it parses against the sort unions, which hold
+    the production objects themselves and are indifferent to what the name now
+    means. So a collision is exactly a case where a warm build and a cold build
+    would disagree, and it has to reach the digest.
+
+    Only the *collisions*, not every outside name: a line renamed to something no
+    production is called shadows nothing, and invalidating every schema term for
+    it would be cost with no defect behind it.
+    """
+    grammar = {prod.name for prod in spec.productions} | set(spec.sort_names())
+    outside = {_identifier(spec.name) or "System"}
+    for line in spec.lines:
+        outside.add(line.name)
+        outside.update(part.name for part in line.parts)
+    for axiom in spec.axioms:
+        outside.add(_identifier(axiom.name))
+        outside.add(f"{_identifier(axiom.name)}_axiom")
+    return sorted(grammar & outside)
 
 
 def _fingerprint(value: object) -> str:

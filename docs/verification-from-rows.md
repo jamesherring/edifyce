@@ -394,14 +394,35 @@ Two details the digest gets right by being computed on the right thing:
   `spec.brackets`. Undeclaring `()` on a system that writes parens changes
   nothing — the build falls back to them — and digesting the declaration would
   have thrown away every term for no reason.
-- It omits the system's name, lines and axioms, which do enter the build
-  namespace. A template spelled like one of those resolves to the declared
-  pattern and composes nothing at all, so it stores a NULL — and a NULL is a
-  miss, so the slot re-composes whether or not the name is still there. The
-  digest does not have to reach the non-production namespace because nothing
-  that namespace decides is ever *served*.
+- It covers which grammar names the *rest* of the build namespace shadows —
+  the collisions only, not every name a line, part or axiom binds. See below.
 - It omits a rule's **label**, which affects nothing composition reads. A pure
   rename therefore keeps the terms, which is right.
+
+**The namespace has two readers, and only one of them is composition.** The
+first cut left lines, line parts and axioms out of the digest, on the argument
+that a template spelled like one of them resolves to that declared pattern and
+composes nothing — so no stored term is served for it. True, and beside the
+point. Those names share `ctx.variables` with the grammar and are registered
+after it, so an axiom named `implication` leaves that name bound to its line
+type. Composing is indifferent: it parses against the sort *unions*, which hold
+the production objects. But a stored term names its constructors by **name** and
+resolves them back through that same namespace (`terms_mapping.load_term`), and
+finds the line type. Cold build fine, warm build dead — from an edit that changes
+no composed term at all, which is why the digest-reach test could not see it and
+a warm-equals-cold test now does.
+
+`_shadowed_grammar_names` covers exactly the collisions, not every outside name:
+a line renamed to something no production is called shadows nothing, and
+invalidating for it would be cost with no defect behind it. Both directions are
+pinned by tests.
+
+Worth noting that **P2 has the same hazard and is saved by something else**: a
+stored proof-line term resolves its constructors through the same shadowed
+namespace, but `discard_system_checks` drops every proof in the system on any
+part edit, so the rows never survive the rename. P3 deliberately has no such
+blanket invalidation — that is the whole point of the digest — so it has to carry
+this itself.
 
 **One trap, and it is P1's trap again.** `prefetch_terms` loads the schema graph
 in one sweep, but the build runs *outside* the session — so a descendant row that

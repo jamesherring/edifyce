@@ -303,10 +303,42 @@ def _rebind_rule(spec: SystemSpec) -> None:
     spec.rules[0].bindings = [(var, sort) for var, sort in spec.rules[0].bindings][:-1]
 
 
+def _collide_axiom_with_production(spec: SystemSpec) -> None:
+    """An axiom renamed onto a production's name.
+
+    Lines, line parts and axioms share ``ctx.variables`` with the grammar, and are
+    registered after it, so this leaves the name bound to the axiom's line type.
+    Composing does not care — it parses against the sort unions, which hold the
+    production objects — but a *stored* term resolves its constructors by name
+    through that namespace, and finds the line type.
+    """
+    spec.axioms[0].name = "implication"
+
+
+def _collide_line_part_with_production(spec: SystemSpec) -> None:
+    """The same collision from a line part, which is registered the same way."""
+    spec.lines[0].parts[0].name = "implication"
+    spec.lines[0].shape = spec.lines[0].shape.replace("<reference>", "<implication>")
+
+
+def _rename_line_harmlessly(spec: SystemSpec) -> None:
+    """A rename that collides with nothing — the terms must survive it.
+
+    The counterweight to the two above: the digest covers *collisions*, not every
+    name bound outside the grammar, so an unrelated rename must not throw the
+    system's schema terms away.
+    """
+    spec.lines[0].name = "claim"
+
+
 # Each edit, paired with whether it is known to *move* a schema term in this
 # fixture. The flag is asserted too: an edit that starts or stops moving one is a
 # change in what composition depends on, and this is where that should surface
 # rather than in a stale term nobody notices.
+#
+# Note the collisions move nothing: a cold build is completely unaffected by
+# them. They are here for the end-to-end test below, which is the one that can
+# see them.
 _EDITS = [
     (_retemplate, True),
     (_rename_production, True),
@@ -314,6 +346,9 @@ _EDITS = [
     (_drop_brackets, False),
     (_retemplate_rule, True),
     (_rebind_rule, False),
+    (_collide_axiom_with_production, False),
+    (_collide_line_part_with_production, False),
+    (_rename_line_harmlessly, False),
 ]
 
 
@@ -349,32 +384,91 @@ def test_an_edit_that_changes_a_schema_term_changes_its_digest(edit, moves) -> N
         )
 
 
-@pytest.mark.parametrize(
-    "edit", [_retemplate, _rename_production, _add_production],
-    ids=lambda f: f.__name__.lstrip("_"),
-)
-def test_a_grammar_edit_leaves_every_stored_term_unread(engine: Engine, edit) -> None:
-    """End to end: edit the *rows*, and the stored terms stop being served.
+def _edited_rows(session: Session, edit) -> tuple[FormalSystem, SystemSpec]:
+    """The rows an edit to the stored system would leave, terms and all.
 
-    The digest test above works on specs; this one goes through storage, because
-    a digest that is right and a lookup that ignores it would still be a bug.
+    A part edit rewrites the parts and touches nothing on `rules` — including the
+    columns this cache lives in — so the stored terms and digests carry straight
+    over. That carry-over is the whole hazard, and reproducing it faithfully is
+    what makes the tests below mean anything.
     """
-    spec = hilbert_spec()
-    _store(engine, spec)
+    row = session.scalars(select(FormalSystem)).one()
+    edited = system_to_spec(row)
+    edit(edited)
+
+    replacement = spec_to_system(edited)
+    for stored, fresh in zip(row.rules, replacement.rules):
+        fresh.schema_digest = stored.schema_digest
+        fresh.deduction_term_id = stored.deduction_term_id
+        fresh.subproof_derive_term_id = stored.subproof_derive_term_id
+        fresh.subproof_assume_term_id = stored.subproof_assume_term_id
+        fresh.subproof_fresh_term_id = stored.subproof_fresh_term_id
+        for stored_a, fresh_a in zip(stored.antecedents, fresh.antecedents):
+            fresh_a.term_id = stored_a.term_id
+    return replacement, edited
+
+
+@pytest.mark.parametrize("edit,_moves", _EDITS, ids=lambda v: getattr(v, "__name__", ""))
+def test_a_warm_build_agrees_with_a_cold_one_after_any_edit(
+    engine: Engine, edit, _moves
+) -> None:
+    """The property the whole phase rests on, checked through storage.
+
+    The digest test above works on specs and asks a proxy question — did the
+    digest move when the term did. This asks the real one: after an edit, does
+    building *through* the stored terms give the same system as building without
+    them. It is strictly stronger, and it is what catches an edit that changes no
+    composed term but changes how a stored one is *read* back — a line or axiom
+    renamed onto a production's name shadows it in the build namespace, so the
+    cold build composes fine while the warm build resolves the stored
+    constructor to a line type. Nothing about composition moves, so only this
+    shape of test can see it.
+    """
+    _store(engine, hilbert_spec())
 
     with Session(engine) as session:
-        row = session.scalars(select(FormalSystem)).one()
-        assert len(load_schema_terms(session, row, system_to_spec(row))) > 0
+        replacement, edited = _edited_rows(session, edit)
+        warm = build_spec(
+            edited, schema_terms=load_schema_terms(session, replacement, edited)
+        )
+        cold = build_spec(edited)
 
-        edited = system_to_spec(row)
-        edit(edited)
-        # The rows the edit would produce, against the terms already stored.
-        replacement = spec_to_system(edited)
-        for stored_rule, fresh_rule in zip(row.rules, replacement.rules):
-            fresh_rule.schema_digest = stored_rule.schema_digest
-            fresh_rule.deduction_term_id = stored_rule.deduction_term_id
+    assert "errors" not in cold, cold.get("errors")
+    assert "errors" not in warm, warm.get("errors")
+    assert _schemas(warm["system"]) == _schemas(cold["system"])
 
-        assert len(load_schema_terms(session, replacement, edited)) == 0
+
+@pytest.mark.parametrize(
+    "edit,served",
+    [
+        # A grammar edit invalidates everything: a schema term names the
+        # constructors it was built from.
+        (_retemplate, 0),
+        (_rename_production, 0),
+        (_add_production, 0),
+        # A collision does too, for a different reason — it changes what a stored
+        # constructor *name* resolves to (see _shadowed_grammar_names).
+        (_collide_axiom_with_production, 0),
+        (_collide_line_part_with_production, 0),
+        # ...but a rename that shadows nothing must keep them.
+        (_rename_line_harmlessly, 4),
+    ],
+    ids=lambda v: getattr(v, "__name__", str(v)),
+)
+def test_which_edits_leave_the_stored_terms_readable(
+    engine: Engine, edit, served: int
+) -> None:
+    """The cost side of the guard.
+
+    The test above says a warm build is never *wrong*; this says it is not
+    needlessly cold either. Invalidating on every name bound outside the grammar
+    would pass that one and throw the cache away for an unrelated rename.
+    """
+    _store(engine, hilbert_spec())
+
+    with Session(engine) as session:
+        replacement, edited = _edited_rows(session, edit)
+        assert len(load_schema_terms(session, replacement, edited)) == served
 
 
 def test_storing_is_idempotent(engine: Engine) -> None:
