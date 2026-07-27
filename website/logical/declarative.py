@@ -143,6 +143,25 @@ class Justification:
     `df-sb` and stating exactly its hypothesis. ``statement`` is the obligation in
     the system's own grammar, over the definition's own metavariables; ``label``
     names the promoted theorem that settles it.
+
+    When it is *not* needed
+    -----------------------
+    An obligation of `df-sb`'s particular kind - "the dummy could have been any
+    name" - is an artefact of writing definitions with named binders. Declare the
+    dummy `fresh` and the kernel stores it abstractly
+    (:class:`~website.logical.kernel.terms.Bound`), so the definition makes no
+    choice of name and there is nothing left to justify: both spellings are unfolds
+    of one defined form, and their equivalence follows rather than precedes.
+
+    That is not a reason to drop this. `set.mm` states the argument itself, in
+    `df-sb`'s comment - *"Without this hypothesis, sbjust would be derivable from
+    propositional axioms alone: one could apply the definiens twice, using
+    different dummy variables"* - and keeps the hypothesis anyway, because making
+    `sbjust` derivable would weaken an independence claim about its axioms. So the
+    two routes import the same theorems under different metatheoretic discipline,
+    and a faithful import wants this one. The obligations it is really *needed*
+    for are the ones no representation removes: an existence lemma of the
+    `df-div`/`df-sqrt` kind (roadmap A4).
     """
 
     label: str
@@ -156,6 +175,12 @@ class Definition:
     higher: str
     lower: str
     bindings: list[tuple[str, str]]
+    # Soundness provisos (the `where` clause), `;`-separated kernel-vocabulary
+    # lines. Checked at every unfold against what that unfold binds, so a proviso
+    # may name a parameter of the *defined* form or one of the `fresh` binders
+    # below (by its declared name — a binder is stored abstractly, so the proviso
+    # constrains whatever leaf it takes there). Naming anything else is refused at
+    # build: there would be nothing to resolve it against.
     condition: str | None = None
     # The defining form's bound variables, `[(var, sort)]` (the `fresh` clause).
     # Declaring a binder lets the term checker unfold the definition
@@ -1074,17 +1099,20 @@ def _check_condition_is_checkable(defn: Definition, built: KernelDefinition) -> 
     # where the author can act on it, exactly as an unsound defining form is.
     if built.condition is None:
         return
-    supplied = set(built.higher.free_vars())
+    # The declared binders count as supplied: the unfold resolves each to the leaf
+    # it takes there and exposes it under its declared name, so a proviso may
+    # constrain one (`kernel.definitions._condition_binding`).
+    supplied = set(built.higher.free_vars()) | {binder.name for binder in built.fresh}
     orphaned = sorted(references(built.condition) - supplied)
     if orphaned:
         listed = ", ".join(repr(name) for name in orphaned)
         raise DeclarativeError(
             f"Definition '{defn.name}' has a proviso naming {listed}, which its "
-            f"defined form '{defn.higher}' does not supply. A proviso is checked "
-            "against the match between the defined form and the term being "
-            "unfolded, so it can only constrain what that match binds. Either make "
-            f"{listed} a parameter of the defined form, or state the proviso over "
-            "the parameters it already has."
+            f"defined form '{defn.higher}' does not supply and its `fresh` clause "
+            "does not declare. A proviso is checked against the match between the "
+            "defined form and the term being unfolded, plus the binders that unfold "
+            f"resolves, so it can constrain nothing else. Either make {listed} a "
+            "parameter of the defined form, or state the proviso over what it has."
         )
 
 
@@ -1097,24 +1125,34 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
     context_copy = copy(system.context)
     context_copy.string_variables.update(_binding_patterns(defn.bindings, ctx))
 
+    # The defining form's bound variables, resolved to their sort patterns, so the
+    # term checker treats them as binders (capture-avoiding unfold) rather than as
+    # stray ground leaves that would force the string path.
+    fresh_patterns = _binding_patterns(defn.fresh, ctx)
+
     # A `;` inside a `where` proviso conjoins several kernel conditions.
+    #
+    # Parsed with the binders in scope as well as the parameters, so a proviso may
+    # name one. A binder is stored abstractly and has no fixed name to constrain,
+    # so `disjoint(z, x)` on a definition whose `fresh` clause names `z` means
+    # "whatever this binder is called at this unfold" — which is what an author
+    # writing it means, and what `kernel.definitions._condition_binding` resolves
+    # it to. Without the binders here `z` parses as the literal token `z`, which is
+    # a coherent reading of nothing anybody wanted.
     where_strings = (
         [part.strip() for part in defn.condition.split(";") if part.strip()]
         if defn.condition
         else []
     )
-    kernel_condition = combine_side_conditions(where_strings, context_copy)
+    proviso_context = copy(context_copy)
+    proviso_context.string_variables = {**fresh_patterns, **context_copy.string_variables}
+    kernel_condition = combine_side_conditions(where_strings, proviso_context)
 
     # A definition holding only under an obligation discharges it here, before any
     # of it is registered — the obligation is stated in the grammar the definition
     # extends, so it must be settled while that grammar is still the one in force.
     if defn.justification is not None:
         kernel_condition = _discharge_justification(defn, system, kernel_condition)
-
-    # The defining form's bound variables, resolved to their sort patterns, so the
-    # term checker treats them as binders (capture-avoiding unfold) rather than as
-    # stray ground leaves that would force the string path.
-    fresh_patterns = _binding_patterns(defn.fresh, ctx)
 
     # Whether the defining form is recognised *given the definitions before it* is
     # what "layering" means, and it is settled before anything is registered: a

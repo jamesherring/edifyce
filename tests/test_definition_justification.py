@@ -306,12 +306,12 @@ def test_an_inherited_proviso_joins_the_definition_s_own():
 
 
 def test_an_inherited_proviso_the_defined_form_cannot_supply_is_refused():
-    # `z` is the obligation's dummy: a metavariable of the definition, but not one
-    # its *defined* form `x ⊆ y` supplies. An unfold binds only what matching the
-    # defined form against the redex binds, so this proviso has nothing to resolve
-    # against — and `unfold` does not fail closed on that, it raises into the proof
-    # parse. Refused where the author can act on it instead.
-    system = _promote(_built_system(), distinct=["disjoint(z, y)"])
+    # `w` is the obligation's *other* dummy: a metavariable of the definition, but
+    # neither one its defined form `x ⊆ y` supplies nor one its `fresh` clause
+    # declares. An unfold resolves only the parameters and the binders, so this
+    # proviso has nothing to resolve against — and `unfold` does not fail closed on
+    # that, it raises into the proof parse. Refused where the author can act on it.
+    system = _promote(_built_system(), distinct=["disjoint(w, y)"])
 
     with pytest.raises(DeclarativeError) as excinfo:
         register_definition(
@@ -319,7 +319,7 @@ def test_an_inherited_proviso_the_defined_form_cannot_supply_is_refused():
         )
 
     assert "does not supply" in str(excinfo.value)
-    assert "'z'" in str(excinfo.value)
+    assert "'w'" in str(excinfo.value)
 
 
 def test_a_late_refusal_withdraws_the_notation_it_registered():
@@ -328,7 +328,7 @@ def test_a_late_refusal_withdraws_the_notation_it_registered():
     # discarded with everything else, but `register_definition` mutates a *live*
     # system — and a corpus import catches this exact error to keep the assertion
     # as an axiom, so it must find the grammar as it left it.
-    system = _promote(_built_system(), distinct=["disjoint(z, y)"])
+    system = _promote(_built_system(), distinct=["disjoint(w, y)"])
     before = set(system.context.definitions)
 
     with pytest.raises(DeclarativeError):
@@ -346,7 +346,7 @@ def test_a_late_refusal_leaves_an_earlier_definition_s_notation_alone():
     # Two definitions may share one defined form, and `add_notation` hands the
     # second the production the first registered. Withdrawing it on the second's
     # refusal would confiscate the first one's grammar.
-    system = _promote(_built_system(), distinct=["disjoint(z, y)"])
+    system = _promote(_built_system(), distinct=["disjoint(w, y)"])
     register_definition(subset_defn(None), system)
     before = set(system.context.definitions)
 
@@ -359,11 +359,27 @@ def test_a_late_refusal_leaves_an_earlier_definition_s_notation_alone():
     assert system.parse("a ⊆ b [HYP]").proof_lines[0].formula_term is not None
 
 
+def test_a_proviso_may_constrain_a_binder_by_its_declared_name():
+    # A binder is stored abstractly and takes whatever name the unfold chooses, so
+    # `disjoint(z, x)` means "this binder, whatever it ends up called" rather than
+    # the literal token `z`. Here it forbids the binder taking the same name as the
+    # first parameter, so `a ⊆ b` unfolds with the default `z` and the *renamed*
+    # unfold to `a` is refused.
+    system = _built_system()
+    register_definition(subset_defn(None, condition="disjoint(z, x, variable)"), system)
+    definition = system.definitions[0]
+    redex = system.parse("a ⊆ b [HYP]").proof_lines[0].formula_term
+
+    assert unfold(definition, redex, system.context) is not None
+    chosen = system.parse("a [HYP]").proof_lines[0].formula_term
+    assert unfold(definition, redex, system.context, {"z": chosen}) is None
+
+
 def test_a_definition_s_own_proviso_is_held_to_the_same_rule():
     # Not a justification-only rule: a hand-written `where` clause naming a
     # non-parameter has always had the same defect, and is refused the same way.
     with pytest.raises(DeclarativeError) as excinfo:
-        build_system(_spec([subset_defn(None, condition="disjoint(z, y)")]))
+        build_system(_spec([subset_defn(None, condition="disjoint(w, y)")]))
 
     assert "does not supply" in str(excinfo.value)
 

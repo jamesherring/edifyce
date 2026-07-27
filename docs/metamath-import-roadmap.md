@@ -628,6 +628,54 @@ importer binding slots is therefore the highest-value next step in A4** — set.
 `$j` annotations are the obvious source — and it lifts ~1,123 statements at once
 with no change to the classifier's tests.
 
+**Abstract binders make both of set.mm's justifications unnecessary — and set.mm
+declines that on purpose.** Worth recording, because it decides what the binding-
+slot work is *for*.
+
+The kernel already stores a `fresh` binder abstractly, by index
+(`kernel.terms.Bound`): `x ⊆ y ≝ ∀z(z ∈ x → z ∈ y)` is held as
+`∀⟨0⟩(⟨0⟩ ∈ x → ⟨0⟩ ∈ y)`, and the *consumer* of an unfold picks the concrete
+name. That is what turns capture from a rejection into a rename — `z ⊆ b` unfolds
+to `∀w(w ∈ z → w ∈ b)` rather than failing. What survives is not a residual
+occurs-check but the check that the *chosen* name is a good one, which cannot be
+removed while terms round-trip to the user's surface syntax: a proof line is text
+in the system's own grammar, and a grammar has no notion of an index, so the
+boundary where names come back is where the check must live.
+
+Now apply that to `df-sb`. Its `y` appears on the right only, so in Metamath the
+definition genuinely commits to a name, and `sbjust` is the theorem that the
+commitment does not matter. Declared `fresh`, the defining form is
+`∀⟨0⟩(⟨0⟩ = t → ∀x(x = ⟨0⟩ → φ))` — **no choice is made, so there is nothing to
+justify**. `A. y (…)` and `A. z (…)` are both unfolds of the same defined form, and
+their equivalence follows from two definitional steps and transitivity.
+
+`set.mm` states this argument itself, in `df-sb`'s own comment:
+
+> The hypothesis asserts that the definition is independent of the particular
+> choice of the dummy variable `y`. **Without this hypothesis, `sbjust` would be
+> derivable from propositional axioms alone: one could apply the definiens for
+> `[ t / x ] ph` twice, using different dummy variables `y` and `z`, and then
+> invoke `bitr3i`** … This would jeopardize the independence of axioms.
+
+"Apply the definiens twice and invoke `bitr3i`" is exactly two unfolds and
+transitivity. So the mechanism works and its authors deliberately decline it: it
+would make `sbjust` derivable and weaken an independence claim about their axiom
+system. The two routes import the same theorems under different metatheoretic
+discipline, and a faithful import wants Metamath's.
+
+Which leaves `justification` earning its keep on the obligations no representation
+removes — an existence lemma of the `df-div`/`df-sqrt` kind, which is a claim about
+what exists rather than about how a binder is spelled. Both set.mm cases may cease
+to need it once binding slots land; that is a success of the representation, not a
+loss of the mechanism.
+
+One consequence of the abstract representation is now usable directly: a
+definition's own proviso may **constrain a binder** by the name its author
+declared it under (`disjoint(z, x)` where `z` is the `fresh` name), resolved at
+each unfold to whatever leaf the binder takes there. Before, the condition was
+checked before the binders were resolved, so `z` in a proviso could only mean the
+literal token `z`.
+
 Of the 310 non-binding refusals: 119 root is not a declared equivalence (`df-bi`
 among them — it defines `↔` and so cannot use it, root `-.`), 9 defined side
 already in use (`df-clab`/`df-cleq`/`df-clel`, the axioms connecting class
