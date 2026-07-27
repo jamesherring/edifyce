@@ -49,11 +49,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ..declarative import Definition
+from ..kernel.terms import Node
 
 if TYPE_CHECKING:
-    from ..formal_system import FormalSystem
     from ..kernel.terms import Term
-    from .parser import Assertion, Database
+    from .parser import Assertion
 
 
 @dataclass(frozen=True)
@@ -76,47 +76,45 @@ class Classified:
 
 
 def constructors_used(term: Term) -> set[str]:
-    """Every constructor name appearing anywhere in ``term``."""
+    """Every constructor name appearing anywhere in ``term``.
+
+    A :class:`~website.logical.kernel.terms.Var` contributes none - it stands for
+    a term rather than naming a production - so only nodes are read.
+    """
     names: set[str] = set()
     stack = [term]
     while stack:
         node = stack.pop()
-        constructor = getattr(node, "constructor", None)
-        if constructor is not None:
-            names.add(constructor.name)
-        stack.extend(getattr(node, "children", {}).values())
+        if isinstance(node, Node):
+            names.add(node.constructor.name)
+            stack.extend(node.children.values())
     return names
 
 
-def _sides(term: Term) -> tuple[Term, Term] | None:
+def _sides(term: Term) -> tuple[Node, Node] | None:
     # The two operands of a relation between two things of one sort, or None if
     # the term is not one. The slots must agree in sort: that is what tells `=`
     # and `↔` from a production that merely happens to take two arguments.
-    constructor = getattr(term, "constructor", None)
-    if constructor is None:
+    if not isinstance(term, Node):
         return None
 
-    slots = constructor.slots
-    if len(slots) != 2 or len(set(slots)) != 2:
+    slots = term.constructor.slots
+    if len(slots) != 2 or slots[0] == slots[1]:
         return None
 
-    children = getattr(term, "children", {})
-    if len(children) != 2:
+    sorts = term.constructor.slot_sorts
+    if slots[0] not in sorts or sorts[slots[0]] is not sorts[slots[1]]:
         return None
 
-    sorts = constructor.slot_sorts
-    if sorts.get(slots[0]) is not sorts.get(slots[1]) or slots[0] not in sorts:
+    left, right = term.children[slots[0]], term.children[slots[1]]
+    if not isinstance(left, Node) or not isinstance(right, Node):
         return None
 
-    return children[slots[0]], children[slots[1]]
+    return left, right
 
 
 def classify(
-    assertion: Assertion,
-    database: Database,
-    system: FormalSystem,
-    statement: Term | None,
-    in_use: set[str],
+    assertion: Assertion, statement: Term | None, in_use: set[str]
 ) -> Classified:
     """Decide whether ``assertion`` is a definition, given what precedes it.
 
@@ -130,7 +128,7 @@ def classify(
 
     sides = _sides(statement)
     if sides is None:
-        root = getattr(getattr(statement, "constructor", None), "name", "?")
+        root = statement.constructor.name if isinstance(statement, Node) else "a variable"
         return Classified(
             assertion.label,
             reason=f"not a relation between two things of one sort (root {root})",
@@ -149,21 +147,20 @@ def classify(
             reason=f"defined side is a bare metavariable ({defined})",
         )
 
-    head = getattr(getattr(higher, "constructor", None), "name", None)
-    if head is None or head in in_use:
+    head = higher.constructor.name
+    if head in in_use:
         return Classified(
             assertion.label,
             reason=f"defined side is built from notation already in use ({head})",
         )
 
-    constructor = statement.constructor
-    sort = constructor.slot_sorts[constructor.slots[0]]
+    sort = statement.constructor.slot_sorts[statement.constructor.slots[0]]
     return Classified(
         assertion.label,
         definition=Definition(
             sort=sort.name,
             name=assertion.label,
-            higher=higher.to_string(),
+            higher=defined,
             lower=lower.to_string(),
             bindings=[(h.variable, h.typecode) for h in assertion.floatings],
             label=assertion.label,

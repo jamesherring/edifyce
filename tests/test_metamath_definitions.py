@@ -30,7 +30,7 @@ def classify_all(source: str) -> dict[str, object]:
             continue
         line = system.parse(" ".join(assertion.tokens) + " [x]").proof_lines[0]
         term = line.formula_term
-        out[assertion.label] = classify(assertion, database, system, term, in_use)
+        out[assertion.label] = classify(assertion, term, in_use)
         if term is not None:
             in_use |= constructors_used(term)
     return out
