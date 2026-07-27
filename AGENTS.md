@@ -85,9 +85,19 @@ Two follow-ups this leaves open:
   is what admitting an open abbreviation like `S ≝ (a ∈ b)` would need, and the
   only one that widens what a *proof* may do. Specced in
   [docs/binding-slots-design.md](docs/binding-slots-design.md).
-- **Conservativity.** That a defined symbol is fresh and the definition
-  non-circular is still untreated, as in Metamath. Only the *capture* half of
-  admissibility is checked.
+- **Conservativity.** A definition must add notation, not assumptions, and both
+  halves are now settled. **Non-circularity** holds by construction: a defining
+  form is matched against the grammar as extended by the definitions *before* it,
+  so a definition stated in terms of itself matches nothing and is dropped, and
+  the "defined using" relation is a DAG by index — there is no check because none
+  is reachable. **Freshness** is checked
+  (`declarative._require_a_fresh_defined_form`): a definition may not give meaning
+  to a symbol an axiom or rule is already stated over, since equating such a
+  symbol to something else is an axiom rather than a definition. Declaring the
+  defined form as a *production* is deliberately not disqualifying — that is how
+  `⊆` becomes grammatical before `df-subset` gives it meaning; what is refused is
+  defining a symbol the theory already reasons about. Pinned in
+  `tests/test_conservativity.py`.
 
 The bespoke `.edi` source language and its compiler are **gone**. A system is a
 `SystemSpec` and nothing else; there is no text form to round-trip through, and

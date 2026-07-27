@@ -52,6 +52,7 @@ from .formal_system.definitions import (
 )
 from .formal_system.side_condition_syntax import parse_side_condition
 from .kernel.constructors import constructor_for, project_grammar
+from .kernel.terms import Node, from_match, from_pattern
 from .matching import AtomPattern, Pattern, RegexPattern, StringPattern, UnionPattern
 
 if TYPE_CHECKING:
@@ -786,12 +787,24 @@ def build_system(
     # silently letting `[<name>, <line>]` pick one.
     seen_labels: set[str] = set()
     layering: list[bool] = []
+    # The shapes the system's primitive rules are stated over: a definition may
+    # not give meaning to a symbol they already constrain. Computed on demand and
+    # memoised, because getting them means re-parsing every schema — and the
+    # check only reaches for them when a defined form *already parses*, which is
+    # the rare case. A system whose definitions all introduce new notation, which
+    # is the ordinary one, never pays for this at all.
+    primitive_cache: list[set[tuple[str, ...]]] = []
+
+    def primitive() -> set[tuple[str, ...]]:
+        if not primitive_cache:
+            primitive_cache.append(_schema_signatures(spec, ctx))
+        return primitive_cache[0]
     for defn in spec.definitions:
         if defn.label is not None:
             if defn.label in seen_labels:
                 raise DeclarativeError(f"Duplicate definition label '{defn.label}'.")
             seen_labels.add(defn.label)
-        layering.append(_finalise_definition(defn, ctx, system))
+        layering.append(_finalise_definition(defn, ctx, system, primitive))
     system.definition_layering = layering
 
     # 9. Parse each rule's provisos now that definitions have resolved, so a
@@ -946,7 +959,121 @@ def _build_subproof(
     )
 
 
-def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: FormalSystem) -> bool:
+def _schema_signatures(spec: SystemSpec, ctx: FormalSystemContext) -> set[tuple[str, ...]]:
+    """Every constructor signature the system's *primitive* rules are stated over.
+
+    Taken from the spec's own schema *text*, re-parsed against the grammar, and
+    that is not an accident: a schema is stored as a pattern whose template is
+    the source line with only its declared metavariables punched out as slots.
+    An axiom with no metavariables is therefore one literal blob — `from_pattern`
+    reads it as a ground leaf carrying the whole line, and sees no `∈` inside it.
+    The structure exists only in the string, so recovering it means parsing.
+
+    Parsed against each sort in turn because a schema does not record which sort
+    it was written in; the first that matches is the one. Metavariables come from
+    the schema's own bindings, as they did when it was built.
+    """
+    found: set[tuple[str, ...]] = set()
+    unions = [
+        ctx.variables[name]
+        for name in spec.sort_names()
+        if isinstance(ctx.variables.get(name), UnionPattern)
+    ]
+    if not unions:
+        return found
+
+    def collect(text: str | None, bindings: list[tuple[str, str]]) -> None:
+        if not text:
+            return
+        scoped = copy(ctx)
+        scoped.string_variables = {
+            **ctx.string_variables,
+            **_binding_patterns(bindings, ctx),
+        }
+        for union in unions:
+            matched = union.match(text, scoped)
+            if matched is None:
+                continue
+            stack: list[Term] = [from_match(matched)]
+            while stack:
+                term = stack.pop()
+                if isinstance(term, Node):
+                    found.add(term.constructor.signature)
+                    stack.extend(term.children.values())
+            return
+
+    for ax in spec.axioms:
+        collect(ax.deduction, ax.bindings)
+    for rule in spec.rules:
+        collect(rule.deduction, rule.bindings)
+        for antecedent in rule.antecedents:
+            collect(antecedent, rule.bindings)
+        if rule.subproof is not None:
+            collect(rule.subproof.derive, rule.bindings)
+            collect(rule.subproof.assume, rule.bindings)
+            collect(rule.subproof.fresh, rule.bindings)
+    return found
+
+
+def _require_a_fresh_defined_form(
+    defn: Definition,
+    union: Pattern,
+    context: FormalSystemContext,
+    system: FormalSystem,
+    primitive: Callable[[], set[tuple[str, ...]]],
+) -> None:
+    """Refuse a definition whose defined symbol the system already reasons with.
+
+    The freshness half of **conservativity**: a definition may only give meaning
+    to a symbol that had none. If an axiom or inference rule is already stated
+    over that symbol, the system already constrains it, and a definition equating
+    it to something else is an *axiom* — it can prove statements in the original
+    language that were not provable before.
+
+    Declaring the defined form as a *production* is not what disqualifies it, and
+    that distinction is the whole subtlety here. Declaring ``subset`` and then
+    writing ``Define (x ⊆ y) as ∀z.…`` is the ordinary way to define notation in
+    this engine: the production supplies grammar, the definition supplies meaning,
+    and nothing else in the system mentions ``⊆``. What is refused is defining a
+    symbol the theory is *already about* — ``Define (x ∈ y) as (⊥ → ⊥)`` in a
+    system whose rules reason over ``∈``.
+
+    It is not inert, which is why this is a refusal rather than a note. The kernel
+    definition ends up stated over the *production's* constructor, so
+    ``(⊥ → ⊥) [Def, 1]`` checks against a membership line and the base language
+    gains a theorem.
+
+    An **earlier definition's** notation is deliberately not disqualifying: two
+    definitions may attach to one defined form, each separately citable, which is
+    the design (see ``matching.definitions``) and is Metamath's, where every
+    ``df-`` is its own axiom.
+    """
+    matched = union.match(defn.higher, context)
+    if matched is None:
+        return
+    if any(matched.pattern is n.template for n in system.context.definitions):
+        return
+    head = from_match(matched)
+    if not isinstance(head, Node) or head.constructor.signature not in primitive():
+        return
+    raise DeclarativeError(
+        f"Definition {defn.name!r} defines '{defn.higher}', but the system's "
+        f"axioms or inference rules are already stated over that form. A "
+        f"definition may only give meaning to a symbol that had none: a symbol "
+        f"the rules already constrain is one the system reasons about, so "
+        f"equating it to something else is an axiom rather than a definition, "
+        f"and unfolding it proves statements the base system could not. Define a "
+        f"new notation instead; or, if you meant to assert an equation between "
+        f"forms the system already uses, declare it as an axiom."
+    )
+
+
+def _finalise_definition(
+    defn: Definition,
+    ctx: FormalSystemContext,
+    system: FormalSystem,
+    primitive: Callable[[], set[tuple[str, ...]]],
+) -> bool:
     """Register ``defn`` against the now-complete grammar, returning whether it
     layered — ``True`` when its defining (lower) form was recognised (given the
     definitions already in context), ``False`` when it matched nothing and so was
@@ -973,6 +1100,8 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
     # definition that does not layer must leave the grammar untouched.
     if union.match(defn.lower, context_copy) is None:
         return False
+
+    _require_a_fresh_defined_form(defn, union, context_copy, system, primitive)
 
     notation = union.add_notation(defn.higher, context_copy)
     system.context.definitions.add(notation)
