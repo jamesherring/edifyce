@@ -41,6 +41,7 @@ from .side_conditions import (
     Occurs,
     Or,
     SideCondition,
+    restate,
 )
 from .constructors import Constructor, constructor_for
 from .terms import Bound, Node, Term, Var, abstract, bind, from_match, from_pattern, intern
@@ -73,6 +74,7 @@ __all__ = [
     "introduced_leaves",
     "match",
     "match_all",
+    "restate",
     "unbound_parameters",
     "unfold",
 ]

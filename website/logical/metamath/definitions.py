@@ -29,12 +29,20 @@ Nothing about the *label*. Two structural tests, in order, and then the kernel:
    `df-clel`, whose left sides are ordinary ``e.``/``=`` and which are genuinely
    axioms connecting class notation to set theory, whatever their names suggest.
 
-Then three refusals for what a `Definition` cannot faithfully carry: a defining
-form built from the very form being defined (a recursive alias, not something
-eliminable), an assertion holding only under `$e` hypotheses (a definition holds
-unconditionally, and there is nowhere to put a premise), and a metavariable the
-proviso syntax cannot name. A `$d` *can* be carried, as the definition's
-condition, and must be: 1,033 of set.mm's definition-shaped statements have one.
+Then two refusals for what a `Definition` cannot faithfully carry: a defining form
+built from the very form being defined (a recursive alias, not something
+eliminable), and a metavariable the proviso syntax cannot name. A `$d` *can* be
+carried, as the definition's condition, and must be: 1,033 of set.mm's
+definition-shaped statements have one.
+
+A `$e` is carried too, as a `Justification`. A definition holds unconditionally,
+so a hypothesis has to be settled once and for all rather than per unfold - and
+`set.mm` shows how, because it does it itself: `df-sb`'s `$e sbjust.1` is stated
+verbatim by `sbjust`, a `$p` proved earlier in the file. So the hypothesis is
+discharged by *citation*, and this module's part is only to find the citation -
+a proved statement token-identical to the hypothesis, ahead of it in the file.
+Whether it really discharges the obligation is settled structurally when the
+definition is registered (`declarative._discharge_justification`), not here.
 
 None of the shape tests is load-bearing alone, and the reason test 1 names its
 relation rather than describing it is that describing it failed twice. Matching on
@@ -65,14 +73,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ..declarative import Definition
+from ..declarative import Definition, Justification
 from ..kernel.terms import Node
 from .importer import _distinct_provisos, _proviso_safe_names
 
 if TYPE_CHECKING:
     from ..formal_system import FormalSystem
     from ..kernel.terms import Term
-    from .parser import Assertion, Database
+    from .parser import Assertion, Database, Hypothesis
 
 
 @dataclass(frozen=True)
@@ -130,6 +138,49 @@ def _sides(term: Term) -> tuple[Node, Node] | None:
         return None
 
     return left, right
+
+
+def _proved_statement(
+    hypothesis: Hypothesis, before: int, database: Database
+) -> str | None:
+    # The label of a `$p` proved before position ``before`` whose statement is
+    # exactly ``hypothesis``', or None. Token identity is the whole test: `set.mm`
+    # states a justification theorem and the hypothesis citing it verbatim, and
+    # anything looser would be this module guessing at what discharges what when
+    # the engine settles that structurally at registration.
+    for label in database.order[:before]:
+        candidate = database.assertions.get(label)
+        if candidate is None or candidate.is_axiom or not candidate.is_logical:
+            continue
+        if candidate.typecode == hypothesis.typecode and candidate.tokens == hypothesis.tokens:
+            return label
+    return None
+
+
+def _justification(assertion: Assertion, database: Database) -> Justification | None | str:
+    # How ``assertion``'s ``$e`` hypotheses are discharged: None when it has
+    # none, a :class:`Justification` when the one it has is already proved, and a
+    # refusal *reason* otherwise.
+    #
+    # A definition holds unconditionally, so a `$a` under a hypothesis needs that
+    # hypothesis settled once and for all. A `Definition` carries one obligation,
+    # which is one more than `set.mm` ever needs (`df-sb` and `df-mo` have a
+    # single `$e` each), so several are refused rather than guessed at.
+    essentials = assertion.essentials
+    if not essentials:
+        return None
+    if len(essentials) > 1:
+        premises = ", ".join(h.label for h in essentials)
+        return f"holds only under several hypotheses ({premises})"
+
+    hypothesis = essentials[0]
+    proved = _proved_statement(hypothesis, database.position(assertion.label), database)
+    if proved is None:
+        return (
+            f"holds only under hypothesis {hypothesis.label}, which nothing "
+            "proved before it states"
+        )
+    return Justification(label=proved, statement=" ".join(hypothesis.tokens))
 
 
 def classify(
@@ -202,15 +253,9 @@ def classify(
             reason=f"defining side is built from the form being defined ({head})",
         )
 
-    if assertion.essentials:
-        # A definition holds unconditionally; a `$a` under `$e` hypotheses does
-        # not. `Definition` has nowhere to put a premise, so folding one in would
-        # licence unfolds the Metamath assertion forbids.
-        premises = ", ".join(h.label for h in assertion.essentials)
-        return Classified(
-            assertion.label,
-            reason=f"holds only under hypotheses ({premises})",
-        )
+    justification = _justification(assertion, database)
+    if isinstance(justification, str):
+        return Classified(assertion.label, reason=justification)
 
     if _proviso_safe_names(assertion):
         # A metavariable the proviso syntax cannot name (set.mm's `.,`). The
@@ -236,5 +281,6 @@ def classify(
             condition="; ".join(_distinct_provisos(assertion, database, system))
             or None,
             label=assertion.label,
+            justification=justification,
         ),
     )

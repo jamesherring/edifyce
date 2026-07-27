@@ -242,6 +242,12 @@ class DefinitionRow(Base):
     # when unnamed (cited only via the generic `[Def, <line>]` keyword). Unique
     # within a system, enforced at build time, not by a DB constraint.
     label: Mapped[str | None] = mapped_column(String(64))
+    # The proof obligation this definition holds only under, discharged by citing
+    # a theorem the system has already settled (see declarative.Justification).
+    # Both NULL for a definition that holds outright, which is nearly all of them;
+    # they are set and cleared together, so neither is meaningful alone.
+    justification_label: Mapped[str | None] = mapped_column(String(64))
+    justification_statement: Mapped[str | None] = mapped_column(String(512))
 
     system: Mapped[FormalSystem] = relationship(back_populates="definitions")
     symbol: Mapped[SymbolRow] = relationship()

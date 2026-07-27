@@ -263,6 +263,66 @@ class Or(SideCondition):
         return any(results)
 
 
+def restate(condition: SideCondition, binding: Binding, context: Context) -> SideCondition:
+    """``condition`` re-expressed over whatever ``binding`` maps its names to.
+
+    A proviso names its subject by metavariable, so it can only be checked in the
+    match that binds those names. Carrying one *out* of that match - into a rule
+    or definition with metavariables of its own - means restating it: each name is
+    replaced by the term it stands for there, which may itself mention the outer
+    metavariables and is resolved when the outer match runs.
+
+    The one caller is a definition citing a proved theorem as its justification
+    (``declarative``): the theorem's provisos are stated in the theorem's
+    variables, and the definition inherits them stated in its own. Distinct from
+    :func:`_resolve`, which resolves an argument all the way to a *ground* term
+    for an immediate check; this one deliberately stops short of ground.
+
+    Exhaustive over the algebra, and unknown members raise rather than pass
+    through unchanged - an unrestated proviso would silently read the outer
+    binding for a name that means something else there.
+    """
+    if isinstance(condition, Occurs):
+        return Occurs(
+            _restated(condition.needle, binding, context),
+            _restated(condition.haystack, binding, context),
+        )
+    if isinstance(condition, DisjointLeaves):
+        return DisjointLeaves(
+            _restated(condition.left, binding, context),
+            _restated(condition.right, binding, context),
+            condition.sort,
+        )
+    if isinstance(condition, IsAtom):
+        return IsAtom(_restated(condition.name, binding, context), condition.sort)
+    if isinstance(condition, IsMember):
+        return IsMember(_restated(condition.name, binding, context), condition.sort)
+    if isinstance(condition, Equal):
+        return Equal(
+            _restated(condition.left, binding, context),
+            _restated(condition.right, binding, context),
+        )
+    if isinstance(condition, Not):
+        return Not(restate(condition.inner, binding, context))
+    if isinstance(condition, And):
+        return And(tuple(restate(part, binding, context) for part in condition.parts))
+    if isinstance(condition, Or):
+        return Or(tuple(restate(part, binding, context) for part in condition.parts))
+    raise ValueError(f"Cannot restate side-condition of type {type(condition).__name__}.")
+
+
+def _restated(arg: TermArg, binding: Binding, context: Context) -> Term:
+    """One predicate argument, restated - see :func:`restate`.
+
+    Unlike :func:`_resolve` the result may still carry ``Var`` leaves: they are
+    the *outer* metavariables the restated condition is now written over, and are
+    substituted when that match runs.
+    """
+    if isinstance(arg, str):
+        return _bound(binding, arg)
+    return arg.substitute(binding, context)
+
+
 def _bound(binding: Binding, name: str) -> Term:
     """Look up a metavariable's bound term, or fail loudly on a malformed
     condition (one naming a metavariable the rule never binds)."""

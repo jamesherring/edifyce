@@ -553,27 +553,26 @@ then the kernel:
 2. its defined side is **not a bare metavariable**;
 3. its defined side is **built from notation not yet in use**.
 
-Three further refusals cover what a `Definition` cannot faithfully carry: a
-defining form built from the form being defined, an assertion holding only under
-`$e` hypotheses, and a metavariable the proviso syntax cannot name. A `$d` *is*
-carried, as the definition's condition — 1,033 of the definition-shaped
-statements have one, and dropping them would licence the captures Metamath
-forbids.
+Two further refusals cover what a `Definition` cannot faithfully carry: a defining
+form built from the form being defined, and a metavariable the proviso syntax
+cannot name. A `$d` *is* carried, as the definition's condition — 1,033 of the
+definition-shaped statements have one, and dropping them would licence the
+captures Metamath forbids.
 
-**The `$e` case has a known shape, and it is not a side condition.** `df-sb`
-defines proper substitution using a bound `y` appearing on the right only, which
-is sound just because the choice of `y` is immaterial; its `$e` (`sbjust.1`) is
-the statement that it is. That is a *derivability* claim, and every predicate in
+**The `$e` case has a known shape, and it is not a side condition — *done*.**
+`df-sb` defines proper substitution using a bound `y` appearing on the right only,
+which is sound just because the choice of `y` is immaterial; its `$e` (`sbjust.1`)
+is the statement that it is. That is a *derivability* claim, and every predicate in
 the kernel's closed algebra — `Occurs`, `DisjointLeaves`, `IsAtom`, `IsMember`,
 `Equal` — is a total structural check on shape. A `Proven(φ)` proviso would have
 to search for a proof at every citation: undecidable, and it would restore the
 executable condition language the kernel deliberately retired.
 
-Discharge it **once, at definition time, by citation** instead — a definition
-gains a *justification*, a label naming an already-proved theorem whose statement
-is the obligation, checked by comparing the two statements when the definition is
-registered. `set.mm` shows this is the right model, because it is already what
-Metamath does:
+So it is discharged **once, when the definition is registered, by citation**. A
+`Definition` carries a `Justification` — a label and the obligation as a
+statement — and `declarative._discharge_justification` settles it before any of
+the definition is registered. `set.mm` shows this is the right model, because it
+is already what Metamath does:
 
 | | |
 |---|---|
@@ -581,20 +580,34 @@ Metamath does:
 | `df-sb`'s `$e sbjust.1` | token-identical statement |
 | order | `sbjust` precedes `df-sb` |
 
-The same holds for `mojust`/`df-mo`. Both proofs are already in the corpus,
-already ahead of the definition needing them, so an import would cite what is
-there rather than prove anything new. It affects two definitions in `set.mm`, so
-the value is generality rather than volume — and it is the same mechanism A4
-already earmarks for `df-div`/`df-sqrt`, whose existence lemmas are kept as cited
-premises.
+The same holds for `mojust`/`df-mo`. Both proofs are already in the corpus and
+already ahead of the definition needing them, so the import cites what is there
+rather than proving anything new. `metamath/definitions` finds the citation —
+a proved statement token-identical to the hypothesis, ahead of it in the file —
+and the engine decides whether it discharges anything:
 
-Over `set.mm`: **1,427 definitions, 132 axioms**, and it agrees with the `df-`
-convention on 1,427 of 1,433. All six disagreements are the classifier's:
-`df-bi` defines `↔` and so cannot use it (its root is `-.`); `df-clab`,
+- the obligation must be an **instance** of the cited statement, matched
+  structurally with the obligation's own metavariables rigid, so the discharge
+  holds for every substitution the definition is later used at. A theorem may be
+  more general than the obligation needs, never less;
+- the cited statement must carry **no premises of its own**, which would be the
+  obligation again one step back;
+- the definition **inherits the cited theorem's provisos**, restated in its own
+  metavariables (`kernel.side_conditions.restate`). The citation licences only
+  what the theorem licences, so `sbjust`'s `$d x y z` becomes a condition on
+  `df-sb`. Stricter than Metamath, which re-proves the hypothesis per use — and
+  over `set.mm` it costs nothing, since both definitions carry the same `$d` as
+  the theorem they cite.
+
+Verified against the corpus: both discharge on the real terms, and both inherit
+their theorem's `$d` restated over their own variables.
+
+Over `set.mm`: **1,429 definitions, 130 axioms**, and it agrees with the `df-`
+convention on 1,429 of 1,433. All four disagreements are the classifier's:
+`df-bi` defines `↔` and so cannot use it (its root is `-.`); and `df-clab`,
 `df-cleq`, `df-clel` have ordinary `e.`/`=` on the defined side — the axioms
-connecting class notation to set theory, not eliminable definitions; and
-`df-sb`/`df-mo` hold only under `$e` hypotheses. No assertion Metamath names
-`ax-` is classified as a definition.
+connecting class notation to set theory, not eliminable definitions. No assertion
+Metamath names `ax-` is classified as a definition.
 
 None of the three tests is load-bearing alone, and the set is not trusted to be
 complete. Test 1 admits an implication, since `( ph -> ps )` has a
@@ -609,10 +622,19 @@ and conservativity are untreated there, as in Metamath, so those refusals are
 this module's and have nothing behind them.
 
 *What remains* is wiring it into the import, which changes the basis every
-imported proof is checked against and so wants the corpus re-verified as one
-step. `df-div`/`df-sqrt` define via `iota` and will need the `fresh`-aware path
-with their existence lemmas as cited premises — the first real test of whether
-the kernel's refusal is the right arbiter or too strict.
+imported proof is checked against and so wants the corpus re-verified as one step.
+`declarative.register_definition` is the entry point a walk needs — a definition
+registered against an already-built system, since the theorem its justification
+cites is promoted only as the walk reaches it. The blocker is that registering a
+definition also calls `add_notation`, which makes its defined form *defined*
+notation; for an imported system that form is already grammatical via its own
+syntax axiom, so the second reading shadows the first (`T.` stops parsing to
+`wtru`, and 12 of the first 3,000 theorems failed on it). Building the kernel
+definition without the notation half is the untried fix.
+
+`df-div`/`df-sqrt` define via `iota` and will need the `fresh`-aware path with
+their existence lemmas as cited premises — the first real test of whether the
+kernel's refusal is the right arbiter or too strict.
 
 **A5. Scale — *measured; no longer a risk*.**
 The whole corpus checks in 24 minutes at 3.6 GB (§1.1). Both risks this item named

@@ -1,0 +1,268 @@
+"""A definition that holds only under a proof obligation.
+
+Most definitions hold outright. A few hold only because something is *provable*:
+Metamath's `df-sb` defines proper substitution through a dummy variable and is
+sound just because the choice of dummy is immaterial, which its hypothesis
+`sbjust.1` asserts. That is a derivability claim, so it is not a proviso — every
+predicate in the kernel's closed algebra is a total structural check on shape —
+and it is discharged instead by citing something the system has already settled.
+
+These tests fix what the citation has to establish, and what the definition
+inherits from it.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+pytest.importorskip("regex")
+
+from website.logical.declarative import (
+    DeclarativeError,
+    Justification,
+    SystemSpec,
+    build_system,
+    register_definition,
+)
+from website.logical.promotion import promote_from_source
+
+from tests.spec_helpers import (
+    axiom,
+    biconditional_prod,
+    brackets,
+    defn,
+    equality_prod,
+    hyp_rule,
+    implication_prod,
+    membership_prod,
+    mp_rule,
+    rule,
+    statement_line,
+    universal_prod,
+    variable_prod,
+)
+
+# `x ⊆ y ≝ ∀z (z ∈ x → z ∈ y)`, but stated as holding only if the choice of the
+# dummy `z` is immaterial — the shape of `df-sb`'s hypothesis, in miniature. The
+# obligation is written in primitive notation, as it must be: it has to parse
+# before the definition it justifies extends the grammar.
+OBLIGATION = "(∀z (z ∈ x → z ∈ y) ↔ ∀w (w ∈ x → w ∈ y))"
+
+METAVARIABLES = [
+    ("x", "variable"), ("y", "variable"), ("z", "variable"), ("w", "variable"),
+]
+
+
+def subset_defn(justification: Justification | None, condition: str | None = None):
+    return defn(
+        "formula",
+        "subset",
+        "x ⊆ y",
+        "∀z (z ∈ x → z ∈ y)",
+        METAVARIABLES,
+        condition=condition,
+        fresh=[("z", "variable")],
+        justification=justification,
+    )
+
+
+def _spec(definitions, extra_rules=()) -> SystemSpec:
+    return SystemSpec(
+        name="Sets",
+        brackets=brackets(),
+        productions=[
+            variable_prod(), membership_prod(), equality_prod(),
+            implication_prod(), biconditional_prod(), universal_prod(),
+        ],
+        lines=[statement_line()],
+        axioms=[axiom("EXT", "extensionality", "∀x x = x")],
+        rules=[hyp_rule(), mp_rule(), *extra_rules],
+        definitions=list(definitions),
+    )
+
+
+def _dummy_rule(deduction: str = OBLIGATION, antecedents=(), side_conditions=()):
+    # The system's own statement that the dummy is immaterial. An asserted rule
+    # rather than a proved theorem only because a spec declares no proofs; both
+    # are settled statements, which is all a discharge needs.
+    return rule(
+        "dummy-immaterial",
+        "the dummy is immaterial",
+        list(antecedents),
+        deduction,
+        METAVARIABLES,
+        side_conditions=side_conditions,
+    )
+
+
+def test_a_definition_whose_obligation_is_settled_is_registered():
+    system = build_system(
+        _spec([subset_defn(Justification("dummy-immaterial", OBLIGATION))], [_dummy_rule()])
+    )
+
+    assert system.definition_layering == [True]
+    assert len(system.definitions) == 1
+
+
+def test_a_definition_with_no_justification_is_unaffected():
+    system = build_system(_spec([subset_defn(None)]))
+
+    assert system.definition_layering == [True]
+    assert system.definitions[0].condition is None
+
+
+def test_a_definition_citing_nothing_the_system_declares_is_refused():
+    with pytest.raises(DeclarativeError) as excinfo:
+        build_system(_spec([subset_defn(Justification("no-such-theorem", OBLIGATION))]))
+
+    assert "no-such-theorem" in str(excinfo.value)
+
+
+def test_a_definition_citing_something_with_premises_of_its_own_is_refused():
+    # A rule with an antecedent has not settled its conclusion — it settles it
+    # *given* something else, which is the obligation over again one step back.
+    with pytest.raises(DeclarativeError) as excinfo:
+        build_system(
+            _spec(
+                [subset_defn(Justification("dummy-immaterial", OBLIGATION))],
+                [_dummy_rule(antecedents=["∀x x = x"])],
+            )
+        )
+
+    assert "premises of its own" in str(excinfo.value)
+
+
+def test_an_obligation_the_cited_statement_does_not_cover_is_refused():
+    # The cited rule is about `∈`; the obligation stated is about `=`. Nothing
+    # structural relates them, so the citation establishes nothing.
+    unrelated = "(∀z (z = x → z = y) ↔ ∀w (w = x → w = y))"
+    with pytest.raises(DeclarativeError) as excinfo:
+        build_system(
+            _spec(
+                [subset_defn(Justification("dummy-immaterial", OBLIGATION))],
+                [_dummy_rule(deduction=unrelated)],
+            )
+        )
+
+    assert "not an instance of what" in str(excinfo.value)
+
+
+def test_a_more_general_statement_still_discharges_the_obligation():
+    # The citation asks that the obligation be an *instance* of what was settled,
+    # not that the two coincide: a theorem may be more general than the definition
+    # needs. Here the rule is schematic in whole formulae where the obligation has
+    # memberships.
+    general = rule(
+        "dummy-immaterial",
+        "the dummy is immaterial",
+        [],
+        "(∀z p ↔ ∀w q)",
+        [("p", "formula"), ("q", "formula"), ("z", "variable"), ("w", "variable")],
+    )
+    system = build_system(
+        _spec([subset_defn(Justification("dummy-immaterial", OBLIGATION))], [general])
+    )
+
+    assert system.definition_layering == [True]
+
+
+def test_an_obligation_more_general_than_what_was_settled_is_refused():
+    # The other direction: what was settled is about `x` specifically, while the
+    # obligation is schematic in it. Matching is one-directional for a reason —
+    # a narrower statement does not discharge a broader claim.
+    narrow = rule(
+        "dummy-immaterial",
+        "the dummy is immaterial for x",
+        [],
+        "(∀z (z ∈ x → z ∈ x) ↔ ∀w (w ∈ x → w ∈ x))",
+        METAVARIABLES,
+    )
+    with pytest.raises(DeclarativeError) as excinfo:
+        build_system(
+            _spec([subset_defn(Justification("dummy-immaterial", OBLIGATION))], [narrow])
+        )
+
+    assert "not an instance of what" in str(excinfo.value)
+
+
+def test_a_rule_whose_provisos_are_not_yet_parsed_cannot_be_cited():
+    # A rule's provisos are parsed after definitions resolve, so that one may use
+    # defined notation. Inheriting them here would read an empty list and silently
+    # drop what the rule holds under, so the citation is refused instead.
+    with pytest.raises(DeclarativeError) as excinfo:
+        build_system(
+            _spec(
+                [subset_defn(Justification("dummy-immaterial", OBLIGATION))],
+                [_dummy_rule(side_conditions=["disjoint(z, y)"])],
+            )
+        )
+
+    assert "parsed after definitions resolve" in str(excinfo.value)
+
+
+# --- the corpus case: a theorem promoted after the system was built ----------
+
+
+def _built_system():
+    return build_system(_spec([]))
+
+
+def _promote(system, statement=OBLIGATION, distinct=()):
+    system.promote(
+        promote_from_source(
+            system,
+            label="dummy-immaterial",
+            statement=statement,
+            metavariables=dict(METAVARIABLES),
+            distinct=distinct,
+        )
+    )
+    return system
+
+
+def test_a_definition_added_after_the_build_cites_a_promoted_theorem():
+    # The corpus case. A walk builds one system and promotes each theorem as it
+    # reaches it, so the theorem a definition cites is not there at build time —
+    # which is what `register_definition` is for.
+    system = _promote(_built_system())
+
+    registered = register_definition(
+        subset_defn(Justification("dummy-immaterial", OBLIGATION)), system
+    )
+
+    assert registered is True
+    assert len(system.definitions) == 1
+
+
+def test_the_definition_inherits_the_provisos_of_the_theorem_it_cites():
+    # The citation licences only what the cited theorem licences: a theorem proved
+    # under a `$d` hands that proviso to the definition, restated in the
+    # definition's own metavariables. Stricter than Metamath, which re-proves the
+    # hypothesis per use — and stricter is the safe direction.
+    system = _promote(_built_system(), distinct=["disjoint(z, y)"])
+
+    register_definition(subset_defn(Justification("dummy-immaterial", OBLIGATION)), system)
+
+    condition = system.definitions[0].condition
+    assert condition is not None
+    assert "DisjointLeaves" in repr(condition)
+
+
+def test_an_inherited_proviso_joins_the_definition_s_own():
+    system = _promote(_built_system(), distinct=["disjoint(z, y)"])
+
+    register_definition(
+        subset_defn(Justification("dummy-immaterial", OBLIGATION), condition="disjoint(x, y)"),
+        system,
+    )
+
+    assert repr(system.definitions[0].condition).count("DisjointLeaves") == 2
+
+
+def test_registering_against_a_system_with_no_build_context_is_refused():
+    from website.logical.formal_system import FormalSystem
+
+    with pytest.raises(DeclarativeError) as excinfo:
+        register_definition(subset_defn(None), FormalSystem("bare"))
+
+    assert "no build context" in str(excinfo.value)

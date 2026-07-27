@@ -41,17 +41,26 @@ from .build_context import (
     build_schema_pattern,
     combine_side_conditions,
 )
-from .formal_system import FormalSystem, InferenceRule, LineType, SubproofSchema
+from .formal_system import (
+    FormalSystem,
+    InferenceRule,
+    LineType,
+    SubproofSchema,
+    statement_term,
+)
 from .formal_system.definitions import (
     DefinitionError,
     build_kernel_definition,
     denotes_a_constant,
 )
 from .formal_system.side_condition_syntax import parse_side_condition
+from .kernel import And, match, restate
 from .kernel.constructors import constructor_for, project_grammar
 from .matching import AtomPattern, Pattern, RegexPattern, StringPattern, UnionPattern
+from .promotion import promote_from_source
 
 if TYPE_CHECKING:
+    from .kernel import SideCondition
     from .kernel.constructors import Constructor
 
 
@@ -112,6 +121,33 @@ class Production:
 
 
 @dataclass
+class Justification:
+    """A proof obligation a definition carries, discharged by citing a theorem.
+
+    Some definitions hold only because something is *provable*. Metamath's
+    `df-sb` defines proper substitution through a dummy `y` that appears on the
+    right only, and is sound just because the choice of `y` is immaterial; its
+    hypothesis `sbjust.1` is the statement that it is.
+
+    That is not a proviso and cannot become one. Every predicate in the kernel's
+    closed algebra is a total structural check on *shape*, while this is a claim
+    about *derivability*: a `Proven(φ)` condition would have to search for a proof
+    at every citation, which is undecidable and would restore the executable
+    condition language the kernel retired.
+
+    So it is discharged once, when the definition is registered, by naming a
+    theorem already proved in the system whose statement is the obligation -
+    which is what Metamath does too, since `sbjust` is a proved `$p` preceding
+    `df-sb` and stating exactly its hypothesis. ``statement`` is the obligation in
+    the system's own grammar, over the definition's own metavariables; ``label``
+    names the promoted theorem that settles it.
+    """
+
+    label: str
+    statement: str
+
+
+@dataclass
 class Definition:
     sort: str
     name: str
@@ -128,6 +164,10 @@ class Definition:
     # generic `[Def, <line>]` keyword searches all in-scope definitions instead.
     # Must be unique within a system so a named citation resolves unambiguously.
     label: str | None = None
+    # The obligation this definition holds only under, discharged by citing an
+    # already-proved theorem when the system is built. None — the default — is a
+    # definition that holds outright, which is nearly all of them.
+    justification: Justification | None = None
 
 
 @dataclass
@@ -766,6 +806,11 @@ def build_system(spec: SystemSpec) -> FormalSystem:
     # definitions against that (now complete) context, so `add_notation` can
     # match the lower form against the productions.
     system.context.variables.update(ctx.variables)
+    # Wired here rather than at the end because a definition's justification reads
+    # a statement in the system's own grammar, which needs the build context. The
+    # grammar is complete as of the line above; only the pattern dictionary (built
+    # last) still is not, and nothing on this path consults it.
+    system.build_context = ctx
     # Per position, whether the definition layered — kept in spec order so a
     # caller can map it back to a specific definition even when two share a
     # defined form (see registered_definition_layering). A cited definition name
@@ -797,8 +842,7 @@ def build_system(spec: SystemSpec) -> FormalSystem:
         )
         inference_rule.pending_side_conditions = []
 
-    # 10. Wire the build context and index the patterns.
-    system.build_context = ctx
+    # 10. Index the patterns (the build context was wired at step 8).
     system.build_pattern_dictionary()
     return system
 
@@ -908,6 +952,105 @@ def _build_subproof(rule: Rule, rule_ctx: FormalSystemContext) -> SubproofSchema
     )
 
 
+def _justifying_statement(
+    justification: Justification, system: FormalSystem, name: str
+) -> tuple[Pattern, tuple[SideCondition, ...]] | None:
+    # The statement a justification cites, and the provisos it carries, or None if
+    # the label names nothing citable. A *proved* theorem is the expected case
+    # (Metamath's `sbjust`), but a system's own axiom is equally a settled
+    # statement, so a rule with no antecedents serves too.
+    theorem = system.promoted_theorems.get(justification.label)
+    if theorem is not None:
+        return (
+            (theorem.deduction, theorem.side_conditions)
+            if not theorem.antecedents
+            else None
+        )
+    rule = system.rule_by_label(justification.label)
+    if rule is None or rule.antecedents:
+        return None
+    if rule.pending_side_conditions:
+        # A rule's provisos are parsed only *after* definitions resolve, so that
+        # one may use defined notation — which is exactly why a definition cannot
+        # read them here. Rather than inherit a proviso list that is still empty,
+        # refuse: the citation would silently drop what the rule holds under.
+        raise DeclarativeError(
+            f"Definition '{name}' is justified by rule '{justification.label}', whose "
+            "provisos are parsed after definitions resolve and so cannot be inherited. "
+            "Cite a proved theorem, or drop the rule's provisos."
+        )
+    return rule.deduction, tuple(rule.side_conditions)
+
+
+def _discharge_justification(
+    defn: Definition, system: FormalSystem, condition: SideCondition | None
+) -> SideCondition | None:
+    """Settle ``defn``'s proof obligation against the theorem it cites, or refuse.
+
+    Returns the condition the definition is registered under: its own, plus the
+    cited theorem's provisos restated in the definition's metavariables. The
+    definition *inherits* them because the citation only licences an instance the
+    theorem itself licences — `sbjust` holds under `$d x y z` and so, therefore,
+    does every use of `df-sb` that leans on it. That is stricter than Metamath,
+    which re-proves the hypothesis per use; strictness costs a refused unfold, and
+    in `set.mm` costs nothing at all, since a definition needing a justification
+    carries the same `$d` as its justifying theorem.
+    """
+    justification = defn.justification
+    if justification is None:
+        raise DeclarativeError(f"Definition '{defn.name}' has no justification to discharge.")
+
+    cited = _justifying_statement(justification, system, defn.name)
+    if cited is None:
+        raise DeclarativeError(
+            f"Definition '{defn.name}' is justified by '{justification.label}', which is "
+            "not a proved theorem or an axiom of this system with no premises of its "
+            "own. An obligation is discharged by citing something already settled."
+        )
+    statement, provisos = cited
+
+    try:
+        obligation = promote_from_source(
+            system,
+            label=f"{defn.name}.justification",
+            statement=justification.statement,
+            metavariables=dict(defn.bindings),
+        )
+    except ValueError as exc:
+        raise DeclarativeError(
+            f"Definition '{defn.name}' states its obligation as "
+            f"'{justification.statement}', which the system cannot read: {exc}"
+        ) from exc
+
+    # The obligation must be an *instance* of what was proved, so the cited
+    # statement is the schema and the obligation the subject: a theorem may be
+    # more general than the obligation needs, never less. The obligation's own
+    # metavariables stay rigid, which is what makes the discharge hold for every
+    # substitution the definition is later used at.
+    binding = match(
+        statement_term(statement), statement_term(obligation.deduction), system.context
+    )
+    if binding is None:
+        raise DeclarativeError(
+            f"Definition '{defn.name}' states its obligation as "
+            f"'{justification.statement}', which is not an instance of what "
+            f"'{justification.label}' proves."
+        )
+
+    try:
+        inherited = [restate(proviso, binding, system.context) for proviso in provisos]
+    except ValueError as exc:
+        raise DeclarativeError(
+            f"Definition '{defn.name}' cannot inherit a proviso of "
+            f"'{justification.label}': {exc}"
+        ) from exc
+
+    if not inherited:
+        return condition
+    parts = (*( () if condition is None else (condition,) ), *inherited)
+    return parts[0] if len(parts) == 1 else And(parts)
+
+
 def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: FormalSystem) -> bool:
     """Register ``defn`` against the now-complete grammar, returning whether it
     layered — ``True`` when its defining (lower) form was recognised (given the
@@ -924,6 +1067,12 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
         else []
     )
     kernel_condition = combine_side_conditions(where_strings, context_copy)
+
+    # A definition holding only under an obligation discharges it here, before any
+    # of it is registered — the obligation is stated in the grammar the definition
+    # extends, so it must be settled while that grammar is still the one in force.
+    if defn.justification is not None:
+        kernel_condition = _discharge_justification(defn, system, kernel_condition)
 
     # The defining form's bound variables, resolved to their sort patterns, so the
     # term checker treats them as binders (capture-avoiding unfold) rather than as
@@ -993,6 +1142,25 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
+
+
+def register_definition(defn: Definition, system: FormalSystem) -> bool:
+    """Register one definition against an already-built ``system``.
+
+    The same registration :func:`build_system` performs for every definition in a
+    spec, for a caller that has one to add later — an import walking a corpus, in
+    which the theorem a definition's justification cites is promoted as the walk
+    reaches it and so is not there when the system is built.
+
+    Returns whether the definition *layered* (see :func:`_finalise_definition`),
+    and raises :class:`DeclarativeError` if it cannot be registered soundly.
+    """
+    if system.build_context is None:
+        raise DeclarativeError(
+            f"Cannot register definition '{defn.name}' against a system with no "
+            "build context."
+        )
+    return _finalise_definition(defn, system.build_context, system)
 
 
 def build_spec(spec: SystemSpec, system_dict: dict | None = None) -> dict:

@@ -171,6 +171,7 @@ def test_a_recursive_alias_is_not_a_definition():
 
 
 # `df-sb` and `df-mo` are set.mm's two definition-shaped `$a` under hypotheses.
+# Here the hypothesis is stated by nothing, so there is nothing to cite.
 CONDITIONAL = r"""
 $c |- wff ( ) -> <-> NEW $.
 $v ph ps $.
@@ -186,13 +187,68 @@ $}
 """
 
 
-def test_an_assertion_holding_only_under_hypotheses_is_not_a_definition():
-    # A definition holds unconditionally and `Definition` has nowhere to put a
-    # premise, so folding this in would licence unfolds the `$a` forbids.
+def test_an_assertion_under_a_hypothesis_nothing_proves_is_not_a_definition():
+    # A definition holds unconditionally, so an undischarged premise would licence
+    # unfolds the `$a` forbids.
     classified = classify_all(CONDITIONAL)["df-cond"]
 
     assert not classified.is_definition
-    assert "holds only under hypotheses" in classified.reason
+    assert "which nothing proved before it states" in classified.reason
+
+
+# `df-sb`'s shape: a hypothesis stated verbatim by a theorem proved earlier in the
+# file, which is how `set.mm` discharges the obligation itself (`sbjust`).
+JUSTIFIED = r"""
+$c |- wff ( ) -> <-> NEW $.
+$v ph ps $.
+wph $f wff ph $.
+wps $f wff ps $.
+wi $a wff ( ph -> ps ) $.
+wb $a wff ( ph <-> ps ) $.
+ax-id $a |- ( ph -> ph ) $.
+newjust $p |- ( ph -> ph ) $= ( wi ax-id ) B $.
+wnew $a wff NEW ph $.
+${
+  newjust.1 $e |- ( ph -> ph ) $.
+  df-new $a |- ( NEW ph <-> ( ph -> ph ) ) $.
+$}
+"""
+
+
+def test_a_hypothesis_a_proved_theorem_states_becomes_a_justification():
+    classified = classify_all(JUSTIFIED)["df-new"]
+
+    assert classified.is_definition
+    justification = classified.definition.justification
+    assert justification is not None
+    assert justification.label == "newjust"
+    assert justification.statement == "( ph -> ph )"
+
+
+def test_only_a_proof_ahead_of_the_definition_discharges_its_hypothesis():
+    # A theorem stated *after* the definition is not available to it: the import
+    # checks every assertion against only what precedes it, and a justification
+    # that reached forwards would be the one place that ordering leaked.
+    later = JUSTIFIED.replace(
+        "newjust $p |- ( ph -> ph ) $= ( wi ax-id ) B $.\n", ""
+    ).replace("$}", "$}\nnewjust $p |- ( ph -> ph ) $= ( wi ax-id ) B $.")
+    classified = classify_all(later)["df-new"]
+
+    assert not classified.is_definition
+    assert "which nothing proved before it states" in classified.reason
+
+
+def test_an_assertion_under_several_hypotheses_is_not_a_definition():
+    # A `Definition` carries one obligation. Two would have to be guessed at, and
+    # `set.mm` never needs it — `df-sb` and `df-mo` have a single `$e` each.
+    several = JUSTIFIED.replace(
+        "  newjust.1 $e |- ( ph -> ph ) $.",
+        "  newjust.1 $e |- ( ph -> ph ) $.\n  newjust.2 $e |- ( ps -> ps ) $.",
+    )
+    classified = classify_all(several)["df-new"]
+
+    assert not classified.is_definition
+    assert "several hypotheses" in classified.reason
 
 
 # A `$d` restricts which substitutions the definition admits, so it has to travel
