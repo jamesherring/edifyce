@@ -405,6 +405,37 @@ def test_a_binder_proviso_reaches_the_proof_checker_too():
     assert refused.proof_lines[1].valid is not True
 
 
+def test_a_proviso_names_an_inferred_binder_as_readily_as_a_declared_one():
+    # A `fresh` clause need not be written: a grammar declaring binding slots has
+    # it inferred from the parsed defining form. Reading the *spec* for the binders
+    # would see none in that case, so `z` would parse as the literal token `z` —
+    # inert, and silently so, against a proviso whose whole point is soundness.
+    from tests.test_binding_slots import set_theory
+
+    def spec(scopes_over):
+        built = set_theory(scopes_over)
+        built.definitions = [
+            defn("formula", "subset", "(x ⊆ y)", "∀z.((z ∈ x) → (z ∈ y))",
+                 [("x", "setvar"), ("y", "setvar")],
+                 condition="not equal(z, c)",
+                 fresh=[] if scopes_over else [("z", "setvar")])
+        ]
+        return built
+
+    def binder(system, name):
+        membership = system.parse(f"({name} ∈ {name}) [x]").proof_lines[0].formula_term
+        return membership.children["x"]
+
+    for scopes_over in ({"x": ["phi"]}, None):  # inferred, then declared
+        system = build_system(spec(scopes_over))
+        definition = system.definitions[0]
+        redex = system.parse("(a ⊆ b) [x]").proof_lines[0].formula_term
+
+        assert [b.name for b in definition.fresh] == ["z"]
+        assert unfold(definition, redex, system.context, {"z": binder(system, "c")}) is None
+        assert unfold(definition, redex, system.context, {"z": binder(system, "d")}) is not None
+
+
 def test_a_definition_s_own_proviso_is_held_to_the_same_rule():
     # Not a justification-only rule: a hand-written `where` clause naming a
     # non-parameter has always had the same defect, and is refused the same way.

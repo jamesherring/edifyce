@@ -427,14 +427,26 @@ def _condition_binding(
     A definition whose ``fresh`` name is also a parameter is confused about that
     name for reasons older than any proviso (``bind`` abstracts *every* occurrence
     of the spelling, the parameter's included), so nothing here tries to rescue it.
+
+    A spelling *two binders* share is left out entirely rather than resolved to
+    one of them. Binders placed by scope are per-occurrence, so ``(∃z.… → ∀z.…)``
+    is two binders both called ``z``, and a proviso naming ``z`` cannot say which.
+    Omitting it is what makes the build refuse such a proviso
+    (``declarative._check_condition_is_checkable``) instead of silently
+    constraining whichever came last.
     """
     if not definition.fresh:
         return binding
-    named = {
-        binder.name: bound_binding[_bound_label(index)]
+    named: Binding = {}
+    ambiguous = {
+        binder.name
         for index, binder in enumerate(definition.fresh)
-        if _bound_label(index) in bound_binding
+        if any(other.name == binder.name for j, other in enumerate(definition.fresh) if j != index)
     }
+    for index, binder in enumerate(definition.fresh):
+        key = _bound_label(index)
+        if binder.name not in ambiguous and key in bound_binding:
+            named[binder.name] = bound_binding[key]
     return {**named, **binding}
 
 

@@ -57,6 +57,7 @@ from app.schemas import (
     FormalSystemDetail,
     FormalSystemSummary,
     FormalSystemUpdate,
+    Justification,
     LinePart,
     LineType,
     Page,
@@ -358,6 +359,13 @@ def definition_out(d: DefinitionRow) -> Definition:
         bindings=_bindings_out(d.bindings),
         fresh=_bindings_out(d.fresh),
         label=d.label,
+        # Both columns are written together, so the label alone decides whether
+        # there is an obligation (see `app.db.systems.DefinitionRow`).
+        justification=(
+            Justification(label=d.justification_label, statement=d.justification_statement or "")
+            if d.justification_label is not None
+            else None
+        ),
     )
 
 

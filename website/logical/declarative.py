@@ -68,6 +68,7 @@ if TYPE_CHECKING:
     from .kernel.constructors import Constructor
     from .kernel.definitions import Definition as KernelDefinition
     from .kernel.terms import Term
+    from .matching.context import Context
     from .matching.definitions import DefinedNotation
 
 
@@ -1022,8 +1023,14 @@ def _justifying_statement(
 ) -> tuple[Pattern, tuple[SideCondition, ...]] | None:
     # The statement a justification cites, and the provisos it carries, or None if
     # the label names nothing citable. A *proved* theorem is the expected case
-    # (Metamath's `sbjust`), but a system's own axiom is equally a settled
-    # statement, so a rule with no antecedents serves too.
+    # (Metamath's `sbjust`); a rule that asserts its conclusion outright serves
+    # too, since it is equally a settled statement.
+    #
+    # Not a `SystemSpec.axiom`, though the name invites it: an axiom is lowered to
+    # an axiom-behaviour *line type* (`_build_axiom`), which carries the axiom's
+    # name and never its label, so there is nothing here to resolve a citation
+    # against. An author wanting a citable axiom declares it as a rule with no
+    # antecedents, which is the same assertion and is addressed by label.
     theorem = system.promoted_theorems.get(justification.label)
     if theorem is not None:
         return (
@@ -1053,18 +1060,22 @@ def _justifying_statement(
 
 
 def _discharge_justification(
-    defn: Definition, system: FormalSystem, condition: SideCondition | None
-) -> SideCondition | None:
+    defn: Definition, system: FormalSystem
+) -> list[SideCondition]:
     """Settle ``defn``'s proof obligation against the theorem it cites, or refuse.
 
-    Returns the condition the definition is registered under: its own, plus the
-    cited theorem's provisos restated in the definition's metavariables. The
-    definition *inherits* them because the citation only licences an instance the
-    theorem itself licences — `sbjust` holds under `$d x y z` and so, therefore,
-    does every use of `df-sb` that leans on it. That is stricter than Metamath,
-    which re-proves the hypothesis per use; strictness costs a refused unfold, and
-    in `set.mm` costs nothing at all, since a definition needing a justification
+    Returns the cited theorem's own provisos, restated in the definition's
+    metavariables, for the caller to conjoin with the definition's. The definition
+    *inherits* them because the citation only licences an instance the theorem
+    itself licences — `sbjust` holds under `$d x y z` and so, therefore, does every
+    use of `df-sb` that leans on it. That is stricter than Metamath, which
+    re-proves the hypothesis per use; strictness costs a refused unfold, and in
+    `set.mm` costs nothing at all, since a definition needing a justification
     carries the same `$d` as its justifying theorem.
+
+    Run *before* the definition's notation is registered: the obligation is stated
+    in the grammar the definition extends, so it must be read while that grammar is
+    still the one in force.
     """
     justification = defn.justification
     if justification is None:
@@ -1073,9 +1084,12 @@ def _discharge_justification(
     cited = _justifying_statement(justification, system, defn.name)
     if cited is None:
         raise DeclarativeError(
-            f"Definition '{defn.name}' is justified by '{justification.label}', which is "
-            "not a proved theorem or an axiom of this system with no premises of its "
-            "own. An obligation is discharged by citing something already settled."
+            f"Definition '{defn.name}' is justified by '{justification.label}', which "
+            "is not a proved theorem of this system, nor a rule that asserts its "
+            "conclusion with no premises of its own. An obligation is discharged by "
+            "citing something already settled. (A spec `axiom` is lowered to a line "
+            "type and carries no label, so it cannot be cited; declare it as a rule "
+            "with no antecedents instead.)"
         )
     statement, provisos = cited
 
@@ -1108,16 +1122,71 @@ def _discharge_justification(
         )
 
     try:
-        inherited = [restate(proviso, binding, system.context) for proviso in provisos]
+        return [restate(proviso, binding, system.context) for proviso in provisos]
     except ValueError as exc:
         raise DeclarativeError(
             f"Definition '{defn.name}' cannot inherit a proviso of "
             f"'{justification.label}': {exc}"
         ) from exc
 
-    if not inherited:
-        return condition
-    parts = (*( () if condition is None else (condition,) ), *inherited)
+
+def _binder_patterns(
+    built: KernelDefinition, ctx: FormalSystemContext
+) -> dict[str, Pattern]:
+    """The definition's binders, by the name a proviso would call each one.
+
+    Read off the *built* definition rather than the spec, because a `fresh` clause
+    need not be written: a grammar declaring binding slots has it inferred from
+    the parsed defining form, and a proviso must be able to name those binders on
+    the same terms as declared ones.
+
+    A spelling two binders share is omitted. Binders placed by scope are
+    per-occurrence, so `(∃z.… → ∀z.…)` is two binders both called `z` and a proviso
+    naming `z` could not say which; leaving it out makes such a proviso a refusal
+    (:func:`_check_condition_is_checkable`) rather than a silent pick.
+    """
+    names = [binder.name for binder in built.fresh]
+    patterns: dict[str, Pattern] = {}
+    for binder in built.fresh:
+        if names.count(binder.name) > 1:
+            continue
+        pattern = ctx.variables.get(binder.sort.name)
+        if isinstance(pattern, Pattern):
+            patterns[binder.name] = pattern
+    return patterns
+
+
+def _definition_condition(
+    defn: Definition,
+    built: KernelDefinition,
+    ctx: FormalSystemContext,
+    context_copy: Context,
+    inherited: list[SideCondition],
+) -> SideCondition | None:
+    # The definition's own `where` provisos, parsed with its parameters *and* its
+    # binders in scope, conjoined with whatever its justification's theorem holds
+    # under. A binder is stored abstractly and has no fixed name, so `disjoint(z, x)`
+    # means "whatever this binder is called at this unfold"
+    # (`kernel.definitions._condition_binding`) — which is what an author writing it
+    # means. Without the binders here `z` parses as the literal token `z`, a
+    # coherent reading of nothing anybody wanted.
+    #
+    # A `;` inside a `where` proviso conjoins several kernel conditions.
+    where_strings = (
+        [part.strip() for part in defn.condition.split(";") if part.strip()]
+        if defn.condition
+        else []
+    )
+    proviso_context = copy(context_copy)
+    proviso_context.string_variables = {
+        **_binder_patterns(built, ctx),
+        **context_copy.string_variables,
+    }
+    own = combine_side_conditions(where_strings, proviso_context)
+
+    parts = (*(() if own is None else (own,)), *inherited)
+    if not parts:
+        return None
     return parts[0] if len(parts) == 1 else And(parts)
 
 
@@ -1137,17 +1206,19 @@ def _check_condition_is_checkable(defn: Definition, built: KernelDefinition) -> 
     # where the author can act on it, exactly as an unsound defining form is.
     if built.condition is None:
         return
-    # The declared binders count as supplied: the unfold resolves each to the leaf
-    # it takes there and exposes it under its declared name, so a proviso may
-    # constrain one (`kernel.definitions._condition_binding`).
-    supplied = set(built.higher.free_vars()) | {binder.name for binder in built.fresh}
+    # The binders count as supplied: the unfold resolves each to the leaf it takes
+    # there and exposes it under its name (`kernel.definitions._condition_binding`).
+    # Only the unambiguous ones — a spelling two binders share names neither, and
+    # is exactly what should be refused here rather than resolved to one of them.
+    names = [binder.name for binder in built.fresh]
+    supplied = set(built.higher.free_vars()) | {n for n in names if names.count(n) == 1}
     orphaned = sorted(references(built.condition) - supplied)
     if orphaned:
         listed = ", ".join(repr(name) for name in orphaned)
         raise DeclarativeError(
             f"Definition '{defn.name}' has a proviso naming {listed}, which its "
-            f"defined form '{defn.higher}' does not supply and its `fresh` clause "
-            "does not declare. A proviso is checked against the match between the "
+            f"defined form '{defn.higher}' does not supply and its binders do not "
+            "unambiguously name. A proviso is checked against the match between the "
             "defined form and the term being unfolded, plus the binders that unfold "
             f"resolves, so it can constrain nothing else. Either make {listed} a "
             "parameter of the defined form, or state the proviso over what it has."
@@ -1168,29 +1239,14 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
     # stray ground leaves that would force the string path.
     fresh_patterns = _binding_patterns(defn.fresh, ctx)
 
-    # A `;` inside a `where` proviso conjoins several kernel conditions.
-    #
-    # Parsed with the binders in scope as well as the parameters, so a proviso may
-    # name one. A binder is stored abstractly and has no fixed name to constrain,
-    # so `disjoint(z, x)` on a definition whose `fresh` clause names `z` means
-    # "whatever this binder is called at this unfold" — which is what an author
-    # writing it means, and what `kernel.definitions._condition_binding` resolves
-    # it to. Without the binders here `z` parses as the literal token `z`, which is
-    # a coherent reading of nothing anybody wanted.
-    where_strings = (
-        [part.strip() for part in defn.condition.split(";") if part.strip()]
-        if defn.condition
-        else []
-    )
-    proviso_context = copy(context_copy)
-    proviso_context.string_variables = {**fresh_patterns, **context_copy.string_variables}
-    kernel_condition = combine_side_conditions(where_strings, proviso_context)
-
     # A definition holding only under an obligation discharges it here, before any
     # of it is registered — the obligation is stated in the grammar the definition
     # extends, so it must be settled while that grammar is still the one in force.
-    if defn.justification is not None:
-        kernel_condition = _discharge_justification(defn, system, kernel_condition)
+    # What comes back is the cited theorem's own provisos, to be conjoined with the
+    # definition's once those can be parsed.
+    inherited: list[SideCondition] = (
+        _discharge_justification(defn, system) if defn.justification is not None else []
+    )
 
     # Whether the defining form is recognised *given the definitions before it* is
     # what "layering" means, and it is settled before anything is registered: a
@@ -1208,7 +1264,7 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
 
     try:
         return _register_notated_definition(
-            defn, union, notation, kernel_condition, fresh_patterns, system
+            defn, union, notation, ctx, context_copy, fresh_patterns, inherited, system
         )
     except DeclarativeError:
         # Every refusal past this point is a *late* one: the notation is already
@@ -1226,8 +1282,10 @@ def _register_notated_definition(
     defn: Definition,
     union: Pattern,
     notation: DefinedNotation,
-    kernel_condition: SideCondition | None,
+    ctx: FormalSystemContext,
+    context_copy: Context,
     fresh_patterns: dict[str, Pattern],
+    inherited: list[SideCondition],
     system: FormalSystem,
 ) -> bool:
     # The half of `_finalise_definition` that runs with the defined form's notation
@@ -1266,18 +1324,30 @@ def _register_notated_definition(
     #
     # A definition with no sound kernel reading is rejected here rather than
     # silently accepted and refused per-step later.
+    # Built *without* the condition first, because which binders the definition has
+    # is settled here and the condition may name one. A `fresh` clause need not be
+    # written: a grammar with binding slots has it inferred from the parsed defining
+    # form (`formal_system.definitions`), so reading `defn.fresh` would see nothing
+    # and a proviso naming an inferred binder would parse as the literal token —
+    # inert, and silently so. The condition decides nothing during construction, so
+    # attaching it afterwards costs only this ordering.
     try:
         kernel_definition = build_kernel_definition(
             notation,
             defn.lower,
             system.context,
-            condition=kernel_condition,
             fresh=fresh_patterns or None,
             label=defn.label,
         )
     except DefinitionError as exc:
         raise DeclarativeError(str(exc)) from exc
 
+    kernel_definition = replace(
+        kernel_definition,
+        condition=_definition_condition(
+            defn, kernel_definition, ctx, context_copy, inherited
+        ),
+    )
     _check_condition_is_checkable(defn, kernel_definition)
     system.add_definition(kernel_definition)
 
