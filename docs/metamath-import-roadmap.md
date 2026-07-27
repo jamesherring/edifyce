@@ -560,6 +560,34 @@ carried, as the definition's condition — 1,033 of the definition-shaped
 statements have one, and dropping them would licence the captures Metamath
 forbids.
 
+**The `$e` case has a known shape, and it is not a side condition.** `df-sb`
+defines proper substitution using a bound `y` appearing on the right only, which
+is sound just because the choice of `y` is immaterial; its `$e` (`sbjust.1`) is
+the statement that it is. That is a *derivability* claim, and every predicate in
+the kernel's closed algebra — `Occurs`, `DisjointLeaves`, `IsAtom`, `IsMember`,
+`Equal` — is a total structural check on shape. A `Proven(φ)` proviso would have
+to search for a proof at every citation: undecidable, and it would restore the
+executable condition language the kernel deliberately retired.
+
+Discharge it **once, at definition time, by citation** instead — a definition
+gains a *justification*, a label naming an already-proved theorem whose statement
+is the obligation, checked by comparing the two statements when the definition is
+registered. `set.mm` shows this is the right model, because it is already what
+Metamath does:
+
+| | |
+|---|---|
+| `sbjust` | a **proved** `$p`, at position 2092 |
+| `df-sb`'s `$e sbjust.1` | token-identical statement |
+| order | `sbjust` precedes `df-sb` |
+
+The same holds for `mojust`/`df-mo`. Both proofs are already in the corpus,
+already ahead of the definition needing them, so an import would cite what is
+there rather than prove anything new. It affects two definitions in `set.mm`, so
+the value is generality rather than volume — and it is the same mechanism A4
+already earmarks for `df-div`/`df-sqrt`, whose existence lemmas are kept as cited
+premises.
+
 Over `set.mm`: **1,427 definitions, 132 axioms**, and it agrees with the `df-`
 convention on 1,427 of 1,433. All six disagreements are the classifier's:
 `df-bi` defines `↔` and so cannot use it (its root is `-.`); `df-clab`,
