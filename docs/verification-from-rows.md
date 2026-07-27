@@ -1,6 +1,6 @@
 # Design: verification from rows, not from text
 
-**Status:** P1, P2 and P3 shipped, P4–P5 proposed · **Prerequisite work:** merged (the term
+**Status:** P1–P4 shipped, P5 proposed · **Prerequisite work:** merged (the term
 graph, `proof_lines`, the kernel-takes-terms change #121, and the Metamath
 corpus import #124)
 
@@ -50,8 +50,8 @@ checking does.
 
 ## 2. What is stored, and what is thrown away
 
-This table is what the phases below work through; **used** is the state after P1,
-P2 and P3.
+This table is what the phases below work through; **used** is the state after
+P1–P4.
 
 | Verification needs | Stored | Used |
 |---|---|---|
@@ -63,7 +63,7 @@ P2 and P3.
 | Scope tree (for discharge) | yes — `proof_lines.opens_scope` / `scope_id` | no — *re-derived*, deliberately |
 | Rule schema terms | yes — `rules.deduction_term_id` etc. → `terms` | **yes** (P3), when `rules.schema_digest` still matches |
 | Definition higher/lower forms | **no** | stored as strings, matched against the grammar at build |
-| Promoted theorems | **no** | not persisted at all (P4; metamath roadmap §3.2) |
+| Promoted theorems | yes — `promoted_theorems` → `terms` | **yes** (P4), resolved by label per citation |
 
 The two *deliberate* nos are the point rather than an omission. Edges and scope
 are stored so the graph is queryable, and re-derived so a check is a check: if a
@@ -74,12 +74,12 @@ Everything a verdict rests on is recomputed; the rows supply only what each line
 **The proof side is closed.** Everything a proof contributes is in rows and read
 back on every check.
 
-**The system side is half done.** Rule schemas are stored as composed terms and
-read back (P3), so building a system no longer parses them. What is left is a
-definition's forms — which are *registered as notation* against the finished
-grammar rather than composed against it, a different seam — and promoted
-theorems, the extreme case: nothing at all, which is why an imported Metamath
-proof cannot yet be re-checked from its own rows.
+**The system side is closed but for one seam.** Rule schemas are stored as
+composed terms and read back (P3); the citable library is stored and resolved by
+label (P4), so an imported Metamath proof re-checks from its own rows. What is
+left is a definition's forms, which are *registered as notation* against the
+finished grammar rather than composed against it — a different mechanism, and the
+only remaining thing a build reads from a string.
 
 ## 3. The contract this inverts
 
@@ -498,16 +498,80 @@ matched and registered as *notation* against the finished grammar
 (`_finalise_definition`), which mutates the grammar rather than reading it. That
 is a different seam and belongs with P5's tidying, not here.
 
-### P4. Store promoted theorems
+### P4. Store promoted theorems — *done*
 
-The metamath roadmap's §3.2, seen from this side. `inference_rules` have a
-table; `promoted_theorems` have none, which is why the corpus import stores a
-grammar-only system and its proofs cannot be re-checked from rows. It also
-unblocks promoting natively-authored proofs (that needs the generalisation
-policy in the metamath roadmap's A1, which is a separate question).
+The metamath roadmap's §3.2, seen from this side. `inference_rules` had a table;
+`promoted_theorems` had none, so a corpus import stored a grammar-only system and
+its proofs could not be re-checked from rows — a rebuilt system had no `ax-mp` to
+resolve, and every imported proof failed on its first citation.
 
-**Measure:** an imported set.mm theorem re-checks from rows alone and agrees
-with the verdict the import recorded.
+**Measure, met.** Every imported set.mm theorem re-checks from its rows alone and
+agrees with the verdict the import recorded — the `.mm` file gone, no statement
+parsed:
+
+| walk | productions | library stored | re-checked | agreed | per proof |
+|---|---|---|---|---|---|
+| first 1,000 | 18 | 1,007 (7 primitive) | 1,000 | **1,000** | 18.4 ms |
+| first 5,000 | 148 | 5,069 (69 primitive) | 5,000 | **5,000** | 19.6 ms |
+
+The per-proof cost is worth noting for being *flat*: an eight-fold grammar costs
+6%, because what a re-check does is read rows and unify terms, and neither scales
+with the grammar. That is the property the whole document is after, and this is
+the first phase where it can be seen end to end rather than argued for.
+
+**One library table, and both kinds are lazy.** §3.2 proposed splitting an
+imported library by kind: logical `$a` into the existing `rules`, `$p` into a
+table of its own, so an imported system's axioms would be real `inference_rules`.
+Measurement says the axiom half does not scale. `build_system` builds every rule
+eagerly, and at 309 productions 269 axioms-as-rules already cost 0.29 s per build
+— extrapolated to set.mm's 1,559 axioms at 1,441 productions, seconds on every
+verify. A full import would have been effectively unverifiable.
+
+So the split is by **provenance** rather than by kind: `rules` keeps its meaning —
+the handful of primitives an author declared, built with the system — and
+`promoted_theorems` holds a library that arrived whole, resolved by label on
+demand. `primitive` records which of a library entry's two kinds it is, so "what
+does this system assume?" is still one query; it is read by nothing in checking,
+because a citation of an axiom and of a derived theorem are checked identically.
+That is the same fact §3.2 rests on, pointed at storage instead of at namespaces.
+
+**Loading is by label, and that is the phase.** Promoting one theorem costs a
+parse of its statement against the grammar — 0.44 ms at 18 productions, 1.05 ms
+at 309, rising with the grammar as any parse does — so promoting 47,546 of them
+per build is minutes. A verify instead reads the citations off the proof's own
+lines, loads exactly those labels, and promotes them. That is P1's shape applied
+to the library: load the lemmas a proof cites, not every proof in the system.
+
+Two things had to move to make the citations knowable before the check:
+
+- **`FormalSystem.read_proof`** — `parse` minus the check, so the parse path can
+  read the lines, resolve what they cite, and only then check. `parse` is now
+  exactly that pair, and the route calls the halves separately.
+- **`load_proof_for_check(..., before_check=…)`** — the same moment on the row
+  path: lines populated, nothing resolved yet.
+
+**Hypotheses are scoped by storage, as the walk scopes them in time.** A theorem
+proves *under* its `$e` hypotheses, and its proof states them as lines citing
+their labels — but a `$e` registered as a library entry is a bare `|- ph` that
+proves anything, for anyone. The walk handles this by promoting them for the
+length of one check and withdrawing them (`corpus._givens`); the rows handle it by
+making them reachable only through the theorem that owns them
+(`promoted_theorem_premises.label`, `load_hypotheses`), and `proofs.theorem_id`
+says which theorem "this proof" establishes. Found by writing the measure test
+first: without it, every multi-hypothesis theorem re-checked as invalid.
+
+**The terms are cached too**, on P3's contract exactly: `schema_digest` guards
+them, a NULL or a stale digest is a *miss*, and a miss costs a parse and never a
+difference. `library_digest` is the system half of that digest and is wider than
+`schema_digests`', because promotion reads more of the system than a rule schema
+does — a statement is composed at the sorts a **line** is read at, and a ground
+one may use the system's resolved **definitions**.
+
+**What this does not do.** Promoting a *natively-authored* proof — the storage is
+there, but deciding what a proved lemma generalises to is the metamath roadmap's
+A1 and a separate question. And `_link_proofs_to_theorems` joins a proof to its
+theorem by name, which is exact for an import (both come from one `$p`) and would
+need saying differently for a library assembled any other way.
 
 ### P5. Settle the string-rewriting path
 

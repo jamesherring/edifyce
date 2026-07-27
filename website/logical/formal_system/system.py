@@ -123,6 +123,20 @@ class FormalSystem:
         # carries, so a caller that has those rows can populate the lines itself
         # and call `check_proof` directly, with no parse at all. See
         # docs/verification-from-rows.md.
+        proof, context = self.read_proof(text, proof, context)
+        return self.check_proof(proof, context)
+
+    def read_proof(
+        self, text: str, proof: Proof | None = None, context: Context | None = None
+    ) -> tuple[Proof, Context]:
+        """Read every line's content off the grammar, and stop there.
+
+        `parse` minus the check. Separate because a caller may need to look at
+        what the lines *say* before checking them — notably at the theorems they
+        cite, so a system with an unbounded library can resolve exactly those and
+        no more (see app/db/promoted_theorems_mapping.py). The context is returned
+        because the check must run in the same one the read used.
+        """
         if proof is None:
             proof = Proof(formal_system=self)
 
@@ -134,7 +148,7 @@ class FormalSystem:
             if not proof_line.empty:
                 self.read_line(proof_line, context)
 
-        return self.check_proof(proof, context)
+        return proof, context
 
     def read_line(self, proof_line: ProofLine, context: Context) -> None:
         """Populate one line's content from its text, against this grammar.

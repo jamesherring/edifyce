@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from copy import copy
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from website.logical.build_context import (
@@ -28,6 +29,30 @@ from website.logical.matching import Pattern, StringPattern
 
 if TYPE_CHECKING:
     from website.logical.kernel.terms import Term
+
+
+@dataclass(frozen=True)
+class TheoremSpec:
+    """A promoted theorem in the form it is *written*: strings and names.
+
+    Exactly :func:`promote_from_source`'s arguments, gathered into one record so
+    the two things that need them can share it — an importer, which derives them
+    from a corpus, and the persistence layer, which stores and replays them. It
+    is to a ``PromotedTheorem`` what a ``SystemSpec`` is to a ``FormalSystem``:
+    declarative, engine-object-free, and the thing a row round-trips to.
+
+    Deliberately *not* carrying whether the theorem is a primitive of its system.
+    Nothing about promotion reads that — a citation of an axiom and of a derived
+    theorem are checked identically, which is the whole reason one construction
+    serves both — so it belongs to whatever records the library, not here.
+    """
+
+    label: str
+    statement: str
+    metavariables: dict[str, str] = field(default_factory=dict)
+    premises: tuple[str, ...] = ()
+    distinct: tuple[str, ...] = ()
+    matching: str = "structural"
 
 
 def _logical_sorts(system: FormalSystem) -> list[Pattern]:
@@ -90,6 +115,7 @@ def _theorem_schema(
     context: FormalSystemContext,
     name: str,
     matching: str,
+    cached: Term | None = None,
 ) -> Pattern:
     # Build one schema pattern for a promoted theorem's statement or premise.
     #
@@ -109,8 +135,14 @@ def _theorem_schema(
     # A promoted theorem's statement is a proof line's formula, so it is read at
     # the sorts a line is read at - not at whichever sort of the grammar happens
     # to come first. Both composition paths take the same list.
+    #
+    # `cached` is the same term read back from storage instead of re-derived (P4).
+    # It reaches the ground path too: whichever branch composed the term the first
+    # time, what is stored is the term, and a stored one is simply attached. What
+    # the branch below then decides is only whether the *pattern* needs replacing,
+    # and with a term already in hand it does not.
     sorts = _logical_sorts(system)
-    pattern = build_schema_pattern(text, context, name, prefer=sorts)
+    pattern = build_schema_pattern(text, context, name, prefer=sorts, cached=cached)
     if (
         matching != "string"
         and isinstance(pattern, StringPattern)
@@ -140,6 +172,8 @@ def promote_from_source(
     premises: Sequence[str] = (),
     distinct: Sequence[str] = (),
     matching: str = "structural",
+    statement_term: Term | None = None,
+    premise_terms: Sequence[Term | None] = (),
 ) -> PromotedTheorem:
     """Build a :class:`PromotedTheorem` from a proved/imported theorem's source.
 
@@ -168,6 +202,13 @@ def promote_from_source(
     ``2 e. RR`` - is supported: with no metavariables to instantiate it justifies
     exactly its own statement and nothing else.
 
+    ``statement_term`` and ``premise_terms`` supply already-composed kernel terms
+    so the statement need not be parsed against the grammar again — what the
+    persistence layer hands back when its stored terms are still current (see
+    ``app/db/promoted_theorems_mapping.py``). Absent or ``None``, the text is
+    composed exactly as before; a missing term costs a parse and never a
+    difference in what the theorem says.
+
     Raises :class:`ValueError` if the system has no build context, if a sort name
     is not a declared pattern of the system, or if a structurally-matched ground
     conclusion/premise parses at none of the system's logical sorts. A statement
@@ -195,9 +236,14 @@ def promote_from_source(
         string_variables[name] = sort
     context.string_variables = string_variables
 
-    deduction = _theorem_schema(statement, system, context, label, matching)
+    deduction = _theorem_schema(
+        statement, system, context, label, matching, statement_term
+    )
     antecedents = tuple(
-        _theorem_schema(text, system, context, f"{label}.premise{index}", matching)
+        _theorem_schema(
+            text, system, context, f"{label}.premise{index}", matching,
+            premise_terms[index] if index < len(premise_terms) else None,
+        )
         for index, text in enumerate(premises)
     )
     side_conditions = tuple(parse_side_condition(line, context) for line in distinct)
@@ -209,4 +255,28 @@ def promote_from_source(
         side_conditions=side_conditions,
         variables=dict(string_variables),
         matching=matching,
+    )
+
+
+def promote_spec(
+    system: FormalSystem,
+    spec: TheoremSpec,
+    statement_term: Term | None = None,
+    premise_terms: Sequence[Term | None] = (),
+) -> PromotedTheorem:
+    """Build a :class:`PromotedTheorem` from its declarative :class:`TheoremSpec`.
+
+    ``statement_term`` / ``premise_terms`` skip the composing parse; see
+    :func:`promote_from_source`.
+    """
+    return promote_from_source(
+        system,
+        label=spec.label,
+        statement=spec.statement,
+        metavariables=spec.metavariables,
+        premises=spec.premises,
+        distinct=spec.distinct,
+        matching=spec.matching,
+        statement_term=statement_term,
+        premise_terms=premise_terms,
     )

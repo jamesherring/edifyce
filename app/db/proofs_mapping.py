@@ -45,7 +45,7 @@ from website.logical.formal_system.proof import Proof as EngineProof
 from website.logical.formal_system.proof import ProofLine as EngineProofLine
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Callable, Iterator, Sequence
 
     from app.db.models import FormalSystem, Proof
     from website.logical.formal_system import FormalSystem as EngineSystem
@@ -268,6 +268,7 @@ def load_proof_for_check(
     system: EngineSystem,
     context: Context,
     proof: EngineProof | None = None,
+    before_check: Callable[[EngineProof], None] | None = None,
 ) -> EngineProof | None:
     """Rebuild a proof from its rows *for re-checking*, with no parse at all.
 
@@ -289,6 +290,11 @@ def load_proof_for_check(
     (the lemmas it may cite). ``None`` back means the proof has no stored lines:
     it has never been checked, or its snapshot was invalidated, so there is
     nothing to check and the caller must parse.
+
+    ``before_check`` runs once the lines are populated and before they are
+    checked — the moment at which what a proof *cites* is known but nothing has
+    been resolved yet, which is what a system with an unbounded library needs
+    (see ``app/db/promoted_theorems_mapping.py``).
     """
     rows = list(
         session.scalars(
@@ -312,6 +318,8 @@ def load_proof_for_check(
     for row in rows:
         _load_line(proof, row, line_types, context, memo, needs_strings)
 
+    if before_check is not None:
+        before_check(proof)
     return system.check_proof(proof, context)
 
 

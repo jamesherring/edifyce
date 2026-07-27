@@ -35,6 +35,11 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy.orm import Session
 
 from app.db import Base, spec_to_system
+from app.db.promoted_theorems import (
+    PromotedTheoremBindingRow,
+    PromotedTheoremPremiseRow,
+    PromotedTheoremRow,
+)
 from app.db.models import FormalSystem, OAuthAccount, Proof, ProofFolder, User
 from app.db.proof_lines import ProofLineAntecedentRow, ProofLineRow
 from app.db.schema_terms import load_schema_terms, store_schema_terms
@@ -83,6 +88,7 @@ _TABLES = [
         RuleRow, RuleAntecedentRow, RuleBindingRow, SideConditionRow,
         ProofFolder, Proof, TermRow, TermChildRow,
         ProofLineRow, ProofLineAntecedentRow,
+        PromotedTheoremRow, PromotedTheoremPremiseRow, PromotedTheoremBindingRow,
     )
 ]
 

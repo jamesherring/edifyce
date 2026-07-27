@@ -33,6 +33,11 @@ from app.db import (
     TermChildRow,
     TermRow,
 )
+from app.db.promoted_theorems import (
+    PromotedTheoremBindingRow,
+    PromotedTheoremPremiseRow,
+    PromotedTheoremRow,
+)
 from app.db.models import OAuthAccount, User
 from app.db.session import get_session
 from app.db.systems import (
@@ -74,6 +79,7 @@ _TABLES = [
         # table whose FK target is absent, Postgres refuses to.
         ProofFolder, Proof, ProofLineRow, ProofLineAntecedentRow,
         TermRow, TermChildRow,
+        PromotedTheoremRow, PromotedTheoremPremiseRow, PromotedTheoremBindingRow,
     )
 ]
 

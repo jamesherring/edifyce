@@ -34,6 +34,7 @@ from app.db.side_conditions import (
     SIDE_KIND_OR,
     SideConditionRow,
 )
+from app.db.promoted_theorems import PromotedTheoremRow
 from app.db.systems import DefinitionRow, RuleRow, SymbolRow
 
 # Leaf predicate -> (kind, allowed arg counts, arg-index of the sort or None).
@@ -224,6 +225,27 @@ def build_rule_side_conditions(
         _materialise(tree, symbols, metavars, parent=None, position=0, rule=rule)
 
 
+def build_theorem_side_conditions(
+    theorem: PromotedTheoremRow,
+    provisos: list[str],
+    symbols: dict[str, SymbolRow],
+    metavars: set[str],
+) -> None:
+    """Parse a promoted theorem's provisos and attach the tree to it (unsaved).
+
+    The library owner of :func:`build_rule_side_conditions`. An imported ``$d``
+    arrives as one ``disjoint(...)`` line per constrained pair, which lowers to the
+    same ``and`` root a rule's proviso block does — so a theorem's provisos are
+    stored, queried and rendered exactly as a rule's are, and the storage learns
+    nothing new about the library.
+    """
+    tree = _parse_lines(provisos)
+    if tree is not None:
+        _materialise(
+            tree, symbols, metavars, parent=None, position=0, promoted_theorem=theorem
+        )
+
+
 def build_definition_provisos(
     definition: DefinitionRow,
     provisos: list[str],
@@ -284,12 +306,14 @@ def _materialise(
     position: int,
     definition: DefinitionRow | None = None,
     rule: RuleRow | None = None,
+    promoted_theorem: PromotedTheoremRow | None = None,
 ) -> SideConditionRow:
-    # The owner (definition or rule) is carried on *every* node — root and
-    # children alike — so a leaf predicate joins back to its owner without walking
-    # the tree; the CHECK requires exactly one owner set on each row.
+    # The owner (definition, rule or promoted theorem) is carried on *every* node —
+    # root and children alike — so a leaf predicate joins back to its owner without
+    # walking the tree; the CHECK requires exactly one owner set on each row.
     row = SideConditionRow(
-        definition=definition, rule=rule, parent=parent, position=position, kind=node.kind
+        definition=definition, rule=rule, promoted_theorem=promoted_theorem,
+        parent=parent, position=position, kind=node.kind,
     )
     if isinstance(node, _Leaf):
         # A leaf's left/right are argument positions (the sort argument is separate
@@ -310,7 +334,7 @@ def _materialise(
         for i, child in enumerate(node.children):
             _materialise(
                 child, symbols, metavars, parent=row, position=i,
-                definition=definition, rule=rule,
+                definition=definition, rule=rule, promoted_theorem=promoted_theorem,
             )
     return row
 
@@ -358,6 +382,11 @@ def rule_side_conditions_list(rule: RuleRow) -> list[str]:
     single line. Empty when the rule has no proviso.
     """
     return _proviso_lines(list(rule.side_conditions))
+
+
+def theorem_side_conditions_list(theorem: PromotedTheoremRow) -> list[str]:
+    """Render a promoted theorem's proviso tree back to its ``distinct`` lines."""
+    return _proviso_lines(list(theorem.side_conditions))
 
 
 def definition_provisos_list(definition: DefinitionRow) -> list[str]:

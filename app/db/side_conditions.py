@@ -15,8 +15,8 @@ Each row is one algebra node, mirroring the kernel vocabulary:
   the symbol namespace, not a name string);
 * combinators — ``not`` (one child), ``and`` / ``or`` (ordered children).
 
-A node belongs to exactly one owner — a definition *or* a rule — via the
-``definition_id`` / ``rule_id`` either-or FK (a CHECK enforces exactly one). The
+A node belongs to exactly one owner — a definition, a rule, *or* a promoted
+theorem — via the three-way either-or FK (a CHECK enforces exactly one). The
 owner id is carried on *every* node, so a leaf predicate is found and joined back
 to its owner without walking the tree. Structure is a tree: ``parent_id`` is null
 on the root and set on children; a partial unique index keeps one root per owner.
@@ -35,6 +35,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, uuid_pk_column
 
 if TYPE_CHECKING:
+    from app.db.promoted_theorems import PromotedTheoremRow
     from app.db.systems import DefinitionRow, RuleRow, SymbolRow
 
 # `kind` values — a closed set mirroring the kernel algebra. Plain string column
@@ -52,12 +53,18 @@ SIDE_KIND_OR = "or"
 class SideConditionRow(Base):
     __tablename__ = "side_conditions"
     __table_args__ = (
-        # Exactly one owner: a definition or a rule, never both/neither. Written
-        # so it holds on both Postgres and SQLite (no num_nonnulls()).
+        # Exactly one owner: a definition, a rule, or a promoted theorem — never
+        # two, never none. Spelled out rather than with num_nonnulls() so it holds
+        # on both Postgres and SQLite.
         # The convention prepends ``ck_<table>_``; name only the discriminator so
         # the constraint lands as ``ck_side_conditions_one_owner``, not doubled.
         CheckConstraint(
-            "(definition_id IS NULL) <> (rule_id IS NULL)",
+            "(definition_id IS NOT NULL AND rule_id IS NULL "
+            "AND promoted_theorem_id IS NULL) "
+            "OR (definition_id IS NULL AND rule_id IS NOT NULL "
+            "AND promoted_theorem_id IS NULL) "
+            "OR (definition_id IS NULL AND rule_id IS NULL "
+            "AND promoted_theorem_id IS NOT NULL)",
             name="one_owner",
         ),
         # One proviso tree per owner, so at most one root node per owner. Partial
@@ -80,6 +87,13 @@ class SideConditionRow(Base):
             postgresql_where=text("parent_id IS NULL"),
             sqlite_where=text("parent_id IS NULL"),
         ),
+        Index(
+            "uq_side_conditions_promoted_theorem_root",
+            "promoted_theorem_id",
+            unique=True,
+            postgresql_where=text("parent_id IS NULL"),
+            sqlite_where=text("parent_id IS NULL"),
+        ),
         # "which definitions/rules have an <X> proviso" — search by predicate kind.
         Index("ix_side_conditions_definition_kind", "definition_id", "kind"),
         Index("ix_side_conditions_rule_kind", "rule_id", "kind"),
@@ -92,6 +106,9 @@ class SideConditionRow(Base):
     )
     rule_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("rules.id", ondelete="CASCADE"), index=True
+    )
+    promoted_theorem_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("promoted_theorems.id", ondelete="CASCADE"), index=True
     )
     # Null on the root; the parent node otherwise. Self-FK within the tree.
     parent_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -121,6 +138,9 @@ class SideConditionRow(Base):
 
     definition: Mapped[DefinitionRow | None] = relationship(back_populates="side_conditions")
     rule: Mapped[RuleRow | None] = relationship(back_populates="side_conditions")
+    promoted_theorem: Mapped[PromotedTheoremRow | None] = relationship(
+        back_populates="side_conditions"
+    )
     sort_symbol: Mapped[SymbolRow | None] = relationship()
     parent: Mapped[SideConditionRow | None] = relationship(
         remote_side="SideConditionRow.id", back_populates="children"

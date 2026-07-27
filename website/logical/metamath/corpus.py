@@ -42,6 +42,7 @@ from ..declarative import build_system
 from ..promotion import promote_from_source
 from .importer import (
     GrammarSchedule,
+    LibraryEntry,
     build_spec,
     grammar_schedule,
     import_proof,
@@ -50,7 +51,7 @@ from .importer import (
 from .parser import MetamathError
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
     from ..declarative import SystemSpec
     from ..formal_system import FormalSystem
@@ -114,12 +115,21 @@ def corpus_spec(
 
 
 def walk(
-    database: Database, limit: int | None = None, name: str = "Metamath"
+    database: Database,
+    limit: int | None = None,
+    name: str = "Metamath",
+    registered: Callable[[LibraryEntry], None] | None = None,
 ) -> Iterator[CheckedTheorem]:
     """Check each of ``database``'s first ``limit`` theorems, in file order.
 
     Yields one :class:`CheckedTheorem` per theorem as it is checked, so a caller
     can persist or report incrementally rather than hold the whole corpus.
+
+    ``registered`` is called with every assertion that joins the library, axioms
+    included, in the order they join. A caller storing the corpus needs that:
+    promotion parses a statement against the grammar *as of its own position*, so
+    only the walk is in a position to hand over what it built (see
+    ``app/db/promoted_theorems_mapping.py``). Nothing here reads it back.
     """
     walked = theorems(database, limit)
     if not walked:
@@ -177,7 +187,7 @@ def walk(
                         "written in cannot be told."
                     ),
                 )
-                _promote(system, assertion, database)
+                _promote(system, assertion, database, registered)
                 continue
             yield _check(database, assertion, system)
 
@@ -185,7 +195,7 @@ def walk(
         # would have: a rejected proof does not retract its statement from
         # the library, so a later theorem citing it fails for its own
         # reasons rather than for a missing label.
-        _promote(system, assertion, database)
+        _promote(system, assertion, database, registered)
 
 
 def _reset_sorts(system: FormalSystem, schedule: GrammarSchedule) -> None:
@@ -213,15 +223,26 @@ def _admit(
     return position + 1
 
 
-def _promote(system: FormalSystem, assertion: Assertion, database: Database) -> None:
+def _promote(
+    system: FormalSystem,
+    assertion: Assertion,
+    database: Database,
+    registered: Callable[[LibraryEntry], None] | None = None,
+) -> None:
     # A statement that cannot be promoted is dropped from the library rather than
     # aborting the walk: set.mm has a handful whose tokens defeat the proviso and
     # bracket scans (roadmap §1.2), and the theorems citing them are the ones
     # that should fail, not the 47,000 that do not.
+    #
+    # A dropped statement is not reported to `registered` either: it never joined
+    # the library, so storing it would leave a citable row for a theorem this walk
+    # refused to make citable.
     try:
-        register(assertion, database, system)
+        entry = register(assertion, database, system)
     except Exception:  # noqa: BLE001 - any promotion defect, reported by its citers
-        pass
+        return
+    if registered is not None:
+        registered(entry)
 
 
 def _check(

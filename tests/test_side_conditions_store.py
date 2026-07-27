@@ -19,6 +19,11 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.db import Base, spec_to_system, system_to_spec
+from app.db.promoted_theorems import (
+    PromotedTheoremBindingRow,
+    PromotedTheoremPremiseRow,
+    PromotedTheoremRow,
+)
 from app.db.terms import TermChildRow, TermRow
 from app.db.models import FormalSystem
 from app.db.side_conditions import SideConditionRow
@@ -73,6 +78,7 @@ _TABLES = [
         # `rules` and `rule_antecedents` reference `terms` for their cached
         # schema terms (app/db/schema_terms.py).
         TermRow, TermChildRow,
+        PromotedTheoremRow, PromotedTheoremPremiseRow, PromotedTheoremBindingRow,
     )
 ]
 

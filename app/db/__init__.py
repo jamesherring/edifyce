@@ -17,6 +17,18 @@ from app.db.models import (
 )
 from app.db.metamath_store import ImportReport, import_corpus
 from app.db.proof_lines import ProofLineAntecedentRow, ProofLineRow
+from app.db.promoted_theorems import (
+    PromotedTheoremBindingRow,
+    PromotedTheoremPremiseRow,
+    PromotedTheoremRow,
+)
+from app.db.promoted_theorems_mapping import (
+    cited_labels,
+    load_hypotheses,
+    load_theorems,
+    store_theorem,
+    theorem_digest,
+)
 from app.db.proofs_mapping import (
     clear_proof_lines,
     discard_system_checks,
@@ -86,6 +98,15 @@ __all__ = [
     "RuleRow",
     "SideConditionRow",
     "SymbolRow",
+    # The citable library (app/db/promoted_theorems.py).
+    "PromotedTheoremBindingRow",
+    "PromotedTheoremPremiseRow",
+    "PromotedTheoremRow",
+    "cited_labels",
+    "load_hypotheses",
+    "load_theorems",
+    "store_theorem",
+    "theorem_digest",
     "spec_to_system",
     "system_to_spec",
     # Term graph (app/db/terms.py) + kernel-term round trip.

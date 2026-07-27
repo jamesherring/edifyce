@@ -1091,21 +1091,7 @@ def schema_digests(spec: SystemSpec) -> list[str]:
     reads, so a rename keeps the terms. And the content of lines and axioms —
     only the names they bind matter, and only where one collides.
     """
-    grammar = _fingerprint(
-        [
-            sorted((_bracket_map(spec) or {}).items()),
-            _bracket_opaque_tokens(spec, _bracket_map(spec)),
-            [
-                [
-                    prod.sort, prod.name, prod.template, prod.regex,
-                    prod.atom_value, prod.atom_base, prod.denotes_constant,
-                    prod.bindings, sorted(prod.scopes_over.items()),
-                ]
-                for prod in spec.productions
-            ],
-            _shadowed_grammar_names(spec),
-        ]
-    )
+    grammar = _grammar_fingerprint(spec)
     return [
         _fingerprint(
             [
@@ -1120,6 +1106,64 @@ def schema_digests(spec: SystemSpec) -> list[str]:
         )
         for rule in spec.rules
     ]
+
+
+def library_digest(spec: SystemSpec) -> str:
+    """What determines the term a *promoted theorem*'s statement composes to.
+
+    :func:`schema_digests`' counterpart for the citable library, and wider,
+    because promotion reads more of the system than a rule schema does. A rule
+    template is parsed against the productions alone; a theorem's statement is a
+    proof line's formula, so it is composed at the sorts a **line** is read at
+    (``promotion._logical_sorts``), and a *ground* one may use the system's
+    resolved **definitions** (``promotion._ground_schema_term``). Both therefore
+    have to be here, where `schema_digests` can leave them out.
+
+    One digest for the whole library rather than one per theorem: the per-theorem
+    half is the theorem's own strings, which the persistence layer already holds
+    beside the term it is guarding, and hashing them there keeps a library of
+    50,000 from recomputing this for each one.
+    """
+    return _fingerprint(
+        [
+            _grammar_fingerprint(spec),
+            [
+                [
+                    line.name, line.shape, line.logical_sort, line.scope,
+                    line.behaviour, [[p.name, p.regex] for p in line.parts],
+                ]
+                for line in spec.lines
+            ],
+            [
+                [
+                    defn.sort, defn.name, defn.higher, defn.lower, defn.bindings,
+                    defn.condition, defn.fresh, defn.label,
+                ]
+                for defn in spec.definitions
+            ],
+        ]
+    )
+
+
+def _grammar_fingerprint(spec: SystemSpec) -> str:
+    # What a template is parsed *against*: the productions, the bracket map that
+    # decides where one may be split, and the names something else in the build
+    # namespace shadows.
+    return _fingerprint(
+        [
+            sorted((_bracket_map(spec) or {}).items()),
+            _bracket_opaque_tokens(spec, _bracket_map(spec)),
+            [
+                [
+                    prod.sort, prod.name, prod.template, prod.regex,
+                    prod.atom_value, prod.atom_base, prod.denotes_constant,
+                    prod.bindings, sorted(prod.scopes_over.items()),
+                ]
+                for prod in spec.productions
+            ],
+            _shadowed_grammar_names(spec),
+        ]
+    )
 
 
 def _shadowed_grammar_names(spec: SystemSpec) -> list[str]:

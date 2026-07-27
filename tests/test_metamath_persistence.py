@@ -28,9 +28,18 @@ pytest.importorskip("regex")
 pytest.importorskip("sqlalchemy")
 
 from sqlalchemy import create_engine, func, select
+from sqlalchemy import distinct as distinct_
 from sqlalchemy.orm import Session
 
-from app.db import Base, load_term
+from app.db import Base, cited_labels, load_proof_for_check, load_term, load_theorems
+from app.db.promoted_theorems_mapping import load_hypotheses
+from website.logical.declarative import build_spec, library_digest
+from website.logical.formal_system.proof import Proof as EngineProof
+from app.db.promoted_theorems import (
+    PromotedTheoremBindingRow,
+    PromotedTheoremPremiseRow,
+    PromotedTheoremRow,
+)
 from app.db import metamath_store
 from app.db.metamath_store import import_corpus
 from app.db.models import FormalSystem, Proof
@@ -122,6 +131,8 @@ _TABLES = [
         DefinitionFreshRow, AxiomRow, AxiomBindingRow, RuleRow,
         RuleAntecedentRow, RuleBindingRow, SideConditionRow,
         Proof, ProofLineRow, ProofLineAntecedentRow, TermRow, TermChildRow,
+        # The citable library an import now writes alongside the proofs.
+        PromotedTheoremRow, PromotedTheoremPremiseRow, PromotedTheoremBindingRow,
     )
 ]
 
@@ -312,10 +323,18 @@ def test_a_stored_term_reloads_without_the_mm_file(session, imported):
 def test_equal_subterms_are_one_row_across_the_whole_corpus(session, imported):
     # Interning is per system, so the corpus lands in *one* term graph: the
     # formula `ph`, stated by three of the four proofs, is a single row.
+    #
+    # Counted over the *lines'* terms rather than over `terms` as a whole: the
+    # library's statements intern into the same graph (app/db/promoted_theorems.py)
+    # and would otherwise be counted as though the proofs had stated them.
     total_formulas = session.scalar(
         select(func.count()).select_from(ProofLineRow).where(ProofLineRow.term_id.is_not(None))
     )
-    distinct = session.scalar(select(func.count()).select_from(TermRow))
+    distinct = session.scalar(
+        select(func.count(distinct_(ProofLineRow.term_id))).where(
+            ProofLineRow.term_id.is_not(None)
+        )
+    )
 
     assert total_formulas > distinct
 
@@ -476,3 +495,87 @@ def _lines(session: Session, proof: str) -> list[ProofLineRow]:
             .order_by(ProofLineRow.position)
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# The library, and re-checking from it
+# ---------------------------------------------------------------------------
+def test_the_library_is_stored_and_says_which_entries_are_primitive(session, imported):
+    # Both kinds land in one table (app/db/promoted_theorems.py), so the split
+    # that lets an imported system say what it *assumes* is a column rather than
+    # a namespace. The fragment has three logical `$a` and four `$p`.
+    rows = list(
+        session.scalars(select(PromotedTheoremRow).order_by(PromotedTheoremRow.position))
+    )
+    assert [r.label for r in rows] == ["ax-mp", "ax-1", "ax-2", "mp2", "a1i", "2a1i", "a2i"]
+    assert [r.label for r in rows if r.primitive] == ["ax-mp", "ax-1", "ax-2"]
+    assert (imported.theorems, imported.primitives) == (7, 3)
+
+    # `ax-mp` is the shape everything else is checked against: two premises, a
+    # bare metavariable conclusion, three metavariables typed by the grammar.
+    ax_mp = next(r for r in rows if r.label == "ax-mp")
+    assert ax_mp.statement == "ps"
+    assert [p.statement for p in ax_mp.premises] == ["ph", "( ph -> ps )"]
+    assert {b.var: b.symbol.name for b in ax_mp.bindings} == {"ph": "wff", "ps": "wff"}
+
+
+def test_an_imported_theorem_re_checks_from_its_rows_alone(session, imported):
+    """P4's measure: rebuild the system from rows, resolve what a proof cites out
+    of the stored library, and get the verdict the import recorded — with the
+    ``.mm`` file gone and no statement parsed.
+
+    Before the library was stored this could not run at all: the system rebuilt
+    from rows had no `ax-mp` to resolve, so every imported proof failed on its
+    first citation.
+    """
+    system = session.get(FormalSystem, imported.system_id)
+    spec = system_to_spec(system)
+    built = build_spec(spec)["system"]
+    context = copy(built.context)
+    context.variables.update(built.build_context.variables)
+    library = library_digest(spec)
+
+    for name in IMPORTED:
+        proof_row = session.scalar(select(Proof).where(Proof.name == name))
+        root = EngineProof(formal_system=built)
+
+        assert proof_row.theorem_id is not None, f"{name} was not linked to its theorem"
+
+        def resolve(populated, _built=built, _ctx=context, _lib=library, _row=proof_row):
+            labels = cited_labels(line.reference_string for line in populated.proof_lines)
+            promoted = load_theorems(
+                session, imported.system_id, labels, _built, _ctx, _lib
+            )
+            # A theorem proves under its own `$e` hypotheses, reachable only
+            # through the theorem this proof establishes.
+            promoted.update(load_hypotheses(session, _row.theorem_id, _built, _ctx))
+            for theorem in promoted.values():
+                _built.promote(theorem)
+
+        checked = load_proof_for_check(
+            session, proof_row.id, built, context, proof=root, before_check=resolve
+        )
+        assert checked is not None, f"{name} stored no lines"
+        assert checked.valid is True, [
+            (line.display, line.invalid_message) for line in checked.proof_lines
+        ]
+        assert checked.valid == proof_row.valid
+
+
+def test_a_stored_theorem_carries_the_term_its_statement_composed_to(session, imported):
+    # The cache half (P3's contract, applied to the library): a theorem whose
+    # digest still matches is promoted with no parse. Only a *compound* statement
+    # composes to a term — `ax-mp` concludes the bare metavariable `ps`, which
+    # has no structure to compose and correctly stores none.
+    rows = {r.label: r for r in session.scalars(select(PromotedTheoremRow))}
+    assert rows["ax-1"].statement_term_id is not None
+    assert rows["ax-mp"].statement_term_id is None
+    assert all(r.schema_digest is not None for r in rows.values())
+
+    # A grammar edit moves the digest, so the terms stop being read and the
+    # statements are composed again — the same inert-not-wrong contract the rule
+    # schemas have.
+    spec = system_to_spec(session.get(FormalSystem, imported.system_id))
+    moved = system_to_spec(session.get(FormalSystem, imported.system_id))
+    moved.productions[0].name = "renamed"
+    assert library_digest(spec) != library_digest(moved)
