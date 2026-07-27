@@ -86,7 +86,8 @@ Two follow-ups this leaves open:
   only one that widens what a *proof* may do. Analysed and **blocked**: deciding
   capture at the redex turns out to be the easy half, and the hard half is that a
   defined form is a leaf, so `Occurs` answers differently either side of a
-  definitional equality
+  definitional equality — which wants separate semantic-leaf metadata rather than
+  anything to do with `free_vars`
   ([docs/scope-aware-definitional-steps.md](docs/scope-aware-definitional-steps.md)).
 - **Conservativity.** That a defined symbol is fresh and the definition
   non-circular is still untreated, as in Metamath. Only the *capture* half of

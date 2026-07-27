@@ -17,6 +17,7 @@ from website.logical.declarative import Definition as Definition_
 from website.logical.declarative import SystemSpec, build_spec, build_system
 from website.logical.kernel import (
     Occurs,
+    Term,
     Node,
     constructor_for,
     DisjointLeaves,
@@ -940,7 +941,7 @@ def test_declaring_a_bindable_atom_constant_is_the_author_s_to_get_wrong():
     assert "errors" not in result
 
 
-def test_a_defined_form_is_opaque_to_a_structural_proviso():
+def test_a_defined_form_is_opaque_to_a_structural_proviso() -> None:
     """A characterisation test, not an endorsement.
 
     `Occurs` is what the proviso vocabulary is built from, and what an
@@ -982,7 +983,7 @@ def test_a_defined_form_is_opaque_to_a_structural_proviso():
     system, context = build(spec)
     formula = system.build_context.variables["formula"]
 
-    def term(text):
+    def term(text: str) -> Term:
         matched = formula.match(text, context)
         assert matched is not None, text
         return from_match(matched)

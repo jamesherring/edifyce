@@ -144,7 +144,9 @@ defined form is a *leaf*, so `Occurs` — the predicate every freshness proviso 
 built from — answers differently either side of a definitional equality. A
 proviso can be satisfied by `S` and violated by `(a ∈ b)`. Admitting open
 abbreviations over genuine variables therefore needs notation to be transparent
-to structural predicates first, which is a design question of its own. The item
+to structural predicates first — as *separate* metadata, not via `free_vars`,
+which is the schema-metavariable inventory and has three callers depending on a
+ground term reporting none. That is a design question of its own, so the item
 stays open with a named blocker rather than a vague warning.
 
 ## Shape of the change

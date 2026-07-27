@@ -58,21 +58,35 @@ genuine **variable** — which is what admitting open abbreviations would mean.
 
 ## The prerequisite
 
-For an open abbreviation to be admissible, a defined form's leaf has to report
-the free variables of its definition. `S` would have to answer "`a` and `b` occur
-in me", so that:
+For an open abbreviation to be admissible, a defined form's leaf has to carry the
+object-language variables its definition mentions, so that `Occurs`,
+`DisjointLeaves` and the eigenvariable machinery see through the notation instead
+of stopping at the leaf.
 
-- `Occurs` and `DisjointLeaves` see through the notation;
-- an eigenvariable check cannot be passed by hiding a variable behind a constant;
-- `free_vars` means what its callers assume it means.
+**Not by way of `free_vars`.** That was the first draft of this note and it was
+wrong. `Term.free_vars` is the inventory of *schema metavariables* — what a match
+has yet to bind — and a ground term like `(a ∈ b)` correctly reports none. Three
+callers depend on exactly that reading, and each would break in a different way:
 
-That is a change to what a *notation* carries — semantic information from the
-definition it abbreviates — and it cuts across the layering this arc has spent
-several changes establishing: the kernel reads no strings, a production projects
-to a `Constructor`, and a `Constructor` is structural. Making a constructor carry
-"the free variables of the definition whose defined form I am" is not obviously
-wrong, but it is a design question in its own right, not an implementation detail
-of this one.
+| caller | what it does with `free_vars` | breakage |
+|---|---|---|
+| `rules._term_for_occurrence` | renames every entry to `name\x00occurrence` | ground notation gets renamed |
+| `side_conditions._resolve` | raises if any entry remains after substitution | a proviso naming `S` is rejected as malformed |
+| `definitions.unbound_parameters` | `lower` minus `higher` | `a`, `b` reported as introduced parameters |
+
+The two notions are genuinely distinct and the conflation was the error: a
+*schema metavariable* is something a match may still bind, an *object-language
+variable* is something a binder may capture. A definition's parameters are the
+first; the leaves an open abbreviation hides are the second.
+
+So the prerequisite is **separate metadata** — a defined form's constructor
+recording the object-language leaves of its defining form — plus `Occurs` and
+`DisjointLeaves` consulting it. That is a change to what a *notation* carries:
+semantic information from the definition it abbreviates. It cuts across the
+layering this arc has spent several changes establishing — the kernel reads no
+strings, a production projects to a `Constructor`, and a `Constructor` is
+structural — so it is a design question in its own right, not an implementation
+detail of this one.
 
 **So this item stays open, now with a named blocker rather than a vague warning.**
 The position-tracking half is ready whenever the transparency half is settled.
