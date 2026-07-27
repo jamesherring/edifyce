@@ -359,20 +359,50 @@ def test_a_late_refusal_leaves_an_earlier_definition_s_notation_alone():
     assert system.parse("a ⊆ b [HYP]").proof_lines[0].formula_term is not None
 
 
+# A proviso that constrains the *binder* and nothing else. Disjointness from the
+# parameters is already the auto-generated `$d` the kernel derives from `fresh`,
+# so it could never isolate this; "the binder may not be called `c`" can. It is a
+# contrived rule, and deliberately so — what it pins is which binding the proviso
+# is resolved against, not a proposition anyone would want.
+NOT_C = "not equal(z, c)"
+
+
 def test_a_proviso_may_constrain_a_binder_by_its_declared_name():
-    # A binder is stored abstractly and takes whatever name the unfold chooses, so
-    # `disjoint(z, x)` means "this binder, whatever it ends up called" rather than
-    # the literal token `z`. Here it forbids the binder taking the same name as the
-    # first parameter, so `a ⊆ b` unfolds with the default `z` and the *renamed*
-    # unfold to `a` is refused.
+    # A binder is stored abstractly and takes whatever name an unfold chooses, so
+    # `z` in a proviso means "this binder, whatever it ends up called" rather than
+    # the literal token `z`. Before, the condition was checked before the binders
+    # were resolved and could only mean the token.
     system = _built_system()
-    register_definition(subset_defn(None, condition="disjoint(z, x, variable)"), system)
+    register_definition(subset_defn(None, condition=NOT_C), system)
     definition = system.definitions[0]
     redex = system.parse("a ⊆ b [HYP]").proof_lines[0].formula_term
 
+    def leaf(name: str):
+        # A `variable` leaf, taken out of a formula: a bare variable is not a
+        # formula, so it has no proof line of its own to parse.
+        membership = system.parse(f"{name} ∈ {name} [HYP]").proof_lines[0].formula_term
+        return membership.children["s"]
+
+    # The default name, and another the proviso permits.
     assert unfold(definition, redex, system.context) is not None
-    chosen = system.parse("a [HYP]").proof_lines[0].formula_term
-    assert unfold(definition, redex, system.context, {"z": chosen}) is None
+    assert unfold(definition, redex, system.context, {"z": leaf("d")}) is not None
+    # `c` is fresh for the parameters, so only the definition's own proviso refuses.
+    assert unfold(definition, redex, system.context, {"z": leaf("c")}) is None
+
+
+def test_a_binder_proviso_reaches_the_proof_checker_too():
+    # `check_definitional_step` recovers the binder's name from the target rather
+    # than being handed it, and carries its own copy of the unfold logic — so the
+    # proviso has to be checked there after recovery too, or the rule holds for
+    # `kernel.unfold` and not for any actual proof.
+    system = _built_system()
+    register_definition(subset_defn(None, condition=NOT_C, label="sub"), system)
+
+    ok = system.parse("a ⊆ b [HYP]\n∀d (d ∈ a → d ∈ b) [sub, 1]")
+    assert ok.proof_lines[1].valid is True
+
+    refused = system.parse("a ⊆ b [HYP]\n∀c (c ∈ a → c ∈ b) [sub, 1]")
+    assert refused.proof_lines[1].valid is not True
 
 
 def test_a_definition_s_own_proviso_is_held_to_the_same_rule():

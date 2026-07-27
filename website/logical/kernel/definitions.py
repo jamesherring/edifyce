@@ -589,8 +589,6 @@ def _unfolds_to(definition: Definition, source: Term, target: Term, context: Con
     binding = match(definition.higher, source, context)
     if binding is None:
         return False
-    if definition.condition is not None and not definition.condition.check(binding, context):
-        return False
 
     # Recover each binder's concrete name by matching the defining form against
     # the claimed target, *seeded with the parameter binding* so the parameters
@@ -608,6 +606,13 @@ def _unfolds_to(definition: Definition, source: Term, target: Term, context: Con
     if set(recovered) - set(binding) - bound_keys:
         return False
     bound_binding = {key: recovered[key] for key in bound_keys if key in recovered}
+    # Checked once the binders are recovered, as :func:`unfold` checks it once they
+    # are chosen, and for the same reason: a proviso may constrain a binder, and
+    # here the name it takes is read off the target rather than supplied.
+    if definition.condition is not None and not definition.condition.check(
+        _condition_binding(definition, binding, bound_binding), context
+    ):
+        return False
     if not _bounds_are_fresh(definition, binding, bound_binding, context):
         return False
     return definition.lower.substitute(recovered, context).equal(target, context)
