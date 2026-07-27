@@ -229,7 +229,13 @@ export interface DefinitionBinder {
 }
 
 export interface DefinitionBinders {
+	/** The stored definition this reports on. Neither `label` nor `defined_form`
+	 * identifies a row — a definition may be unnamed, two may share one defined
+	 * form, and one whose defining form matched nothing is dropped at build — so
+	 * join on this, not on position. */
+	definition_id: string;
 	label: string | null;
+	/** For display, not identification. */
 	defined_form: string;
 	binders: DefinitionBinder[];
 }
