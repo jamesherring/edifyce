@@ -547,8 +547,9 @@ split counted 1,433 `df-` declared primitives of the imported system.
 `metamath/definitions.classify` decides structurally, never by label. Three tests,
 then the kernel:
 
-1. the statement is a **relation between two things of one sort** — its root takes
-   two slots of the same sort, which admits `=` and `↔` without naming either;
+1. the statement's root is a **declared definitional equivalence** (`wb`/`wceq`
+   for `set.mm`) — declared rather than inferred, because arity and slot sorts do
+   not tell `↔` from `→`, and nothing is a definition under the empty default;
 2. its defined side is **not a bare metavariable**;
 3. its defined side is **built from notation not yet in use**.
 

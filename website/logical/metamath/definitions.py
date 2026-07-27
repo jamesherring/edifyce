@@ -14,10 +14,12 @@ What makes a definition, here
 -----------------------------
 Nothing about the *label*. Two structural tests, in order, and then the kernel:
 
-1. The statement is a **relation between two things of one sort**: its root
-   production takes exactly two slots of the same sort and yields the logical
-   sort. That admits `=` and `↔` without naming either, which matters because
-   the vocabulary is the imported system's, not ours.
+1. The statement's root is a **declared definitional equivalence**. Which
+   production that is has to be *told* to the classifier (``equivalences``), not
+   inferred: arity and slot sorts do not distinguish `↔` from `→`, and reading a
+   one-way implication as a definition would licence the reverse rewrite and
+   strengthen the theory. Nothing is a definition under the default empty set, so
+   a caller that says nothing gets the old all-axioms import.
 2. Its left side is **not a bare metavariable**, which defines nothing.
 3. Its left side is **built from notation not yet in use**. This is what makes it
    a *definition* rather than an equation between things that already exist, and
@@ -34,11 +36,16 @@ unconditionally, and there is nowhere to put a premise), and a metavariable the
 proviso syntax cannot name. A `$d` *can* be carried, as the definition's
 condition, and must be: 1,033 of set.mm's definition-shaped statements have one.
 
-None of the shape tests is load-bearing alone. Test 1 admits an implication,
-since `( ph -> ps )` has the shape of a biconditional; test 3 then admits `ax-1`,
-because `ph` is notation not yet in use the first time it appears - which is why
-test 2 is there, and which was found by running the classifier over `set.mm`
-rather than by reasoning about it. Nor is the set of them trusted to be complete.
+None of the shape tests is load-bearing alone, and the reason test 1 names its
+relation rather than describing it is that describing it failed twice. Matching on
+"two slots of one sort" admits `→` as readily as `↔`; test 3 then admits `ax-1`
+(``|- ( ph -> ( ps -> ph ) )``) as ``ph := ( ps -> ph )``, because `ph` is notation
+not yet in use the first time it appears, which is what test 2 is for. That much
+was found by running the classifier over `set.mm`. It still admitted
+``|- ( NEW ph ps -> ph )`` as ``NEW ph ps := ph`` - a fresh compound antecedent
+rather than a bare metavariable, so test 2 does not fire - which is what made
+declaring the relation the only defensible reading. Nor is the set of them trusted
+to be complete.
 
 **The default on any doubt is axiom**, which costs a longer proof rather than an
 unsound one. What is *behind* that default is worth stating precisely, because it
@@ -131,6 +138,7 @@ def classify(
     in_use: set[str],
     database: Database,
     system: FormalSystem,
+    equivalences: frozenset[str] = frozenset(),
 ) -> Classified:
     """Decide whether ``assertion`` is a definition, given what precedes it.
 
@@ -139,13 +147,25 @@ def classify(
     both supplied by the caller, because a walk already has them and re-deriving
     either per assertion would re-parse the corpus. ``database`` and ``system``
     are needed only to render a ``$d`` into proviso syntax.
+
+    ``equivalences`` names the productions that mean *definitional equivalence* in
+    this database - `set.mm`'s are `wb` and `wceq`. It is declared rather than
+    inferred because nothing structural distinguishes an equivalence from an
+    implication, and it defaults to empty, so a caller that names none imports
+    every logical ``$a`` as an axiom exactly as before.
     """
     if statement is None:
         return Classified(assertion.label, reason="statement does not parse")
 
+    root = statement.constructor.name if isinstance(statement, Node) else "a variable"
+    if root not in equivalences:
+        return Classified(
+            assertion.label,
+            reason=f"root is not a declared definitional equivalence ({root})",
+        )
+
     sides = _sides(statement)
     if sides is None:
-        root = statement.constructor.name if isinstance(statement, Node) else "a variable"
         return Classified(
             assertion.label,
             reason=f"not a relation between two things of one sort (root {root})",

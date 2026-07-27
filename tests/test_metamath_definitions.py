@@ -18,7 +18,13 @@ from website.logical.metamath import build_spec, parse
 from website.logical.metamath.definitions import classify, constructors_used
 
 
-def classify_all(source: str) -> dict[str, object]:
+# The productions that mean definitional equivalence in these fragments, as
+# set.mm's do: `wb` is `( ph <-> ps )` and `wceq` is `A = B`. Declared, because
+# nothing structural tells an equivalence from an implication.
+EQUIVALENCES = frozenset({"wb", "wceq"})
+
+
+def classify_all(source: str, equivalences=EQUIVALENCES) -> dict[str, object]:
     """Classify every logical `$a` in `source`, in file order."""
     database = parse(source)
     system = build_system(build_spec(database, name="t"))
@@ -30,7 +36,9 @@ def classify_all(source: str) -> dict[str, object]:
             continue
         line = system.parse(" ".join(assertion.tokens) + " [x]").proof_lines[0]
         term = line.formula_term
-        out[assertion.label] = classify(assertion, term, in_use, database, system)
+        out[assertion.label] = classify(
+            assertion, term, in_use, database, system, equivalences
+        )
         if term is not None:
             in_use |= constructors_used(term)
     return out
@@ -73,7 +81,7 @@ def test_an_implication_is_not_a_definition_of_its_own_antecedent():
     classified = classify_all(PROPOSITIONAL)["ax-1"]
 
     assert not classified.is_definition
-    assert "bare metavariable" in classified.reason
+    assert "not a declared definitional equivalence" in classified.reason
 
 
 # `df-bi` must define `<->` without using it, so set.mm states it as a nest of
@@ -98,7 +106,7 @@ def test_a_definition_that_cannot_use_its_own_connective_stays_an_axiom():
     classified = classify_all(DEFINES_ITS_OWN_CONNECTIVE)["df-bi"]
 
     assert not classified.is_definition
-    assert "not a relation between two things of one sort" in classified.reason
+    assert "not a declared definitional equivalence" in classified.reason
 
 
 # `df-cleq` in miniature: an equivalence whose *defined* side is ordinary `=`,
@@ -215,3 +223,34 @@ def test_a_distinct_variable_constraint_travels_with_the_definition():
     assert classified.is_definition
     condition = classified.definition.condition
     assert condition is not None and "disjoint(" in condition
+
+
+
+# A one-way implication whose antecedent is a *fresh compound* — so the
+# bare-metavariable test does not fire, and only naming the equivalence refuses
+# it. Reading this as `NEW ph ps := ph` would licence the reverse rewrite.
+ONE_WAY = r"""
+$c |- wff ( ) -> <-> NEW $.
+$v ph ps $.
+wph $f wff ph $.
+wps $f wff ps $.
+wi $a wff ( ph -> ps ) $.
+wb $a wff ( ph <-> ps ) $.
+wnew $a wff NEW ph ps $.
+ax-new $a |- ( NEW ph ps -> ph ) $.
+"""
+
+
+def test_a_one_way_implication_is_not_a_definition():
+    classified = classify_all(ONE_WAY)["ax-new"]
+
+    assert not classified.is_definition
+    assert "not a declared definitional equivalence" in classified.reason
+
+
+def test_nothing_is_a_definition_when_no_equivalence_is_declared():
+    # The default: a caller that names no equivalence gets every logical `$a` as
+    # an axiom, which is the import's behaviour before any of this.
+    classified = classify_all(PROPOSITIONAL, equivalences=frozenset())
+
+    assert not any(c.is_definition for c in classified.values())
