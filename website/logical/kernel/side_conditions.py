@@ -311,15 +311,63 @@ def restate(condition: SideCondition, binding: Binding, context: Context) -> Sid
     raise ValueError(f"Cannot restate side-condition of type {type(condition).__name__}.")
 
 
+def references(condition: SideCondition) -> set[str]:
+    """Every metavariable name ``condition`` reads, by name or through a term.
+
+    What a match must bind for the condition to be checkable at all - a name it
+    does not cover makes :func:`_resolve` raise rather than return a verdict. A
+    caller attaching a proviso to something (a definition, say) uses this to
+    refuse a mismatch when the proviso is *written*, instead of leaving it to
+    surface as an exception on some later step.
+
+    Exhaustive over the algebra for the same reason :func:`restate` is: a member
+    that fell through would under-report, and under-reporting here reads as "this
+    proviso is fine".
+    """
+    if isinstance(condition, Occurs):
+        return _referenced(condition.needle) | _referenced(condition.haystack)
+    if isinstance(condition, DisjointLeaves):
+        return _referenced(condition.left) | _referenced(condition.right)
+    if isinstance(condition, (IsAtom, IsMember)):
+        return _referenced(condition.name)
+    if isinstance(condition, Equal):
+        return _referenced(condition.left) | _referenced(condition.right)
+    if isinstance(condition, Not):
+        return references(condition.inner)
+    if isinstance(condition, (And, Or)):
+        return set().union(*(references(part) for part in condition.parts)) \
+            if condition.parts else set()
+    raise ValueError(
+        f"Cannot read the references of a side-condition of type "
+        f"{type(condition).__name__}."
+    )
+
+
+def _referenced(arg: TermArg) -> set[str]:
+    """The metavariable names one predicate argument reads - see :func:`references`."""
+    return {arg} if isinstance(arg, str) else set(arg.free_vars())
+
+
 def _restated(arg: TermArg, binding: Binding, context: Context) -> Term:
     """One predicate argument, restated - see :func:`restate`.
 
     Unlike :func:`_resolve` the result may still carry ``Var`` leaves: they are
     the *outer* metavariables the restated condition is now written over, and are
     substituted when that match runs.
+
+    Which is why a term argument's own variables are checked *before* the
+    substitution rather than after: an unbound one survives it looking exactly
+    like an outer metavariable, and would then be read against the outer binding,
+    where the same spelling means something else entirely.
     """
     if isinstance(arg, str):
         return _bound(binding, arg)
+    unbound = sorted(name for name in arg.free_vars() if name not in binding)
+    if unbound:
+        raise ValueError(
+            "Side-condition term references metavariable(s) the match did not "
+            f"bind: {', '.join(unbound)}."
+        )
     return arg.substitute(binding, context)
 
 

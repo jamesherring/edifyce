@@ -41,6 +41,7 @@ from .side_conditions import (
     Occurs,
     Or,
     SideCondition,
+    references,
     restate,
 )
 from .constructors import Constructor, constructor_for
@@ -74,6 +75,7 @@ __all__ = [
     "introduced_leaves",
     "match",
     "match_all",
+    "references",
     "restate",
     "unbound_parameters",
     "unfold",

@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from copy import copy
-from dataclasses import InitVar, dataclass, field
+from dataclasses import InitVar, dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from .build_context import (
@@ -54,7 +54,7 @@ from .formal_system.definitions import (
     denotes_a_constant,
 )
 from .formal_system.side_condition_syntax import parse_side_condition
-from .kernel import And, match, restate
+from .kernel import And, match, references, restate
 from .kernel.constructors import constructor_for, project_grammar
 from .matching import AtomPattern, Pattern, RegexPattern, StringPattern, UnionPattern
 from .promotion import promote_from_source
@@ -62,6 +62,7 @@ from .promotion import promote_from_source
 if TYPE_CHECKING:
     from .kernel import SideCondition
     from .kernel.constructors import Constructor
+    from .kernel.definitions import Definition as KernelDefinition
 
 
 class DeclarativeError(Exception):
@@ -969,6 +970,11 @@ def _justifying_statement(
     rule = system.rule_by_label(justification.label)
     if rule is None or rule.antecedents:
         return None
+    if rule.is_discharge:
+        # A discharge rule cites no lines, so it has no `antecedents` — but it
+        # consumes a whole subproof, which is a premise by another name. Without
+        # this, conditional proof settles every `(A → B)` there is.
+        return None
     if rule.pending_side_conditions:
         # A rule's provisos are parsed only *after* definitions resolve, so that
         # one may use defined notation — which is exactly why a definition cannot
@@ -1049,6 +1055,36 @@ def _discharge_justification(
         return condition
     parts = (*( () if condition is None else (condition,) ), *inherited)
     return parts[0] if len(parts) == 1 else And(parts)
+
+
+def _check_condition_is_checkable(defn: Definition, built: KernelDefinition) -> None:
+    # A definition's proviso is checked against the binding an *unfold* produces,
+    # and that binding comes from matching the defined form against the redex
+    # (`kernel.definitions.unfold`). So a proviso may only name metavariables the
+    # defined form supplies: one naming anything else - a parameter of the
+    # defining form alone, a variable a `$d` mentions but neither form uses - has
+    # nothing to resolve against, and the kernel raises rather than returning a
+    # verdict.
+    #
+    # Unlike a rule, which fails closed on a malformed proviso
+    # (`InferenceRule._side_conditions_hold`), `unfold` lets that escape into the
+    # proof parse - and a generic `[Def, n]` tries every definition in scope, so
+    # one such definition breaks definitional steps system-wide. Settle it here,
+    # where the author can act on it, exactly as an unsound defining form is.
+    if built.condition is None:
+        return
+    supplied = set(built.higher.free_vars())
+    orphaned = sorted(references(built.condition) - supplied)
+    if orphaned:
+        listed = ", ".join(repr(name) for name in orphaned)
+        raise DeclarativeError(
+            f"Definition '{defn.name}' has a proviso naming {listed}, which its "
+            f"defined form '{defn.higher}' does not supply. A proviso is checked "
+            "against the match between the defined form and the term being "
+            "unfolded, so it can only constrain what that match binds. Either make "
+            f"{listed} a parameter of the defined form, or state the proviso over "
+            "the parameters it already has."
+        )
 
 
 def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: FormalSystem) -> bool:
@@ -1132,6 +1168,7 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
     except DefinitionError as exc:
         raise DeclarativeError(str(exc)) from exc
 
+    _check_condition_is_checkable(defn, kernel_definition)
     system.add_definition(kernel_definition)
 
     # A freshly added definition or one that de-duplicated into an existing
@@ -1153,14 +1190,25 @@ def register_definition(defn: Definition, system: FormalSystem) -> bool:
     reaches it and so is not there when the system is built.
 
     Returns whether the definition *layered* (see :func:`_finalise_definition`),
-    and raises :class:`DeclarativeError` if it cannot be registered soundly.
+    appending that to ``system.definition_layering`` so it stays positional with
+    ``system.definitions`` however the definitions arrived, and raises
+    :class:`DeclarativeError` if the definition cannot be registered soundly.
     """
     if system.build_context is None:
         raise DeclarativeError(
             f"Cannot register definition '{defn.name}' against a system with no "
             "build context."
         )
-    return _finalise_definition(defn, system.build_context, system)
+    # A cited definition name must resolve to one definition, and nothing else
+    # enforces that: `_definition_by_label` takes the first match, so a collision
+    # would leave the second silently uncitable. `build_system` refuses a
+    # duplicate within its own spec; this is the same refusal against whatever the
+    # system already carries.
+    if defn.label is not None and any(d.label == defn.label for d in system.definitions):
+        raise DeclarativeError(f"Duplicate definition label '{defn.label}'.")
+    layered = _finalise_definition(defn, system.build_context, system)
+    system.definition_layering.append(layered)
+    return layered
 
 
 def build_spec(spec: SystemSpec, system_dict: dict | None = None) -> dict:
@@ -1210,11 +1258,20 @@ def registered_definition_layering(spec: SystemSpec) -> list[bool]:
     reporting every definition dropped. Only a broken *grammar* still errors —
     and there no definition can layer at all, so all-``False`` is the honest
     answer (nothing is live for a reorder to drop).
+
+    A definition's *justification* goes with the rules, and for the same reason:
+    it cites one, so keeping it would fail the reduced build over something that
+    decides nothing about layering — reporting every definition dropped, which is
+    exactly what the reduction exists to prevent.
     """
     reduced = copy(spec)
     reduced.axioms = []
     reduced.rules = []
     reduced.lines = []
+    reduced.definitions = [
+        replace(defn, justification=None) if defn.justification is not None else defn
+        for defn in spec.definitions
+    ]
     result = build_spec(reduced)
     if "errors" in result:
         return [False] * len(spec.definitions)

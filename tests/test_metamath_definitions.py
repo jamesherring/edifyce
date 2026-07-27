@@ -238,6 +238,36 @@ def test_only_a_proof_ahead_of_the_definition_discharges_its_hypothesis():
     assert "which nothing proved before it states" in classified.reason
 
 
+# `df-tru`, quoted from set.mm: `T.` is defined by a statement quantifying over an
+# `x` the defined form has no room for. 1,123 of set.mm's definition-shaped
+# statements are this shape, and it is the single largest reason one is refused.
+BINDS_A_DUMMY = r"""
+$c |- wff setvar ( ) -> <-> = A. T. $.
+$v x ph ps $.
+vx $f setvar x $.
+wph $f wff ph $.
+wps $f wff ps $.
+wi $a wff ( ph -> ps ) $.
+wb $a wff ( ph <-> ps ) $.
+weq $a wff x = x $.
+wal $a wff A. x ph $.
+wtru $a wff T. $.
+df-tru $a |- ( T. <-> ( A. x x = x -> A. x x = x ) ) $.
+"""
+
+
+def test_a_defining_side_binding_a_dummy_is_not_a_definition():
+    # `x` is bound by `A.` in the defining form and absent from `T.`, so an unfold
+    # would conjure it. A `fresh` clause is how a definition says the defining form
+    # *binds* it — and that is inferred from the grammar's binding slots, which a
+    # `.mm` file carries no trace of. Nothing here can tell a bound `x` from a free
+    # one, and guessing would be the unsafe direction, so it stays an axiom.
+    classified = classify_all(BINDS_A_DUMMY)["df-tru"]
+
+    assert not classified.is_definition
+    assert "defining side introduces 'x'" in classified.reason
+
+
 def test_an_assertion_under_several_hypotheses_is_not_a_definition():
     # A `Definition` carries one obligation. Two would have to be guessed at, and
     # `set.mm` never needs it — `df-sb` and `df-mo` have a single `$e` each.

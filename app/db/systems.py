@@ -243,9 +243,17 @@ class DefinitionRow(Base):
     # within a system, enforced at build time, not by a DB constraint.
     label: Mapped[str | None] = mapped_column(String(64))
     # The proof obligation this definition holds only under, discharged by citing
-    # a theorem the system has already settled (see declarative.Justification).
+    # something the system has already settled (see declarative.Justification).
     # Both NULL for a definition that holds outright, which is nearly all of them;
     # they are set and cleared together, so neither is meaningful alone.
+    #
+    # What can be cited *here* is narrower than what the engine accepts: a
+    # `SystemSpec` carries rules and axioms but no proved theorems, so a stored
+    # citation has to name one of those to rebuild. A citation of a *promoted*
+    # theorem — what a corpus import produces — stores fine and then fails the
+    # rebuild, because there is nowhere in a spec for the theorem to live. That
+    # is the same gap as storing the imported library at all (roadmap §3.2), and
+    # is unreachable until the import writes definitions.
     justification_label: Mapped[str | None] = mapped_column(String(64))
     justification_statement: Mapped[str | None] = mapped_column(String(512))
 

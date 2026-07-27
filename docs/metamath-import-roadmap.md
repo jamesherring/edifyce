@@ -39,7 +39,7 @@ are not relitigated), and what remains.
 | Token-collision defects (§1.2) | fixed — four instances of one shape |
 | `$t` typesetting / notation (§4) | **next** |
 | Axiom-vs-theorem split (§3.2) | engine done; storing the library open |
-| Definition classification (§5, A4) | classifier done — 1,427/132; wiring open |
+| Definition classification (§5, A4) | classifier done — 306/1,253, capped by binding slots; wiring open |
 
 `tests/test_metamath_import.py` imports `sqrt2re` from its verbatim `set.mm` proof
 and has Edifyce's kernel check the result:
@@ -599,15 +599,40 @@ and the engine decides whether it discharges anything:
   over `set.mm` it costs nothing, since both definitions carry the same `$d` as
   the theorem they cite.
 
-Verified against the corpus: both discharge on the real terms, and both inherit
-their theorem's `$d` restated over their own variables.
+Verified against the corpus: both obligations discharge on the real terms, and
+both inherit their theorem's `$d` restated over their own variables.
 
-Over `set.mm`: **1,429 definitions, 130 axioms**, and it agrees with the `df-`
-convention on 1,429 of 1,433. All four disagreements are the classifier's:
-`df-bi` defines `↔` and so cannot use it (its root is `-.`); and `df-clab`,
-`df-cleq`, `df-clel` have ordinary `e.`/`=` on the defined side — the axioms
-connecting class notation to set theory, not eliminable definitions. No assertion
-Metamath names `ax-` is classified as a definition.
+**The binding-slot wall.** Over `set.mm` the classifier returns **306
+definitions, 1,253 axioms** — and the single dominant refusal, **1,123 of them**,
+is *a defining form introducing a variable the defined form does not supply*.
+`df-tru` is the shape: `|- ( T. <-> ( A. x x = x -> A. x x = x ) )`, where `x` is
+quantified in the defining form and `T.` has no room for it.
+
+Every one of those is sound in Metamath and would be here, because the defining
+form *binds* the variable — which a `Definition` states with a `fresh` clause,
+and which is what makes the unfold capture-avoiding. But a `fresh` clause is
+inferred from `Production.scopes_over`, and a `.mm` file carries no trace of
+binding slots: nothing in `A. x ph` says the first slot binds in the second. The
+classifier cannot tell a bound `x` from one left free, and declaring it bound
+would be a guess in the unsafe direction, so it refuses.
+
+That refusal belongs to the classifier rather than the kernel for a reason worth
+keeping: the kernel refuses by *raising*, which aborts a whole import over one
+statement. The contract here is that doubt costs an axiom, not a build — and it is
+now checked, not assumed: 25 sampled definitions all register against a system
+built to their own position.
+
+`df-sb` and `df-mo` are among the 1,123, so the justification mechanism is
+implemented and verified but currently reaches nothing in `set.mm`. **Teaching the
+importer binding slots is therefore the highest-value next step in A4** — set.mm's
+`$j` annotations are the obvious source — and it lifts ~1,123 statements at once
+with no change to the classifier's tests.
+
+Of the 310 non-binding refusals: 119 root is not a declared equivalence (`df-bi`
+among them — it defines `↔` and so cannot use it, root `-.`), 9 defined side
+already in use (`df-clab`/`df-cleq`/`df-clel`, the axioms connecting class
+notation to set theory), 2 a bare metavariable. No assertion Metamath names `ax-`
+is classified as a definition.
 
 None of the three tests is load-bearing alone, and the set is not trusted to be
 complete. Test 1 admits an implication, since `( ph -> ps )` has a

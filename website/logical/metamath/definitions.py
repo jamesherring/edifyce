@@ -29,11 +29,11 @@ Nothing about the *label*. Two structural tests, in order, and then the kernel:
    `df-clel`, whose left sides are ordinary ``e.``/``=`` and which are genuinely
    axioms connecting class notation to set theory, whatever their names suggest.
 
-Then two refusals for what a `Definition` cannot faithfully carry: a defining form
+Then the refusals, for what a `Definition` cannot faithfully carry: a defining form
 built from the very form being defined (a recursive alias, not something
-eliminable), and a metavariable the proviso syntax cannot name. A `$d` *can* be
-carried, as the definition's condition, and must be: 1,033 of set.mm's
-definition-shaped statements have one.
+eliminable), a metavariable the proviso syntax cannot name, and the two below.
+A `$d` *can* be carried, as the definition's condition, and must be: 1,033 of
+set.mm's definition-shaped statements have one.
 
 A `$e` is carried too, as a `Justification`. A definition holds unconditionally,
 so a hypothesis has to be settled once and for all rather than per unfold - and
@@ -43,6 +43,28 @@ discharged by *citation*, and this module's part is only to find the citation -
 a proved statement token-identical to the hypothesis, ahead of it in the file.
 Whether it really discharges the obligation is settled structurally when the
 definition is registered (`declarative._discharge_justification`), not here.
+
+The binding-slot wall
+---------------------
+The largest refusal by far, and not a property of Metamath: **a defining form may
+not introduce a variable the defined form does not supply**. `df-tru` is
+``|- ( T. <-> ( A. x x = x -> A. x x = x ) )`` - `x` is quantified in the defining
+form and `T.` has no room for it - and *1,123 of set.mm's 1,433* `df-` statements
+are that shape.
+
+Each is sound in Metamath, and would be here: the defining form *binds* the
+variable, and a `Definition` says so with a `fresh` clause, which is what makes
+the unfold capture-avoiding. But a `fresh` clause is inferred from the grammar's
+binding slots (``Production.scopes_over``), and a `.mm` file carries no trace of
+them - nothing in ``A. x ph`` says the first slot binds in the second. So this
+module cannot tell a bound `x` from one left free, and declaring it bound would be
+a guess in the unsafe direction.
+
+It is refused *here* rather than left to the kernel because the kernel refuses it
+by raising, which aborts a whole import; the contract of this module is that doubt
+costs an axiom, not a build. What lifts it is the importer learning binding slots
+- set.mm's `$j` annotations are the obvious source - after which most of these
+become definitions with no change to the tests above.
 
 None of the shape tests is load-bearing alone, and the reason test 1 names its
 relation rather than describing it is that describing it failed twice. Matching on
@@ -56,12 +78,18 @@ declaring the relation the only defensible reading. Nor is the set of them trust
 to be complete.
 
 **The default on any doubt is axiom**, which costs a longer proof rather than an
-unsound one. What is *behind* that default is worth stating precisely, because it
-is less than it sounds: the kernel refuses a definition whose defining form
-introduces a leaf the defined form does not supply - the capture half of
-admissibility - and that is all. Non-circularity and conservativity are untreated
-there, as in Metamath (see AGENTS.md), so the circularity refusal above has
-nothing behind it and every other gap of that kind is this module's to close.
+unsound one - and that is a promise about *behaviour*, not only about the verdict:
+what this module returns, registration accepts. A definition handed back that the
+kernel then refuses would abort the import of a whole corpus over one statement,
+which is the opposite of falling back. So each refusal above that mirrors a kernel
+one is made here first.
+
+What is behind that default is less than it sounds: the kernel refuses a
+definition whose defining form introduces a leaf the defined form does not supply
+- the capture half of admissibility - and that is all. Non-circularity and
+conservativity are untreated there, as in Metamath (see AGENTS.md), so the
+circularity refusal above has nothing behind it and every other gap of that kind
+is this module's to close.
 
 `df-bi` shows why the tests have to be structural. It defines ``<->`` and so
 cannot use it: its statement is a nest of negated implications, root ``-.``, and
@@ -140,6 +168,27 @@ def _sides(term: Term) -> tuple[Node, Node] | None:
     return left, right
 
 
+def variables_used(term: Term, variables: set[str]) -> set[str]:
+    """Which of ``variables`` appear as leaves of ``term``.
+
+    A Metamath metavariable is a *ground* leaf here, not a
+    :class:`~website.logical.kernel.terms.Var`: the imported grammar declares one
+    atom production per declared variable (``importer._variable_productions``), so
+    `ph` in a parsed statement is a nullary node whose literal is its name. Which
+    of them is a metavariable is therefore the caller's to say, from the ``$f``
+    hypotheses, and not readable off the term.
+    """
+    found: set[str] = set()
+    stack = [term]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, Node):
+            if node.literal in variables:
+                found.add(node.literal)
+            stack.extend(node.children.values())
+    return found
+
+
 def _proved_statement(
     hypothesis: Hypothesis, before: int, database: Database
 ) -> str | None:
@@ -148,9 +197,17 @@ def _proved_statement(
     # states a justification theorem and the hypothesis citing it verbatim, and
     # anything looser would be this module guessing at what discharges what when
     # the engine settles that structurally at registration.
+    #
+    # A candidate under `$e` hypotheses of its own is skipped: it settles its
+    # statement only *given* something else, which is the obligation again one
+    # step back, and the engine refuses it for that reason. Skipping here keeps
+    # the module's contract - fall back to axiom, never hand back a definition
+    # registration is bound to reject.
     for label in database.order[:before]:
         candidate = database.assertions.get(label)
         if candidate is None or candidate.is_axiom or not candidate.is_logical:
+            continue
+        if candidate.essentials:
             continue
         if candidate.typecode == hypothesis.typecode and candidate.tokens == hypothesis.tokens:
             return label
@@ -266,6 +323,43 @@ def classify(
             reason="a metavariable cannot be named in a proviso",
         )
 
+    variables = {h.variable for h in assertion.floatings}
+    supplied = variables_used(higher, variables)
+
+    introduced = sorted(variables_used(lower, variables) - supplied)
+    if introduced:
+        # A variable the defining form uses and the defined form does not supply.
+        # The unfold would conjure it, and under a binder of the same name that
+        # silently rebinds it - the capture half of admissibility, which the
+        # kernel refuses (`kernel.definitions.unbound_parameters`).
+        #
+        # A defining form that *binds* it would be sound, and a `fresh` clause is
+        # how a definition says so - inferred from the grammar's binding slots
+        # (`Production.scopes_over`). A `.mm` file carries no trace of them, so
+        # nothing here can tell `A. y ( ... )` binding `y` from a `y` left free,
+        # and declaring it either way would be a guess in the unsafe direction.
+        # This is what holds `df-sb` and `df-mo` back (see the roadmap, A4), and
+        # it lifts the moment the importer can declare binding slots.
+        listed = ", ".join(repr(name) for name in introduced)
+        return Classified(
+            assertion.label,
+            reason=f"defining side introduces {listed}, which the defined side does not supply",
+        )
+
+    constrained = {v for group in assertion.distinct for v in group if v in variables}
+    orphaned = sorted(constrained - supplied)
+    if orphaned:
+        # A `$d` over a variable the defined form does not supply. Its proviso is
+        # checked against the match between the defined form and the term being
+        # unfolded, so there would be nothing to resolve it against; carrying it
+        # anyway makes every unfold raise, and dropping it silently widens what
+        # the definition admits. Neither is faithful, so this stays an axiom.
+        listed = ", ".join(repr(name) for name in orphaned)
+        return Classified(
+            assertion.label,
+            reason=f"a $d constrains {listed}, which the defined side does not supply",
+        )
+
     sort = statement.constructor.slot_sorts[statement.constructor.slots[0]]
     return Classified(
         assertion.label,
@@ -276,7 +370,8 @@ def classify(
             lower=lower.to_string(),
             bindings=[(h.variable, h.typecode) for h in assertion.floatings],
             # A `$d` restricts which substitutions the definition admits, so it
-            # has to travel with it: 1,033 of set.mm's definitions carry one, and
+            # has to travel with it: 1,033 of set.mm's definition-shaped
+            # statements carry one, and
             # dropping them would licence exactly the captures Metamath forbids.
             condition="; ".join(_distinct_provisos(assertion, database, system))
             or None,

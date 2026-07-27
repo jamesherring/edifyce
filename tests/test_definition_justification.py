@@ -23,19 +23,24 @@ from website.logical.declarative import (
     SystemSpec,
     build_system,
     register_definition,
+    registered_definition_layering,
 )
+from website.logical.kernel import unfold
 from website.logical.promotion import promote_from_source
 
 from tests.spec_helpers import (
+    assumption_line,
     axiom,
     biconditional_prod,
     brackets,
+    cp_rule,
     defn,
     equality_prod,
     hyp_rule,
     implication_prod,
     membership_prod,
     mp_rule,
+    reiteration_rule,
     rule,
     statement_line,
     universal_prod,
@@ -53,7 +58,11 @@ METAVARIABLES = [
 ]
 
 
-def subset_defn(justification: Justification | None, condition: str | None = None):
+def subset_defn(
+    justification: Justification | None,
+    condition: str | None = None,
+    label: str | None = None,
+):
     return defn(
         "formula",
         "subset",
@@ -62,6 +71,7 @@ def subset_defn(justification: Justification | None, condition: str | None = Non
         METAVARIABLES,
         condition=condition,
         fresh=[("z", "variable")],
+        label=label,
         justification=justification,
     )
 
@@ -185,6 +195,28 @@ def test_an_obligation_more_general_than_what_was_settled_is_refused():
     assert "not an instance of what" in str(excinfo.value)
 
 
+def test_a_discharge_rule_settles_nothing_and_cannot_be_cited():
+    # Conditional proof has no `antecedents` — it cites no lines — but it consumes
+    # a whole subproof, which is a premise by another name. Without refusing it,
+    # `CP` would settle every `(A → B)` there is.
+    spec = SystemSpec(
+        name="Sets",
+        brackets=brackets(),
+        productions=[
+            variable_prod(), membership_prod(), equality_prod(),
+            implication_prod(), biconditional_prod(), universal_prod(),
+        ],
+        lines=[statement_line(), assumption_line()],
+        axioms=[axiom("EXT", "extensionality", "∀x x = x")],
+        rules=[hyp_rule(), mp_rule(), cp_rule(), reiteration_rule()],
+        definitions=[subset_defn(Justification("CP", "(x ∈ y → x ∈ y)"))],
+    )
+    with pytest.raises(DeclarativeError) as excinfo:
+        build_system(spec)
+
+    assert "premises of its own" in str(excinfo.value)
+
+
 def test_a_rule_whose_provisos_are_not_yet_parsed_cannot_be_cited():
     # A rule's provisos are parsed after definitions resolve, so that one may use
     # defined notation. Inheriting them here would read an empty list and silently
@@ -239,7 +271,7 @@ def test_the_definition_inherits_the_provisos_of_the_theorem_it_cites():
     # under a `$d` hands that proviso to the definition, restated in the
     # definition's own metavariables. Stricter than Metamath, which re-proves the
     # hypothesis per use — and stricter is the safe direction.
-    system = _promote(_built_system(), distinct=["disjoint(z, y)"])
+    system = _promote(_built_system(), distinct=["disjoint(x, y, variable)"])
 
     register_definition(subset_defn(Justification("dummy-immaterial", OBLIGATION)), system)
 
@@ -248,8 +280,22 @@ def test_the_definition_inherits_the_provisos_of_the_theorem_it_cites():
     assert "DisjointLeaves" in repr(condition)
 
 
+def test_an_inherited_proviso_is_enforced_at_every_unfold():
+    # Present is not enough — it has to *decide* unfolds. `a ⊆ b` satisfies the
+    # inherited disjointness and unfolds; `a ⊆ a` does not, and is refused.
+    system = _promote(_built_system(), distinct=["disjoint(x, y, variable)"])
+    register_definition(subset_defn(Justification("dummy-immaterial", OBLIGATION)), system)
+    definition = system.definitions[0]
+
+    def redex(text: str):
+        return system.parse(f"{text} [HYP]").proof_lines[0].formula_term
+
+    assert unfold(definition, redex("a ⊆ b"), system.context) is not None
+    assert unfold(definition, redex("a ⊆ a"), system.context) is None
+
+
 def test_an_inherited_proviso_joins_the_definition_s_own():
-    system = _promote(_built_system(), distinct=["disjoint(z, y)"])
+    system = _promote(_built_system(), distinct=["disjoint(x, y, variable)"])
 
     register_definition(
         subset_defn(Justification("dummy-immaterial", OBLIGATION), condition="disjoint(x, y)"),
@@ -259,6 +305,58 @@ def test_an_inherited_proviso_joins_the_definition_s_own():
     assert repr(system.definitions[0].condition).count("DisjointLeaves") == 2
 
 
+def test_an_inherited_proviso_the_defined_form_cannot_supply_is_refused():
+    # `z` is the obligation's dummy: a metavariable of the definition, but not one
+    # its *defined* form `x ⊆ y` supplies. An unfold binds only what matching the
+    # defined form against the redex binds, so this proviso has nothing to resolve
+    # against — and `unfold` does not fail closed on that, it raises into the proof
+    # parse. Refused where the author can act on it instead.
+    system = _promote(_built_system(), distinct=["disjoint(z, y)"])
+
+    with pytest.raises(DeclarativeError) as excinfo:
+        register_definition(
+            subset_defn(Justification("dummy-immaterial", OBLIGATION)), system
+        )
+
+    assert "does not supply" in str(excinfo.value)
+    assert "'z'" in str(excinfo.value)
+
+
+def test_a_definition_s_own_proviso_is_held_to_the_same_rule():
+    # Not a justification-only rule: a hand-written `where` clause naming a
+    # non-parameter has always had the same defect, and is refused the same way.
+    with pytest.raises(DeclarativeError) as excinfo:
+        build_system(_spec([subset_defn(None, condition="disjoint(z, y)")]))
+
+    assert "does not supply" in str(excinfo.value)
+
+
+def test_registering_a_duplicate_definition_label_is_refused():
+    # `build_system` refuses a duplicate within its own spec because a cited name
+    # must resolve to one definition; a definition added later needs the same
+    # refusal against what the system already carries.
+    system = _built_system()
+    register_definition(subset_defn(None, label="sub"), system)
+
+    with pytest.raises(DeclarativeError) as excinfo:
+        register_definition(
+            defn("formula", "sub2", "x ⊂ y", "∀z (z ∈ x → z ∈ y)",
+                 METAVARIABLES, fresh=[("z", "variable")], label="sub"),
+            system,
+        )
+
+    assert "Duplicate definition label 'sub'" in str(excinfo.value)
+
+
+def test_registering_keeps_the_layering_list_positional():
+    system = _built_system()
+
+    register_definition(subset_defn(None), system)
+
+    assert system.definition_layering == [True]
+    assert len(system.definitions) == len(system.definition_layering)
+
+
 def test_registering_against_a_system_with_no_build_context_is_refused():
     from website.logical.formal_system import FormalSystem
 
@@ -266,3 +364,16 @@ def test_registering_against_a_system_with_no_build_context_is_refused():
         register_definition(subset_defn(None), FormalSystem("bare"))
 
     assert "no build context" in str(excinfo.value)
+
+
+def test_layering_is_reported_for_a_justified_definition():
+    # The reorder guard builds a spec reduced to grammar plus definitions, so a
+    # justification's citation is not there to resolve. Dropping the justification
+    # for that build is what keeps the answer about *layering* — otherwise every
+    # definition reads as dropped and the guard silently stops guarding.
+    spec = _spec(
+        [subset_defn(Justification("dummy-immaterial", OBLIGATION))], [_dummy_rule()]
+    )
+
+    assert build_system(spec).definition_layering == [True]
+    assert registered_definition_layering(spec) == [True]
