@@ -17,6 +17,15 @@ ordering guarantee, and a stale row is inert rather than believed. That is the
 opposite of ``proof_lines``, where the row *is* the record; here the template
 beside it is, and the term is only a saved derivation of it.
 
+**A missing term is a miss, never an answer.** A NULL term id is *not* read as
+"this template composes to nothing", even under a matching digest. It cannot be:
+the same NULL is what a deleted term leaves behind (the FKs are ``ON DELETE SET
+NULL``), and what a slot resolving to a declared grammar pattern rather than a
+composed one stores. Composing again settles all three correctly, and it is what
+the build did before this module existed — so the only thing the distinction
+would buy is skipping a compose, at the price of an absence being read as assent.
+That trade is exactly the one P2 got wrong twice.
+
 See docs/verification-from-rows.md, P3.
 """
 
@@ -27,9 +36,9 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
-from app.db.systems import RuleAntecedentRow, RuleRow
+from app.db.systems import RuleRow
 from app.db.terms_mapping import load_term, prefetch_terms, store_term
-from website.logical.build_context import CachedSchema, SchemaSlot
+from website.logical.build_context import SchemaSlot
 from website.logical.declarative import schema_digests
 from website.logical.matching import StringPattern
 
@@ -82,7 +91,7 @@ class SchemaTermCache:
     def __init__(
         self,
         digests: list[str],
-        rows: dict[SchemaSlot, TermRow | None],
+        rows: dict[SchemaSlot, TermRow],
         graph: list[TermRow],
     ) -> None:
         self.digests = digests
@@ -101,18 +110,11 @@ class SchemaTermCache:
     def __len__(self) -> int:
         return len(self._rows)
 
-    def __call__(
-        self, slot: SchemaSlot, context: FormalSystemContext
-    ) -> CachedSchema | None:
-        if slot not in self._rows:
-            return None
-        row = self._rows[slot]
+    def __call__(self, slot: SchemaSlot, context: FormalSystemContext) -> Term | None:
+        row = self._rows.get(slot)
         if row is None:
-            # Stored, and composes to nothing — a hit. Those are the templates
-            # nothing parses, so composing them again is the most expensive miss
-            # there is (every candidate sort tried, all failing).
-            return CachedSchema(None)
-        return CachedSchema(load_term(row, context, self._memo))
+            return None
+        return load_term(row, context, self._memo)
 
 
 def load_schema_terms(
@@ -134,20 +136,26 @@ def load_schema_terms(
     if not fresh:
         return SchemaTermCache(digests, {}, [])
 
-    ids: dict[SchemaSlot, uuid.UUID | None] = {}
+    ids: dict[SchemaSlot, uuid.UUID] = {}
     for index, rule in fresh:
         for slot, term_id in _rule_term_ids(rule).items():
-            ids[SchemaSlot(index, slot)] = term_id
-        for antecedent in rule.antecedents:
-            ids[SchemaSlot(index, "antecedent", antecedent.position)] = antecedent.term_id
+            if term_id is not None:
+                ids[SchemaSlot(index, slot)] = term_id
+        # Keyed by position *in order*, not by the `position` column: the build
+        # enumerates the spec's antecedent list, and `system_to_spec` builds that
+        # by reading these rows in position order. The two agree on the ordinal
+        # even if the stored positions are not 0, 1, 2 ….
+        for ordinal, antecedent in enumerate(rule.antecedents):
+            if antecedent.term_id is not None:
+                ids[SchemaSlot(index, "antecedent", ordinal)] = antecedent.term_id
 
     # One sweep for the whole system's schema graph. The build happens outside
     # the session, so every row it will touch has to be in memory by the time
     # this returns — and has to stay there (see SchemaTermCache).
-    graph = prefetch_terms(session, [i for i in ids.values() if i is not None])
+    graph = prefetch_terms(session, list(ids.values()))
     by_id = {row.id: row for row in graph}
     return SchemaTermCache(
-        digests, {slot: None if i is None else by_id[i] for slot, i in ids.items()}, graph
+        digests, {slot: by_id[i] for slot, i in ids.items() if i in by_id}, graph
     )
 
 
@@ -168,18 +176,22 @@ def store_schema_terms(
     """
     digests = cache.digests
     rules = list(system.rules)
-    engine_rules = list(built.inference_rules)
-    if not (len(rules) == len(engine_rules) == len(digests)):
-        # Only reachable if the three drifted apart, which would silently attach
-        # one rule's terms to another. Refuse rather than write a plausible lie.
-        raise ValueError(
-            f"Cannot store schema terms: {len(rules)} rule rows, "
-            f"{len(engine_rules)} built rules, {len(digests)} digests."
-        )
+    # `add_inference_rule` *replaces* a rule of the same label, so a system with
+    # two rules sharing one builds to fewer than it has rows, and matching them
+    # up by position would attach one rule's terms to another. Only the last row
+    # of each label survives into `built`; a shadowed one had its templates
+    # composed and then discarded, so there is nothing of its own to store. It
+    # keeps no digest and composes on every build, exactly as it did before this
+    # module existed. (A duplicate label is a system defect either way, and one
+    # the API does not currently refuse.)
+    surviving = {row.label: index for index, row in enumerate(rules)}
 
     written = 0
-    for row, engine_rule, digest in zip(rules, engine_rules, digests):
-        if row.schema_digest == digest:
+    for index, (row, digest) in enumerate(zip(rules, digests)):
+        if row.schema_digest == digest or surviving[row.label] != index:
+            continue
+        engine_rule = built.rule_by_label(row.label)
+        if engine_rule is None:
             continue
         _store_rule(session, system, row, engine_rule)
         row.schema_digest = digest
@@ -201,14 +213,12 @@ def _store_rule(
         row, {slot: _term_id(session, system, patterns[slot]) for slot in _RULE_SLOTS}
     )
 
-    by_position: dict[int, RuleAntecedentRow] = {a.position: a for a in row.antecedents}
-    for position, pattern in enumerate(rule.antecedents):
-        antecedent = by_position.get(position)
-        # A build takes its antecedents from the rows in position order, so a gap
-        # here means the rows changed under us; leave the row alone rather than
-        # guess which template the term belongs to.
-        if antecedent is not None:
-            antecedent.term_id = _term_id(session, system, pattern)
+    # Paired in order, matching how `system_to_spec` reads them and how the build
+    # then enumerates them — not by the `position` column, which need not run
+    # 0, 1, 2 …. `zip` is exact here: the built rule's antecedents *are* these
+    # rows, one schema each.
+    for antecedent, pattern in zip(row.antecedents, rule.antecedents):
+        antecedent.term_id = _term_id(session, system, pattern)
 
 
 def _term_id(

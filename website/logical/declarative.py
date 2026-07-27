@@ -39,7 +39,6 @@ from dataclasses import InitVar, dataclass, field
 from typing import TYPE_CHECKING
 
 from .build_context import (
-    CachedSchema,
     FormalSystemContext,
     SchemaSlot,
     build_schema_pattern,
@@ -58,6 +57,7 @@ from .matching import AtomPattern, Pattern, RegexPattern, StringPattern, UnionPa
 if TYPE_CHECKING:
     from .build_context import SchemaTermSource
     from .kernel.constructors import Constructor
+    from .kernel.terms import Term
 
 
 class DeclarativeError(Exception):
@@ -887,7 +887,7 @@ def _build_rule(
     rule_ctx = copy(ctx)
     rule_ctx.string_variables = dict(string_variables)
 
-    def stored(slot: str, ordinal: int = 0) -> CachedSchema | None:
+    def stored(slot: str, ordinal: int = 0) -> Term | None:
         if schema_terms is None:
             return None
         return schema_terms(SchemaSlot(index, slot, ordinal), rule_ctx)
@@ -919,7 +919,7 @@ def _build_rule(
 def _build_subproof(
     rule: Rule,
     rule_ctx: FormalSystemContext,
-    stored: Callable[[str], CachedSchema | None],
+    stored: Callable[[str], Term | None],
 ) -> SubproofSchema | None:
     # A discharge rule consumes a subproof opened by exactly one of a hypothesis
     # (`assume`) or a fresh variable (`fresh`); its final line must match

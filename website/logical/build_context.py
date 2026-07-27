@@ -101,25 +101,14 @@ class SchemaSlot:
     ordinal: int = 0
 
 
-@dataclass(frozen=True)
-class CachedSchema:
-    """A schema term recovered from storage instead of composed.
-
-    Wrapped rather than passed bare so that ``term=None`` — a template that was
-    composed before and yielded nothing — stays a *hit*. Those are the expensive
-    misses (nothing parses the template, so every candidate sort was tried), and
-    reading `None` as "not cached" would make them the one case the cache never
-    helps.
-    """
-
-    term: Term | None
-
-
 # Supplies the stored term for a schema slot, given the build context its
-# constructors resolve in. Returns None for a slot with nothing stored, or when
-# what is stored no longer matches the system - in either case the template is
-# composed as it always was, so a miss costs time and never correctness.
-SchemaTermSource = Callable[[SchemaSlot, "FormalSystemContext"], "CachedSchema | None"]
+# constructors resolve in. `None` always means "compose it" - nothing stored,
+# stored but no longer matching the system, or stored as the absence of a term.
+# The three are deliberately not distinguished: composing is what the build did
+# before any of this existed, so treating them alike costs time on the rare
+# template that composes to nothing and can never cost correctness. Reading an
+# absence as an answer is the shape of the two bugs P2 shipped with.
+SchemaTermSource = Callable[[SchemaSlot, "FormalSystemContext"], "Term | None"]
 
 
 def build_schema_pattern(
@@ -127,7 +116,7 @@ def build_schema_pattern(
     context: FormalSystemContext,
     name: str,
     prefer: Sequence[Pattern] = (),
-    cached: CachedSchema | None = None,
+    cached: Term | None = None,
 ) -> Pattern:
     # Build a rule-schema pattern from a source token. A bare constant atom
     # (e.g. a falsum `⊥`) resolves to its *declared* AtomPattern, so the rule's
@@ -174,8 +163,7 @@ def build_schema_pattern(
     # grammar and the template are the same. Deciding *whether* it is the same is
     # the caller's (see declarative.schema_digests).
     pattern.schema_term = (
-        cached.term if cached is not None
-        else compose_schema_term(pattern, context, prefer)
+        cached if cached is not None else compose_schema_term(pattern, context, prefer)
     )
     return pattern
 

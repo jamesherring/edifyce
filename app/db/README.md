@@ -71,7 +71,10 @@ Modernised from the original Django app (`website/models.py` on `main`):
   bindings, and a row whose digest no longer matches is simply not read — so a
   part edit needs no invalidation sweep, and a stale row is inert rather than
   believed. The FKs into `terms` are `ON DELETE SET NULL` for the same reason:
-  losing a term must cost a re-compose, never a rule.
+  losing a term must cost a re-compose, never a rule. And a NULL term id is a
+  *miss* even under a matching digest — never "this template composes to
+  nothing" — because the same NULL is what a deleted term, and a slot that
+  resolved to a declared pattern instead of a composed one, both leave behind.
 - **`side_conditions`** — a definition's proviso (`where` clause) stored as the
   kernel's closed side-condition algebra (`side_conditions.py`) rather than an
   opaque string: one row per algebra node (`occurs`/`equal`/`disjoint`/`atom`/

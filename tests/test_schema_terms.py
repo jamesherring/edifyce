@@ -61,6 +61,7 @@ from app.db.terms_mapping import digest_term
 from tests.database import enable_foreign_keys
 from tests.miu_system import miu_spec
 from tests.zfc_systems import scoped_zfc_spec
+from website.logical.build_context import SchemaSlot
 from website.logical.declarative import build_spec, schema_digests
 from website.logical.matching import StringPattern
 
@@ -133,14 +134,15 @@ def hilbert_spec() -> SystemSpec:
     )
 
 
-# One entry per system the round trip is exercised against. MIU is here because
-# its rules are string-matching: they carry schemas like every other rule and are
-# stored the same way, but nothing ever unifies against the terms — so it is the
-# case where the cache must be *harmless* rather than useful.
+# One entry per system the round trip is exercised against, with how many slots
+# it has worth caching. MIU is here at **zero**: its rules are string-rewriting
+# over a single regex sort, so no template composes to anything and the cache is
+# empty. That is the case where the phase must be *harmless* rather than useful,
+# and asserting the zero is what says the other two aren't accidentally there.
 _SYSTEMS = {
-    "zfc": scoped_zfc_spec,
-    "hilbert": hilbert_spec,
-    "miu": miu_spec,
+    "zfc": (scoped_zfc_spec, 3),
+    "hilbert": (hilbert_spec, 4),
+    "miu": (miu_spec, 0),
 }
 
 
@@ -215,13 +217,14 @@ def _rebuild(engine: Engine) -> tuple[EngineSystem, int]:
 
 @pytest.mark.parametrize("name", list(_SYSTEMS))
 def test_a_cached_build_composes_the_same_terms(engine: Engine, name: str) -> None:
-    spec = _SYSTEMS[name]()
+    factory, cacheable = _SYSTEMS[name]
+    spec = factory()
     cold = build_spec(spec)["system"]
 
     _store(engine, spec)
     warm, served = _rebuild(engine)
 
-    assert served > 0, "nothing was stored, so the comparison proves nothing"
+    assert served == cacheable, "the cache served a different number of slots than stated"
     assert _schemas(warm) == _schemas(cold)
 
 
@@ -241,7 +244,7 @@ def test_a_cached_build_composes_the_same_terms(engine: Engine, name: str) -> No
 def test_a_cached_build_checks_proofs_the_same(
     engine: Engine, name: str, source: str, valid: bool
 ) -> None:
-    spec = _SYSTEMS[name]()
+    spec = _SYSTEMS[name][0]()
     _store(engine, spec)
     warm, _served = _rebuild(engine)
 
@@ -388,13 +391,15 @@ def test_storing_is_idempotent(engine: Engine) -> None:
         assert store_schema_terms(session, row, built, cache) == 0
 
 
-def test_a_rule_whose_template_composes_to_nothing_is_a_hit(engine: Engine) -> None:
-    """The expensive miss stays a hit.
+def test_a_slot_with_no_stored_term_is_a_miss_not_an_answer(engine: Engine) -> None:
+    """A NULL term id must never be read as "this composes to nothing".
 
-    A template nothing parses costs a failed parse at *every* sort, and composes
-    to None. Stored as a NULL term id, that is indistinguishable from "never
-    composed" — which is exactly why the digest, not the id, is what says whether
-    a slot is answered.
+    It cannot be, because the same NULL means three different things: the
+    template genuinely composes to nothing, the slot resolved to a declared
+    grammar pattern instead of a composed one, or the term row was deleted and
+    the FK set it null. Composing again settles all three; reading the absence as
+    an answer settles the last two wrongly, and silently — a rule reduced to its
+    flat projection stops matching the proofs it used to.
     """
     spec = hilbert_spec()
     spec.rules[0].deduction = "q"  # a bare metavariable: no structure to compose
@@ -404,11 +409,105 @@ def test_a_rule_whose_template_composes_to_nothing_is_a_hit(engine: Engine) -> N
         row = session.scalars(select(FormalSystem)).one()
         loaded = load_schema_terms(session, row, system_to_spec(row))
 
-    from website.logical.build_context import SchemaSlot
+    assert loaded(SchemaSlot(0, "deduction"), None) is None
 
-    answered = loaded(SchemaSlot(0, "deduction"), None)
-    assert answered is not None, "a stored slot with no term must still answer"
-    assert answered.term is None
+
+def test_a_deleted_term_costs_a_re_compose_and_not_a_rule(engine: Engine) -> None:
+    """What the ``ON DELETE SET NULL`` on the schema-term FKs actually promises.
+
+    Deleting a term nulls the reference and leaves the digest matching. The rule
+    must come back exactly as a cold build would have it — not as the flat
+    projection a believed NULL would leave, which unifies against nothing the
+    nested schema used to match.
+    """
+    spec = hilbert_spec()
+    _store(engine, spec)
+    cold = _schemas(build_spec(spec)["system"])
+
+    with Session(engine) as session:
+        row = session.scalars(select(FormalSystem)).one()
+        rule = next(r for r in row.rules if r.deduction_term_id is not None)
+        # Exactly what `ON DELETE SET NULL` leaves behind, without disturbing the
+        # rest of the graph: the reference goes, the digest stays.
+        session.execute(
+            update(RuleRow).where(RuleRow.id == rule.id).values(deduction_term_id=None)
+        )
+        session.commit()
+
+        row = session.scalars(select(FormalSystem)).one()
+        index = row.rules.index(rule)
+        assert rule.schema_digest is not None, "the digest must survive the deletion"
+        spec_now = system_to_spec(row)
+        cache = load_schema_terms(session, row, spec_now)
+        # The slot is genuinely unanswered — otherwise the comparison below would
+        # pass on a cache that never lost anything.
+        assert cache(SchemaSlot(index, "deduction"), None) is None
+        warm = build_spec(spec_now, schema_terms=cache)["system"]
+
+    assert _schemas(warm) == cold
+    assert dict(cold[index][1])["deduction"] is not None, (
+        "the erased slot composes to nothing, so nothing was recovered"
+    )
+
+
+def test_two_rules_sharing_a_label_do_not_cross_wire_their_terms(
+    engine: Engine,
+) -> None:
+    """`add_inference_rule` replaces a rule of the same label, so a system with a
+    duplicate builds to fewer rules than it has rows. Pairing rows to built rules
+    by position would then attach one rule's terms to another's row — and the
+    row that survives is the *later* one, so the mix-up is silent.
+
+    A duplicate label is a defect in the system, but the API does not refuse one,
+    and it verified fine before any of this existed. It must still.
+    """
+    spec = hilbert_spec()
+    spec.rules[2].label = "MP"  # HS now shadows MP
+    cold = build_spec(spec)["system"]
+    assert len(cold.inference_rules) < len(spec.rules), "the fixture must shadow"
+
+    _store(engine, spec)
+    with Session(engine) as session:
+        row = session.scalars(select(FormalSystem)).one()
+        spec_now = system_to_spec(row)
+        warm = build_spec(
+            spec_now, schema_terms=load_schema_terms(session, row, spec_now)
+        )["system"]
+        # The shadowed row keeps no digest: its rule object was composed and then
+        # discarded, so there is nothing of its own to store.
+        assert [r.schema_digest is None for r in row.rules] == [False, True, False]
+
+    assert _schemas(warm) == _schemas(cold)
+
+
+def test_antecedent_terms_follow_reading_order_not_the_position_column(
+    engine: Engine,
+) -> None:
+    """A rule's antecedents are read back in ``position`` order and then
+    *enumerated*, so the ordinal a build asks for is an index into that order and
+    not the column's value. A system whose positions are not 0, 1, 2 … would
+    otherwise store under one key and read under another — a permanent miss, or
+    worse, a hit on the neighbouring slot.
+    """
+    spec = hilbert_spec()
+    _store(engine, spec)
+
+    with Session(engine) as session:
+        # Spread the positions without changing their order.
+        for rule in session.scalars(select(RuleRow)):
+            for offset, antecedent in enumerate(rule.antecedents):
+                antecedent.position = offset * 7 + 3
+        session.commit()
+
+        row = session.scalars(select(FormalSystem)).one()
+        spec_now = system_to_spec(row)
+        warm = build_spec(
+            spec_now, schema_terms=load_schema_terms(session, row, spec_now)
+        )["system"]
+        served = len(load_schema_terms(session, row, spec_now))
+
+    assert served > 0, "the spread positions served nothing, so nothing was tested"
+    assert _schemas(warm) == _schemas(build_spec(spec)["system"])
 
 
 def test_a_system_with_stored_schema_terms_can_still_be_deleted(engine: Engine) -> None:
@@ -466,8 +565,6 @@ def test_a_stored_term_that_no_longer_resolves_is_not_silently_believed(
         built = build_spec(spec_now)["system"]
         context = copy(built.context)
         context.variables.update(built.build_context.variables)
-
-        from website.logical.build_context import SchemaSlot
 
         with pytest.raises(LookupError):
             source(SchemaSlot(index, "deduction"), context)

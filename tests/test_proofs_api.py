@@ -21,6 +21,7 @@ pytest.importorskip("regex")
 
 from fastapi.testclient import TestClient
 from sqlalchemy import NullPool, create_engine, event, select, text
+from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
@@ -1397,6 +1398,34 @@ def test_verify_stores_every_line_with_its_kernel_term(client, db):
     ]
     # And lines 1 and 3 are the *same* statement, so they share one interned row.
     assert lines[0]["term"]["id"] == lines[2]["term"]["id"]
+
+
+def test_an_anonymous_verify_of_a_published_proof_writes_nothing(client, db):
+    # A non-owner's transaction is never committed: the verdict comes back and
+    # the stored state does not move. Verify now writes the schema-term cache as
+    # well as the verdict, so this pins the contract over that too — cleared
+    # first, so a write that reached the database would be visible rather than
+    # merely redundant. (Verify also *skips* that write for a non-owner; that is
+    # an efficiency guard on work the rollback would discard, so it leaves no
+    # trace either way and this cannot distinguish it.)
+    owner = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, owner, published=True)
+    pid = _create_proof(client, sid, "Public", source=VALID_PROOF)
+    assert client.patch(f"/api/proofs/{pid}", json={"published": True}).status_code == 200
+
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            session.execute(sa_update(RuleRow).values(schema_digest=None))
+            session.commit()
+
+        _logout(client)
+        assert client.post(f"/api/proofs/{pid}/verify").json()["success"] is True
+
+        with Session(engine) as session:
+            assert session.scalars(select(RuleRow.schema_digest)).all() == [None, None]
+    finally:
+        engine.dispose()
 
 
 def test_stored_terms_are_interned_per_system_not_per_line(client, db):

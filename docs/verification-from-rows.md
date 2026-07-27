@@ -396,8 +396,12 @@ Two details the digest gets right by being computed on the right thing:
   have thrown away every term for no reason.
 - It omits the system's name, lines and axioms, which do enter the build
   namespace. A template spelled like one of those resolves to the declared
-  pattern and composes nothing at all, so no stored term is ever consulted for
-  it.
+  pattern and composes nothing at all, so it stores a NULL — and a NULL is a
+  miss, so the slot re-composes whether or not the name is still there. The
+  digest does not have to reach the non-production namespace because nothing
+  that namespace decides is ever *served*.
+- It omits a rule's **label**, which affects nothing composition reads. A pure
+  rename therefore keeps the terms, which is right.
 
 **One trap, and it is P1's trap again.** `prefetch_terms` loads the schema graph
 in one sweep, but the build runs *outside* the session — so a descendant row that
@@ -435,15 +439,36 @@ parses a rule schema, not that it is quicker at every size.
 it does so under the system lock alongside everything else it writes (§3.1). The
 other places that build a system — the compile preview, the publish gate — read
 nothing and write nothing here: they take no lock, and a system is warmed by its
-first verify anyway.
+first verify anyway. It is also skipped when the caller's transaction will be
+rolled back (an anonymous viewer verifying a published proof), so the public path
+does not pay for inserts that are about to be discarded.
+
+**Rows pair with built rules by label, not by position.**
+`FormalSystem.add_inference_rule` *replaces* a rule of the same label, so a system
+with a duplicate builds to fewer rules than it has rows and index alignment
+attaches one rule's terms to another. The shadowed row's schemas were composed and
+then discarded, so it keeps no digest and composes on every build — the behaviour
+it had before this phase. A duplicate rule label is a system defect that nothing
+currently refuses; that is worth fixing, but not here, and not by way of a 500 on
+verify.
 
 **Storage.** `rules.schema_digest` plus `rules.deduction_term_id`,
 `subproof_derive_term_id`, `subproof_assume_term_id`, `subproof_fresh_term_id`,
 and `rule_antecedents.term_id` — each a nullable FK to `terms`, `ON DELETE SET
-NULL` so losing a term costs a re-compose and never a rule. A NULL term id under
-a *matching* digest means "composes to nothing", which is a hit rather than a
-miss: those are the templates nothing parses, and re-composing one is the most
-expensive miss there is.
+NULL` so losing a term costs a re-compose and never a rule.
+
+**A NULL term id is a miss, even under a matching digest**, and the type the
+build sees has no way to say otherwise. The first cut let a NULL mean "this
+template composes to nothing" — a *hit*, on the reasoning that those are the
+templates nothing parses and re-composing one is the most expensive miss there
+is. That was wrong three ways over: the same NULL is what `ON DELETE SET NULL`
+leaves behind, and what a slot resolving to a declared grammar pattern rather
+than a composed one stores, and what a stale-but-digest-matching row holds after
+a line or axiom leaves the build namespace. Believing it would have degraded a
+rule to its flat projection, which unifies against nothing its nested schema used
+to match — a proof that verified yesterday failing today, silently. Composing
+again settles all three cases, costs a parse on the one template that genuinely
+composes to nothing, and is what the build did before this existed.
 
 **Not in this phase.** Definitions. The design sketch listed
 `definitions.higher_term_id` / `lower_term_id` alongside the rules, but a
