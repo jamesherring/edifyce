@@ -63,6 +63,7 @@ if TYPE_CHECKING:
     from .kernel import SideCondition
     from .kernel.constructors import Constructor
     from .kernel.definitions import Definition as KernelDefinition
+    from .matching.definitions import DefinedNotation
 
 
 class DeclarativeError(Exception):
@@ -1122,7 +1123,40 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
         return False
 
     notation = union.add_notation(defn.higher, context_copy)
+    # Whether the notation was already in scope, so a failure below knows whether
+    # removing it is undoing *this* registration or confiscating an earlier
+    # definition's grammar — two definitions may share one defined form, and
+    # `add_notation` hands back the production the first one registered.
+    shared_with_an_earlier_definition = notation in system.context.definitions
     system.context.definitions.add(notation)
+
+    try:
+        return _register_notated_definition(
+            defn, union, notation, kernel_condition, fresh_patterns, system
+        )
+    except DeclarativeError:
+        # Every refusal past this point is a *late* one: the notation is already
+        # in scope, so the defined form parses as defined notation while no kernel
+        # definition backs it. Harmless when a whole build is being discarded, but
+        # `register_definition` mutates a live system, and a caller that catches
+        # this to keep the assertion as an axiom (which is what a corpus import
+        # does) would be left with the grammar half-extended.
+        if not shared_with_an_earlier_definition:
+            system.context.definitions.discard(notation)
+        raise
+
+
+def _register_notated_definition(
+    defn: Definition,
+    union: Pattern,
+    notation: DefinedNotation,
+    kernel_condition: SideCondition | None,
+    fresh_patterns: dict[str, Pattern],
+    system: FormalSystem,
+) -> bool:
+    # The half of `_finalise_definition` that runs with the defined form's notation
+    # already in scope — which is what makes that form grammatical, and so what
+    # every check below needs. Split out so a refusal here can withdraw it again.
 
     # Whether the sort actually parses the defined form through *this* notation.
     # A sort tries its own productions before its notations, so a form the grammar
@@ -1143,8 +1177,8 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
     # it projects this template to a constructor and a constructor snapshots the
     # declaration. Safe in both directions: the definition's own leaf is always
     # among its defined form's, so `introduced_leaves` never puts it to the
-    # constants check during this build, and a build that goes on to fail discards
-    # the notation with the rest of the half-built system.
+    # constants check during this build, and a definition that goes on to fail
+    # withdraws the notation this is written on (see the caller).
     notation.template.denotes_constant = denotes_a_constant(notation, parses_to_its_own_leaf)
 
     # Build the kernel counterpart now, against the context the notation has just

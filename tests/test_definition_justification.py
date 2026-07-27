@@ -322,6 +322,43 @@ def test_an_inherited_proviso_the_defined_form_cannot_supply_is_refused():
     assert "'z'" in str(excinfo.value)
 
 
+def test_a_late_refusal_withdraws_the_notation_it_registered():
+    # A refusal past `add_notation` leaves the defined form parsing as defined
+    # notation with no kernel definition behind it. On a whole build that is
+    # discarded with everything else, but `register_definition` mutates a *live*
+    # system — and a corpus import catches this exact error to keep the assertion
+    # as an axiom, so it must find the grammar as it left it.
+    system = _promote(_built_system(), distinct=["disjoint(z, y)"])
+    before = set(system.context.definitions)
+
+    with pytest.raises(DeclarativeError):
+        register_definition(
+            subset_defn(Justification("dummy-immaterial", OBLIGATION)), system
+        )
+
+    assert set(system.context.definitions) == before
+    assert system.definitions == []
+    # And the form is no longer readable as the notation the refusal registered.
+    assert system.parse("a ⊆ b [HYP]").proof_lines[0].formula_term is None
+
+
+def test_a_late_refusal_leaves_an_earlier_definition_s_notation_alone():
+    # Two definitions may share one defined form, and `add_notation` hands the
+    # second the production the first registered. Withdrawing it on the second's
+    # refusal would confiscate the first one's grammar.
+    system = _promote(_built_system(), distinct=["disjoint(z, y)"])
+    register_definition(subset_defn(None), system)
+    before = set(system.context.definitions)
+
+    with pytest.raises(DeclarativeError):
+        register_definition(
+            subset_defn(Justification("dummy-immaterial", OBLIGATION)), system
+        )
+
+    assert set(system.context.definitions) == before
+    assert system.parse("a ⊆ b [HYP]").proof_lines[0].formula_term is not None
+
+
 def test_a_definition_s_own_proviso_is_held_to_the_same_rule():
     # Not a justification-only rule: a hand-written `where` clause naming a
     # non-parameter has always had the same defect, and is refused the same way.
