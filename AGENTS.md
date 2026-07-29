@@ -105,9 +105,13 @@ Two follow-ups this leaves open:
   symbol to something else is an axiom rather than a definition. Declaring the
   defined form as a *production* is deliberately not disqualifying — that is how
   `⊆` becomes grammatical before `df-subset` gives it meaning; what is refused is
-  defining a symbol the theory already reasons about. Both checks read the grammar
-  as it stands before the definition extends it, and both run on the late path too
-  (`register_definition`, which a corpus import takes). Pinned in
+  defining a symbol the theory already reasons about. It runs *after* the defined
+  form's notation is registered, because the sharpest case is a rule stated over a
+  form **no production spells**: that schema parses against no sort, is stored as
+  flat text, and looks like a rule about nothing until the definition makes its
+  conclusion grammatical and rewritable. Both checks run on the late path too
+  (`register_definition`, which a corpus import takes), where the rules are read
+  again so one added after the build still counts. Pinned in
   `tests/test_conservativity.py`.
 
 The bespoke `.edi` source language and its compiler are **gone**. A system is a

@@ -12,7 +12,10 @@ differently:
   spell, which is why it needs a check as well
   (``declarative._require_a_non_circular_definition``) — see the section below.
 * **freshness** — the defined symbol must be one the system does not already
-  reason about. This is checked (``declarative._require_a_fresh_defined_form``).
+  reason about. This is checked (``declarative._require_a_fresh_defined_form``),
+  and "already" reaches further than it looks: a rule may be stated over a form no
+  production spells, which parses against no sort and sits inert as flat text
+  until a definition supplies the grammar for it.
 
 The distinction that makes freshness subtle: *declaring the defined form as a
 production is not what disqualifies it*. Declaring ``subset`` and then defining
@@ -31,6 +34,7 @@ from website.logical.declarative import Definition as Definition_
 from website.logical.declarative import (
     DeclarativeError,
     SystemSpec,
+    _build_rule,
     build_spec,
     build_system,
     register_definition,
@@ -281,3 +285,90 @@ def test_a_definition_registered_after_the_build_is_held_to_the_same_rule() -> N
         Definition_(sort="formula", name="late-ok", higher="S", lower="⊥", bindings=[]),
         system,
     )
+
+
+# ---------------------------------------------------------------------------
+# Freshness — a statement the grammar cannot yet read
+# ---------------------------------------------------------------------------
+
+
+def test_a_rule_over_a_form_no_production_spells_is_still_reasoned_over() -> None:
+    # The sharpest freshness case, and the one an inventory of constructors
+    # cannot see on its own: `⊑` has no production, so `SQ`'s conclusion parses
+    # against no sort and is stored as a flat text pattern — a rule that looks,
+    # at build time, to be about nothing. The definition then makes exactly that
+    # form grammatical, and the rule becomes a rule about `⊥`.
+    result = build_spec(spec(
+        [defines("(x ⊑ y)", "⊥", name="bogus")],
+        rules=[rule("SQ", "sqsubset rule", [], "(x ⊑ y)",
+                    [("x", "setvar"), ("y", "setvar")])],
+    ))
+
+    assert "errors" in result
+    (message,) = result["errors"]
+    assert "already stated over that form" in message
+
+
+def test_the_unreadable_statement_case_was_not_inert() -> None:
+    # What that refusal is worth. Built here with `⊑` declared as a production and
+    # no rule over it — the admissible version of the same definition — to show
+    # the step it licences: `(a ⊑ b)` rewrites to `⊥`. In the refused system the
+    # definition supplies that grammar itself, so the rule's own conclusion
+    # becomes writable, and those two lines are a proof of ⊥.
+    system = build_system(spec(
+        [defines("(x ⊑ y)", "⊥", name="bogus")],
+        productions=[SQSUBSET],
+    ))
+    context = copy(system.context)
+    context.variables.update(system.build_context.variables)
+    formula = system.build_context.variables["formula"]
+    (definition,) = system.definitions
+
+    def term(text: str):
+        matched = formula.match(text, context)
+        assert matched is not None, text
+        return from_match(matched)
+
+    assert check_definitional_step(term("(a ⊑ b)"), term("⊥"), definition, context)
+
+
+def test_an_axiom_over_a_form_no_production_spells_is_refused() -> None:
+    # The same hole through an axiom, whose schema is a line type rather than a
+    # rule — so it is reached by re-reading the text, not by any term a pattern
+    # carries.
+    result = build_spec(spec(
+        [Definition_(sort="formula", name="b", higher="S", lower="⊥", bindings=[])],
+        axioms=[axiom("A", "a", "(S → S)")],
+    ))
+
+    assert "errors" in result
+    (message,) = result["errors"]
+    assert "already stated over that form" in message
+
+
+def test_an_unreadable_statement_does_not_condemn_an_unrelated_definition() -> None:
+    # The re-read is targeted: `SQ` mentions `⊑`, the definition introduces `S`,
+    # and a statement the grammar cannot read is not by itself a reason to refuse
+    # every definition that follows it.
+    written = spec(
+        [Definition_(sort="formula", name="b", higher="S", lower="⊥", bindings=[])],
+        rules=[rule("SQ", "sqsubset rule", [], "(x ⊑ y)",
+                    [("x", "setvar"), ("y", "setvar")])],
+    )
+
+    assert "errors" not in build_spec(written)
+
+
+def test_a_rule_added_after_the_build_counts_as_reasoning_over_its_symbols() -> None:
+    # `register_definition` is the one path on which the system can have gained a
+    # primitive since the build, so it is the one path that has to look. The spec
+    # this system was built from has no rule over `∈` at all.
+    system = build_system(spec([]))
+    system.add_inference_rule(_build_rule(
+        rule("MEM", "membership rule", [], "(x ∈ y)",
+             [("x", "setvar"), ("y", "setvar")]),
+        system.build_context, 0, None,
+    ))
+
+    with pytest.raises(DeclarativeError, match="already stated over that form"):
+        register_definition(defines("(x ∈ y)", "⊥", name="late"), system)

@@ -861,32 +861,28 @@ def build_system(
     # silently letting `[<name>, <line>]` pick one.
     seen_labels: set[str] = set()
     layering: list[bool] = []
-    # The shapes the system's primitive rules are stated over: a definition may
-    # not give meaning to a symbol they already constrain. Computed on demand and
-    # memoised, because getting them means re-parsing every schema — and the
-    # check only reaches for them when a defined form *already parses*, which is
-    # the rare case. A system whose definitions all introduce new notation, which
-    # is the ordinary one, never pays for this at all.
-    primitive_cache: list[set[tuple[str, ...]]] = []
+    # What the system's primitive statements are stated over: a definition may
+    # not give meaning to a symbol they already constrain. Read on demand and
+    # memoised, because reading them means re-parsing every schema — a fifth of a
+    # ZFC build's cost, paid once, and not at all by a system with no definitions.
+    scan_cache: list[_SchemaScan] = []
 
-    def primitive() -> set[tuple[str, ...]]:
-        if not primitive_cache:
-            primitive_cache.append(_schema_signatures(spec, ctx))
-        return primitive_cache[0]
+    def scan() -> _SchemaScan:
+        if not scan_cache:
+            scan_cache.append(_scan_schemas(spec, ctx))
+        return scan_cache[0]
 
     # Kept on the system so a definition registered *later* is held to the same
     # freshness rule (`register_definition`), which is the path a corpus import
-    # takes. It reads the spec's rules, so a rule added after the build is not
-    # among them — that errs toward admitting a definition, never toward
-    # admitting an unfold the spec's own rules would make an axiom.
-    system.primitive_signatures = primitive
+    # takes.
+    system.primitive_schemas = scan
 
     for defn in spec.definitions:
         if defn.label is not None:
             if defn.label in seen_labels:
                 raise DeclarativeError(f"Duplicate definition label '{defn.label}'.")
             seen_labels.add(defn.label)
-        layering.append(_finalise_definition(defn, ctx, system, primitive))
+        layering.append(_finalise_definition(defn, ctx, system, scan))
     system.definition_layering = layering
 
     # 9. Parse each rule's provisos now that definitions have resolved, so a
@@ -1040,8 +1036,24 @@ def _build_subproof(
     )
 
 
-def _schema_signatures(spec: SystemSpec, ctx: FormalSystemContext) -> set[tuple[str, ...]]:
-    """Every constructor signature the system's *primitive* rules are stated over.
+@dataclass(frozen=True)
+class _SchemaScan:
+    """What the system's *primitive* rules and axioms are stated over.
+
+    ``signatures`` is every constructor they mention; ``unparsed`` is the schemas
+    no sort could read, kept with the bindings they were written under so they can
+    be tried again once a definition has extended the grammar. ``unions`` are the
+    sort patterns to try them against — live objects, so a notation registered
+    after the scan is in them.
+    """
+
+    signatures: frozenset[tuple[str, ...]]
+    unparsed: tuple[tuple[str, tuple[tuple[str, str], ...]], ...]
+    unions: tuple[Pattern, ...]
+
+
+def _scan_schemas(spec: SystemSpec, ctx: FormalSystemContext) -> _SchemaScan:
+    """Read the system's primitive statements, for the freshness check.
 
     Taken from the spec's own schema *text*, re-parsed against the grammar, and
     that is not an accident: a schema is stored as a pattern whose template is
@@ -1053,35 +1065,33 @@ def _schema_signatures(spec: SystemSpec, ctx: FormalSystemContext) -> set[tuple[
     Parsed against each sort in turn because a schema does not record which sort
     it was written in; the first that matches is the one. Metavariables come from
     the schema's own bindings, as they did when it was built.
+
+    A schema that reads against *no* sort is not an error here — `build_schema_pattern`
+    accepts it as a flat text pattern, which matches proof lines by string — but it
+    is the interesting case: it mentions something the grammar cannot spell, and a
+    definition may be about to spell it. So it is kept rather than dropped, to be
+    re-read per definition (`_mentioned_by_an_unparsed_schema`). The list is empty
+    for a system whose statements all parse, which is the ordinary one, and then
+    that per-definition work is nothing.
     """
     found: set[tuple[str, ...]] = set()
-    unions = [
+    unparsed: list[tuple[str, tuple[tuple[str, str], ...]]] = []
+    unions = tuple(
         ctx.variables[name]
         for name in spec.sort_names()
         if isinstance(ctx.variables.get(name), UnionPattern)
-    ]
+    )
     if not unions:
-        return found
+        return _SchemaScan(frozenset(), (), ())
 
     def collect(text: str | None, bindings: list[tuple[str, str]]) -> None:
         if not text:
             return
-        scoped = copy(ctx)
-        scoped.string_variables = {
-            **ctx.string_variables,
-            **_binding_patterns(bindings, ctx),
-        }
-        for union in unions:
-            matched = union.match(text, scoped)
-            if matched is None:
-                continue
-            stack: list[Term] = [from_match(matched)]
-            while stack:
-                term = stack.pop()
-                if isinstance(term, Node):
-                    found.add(term.constructor.signature)
-                    stack.extend(term.children.values())
+        matched = _match_a_schema(text, bindings, ctx, ctx, unions)
+        if matched is None:
+            unparsed.append((text, tuple(bindings)))
             return
+        found.update(_signatures_in(matched))
 
     for ax in spec.axioms:
         collect(ax.deduction, ax.bindings)
@@ -1093,6 +1103,75 @@ def _schema_signatures(spec: SystemSpec, ctx: FormalSystemContext) -> set[tuple[
             collect(rule.subproof.derive, rule.bindings)
             collect(rule.subproof.assume, rule.bindings)
             collect(rule.subproof.fresh, rule.bindings)
+    return _SchemaScan(frozenset(found), tuple(unparsed), unions)
+
+
+def _match_a_schema(
+    text: str,
+    bindings: Iterable[tuple[str, str]],
+    ctx: FormalSystemContext,
+    context: Context,
+    unions: tuple[Pattern, ...],
+) -> Term | None:
+    # One schema read against the sorts, as its own metavariables. `ctx` resolves
+    # the binding sorts (always the build context); `context` is the grammar to
+    # read against, which is the build context during the scan and the *proof*
+    # context afterwards, once definitions have added notation to it.
+    scoped = copy(context)
+    scoped.string_variables = {
+        **context.string_variables,
+        **_binding_patterns(list(bindings), ctx),
+    }
+    for union in unions:
+        matched = union.match(text, scoped)
+        if matched is not None:
+            return from_match(matched)
+    return None
+
+
+def _mentioned_by_an_unparsed_schema(
+    scan: _SchemaScan,
+    signature: tuple[str, ...],
+    ctx: FormalSystemContext,
+    context: Context,
+) -> bool:
+    # Whether a statement the grammar could not read at build time reads *now* —
+    # through notation this definition has just registered — and is stated over
+    # the form being defined. This is the freshness case a signature inventory
+    # alone cannot see: before the definition there was no constructor to put in
+    # it, so a rule concluding `(x ⊑ y)` in a grammar with no `⊑` looked like a
+    # rule about nothing, until `(x ⊑ y) ≝ ⊥` made it a rule about `⊥`.
+    for text, bindings in scan.unparsed:
+        matched = _match_a_schema(text, bindings, ctx, context, scan.unions)
+        if matched is not None and signature in _signatures_in(matched):
+            return True
+    return False
+
+
+def _rule_term_signatures(system: FormalSystem) -> set[tuple[str, ...]]:
+    """What the system's rules are stated over, read off their schema *terms*.
+
+    For rules added after the build, which the spec scan cannot see. It reads the
+    kernel term a schema pattern already carries rather than re-parsing, so it
+    needs no source text — and correspondingly it sees only what carries one: a
+    rule's own schema patterns, not an axiom's line type. That is the right half
+    to have, since a line type is fixed when the system is built and a rule is
+    what a late caller adds.
+    """
+    found: set[tuple[str, ...]] = set()
+
+    def read(pattern: Pattern | None) -> None:
+        if isinstance(pattern, StringPattern) and pattern.schema_term is not None:
+            found.update(_signatures_in(pattern.schema_term))
+
+    for rule in system.inference_rules:
+        read(rule.deduction)
+        for antecedent in rule.antecedents:
+            read(antecedent)
+        if rule.subproof_schema is not None:
+            read(rule.subproof_schema.conclusion)
+            read(rule.subproof_schema.assumption)
+            read(rule.subproof_schema.fresh)
     return found
 
 
@@ -1189,9 +1268,10 @@ def _require_a_non_circular_definition(
 
 def _require_a_fresh_defined_form(
     defn: Definition,
-    higher_match: Match | None,
+    union: Pattern,
+    ctx: FormalSystemContext,
     system: FormalSystem,
-    primitive: Callable[[], set[tuple[str, ...]]],
+    scan: Callable[[], _SchemaScan],
 ) -> None:
     """Refuse a definition whose defined symbol the system already reasons with.
 
@@ -1214,17 +1294,26 @@ def _require_a_fresh_defined_form(
     ``(⊥ → ⊥) [Def, 1]`` checks against a membership line and the base language
     gains a theorem.
 
-    An **earlier definition's** notation is deliberately not disqualifying: two
-    definitions may attach to one defined form, each separately citable, which is
-    the design (see ``matching.definitions``) and is Metamath's, where every
-    ``df-`` is its own axiom.
+    Run **after** the defined form's notation is registered, so the form has a
+    constructor to ask about however it became grammatical. Asking beforehand
+    reaches only a form some production already spelled, and misses the sharper
+    case: a rule stated over a form *no* production spells is stored as a flat
+    text pattern, so a zero-premise rule concluding ``(x ⊑ y)`` in a grammar with
+    no ``⊑`` sits inert — until ``(x ⊑ y) ≝ ⊥`` makes its conclusion grammatical
+    and rewritable, and ``⊥`` is proved. The caller withdraws the notation on a
+    refusal (see :func:`_finalise_definition`).
     """
-    if higher_match is None:
+    matched = union.match(defn.higher, system.context)
+    if matched is None:
         return
-    if any(higher_match.pattern is n.template for n in system.context.definitions):
+    head = from_match(matched)
+    if not isinstance(head, Node):
         return
-    head = from_match(higher_match)
-    if not isinstance(head, Node) or head.constructor.signature not in primitive():
+    signature = head.constructor.signature
+    scanned = scan()
+    if signature not in scanned.signatures and not _mentioned_by_an_unparsed_schema(
+        scanned, signature, ctx, system.context
+    ):
         return
     raise DeclarativeError(
         f"Definition {defn.name!r} defines '{defn.higher}', but the system's "
@@ -1449,7 +1538,7 @@ def _finalise_definition(
     defn: Definition,
     ctx: FormalSystemContext,
     system: FormalSystem,
-    primitive: Callable[[], set[tuple[str, ...]]],
+    scan: Callable[[], _SchemaScan],
 ) -> bool:
     """Register ``defn`` against the now-complete grammar, returning whether it
     layered — ``True`` when its defining (lower) form was recognised (given the
@@ -1480,13 +1569,15 @@ def _finalise_definition(
     if lower_match is None:
         return False
 
-    # Both halves of conservativity, read off the grammar as it stands *before*
-    # this definition extends it — which is why they run here and not after
-    # `add_notation`, and why they share the one parse of the defined form.
-    higher_match = union.match(defn.higher, context_copy)
-    _require_a_fresh_defined_form(defn, higher_match, system, primitive)
+    # Non-circularity is read off the grammar as it stands *before* this
+    # definition extends it: a form it cannot yet spell is one nothing earlier
+    # could have been defined in terms of. Freshness is the other way about and
+    # runs below, once the notation exists.
     _require_a_non_circular_definition(
-        defn, higher_match, from_match(lower_match), system
+        defn,
+        union.match(defn.higher, context_copy),
+        from_match(lower_match),
+        system,
     )
 
     notation = union.add_notation(defn.higher, context_copy)
@@ -1499,7 +1590,8 @@ def _finalise_definition(
 
     try:
         return _register_notated_definition(
-            defn, union, notation, ctx, context_copy, fresh_patterns, inherited, system
+            defn, union, notation, ctx, context_copy, fresh_patterns, inherited,
+            system, scan,
         )
     except DeclarativeError:
         # Every refusal past this point is a *late* one: the notation is already
@@ -1522,6 +1614,7 @@ def _register_notated_definition(
     fresh_patterns: dict[str, Pattern],
     inherited: list[SideCondition],
     system: FormalSystem,
+    scan: Callable[[], _SchemaScan],
 ) -> bool:
     # The half of `_finalise_definition` that runs with the defined form's notation
     # already in scope — which is what makes that form grammatical, and so what
@@ -1549,6 +1642,12 @@ def _register_notated_definition(
     # constants check during this build, and a definition that goes on to fail
     # withdraws the notation this is written on (see the caller).
     notation.template.denotes_constant = denotes_a_constant(notation, parses_to_its_own_leaf)
+
+    # Freshness needs the defined form's constructor, so it waits for the notation
+    # — but not a moment longer than the line above, which must settle the leaf's
+    # role *before* anything projects the template: a constructor snapshots the
+    # declaration, and reading the form to check it is such a projection.
+    _require_a_fresh_defined_form(defn, union, ctx, system, scan)
 
     # Build the kernel counterpart now, against the context the notation has just
     # entered — a definition's *defined* form is grammatical only because its
@@ -1609,7 +1708,7 @@ def register_definition(defn: Definition, system: FormalSystem) -> bool:
     ``system.definitions`` however the definitions arrived, and raises
     :class:`DeclarativeError` if the definition cannot be registered soundly.
     """
-    if system.build_context is None or system.primitive_signatures is None:
+    if system.build_context is None or system.primitive_schemas is None:
         raise DeclarativeError(
             f"Cannot register definition '{defn.name}' against a system with no "
             "build context."
@@ -1621,9 +1720,20 @@ def register_definition(defn: Definition, system: FormalSystem) -> bool:
     # system already carries.
     if defn.label is not None and any(d.label == defn.label for d in system.definitions):
         raise DeclarativeError(f"Duplicate definition label '{defn.label}'.")
-    layered = _finalise_definition(
-        defn, system.build_context, system, system.primitive_signatures
-    )
+    # The build's scan plus whatever the system has gained since. A rule added
+    # after the build is not in the spec the scan reads, so on this path — the only
+    # one where that can have happened — the rules are read again, off the schema
+    # terms their patterns carry. Cheap enough to do per late definition, and it is
+    # the difference between the two paths enforcing the same rule and only one.
+    stored = system.primitive_schemas
+
+    def scan() -> _SchemaScan:
+        scanned = stored()
+        return replace(
+            scanned, signatures=scanned.signatures | _rule_term_signatures(system)
+        )
+
+    layered = _finalise_definition(defn, system.build_context, system, scan)
     system.definition_layering.append(layered)
     return layered
 
