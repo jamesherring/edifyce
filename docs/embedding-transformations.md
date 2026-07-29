@@ -457,6 +457,114 @@ Concretely, Phase 3 as written should be amended:
 7. **Add the sequent-level aggregation** for hypotheses-plus-conclusion (§5);
    `apply?` needs it and no fold over a single term provides it.
 
+---
+
+## Appendix A — a worked example in 3 dimensions
+
+Small enough to print every vector. One system: sort `term` (variables, `∅`, `ω`,
+`(x ∪ y)`), sort `formula` (`x ∈ y`, `x ⊆ y`, `(p → q)`, `∀.p`). One orthogonal
+`3×3` matrix per (constructor, slot), seeded from the constructor's signature;
+leaves are seeded unit vectors; `Bound` is de Bruijn, so binders need no leaf.
+
+```
+emb(Node c {l₁:t₁ … l_k:t_k}) = ( Σᵢ A_{c,lᵢ} · emb(tᵢ) ) / √k
+```
+
+Scaling by `1/√k` instead of normalising per node keeps the fold exactly affine,
+which is what lets a definition's compiled map be displayed below.
+
+**A.1 One matrix per slot, not one matrix on the sum.** Tying a constructor's
+slot matrices together *is* "apply one matrix to the sum of the children" — and
+that is precisely the commutative combiner, so it must be opt-in:
+
+```
+per-slot     cos(∅ ∈ ω, ω ∈ ∅) = +0.229      order preserved
+slots tied   cos(∅ ∈ ω, ω ∈ ∅) = +1.000      order discarded
+```
+
+**A.2 A definition costs one compiled affine map, not a dimension.**
+With `x ⊆ y ≝ ∀z.(z ∈ x → z ∈ y)`:
+
+```
+before wiring   emb(a ⊆ b)        = [ 0.814  0.469  0.010]
+                emb(∀z.(z∈a → z∈b)) = [ 0.481  0.592 -0.350]   cos = +0.844
+after  wiring   both              = [ 0.481  0.592 -0.350]     cos = +1.000
+```
+
+and because the fold is affine, the definiens folds *once* into a map reusable at
+every occurrence — `O(1)` per node thereafter, no unfolding at fold time:
+
+```
+emb(x ⊆ y) = b + L_x·emb(x) + L_y·emb(y)
+L_x = [-0.161 -0.028 +0.472; -0.471 +0.057 -0.157; +0.045 +0.496 +0.045]
+L_y = [+0.347 +0.167 -0.319; +0.205 +0.272 +0.366; +0.296 -0.385 +0.120]
+```
+
+**A.3 A new theorem updates one flag, and congruence follows.** Proving
+`x ∪ y = y ∪ x` ties `union`'s two slot matrices. Nothing else is edited:
+
+```
+                                    before     after
+cos(∅ ∪ ω,      ω ∪ ∅)             -0.967     +1.000
+cos((∅ ∪ ω) ⊆ c, (ω ∪ ∅) ⊆ c)      +0.739     +1.000     ← congruence, unedited
+emb(a ∈ b)                         unchanged  unchanged  ← locality
+```
+
+The context case is the point: no correction was applied to `⊆`, yet the two
+`⊆` statements agree, because the fold is bottom-up and the parent recomputes
+from a corrected child. This is the whole content of §2's "inside, not after".
+
+**A.4 The variable-naming choice, and its cost.** Numbering free variables by
+first occurrence (what `alpha_digest` does) gives the wanted invariance *with*
+sharing; a sort-generic leaf gives the invariance and loses sharing:
+
+```
+first-occurrence   cos(a∈b, y∈z) = +1.000     cos(a∈b, a∈a) = +0.469
+sort-generic       cos(a∈b, y∈z) = +1.000     cos(a∈b, a∈a) = +1.000   ← a∈a lost
+```
+
+But first-occurrence numbering is a property of the *root*, so the same term row
+folds to different vectors in different contexts:
+
+```
+emb(c ∈ a) standalone          [ 0.431 -0.685  0.517]   numbering {c:0, a:1}
+emb(c ∈ a) inside (a∈b)→(c∈a)  [ 0.941 -0.355  0.253]   numbering {a:0, b:1, c:2}
+                                                        cos = +0.783
+```
+
+— §7's non-compositionality, made concrete. A memo keyed on the term row is
+simply wrong.
+
+**A.5 The compositional fix, and its degeneracy.** Carry, per node, the affine
+form `emb(t) = b(t) + Σ_v L_v(t)·e(v)` keyed by *variable identity*. This
+composes (`L_v(c(t₁,t₂)) = (A_1 L_v(t₁) + A_2 L_v(t₂))/√2`), mentions no
+numbering, and so is memoisable on the exact `digest` — which is what `TermRow`
+is already interned by. α-invariance is then a **readout** taken at index time,
+symmetric in the variables. Two candidate readouts, and neither works alone:
+
+```
+lin = b + Σ_v L_v·v₀        G = Σ_v L_v L_vᵀ
+
+                    lin                        ‖G − I‖
+a ∈ b               [-1.044 -0.195 -0.365]      0.000
+y ∈ z               [-1.044 -0.195 -0.365]      0.000
+a ∈ a               [-1.044 -0.195 -0.365]      1.527
+(a∈b) → (c∈d)       [ 0.580 -0.342 -0.343]      0.000
+(a∈b) → (a∈d)       [ 0.580 -0.342 -0.343]      0.631
+```
+
+`lin` is exactly the sort-generic fold: it carries structure and is blind to
+sharing (rows 1–3 coincide). `G` is blind to structure — with orthogonal slot
+matrices and `1/√k` scaling the quadratic form telescopes to `I` for *any* term
+whose leaves are all distinct free variables (rows 1, 2, 4), so it registers only
+the sharing partition and the leaf-weight profile. They are exactly
+complementary, and the usable α-invariant key is the **pair** `(lin, G)` — `lin`
+in the vector column, `G` (or a fixed contraction of it) as a small appended
+block. Cost is `O(#free vars)` matrices per node during the fold, which is why
+the truncation at some `k_max` in §7 matters.
+
+---
+
 And one thing the embedding will never do, worth recording so it is not
 rediscovered: cosine is **symmetric**, so it cannot express *subsumption* —
 "my goal is an instance of this lemma" is a directed relation and a
