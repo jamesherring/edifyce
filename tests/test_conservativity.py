@@ -27,9 +27,11 @@ pytest.importorskip("regex")
 
 from website.logical.declarative import Definition as Definition_
 from website.logical.declarative import (
+    DeclarativeError,
     SystemSpec,
     build_spec,
     build_system,
+    register_definition,
     registered_definition_layering,
 )
 from website.logical.kernel import check_definitional_step, from_match
@@ -188,4 +190,22 @@ def test_the_refused_definition_was_not_inert() -> None:
 
     assert check_definitional_step(
         term("(a ∈ b)"), term("(⊥ → ⊥)"), definition, context
+    )
+
+
+def test_a_definition_registered_after_the_build_is_held_to_the_same_rule() -> None:
+    # `register_definition` is the corpus-import path — the one place a definition
+    # arrives after the system exists, and so the one most likely to carry a
+    # defined form the system already reasons about. It reads the same primitive
+    # signatures the build computed, so the refusal does not depend on *when* the
+    # definition shows up.
+    system = build_system(spec([], rules=[MEMBERSHIP_RULE]))
+
+    with pytest.raises(DeclarativeError, match="already stated over that form"):
+        register_definition(defines("(x ∈ y)", "(⊥ → ⊥)", name="late"), system)
+
+    # And a fresh notation still registers by that path.
+    assert register_definition(
+        Definition_(sort="formula", name="late-ok", higher="S", lower="⊥", bindings=[]),
+        system,
     )

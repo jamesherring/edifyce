@@ -605,6 +605,15 @@ async def _assign_definition(session: AsyncSession, system_id: uuid.UUID, row: D
     # a client may clear it by sending null — assign whenever the field is present.
     if "label" in fields:
         row.label = payload.label
+    # Nullable like `label`, and the two columns move together: a stored label with
+    # no statement would name an obligation with nothing to check.
+    if "justification" in fields:
+        row.justification_label = (
+            payload.justification.label if payload.justification is not None else None
+        )
+        row.justification_statement = (
+            payload.justification.statement if payload.justification is not None else None
+        )
     # Bindings first: a proviso's metavariables are validated against them, so a
     # same-request binding change must land before the provisos are rebuilt.
     bindings_changed = "bindings" in fields and payload.bindings is not None

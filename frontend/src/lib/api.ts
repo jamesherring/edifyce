@@ -122,6 +122,21 @@ export interface LineType {
 	parts: LinePart[];
 }
 
+/** A definition's proof obligation, discharged by citing a settled statement.
+ *
+ * Some definitions hold only because something is *provable* — the choice of a
+ * dummy variable being immaterial, say. That is a claim about derivability rather
+ * than about the shape of a term, so it is not a proviso: it is settled once,
+ * when the system is built, by naming a theorem or premise-free rule whose
+ * statement is the obligation. Both halves travel together. */
+export interface Justification {
+	/** The label of the rule or theorem cited. */
+	label: string;
+	/** The obligation, in the system's own grammar, over the definition's own
+	 * metavariables. */
+	statement: string;
+}
+
 export interface Definition {
 	id: string;
 	sort: string;
@@ -141,6 +156,9 @@ export interface Definition {
 	/** Optional name a proof cites this definition by (`[<label>, <line>]`); null
 	 * when unnamed. Unique within a system. */
 	label: string | null;
+	/** The obligation this definition holds only under, or null — which is nearly
+	 * all of them. */
+	justification: Justification | null;
 }
 
 export interface Axiom {

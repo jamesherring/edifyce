@@ -25,6 +25,7 @@ function definition(over: Partial<Definition> = {}): Definition {
 		bindings: [{ var: 'x', sort: 'variable' }],
 		fresh: [{ var: 'z', sort: 'variable' }],
 		label: null,
+		justification: null,
 		...over
 	};
 }

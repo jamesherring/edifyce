@@ -20,6 +20,7 @@ import re
 
 from website.logical.declarative import (
     Definition,
+    Justification,
     LinePart,
     LineSpec,
     Production,
@@ -136,8 +137,13 @@ def spec_to_system(spec: SystemSpec) -> FormalSystem:
         system.lines.append(line)
 
     for i, defn in enumerate(spec.definitions):
-        row = DefinitionRow(position=i, symbol=symbols[defn.sort], name=defn.name,
-                            higher=defn.higher, lower=defn.lower, label=defn.label)
+        justification = defn.justification
+        row = DefinitionRow(
+            position=i, symbol=symbols[defn.sort], name=defn.name,
+            higher=defn.higher, lower=defn.lower, label=defn.label,
+            justification_label=justification.label if justification else None,
+            justification_statement=justification.statement if justification else None,
+        )
         for j, (var, sort) in enumerate(defn.bindings):
             row.bindings.append(DefinitionBindingRow(position=j, var=var, symbol=symbols[sort]))
         for j, (var, sort) in enumerate(defn.fresh):
@@ -229,6 +235,17 @@ def system_to_spec(system: FormalSystem) -> SystemSpec:
             condition=definition_condition_string(defn),
             fresh=[(f.var, f.symbol.name) for f in defn.fresh],
             label=defn.label,
+            # Both columns are written together, so the label alone decides
+            # whether there is an obligation; a statement without one is a row
+            # nothing here could have produced.
+            justification=(
+                Justification(
+                    label=defn.justification_label,
+                    statement=defn.justification_statement or "",
+                )
+                if defn.justification_label is not None
+                else None
+            ),
         )
         for defn in system.definitions
     ]

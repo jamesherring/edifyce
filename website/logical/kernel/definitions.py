@@ -33,6 +33,22 @@ capture is still rejected; only a genuinely fresh choice is admitted. In
 :func:`check_definitional_step` the chosen name is not supplied separately - it
 is *recovered* from the target term the step is checked against.
 
+A definition's *own* proviso may constrain a binder too, by the name its author
+declared it under: the check runs once the binders are resolved, and each one's
+chosen leaf is exposed under that name (:func:`_condition_binding`). What a
+proviso naming ``z`` means is therefore "whatever this binder is called here",
+which is the only thing it could sensibly mean - an abstract binder has no fixed
+name to constrain.
+
+Worth stating what this representation *removes*, because it is more than
+capture-avoidance. A definition whose defining form binds a dummy makes no choice
+of name at all, so there is nothing to prove about the choice. Metamath, whose
+defining forms are named, must instead carry the proof as a hypothesis - `df-sb`'s
+``$e sbjust.1`` says exactly that its dummy is immaterial. Here that follows from
+two unfolds of the same defined form rather than preceding the definition (see
+``declarative.Justification`` and the roadmap's A4, which also records why
+`set.mm` declines to rely on it).
+
 Two operations, both built entirely from steps 1-3:
 
 * :func:`unfold` - match the ``higher`` schema against a term, check the
@@ -377,17 +393,64 @@ def unfold(
     binding = match(definition.higher, redex, context)
     if binding is None:
         return None
-    if definition.condition is not None and not definition.condition.check(binding, context):
-        return None
     bound_binding = _resolve_bound_names(definition, names)
     if bound_binding is None:
         # A chosen name is not a leaf of its binder's sort.
+        return None
+    # Checked *after* the binders are resolved, so a proviso may constrain one.
+    # A binder has no fixed name to write a proviso about - that is the point of
+    # storing it abstractly - so what a proviso naming `z` means is "whatever this
+    # binder is called at this unfold", which is exactly what resolution just
+    # settled. Before, the condition saw the parameters alone and a `z` in it could
+    # only ever mean the literal leaf spelled `z`.
+    if definition.condition is not None and not definition.condition.check(
+        _condition_binding(definition, binding, bound_binding), context
+    ):
         return None
     if not _bounds_are_fresh(definition, binding, bound_binding, context):
         return None
     # Parameters and binders substitute in one pass: their keys are disjoint
     # (a binder's key is the reserved, index-derived name a `Bound` carries).
     return definition.lower.substitute({**binding, **bound_binding}, context)
+
+
+def _condition_binding(
+    definition: Definition, binding: Binding, bound_binding: Binding
+) -> Binding:
+    """The binding a definition's own proviso is checked against.
+
+    The ``higher``-form parameters, plus each binder's chosen name under the name
+    its author declared it by - so ``disjoint(z, x)`` on a definition whose
+    ``fresh`` clause names ``z`` constrains *that binder*, whatever leaf it ends up
+    taking, rather than the literal token ``z``. The reserved index keys
+    :func:`_bounds_are_fresh` uses are deliberately not exposed here: they are the
+    kernel's own handle on a binder, and an author writes the name.
+
+    A parameter wins a spelling collision, being what the redex actually supplied.
+    A definition whose ``fresh`` name is also a parameter is confused about that
+    name for reasons older than any proviso (``bind`` abstracts *every* occurrence
+    of the spelling, the parameter's included), so nothing here tries to rescue it.
+
+    A spelling *two binders* share is left out entirely rather than resolved to
+    one of them. Binders placed by scope are per-occurrence, so ``(∃z.… → ∀z.…)``
+    is two binders both called ``z``, and a proviso naming ``z`` cannot say which.
+    Omitting it is what makes the build refuse such a proviso
+    (``declarative._check_condition_is_checkable``) instead of silently
+    constraining whichever came last.
+    """
+    if not definition.fresh:
+        return binding
+    named: Binding = {}
+    ambiguous = {
+        binder.name
+        for index, binder in enumerate(definition.fresh)
+        if any(other.name == binder.name for j, other in enumerate(definition.fresh) if j != index)
+    }
+    for index, binder in enumerate(definition.fresh):
+        key = _bound_label(index)
+        if binder.name not in ambiguous and key in bound_binding:
+            named[binder.name] = bound_binding[key]
+    return {**named, **binding}
 
 
 def _resolve_bound_names(
@@ -541,8 +604,6 @@ def _unfolds_to(definition: Definition, source: Term, target: Term, context: Con
     binding = match(definition.higher, source, context)
     if binding is None:
         return False
-    if definition.condition is not None and not definition.condition.check(binding, context):
-        return False
 
     # Recover each binder's concrete name by matching the defining form against
     # the claimed target, *seeded with the parameter binding* so the parameters
@@ -560,6 +621,13 @@ def _unfolds_to(definition: Definition, source: Term, target: Term, context: Con
     if set(recovered) - set(binding) - bound_keys:
         return False
     bound_binding = {key: recovered[key] for key in bound_keys if key in recovered}
+    # Checked once the binders are recovered, as :func:`unfold` checks it once they
+    # are chosen, and for the same reason: a proviso may constrain a binder, and
+    # here the name it takes is read off the target rather than supplied.
+    if definition.condition is not None and not definition.condition.check(
+        _condition_binding(definition, binding, bound_binding), context
+    ):
+        return False
     if not _bounds_are_fresh(definition, binding, bound_binding, context):
         return False
     return definition.lower.substitute(recovered, context).equal(target, context)

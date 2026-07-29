@@ -38,6 +38,7 @@ LineBehaviour = Literal["logical", "comment"]
 # caps below mirror those `String(N)` widths so oversized input is rejected as a
 # 422 rather than reaching the INSERT and erroring on Postgres.
 _Text512 = Annotated[str, Field(max_length=512)]
+_Text64 = Annotated[str, Field(min_length=1, max_length=64)]
 
 
 class HealthResponse(BaseModel):
@@ -142,6 +143,25 @@ class LineType(BaseModel):
     parts: list[LinePart] = Field(default_factory=list)
 
 
+class Justification(BaseModel):
+    """A definition's proof obligation, discharged by citing a settled statement.
+
+    Some definitions hold only because something is *provable* — Metamath's
+    `df-sb` defines proper substitution through a dummy variable and is sound just
+    because the choice of dummy is immaterial. That is a claim about derivability,
+    not about the shape of a term, so it is not a proviso: it is settled once, when
+    the system is built, by naming a theorem or premise-free rule whose statement
+    is the obligation. See `website.logical.declarative.Justification`.
+    """
+
+    # The label of the theorem or rule cited. A stored system carries no proved
+    # theorems, so within a spec this names one of its rules.
+    label: _Text64
+    # The obligation itself, in the system's own grammar, over the definition's
+    # own metavariables.
+    statement: _Text512
+
+
 class Definition(BaseModel):
     id: uuid.UUID
     sort: str
@@ -161,6 +181,9 @@ class Definition(BaseModel):
     # Optional name a proof cites this definition by (`[<label>, <line>]`); null
     # when unnamed. Unique within a system.
     label: str | None = None
+    # The obligation this definition holds only under, or null — which is nearly
+    # all of them.
+    justification: Justification | None = None
 
 
 class Axiom(BaseModel):
@@ -406,6 +429,10 @@ class DefinitionCreate(BaseModel):
     fresh: list[Binding] = Field(default_factory=list)
     # Optional citation name (`[<label>, <line>]`); must be unique within a system.
     label: str | None = Field(None, max_length=64)
+    # The obligation this definition holds only under. Both halves travel together
+    # — a label with no statement names nothing to check — which is why it is one
+    # nested object rather than two columns' worth of flat fields.
+    justification: Justification | None = None
 
 
 class DefinitionUpdate(BaseModel):
@@ -420,6 +447,9 @@ class DefinitionUpdate(BaseModel):
     bindings: list[Binding] | None = None
     fresh: list[Binding] | None = None
     label: str | None = Field(None, max_length=64)
+    # Nullable and cleared by sending null, like `label`: a definition may stop
+    # holding under an obligation.
+    justification: Justification | None = None
 
 
 class AxiomCreate(BaseModel):

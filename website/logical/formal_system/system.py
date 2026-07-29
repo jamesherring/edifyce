@@ -12,6 +12,8 @@ from .promotion import PromotedTheorem
 from .proof import Proof, ProofLine
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from .rules import InferenceRule
 
 
@@ -68,6 +70,16 @@ class FormalSystem:
         # way. Keyed by position (not by notation) so callers can tell two
         # distinct definitions apart even when they share a defined form.
         self.definition_layering: list[bool] = []
+
+        # The constructor signatures the system's *primitive* rules are stated
+        # over, on demand — what a definition's freshness check reads (see
+        # declarative._require_a_fresh_defined_form). Held as a callable because
+        # producing it means re-parsing every schema, and the check reaches for it
+        # only in the rare case that a defined form already parses. The
+        # declarative builder sets this; it stays None for systems built another
+        # way, which is also what a definition registered against one is refused
+        # on.
+        self.primitive_signatures: Callable[[], set[tuple[str, ...]]] | None = None
 
         # A pattern dictionary of all the patterns used in build context
         self.pattern_dictionary = {}

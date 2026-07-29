@@ -37,6 +37,7 @@ function defn(over: Partial<Definition> = {}): Definition {
 		],
 		fresh: [],
 		label: null,
+		justification: null,
 		...over
 	};
 }

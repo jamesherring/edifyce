@@ -155,7 +155,8 @@ describe('notationReference', () => {
 						condition: null,
 						bindings: [],
 						fresh: [],
-						label: null
+						label: null,
+						justification: null
 					}
 				],
 				rules: [
