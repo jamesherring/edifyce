@@ -140,6 +140,15 @@ class representative before hashing, giving a `theory_digest` that extends the
 
 ## Phase 3 — Deterministic *evolving* embedding
 
+> **Read [embedding-transformations.md](embedding-transformations.md) before
+> building this.** That note works through where a per-definition or
+> per-theorem transformation can live, and amends this phase in seven places —
+> most importantly: a transformation applied *after* the fold (a map on ℝⁿ)
+> provably collapses the space rather than merely exhausting its dimensions, so
+> every transformation must live *inside* the fold; a symmetric combiner buys
+> commutativity but **not** associativity; and the re-fold cost below holds only
+> for a fold that is not α-invariant.
+
 A deterministic, compositional fold of the term DAG into ℝⁿ — a catamorphism
 with a **fixed (non-learned) combiner per constructor**:
 
