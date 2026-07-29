@@ -16,6 +16,8 @@ pytest.importorskip("regex")
 from website.logical.declarative import Definition as Definition_
 from website.logical.declarative import SystemSpec, build_spec, build_system
 from website.logical.kernel import (
+    Occurs,
+    Term,
     Node,
     constructor_for,
     DisjointLeaves,
@@ -937,3 +939,58 @@ def test_declaring_a_bindable_atom_constant_is_the_author_s_to_get_wrong():
     )
     result = build_spec(spec)
     assert "errors" not in result
+
+
+def test_a_defined_form_is_opaque_to_a_structural_proviso() -> None:
+    """A characterisation test, not an endorsement.
+
+    `Occurs` is what the proviso vocabulary is built from, and what an
+    eigenvariable-style freshness condition ultimately asks. It reads the term it
+    is given, and a defined form is a *leaf* — so it answers differently either
+    side of a definitional equality:
+
+        Occurs('x', 'phi')  phi := S        -> False
+        Occurs('x', 'phi')  phi := (a ∈ b)  -> True
+
+    That is sound under the current trust model: `S ≝ (a ∈ b)` is admissible only
+    because `a` and `b` are *declared constants*, and if that declaration is true
+    then no freshness proviso is about them. It stops being sound the moment an
+    open abbreviation over genuine variables is admitted — which is why
+    `docs/scope-aware-definitional-steps.md` reports that scope-awareness at the
+    redex is not sufficient on its own.
+
+    Pinned here so the boundary is in the suite rather than only in prose. If a
+    later change makes notation transparent to `Occurs`, this is the test that
+    should fail and be rewritten.
+    """
+    spec = SystemSpec(
+        name="OpaqueNotation",
+        brackets=brackets(),
+        productions=[
+            # Listed before the regex so they win the parse and the leaf really
+            # is the declared-constant production.
+            atom_const_prod("setvar", "aa", "a", denotes_constant=True),
+            atom_const_prod("setvar", "bb", "b", denotes_constant=True),
+            regex_prod("setvar", "letter", "[a-z]"),
+            template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+            template_prod("formula", "ess", "S", []),
+        ],
+        lines=[statement_line()],
+        definitions=[
+            Definition_(sort="formula", name="d", higher="S", lower="(a ∈ b)", bindings=[])
+        ],
+    )
+    system, context = build(spec)
+    formula = system.build_context.variables["formula"]
+
+    def term(text: str) -> Term:
+        matched = formula.match(text, context)
+        assert matched is not None, text
+        return from_match(matched)
+
+    defined, defining = term("S"), term("(a ∈ b)")
+    binding = {"phi": defined, "x": defining.children["x"]}
+    assert not Occurs("x", "phi").check(binding, context)
+
+    binding["phi"] = defining
+    assert Occurs("x", "phi").check(binding, context)
