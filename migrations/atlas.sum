@@ -1,4 +1,4 @@
-h1:AhTdu8wfiSJMiITMeM3P23QNBHK0TRIW7SSV4XrsbuM=
+h1:zbZ0sMiUZ1jhrx1VM7DUm5aiejA56yp0xh1DJIiViZA=
 20260715084842_initial_schema.sql h1:li+tGjd1xfzUC+Oet1ytZRgaeJlFFn6zwKJKRRHQR5o=
 20260717121403_normalize_constraint_names.sql h1:VfGJbOd7VWShF/0kWpgvlm+iMJLrutRP+qweQ/rJR4k=
 20260721060312_unify_symbols.sql h1:TEriOjT9h56DIRBgors2hB/rmp9gUzezuiMsaX5Fk8Q=
@@ -22,3 +22,4 @@ h1:AhTdu8wfiSJMiITMeM3P23QNBHK0TRIW7SSV4XrsbuM=
 20260726083616_add_production_binding_scopes.sql h1:1AdkZG5e0XZMqWFfKmeWbq6sJC9e6d5oEUDbxtKkpNY=
 20260726132102_add_token_separated.sql h1:vxDjPIHuM6eXihMYLd1HI8KuyIlDfWR1/P8V8w5ZhD0=
 20260727064438_schema_terms.sql h1:Z1hjVpBC0jsUEXUjGgEXG6GBGTkFZY0Li8Wy9vH/8HA=
+20260727161209_add_definition_justification.sql h1:h5OslLw+4o7wruCZ66oDmwijjRVtedgQ4bKzSill684=

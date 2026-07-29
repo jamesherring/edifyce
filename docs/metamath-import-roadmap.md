@@ -39,7 +39,7 @@ are not relitigated), and what remains.
 | Token-collision defects (§1.2) | fixed — four instances of one shape |
 | `$t` typesetting / notation (§4) | **next** |
 | Axiom-vs-theorem split (§3.2) | engine done; storing the library open |
-| Definition classification (§5, A4) | not a blocker; front-load |
+| Definition classification (§5, A4) | classifier done — 306/1,253, capped by binding slots; wiring open |
 
 `tests/test_metamath_import.py` imports `sqrt2re` from its verbatim `set.mm` proof
 and has Edifyce's kernel check the result:
@@ -535,18 +535,179 @@ split (§3.2)** — the real gap; the `$t` block (§4); typecodes beyond
 self-contained). Import faithfully as Metamath's own sorts first; a richer type
 discipline risks needing to re-prove things and is best deferred.
 
-**A4. Definition classification — *not a blocker; front-load anyway*.**
-Not every `$a` is fold/unfold-shaped, and Metamath relies on an *external*
-definitional-soundness checker. Importing every logical `$a` as an axiom is still
-**fully verifiable** — it is exactly what Metamath does. What is given up:
+**A4. Definition classification — *classifier done; not yet wired in*.**
+Metamath does not distinguish a definition from an axiom: both are `$a`, `df-` is
+a convention its verifier never reads, and soundness of the definitional ones is
+left to an *external* checker. Importing every logical `$a` as an axiom is
+faithful and fully verifiable — it is what Metamath itself does — but it gives up
 conservativity-by-construction, which Edifyce's `Define` supplies for free, and
-definitional steps `[Def, n]` (without them a proof cites the biconditional and
-reasons propositionally — sound, but longer). Clean cases map directly
-(`df-nel`: `A e/ B ↔ ¬(A ∈ B)`; `df-2`: `2 = (1+1)`); `df-div`/`df-sqrt` define via
-`iota`, so route them through the `fresh`-aware path and keep their existence
-lemmas as cited premises. Default on "does not reduce to fold/unfold" must be
-*axiom + flag*, never a silent `Define`. Do it early: reclassifying after a bulk
-import means re-importing everything.
+definitional steps `[Def, n]` in a proof. It also overstates the basis: §3.2's
+split counted 1,433 `df-` declared primitives of the imported system.
+
+`metamath/definitions.classify` decides structurally, never by label. Three tests,
+then the kernel:
+
+1. the statement's root is a **declared definitional equivalence** (`wb`/`wceq`
+   for `set.mm`) — declared rather than inferred, because arity and slot sorts do
+   not tell `↔` from `→`, and nothing is a definition under the empty default;
+2. its defined side is **not a bare metavariable**;
+3. its defined side is **built from notation not yet in use**.
+
+Two further refusals cover what a `Definition` cannot faithfully carry: a defining
+form built from the form being defined, and a metavariable the proviso syntax
+cannot name. A `$d` *is* carried, as the definition's condition — 1,033 of the
+definition-shaped statements have one, and dropping them would licence the
+captures Metamath forbids.
+
+**The `$e` case has a known shape, and it is not a side condition — *done*.**
+`df-sb` defines proper substitution using a bound `y` appearing on the right only,
+which is sound just because the choice of `y` is immaterial; its `$e` (`sbjust.1`)
+is the statement that it is. That is a *derivability* claim, and every predicate in
+the kernel's closed algebra — `Occurs`, `DisjointLeaves`, `IsAtom`, `IsMember`,
+`Equal` — is a total structural check on shape. A `Proven(φ)` proviso would have
+to search for a proof at every citation: undecidable, and it would restore the
+executable condition language the kernel deliberately retired.
+
+So it is discharged **once, when the definition is registered, by citation**. A
+`Definition` carries a `Justification` — a label and the obligation as a
+statement — and `declarative._discharge_justification` settles it before any of
+the definition is registered. `set.mm` shows this is the right model, because it
+is already what Metamath does:
+
+| | |
+|---|---|
+| `sbjust` | a **proved** `$p`, at position 2092 |
+| `df-sb`'s `$e sbjust.1` | token-identical statement |
+| order | `sbjust` precedes `df-sb` |
+
+The same holds for `mojust`/`df-mo`. Both proofs are already in the corpus and
+already ahead of the definition needing them, so the import cites what is there
+rather than proving anything new. `metamath/definitions` finds the citation —
+a proved statement token-identical to the hypothesis, ahead of it in the file —
+and the engine decides whether it discharges anything:
+
+- the obligation must be an **instance** of the cited statement, matched
+  structurally with the obligation's own metavariables rigid, so the discharge
+  holds for every substitution the definition is later used at. A theorem may be
+  more general than the obligation needs, never less;
+- the cited statement must carry **no premises of its own**, which would be the
+  obligation again one step back;
+- the definition **inherits the cited theorem's provisos**, restated in its own
+  metavariables (`kernel.side_conditions.restate`). The citation licences only
+  what the theorem licences, so `sbjust`'s `$d x y z` becomes a condition on
+  `df-sb`. Stricter than Metamath, which re-proves the hypothesis per use — and
+  over `set.mm` it costs nothing, since both definitions carry the same `$d` as
+  the theorem they cite.
+
+Verified against the corpus: both obligations discharge on the real terms, and
+both inherit their theorem's `$d` restated over their own variables.
+
+**The binding-slot wall.** Over `set.mm` the classifier returns **306
+definitions, 1,253 axioms** — and the single dominant refusal, **1,123 of them**,
+is *a defining form introducing a variable the defined form does not supply*.
+`df-tru` is the shape: `|- ( T. <-> ( A. x x = x -> A. x x = x ) )`, where `x` is
+quantified in the defining form and `T.` has no room for it.
+
+Every one of those is sound in Metamath and would be here, because the defining
+form *binds* the variable — which a `Definition` states with a `fresh` clause,
+and which is what makes the unfold capture-avoiding. But a `fresh` clause is
+inferred from `Production.scopes_over`, and a `.mm` file carries no trace of
+binding slots: nothing in `A. x ph` says the first slot binds in the second. The
+classifier cannot tell a bound `x` from one left free, and declaring it bound
+would be a guess in the unsafe direction, so it refuses.
+
+That refusal belongs to the classifier rather than the kernel for a reason worth
+keeping: the kernel refuses by *raising*, which aborts a whole import over one
+statement. The contract here is that doubt costs an axiom, not a build — and it is
+now checked, not assumed: 25 sampled definitions all register against a system
+built to their own position.
+
+`df-sb` and `df-mo` are among the 1,123, so the justification mechanism is
+implemented and verified but currently reaches nothing in `set.mm`. **Teaching the
+importer binding slots is therefore the highest-value next step in A4** — set.mm's
+`$j` annotations are the obvious source — and it lifts ~1,123 statements at once
+with no change to the classifier's tests.
+
+**Abstract binders make both of set.mm's justifications unnecessary — and set.mm
+declines that on purpose.** Worth recording, because it decides what the binding-
+slot work is *for*.
+
+The kernel already stores a `fresh` binder abstractly, by index
+(`kernel.terms.Bound`): `x ⊆ y ≝ ∀z(z ∈ x → z ∈ y)` is held as
+`∀⟨0⟩(⟨0⟩ ∈ x → ⟨0⟩ ∈ y)`, and the *consumer* of an unfold picks the concrete
+name. That is what turns capture from a rejection into a rename — `z ⊆ b` unfolds
+to `∀w(w ∈ z → w ∈ b)` rather than failing. What survives is not a residual
+occurs-check but the check that the *chosen* name is a good one, which cannot be
+removed while terms round-trip to the user's surface syntax: a proof line is text
+in the system's own grammar, and a grammar has no notion of an index, so the
+boundary where names come back is where the check must live.
+
+Now apply that to `df-sb`. Its `y` appears on the right only, so in Metamath the
+definition genuinely commits to a name, and `sbjust` is the theorem that the
+commitment does not matter. Declared `fresh`, the defining form is
+`∀⟨0⟩(⟨0⟩ = t → ∀x(x = ⟨0⟩ → φ))` — **no choice is made, so there is nothing to
+justify**. `A. y (…)` and `A. z (…)` are both unfolds of the same defined form, and
+their equivalence follows from two definitional steps and transitivity.
+
+`set.mm` states this argument itself, in `df-sb`'s own comment:
+
+> The hypothesis asserts that the definition is independent of the particular
+> choice of the dummy variable `y`. **Without this hypothesis, `sbjust` would be
+> derivable from propositional axioms alone: one could apply the definiens for
+> `[ t / x ] ph` twice, using different dummy variables `y` and `z`, and then
+> invoke `bitr3i`** … This would jeopardize the independence of axioms.
+
+"Apply the definiens twice and invoke `bitr3i`" is exactly two unfolds and
+transitivity. So the mechanism works and its authors deliberately decline it: it
+would make `sbjust` derivable and weaken an independence claim about their axiom
+system. The two routes import the same theorems under different metatheoretic
+discipline, and a faithful import wants Metamath's.
+
+Which leaves `justification` earning its keep on the obligations no representation
+removes — an existence lemma of the `df-div`/`df-sqrt` kind, which is a claim about
+what exists rather than about how a binder is spelled. Both set.mm cases may cease
+to need it once binding slots land; that is a success of the representation, not a
+loss of the mechanism.
+
+One consequence of the abstract representation is now usable directly: a
+definition's own proviso may **constrain a binder** by the name its author
+declared it under (`disjoint(z, x)` where `z` is the `fresh` name), resolved at
+each unfold to whatever leaf the binder takes there. Before, the condition was
+checked before the binders were resolved, so `z` in a proviso could only mean the
+literal token `z`.
+
+Of the 310 non-binding refusals: 119 root is not a declared equivalence (`df-bi`
+among them — it defines `↔` and so cannot use it, root `-.`), 9 defined side
+already in use (`df-clab`/`df-cleq`/`df-clel`, the axioms connecting class
+notation to set theory), 2 a bare metavariable. No assertion Metamath names `ax-`
+is classified as a definition.
+
+None of the three tests is load-bearing alone, and the set is not trusted to be
+complete. Test 1 admits an implication, since `( ph -> ps )` has a
+biconditional's shape; test 3 then admits `ax-1`, because `ph` is notation not yet
+in use the first time it appears — which is what test 2 is for, and which was
+found by running the classifier over `set.mm` rather than by reasoning about it.
+Any doubt defaults to axiom, which costs a longer proof rather than an unsound
+one. What is *behind* that default is less than it sounds: the kernel refuses a
+definition whose defining form introduces a leaf the defined form does not
+supply — the capture half of admissibility — and nothing more. Non-circularity
+and conservativity are untreated there, as in Metamath, so those refusals are
+this module's and have nothing behind them.
+
+*What remains* is wiring it into the import, which changes the basis every
+imported proof is checked against and so wants the corpus re-verified as one step.
+`declarative.register_definition` is the entry point a walk needs — a definition
+registered against an already-built system, since the theorem its justification
+cites is promoted only as the walk reaches it. The blocker is that registering a
+definition also calls `add_notation`, which makes its defined form *defined*
+notation; for an imported system that form is already grammatical via its own
+syntax axiom, so the second reading shadows the first (`T.` stops parsing to
+`wtru`, and 12 of the first 3,000 theorems failed on it). Building the kernel
+definition without the notation half is the untried fix.
+
+`df-div`/`df-sqrt` define via `iota` and will need the `fresh`-aware path with
+their existence lemmas as cited premises — the first real test of whether the
+kernel's refusal is the right arbiter or too strict.
 
 **A5. Scale — *measured; no longer a risk*.**
 The whole corpus checks in 24 minutes at 3.6 GB (§1.1). Both risks this item named

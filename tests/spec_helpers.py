@@ -17,6 +17,7 @@ from collections.abc import Iterable
 
 from website.logical.declarative import (
     Definition,
+    Justification,
     LinePart,
     LineSpec,
     Production,
@@ -90,6 +91,7 @@ def defn(
     condition: str | None = None,
     fresh: Iterable[Binding] = (),
     label: str | None = None,
+    justification: Justification | None = None,
 ) -> Definition:
     return Definition(
         sort=sort,
@@ -100,6 +102,7 @@ def defn(
         condition=condition,
         fresh=list(fresh),
         label=label,
+        justification=justification,
     )
 
 
