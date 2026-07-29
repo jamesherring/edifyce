@@ -5,10 +5,12 @@ that preceded it. Two properties carry that, and the engine treats them very
 differently:
 
 * **non-circularity** — a definition may not (transitively) be stated in terms
-  of itself. This holds *by construction* and always has: a definition's defining
-  form is matched against the grammar as extended by the definitions **before**
-  it, so the "is defined using" relation is a DAG by index. The tests here pin
-  that rather than a check, because there is no check to pin.
+  of itself. Mostly this holds *by construction*: a definition's defining form is
+  matched against the grammar as extended by the definitions **before** it, so a
+  definition stated in terms of its own **new notation** matches nothing and is
+  dropped. That argument covers only a defined form the grammar does not already
+  spell, which is why it needs a check as well
+  (``declarative._require_a_non_circular_definition``) — see the section below.
 * **freshness** — the defined symbol must be one the system does not already
   reason about. This is checked (``declarative._require_a_fresh_defined_form``).
 
@@ -52,6 +54,14 @@ GRAMMAR = [
     template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
 ]
 
+# Two more relations, declared but not reasoned over, for the circularity cases:
+# what makes them interesting is that they are grammatical before any definition
+# runs, so a definition over them layers whatever it says.
+SQSUBSET = template_prod("formula", "sqsubset", "(x ⊑ y)",
+                         [("x", "setvar"), ("y", "setvar")])
+SQSUBSET2 = template_prod("formula", "sqsubseteq", "(x ⊴ y)",
+                          [("x", "setvar"), ("y", "setvar")])
+
 # A rule stated over `∈`: with this present the system *reasons about* membership.
 MEMBERSHIP_RULE = rule(
     "MEMR", "membership rule", ["(x ∈ y)"], "⊥", [("x", "setvar"), ("y", "setvar")]
@@ -78,7 +88,7 @@ def defines(higher: str, lower: str, name: str = "d") -> Definition_:
 
 
 # ---------------------------------------------------------------------------
-# Non-circularity — holds by construction, via layering
+# Non-circularity — by construction where the defined form is new notation
 # ---------------------------------------------------------------------------
 
 
@@ -96,8 +106,8 @@ def test_a_definition_cannot_be_stated_in_terms_of_itself() -> None:
 
 def test_two_definitions_cannot_be_stated_in_terms_of_each_other() -> None:
     # `A ≝ (B → ⊥)` needs `B` to precede it and `B ≝ (A → ⊥)` needs `A` to; only
-    # one can be earlier, so neither layers. The same index ordering that makes
-    # self-reference unreachable rules out every cycle.
+    # one can be earlier, so neither layers. Index ordering rules out every cycle
+    # among definitions that introduce their own notation.
     written = spec([
         Definition_(sort="formula", name="d1", higher="A", lower="(B → ⊥)", bindings=[]),
         Definition_(sort="formula", name="d2", higher="B", lower="(A → ⊥)", bindings=[]),
@@ -116,6 +126,68 @@ def test_layering_on_an_earlier_definition_is_not_circular() -> None:
 
     assert registered_definition_layering(written) == [True, True]
     assert len(build_spec(written)["system"].definitions) == 2
+
+
+# ---------------------------------------------------------------------------
+# Non-circularity — checked where the defined form is already grammatical
+# ---------------------------------------------------------------------------
+
+
+def test_a_definition_over_a_declared_production_cannot_be_self_referential() -> None:
+    # The hole the layering argument leaves. `⊑` is a *declared production*, so
+    # `(x ⊑ y)` is grammatical before any definition runs and the defining form
+    # matches — the definition layers, and without a check it registers. It is
+    # `P ↔ ¬P`: not an abbreviation but a contradiction.
+    result = build_spec(spec(
+        [defines("(x ⊑ y)", "((x ⊑ y) → ⊥)", name="circ")],
+        productions=[SQSUBSET],
+    ))
+
+    assert "errors" in result
+    (message,) = result["errors"]
+    assert "in terms of itself" in message
+
+
+def test_two_definitions_over_declared_productions_cannot_cycle() -> None:
+    # Neither definition is self-referential; the cycle exists only between them,
+    # and both forms are grammatical from the start so index ordering does not
+    # break it. `⊑ ≝ ¬⊴` and `⊴ ≝ ¬⊑` unfold into each other forever.
+    result = build_spec(spec(
+        [defines("(x ⊑ y)", "((x ⊴ y) → ⊥)", name="d1"),
+         defines("(x ⊴ y)", "((x ⊑ y) → ⊥)", name="d2")],
+        productions=[SQSUBSET, SQSUBSET2],
+    ))
+
+    assert "errors" in result
+    (message,) = result["errors"]
+    assert "in terms of itself" in message
+
+
+def test_a_cycle_closed_through_a_shared_defined_form_is_refused() -> None:
+    # The other way past the layering argument: `S` is grammatical once its first
+    # definition registers, so a *later* definition may name it again — this time
+    # in terms of `T`, which is itself defined in terms of `S`.
+    result = build_spec(spec([
+        Definition_(sort="formula", name="a", higher="S", lower="⊥", bindings=[]),
+        Definition_(sort="formula", name="b", higher="T", lower="(S → ⊥)", bindings=[]),
+        Definition_(sort="formula", name="c", higher="S", lower="(T → ⊥)", bindings=[]),
+    ]))
+
+    assert "errors" in result
+    (message,) = result["errors"]
+    assert "in terms of itself" in message
+
+
+def test_a_definition_over_a_declared_production_is_otherwise_fine() -> None:
+    # The check is about the *cycle*, not about defining a production: `⊑` may be
+    # given meaning in terms of `⊴` as long as `⊴` does not lead back to it.
+    written = spec(
+        [defines("(x ⊑ y)", "((x ⊴ y) → ⊥)", name="d1")],
+        productions=[SQSUBSET, SQSUBSET2],
+    )
+
+    assert "errors" not in build_spec(written)
+    assert registered_definition_layering(written) == [True]
 
 
 # ---------------------------------------------------------------------------

@@ -59,7 +59,7 @@ from .formal_system.definitions import (
 from .formal_system.side_condition_syntax import parse_side_condition
 from .kernel import And, match, references, restate
 from .kernel.constructors import constructor_for, project_grammar
-from .kernel.terms import Node, from_match, from_pattern
+from .kernel.terms import Node, from_match
 from .matching import AtomPattern, Pattern, RegexPattern, StringPattern, UnionPattern
 from .promotion import promote_from_source
 
@@ -69,6 +69,7 @@ if TYPE_CHECKING:
     from .kernel.constructors import Constructor
     from .kernel.definitions import Definition as KernelDefinition
     from .kernel.terms import Term
+    from .matching import Match
     from .matching.context import Context
     from .matching.definitions import DefinedNotation
 
@@ -1095,10 +1096,100 @@ def _schema_signatures(spec: SystemSpec, ctx: FormalSystemContext) -> set[tuple[
     return found
 
 
+def _signatures_in(term: Term) -> set[tuple[str, ...]]:
+    # Every constructor a term is built from, itself included.
+    found: set[tuple[str, ...]] = set()
+    stack: list[Term] = [term]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, Node):
+            found.add(current.constructor.signature)
+            stack.extend(current.children.values())
+    return found
+
+
+def _defined_using(system: FormalSystem) -> dict[tuple[str, ...], set[tuple[str, ...]]]:
+    # The "is defined using" relation the system's definitions so far make: from
+    # each defined form's head constructor to every constructor its defining form
+    # is built from. Read off the built definitions rather than accumulated in a
+    # field, so `register_definition` sees the same relation `build_system` does
+    # however the definitions arrived.
+    edges: dict[tuple[str, ...], set[tuple[str, ...]]] = {}
+    for built in system.definitions:
+        if isinstance(built.higher, Node):
+            edges.setdefault(built.higher.constructor.signature, set()).update(
+                _signatures_in(built.lower)
+            )
+    return edges
+
+
+def _require_a_non_circular_definition(
+    defn: Definition,
+    higher_match: Match | None,
+    lower: Term,
+    system: FormalSystem,
+) -> None:
+    """Refuse a definition that would make the "is defined using" relation cycle.
+
+    The non-circularity half of **conservativity**. A definition abbreviates; a
+    cycle abbreviates nothing, because unfolding never terminates. Worse, it
+    asserts something: ``(x ⊑ y) ≝ ((x ⊑ y) → ⊥)`` is ``P ↔ ¬P``, which is a
+    contradiction rather than a notation.
+
+    Most of this is unreachable, which is why it went unnoticed. A definition's
+    defining form is matched against the grammar as extended by the definitions
+    *before* it, so a definition stated in terms of its own **new notation**
+    matches nothing and is dropped as non-layering — the relation is a DAG by
+    index, and no check is involved. What that argument does not cover is a
+    defined form the grammar already spells:
+
+    * a **declared production** is grammatical from the start, so
+      ``(x ⊑ y) ≝ ((x ⊑ y) → ⊥)`` layers and registers, and a pair like
+      ``⊑ ≝ …⊴…``/``⊴ ≝ …⊑…`` cycles with neither definition self-referential;
+    * an **earlier definition's** notation is grammatical too, so ``S ≝ ⊥``,
+      ``T ≝ (S → ⊥)``, ``S ≝ (T → ⊥)`` closes a cycle through a shared defined
+      form.
+
+    Sharing a defined form stays legal — two definitions may attach to one form,
+    each its own citable axiom, as in Metamath. What is refused is the *cycle*.
+    """
+    if higher_match is None:
+        # Not yet grammatical, so this definition introduces the notation and
+        # nothing earlier can refer to it: no cycle is expressible. (Its own
+        # defining form cannot either — that is the non-layering case above.)
+        return
+    head = from_match(higher_match)
+    if not isinstance(head, Node):
+        return
+    signature = head.constructor.signature
+
+    # Reached only for a defined form the grammar already spells, which is the
+    # rare case — a definition introducing its own notation returned above, and
+    # never pays for the relation to be assembled.
+    edges = _defined_using(system)
+    reachable = _signatures_in(lower)
+    stack = list(reachable)
+    while stack and signature not in reachable:
+        for successor in edges.get(stack.pop(), ()):
+            if successor not in reachable:
+                reachable.add(successor)
+                stack.append(successor)
+    if signature not in reachable:
+        return
+    raise DeclarativeError(
+        f"Definition {defn.name!r} defines '{defn.higher}' in terms of itself, "
+        f"directly or through the definitions already registered. A definition "
+        f"abbreviates, and a cycle abbreviates nothing: unfolding it never "
+        f"terminates, and stating a form equivalent to something built from that "
+        f"same form is an assertion about it rather than a name for it. Define it "
+        f"over the forms that precede it; or, if the equivalence is meant, declare "
+        f"it as an axiom."
+    )
+
+
 def _require_a_fresh_defined_form(
     defn: Definition,
-    union: Pattern,
-    context: FormalSystemContext,
+    higher_match: Match | None,
     system: FormalSystem,
     primitive: Callable[[], set[tuple[str, ...]]],
 ) -> None:
@@ -1128,12 +1219,11 @@ def _require_a_fresh_defined_form(
     the design (see ``matching.definitions``) and is Metamath's, where every
     ``df-`` is its own axiom.
     """
-    matched = union.match(defn.higher, context)
-    if matched is None:
+    if higher_match is None:
         return
-    if any(matched.pattern is n.template for n in system.context.definitions):
+    if any(higher_match.pattern is n.template for n in system.context.definitions):
         return
-    head = from_match(matched)
+    head = from_match(higher_match)
     if not isinstance(head, Node) or head.constructor.signature not in primitive():
         return
     raise DeclarativeError(
@@ -1386,10 +1476,18 @@ def _finalise_definition(
     # Whether the defining form is recognised *given the definitions before it* is
     # what "layering" means, and it is settled before anything is registered: a
     # definition that does not layer must leave the grammar untouched.
-    if union.match(defn.lower, context_copy) is None:
+    lower_match = union.match(defn.lower, context_copy)
+    if lower_match is None:
         return False
 
-    _require_a_fresh_defined_form(defn, union, context_copy, system, primitive)
+    # Both halves of conservativity, read off the grammar as it stands *before*
+    # this definition extends it — which is why they run here and not after
+    # `add_notation`, and why they share the one parse of the defined form.
+    higher_match = union.match(defn.higher, context_copy)
+    _require_a_fresh_defined_form(defn, higher_match, system, primitive)
+    _require_a_non_circular_definition(
+        defn, higher_match, from_match(lower_match), system
+    )
 
     notation = union.add_notation(defn.higher, context_copy)
     # Whether the notation was already in scope, so a failure below knows whether
@@ -1676,9 +1774,12 @@ def registered_definition_layering(spec: SystemSpec) -> list[bool]:
     So the build is done against a spec **reduced** to grammar plus definitions:
     an unrelated draft error the draft-tolerant CRUD persisted (a half-written
     rule, a malformed proviso) then can't fail the build and blind the check into
-    reporting every definition dropped. Only a broken *grammar* still errors —
+    reporting every definition dropped. What still errors is a broken *grammar* —
     and there no definition can layer at all, so all-``False`` is the honest
-    answer (nothing is live for a reorder to drop).
+    answer (nothing is live for a reorder to drop) — or a definition the build
+    refuses outright (a circular or non-fresh defined form), where all-``False``
+    is a degradation: a reorder guard cannot act on it, but the caller has the
+    build's own error, which says which definition and why.
 
     A definition's *justification* goes with the rules, and for the same reason:
     it cites one, so keeping it would fail the reduced build over something that

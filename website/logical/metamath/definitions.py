@@ -302,9 +302,11 @@ def classify(
     if head in constructors_used(lower):
         # A recursive alias, not an eliminable definition. `in_use` cannot catch
         # this: it holds what *earlier* assertions used, and the defining form is
-        # part of this one. Nor can the kernel, which checks the capture half of
-        # admissibility and leaves non-circularity untreated, as Metamath does -
-        # so this is the one refusal with nothing behind it.
+        # part of this one. The builder does now refuse it
+        # (`declarative._require_a_non_circular_definition`), and catches the
+        # mutual case this test cannot see - but it refuses by *raising*, which
+        # aborts the import. Kept here for the same reason as the binding-slot
+        # wall above: doubt costs an axiom, not a build.
         return Classified(
             assertion.label,
             reason=f"defining side is built from the form being defined ({head})",

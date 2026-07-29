@@ -90,17 +90,24 @@ Two follow-ups this leaves open:
   anything to do with `free_vars`
   ([docs/scope-aware-definitional-steps.md](docs/scope-aware-definitional-steps.md)).
 - **Conservativity.** A definition must add notation, not assumptions, and both
-  halves are now settled. **Non-circularity** holds by construction: a defining
-  form is matched against the grammar as extended by the definitions *before* it,
-  so a definition stated in terms of itself matches nothing and is dropped, and
-  the "defined using" relation is a DAG by index — there is no check because none
-  is reachable. **Freshness** is checked
+  halves are now settled. **Non-circularity** holds by construction *where the
+  defined form is new notation*: a defining form is matched against the grammar as
+  extended by the definitions before it, so a definition stated in terms of its own
+  notation matches nothing and is dropped. That argument stops at a form the
+  grammar already spells — a declared production, or an earlier definition's
+  notation — where the defining form matches and the definition registers, so a
+  cycle is expressible and is checked
+  (`declarative._require_a_non_circular_definition`). It refuses a cycle in the
+  "is defined using" relation, not the sharing of a defined form, which stays legal
+  and is Metamath's. **Freshness** is checked
   (`declarative._require_a_fresh_defined_form`): a definition may not give meaning
   to a symbol an axiom or rule is already stated over, since equating such a
   symbol to something else is an axiom rather than a definition. Declaring the
   defined form as a *production* is deliberately not disqualifying — that is how
   `⊆` becomes grammatical before `df-subset` gives it meaning; what is refused is
-  defining a symbol the theory already reasons about. Pinned in
+  defining a symbol the theory already reasons about. Both checks read the grammar
+  as it stands before the definition extends it, and both run on the late path too
+  (`register_definition`, which a corpus import takes). Pinned in
   `tests/test_conservativity.py`.
 
 The bespoke `.edi` source language and its compiler are **gone**. A system is a
