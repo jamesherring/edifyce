@@ -135,7 +135,19 @@ needs to know what scopes over what — i.e. binding slots — at the position t
 step is taken.
 
 This is the largest of the three and the one to do last, if at all. It changes
-what proofs are accepted, so it wants its own soundness argument.
+what proofs are accepted, so it wants its own soundness argument — which is now
+written: [scope-aware-definitional-steps.md](scope-aware-definitional-steps.md).
+
+**Its finding is that this is not sufficient.** Deciding capture at the redex is
+the easy half and the position information now exists; the hard half is that a
+defined form is a *leaf*, so `Occurs` — the predicate every freshness proviso is
+built from — answers differently either side of a definitional equality. A
+proviso can be satisfied by `S` and violated by `(a ∈ b)`. Admitting open
+abbreviations over genuine variables therefore needs notation to be transparent
+to structural predicates first — as *separate* metadata, not via `free_vars`,
+which is the schema-metavariable inventory and has three callers depending on a
+ground term reporting none. That is a design question of its own, so the item
+stays open with a named blocker rather than a vague warning.
 
 ## Shape of the change
 
@@ -227,7 +239,8 @@ Adding the control removes the need for that, and is the reason to add it.
    open question 3 is **done** — `validate` returns the settled clause; what is
    left is the control for authoring `scopes_over`, and surfacing the report in
    the editor.
-6. Scope-aware definitional steps — separately, with its own design note.
+6. Scope-aware definitional steps — **analysed, blocked**; see
+   [scope-aware-definitional-steps.md](scope-aware-definitional-steps.md).
 
 Step 4 shipped ahead of 3 because it is the one with a caller waiting: a Metamath
 import reconstructs a `fresh` clause per definition without it. Both remaining

@@ -660,6 +660,45 @@ def test_definition_binding_and_proviso_updated_together(client):
     assert updated.json()["condition"] == "disjoint(x, y)"
 
 
+def test_a_definition_s_justification_round_trips_through_the_api(client):
+    # A definition may hold only under an obligation discharged by citing a settled
+    # statement. It persists as two columns and has to come back as one object —
+    # a GET that omitted it would show a definition holding unconditionally, which
+    # is a weaker claim than the one stored.
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/api/formal-systems/{sid}/sorts", {"name": "term"})
+    defn = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "term", "name": "d", "higher": "x", "lower": "y",
+        "bindings": [{"var": "x", "sort": "term"}, {"var": "y", "sort": "term"}],
+        "justification": {"label": "immaterial", "statement": "x"},
+    })
+    assert defn["justification"] == {"label": "immaterial", "statement": "x"}
+
+    fetched = client.get(f"/api/formal-systems/{sid}").json()
+    assert fetched["definitions"][0]["justification"]["label"] == "immaterial"
+
+    # Nullable, and cleared by sending null — a definition may stop holding under
+    # an obligation.
+    cleared = client.patch(
+        f"/api/formal-systems/{sid}/definitions/{defn['id']}", json={"justification": None}
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["justification"] is None
+
+
+def test_a_definition_with_no_justification_reports_null(client):
+    _login(client, "ada@example.com")
+    sid = _new_system(client)
+    _post(client, f"/api/formal-systems/{sid}/sorts", {"name": "term"})
+    defn = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "term", "name": "d", "higher": "x", "lower": "y",
+        "bindings": [{"var": "x", "sort": "term"}],
+    })
+
+    assert defn["justification"] is None
+
+
 def test_binding_only_patch_that_orphans_a_proviso_metavar_is_422(client):
     # Dropping a binding a stored proviso still names must be rejected even though
     # the proviso itself isn't in the PATCH — otherwise the rule persists malformed

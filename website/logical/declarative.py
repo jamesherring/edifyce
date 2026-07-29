@@ -35,7 +35,7 @@ import hashlib
 import json
 from collections.abc import Callable, Iterable
 from copy import copy
-from dataclasses import InitVar, dataclass, field
+from dataclasses import InitVar, dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from .build_context import (
@@ -44,20 +44,32 @@ from .build_context import (
     build_schema_pattern,
     combine_side_conditions,
 )
-from .formal_system import FormalSystem, InferenceRule, LineType, SubproofSchema
+from .formal_system import (
+    FormalSystem,
+    InferenceRule,
+    LineType,
+    SubproofSchema,
+    statement_term,
+)
 from .formal_system.definitions import (
     DefinitionError,
     build_kernel_definition,
     denotes_a_constant,
 )
 from .formal_system.side_condition_syntax import parse_side_condition
+from .kernel import And, match, references, restate
 from .kernel.constructors import constructor_for, project_grammar
 from .matching import AtomPattern, Pattern, RegexPattern, StringPattern, UnionPattern
+from .promotion import promote_from_source
 
 if TYPE_CHECKING:
     from .build_context import SchemaTermSource
+    from .kernel import SideCondition
     from .kernel.constructors import Constructor
+    from .kernel.definitions import Definition as KernelDefinition
     from .kernel.terms import Term
+    from .matching.context import Context
+    from .matching.definitions import DefinedNotation
 
 
 class DeclarativeError(Exception):
@@ -117,12 +129,64 @@ class Production:
 
 
 @dataclass
+class Justification:
+    """A proof obligation a definition carries, discharged by citing a theorem.
+
+    Some definitions hold only because something is *provable*. Metamath's
+    `df-sb` defines proper substitution through a dummy `y` that appears on the
+    right only, and is sound just because the choice of `y` is immaterial; its
+    hypothesis `sbjust.1` is the statement that it is.
+
+    That is not a proviso and cannot become one. Every predicate in the kernel's
+    closed algebra is a total structural check on *shape*, while this is a claim
+    about *derivability*: a `Proven(φ)` condition would have to search for a proof
+    at every citation, which is undecidable and would restore the executable
+    condition language the kernel retired.
+
+    So it is discharged once, when the definition is registered, by naming a
+    theorem already proved in the system whose statement is the obligation -
+    which is what Metamath does too, since `sbjust` is a proved `$p` preceding
+    `df-sb` and stating exactly its hypothesis. ``statement`` is the obligation in
+    the system's own grammar, over the definition's own metavariables; ``label``
+    names the promoted theorem that settles it.
+
+    When it is *not* needed
+    -----------------------
+    An obligation of `df-sb`'s particular kind - "the dummy could have been any
+    name" - is an artefact of writing definitions with named binders. Declare the
+    dummy `fresh` and the kernel stores it abstractly
+    (:class:`~website.logical.kernel.terms.Bound`), so the definition makes no
+    choice of name and there is nothing left to justify: both spellings are unfolds
+    of one defined form, and their equivalence follows rather than precedes.
+
+    That is not a reason to drop this. `set.mm` states the argument itself, in
+    `df-sb`'s comment - *"Without this hypothesis, sbjust would be derivable from
+    propositional axioms alone: one could apply the definiens twice, using
+    different dummy variables"* - and keeps the hypothesis anyway, because making
+    `sbjust` derivable would weaken an independence claim about its axioms. So the
+    two routes import the same theorems under different metatheoretic discipline,
+    and a faithful import wants this one. The obligations it is really *needed*
+    for are the ones no representation removes: an existence lemma of the
+    `df-div`/`df-sqrt` kind (roadmap A4).
+    """
+
+    label: str
+    statement: str
+
+
+@dataclass
 class Definition:
     sort: str
     name: str
     higher: str
     lower: str
     bindings: list[tuple[str, str]]
+    # Soundness provisos (the `where` clause), `;`-separated kernel-vocabulary
+    # lines. Checked at every unfold against what that unfold binds, so a proviso
+    # may name a parameter of the *defined* form or one of the `fresh` binders
+    # below (by its declared name — a binder is stored abstractly, so the proviso
+    # constrains whatever leaf it takes there). Naming anything else is refused at
+    # build: there would be nothing to resolve it against.
     condition: str | None = None
     # The defining form's bound variables, `[(var, sort)]` (the `fresh` clause).
     # Declaring a binder lets the term checker unfold the definition
@@ -133,6 +197,10 @@ class Definition:
     # generic `[Def, <line>]` keyword searches all in-scope definitions instead.
     # Must be unique within a system so a named citation resolves unambiguously.
     label: str | None = None
+    # The obligation this definition holds only under, discharged by citing an
+    # already-proved theorem when the system is built. None — the default — is a
+    # definition that holds outright, which is nearly all of them.
+    justification: Justification | None = None
 
 
 @dataclass
@@ -779,6 +847,11 @@ def build_system(
     # definitions against that (now complete) context, so `add_notation` can
     # match the lower form against the productions.
     system.context.variables.update(ctx.variables)
+    # Wired here rather than at the end because a definition's justification reads
+    # a statement in the system's own grammar, which needs the build context. The
+    # grammar is complete as of the line above; only the pattern dictionary (built
+    # last) still is not, and nothing on this path consults it.
+    system.build_context = ctx
     # Per position, whether the definition layered — kept in spec order so a
     # caller can map it back to a specific definition even when two share a
     # defined form (see registered_definition_layering). A cited definition name
@@ -810,8 +883,7 @@ def build_system(
         )
         inference_rule.pending_side_conditions = []
 
-    # 10. Wire the build context and index the patterns.
-    system.build_context = ctx
+    # 10. Index the patterns (the build context was wired at step 8).
     system.build_pattern_dictionary()
     return system
 
@@ -946,6 +1018,213 @@ def _build_subproof(
     )
 
 
+def _justifying_statement(
+    justification: Justification, system: FormalSystem, name: str
+) -> tuple[Pattern, tuple[SideCondition, ...]] | None:
+    # The statement a justification cites, and the provisos it carries, or None if
+    # the label names nothing citable. A *proved* theorem is the expected case
+    # (Metamath's `sbjust`); a rule that asserts its conclusion outright serves
+    # too, since it is equally a settled statement.
+    #
+    # Not a `SystemSpec.axiom`, though the name invites it: an axiom is lowered to
+    # an axiom-behaviour *line type* (`_build_axiom`), which carries the axiom's
+    # name and never its label, so there is nothing here to resolve a citation
+    # against. An author wanting a citable axiom declares it as a rule with no
+    # antecedents, which is the same assertion and is addressed by label.
+    theorem = system.promoted_theorems.get(justification.label)
+    if theorem is not None:
+        return (
+            (theorem.deduction, theorem.side_conditions)
+            if not theorem.antecedents
+            else None
+        )
+    rule = system.rule_by_label(justification.label)
+    if rule is None or rule.antecedents:
+        return None
+    if rule.is_discharge:
+        # A discharge rule cites no lines, so it has no `antecedents` — but it
+        # consumes a whole subproof, which is a premise by another name. Without
+        # this, conditional proof settles every `(A → B)` there is.
+        return None
+    if rule.pending_side_conditions:
+        # A rule's provisos are parsed only *after* definitions resolve, so that
+        # one may use defined notation — which is exactly why a definition cannot
+        # read them here. Rather than inherit a proviso list that is still empty,
+        # refuse: the citation would silently drop what the rule holds under.
+        raise DeclarativeError(
+            f"Definition '{name}' is justified by rule '{justification.label}', whose "
+            "provisos are parsed after definitions resolve and so cannot be inherited. "
+            "Cite a proved theorem, or drop the rule's provisos."
+        )
+    return rule.deduction, tuple(rule.side_conditions)
+
+
+def _discharge_justification(
+    defn: Definition, system: FormalSystem
+) -> list[SideCondition]:
+    """Settle ``defn``'s proof obligation against the theorem it cites, or refuse.
+
+    Returns the cited theorem's own provisos, restated in the definition's
+    metavariables, for the caller to conjoin with the definition's. The definition
+    *inherits* them because the citation only licences an instance the theorem
+    itself licences — `sbjust` holds under `$d x y z` and so, therefore, does every
+    use of `df-sb` that leans on it. That is stricter than Metamath, which
+    re-proves the hypothesis per use; strictness costs a refused unfold, and in
+    `set.mm` costs nothing at all, since a definition needing a justification
+    carries the same `$d` as its justifying theorem.
+
+    Run *before* the definition's notation is registered: the obligation is stated
+    in the grammar the definition extends, so it must be read while that grammar is
+    still the one in force.
+    """
+    justification = defn.justification
+    if justification is None:
+        raise DeclarativeError(f"Definition '{defn.name}' has no justification to discharge.")
+
+    cited = _justifying_statement(justification, system, defn.name)
+    if cited is None:
+        raise DeclarativeError(
+            f"Definition '{defn.name}' is justified by '{justification.label}', which "
+            "is not a proved theorem of this system, nor a rule that asserts its "
+            "conclusion with no premises of its own. An obligation is discharged by "
+            "citing something already settled. (A spec `axiom` is lowered to a line "
+            "type and carries no label, so it cannot be cited; declare it as a rule "
+            "with no antecedents instead.)"
+        )
+    statement, provisos = cited
+
+    try:
+        obligation = promote_from_source(
+            system,
+            label=f"{defn.name}.justification",
+            statement=justification.statement,
+            metavariables=dict(defn.bindings),
+        )
+    except ValueError as exc:
+        raise DeclarativeError(
+            f"Definition '{defn.name}' states its obligation as "
+            f"'{justification.statement}', which the system cannot read: {exc}"
+        ) from exc
+
+    # The obligation must be an *instance* of what was proved, so the cited
+    # statement is the schema and the obligation the subject: a theorem may be
+    # more general than the obligation needs, never less. The obligation's own
+    # metavariables stay rigid, which is what makes the discharge hold for every
+    # substitution the definition is later used at.
+    binding = match(
+        statement_term(statement), statement_term(obligation.deduction), system.context
+    )
+    if binding is None:
+        raise DeclarativeError(
+            f"Definition '{defn.name}' states its obligation as "
+            f"'{justification.statement}', which is not an instance of what "
+            f"'{justification.label}' proves."
+        )
+
+    try:
+        return [restate(proviso, binding, system.context) for proviso in provisos]
+    except ValueError as exc:
+        raise DeclarativeError(
+            f"Definition '{defn.name}' cannot inherit a proviso of "
+            f"'{justification.label}': {exc}"
+        ) from exc
+
+
+def _binder_patterns(
+    built: KernelDefinition, ctx: FormalSystemContext
+) -> dict[str, Pattern]:
+    """The definition's binders, by the name a proviso would call each one.
+
+    Read off the *built* definition rather than the spec, because a `fresh` clause
+    need not be written: a grammar declaring binding slots has it inferred from
+    the parsed defining form, and a proviso must be able to name those binders on
+    the same terms as declared ones.
+
+    A spelling two binders share is omitted. Binders placed by scope are
+    per-occurrence, so `(∃z.… → ∀z.…)` is two binders both called `z` and a proviso
+    naming `z` could not say which; leaving it out makes such a proviso a refusal
+    (:func:`_check_condition_is_checkable`) rather than a silent pick.
+    """
+    names = [binder.name for binder in built.fresh]
+    patterns: dict[str, Pattern] = {}
+    for binder in built.fresh:
+        if names.count(binder.name) > 1:
+            continue
+        pattern = ctx.variables.get(binder.sort.name)
+        if isinstance(pattern, Pattern):
+            patterns[binder.name] = pattern
+    return patterns
+
+
+def _definition_condition(
+    defn: Definition,
+    built: KernelDefinition,
+    ctx: FormalSystemContext,
+    context_copy: Context,
+    inherited: list[SideCondition],
+) -> SideCondition | None:
+    # The definition's own `where` provisos, parsed with its parameters *and* its
+    # binders in scope, conjoined with whatever its justification's theorem holds
+    # under. A binder is stored abstractly and has no fixed name, so `disjoint(z, x)`
+    # means "whatever this binder is called at this unfold"
+    # (`kernel.definitions._condition_binding`) — which is what an author writing it
+    # means. Without the binders here `z` parses as the literal token `z`, a
+    # coherent reading of nothing anybody wanted.
+    #
+    # A `;` inside a `where` proviso conjoins several kernel conditions.
+    where_strings = (
+        [part.strip() for part in defn.condition.split(";") if part.strip()]
+        if defn.condition
+        else []
+    )
+    proviso_context = copy(context_copy)
+    proviso_context.string_variables = {
+        **_binder_patterns(built, ctx),
+        **context_copy.string_variables,
+    }
+    own = combine_side_conditions(where_strings, proviso_context)
+
+    parts = (*(() if own is None else (own,)), *inherited)
+    if not parts:
+        return None
+    return parts[0] if len(parts) == 1 else And(parts)
+
+
+def _check_condition_is_checkable(defn: Definition, built: KernelDefinition) -> None:
+    # A definition's proviso is checked against the binding an *unfold* produces,
+    # and that binding comes from matching the defined form against the redex
+    # (`kernel.definitions.unfold`). So a proviso may only name metavariables the
+    # defined form supplies: one naming anything else - a parameter of the
+    # defining form alone, a variable a `$d` mentions but neither form uses - has
+    # nothing to resolve against, and the kernel raises rather than returning a
+    # verdict.
+    #
+    # Unlike a rule, which fails closed on a malformed proviso
+    # (`InferenceRule._side_conditions_hold`), `unfold` lets that escape into the
+    # proof parse - and a generic `[Def, n]` tries every definition in scope, so
+    # one such definition breaks definitional steps system-wide. Settle it here,
+    # where the author can act on it, exactly as an unsound defining form is.
+    if built.condition is None:
+        return
+    # The binders count as supplied: the unfold resolves each to the leaf it takes
+    # there and exposes it under its name (`kernel.definitions._condition_binding`).
+    # Only the unambiguous ones — a spelling two binders share names neither, and
+    # is exactly what should be refused here rather than resolved to one of them.
+    names = [binder.name for binder in built.fresh]
+    supplied = set(built.higher.free_vars()) | {n for n in names if names.count(n) == 1}
+    orphaned = sorted(references(built.condition) - supplied)
+    if orphaned:
+        listed = ", ".join(repr(name) for name in orphaned)
+        raise DeclarativeError(
+            f"Definition '{defn.name}' has a proviso naming {listed}, which its "
+            f"defined form '{defn.higher}' does not supply and its binders do not "
+            "unambiguously name. A proviso is checked against the match between the "
+            "defined form and the term being unfolded, plus the binders that unfold "
+            f"resolves, so it can constrain nothing else. Either make {listed} a "
+            "parameter of the defined form, or state the proviso over what it has."
+        )
+
+
 def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: FormalSystem) -> bool:
     """Register ``defn`` against the now-complete grammar, returning whether it
     layered — ``True`` when its defining (lower) form was recognised (given the
@@ -955,18 +1234,19 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
     context_copy = copy(system.context)
     context_copy.string_variables.update(_binding_patterns(defn.bindings, ctx))
 
-    # A `;` inside a `where` proviso conjoins several kernel conditions.
-    where_strings = (
-        [part.strip() for part in defn.condition.split(";") if part.strip()]
-        if defn.condition
-        else []
-    )
-    kernel_condition = combine_side_conditions(where_strings, context_copy)
-
     # The defining form's bound variables, resolved to their sort patterns, so the
     # term checker treats them as binders (capture-avoiding unfold) rather than as
     # stray ground leaves that would force the string path.
     fresh_patterns = _binding_patterns(defn.fresh, ctx)
+
+    # A definition holding only under an obligation discharges it here, before any
+    # of it is registered — the obligation is stated in the grammar the definition
+    # extends, so it must be settled while that grammar is still the one in force.
+    # What comes back is the cited theorem's own provisos, to be conjoined with the
+    # definition's once those can be parsed.
+    inherited: list[SideCondition] = (
+        _discharge_justification(defn, system) if defn.justification is not None else []
+    )
 
     # Whether the defining form is recognised *given the definitions before it* is
     # what "layering" means, and it is settled before anything is registered: a
@@ -975,7 +1255,42 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
         return False
 
     notation = union.add_notation(defn.higher, context_copy)
+    # Whether the notation was already in scope, so a failure below knows whether
+    # removing it is undoing *this* registration or confiscating an earlier
+    # definition's grammar — two definitions may share one defined form, and
+    # `add_notation` hands back the production the first one registered.
+    shared_with_an_earlier_definition = notation in system.context.definitions
     system.context.definitions.add(notation)
+
+    try:
+        return _register_notated_definition(
+            defn, union, notation, ctx, context_copy, fresh_patterns, inherited, system
+        )
+    except DeclarativeError:
+        # Every refusal past this point is a *late* one: the notation is already
+        # in scope, so the defined form parses as defined notation while no kernel
+        # definition backs it. Harmless when a whole build is being discarded, but
+        # `register_definition` mutates a live system, and a caller that catches
+        # this to keep the assertion as an axiom (which is what a corpus import
+        # does) would be left with the grammar half-extended.
+        if not shared_with_an_earlier_definition:
+            system.context.definitions.discard(notation)
+        raise
+
+
+def _register_notated_definition(
+    defn: Definition,
+    union: Pattern,
+    notation: DefinedNotation,
+    ctx: FormalSystemContext,
+    context_copy: Context,
+    fresh_patterns: dict[str, Pattern],
+    inherited: list[SideCondition],
+    system: FormalSystem,
+) -> bool:
+    # The half of `_finalise_definition` that runs with the defined form's notation
+    # already in scope — which is what makes that form grammatical, and so what
+    # every check below needs. Split out so a refusal here can withdraw it again.
 
     # Whether the sort actually parses the defined form through *this* notation.
     # A sort tries its own productions before its notations, so a form the grammar
@@ -996,8 +1311,8 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
     # it projects this template to a constructor and a constructor snapshots the
     # declaration. Safe in both directions: the definition's own leaf is always
     # among its defined form's, so `introduced_leaves` never puts it to the
-    # constants check during this build, and a build that goes on to fail discards
-    # the notation with the rest of the half-built system.
+    # constants check during this build, and a definition that goes on to fail
+    # withdraws the notation this is written on (see the caller).
     notation.template.denotes_constant = denotes_a_constant(notation, parses_to_its_own_leaf)
 
     # Build the kernel counterpart now, against the context the notation has just
@@ -1009,18 +1324,31 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
     #
     # A definition with no sound kernel reading is rejected here rather than
     # silently accepted and refused per-step later.
+    # Built *without* the condition first, because which binders the definition has
+    # is settled here and the condition may name one. A `fresh` clause need not be
+    # written: a grammar with binding slots has it inferred from the parsed defining
+    # form (`formal_system.definitions`), so reading `defn.fresh` would see nothing
+    # and a proviso naming an inferred binder would parse as the literal token —
+    # inert, and silently so. The condition decides nothing during construction, so
+    # attaching it afterwards costs only this ordering.
     try:
         kernel_definition = build_kernel_definition(
             notation,
             defn.lower,
             system.context,
-            condition=kernel_condition,
             fresh=fresh_patterns or None,
             label=defn.label,
         )
     except DefinitionError as exc:
         raise DeclarativeError(str(exc)) from exc
 
+    kernel_definition = replace(
+        kernel_definition,
+        condition=_definition_condition(
+            defn, kernel_definition, ctx, context_copy, inherited
+        ),
+    )
+    _check_condition_is_checkable(defn, kernel_definition)
     system.add_definition(kernel_definition)
 
     # A freshly added definition or one that de-duplicated into an existing
@@ -1031,6 +1359,36 @@ def _finalise_definition(defn: Definition, ctx: FormalSystemContext, system: For
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
+
+
+def register_definition(defn: Definition, system: FormalSystem) -> bool:
+    """Register one definition against an already-built ``system``.
+
+    The same registration :func:`build_system` performs for every definition in a
+    spec, for a caller that has one to add later — an import walking a corpus, in
+    which the theorem a definition's justification cites is promoted as the walk
+    reaches it and so is not there when the system is built.
+
+    Returns whether the definition *layered* (see :func:`_finalise_definition`),
+    appending that to ``system.definition_layering`` so it stays positional with
+    ``system.definitions`` however the definitions arrived, and raises
+    :class:`DeclarativeError` if the definition cannot be registered soundly.
+    """
+    if system.build_context is None:
+        raise DeclarativeError(
+            f"Cannot register definition '{defn.name}' against a system with no "
+            "build context."
+        )
+    # A cited definition name must resolve to one definition, and nothing else
+    # enforces that: `_definition_by_label` takes the first match, so a collision
+    # would leave the second silently uncitable. `build_system` refuses a
+    # duplicate within its own spec; this is the same refusal against whatever the
+    # system already carries.
+    if defn.label is not None and any(d.label == defn.label for d in system.definitions):
+        raise DeclarativeError(f"Duplicate definition label '{defn.label}'.")
+    layered = _finalise_definition(defn, system.build_context, system)
+    system.definition_layering.append(layered)
+    return layered
 
 
 def build_spec(
@@ -1226,11 +1584,20 @@ def registered_definition_layering(spec: SystemSpec) -> list[bool]:
     reporting every definition dropped. Only a broken *grammar* still errors —
     and there no definition can layer at all, so all-``False`` is the honest
     answer (nothing is live for a reorder to drop).
+
+    A definition's *justification* goes with the rules, and for the same reason:
+    it cites one, so keeping it would fail the reduced build over something that
+    decides nothing about layering — reporting every definition dropped, which is
+    exactly what the reduction exists to prevent.
     """
     reduced = copy(spec)
     reduced.axioms = []
     reduced.rules = []
     reduced.lines = []
+    reduced.definitions = [
+        replace(defn, justification=None) if defn.justification is not None else defn
+        for defn in spec.definitions
+    ]
     result = build_spec(reduced)
     if "errors" in result:
         return [False] * len(spec.definitions)

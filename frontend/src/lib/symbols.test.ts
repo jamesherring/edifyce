@@ -70,7 +70,8 @@ function definition(higher: string, lower: string): Definition {
 		condition: null,
 		bindings: [],
 		fresh: [],
-		label: null
+		label: null,
+		justification: null
 	};
 }
 

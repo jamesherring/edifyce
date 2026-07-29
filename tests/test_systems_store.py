@@ -64,7 +64,14 @@ from tests.spec_helpers import (
     universal_prod,
     variable_prod,
 )
-from website.logical.declarative import LinePart, LineSpec, Rule, SystemSpec, build_spec
+from website.logical.declarative import (
+    Justification,
+    LinePart,
+    LineSpec,
+    Rule,
+    SystemSpec,
+    build_spec,
+)
 
 # The system decomposition now lives among the full app schema. The pgvector
 # `theorems` table (and other Postgres-only bits) aren't SQLite-creatable, so
@@ -381,6 +388,54 @@ def test_labelled_definitions_round_trip_through_the_database(session):
     system = build_spec(system_to_spec(stored))["system"]
     proof = system.parse("a sub b [HYP]\na ∈ b [sub, 1]")
     assert proof.proof_lines[1].valid is True
+
+
+def justified_definition_spec() -> SystemSpec:
+    # A definition holding only under an obligation the system has already settled
+    # — the `df-sb` shape. Both halves of the citation have to persist: a rebuilt
+    # spec that dropped them would build a definition holding unconditionally,
+    # which is a weaker theory than the one that was stored.
+    return SystemSpec(
+        name="Justified",
+        brackets=brackets(),
+        productions=[variable_prod(), membership_prod(), implication_prod()],
+        lines=[statement_line()],
+        definitions=[
+            defn("formula", "sub", "x sub y", "x ∈ y",
+                 [("x", "term"), ("y", "term")],
+                 justification=Justification("immaterial", "(x ∈ y → x ∈ y)")),
+        ],
+        rules=[
+            hyp_rule(),
+            rule("immaterial", "immaterial", [], "(x ∈ y → x ∈ y)",
+                 [("x", "term"), ("y", "term")]),
+        ],
+    )
+
+
+def test_a_definition_s_justification_round_trips_through_the_database(session):
+    session.add(spec_to_system(justified_definition_spec()))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Justified"))
+
+    row = stored.definitions[0]
+    assert (row.justification_label, row.justification_statement) == (
+        "immaterial", "(x ∈ y → x ∈ y)"
+    )
+    assert system_to_spec(stored) == justified_definition_spec()
+    assert build_spec(system_to_spec(stored))["system"].definition_layering == [True]
+
+
+def test_a_definition_with_no_justification_stores_neither_half(session):
+    session.add(spec_to_system(labelled_definition_spec()))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Labelled"))
+
+    row = stored.definitions[0]
+    assert (row.justification_label, row.justification_statement) == (None, None)
+    assert system_to_spec(stored).definitions[0].justification is None
 
 
 def extra_antecedents_spec() -> SystemSpec:

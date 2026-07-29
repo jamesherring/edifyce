@@ -21,6 +21,23 @@ if TYPE_CHECKING:
     Binding = dict[str, Term]
 
 
+def statement_term(pattern: Pattern) -> Term:
+    """The kernel term a schema pattern is unified as, metavariables shared.
+
+    A compound template (a Hilbert axiom, an imported ``$p``) carries a
+    precomputed *nested* term from the build; anything else projects flat, which
+    is one production. Either way its named metavariables keep their names, so a
+    repeated one binds consistently.
+
+    This is the projection for a schema read *as a statement* - one occurrence,
+    so nothing is renamed apart. :meth:`InferenceRule._schema_term` adds that
+    renaming for a bare-sort slot appearing in several antecedents.
+    """
+    if isinstance(pattern, StringPattern) and pattern.schema_term is not None:
+        return pattern.schema_term
+    return from_pattern(pattern)
+
+
 @dataclass(eq=False)
 class SubproofSchema:
     """The subproof an inference rule discharges.
@@ -394,9 +411,7 @@ class InferenceRule:
             # build; a flat from_pattern projection would be one production
             # while the proof formula it must match is a nested tree. Either way
             # its named metavariables are shared, so no per-occurrence renaming.
-            if pattern.schema_term is not None:
-                return pattern.schema_term
-            return from_pattern(pattern)
+            return statement_term(pattern)
 
         term = from_pattern(pattern)
         renames = {
