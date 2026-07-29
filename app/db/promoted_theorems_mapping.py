@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from website.logical.formal_system import PromotedTheorem
     from website.logical.kernel.terms import Term
     from website.logical.matching.context import Context
+    from website.logical.matching.patterns import Pattern
 
 
 def theorem_digest(library: str, spec: TheoremSpec) -> str:
@@ -160,7 +161,9 @@ def store_theorem(
     return row
 
 
-def _term_id(session: Session, system: FormalSystem, pattern: object) -> uuid.UUID | None:
+def _term_id(
+    session: Session, system: FormalSystem, pattern: Pattern | None
+) -> uuid.UUID | None:
     # Only a `StringPattern` carries a composed term; a schema that resolved to a
     # declared grammar pattern has none and needs none (see schema_terms._term_id
     # for the same reasoning on the rule side).
@@ -236,16 +239,20 @@ def load_theorems(
         and row.schema_digest == theorem_digest(library, specs[row.label])
     }
 
-    # Every cached term of every theorem asked for, in one sweep — and held, since
-    # the identity map's references are weak (see prefetch_terms).
+    # Every cached term of every theorem asked for, in one sweep. `by_id` holds
+    # the whole graph, descendants included, for as long as terms are being read
+    # out of it: the identity map's references are weak, so a row nothing refers
+    # to is collected and the edge that reaches it goes back to the database
+    # (see prefetch_terms).
     ids = [
         term_id
         for row in fresh.values()
         for term_id in (row.statement_term_id, *(p.term_id for p in row.premises))
         if term_id is not None
     ]
-    graph = prefetch_terms(session, ids)
-    by_id: dict[uuid.UUID, TermRow] = {term.id: term for term in graph}
+    by_id: dict[uuid.UUID, TermRow] = {
+        term.id: term for term in prefetch_terms(session, ids)
+    }
     memo: dict[object, Term] = {}
 
     def term(term_id: uuid.UUID | None) -> Term | None:
@@ -264,8 +271,6 @@ def load_theorems(
                 else [term(premise.term_id) for premise in current.premises]
             ),
         )
-    # `graph` is referenced until here so the rows above outlive their reads.
-    del graph
     return promoted
 
 
@@ -284,7 +289,11 @@ def load_hypotheses(
     them, which is what keeps a bare ``|- ph`` from being citable by anybody else.
 
     Each becomes a zero-premise theorem over the owner's metavariables, which is
-    what ``_givens`` builds and what a hypothesis *is*.
+    what ``_givens`` builds and what a hypothesis *is* — including its default
+    ``matching``, rather than the owner's. Inheriting would arguably be better,
+    but only *arguably*: what matters is that a hypothesis promoted from rows and
+    one promoted by the walk are the same object, and a divergence between those
+    two paths is the bug class P2 shipped twice.
     """
     row = session.get(
         PromotedTheoremRow,
@@ -300,10 +309,13 @@ def load_hypotheses(
         return {}
 
     metavariables = {b.var: b.symbol.name for b in row.bindings}
-    graph = prefetch_terms(
-        session, [p.term_id for p in row.premises if p.term_id is not None]
-    )
-    by_id = {term.id: term for term in graph}
+    # Held for the duration of the reads below; see `load_theorems`.
+    by_id = {
+        term.id: term
+        for term in prefetch_terms(
+            session, [p.term_id for p in row.premises if p.term_id is not None]
+        )
+    }
     memo: dict[object, Term] = {}
 
     hypotheses: dict[str, PromotedTheorem] = {}
@@ -317,13 +329,11 @@ def load_hypotheses(
                 label=premise.label,
                 statement=premise.statement,
                 metavariables=metavariables,
-                matching=row.matching,
             ),
             statement_term=(
                 None if term_row is None else load_term(term_row, context, memo)
             ),
         )
-    del graph
     return hypotheses
 
 

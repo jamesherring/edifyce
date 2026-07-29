@@ -25,6 +25,16 @@ the labels its proof actually names and no more. See
 The statement and premise **terms** are cached beside their text, exactly as a
 rule's schema terms are (P3): a theorem whose digest still matches is rebuilt
 with no parse at all, which is what "re-checks from rows alone" means.
+
+For an imported corpus the cached term is also the *more faithful* of the two.
+A walk promotes each theorem against the grammar as of its own position, while
+the stored system is the union over the whole walk — so re-composing a statement
+against that union can read it through notation declared later, which is the
+capture the ordering exists to prevent (metamath roadmap §1). The digest covers
+that union, so an unedited import always hits the cache and gets the term the
+walk composed. It is the *fallback* that is approximate, and only for a system
+whose grammar has since moved — where nothing else about the import is current
+either.
 """
 
 from __future__ import annotations

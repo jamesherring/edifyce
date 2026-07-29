@@ -29,6 +29,7 @@ pytest.importorskip("sqlalchemy")
 
 from sqlalchemy import create_engine, func, select
 from sqlalchemy import distinct as distinct_
+from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
 from app.db import Base, cited_labels, load_proof_for_check, load_term, load_theorems
@@ -579,3 +580,76 @@ def test_a_stored_theorem_carries_the_term_its_statement_composed_to(session, im
     moved = system_to_spec(session.get(FormalSystem, imported.system_id))
     moved.productions[0].name = "renamed"
     assert library_digest(spec) != library_digest(moved)
+
+
+def test_a_theorem_whose_digest_moved_is_promoted_by_parsing_instead(session, imported):
+    # The cache is a cache: strip the digests and everything still re-checks,
+    # having composed the statements again. Same contract as the rule schema
+    # terms — a miss costs a parse and never a difference.
+    session.execute(sa_update(PromotedTheoremRow).values(schema_digest=None))
+    session.commit()
+
+    system = session.get(FormalSystem, imported.system_id)
+    spec = system_to_spec(system)
+    built = build_spec(spec)["system"]
+    context = copy(built.context)
+    context.variables.update(built.build_context.variables)
+
+    loaded = load_theorems(
+        session, imported.system_id, ["ax-1", "ax-mp"], built, context,
+        library_digest(spec),
+    )
+    assert set(loaded) == {"ax-1", "ax-mp"}
+    # `ax-1`'s conclusion is compound, so composing it is what the cache saved;
+    # the parse must reach the same nested term rather than a flat projection.
+    assert loaded["ax-1"].deduction.schema_term is not None
+
+
+def test_a_cited_label_with_no_theorem_row_is_simply_absent(session, imported):
+    # `cited_labels` over-collects on purpose — a citation may name a rule, a
+    # definition, or a line of a cited proof — so the loader must be indifferent
+    # to a label it holds nothing for rather than treating it as a miss to report.
+    system = session.get(FormalSystem, imported.system_id)
+    spec = system_to_spec(system)
+    built = build_spec(spec)["system"]
+    context = copy(built.context)
+    context.variables.update(built.build_context.variables)
+
+    loaded = load_theorems(
+        session, imported.system_id, ["ax-1", "no-such-label", "ax-mp, 1, 2"],
+        built, context, library_digest(spec),
+    )
+    assert set(loaded) == {"ax-1"}
+
+
+def test_a_hypothesis_is_reachable_only_through_the_theorem_that_owns_it(
+    session, imported
+):
+    """A `$e` promoted for anyone is a bare `|- ph` that proves anything.
+
+    The walk keeps that from happening in *time* — promoted for one check, then
+    withdrawn. Storage has to keep it from happening in *reach*, which is why a
+    hypothesis is a column on its theorem rather than a library entry.
+    """
+    system = session.get(FormalSystem, imported.system_id)
+    spec = system_to_spec(system)
+    built = build_spec(spec)["system"]
+    context = copy(built.context)
+    context.variables.update(built.build_context.variables)
+
+    # `mp2` proves under three hypotheses, labelled `mp2.1`…`mp2.3`.
+    mp2 = session.scalar(
+        select(PromotedTheoremRow).where(PromotedTheoremRow.label == "mp2")
+    )
+    assert [p.label for p in mp2.premises] == ["mp2.1", "mp2.2", "mp2.3"]
+
+    # Cited as a theorem, they resolve to nothing: no library row bears the name.
+    assert load_theorems(
+        session, imported.system_id, ["mp2.1", "mp2.2"], built, context,
+        library_digest(spec),
+    ) == {}
+
+    # Reached through their owner, they are exactly what the walk promoted.
+    hypotheses = load_hypotheses(session, mp2.id, built, context)
+    assert set(hypotheses) == {"mp2.1", "mp2.2", "mp2.3"}
+    assert all(h.antecedents == () for h in hypotheses.values())

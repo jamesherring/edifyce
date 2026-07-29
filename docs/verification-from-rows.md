@@ -567,6 +567,17 @@ difference. `library_digest` is the system half of that digest and is wider than
 does — a statement is composed at the sorts a **line** is read at, and a ground
 one may use the system's resolved **definitions**.
 
+**One asymmetry worth naming.** For an imported corpus the *cached* term is more
+faithful than a re-parse, which is unusual — everywhere else in this document the
+stored value is a saved copy of what re-deriving would produce. A walk promotes
+each theorem against the grammar as of its own position; the stored system is the
+union over the whole walk, so re-composing a statement against that union can read
+it through notation declared later (the capture the ordering exists to prevent —
+metamath roadmap §1). The digest covers the union, so an unedited import always
+hits the cache and gets the term the walk composed. Only the fallback is
+approximate, and only for a system whose grammar has since moved, where nothing
+about the import is current anyway.
+
 **What this does not do.** Promoting a *natively-authored* proof — the storage is
 there, but deciding what a proved lemma generalises to is the metamath roadmap's
 A1 and a separate question. And `_link_proofs_to_theorems` joins a proof to its
