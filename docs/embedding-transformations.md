@@ -467,13 +467,44 @@ Small enough to print every vector. One system: sort `term` (variables, `∅`, `
 leaves are seeded unit vectors; `Bound` is de Bruijn, so binders need no leaf.
 
 ```
-emb(Node c {l₁:t₁ … l_k:t_k}) = ( Σᵢ A_{c,lᵢ} · emb(tᵢ) ) / √k
+emb(Node c {l₁:t₁ … l_k:t_k}) = ( Σᵢ A[c, lᵢ] · emb(tᵢ) ) / √k
 ```
 
 Scaling by `1/√k` instead of normalising per node keeps the fold exactly affine,
 which is what lets a definition's compiled map be displayed below.
 
-**A.1 One matrix per slot, not one matrix on the sum.** Tying a constructor's
+**A.0 What the matrix table is indexed by.** `A` is keyed by *(constructor,
+slot)* — by the **grammar**, never by a node or a child. For the system above
+that is nine matrices in total, and a corpus of 10⁶ terms adds none: only a new
+constructor does.
+
+```
+A[member , x]   A[member , y]      A[implies, p]   A[implies, q]
+A[subset , x]   A[subset , y]      A[forall , p]
+A[union  , x]   A[union  , y]
+```
+
+`Constructor.slots` is already exactly this index — "the variable-slot labels in
+template order **with repetition**" (`kernel/constructors.py:65`), so a repeated
+label such as `(p → p)`'s `("p", "p")` correctly looks up one matrix twice. In
+DAG terms: **matrices live on edge labels, vectors live on nodes.** A subterm
+reached by three parents is folded once, and its single vector is multiplied by
+three different matrices, one per incoming `TermChildRow(parent, slot, child)`.
+
+**A.1 Leaves, and why `emb(a) ≠ emb(b)`.** Numbering `a ⊆ b`'s free variables by
+first occurrence in template order gives `{a: 0, b: 1}`, so
+
+```
+emb(a)      = v_term#0  = [-0.517 -0.639 -0.570]
+emb(b)      = v_term#1  = [ 0.286  0.808 -0.516]     cos = -0.369
+emb(Bound0) = v_bound#0 = [ 0.624 -0.163  0.764]
+```
+
+`emb(a)` is not "the embedding of `a`" but "the embedding of *the first variable
+mentioned*" — which is what buys α-invariance, since `y` in `y ⊆ z` also gets
+`v_term#0`. `Bound0` needs no numbering: de Bruijn indices are intrinsic.
+
+**A.2 One matrix per slot, not one matrix on the sum.** Tying a constructor's
 slot matrices together *is* "apply one matrix to the sum of the children" — and
 that is precisely the commutative combiner, so it must be opt-in:
 
@@ -482,25 +513,55 @@ per-slot     cos(∅ ∈ ω, ω ∈ ∅) = +0.229      order preserved
 slots tied   cos(∅ ∈ ω, ω ∈ ∅) = +1.000      order discarded
 ```
 
-**A.2 A definition costs one compiled affine map, not a dimension.**
-With `x ⊆ y ≝ ∀z.(z ∈ x → z ∈ y)`:
+**A.3 A definition costs one compiled affine map, not a dimension.**
+With `x ⊆ y ≝ ∀z.(z ∈ x → z ∈ y)`, `a ⊆ b` first unfolds to
+`Node(forall, {p: Node(implies, {p: Node(member, {x: Bound0, y: Var a}),
+q: Node(member, {x: Bound0, y: Var b})})})`, and then folds bottom-up:
 
 ```
-before wiring   emb(a ⊆ b)        = [ 0.814  0.469  0.010]
-                emb(∀z.(z∈a → z∈b)) = [ 0.481  0.592 -0.350]   cos = +0.844
-after  wiring   both              = [ 0.481  0.592 -0.350]     cos = +1.000
+emb(z ∈ a) = (A[member,x]·emb(Bound0) + A[member,y]·emb(a)) / √2 = [-0.028  0.290 -0.059]
+emb(z ∈ b) = (A[member,x]·emb(Bound0) + A[member,y]·emb(b)) / √2 = [-0.766 -0.611  0.053]
+emb(→)     = (A[implies,p]·emb(z∈a)   + A[implies,q]·emb(z∈b)) / √2 = [ 0.070 -0.208 -0.810]
+emb(∀z. →) =  A[forall,p]·emb(→) / √1                             = [ 0.481  0.592 -0.350]
 ```
 
-and because the fold is affine, the definiens folds *once* into a map reusable at
-every occurrence — `O(1)` per node thereafter, no unfolding at fold time:
+The two `member` nodes apply *identical* matrices and differ only through their
+children — which is the compositionality the whole scheme rests on. Writing that
+out in one line and collecting by parameter:
 
 ```
-emb(x ⊆ y) = b + L_x·emb(x) + L_y·emb(y)
+emb(x ⊆ y) = A_f·[ A_ip·(A_mx·z + A_my·x) + A_iq·(A_mx·z + A_my·y) ] / 2
+
+           = A_f·(A_ip + A_iq)·A_mx·emb(Bound0) / 2      ← b   (no parameter)
+           + A_f·A_ip·A_my / 2               · emb(x)    ← L_x
+           + A_f·A_iq·A_my / 2               · emb(y)    ← L_y
+```
+
+so `L_x` and `L_y` are just the products of slot matrices along the path from the
+definiens root to each parameter's position, scaled by the accumulated `1/√k`:
+`L_x` walks `forall.p → implies.p → member.y`, `L_y` walks
+`forall.p → implies.q → member.y`.
+
+```
+b   = [0.250 0.206 0.304]
 L_x = [-0.161 -0.028 +0.472; -0.471 +0.057 -0.157; +0.045 +0.496 +0.045]
 L_y = [+0.347 +0.167 -0.319; +0.205 +0.272 +0.366; +0.296 -0.385 +0.120]
+
+b + L_x·emb(a) + L_y·emb(b)  = [ 0.481  0.592 -0.350]   = the fold above ✓
+before the definition was wired, emb(a ⊆ b) was [0.814 0.469 0.010]  (cos +0.844)
 ```
 
-**A.3 A new theorem updates one flag, and congruence follows.** Proving
+The map does not depend on the children, so it is computed once when the
+definition is declared and never unfolded again —
+`emb((∅ ∪ ω) ⊆ c) = [0.439 -0.806 0.210]` by either route.
+
+The offset `b` is *entirely* the binder's leaf: `z` is introduced by the defining
+form and not supplied by the defined form, so nothing can vary it. A definition
+whose definiens introduces no leaf beyond its parameters compiles to a purely
+**linear** map. That condition is `free_vars(lower) − free_vars(higher)`, which
+`kernel/definitions.py` already computes as `introduced_leaves`.
+
+**A.4 A new theorem updates one flag, and congruence follows.** Proving
 `x ∪ y = y ∪ x` ties `union`'s two slot matrices. Nothing else is edited:
 
 ```
@@ -514,7 +575,7 @@ The context case is the point: no correction was applied to `⊆`, yet the two
 `⊆` statements agree, because the fold is bottom-up and the parent recomputes
 from a corrected child. This is the whole content of §2's "inside, not after".
 
-**A.4 The variable-naming choice, and its cost.** Numbering free variables by
+**A.5 The variable-naming choice, and its cost.** Numbering free variables by
 first occurrence (what `alpha_digest` does) gives the wanted invariance *with*
 sharing; a sort-generic leaf gives the invariance and loses sharing:
 
@@ -535,7 +596,7 @@ emb(c ∈ a) inside (a∈b)→(c∈a)  [ 0.941 -0.355  0.253]   numbering {a:0, 
 — §7's non-compositionality, made concrete. A memo keyed on the term row is
 simply wrong.
 
-**A.5 The compositional fix, and its degeneracy.** Carry, per node, the affine
+**A.6 The compositional fix, and its degeneracy.** Carry, per node, the affine
 form `emb(t) = b(t) + Σ_v L_v(t)·e(v)` keyed by *variable identity*. This
 composes (`L_v(c(t₁,t₂)) = (A_1 L_v(t₁) + A_2 L_v(t₂))/√2`), mentions no
 numbering, and so is memoisable on the exact `digest` — which is what `TermRow`
