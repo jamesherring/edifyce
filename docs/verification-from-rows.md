@@ -51,7 +51,7 @@ checking does.
 ## 2. What is stored, and what is thrown away
 
 This table is what the phases below work through; **used** is the state after
-P1–P4.
+P1–P5.
 
 | Verification needs | Stored | Used |
 |---|---|---|
