@@ -52,7 +52,7 @@ from .importer import (
 from .parser import MetamathError
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Iterator, Mapping, Sequence
 
     from ..declarative import SystemSpec
     from ..formal_system import FormalSystem
@@ -101,7 +101,10 @@ def theorems(database: Database, limit: int | None = None) -> list[Assertion]:
 
 
 def corpus_spec(
-    database: Database, limit: int | None = None, name: str = "Metamath"
+    database: Database,
+    limit: int | None = None,
+    name: str = "Metamath",
+    binders: Mapping[str, Mapping[str, Sequence[str]]] | None = None,
 ) -> SystemSpec:
     """The grammar a walk of ``limit`` theorems ends with.
 
@@ -113,7 +116,9 @@ def corpus_spec(
     if not walked:
         raise MetamathError("Database declares no provable statements to walk.")
     horizon = walked[-1].label
-    return build_spec(database, name, before=horizon, variable_scope=horizon)
+    return build_spec(
+        database, name, before=horizon, variable_scope=horizon, binders=binders
+    )
 
 
 def walk(
@@ -123,6 +128,7 @@ def walk(
     registered: Callable[[LibraryEntry], None] | None = None,
     equivalences: frozenset[str] = frozenset(),
     classified: Callable[[Classified], None] | None = None,
+    binders: Mapping[str, Mapping[str, Sequence[str]]] | None = None,
 ) -> Iterator[CheckedTheorem]:
     """Check each of ``database``'s first ``limit`` theorems, in file order.
 
@@ -140,6 +146,12 @@ def walk(
     logical ``$a`` be imported as a **definition** as well as an axiom; naming
     none - the default - imports every one as an axiom exactly as before. See
     :mod:`~.definitions`, and ``classified`` for the per-assertion verdicts.
+
+    ``binders`` declares which slots of a syntax axiom bind, and over which others
+    (:func:`~.importer.build_spec`). It decides far more of the classification than
+    ``equivalences`` does: a definition whose defining form binds a dummy needs a
+    ``fresh`` clause, which is inferred from these, and without them 1,123 of
+    `set.mm`'s definition-shaped statements stay axioms. :mod:`~.setmm` has both.
     """
     walked = theorems(database, limit)
     if not walked:
@@ -159,7 +171,10 @@ def walk(
     schedule = grammar_schedule(database, before=horizon)
     try:
         system = build_system(
-            build_spec(database, name, before=horizon, variable_scope=horizon)
+            build_spec(
+                database, name, before=horizon, variable_scope=horizon,
+                binders=binders,
+            )
         )
     except Exception as exc:  # noqa: BLE001 - reported per theorem, not fatal
         for assertion in walked:

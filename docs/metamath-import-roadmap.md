@@ -638,11 +638,58 @@ statement. The contract here is that doubt costs an axiom, not a build — and i
 now checked, not assumed: 25 sampled definitions all register against a system
 built to their own position.
 
-`df-sb` and `df-mo` are among the 1,123, so the justification mechanism is
-implemented and verified but currently reaches nothing in `set.mm`. **Teaching the
-importer binding slots is therefore the highest-value next step in A4** — set.mm's
-`$j` annotations are the obvious source — and it lifts ~1,123 statements at once
-with no change to the classifier's tests.
+### Binding slots, and where they come from
+
+The wall lifts by *declaring* which slots bind, and the size of that declaration
+was worth measuring before writing it: **28 productions** account for all 1,123,
+and ten of them for 94% of the binding occurrences —
+
+| | | | |
+|---|---|---|---|
+| `cmpo` 904 | `cmpt` 791 | `wral` 582 | `crab` 419 |
+| `wrex` 309 | `copab` 287 | `cab` 176 | `csb` 156 |
+| `wsbc` 149 | `wex` 74 | | |
+
+— then `coprab`, `crio`, `wal`, `ciun`, `csu`, `cixp`, `cio`, and a tail of
+single-figure ones. `website/logical/metamath/setmm.py` holds the table, beside
+the `equivalences` set, as *data about one library* rather than engine behaviour.
+
+**An earlier revision of this section said `set.mm`'s `$j` annotations were the
+obvious source. That was wrong**, and worth correcting rather than quietly
+dropping, because the shape of the mistake recurs. Of the file's 1,204 `$j`
+directives:
+
+| | |
+|---|---|
+| `usage` (which axioms a proof avoids) | 1,137 |
+| `restatement`, `primitive`, `congruence`, … | 62 |
+| **`free_var` / `free_var_in`** | **5** |
+
+Five, and their polarity is the opposite of what is needed: `$j free_var 'wsb'
+with 'y'` marks the `y` of `[ y / x ] ph` **free**, although it sits exactly where
+a binder would. So `$j` is an *exception list against an assumed default* — the
+default being that a `setvar` slot binds — and reading it would still leave the
+default to be supplied. Adopting that default is inference about binding
+structure, which is the thing this project has twice declined for questions of
+just this kind (`denotes_constant`, then `equivalences`), both times after the
+inference turned out to be wrong in practice. So: a table.
+
+Nor does position decide it, which is what any positional rule would assume:
+
+```
+citg    class S. A B _d x               the binder is the *last* token, binding B
+cmpo    class ( x e. A , y e. B |-> C ) x reaches B as well as C
+wral    wff A. x e. A ph                x binds ph and *not* the domain A
+```
+
+Declaring the slots is not on its own enough, and the second half is easy to
+miss: the classifier's own refusals are stated over the surface variables, so they
+had to become scope-aware too. `bind_scoped` — the same call `parse_definition`
+makes to infer a `fresh` clause — decides which leaves are bound, and the
+classifier now asks it rather than re-deriving the scopes, so what it admits is
+what registration accepts. The `$d` check needed the same: a proviso naming a
+binder is resolvable, because an unfold settles the leaf that binder takes and
+exposes it under the binder's name.
 
 **Abstract binders make both of set.mm's justifications unnecessary — and set.mm
 declines that on purpose.** Worth recording, because it decides what the binding-
