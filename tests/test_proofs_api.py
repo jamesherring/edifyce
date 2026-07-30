@@ -873,9 +873,10 @@ def test_the_reference_closure_is_read_in_a_fixed_number_of_queries(client, db):
         finally:
             engine.dispose()
 
-    # Same number of round trips for one lemma as for six.
+    # Same number of round trips for one lemma as for six: the line rows, and
+    # one sweep for every term below them.
     assert queries_for(1) == queries_for(6)
-    assert queries_for(6) <= 3
+    assert queries_for(6) <= 2
 
 
 def test_an_unverified_reference_the_proof_never_cites_is_not_reported(client, db):

@@ -105,6 +105,11 @@ def term_of(context, formula_string):
         "∀z (z ∈ x → z ∈ y)",         # binder-shaped production
         "x ⊆ y",                      # defined notation (no namespace name)
         "(x ⊆ y → ∀w (w ∈ x → w ∈ y))",  # defined + raw mixed
+        # One interned child in *two* slots. The sweep's recursive CTE dedups its
+        # rows, so it has to key on the slot as well as on the edge's endpoints —
+        # keying on the endpoints alone would collapse these to one and lose a
+        # slot, which reconstructs as a node missing half its children.
+        "(x ∈ y → x ∈ y)",
     ],
 )
 def test_term_round_trips_through_the_database(
@@ -349,7 +354,9 @@ def test_prefetch_does_not_enumerate_paths_through_a_shared_dag(session):
     session.flush()
 
     # A chain of `depth` nodes, each reaching the next by *two* slots: 2**depth
-    # distinct paths from the root, and `depth + 1` distinct nodes.
+    # distinct paths from the root, `depth + 1` distinct nodes, and `2 * depth`
+    # distinct edges — which is what the CTE dedups down to, since it carries the
+    # slot. Both bounds are linear; only the path count is not.
     depth = 40
     nodes = [
         TermRow(formal_system=system, kind="node", constructor="c", digest=f"d{i}")

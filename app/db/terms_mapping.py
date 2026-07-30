@@ -36,7 +36,7 @@ from website.logical.kernel import Bound, Node, Term, Var, constructor_for, inte
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    from sqlalchemy import Select
+    from sqlalchemy import CTE, Select
 
     from app.db.models import FormalSystem
     from website.logical.kernel.constructors import Constructor
@@ -448,102 +448,124 @@ class TermGraph:
         return term
 
 
-def _reachable_rows_statement() -> Select:
-    """The closure query, built once — its roots are an expanding bind parameter.
+def _reachable_edges() -> CTE:
+    """The transitive closure of ``term_children`` below an expanding ``roots``.
 
-    Constructing it is not cheap: a recursive CTE has to have its column
+    Every edge whose parent is reachable from a root — which, since each closure
+    node is either a root or something's child, is *every edge of the closure*.
+    So this answers both halves of a sweep: the nodes are its ``child_id``s plus
+    the roots, and the edges are its rows.
+
+    It carries ``slot`` and ``position`` for that second use. They also widen
+    what `union` dedups on, which is the point: a node reaching one child through
+    two slots is one reachability fact but two edges, and collapsing them would
+    lose a slot.
+
+    `union`, emphatically not `union_all`. A term graph is a DAG with heavy
+    sharing — that is what interning is for — and `union_all` enumerates every
+    root-to-node *path* rather than every reachable edge, which is exponential in
+    depth. Measured on a chain of 21 nodes whose children are shared two ways:
+    4,194,302 rows and 2.5 s, against 21 rows and no measurable time. Dedup on
+    the wider tuple is still bounded by the number of stored edges, so the shape
+    of that guarantee is unchanged.
+    """
+    columns = (
+        TermChildRow.parent_id,
+        TermChildRow.child_id,
+        TermChildRow.slot,
+        TermChildRow.position,
+    )
+    edges = (
+        select(*columns)
+        .where(TermChildRow.parent_id.in_(bindparam("roots", expanding=True)))
+        .cte("reachable_terms", recursive=True)
+    )
+    return edges.union(
+        select(*columns).join(edges, TermChildRow.parent_id == edges.c.child_id)
+    )
+
+
+def _sweep_statement() -> Select:
+    """The whole sweep as one query, built once — the roots are its only parameter.
+
+    Every reachable node left-joined to its edges, so a node comes back once per
+    child and a leaf once with nulls. One statement rather than two because the
+    closure is the expensive half and this way it is computed once; the repeated
+    node columns cost far less than a second evaluation of the CTE.
+
+    Constructing it is not cheap either: a recursive CTE has to have its column
     collection set up before ``edges.c.child_id`` can name one, and that was a
     tenth of a re-check when it happened per call. With the roots bound rather
     than inlined the statement is a constant, so SQLAlchemy compiles it once and
     expands the ``IN`` list at execution.
+
+    Binding *only* the roots is also what keeps the parameter count bounded by
+    what the caller asked for rather than by what the closure turns out to be.
+    An earlier version passed the closure's parents back as a second ``IN`` list,
+    which a large enough graph would have pushed past the driver's parameter
+    limit: a 5,000-theorem set.mm slice already sweeps to 8,190 nodes, so the
+    whole corpus would clear both Postgres's 65,535 and SQLite's 32,766.
+
+    Ordered by ``position`` within a parent, which is template (reading) order —
+    the order ``store_term`` wrote the edges in, and the one a ``Node``'s slot
+    dict must carry.
     """
-    roots = bindparam("roots", expanding=True)
-    # Transitive closure over parent -> child, seeded at the roots' own edges.
-    #
-    # `union`, emphatically not `union_all`. A term graph is a DAG with heavy
-    # sharing — that is what interning is for — and `union_all` enumerates every
-    # root-to-node *path* rather than every reachable node, which is exponential
-    # in depth. Measured on a chain of 21 nodes whose children are shared two
-    # ways: 4,194,302 rows and 2.5 s, against 21 rows and no measurable time.
-    # The result set is identical either way, so nothing fails — it just gets
-    # slower the more sharing there is, in the function that exists to make
-    # loading cheap.
-    edges = (
-        select(TermChildRow.parent_id, TermChildRow.child_id)
-        .where(TermChildRow.parent_id.in_(roots))
-        .cte("reachable_terms", recursive=True)
-    )
-    edges = edges.union(
-        select(TermChildRow.parent_id, TermChildRow.child_id).join(
-            edges, TermChildRow.parent_id == edges.c.child_id
-        )
-    )
-    return select(
-        TermRow.id,
-        TermRow.kind,
-        TermRow.constructor,
-        TermRow.literal,
-        TermRow.sort,
-        TermRow.var_name,
-        TermRow.bound_index,
-    ).where(or_(TermRow.id.in_(roots), TermRow.id.in_(select(edges.c.child_id))))
-
-
-def _child_edges_statement() -> Select:
-    """Every edge under a set of parents, in ``position`` order.
-
-    That is template (reading) order — the order ``store_term`` wrote them in,
-    and the one a ``Node``'s slot dict is expected to carry.
-    """
+    edges = _reachable_edges()
     return (
-        select(TermChildRow.parent_id, TermChildRow.slot, TermChildRow.child_id)
-        .where(TermChildRow.parent_id.in_(bindparam("parents", expanding=True)))
-        .order_by(TermChildRow.parent_id, TermChildRow.position)
+        select(
+            TermRow.id,
+            TermRow.kind,
+            TermRow.constructor,
+            TermRow.literal,
+            TermRow.sort,
+            TermRow.var_name,
+            TermRow.bound_index,
+            TermChildRow.slot,
+            TermChildRow.child_id,
+        )
+        .join(TermChildRow, TermChildRow.parent_id == TermRow.id, isouter=True)
+        .where(
+            or_(
+                TermRow.id.in_(bindparam("roots", expanding=True)),
+                TermRow.id.in_(select(edges.c.child_id)),
+            )
+        )
+        .order_by(TermRow.id, TermChildRow.position)
     )
 
 
-_REACHABLE_ROWS = _reachable_rows_statement()
-_CHILD_EDGES = _child_edges_statement()
+_SWEEP = _sweep_statement()
 
 
 def prefetch_terms(session: Session, root_ids: Sequence[uuid.UUID]) -> TermGraph:
-    """Read every row reachable from ``root_ids`` in two queries.
+    """Read every row reachable from ``root_ids`` in one query.
 
     Walking the term relationships one node at a time is a query *per node*,
     which made rebuilding a statement cost several times what re-parsing it did
     — the one thing that would have made verifying from rows slower than the
     text path it replaces. So the closure is computed in the database and the
-    rows come back flat: two round trips for a whole proof's terms, whatever
+    rows come back flat: one round trip for a whole proof's terms, whatever
     their size or depth.
     """
     roots = list(dict.fromkeys(rid for rid in root_ids if rid is not None))
     if not roots:
         return TermGraph({}, {})
 
-    rows = {
-        row.id: _TermRow(
-            kind=row.kind,
-            constructor=row.constructor,
-            literal=row.literal,
-            sort=row.sort,
-            var_name=row.var_name,
-            bound_index=row.bound_index,
-        )
-        for row in session.execute(_REACHABLE_ROWS, {"roots": roots})
-    }
-    if not rows:
-        return TermGraph({}, {})
-
-    # Only a node has edges, so a graph of bare leaves skips the round trip.
-    parents = [
-        term_id for term_id, row in rows.items() if row.kind == TERM_KIND_NODE
-    ]
+    rows: dict[uuid.UUID, _TermRow] = {}
     children: dict[uuid.UUID, list[tuple[str, uuid.UUID]]] = {}
-    if parents:
-        for parent_id, slot, child_id in session.execute(
-            _CHILD_EDGES, {"parents": parents}
-        ):
-            children.setdefault(parent_id, []).append((slot, child_id))
+    for row in session.execute(_SWEEP, {"roots": roots}):
+        if row.id not in rows:
+            rows[row.id] = _TermRow(
+                kind=row.kind,
+                constructor=row.constructor,
+                literal=row.literal,
+                sort=row.sort,
+                var_name=row.var_name,
+                bound_index=row.bound_index,
+            )
+        # Null for a leaf, which the outer join returns exactly once.
+        if row.slot is not None:
+            children.setdefault(row.id, []).append((row.slot, row.child_id))
 
     return TermGraph(rows, children)
 

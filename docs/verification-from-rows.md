@@ -356,7 +356,7 @@ so each is a row on a query already being issued rather than a round trip.
 hydrated a `TermRow` object graph and `load_term` walked its relationships, for
 data that is immutable, never written back and read exactly once — none of the
 identity map, the instrumented attributes or the unit of work earns its keep
-there. It now issues two Core queries and returns a `TermGraph`: flat rows in a
+there. It now issues one Core query and returns a `TermGraph`: flat rows in a
 plain dict, rebuilt into kernel terms on demand and memoised across every root
 it was asked for. `load_term` is gone; the graph is the only way to read a
 stored term.
@@ -372,22 +372,36 @@ the rule no longer exists to be broken.
 
 The last third of it was not hydration at all: **the closure query was being
 built per call**, and a recursive CTE has to set up its column collection before
-`edges.c.child_id` can name one. Both statements are now module-level constants
-with their roots as expanding bind parameters, so SQLAlchemy compiles each once.
+`edges.c.child_id` can name one. The statement is now a module-level constant
+with its roots as an expanding bind parameter, so SQLAlchemy compiles it once.
+
+**And the sweep is one query rather than two**, which arrived by way of a review
+finding. The second query had asked for the closure's edges by naming every
+parent in an `IN` list — one bind parameter per reachable node, where the
+`selectinload` it replaced had chunked at 500. A 5,000-theorem set.mm slice
+already sweeps to 8,190 nodes, so the whole corpus would clear both Postgres's
+65,535 parameter cap and SQLite's 32,766. The fix was not to chunk but to notice
+that **the recursive CTE already computes every edge of the closure** — it simply
+was not carrying `slot` and `position`. With those two columns added, the nodes
+left-join their own edges and the whole sweep is one statement whose only
+parameter is the roots the caller asked for.
 
 | | per re-checked proof |
 |---|---|
 | before | 12.96 ms, 15.5 queries |
 | after the merge | 9.4 ms, 9.0 queries |
 | after Core rows | 7.85 ms, 9.0 queries |
-| after the cached statements | **5.52 ms, 9.0 queries** |
+| after the cached statement | 5.52 ms, 9.0 queries |
+| after folding the sweep into one query | **5.49 ms, 7.0 queries** |
 
-−57% and −42% in all. Worth being precise about which change bought what: of the
-query count, the merge is all of it and the `joinedload` change is one — in
-because a many-to-one under a collection should not be a round trip, not because
-it showed up. Of the time, the three changes are roughly a third each.
-`prefetch_terms` no longer appears in the profile's top twenty-six; what is left
-is dominated by the ORM load of the theorem rows themselves.
+−58% and −55% in all. Worth being precise about which change bought what: of the
+query count, the merge is most of it and the fold is the rest; the `joinedload`
+change is one, in because a many-to-one under a collection should not be a round
+trip, not because it showed up. Of the time, the first three changes are roughly
+a third each and the fold is free — it removes a round trip and adds a repeated
+node column per edge, and those cancel. `prefetch_terms` no longer appears in the
+profile's top twenty-six; what is left is dominated by the ORM load of the
+theorem rows themselves.
 
 **Still open: one term sweep instead of two.**
 A check still prefetches twice — once for the proof's own line terms, once for
