@@ -1,6 +1,6 @@
 # Design: verification from rows, not from text
 
-**Status:** P1–P4 shipped, P5 proposed · **Prerequisite work:** merged (the term
+**Status:** P1–P5 shipped · **Prerequisite work:** merged (the term
 graph, `proof_lines`, the kernel-takes-terms change #121, and the Metamath
 corpus import #124)
 
@@ -63,6 +63,7 @@ P1–P4.
 | Scope tree (for discharge) | yes — `proof_lines.opens_scope` / `scope_id` | no — *re-derived*, deliberately |
 | Rule schema terms | yes — `rules.deduction_term_id` etc. → `terms` | **yes** (P3), when `rules.schema_digest` still matches |
 | Definition higher/lower forms | **no** | stored as strings, matched against the grammar at build |
+| A line's flat string (string-rewriting) | no — *derived* | **yes** (P5), rendered from the term rather than stored |
 | Promoted theorems | yes — `promoted_theorems` → `terms` | **yes** (P4), resolved by label per citation |
 
 The two *deliberate* nos are the point rather than an omission. Edges and scope
@@ -159,23 +160,31 @@ is covered by asserting it *takes* the lock (`test_every_invalidation_path_takes
 the_system_lock`, one case per path); that the lock then excludes anything is a
 Postgres-only test which fails if the acquire is removed.
 
-## 4. The one honest exception
+## 4. The exception that turned out not to be one
 
 String-rewriting systems (semi-Thue: MIU and friends, `matching == "string"`)
-cannot be term-only by construction. `InferenceRule._string_pairs` matches
-schemas against `ProofLine.formula_string` by associative matching — splitting
-and concatenation the term unifier deliberately cannot express. `formula_string`
-is kept beside `formula_term` for exactly this reason.
+cannot be term-*only* by construction. `InferenceRule._string_pairs` matches
+schemas against `ProofLine.formula_string` by associative matching — the
+splitting and concatenation the term unifier deliberately cannot express.
 
-Two options, both acceptable, neither free:
+This section used to pose a choice: persist `formula_string` beside the term, or
+carve the regime out and let it re-parse. **Neither was needed.** A term renders
+back to its own surface string, so the flat form is *derived* rather than stored
+a second time or re-parsed — and the regime checks from rows like any other.
 
-- persist `formula_string` alongside the term, so those systems also check from
-  rows; or
-- carve them out explicitly — a system declaring string matching re-parses, and
-  the API says so — rather than letting them silently fall back.
+That is exact, not approximate, and the reason is worth stating because it is the
+whole basis for trusting it: `Term.to_string` walks its constructor's template
+pieces and a ground leaf returns its own literal, so a render can differ from the
+source only if a template *literal* matched text it does not equal. The matcher
+admits no such spelling — every whitespace variant of a template simply fails to
+parse. `test_a_rendered_formula_string_is_the_one_the_parse_recorded` asserts it
+over every shape the round trip composes proofs from, rather than leaving it as
+an argument.
 
-Either way it must be a stated exception, since "verification never parses" is
-otherwise false in a way that would surface as a mysterious performance cliff.
+So there is no carve-out and no second copy to keep in step, which is a better
+answer than either option originally on offer. What there *was* is described in
+P5: the derivation was conditional on a question that could not be answered where
+it was asked.
 
 ---
 
@@ -584,11 +593,104 @@ A1 and a separate question. And `_link_proofs_to_theorems` joins a proof to its
 theorem by name, which is exact for an import (both come from one `$p`) and would
 need saying differently for a library assembled any other way.
 
-### P5. Settle the string-rewriting path
+### P5. Settle the string-rewriting path — *done*
 
-Per §4 — persist `formula_string`, or carve the regime out explicitly.
+§4's choice had already been made, by P2, without being recorded as made: the row
+path recovered a line's flat string by rendering its term (`needs_strings` in
+`proofs_mapping`). So the regime was never carved out and `formula_string` was
+never stored twice. Half of this phase is just saying so — §4 now does, with the
+argument for why rendering is exact rather than close enough.
+
+**The other half is a divergence P4 opened and this found.** The recovery was
+*conditional*:
+
+```python
+needs_strings = any(rule.matching == "string" for rule in system.inference_rules)
+```
+
+Two things wrong with that question, and they compound. A promoted theorem
+carries `matching` too and is **not** an inference rule — so a system whose only
+string-matching schema is a library entry answered "no". And the library is
+resolved in `before_check`, *after* a proof's lines are populated — so even
+asking about it would have been asking before the answer existed. The result was
+the P2 bug class exactly: a proof that verified when parsed failed when checked
+from its rows, silently, with `formula_string` left `None` on every line.
+
+The fix removes the question rather than answering it. `ProofLine.formula_string`
+is now a property: the parse's own substring when there is one, the term's render
+otherwise. No caller has to know whether a string will be wanted, because no
+caller is in a position to know. The parse path is untouched — an explicitly set
+string always wins — so this can only ever have added an answer where there was
+`None`.
+
+**Measure:** a system whose only string-matching schema is a promoted theorem
+round-trips with the same verdict and the same per-line fingerprint
+(`test_a_string_matched_theorem_checks_the_same_from_rows`). Mutation-checked:
+restoring the conditional fails exactly that case.
+
+**What is still an exception, and honestly so.** Nothing here makes the string
+regime *term*-checked — `_string_pairs` still matches flat text, because an
+associative rule like `Mx ⊢ Mxx` has no term-unification expression. The claim
+this document makes is that verification never *parses*, and that now holds for
+string-rewriting systems too. It was never that everything is unification.
 
 ---
+
+### Beyond the phases
+
+Three things this work surfaced that are not phases of it — they belong to
+whatever picks up theorem *search*, and are recorded here because that is where
+the reasoning is.
+
+**The `theorems` / `promoted_theorems` overlap.** P4 gave a library entry a
+`statement` and a `statement_term_id`; the forward-looking `theorems` table
+already had both, plus a pgvector `embedding` and an HNSW index. They are two
+views of one object, and the duplication is real rather than superficial. Two
+things kept them apart, one principled and one not: a `theorems` row is a
+statement where a library entry is a *schema* (metavariables, premises, provisos
+— which is what makes it applicable rather than merely findable), and their access
+patterns are opposite (broad search scan against point lookup by label on the
+verify path); but `theorems` was also simply unpopulated, so reusing it would have
+meant redesigning an unused table mid-phase. The clean end state is probably one
+library row with search metadata hanging off it, rather than each carrying its own
+copy of the statement. The moment `theorems` is populated is the moment the
+duplication starts costing something, and also the first moment there is enough
+information to decide which way to merge.
+
+**Label allocation, if a theorem is ever promoted on demand.**
+`promoted_theorems` requires a unique label per system. `proofs.name` has no
+uniqueness constraint at all — only `slug`, and only per owner and system — so
+promoting a user's proof under its own name collides as soon as two proofs share
+one. This also interacts with `_link_proofs_to_theorems`, which joins a proof to
+its library entry *by name*: exact for an import, where both come from one
+Metamath `$p`, and in want of a different answer for anything else. The two want
+settling together, and before the generalisation policy (metamath roadmap A1)
+rather than after — a policy that decides *what* a proof generalises to still
+needs somewhere unambiguous to put it.
+
+**Goal-directed retrieval needs an index this does not have.** Worth stating
+because the naming invites a wrong assumption: `schema_digest` is *not* a search
+key. It fingerprints the grammar and a theorem's own text so a cached term can be
+trusted, changes when the grammar does, and differs between systems for identical
+statements. The search keys are on `terms` — `digest` (exact structure) and
+`alpha_digest` (invariant under consistent renaming). `alpha_digest` answers "has
+anyone proved exactly this?", which is genuinely useful and is not what proof
+search asks: a goal `(A → B)` must retrieve a theorem concluding `ps → ph`, whose
+metavariables are `Var` leaves that no whole-term hash relates to the goal. The
+cheap first cut is two denormalised columns on `promoted_theorems` — the
+conclusion's top constructor (null for a bare metavariable, which matches
+anything and must always be a candidate) and the premise count — which prunes
+tens of thousands of candidates to hundreds before the kernel confirms by
+unification. A path or discrimination index over the conclusion term is the step
+up, and `term_children` already has the shape for it; worth measuring before
+building, because the top constructor may be enough.
+
+One thing that already works and is easy to miss: **speculative promotion is
+free**. `promote_spec` builds a `PromotedTheorem` from a `TheoremSpec` — strings
+and names, no database — so a search may promote, try and discard candidates
+without writing anything. A row is only needed to make something *durably*
+citable. That falls out of keeping the spec engine-object-free, and it is what
+makes search cheap.
 
 ## 6. Why this is worth doing
 
