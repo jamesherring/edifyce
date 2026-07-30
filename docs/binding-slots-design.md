@@ -263,8 +263,11 @@ would read as "dropped" for every definition at once.
    above.
 5. ~~Frontend editing (the per-slot "binds over" control), and surfacing the
    build's report in the editor~~ — **done**.
-6. Scope-aware definitional steps — **analysed, blocked**; see
-   [scope-aware-definitional-steps.md](scope-aware-definitional-steps.md).
+6. Scope-aware definitional steps — **analysed, scoped, and held**; see
+   [scope-aware-definitional-steps.md](scope-aware-definitional-steps.md). The
+   work is decomposed there and the blocker is named, but no caller wants the
+   capability: the Metamath import's refusals are the binding-slot wall, not open
+   abbreviations. Held until something asks.
 
 Step 4 shipped ahead of 3 because it is the one with a caller waiting: a Metamath
 import reconstructs a `fresh` clause per definition without it. Step 6 is the only
