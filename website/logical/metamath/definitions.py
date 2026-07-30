@@ -372,7 +372,16 @@ def classify(
     # Silent on a grammar declaring no binding slots, which is what a `.mm` file
     # says on its own, so an import that declares none classifies exactly as it did
     # before they existed.
-    bound, placed = bind_scoped(lower, 0)
+    try:
+        bound, placed = bind_scoped(lower, 0)
+    except ValueError as exc:
+        # A defining form two of whose *sibling* binder slots hold the same leaf.
+        # The kernel refuses it rather than resolving by declaration order, and
+        # rightly - neither slot shadows the other, so an occurrence in the scope
+        # they share belongs to neither. But it refuses by raising, and this is the
+        # module that must not: an assertion no definition can be made of is an
+        # axiom, not a reason to abandon the corpus.
+        return Classified(assertion.label, reason=f"binders cannot be placed: {exc}")
 
     introduced = sorted(variables_used(bound, variables) - supplied)
     if introduced:

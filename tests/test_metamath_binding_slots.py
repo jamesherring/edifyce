@@ -168,6 +168,53 @@ def test_a_binder_is_not_declared_a_parameter_of_the_definition() -> None:
     assert all(c.verified for c in checked), [c.error for c in checked]
 
 
+# A production with *two* binder slots, instantiated with one variable in both —
+# `{ <. x , x >. | ph }`, in miniature. set.mm has four such productions (`copab`,
+# `coprab`, `cmpo`, `cmpt3`) and no definition-shaped `$a` that doubles one, so
+# nothing in the corpus reaches this.
+SIBLING_BINDERS = r"""
+$c |- wff setvar ( ) -> <-> P NEW $.
+$v x y ph ps $.
+vx $f setvar x $.
+vy $f setvar y $.
+wph $f wff ph $.
+wps $f wff ps $.
+wi $a wff ( ph -> ps ) $.
+wb $a wff ( ph <-> ps ) $.
+wpair $a wff P x y ph $.
+wnew $a wff NEW ph $.
+df-new $a |- ( NEW ph <-> P x x ph ) $.
+ax-1 $a |- ( ph -> ( ps -> ph ) ) $.
+id $p |- ( ph -> ( ps -> ph ) ) $= ( ax-1 ) ABC $.
+"""
+
+PAIR_BINDS = {"wpair": {"x": ["ph"], "y": ["ph"]}}
+
+
+def test_binders_that_cannot_be_placed_leave_an_axiom_rather_than_raising() -> None:
+    # The kernel refuses two sibling slots binding the same leaf, and rightly:
+    # neither shadows the other, so an occurrence in the scope they share belongs
+    # to neither, and resolving it by declaration order would settle it on
+    # something an author cannot see. But it refuses by *raising* — and this
+    # module's contract is that doubt costs an axiom, not a build, so an
+    # unclassifiable assertion must not abort a 47,546-theorem walk.
+    verdicts: list[Classified] = []
+    checked = list(
+        walk(
+            parse(SIBLING_BINDERS),
+            equivalences=EQUIVALENCES,
+            classified=verdicts.append,
+            binders=PAIR_BINDS,
+        )
+    )
+    (df_new,) = [v for v in verdicts if v.label == "df-new"]
+
+    assert not df_new.is_definition
+    assert "binders cannot be placed" in df_new.reason
+    # And the walk carried on, which is the half that matters.
+    assert all(c.verified for c in checked), [c.error for c in checked]
+
+
 def test_the_set_mm_table_is_well_formed() -> None:
     # The table is data about one library, so what it *claims* is checkable only
     # against that library, and a corpus test would need the 51 MB file. What can
