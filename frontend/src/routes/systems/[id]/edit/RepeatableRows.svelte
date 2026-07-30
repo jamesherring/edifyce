@@ -18,7 +18,8 @@
 		addLabel,
 		removeLabel,
 		blank,
-		row
+		row,
+		sub
 	}: {
 		items: T[];
 		label: string;
@@ -29,6 +30,9 @@
 		removeLabel: string;
 		blank: () => T;
 		row: Snippet<[T]>;
+		/** Optional second line under a row, for a control too wide to sit beside
+		 * the fields — a production slot's "binds over" targets, say. */
+		sub?: Snippet<[T]>;
 	} = $props();
 
 	function add() {
@@ -47,11 +51,14 @@
 	<!-- Keyed by object identity so removing a middle row can't shift focus/caret
 	     onto the wrong row. -->
 	{#each items as item (item)}
-		<div class="flex items-center gap-2">
-			{@render row(item)}
-			<Button type="button" variant="ghost" size="icon" class="shrink-0" onclick={() => remove(item)}>
-				<X class="size-4" /><span class="sr-only">{removeLabel}</span>
-			</Button>
+		<div class="space-y-1">
+			<div class="flex items-center gap-2">
+				{@render row(item)}
+				<Button type="button" variant="ghost" size="icon" class="shrink-0" onclick={() => remove(item)}>
+					<X class="size-4" /><span class="sr-only">{removeLabel}</span>
+				</Button>
+			</div>
+			{@render sub?.(item)}
 		</div>
 	{/each}
 	<Button type="button" variant="outline" size="sm" onclick={add}>

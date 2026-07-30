@@ -1,10 +1,10 @@
 # Design: binding slots on productions
 
-**Status:** partly built — steps 1–4 below have shipped (the declaration, its
-storage/API round-trip, `denotes_constant` validation, and `fresh` inference),
-and step 6's *representation* prerequisite has too — see
-[scope-aware-binding.md](scope-aware-binding.md). Step 5 and the rest of step 6
-are open.
+**Status:** built but for the last item — steps 1–5 below have shipped (the
+declaration, its storage/API round-trip, `denotes_constant` validation, `fresh`
+inference, and the editor), and step 6's *representation* prerequisite has too —
+see [scope-aware-binding.md](scope-aware-binding.md). Only step 6 is open, and it
+is blocked.
 **Prerequisite work:** merged (#115, #117, #118, #119, and the kernel-takes-terms
 change)
 
@@ -194,18 +194,31 @@ production payloads use it. `app/routers/system_parts.py` rejects a scope naming
 a non-sibling slot (400), mirroring how it validates a binding's sort;
 `app/db/systems_mapping.py` round-trips it.
 
-### Frontend — **partly built**
+### Frontend — **built**
 
-The client type carries the field and the production editor round-trips it, so an
-edit through the UI cannot silently drop a declared binding slot. Per-slot "binds
-over" *selection* is still to do — the part that can safely lag, since the field
-is optional and defaults to empty.
+A production's slots are edited by `ProductionSlotsEditor`, which offers each slot
+a toggle per *sibling* — press it and this slot binds over that one. Only siblings
+with a name are offered, and a production with one slot offers nothing, since
+there is no reading of a slot that binds over itself or over nothing.
 
-Round-tripping a field with no control to edit it has one sharp edge, and the
-editor handles it: renaming or deleting a slot another slot scopes over would
-send a target that no longer exists, which the API rejects — dead-ending an edit
-the user cannot repair from that form. A stale target is dropped on save instead.
-Adding the control removes the need for that, and is the reason to add it.
+The editor refers to a target by an **editor-local id**, not by the sibling's
+name (`slots.ts`). That is what makes a rename carry the declaration with it, and
+it is why the earlier drop-a-stale-target rule is gone: a target that no longer
+exists is now unrepresentable rather than something to filter out on the way to
+the server. Removing the slot still drops the scope, which is the one case where
+dropping is the answer.
+
+An id rather than a reference to the row object because these rows live in a
+`$state` array, where the proxy and the raw object are two identities and
+`includes` on a mix of them silently answers false. That is a real bug this
+went through, not a hypothetical.
+
+The build's report is surfaced beside the `fresh` clause it concerns, in the
+definition editor: what the build settled on, per binder, flagged *inferred from
+the grammar* or *as declared*. A definition absent from a **successful** build's
+report did not layer, and the editor says so — that drop is otherwise silent.
+Nothing is reported from a failed build, where the report is empty and absence
+would read as "dropped" for every definition at once.
 
 ## Open questions
 
@@ -223,7 +236,8 @@ Adding the control removes the need for that, and is the reason to add it.
    flagged `inferred` (read off the grammar) or not (written in the `fresh`
    clause). `validate` is the surface because it is where the built system exists
    — the definitions read model returns stored rows, which is the *declared*
-   clause by construction.
+   clause by construction. The definition editor now shows that report beside the
+   `fresh` field, which is what makes silent inference visible where it matters.
 4. **Item 3 (scope-aware steps) needs a soundness argument** before any code. It
    widens what the checker accepts, which is the one direction that can be wrong.
 
@@ -235,14 +249,12 @@ Adding the control removes the need for that, and is the reason to add it.
    catches the documented hole.
 4. ~~Use it to infer/check `fresh`~~ — **done**, in the add-only form described
    above.
-5. Frontend editing (the per-slot "binds over" control). The reporting half of
-   open question 3 is **done** — `validate` returns the settled clause; what is
-   left is the control for authoring `scopes_over`, and surfacing the report in
-   the editor.
+5. ~~Frontend editing (the per-slot "binds over" control), and surfacing the
+   build's report in the editor~~ — **done**.
 6. Scope-aware definitional steps — **analysed, blocked**; see
    [scope-aware-definitional-steps.md](scope-aware-definitional-steps.md).
 
 Step 4 shipped ahead of 3 because it is the one with a caller waiting: a Metamath
-import reconstructs a `fresh` clause per definition without it. Both remaining
-steps are still independently shippable, and 6 still wants its own soundness
-argument before any code.
+import reconstructs a `fresh` clause per definition without it. Step 6 is the only
+one left, and it is blocked on a kernel-representation question rather than on
+effort.

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { api } from '$lib/api';
-import type { Definition } from '$lib/api';
+import type { Definition, SystemValidation } from '$lib/api';
 import DefinitionsSection from './DefinitionsSection.svelte';
 
 // The section only side-effects through the api client and toasts; mock both and
@@ -222,5 +222,105 @@ describe('DefinitionsSection layering', () => {
 		// The layering picker (label + combobox) only renders when an earlier
 		// definition exists.
 		expect(screen.queryByText('Build on an earlier definition')).not.toBeInTheDocument();
+	});
+});
+
+// A `fresh` clause need not be written: a grammar declaring binding slots has one
+// inferred from the parsed defining form. Inference is silent at build, so the
+// build's report is where the author sees what it concluded.
+describe('DefinitionsSection build report', () => {
+	function validation(over: Partial<SystemValidation> = {}): SystemValidation {
+		return {
+			success: true,
+			errors: [],
+			system_name: 'S',
+			line_type_count: 1,
+			inference_rule_count: 0,
+			definitions: [],
+			...over
+		};
+	}
+
+	function renderWith(v: SystemValidation | null, validating = false) {
+		render(DefinitionsSection, {
+			systemId: 'sys1',
+			definitions: [defn()],
+			sortNames: ['formula'],
+			symbols: [],
+			onChanged: vi.fn(),
+			validation: v,
+			validating
+		});
+	}
+
+	it('reports a binder the engine read off the grammar', async () => {
+		renderWith(
+			validation({
+				definitions: [
+					{
+						definition_id: 'd1',
+						label: null,
+						defined_form: 'x sub y',
+						binders: [{ var: 'z', sort: 'variable', inferred: true }]
+					}
+				]
+			})
+		);
+		await userEvent.click(screen.getByRole('button', { name: /^Edit / }));
+
+		expect(await screen.findByText(/inferred from the grammar/)).toBeInTheDocument();
+		expect(screen.getByText('z : variable')).toBeInTheDocument();
+	});
+
+	it('distinguishes a binder the author declared', async () => {
+		renderWith(
+			validation({
+				definitions: [
+					{
+						definition_id: 'd1',
+						label: null,
+						defined_form: 'x sub y',
+						binders: [{ var: 'z', sort: 'variable', inferred: false }]
+					}
+				]
+			})
+		);
+		await userEvent.click(screen.getByRole('button', { name: /^Edit / }));
+
+		expect(await screen.findByText(/as declared/)).toBeInTheDocument();
+	});
+
+	it('says so when the definition was dropped at build', async () => {
+		// A definition absent from a *successful* build's report did not layer: its
+		// expansion matched nothing, so it is silently not there. That silence is
+		// exactly what the report is for.
+		renderWith(validation({ definitions: [] }));
+		await userEvent.click(screen.getByRole('button', { name: /^Edit / }));
+
+		expect(await screen.findByText(/dropped/)).toBeInTheDocument();
+	});
+
+	it('reports nothing from a build that failed', async () => {
+		// The report is empty on a failed build, so absence proves nothing — saying
+		// "dropped" for every definition at once would be worse than staying quiet.
+		renderWith(validation({ success: false, errors: ['nope'], definitions: [] }));
+		await userEvent.click(screen.getByRole('button', { name: /^Edit / }));
+		await screen.findByRole('button', { name: /Save changes/ });
+
+		expect(screen.queryByText(/dropped/)).toBeNull();
+		expect(screen.queryByText(/settled on/)).toBeNull();
+	});
+
+	it('reports nothing while a fresh build is in flight', async () => {
+		// A definition saved a moment ago is in the refreshed list before the build
+		// that would mention it has run. A report from the build *before* it does
+		// not have the definition — which looks exactly like a dropped one, and
+		// would say so with the same confidence.
+		renderWith(validation({ definitions: [] }), true);
+		await userEvent.click(screen.getByRole('button', { name: /^Edit / }));
+		await screen.findByRole('button', { name: /Save changes/ });
+
+		expect(screen.queryByText(/dropped/)).toBeNull();
+		expect(screen.queryByText(/settled on/)).toBeNull();
 	});
 });
