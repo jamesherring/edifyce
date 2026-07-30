@@ -337,7 +337,7 @@ every verdict is re-derived, and the ones that hide are those settled by an
 absence.** A test that only exercises proofs which fail *loudly* will not find
 them, which is why the agreement test runs over shapes rather than cases.
 
-### P2a. The constant factor — *partly done*
+### P2a. The constant factor — *done*
 
 Profiled before touching anything, and the profile moved the target. This
 section predicted the cost was in *reading a proof back*; by P4 it was not. On a
@@ -414,17 +414,69 @@ stops it being a small change is the interface: `load_proof_for_check`'s
 term roots you need" and "here they are, finish". That is worth doing and worth
 doing deliberately, on its own evidence.
 
+**Done: theorem rows come back as data too.** The same argument as for term
+rows, applied to the four tables a library entry spans. `load_theorems` selected
+`PromotedTheoremRow` with three `selectinload`s under it, and those three were
+1.15 s of a 3.17 s profiled re-check — **36% of the whole check** for an object
+graph that is read once, never written back and never consulted twice.
+
+It now reads `StoredTheorem`: flat dataclasses over four Core queries. The
+queries are the same four `selectinload` issued — a theorem has three
+*independent* child collections, so one joined statement would be their cartesian
+product, which is why `selectinload` splits them in the first place. What goes is
+the machinery on top.
+
+Two things fell out of doing it:
+
+- **Rendering a proviso now reads a name, not a relationship.** The renderer took
+  a `SideConditionRow` and reached `row.sort_symbol.name`, which a flat read has
+  no instance to offer. It is written against a `ProvisoNode` protocol with a
+  `sort_name` instead, satisfied by the ORM row (a property) and by the flat row
+  (a column the join already resolved). The rule and definition readers are
+  unchanged.
+- **The four statements are built once**, as the term sweep's is, with everything
+  varying bound. That needed one wrinkle: whether a caller wants a proof's
+  *owning* theorem varies per call, so branching on it would mean two statements
+  — the owner is a bind parameter and `NULL` is "no owner", since `id = NULL` is
+  never true. Roughly half the gain came from each of the two.
+
+| | per re-checked proof |
+|---|---|
+| ORM rows | 9.33 ms, 7.0 queries |
+| flat rows | **5.40 ms, 7.0 queries** |
+
+**−42%.** Measured paired — the two builds alternated three times in one run,
+median reported — which is the only way these numbers mean anything: the same
+comparison read 5.44 ms against 4.22 ms (−22%) on an unloaded host an hour
+earlier. Both halves are real; the *ratio* is not stable across machine states,
+because the ORM path is far more CPU-bound and so degrades faster under
+contention than the flat path it replaces. Take −22% as the floor.
+
+**One thing tried and rejected on measurement.** The three child queries take the
+ids the first query found, which is the shape the term sweep had to abandon
+above — so it was worth checking. It is not the same situation: a sweep's closure
+is unboundedly larger than its roots (269 nodes from a proof's six), whereas
+these ids are at most one per label asked for, and *that* `IN` list is already in
+the first query. If the ids overflow, the labels overflowed first. Re-asking
+instead — the children repeating the label predicate as a subquery — costs 19%
+paired, because three more label lookups are dearer than the ids they save. So
+the ids stay, and the reasoning is in `_statements` rather than left for the next
+reader to re-derive.
+
+**One case is pinned that is not a correctness bug.** Asking for no labels, or
+for no owner, must render *false* rather than true — and if either widened,
+nothing would be incorrect, because the caller filters by what it asked for
+either way. It would show up only as every verify scanning the whole library.
+`test_a_degenerate_ask_reads_no_library_at_all` is there because a silent
+whole-library scan is exactly what this phase exists to prevent.
+
 **Also still open:**
 
-- **Theorem rows are still hydrated through the ORM**, and are now 76% of a
-  re-check: `load_theorems` selects `PromotedTheoremRow` with three
-  `selectinload`s under it. The same argument that applied to term rows applies
-  here — the rows are read once and never written back — but it is a larger
-  change, because a theorem row is read for a dozen fields across four tables
-  rather than for six columns and an edge list.
 - **A single-proof load cannot amortise its floor.** Verifying one proof is one
   proof, which is why the levers worth pulling are the ones that cut the fixed
-  cost rather than batch harder.
+  cost rather than batch harder. What is left of a re-check is now roughly a
+  third term sweep, a third library read and a third engine work (`promote_spec`
+  composing what the caches miss), with no single hot spot.
 
 ### P3. Store schema terms — *done*
 
