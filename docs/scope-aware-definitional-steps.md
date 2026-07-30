@@ -120,20 +120,55 @@ and what has to be decided before any of it.
 
 One sentence, because everything below is in service of it:
 
-> A term containing defined notation must answer every **leaf-occurrence**
-> predicate exactly as its full unfolding would, and a definitional step must be
-> refused at any position where unfolding it would put an introduced leaf under a
-> binder for that leaf.
+> A **leaf-occurrence** predicate must never answer more permissively on a term
+> containing defined notation than on its full unfolding, and a definitional step
+> must be refused at any position where unfolding it would put an introduced leaf
+> under a binder for that leaf.
 
-The first clause is the transparency half, the second the positional half. The
-criterion is testable directly, and that property test is the deliverable that
-matters most — see *What I could not settle*.
+The first clause is the transparency half, the second the positional half.
+
+**One-sided, and that is not a hedge.** Exact agreement is both unnecessary and
+unachievable. Unnecessary because only one direction is unsound: a proviso
+`Not(Occurs(x, φ))` that passes on the notation and would fail on the meaning lets
+a proof carry on with a term the proviso was never true of, while the reverse costs
+a refused proof and nothing else. Unachievable because a definition may *discard* a
+parameter — `F(x) ≝ ⊥` is admissible today, since `unbound_parameters` looks for
+variables in `lower` that `higher` lacks and there are none — so:
+
+```
+Occurs('a', 'phi')  with phi := F(a)   ->  True    (the argument is a real child)
+Occurs('a', 'phi')  with phi := ⊥      ->  False   (the unfolding dropped it)
+```
+
+No inventory of *hidden* leaves can fix that, because the disagreement is an excess
+rather than an omission. Stated as an implication — `Occurs(n, unfolding)` must
+imply `Occurs(n, folded)`, never the converse — the discarded parameter is fine and
+the hazard is still caught. It is also exactly what an add-only inventory delivers,
+so the design below meets the weakened criterion and could not have met the strong
+one. Same direction for `DisjointLeaves`: over-reporting leaves makes disjointness
+harder to satisfy, which is the safe way to be wrong.
 
 ## The work, in shippable pieces
 
-Ordered so that **nothing changes observable behaviour until the last one**. That
-is the point of the ordering: the risky act is a single relaxation at the end,
-sitting on three pieces that can each land, be reviewed and be reverted alone.
+Ordered so that **nothing changes observable behaviour until the last one** — with
+one condition, stated here rather than buried in piece 3: the inventory must
+exclude declared constants until then. Decision 2 below argues that the *consistent*
+answer includes them, and including them is itself a behaviour change:
+
+```
+Not(Occurs(⊥, 'phi'))  with phi := S,  S ≝ ⊥   ->  passes today, fails transparently
+```
+
+That flips a proviso an existing system may rely on, so it belongs in the release
+that is already understood to change what the checker accepts, not in the three
+that are meant to be inert. Land piece 3 over bindable leaves only and move
+constant inclusion into piece 4 — or, if that is not wanted, reclassify piece 3 as
+behaviour-changing and give it its own release. What is not available is the
+ordering claim with constants quietly included, which is what the first draft of
+this section asserted.
+
+With that condition met, the risky act is a single relaxation at the end, sitting
+on three pieces that can each land, be reviewed and be reverted alone.
 
 ### 1. Position tracking through `_rewrites_once` — small
 
@@ -210,11 +245,15 @@ and was written to fail here. Its replacement asserts the criterion above.
    A rule using `IsAtom` without a sort to mean "this slot is a variable" would be
    satisfied by notation that is not one. Decide it deliberately; do not let it
    fall out.
-2. **Whether constants stay in the inventory.** The criterion says "as its full
-   unfolding would", which puts `⊥` in — an unrestricted `Occurs` on the unfolding
-   finds it. That is the consistent answer and it changes results for provisos
-   written without a sort restriction. The alternative (hide only bindable leaves)
-   is narrower and cheaper to adopt, and breaks the one-sentence criterion.
+2. **Whether constants stay in the inventory.** The criterion is about the
+   unfolding, and an unrestricted `Occurs` on the unfolding finds `⊥`, so the
+   consistent answer includes them. It is not the free one: it flips
+   `Not(Occurs(⊥, S))` for an existing `S ≝ ⊥`, which is why the ordering above
+   stages it into piece 4. The alternative — hide only bindable leaves — is
+   narrower, adoptable without breaking a stored system, and weakens the criterion
+   to "no proviso *about a variable* answers more permissively". Since every
+   freshness proviso in the tree is about a variable, that may be the whole of what
+   is wanted; decide it against a caller rather than in the abstract.
 3. **Where the inventory hangs.** `Constructor` is the natural home and the
    uncomfortable one: it is *structural* data projected from a production, and this
    is *semantic* data from a definition the production knows nothing about. The
@@ -229,12 +268,18 @@ I found one divergence the original analysis missed (`IsAtom`), by enumerating t
 vocabulary rather than by reasoning about it. That is weak evidence that the
 enumeration is now complete and no evidence at all that the *criterion* is.
 
+Review of this note then produced two more — the constants-ordering tension and the
+discarded parameter above — which is the same lesson twice: the gaps here are found
+by *enumerating cases*, not by reasoning from the design, and one pass of
+enumeration is not enough.
+
 The way to find the rest is the property test, and it should be written before the
 implementation: generate a term containing defined notation, unfold it fully, and
-assert every predicate in the closed vocabulary agrees across the pair — with
-`Equal` and the matcher explicitly excluded and the exclusion argued. Anything that
-disagrees is either a bug or a decision, and it is better to meet them all at once
-than one per review round.
+assert that each predicate in the closed vocabulary is no more permissive on the
+folded term than on the unfolding — an **implication**, not an equality, for the
+reason the criterion gives. `Equal` and the matcher are excluded and the exclusion
+argued. Anything that disagrees is either a bug or a decision, and it is better to
+meet them all at once than one per review round.
 
 ## Whether to do it at all
 
