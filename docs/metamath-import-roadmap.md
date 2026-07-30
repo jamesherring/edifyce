@@ -82,7 +82,8 @@ own kernel.
 | verified | **47,546 (100%)** |
 | rejected by the kernel | 0 |
 | failed to promote | 0 |
-| wall clock | 23 min 57 s |
+| definitions registered | 306 (§5, A4) |
+| wall clock | 22 min 45 s (23 min 10 s with definitions) |
 | peak memory | 3.6 GB |
 
 Cost is dominated by `check`; `promote` and `emit` are each under a fifth of it.
@@ -748,17 +749,25 @@ nothing else spells the form. The kernel definition is stated over the
 production's constructor either way, which is what made the notation redundant
 rather than merely unused.
 
-Measured over the corpus, with every theorem still verifying either way:
+Measured as matched pairs in one session, with every theorem verifying either way:
 
 | | axioms only | definitions wired | cost |
 |---|---|---|---|
 | 5,000 theorems (30 definitions) | 15.3 s | 15.7 s | +2.6% |
 | 20,000 theorems (134 definitions) | 280.2 s | 292.9 s | +4.5% |
+| **47,546 theorems (306 definitions)** | **1,364.7 s** | **1,389.7 s** | **+1.8%** |
 
-The residue grows slowly with the number of definitions rather than with the
-corpus, which is where to look if it ever matters: a statement parse per logical
-`$a`, and the freshness scan over the system's axioms and rules at each
-registration.
+So the whole corpus still imports and verifies in 23 minutes, and the definitions
+cost under two per cent of it. The residue tracks the number of definitions rather
+than the corpus — a statement parse per logical `$a`, and the freshness scan over
+the system's axioms and rules at each registration — which is why the proportion
+*falls* as the walk lengthens: definitions are declared early and the theorems
+that follow them are not.
+
+The classification the walk produces is identical to the standalone classifier's,
+breakdown included (306 definitions; 1,123 / 119 / 9 / 2 refused). Worth stating
+because it is not a restatement: the walk derives `in_use` from the order it
+actually registers in, and the classifier derived it from a separate pass.
 
 *What remains*: `app/db/metamath_store.import_corpus` does not pass
 `equivalences`, so a stored import is still all-axioms — the definitions would
