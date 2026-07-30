@@ -32,7 +32,13 @@ from sqlalchemy import distinct as distinct_
 from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
-from app.db import Base, cited_labels, load_proof_for_check, load_term, load_theorems
+from app.db import (
+    Base,
+    cited_labels,
+    load_proof_for_check,
+    load_theorems,
+    prefetch_terms,
+)
 from website.logical.declarative import build_spec, library_digest
 from website.logical.formal_system.proof import Proof as EngineProof
 from app.db.promoted_theorems import (
@@ -315,9 +321,11 @@ def test_a_stored_term_reloads_without_the_mm_file(session, imported):
     context = copy(built["system"].context)
     context.variables.update(built["system"].build_context.variables)
 
-    for row in _lines(session, "a2i"):
+    rows = _lines(session, "a2i")
+    graph = prefetch_terms(session, [row.term_id for row in rows])
+    for row in rows:
         formula = row.display.split(" [")[0]
-        assert load_term(row.term, context).to_string() == formula
+        assert graph.term(row.term_id, context).to_string() == formula
 
 
 def test_equal_subterms_are_one_row_across_the_whole_corpus(session, imported):

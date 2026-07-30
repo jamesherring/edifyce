@@ -42,7 +42,7 @@ from app.db.side_conditions_mapping import (
     build_theorem_side_conditions,
     theorem_side_conditions_list,
 )
-from app.db.terms_mapping import load_term, prefetch_terms, store_term
+from app.db.terms_mapping import prefetch_terms, store_term
 from website.logical.matching import StringPattern
 from website.logical.promotion import TheoremSpec, promote_spec
 
@@ -51,7 +51,6 @@ if TYPE_CHECKING:
 
     from app.db.models import FormalSystem
     from app.db.systems import SymbolRow
-    from app.db.terms import TermRow
     from website.logical.formal_system import FormalSystem as EngineSystem
     from website.logical.formal_system import PromotedTheorem
     from website.logical.kernel.terms import Term
@@ -265,11 +264,8 @@ def load_theorems(
         and row.schema_digest == theorem_digest(library, specs[row.label])
     }
 
-    # Every cached term of every theorem asked for, in one sweep. `by_id` holds
-    # the whole graph, descendants included, for as long as terms are being read
-    # out of it: the identity map's references are weak, so a row nothing refers
-    # to is collected and the edge that reaches it goes back to the database
-    # (see prefetch_terms).
+    # Every cached term of every theorem asked for, in one sweep — and one memo
+    # across all of them, so a subterm two statements share is rebuilt once.
     ids = [
         term_id
         for row in fresh.values()
@@ -281,14 +277,10 @@ def load_theorems(
         # owner's premise, and the owner's digest is what says whether the
         # owner's terms are current.
         ids += [p.term_id for p in owner.premises if p.term_id is not None]
-    by_id: dict[uuid.UUID, TermRow] = {
-        term.id: term for term in prefetch_terms(session, ids)
-    }
-    memo: dict[object, Term] = {}
+    graph = prefetch_terms(session, ids)
 
     def term(term_id: uuid.UUID | None) -> Term | None:
-        row = None if term_id is None else by_id.get(term_id)
-        return None if row is None else load_term(row, context, memo)
+        return graph.term(term_id, context)
 
     promoted: dict[str, PromotedTheorem] = {}
     for row in cited:

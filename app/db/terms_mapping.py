@@ -2,10 +2,11 @@
 
 ``store_term`` writes a term into ``terms`` / ``term_children`` rows, interning
 by structural digest so equal subterms share one row per system (the relational
-mirror of the kernel's hash-consing). ``load_term`` rebuilds a live, interned
-kernel term from a stored row, resolving constructor names against a compiled
-system's context — the same "rows are canonical, the engine is rebuilt on
-demand" contract as :mod:`app.db.systems_mapping`.
+mirror of the kernel's hash-consing). ``prefetch_terms`` reads them back as a
+:class:`TermGraph`, which rebuilds live, interned kernel terms on demand,
+resolving constructor names against a compiled system's context — the same "rows
+are canonical, the engine is rebuilt on demand" contract as
+:mod:`app.db.systems_mapping`.
 
 Uses a synchronous :class:`~sqlalchemy.orm.Session` (as ``systems_mapping``'s
 tests do); the async route wraps it with ``AsyncSession.run_sync`` when a write
@@ -17,10 +18,11 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from sqlalchemy import or_, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import bindparam, or_, select
+from sqlalchemy.orm import Session
 
 from app.db.terms import (
     TERM_KIND_BOUND,
@@ -33,6 +35,8 @@ from website.logical.kernel import Bound, Node, Term, Var, constructor_for, inte
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+
+    from sqlalchemy import Select
 
     from app.db.models import FormalSystem
     from website.logical.kernel.constructors import Constructor
@@ -344,37 +348,117 @@ def store_term(
     return rows[root_digest]
 
 
-def prefetch_terms(session: Session, root_ids: Sequence[uuid.UUID]) -> list[TermRow]:
-    """Load every row reachable from ``root_ids`` into ``session`` in one sweep.
+@dataclass(frozen=True)
+class _TermRow:
+    """One ``terms`` row as flat data — no ORM instance, no identity map."""
 
-    :func:`load_term` walks a stored term through its ORM relationships, and
-    those fetch lazily — a query for each node's children and each edge's child.
-    That is a query per *node*, which made rebuilding a statement cost several
-    times what re-parsing it did, and it is the one thing that would make
-    verifying from rows slower than the text path it replaces.
+    kind: str
+    constructor: str | None
+    literal: str | None
+    sort: str | None
+    var_name: str | None
+    bound_index: int | None
 
-    So walk the edge table recursively and load every reachable row in *one*
-    query with its edges eager — two round trips for a whole proof's terms,
-    whatever their size or depth. Afterwards ``load_term``
-    touches no database: ``TermRow.children`` is populated, and
-    ``TermChildRow.child`` is a many-to-one onto the primary key, so it resolves
-    from the identity map.
 
-    **The caller must keep the returned list alive** for as long as it is loading
-    terms. A session's identity map holds *weak* references, so rows nothing else
-    refers to are collected the moment this returns — and every lookup that was
-    meant to hit memory goes back to the database, which is the exact failure
-    this function exists to prevent.
+class TermGraph:
+    """Every stored row reachable from a set of roots, ready to rebuild terms.
+
+    Read as **Core rows rather than ORM instances**, which is two things at once.
+    It is faster — hydrating a `TermRow` object graph and walking its
+    relationships was the bulk of what a check spent on terms, and none of that
+    machinery earns its keep for data that is immutable, never written back and
+    read once.
+
+    And it removes a hazard rather than documenting it. The ORM version handed
+    back instances the caller had to *keep alive*, because a session's identity
+    map holds weak references: a row nothing referred to was collected, and the
+    lookup that was meant to hit memory went back to the database — silently
+    slower, or a greenlet error outside the session. That caught this codebase
+    three times (P1, P3, P4). Flat rows in a plain dict cannot be collected out
+    from under a caller, so the rule no longer exists to be broken.
     """
-    # Deduplicated: the roots are a proof's line terms, and interning means the
-    # same statement is commonly the term of several lines.
-    root_ids = list(dict.fromkeys(rid for rid in root_ids if rid is not None))
-    if not root_ids:
-        return []
 
+    def __init__(
+        self,
+        rows: dict[uuid.UUID, _TermRow],
+        children: dict[uuid.UUID, list[tuple[str, uuid.UUID]]],
+    ) -> None:
+        self._rows = rows
+        self._children = children
+        # Shared across every root, so a subterm two statements have in common is
+        # rebuilt once. Interning means that is the usual case, not the exception.
+        self._memo: dict[uuid.UUID, Term] = {}
+
+    def __len__(self) -> int:
+        return len(self._rows)
+
+    @property
+    def ids(self) -> set[uuid.UUID]:
+        """Every row id in the graph — the roots and everything below them."""
+        return set(self._rows)
+
+    def term(self, term_id: uuid.UUID | None, context: Context) -> Term | None:
+        """Rebuild the term rooted at ``term_id``, or ``None`` if it is not here.
+
+        ``None`` back is not an error: a nullable term reference means "nothing
+        stored", and a root the sweep did not find means the row is gone. Both
+        are misses for the caller to handle, which is what every caller of this
+        wants (see app/db/schema_terms.py for the contract).
+
+        Constructor names resolve against ``context`` (a compiled system's proof
+        context): productions and sorts by name in ``context.variables``, defined
+        notations by name among ``context.definitions``. An unresolvable name
+        *raises* — a stored term that no longer matches its system is data
+        corruption, not something to paper over, and the digest guards above this
+        are what decide whether a term is current.
+
+        One graph is meant for one context — the memo is keyed by row id alone —
+        which holds for every caller, since a build's contexts are copies sharing
+        one ``variables``.
+        """
+        if term_id is None or term_id not in self._rows:
+            return None
+        return intern(self._build(term_id, context))
+
+    def _build(self, term_id: uuid.UUID, context: Context) -> Term:
+        cached = self._memo.get(term_id)
+        if cached is not None:
+            return cached
+
+        row = self._rows[term_id]
+        term: Term
+        if row.kind == TERM_KIND_VAR:
+            term = Var(row.var_name, _sort_named(row.sort, context))
+        elif row.kind == TERM_KIND_BOUND:
+            term = Bound(row.bound_index, _sort_named(row.sort, context))
+        elif row.kind == TERM_KIND_NODE:
+            term = Node(
+                constructor=_constructor_named(row.constructor, context),
+                children={
+                    slot: self._build(child, context)
+                    for slot, child in self._children.get(term_id, ())
+                },
+                literal=row.literal,
+                sort=_sort_named(row.sort, context) if row.sort is not None else None,
+            )
+        else:
+            raise ValueError(f"Unknown term row kind: {row.kind!r}")
+
+        self._memo[term_id] = term
+        return term
+
+
+def _reachable_rows_statement() -> Select:
+    """The closure query, built once — its roots are an expanding bind parameter.
+
+    Constructing it is not cheap: a recursive CTE has to have its column
+    collection set up before ``edges.c.child_id`` can name one, and that was a
+    tenth of a re-check when it happened per call. With the roots bound rather
+    than inlined the statement is a constant, so SQLAlchemy compiles it once and
+    expands the ``IN`` list at execution.
+    """
+    roots = bindparam("roots", expanding=True)
     # Transitive closure over parent -> child, seeded at the roots' own edges.
-    # Left as a subquery rather than run for its ids first: the closure is only
-    # ever wanted as the filter below, and one statement is one round trip.
     #
     # `union`, emphatically not `union_all`. A term graph is a DAG with heavy
     # sharing — that is what interning is for — and `union_all` enumerates every
@@ -386,7 +470,7 @@ def prefetch_terms(session: Session, root_ids: Sequence[uuid.UUID]) -> list[Term
     # loading cheap.
     edges = (
         select(TermChildRow.parent_id, TermChildRow.child_id)
-        .where(TermChildRow.parent_id.in_(root_ids))
+        .where(TermChildRow.parent_id.in_(roots))
         .cte("reachable_terms", recursive=True)
     )
     edges = edges.union(
@@ -394,44 +478,74 @@ def prefetch_terms(session: Session, root_ids: Sequence[uuid.UUID]) -> list[Term
             edges, TermChildRow.parent_id == edges.c.child_id
         )
     )
-    # `populate_existing` matters for exactly the rows that count: a root term is
-    # already in the identity map (the line rows loaded it), and a query returns
-    # an existing instance *without* filling in attributes it has not loaded — so
-    # without this every `children` collection would still be fetched one at a
-    # time. Terms are immutable once written, so re-populating overwrites nothing.
-    return list(
-        session.scalars(
-            select(TermRow)
-            .where(
-                or_(
-                    TermRow.id.in_(root_ids),
-                    TermRow.id.in_(select(edges.c.child_id)),
-                )
-            )
-            .options(selectinload(TermRow.children))
-            .execution_options(populate_existing=True)
-        )
+    return select(
+        TermRow.id,
+        TermRow.kind,
+        TermRow.constructor,
+        TermRow.literal,
+        TermRow.sort,
+        TermRow.var_name,
+        TermRow.bound_index,
+    ).where(or_(TermRow.id.in_(roots), TermRow.id.in_(select(edges.c.child_id))))
+
+
+def _child_edges_statement() -> Select:
+    """Every edge under a set of parents, in ``position`` order.
+
+    That is template (reading) order — the order ``store_term`` wrote them in,
+    and the one a ``Node``'s slot dict is expected to carry.
+    """
+    return (
+        select(TermChildRow.parent_id, TermChildRow.slot, TermChildRow.child_id)
+        .where(TermChildRow.parent_id.in_(bindparam("parents", expanding=True)))
+        .order_by(TermChildRow.parent_id, TermChildRow.position)
     )
 
 
-def load_term(
-    row: TermRow, context: Context, memo: dict[object, Term] | None = None
-) -> Term:
-    """Rebuild an interned kernel term from its stored row.
+_REACHABLE_ROWS = _reachable_rows_statement()
+_CHILD_EDGES = _child_edges_statement()
 
-    Constructor names resolve against ``context`` (a compiled system's proof
-    context): productions and sorts by name in ``context.variables``, defined
-    defined notations by name among ``context.definitions``. An
-    unresolvable name raises — a stored term that no longer matches its system
-    is data corruption, not something to paper over.
 
-    Pass a shared ``memo`` to rebuild several terms as one graph. Rows are
-    interned per system, so a subterm is shared across a proof's lines and across
-    the proofs of a corpus — in the Metamath slice, 3,521 statements are 1,337
-    distinct terms. A memo per call rebuilds each of those once per *use*; one
-    memo per batch rebuilds it once.
+def prefetch_terms(session: Session, root_ids: Sequence[uuid.UUID]) -> TermGraph:
+    """Read every row reachable from ``root_ids`` in two queries.
+
+    Walking the term relationships one node at a time is a query *per node*,
+    which made rebuilding a statement cost several times what re-parsing it did
+    — the one thing that would have made verifying from rows slower than the
+    text path it replaces. So the closure is computed in the database and the
+    rows come back flat: two round trips for a whole proof's terms, whatever
+    their size or depth.
     """
-    return intern(_load(row, context, {} if memo is None else memo))
+    roots = list(dict.fromkeys(rid for rid in root_ids if rid is not None))
+    if not roots:
+        return TermGraph({}, {})
+
+    rows = {
+        row.id: _TermRow(
+            kind=row.kind,
+            constructor=row.constructor,
+            literal=row.literal,
+            sort=row.sort,
+            var_name=row.var_name,
+            bound_index=row.bound_index,
+        )
+        for row in session.execute(_REACHABLE_ROWS, {"roots": roots})
+    }
+    if not rows:
+        return TermGraph({}, {})
+
+    # Only a node has edges, so a graph of bare leaves skips the round trip.
+    parents = [
+        term_id for term_id, row in rows.items() if row.kind == TERM_KIND_NODE
+    ]
+    children: dict[uuid.UUID, list[tuple[str, uuid.UUID]]] = {}
+    if parents:
+        for parent_id, slot, child_id in session.execute(
+            _CHILD_EDGES, {"parents": parents}
+        ):
+            children.setdefault(parent_id, []).append((slot, child_id))
+
+    return TermGraph(rows, children)
 
 
 def _constructor_named(name: str, context: Context) -> Constructor:
@@ -463,30 +577,3 @@ def _sort_named(name: str, context: Context) -> Constructor:
     if pattern is None:
         raise LookupError(f"No sort named {name!r} in context")
     return constructor_for(pattern)
-
-
-def _load(row: TermRow, context: Context, memo: dict[object, Term]) -> Term:
-    key = row.id if row.id is not None else id(row)
-    cached = memo.get(key)
-    if cached is not None:
-        return cached
-
-    term: Term
-    if row.kind == TERM_KIND_VAR:
-        term = Var(row.var_name, _sort_named(row.sort, context))
-    elif row.kind == TERM_KIND_BOUND:
-        term = Bound(row.bound_index, _sort_named(row.sort, context))
-    elif row.kind == TERM_KIND_NODE:
-        term = Node(
-            constructor=_constructor_named(row.constructor, context),
-            children={
-                edge.slot: _load(edge.child, context, memo) for edge in row.children
-            },
-            literal=row.literal,
-            sort=_sort_named(row.sort, context) if row.sort is not None else None,
-        )
-    else:
-        raise ValueError(f"Unknown term row kind: {row.kind!r}")
-
-    memo[key] = term
-    return term

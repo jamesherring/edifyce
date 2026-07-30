@@ -370,7 +370,7 @@ async def _verify_with_references(
     lemma_ids = [pid for pid in order if pid != proof.id]
     # The whole closure in one go: reading a proof back is latency, not work, so
     # batching is what makes it cheaper than re-parsing (see load_proof_lines).
-    # A stored row that no longer matches its system raises out of `load_term`,
+    # A stored row that no longer matches its system raises out of `TermGraph.term`,
     # and the line-numbering guard raises deliberately. Both are defects in
     # stored data rather than in the proof being checked, but this function
     # reshapes every other failure into a verdict rather than a 500, and a
@@ -491,7 +491,7 @@ async def _verify_with_references(
 def _term_context(system: EngineSystem) -> Context:
     # The context stored terms are rebuilt against: the proof context (which
     # carries the defined notations) plus the build context's productions, which
-    # is what `load_term` resolves a constructor name in.
+    # is what `TermGraph.term` resolves a constructor name in.
     context = copy(system.context)
     context.variables.update(system.build_context.variables)
     return context

@@ -37,14 +37,13 @@ from typing import TYPE_CHECKING
 from sqlalchemy.orm import Session
 
 from app.db.systems import RuleRow
-from app.db.terms_mapping import load_term, prefetch_terms, store_term
+from app.db.terms_mapping import TermGraph, prefetch_terms, store_term
 from website.logical.build_context import SchemaSlot
 from website.logical.declarative import schema_digests
 from website.logical.matching import StringPattern
 
 if TYPE_CHECKING:
     from app.db.models import FormalSystem
-    from app.db.terms import TermRow
     from website.logical.build_context import FormalSystemContext
     from website.logical.declarative import SystemSpec
     from website.logical.formal_system import FormalSystem as EngineSystem
@@ -78,9 +77,10 @@ class SchemaTermCache:
     """The schema terms of one system, ready to answer a build.
 
     Every row this can serve is already in memory: the build happens outside the
-    session (``build_spec`` is called straight from an async route), and a
-    SQLAlchemy identity map holds only weak references — so the rows are held
-    here rather than merely loaded.
+    session (``build_spec`` is called straight from an async route), so nothing
+    it asks for can be fetched by the time it asks. The graph it holds is flat
+    data rather than ORM rows, which is what makes that unconditional — see
+    :class:`~app.db.terms_mapping.TermGraph`.
 
     It also carries the digests it was selected by, which is what pairs it with
     :func:`store_schema_terms` afterwards: computing them means fingerprinting
@@ -91,30 +91,21 @@ class SchemaTermCache:
     def __init__(
         self,
         digests: list[str],
-        rows: dict[SchemaSlot, TermRow],
-        graph: list[TermRow],
+        ids: dict[SchemaSlot, uuid.UUID],
+        graph: TermGraph,
     ) -> None:
         self.digests = digests
-        self._rows = rows
-        # Every row of the schema graph, roots and descendants alike. Holding the
-        # roots is not enough: a child reached through an edge is found in the
-        # identity map only while something still refers to it, and one that has
-        # been collected is fetched again — a query per edge, outside the session's
-        # greenlet, which is an error rather than a slow path.
+        self._ids = ids
+        # The graph memoises across every slot, so the subterms a system's rules
+        # share — which, for a grammar with one main connective, is most of them —
+        # are rebuilt once rather than once per schema.
         self._graph = graph
-        # One memo across every slot, so the subterms a system's rules share —
-        # which, for a grammar with one main connective, is most of them — are
-        # rebuilt once rather than once per schema.
-        self._memo: dict[object, Term] = {}
 
     def __len__(self) -> int:
-        return len(self._rows)
+        return len(self._ids)
 
     def __call__(self, slot: SchemaSlot, context: FormalSystemContext) -> Term | None:
-        row = self._rows.get(slot)
-        if row is None:
-            return None
-        return load_term(row, context, self._memo)
+        return self._graph.term(self._ids.get(slot), context)
 
 
 def load_schema_terms(
@@ -134,7 +125,7 @@ def load_schema_terms(
         if index < len(digests) and rule.schema_digest == digests[index]
     ]
     if not fresh:
-        return SchemaTermCache(digests, {}, [])
+        return SchemaTermCache(digests, {}, TermGraph({}, {}))
 
     ids: dict[SchemaSlot, uuid.UUID] = {}
     for index, rule in fresh:
@@ -151,11 +142,11 @@ def load_schema_terms(
 
     # One sweep for the whole system's schema graph. The build happens outside
     # the session, so every row it will touch has to be in memory by the time
-    # this returns — and has to stay there (see SchemaTermCache).
+    # this returns.
     graph = prefetch_terms(session, list(ids.values()))
-    by_id = {row.id: row for row in graph}
+    present = graph.ids
     return SchemaTermCache(
-        digests, {slot: by_id[i] for slot, i in ids.items() if i in by_id}, graph
+        digests, {slot: i for slot, i in ids.items() if i in present}, graph
     )
 
 

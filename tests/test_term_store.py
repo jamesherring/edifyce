@@ -19,7 +19,7 @@ pytest.importorskip("sqlalchemy")
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, aliased
 
-from app.db import Base, digest_term, load_term, store_term
+from app.db import Base, digest_term, store_term
 from app.db.terms_mapping import prefetch_terms
 from app.db.models import FormalSystem, Theorem
 from app.db.terms import TermChildRow, TermRow
@@ -116,7 +116,7 @@ def test_term_round_trips_through_the_database(
     root_id = root.id
     session.expire_all()  # fresh identity map: everything reloads from rows
 
-    reloaded = load_term(session.get(TermRow, root_id), engine_context)
+    reloaded = prefetch_terms(session, [root_id]).term(root_id, engine_context)
     assert reloaded.equal(original, engine_context)
     assert reloaded.to_string() == statement
 
@@ -326,8 +326,9 @@ def test_defined_nodes_reload_with_their_stored_sort(session):
     session.commit()
     session.expire_all()
 
+    graph = prefetch_terms(session, list(ids.values()))
     for label, original in (("formula", as_formula), ("term", as_term)):
-        reloaded = load_term(session.get(TermRow, ids[label]), context)
+        reloaded = graph.term(ids[label], context)
         assert reloaded.sort.name == label
         assert reloaded.equal(original, context)
 
@@ -364,6 +365,6 @@ def test_prefetch_does_not_enumerate_paths_through_a_shared_dag(session):
     loaded = prefetch_terms(session, [nodes[0].id])
     elapsed = time.monotonic() - started
 
-    assert {row.digest for row in loaded} == {f"d{i}" for i in range(depth + 1)}
+    assert loaded.ids == {node.id for node in nodes}
     # 2**40 paths would not finish this decade; the node walk is milliseconds.
     assert elapsed < 5

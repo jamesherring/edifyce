@@ -19,9 +19,9 @@ evolve it.
 | `app/db/side_conditions.py` | Definition provisos as the kernel side-condition algebra, stored as rows |
 | `app/db/side_conditions_mapping.py` | Parse/render a `where` proviso ↔ side-condition rows |
 | `app/db/terms.py` | Term graph: kernel-term DAGs as shared `terms` / `term_children` rows |
-| `app/db/terms_mapping.py` | `store_term` / `load_term` round trip between kernel `Term`s and the rows |
+| `app/db/terms_mapping.py` | `store_term` / `prefetch_terms` round trip between kernel `Term`s and the rows |
 | `app/db/promoted_theorems.py` | The citable library: proved and imported theorems as rows, resolved by label |
-| `app/db/promoted_theorems_mapping.py` | `store_theorem` / `load_theorems` / `load_hypotheses`: the library round trip |
+| `app/db/promoted_theorems_mapping.py` | `store_theorem` / `load_theorems`: the library round trip |
 | `app/db/schema_terms.py` | `store_schema_terms` / `load_schema_terms`: a rule's schema templates as composed kernel terms, so a build need not re-parse them |
 | `app/db/proof_lines.py` | Proof structure: a checked proof's lines + the justification edges between them |
 | `app/db/proofs_mapping.py` | `store_proof_lines`: project a checked engine `Proof` into those rows |
@@ -74,7 +74,7 @@ Modernised from the original Django app (`website/models.py` on `main`):
   part edit needs no invalidation sweep, and a stale row is inert rather than
   believed. The digest also covers which grammar names a line, part or axiom
   *shadows* in the build namespace: composing is indifferent to those (it parses
-  against the sort unions) but `load_term` resolves a stored constructor by name
+  against the sort unions) but `TermGraph` resolves a stored constructor by name
   through that namespace, so a collision is where a warm build and a cold build
   would disagree. The FKs into `terms` are `ON DELETE SET NULL` for the same reason:
   losing a term must cost a re-compose, never a rule. And a NULL term id is a
@@ -153,7 +153,7 @@ Modernised from the original Django app (`website/models.py` on `main`):
   anywhere" (a recursive CTE over `term_children`), "uses defined notation
   `x ⊆ y`" (the `defined` kind joins against `definitions.higher`) — all in
   plain SQL. The bridge to live kernel terms is `terms_mapping`
-  (`store_term` / `load_term`). Each row also carries an **`alpha_digest`**
+  (`store_term` / `prefetch_terms`). Each row also carries an **`alpha_digest`**
   (`terms_mapping.alpha_digest`): a second structural hash that numbers free
   variables by first occurrence, so it is invariant under consistent renaming
   while `digest` is not. It is the "same statement up to variable names" search

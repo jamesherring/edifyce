@@ -229,8 +229,10 @@ Two traps worth recording, because both were silent:
 
 - **The identity map holds weak references.** A prefetch that loads the term
   subgraph and returns nothing is collected immediately, and every lookup it was
-  meant to serve goes back to the database. `prefetch_terms` returns its rows and
-  the caller must hold them.
+  meant to serve goes back to the database. The fix at the time was that
+  `prefetch_terms` returns its rows and the caller must hold them — a rule, which
+  P3 and P4 each went on to break. P2a made it moot: the sweep returns flat data
+  rather than ORM instances, so there is nothing to collect.
 - **A query does not populate an instance already in the identity map.** Loading
   the line rows puts the root terms in the map with `children` unloaded, and a
   later `selectinload` of those same rows is a no-op without
@@ -350,17 +352,44 @@ work on the same table, back to back, each paying its own recursive closure over
 binding's symbol, a proviso's sort) are `joinedload` rather than `selectinload`,
 so each is a row on a query already being issued rather than a round trip.
 
+**Done: term rows come back as data, not as ORM instances.** `prefetch_terms`
+hydrated a `TermRow` object graph and `load_term` walked its relationships, for
+data that is immutable, never written back and read exactly once — none of the
+identity map, the instrumented attributes or the unit of work earns its keep
+there. It now issues two Core queries and returns a `TermGraph`: flat rows in a
+plain dict, rebuilt into kernel terms on demand and memoised across every root
+it was asked for. `load_term` is gone; the graph is the only way to read a
+stored term.
+
+That also **removes a hazard rather than documenting it**. The ORM version
+handed back instances the caller had to keep a reference to, because a session's
+identity map holds weak references — a row nothing referred to was collected,
+and the lookup meant to hit memory went back to the database, silently slower or
+a greenlet error outside the session. That caught this codebase three times (P1,
+P3, P4), each time fixed by a comment telling the next caller to hold on to
+something. Flat rows in a dict cannot be collected out from under a caller, so
+the rule no longer exists to be broken.
+
+The last third of it was not hydration at all: **the closure query was being
+built per call**, and a recursive CTE has to set up its column collection before
+`edges.c.child_id` can name one. Both statements are now module-level constants
+with their roots as expanding bind parameters, so SQLAlchemy compiles each once.
+
 | | per re-checked proof |
 |---|---|
 | before | 12.96 ms, 15.5 queries |
-| after | **9.4 ms, 9.0 queries** |
+| after the merge | 9.4 ms, 9.0 queries |
+| after Core rows | 7.85 ms, 9.0 queries |
+| after the cached statements | **5.52 ms, 9.0 queries** |
 
-−27% and −42%. Worth being precise about which change bought what: the merge is
-essentially all of the time and most of the queries; the `joinedload` change is
-one query and no measurable time, and is in because a many-to-one under a
-collection should not be a round trip, not because it showed up.
+−57% and −42% in all. Worth being precise about which change bought what: of the
+query count, the merge is all of it and the `joinedload` change is one — in
+because a many-to-one under a collection should not be a round trip, not because
+it showed up. Of the time, the three changes are roughly a third each.
+`prefetch_terms` no longer appears in the profile's top twenty-six; what is left
+is dominated by the ORM load of the theorem rows themselves.
 
-**Still open, and now the largest single item: one term sweep instead of two.**
+**Still open: one term sweep instead of two.**
 A check still prefetches twice — once for the proof's own line terms, once for
 the library's. They could be one, and the enabler is already there: a line's
 citation is `proof_lines.reference`, a plain column, so *what a proof cites is
@@ -371,12 +400,14 @@ stops it being a small change is the interface: `load_proof_for_check`'s
 term roots you need" and "here they are, finish". That is worth doing and worth
 doing deliberately, on its own evidence.
 
-**Also still open**, both unchanged from the original reading:
+**Also still open:**
 
-- **Term rows are hydrated through the ORM.** `prefetch_terms` builds a `TermRow`
-  object graph and `load_term` walks relationships, where the shape needed is
-  flat tuples fed to the kernel's constructors. Still the bulk of what remains —
-  `prefetch_terms` is 45% of a check even after the merge.
+- **Theorem rows are still hydrated through the ORM**, and are now 76% of a
+  re-check: `load_theorems` selects `PromotedTheoremRow` with three
+  `selectinload`s under it. The same argument that applied to term rows applies
+  here — the rows are read once and never written back — but it is a larger
+  change, because a theorem row is read for a dozen fields across four tables
+  rather than for six columns and an edge list.
 - **A single-proof load cannot amortise its floor.** Verifying one proof is one
   proof, which is why the levers worth pulling are the ones that cut the fixed
   cost rather than batch harder.
@@ -439,7 +470,7 @@ point. Those names share `ctx.variables` with the grammar and are registered
 after it, so an axiom named `implication` leaves that name bound to its line
 type. Composing is indifferent: it parses against the sort *unions*, which hold
 the production objects. But a stored term names its constructors by **name** and
-resolves them back through that same namespace (`terms_mapping.load_term`), and
+resolves them back through that same namespace (`terms_mapping.TermGraph`), and
 finds the line type. Cold build fine, warm build dead — from an edit that changes
 no composed term at all, which is why the digest-reach test could not see it and
 a warm-equals-cold test now does.
@@ -456,33 +487,36 @@ part edit, so the rows never survive the rename. P3 deliberately has no such
 blanket invalidation — that is the whole point of the digest — so it has to carry
 this itself.
 
-**One trap, and it is P1's trap again.** `prefetch_terms` loads the schema graph
-in one sweep, but the build runs *outside* the session — so a descendant row that
-nothing holds is collected, and the edge that reaches it goes back to the
-database. Inside a `run_sync` that is merely slow; here it is
+**One trap, and it was P1's trap again — now gone at the root.** `prefetch_terms`
+loads the schema graph in one sweep, but the build runs *outside* the session, so
+when it returned ORM rows a descendant that nothing held was collected and the
+edge reaching it went back to the database: inside a `run_sync` merely slow, here
 `greenlet_spawn has not been called`, which `build_spec` catches and returns as a
-build error. `StoredSchemaTerms` holds the whole graph, not just the roots.
+build error. The fix at the time was for `SchemaTermCache` to hold the whole
+graph rather than just the roots. P2a removed the hazard instead — the sweep
+returns flat data, which nothing can collect out from under a caller.
 
 **Measure, and it is the same shape as P1 and P2.** Composing is 27% of a build
 at the ZFC fixture's five productions and 51% at seventy-six, so what the phase
 removes grows with the grammar — but what it adds is a term-row read, and that
 has the flat floor P1 and P2 both ran into. Against dev Postgres, building the
-stored system with and without the cache:
+stored system with and without the cache (re-measured after P2a):
 
 | system | productions | rules | cold build | warm build | change |
 |---|---|---|---|---|---|
-| scoped ZFC | 5 | 4 | **1.5 ms** | 5.2 ms | −243% |
-| synthetic, depth 2 | 10 | 8 | **3.2 ms** | 7.1 ms | −122% |
-| synthetic, depth 3 | 20 | 16 | **7.5 ms** | 8.7 ms | −16% |
-| synthetic, depth 4 | 42 | 30 | 15.4 ms | **13.9 ms** | +10% |
-| synthetic, depth 5 | 76 | 40 | 23.1 ms | **17.8 ms** | +23% |
+| scoped ZFC | 5 | 4 | **1.1 ms** | 2.2 ms | −95% |
+| synthetic, depth 2 | 10 | 8 | **2.6 ms** | 3.3 ms | −24% |
+| synthetic, depth 3 | 20 | 16 | 5.9 ms | **5.1 ms** | +13% |
+| synthetic, depth 4 | 42 | 30 | 12.1 ms | **9.2 ms** | +25% |
+| synthetic, depth 5 | 76 | 40 | 18.8 ms | **12.7 ms** | +33% |
 
-So the crossover is around thirty productions, and below it a verify pays a few
-milliseconds it did not before. Two things about that. The overhead is *entirely*
-`prefetch_terms` — 55% of the warm path in profile, almost all SQLAlchemy
-instance hydration — which is P2a's second lever, and this makes it the lever
-under all three phases rather than P2's alone. And a real system is on the far
-side of the crossover: set.mm reaches 1,441 productions, where the build, not the
+So the crossover is around fifteen productions, and below it a verify pays a
+fraction of a millisecond it did not before. When this was first measured the
+crossover was at thirty and the smallest system paid 3.7 ms; the whole of that
+difference was `prefetch_terms`, then 55% of the warm path and almost all
+SQLAlchemy instance hydration, which is what P2a went and fixed. It was the lever
+under all three phases rather than P2's alone. And a real system is far past the
+crossover either way: set.mm reaches 1,441 productions, where the build, not the
 proof, is where a verify's time has gone.
 
 As with P1 and P2, then: the case for P3 today is that the check path no longer
@@ -588,9 +622,10 @@ their labels — but a `$e` registered as a library entry is a bare `|- ph` that
 proves anything, for anyone. The walk handles this by promoting them for the
 length of one check and withdrawing them (`corpus._givens`); the rows handle it by
 making them reachable only through the theorem that owns them
-(`promoted_theorem_premises.label`, `load_hypotheses`), and `proofs.theorem_id`
-says which theorem "this proof" establishes. Found by writing the measure test
-first: without it, every multi-hypothesis theorem re-checked as invalid.
+(`promoted_theorem_premises.label`, `load_theorems`'s `hypotheses_of`), and
+`proofs.theorem_id` says which theorem "this proof" establishes. Found by writing
+the measure test first: without it, every multi-hypothesis theorem re-checked as
+invalid.
 
 **The terms are cached too**, on P3's contract exactly: `schema_digest` guards
 them, a NULL or a stale digest is a *miss*, and a miss costs a parse and never a
