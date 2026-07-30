@@ -1580,13 +1580,26 @@ def _finalise_definition(
         system,
     )
 
-    notation = union.add_notation(defn.higher, context_copy)
-    # Whether the notation was already in scope, so a failure below knows whether
-    # removing it is undoing *this* registration or confiscating an earlier
-    # definition's grammar — two definitions may share one defined form, and
-    # `add_notation` hands back the production the first one registered.
-    shared_with_an_earlier_definition = notation in system.context.definitions
-    system.context.definitions.add(notation)
+    notation, is_new = union.notation_for(defn.higher, context_copy)
+    # Registered only when the grammar cannot already spell the defined form.
+    #
+    # A sort tries its own productions before its notations, so a notation for a
+    # form some production already spells is never *reached* by a parse — but is
+    # scanned by every parse that falls through to `try_definitions`, which on a
+    # large grammar is most of them. That is inert work in a hot path, and on an
+    # imported system it is all of them: a Metamath definition's defined form is
+    # grammatical from its own syntax axiom, so every notation registered would be
+    # dead weight. Measured over 5,000 set.mm theorems, carrying them cost 2.4x.
+    #
+    # Asked against a context holding no notations at all, which is the question
+    # exactly: could this form be read without any of them?
+    production_context = copy(context_copy)
+    production_context.definitions = set()
+    spelled_by_a_production = union.match(defn.higher, production_context) is not None
+
+    registered_now = is_new and not spelled_by_a_production
+    if registered_now:
+        system.context.definitions.add(notation)
 
     try:
         return _register_notated_definition(
@@ -1600,7 +1613,11 @@ def _finalise_definition(
         # `register_definition` mutates a live system, and a caller that catches
         # this to keep the assertion as an axiom (which is what a corpus import
         # does) would be left with the grammar half-extended.
-        if not shared_with_an_earlier_definition:
+        #
+        # Only what *this* registration added is withdrawn: a notation an earlier
+        # definition registered is its grammar, not ours to confiscate, and one we
+        # never registered is not there to remove.
+        if registered_now:
             system.context.definitions.discard(notation)
         raise
 
