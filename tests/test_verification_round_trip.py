@@ -39,6 +39,11 @@ from sqlalchemy import create_engine, select, update
 from sqlalchemy.orm import Session
 
 from app.db import Base, spec_to_system, store_proof_lines
+from app.db.promoted_theorems import (
+    PromotedTheoremBindingRow,
+    PromotedTheoremPremiseRow,
+    PromotedTheoremRow,
+)
 from app.db.models import FormalSystem, Proof, ProofFolder
 from app.db.proof_lines import ProofLineAntecedentRow, ProofLineRow
 from app.db.proofs_mapping import load_proof_for_check
@@ -84,6 +89,7 @@ _TABLES = [
         RuleRow, RuleAntecedentRow, RuleBindingRow, SideConditionRow,
         ProofFolder, Proof, TermRow, TermChildRow,
         ProofLineRow, ProofLineAntecedentRow,
+        PromotedTheoremRow, PromotedTheoremPremiseRow, PromotedTheoremBindingRow,
     )
 ]
 

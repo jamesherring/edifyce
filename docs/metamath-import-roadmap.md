@@ -387,26 +387,38 @@ Resolving a citation needed an index first. `Proof.get_reference` scanned
 `inference_rules` linearly, twice per citation — free at a handful of rules, not
 at 1,559 against roughly 4M citations. `FormalSystem.rule_by_label` keys them.
 
-**The storage half is what remains**, and the split is what makes it answerable.
-`inference_rules` have a table (`rules`); `promoted_theorems` have none, so a
-stored import carries its grammar and none of its library, and an imported proof
-cannot be re-checked from its own rows (§1.3, and
-[docs/verification-from-rows.md](verification-from-rows.md) from the engine side).
-Storing 49,000 derived theorems as `rules` would have answered it wrongly by
-declaring every proved theorem a primitive; with the split, the two halves can be
-answered separately:
+**The storage half is now done too** — but not the way this section proposed, and
+the difference is worth recording because a measurement overturned it.
 
-- **Axioms** need no schema work. A declarative `Rule` is all strings — label,
-  deduction, antecedents, bindings, side-conditions — and `promoted_theorem`
-  already computes exactly those before turning them into patterns, with
-  `_distinct_provisos` returning proviso strings directly. Lifting that string
-  computation into a helper both callers share, and having the walk collect a
-  `Rule` per logical `$a`, is enough for `spec_to_system` to persist them into the
-  existing table. (The walk has to be the collector: provisos need the built
-  system, which `corpus_spec` has no access to.)
-- **Derived theorems** are the open question — 47,546 of them, needing either a
-  table of their own or reconstruction from the `proof_lines` rows §1.3 already
-  stores.
+The plan was to split the library by *kind*: **axioms** into the existing `rules`
+table (a declarative `Rule` is all strings, and `promoted_theorem` already
+computes exactly those), **derived theorems** into a table of their own. That
+would have made an imported system's axioms real `inference_rules`, which is
+tidy. It does not scale. `build_system` builds every rule **eagerly**, and a build
+is what a verify performs: at 309 productions, 269 axioms-as-rules already cost
+0.29 s per build, so set.mm's 1,559 at 1,441 productions would put seconds on
+every verify and grow with the corpus. A fully imported set.mm would have been
+effectively unverifiable.
+
+So the split that got built is by **provenance**, not by kind. `rules` keeps its
+meaning — the handful of primitives an author declared, built with the system —
+and a new `promoted_theorems` table holds a library that arrived whole, *both*
+kinds, resolved by label on demand: a verify reads the citations off a proof's own
+lines and promotes exactly those. A `primitive` column records which kind an entry
+is, so "what does this system assume?" is still one query
+(`WHERE primitive`); nothing in *checking* reads it, because a citation of an
+axiom and of a derived theorem are checked identically — which is the same fact
+this section already rests on, pointed at storage instead of at namespaces.
+
+The string-computation helper this section asked for was still the right first
+step, and exists: `promotion.TheoremSpec` plus `importer.theorem_spec`, shared by
+promotion and by the persistence layer.
+
+Measured: over set.mm's first 1,000 theorems, all 1,000 re-check from their rows
+alone and agree with the verdict the import recorded — no `.mm` file, no statement
+parsed. See [docs/verification-from-rows.md](verification-from-rows.md) P4 for the
+laziness, the term cache, and how a theorem's own `$e` hypotheses stay scoped to
+its own proof.
 
 ---
 

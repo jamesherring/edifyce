@@ -24,6 +24,11 @@ from sqlalchemy.orm import Session
 
 import app.auth.backend as backend
 from app.db import Base, FormalSystem, SideConditionRow, spec_to_system
+from app.db.promoted_theorems import (
+    PromotedTheoremBindingRow,
+    PromotedTheoremPremiseRow,
+    PromotedTheoremRow,
+)
 from app.db.terms import TermChildRow, TermRow
 from app.db.models import OAuthAccount, User
 from app.db.session import get_session
@@ -79,6 +84,8 @@ _TABLES = [
         # be deleted — SQLite creates a table whose FK target is absent,
         # Postgres refuses to.
         TermRow, TermChildRow,
+        # `promoted_theorems` cascades from the system and references `terms`.
+        PromotedTheoremRow, PromotedTheoremPremiseRow, PromotedTheoremBindingRow,
     )
 ]
 

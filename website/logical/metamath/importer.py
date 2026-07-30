@@ -28,16 +28,12 @@ syntax axioms state.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-from ..promotion import promote_from_source
+from ..promotion import TheoremSpec, promote_from_source, promote_spec
 from ..declarative import LinePart, LineSpec, Production, SystemSpec, build_system
-from ..formal_system import FormalSystem
+from ..formal_system import FormalSystem, PromotedTheorem
 from . import compressed
 from .parser import Assertion, Database, Hypothesis, MetamathError
 
-if TYPE_CHECKING:
-    from ..formal_system import PromotedTheorem
 
 # Metamath labels admit letters, digits, and `-_.`; a citation adds the line
 # numbers and separators Edifyce's reference syntax uses.
@@ -312,7 +308,27 @@ def _logical_sort(productions: list[Production], variables: list[Production]) ->
     return notation[0]
 
 
-def register(assertion: Assertion, database: Database, system: FormalSystem) -> None:
+@dataclass(frozen=True)
+class LibraryEntry:
+    """One logical assertion as it joined a system's library.
+
+    What a caller needs to *store* it: the strings it was promoted from, the
+    engine object those composed to (whose terms are worth caching), and whether
+    it is a primitive. See ``app/db/promoted_theorems_mapping.py``.
+    """
+
+    spec: TheoremSpec
+    theorem: PromotedTheorem
+    primitive: bool
+    # The label the theorem's own proof cites each premise by, positionally — a
+    # Metamath `$e` label. Only its own proof may, which is why they travel with
+    # the theorem rather than becoming library entries (see `corpus._givens`).
+    premise_labels: tuple[str, ...] = ()
+
+
+def register(
+    assertion: Assertion, database: Database, system: FormalSystem
+) -> LibraryEntry:
     """Register one logical assertion on ``system``, as what it is.
 
     A logical ``$a`` is a **primitive** of the system - `ax-mp` is literally an
@@ -325,12 +341,27 @@ def register(assertion: Assertion, database: Database, system: FormalSystem) -> 
     which namespace answers a citation, and therefore what the system can say
     about itself. Until this split an imported system could not answer "what are
     your axioms?" - everything was derived.
+
+    Returns what it registered, so a caller can persist the library it is
+    building. (Storage keeps both kinds in one table and marks the primitives -
+    an imported system has 1,559 of them, far too many to rebuild eagerly as
+    `inference_rules` on every verify. The namespace split above is what the
+    *engine* does with a library it has in memory; the flag is how that survives
+    a round trip.)
     """
-    theorem = promoted_theorem(assertion, database, system)
-    if assertion.proof:
-        system.promote(theorem)
-    else:
+    spec = theorem_spec(assertion, database, system)
+    theorem = promote_spec(system, spec)
+    primitive = not assertion.proof
+    if primitive:
         system.add_inference_rule(theorem.as_rule())
+    else:
+        system.promote(theorem)
+    return LibraryEntry(
+        spec=spec,
+        theorem=theorem,
+        primitive=primitive,
+        premise_labels=tuple(h.label for h in assertion.essentials),
+    )
 
 
 def promote_assertions(
@@ -348,15 +379,21 @@ def promote_assertions(
         register(assertion, database, system)
 
 
-def promoted_theorem(
+def theorem_spec(
     assertion: Assertion, database: Database, system: FormalSystem
-) -> PromotedTheorem:
-    """Promote one logical ``$a``/``$p`` to a citable schematic theorem."""
+) -> TheoremSpec:
+    """One logical ``$a``/``$p`` as the strings a promotion is written from.
+
+    Split out from :func:`promoted_theorem` because two callers want it: promotion
+    itself, and the persistence layer, which stores exactly these strings so the
+    theorem can be promoted again without the ``.mm`` file (see
+    ``app/db/theorems_mapping.py``). ``system`` is read only for the sorts a ``$d``
+    proviso may name.
+    """
     rename = _proviso_safe_names(assertion)
     substitute = (lambda tokens: tuple(rename.get(t, t) for t in tokens)) if rename else tuple
 
-    return promote_from_source(
-        system,
+    return TheoremSpec(
         label=assertion.label,
         statement=" ".join(substitute(assertion.tokens)),
         metavariables={
@@ -365,6 +402,13 @@ def promoted_theorem(
         premises=tuple(" ".join(substitute(h.tokens)) for h in assertion.essentials),
         distinct=_distinct_provisos(assertion, database, system, rename),
     )
+
+
+def promoted_theorem(
+    assertion: Assertion, database: Database, system: FormalSystem
+) -> PromotedTheorem:
+    """Promote one logical ``$a``/``$p`` to a citable schematic theorem."""
+    return promote_spec(system, theorem_spec(assertion, database, system))
 
 
 def _proviso_safe_names(assertion: Assertion) -> dict[str, str]:

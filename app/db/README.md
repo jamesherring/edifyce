@@ -20,6 +20,8 @@ evolve it.
 | `app/db/side_conditions_mapping.py` | Parse/render a `where` proviso ↔ side-condition rows |
 | `app/db/terms.py` | Term graph: kernel-term DAGs as shared `terms` / `term_children` rows |
 | `app/db/terms_mapping.py` | `store_term` / `load_term` round trip between kernel `Term`s and the rows |
+| `app/db/promoted_theorems.py` | The citable library: proved and imported theorems as rows, resolved by label |
+| `app/db/promoted_theorems_mapping.py` | `store_theorem` / `load_theorems` / `load_hypotheses`: the library round trip |
 | `app/db/schema_terms.py` | `store_schema_terms` / `load_schema_terms`: a rule's schema templates as composed kernel terms, so a build need not re-parse them |
 | `app/db/proof_lines.py` | Proof structure: a checked proof's lines + the justification edges between them |
 | `app/db/proofs_mapping.py` | `store_proof_lines`: project a checked engine `Proof` into those rows |
@@ -79,6 +81,21 @@ Modernised from the original Django app (`website/models.py` on `main`):
   *miss* even under a matching digest — never "this template composes to
   nothing" — because the same NULL is what a deleted term, and a slot that
   resolved to a declared pattern instead of a composed one, both leave behind.
+- **`promoted_theorems`, `promoted_theorem_premises`,
+  `promoted_theorem_bindings`** — a system's **citable library**
+  (`promoted_theorems.py`): results it has proved, or imported from a corpus, and
+  registered for schematic reuse. Separate from `rules` because the two differ in
+  *scale* and therefore in how they are read: a system's primitives are a handful
+  and are built with it, while an imported library is 49,000 entries and is
+  resolved **by label, on demand** — a verify reads the citations off a proof's
+  own lines and promotes only those. Both kinds of an imported library live here
+  (a Metamath logical `$a` as much as a `$p`); `primitive` records which, so
+  "what does this system assume?" is one query while checking stays indifferent.
+  Statement and premise terms are cached beside their text under `schema_digest`,
+  on the same contract as the rule schema terms above. A premise's `label` is how
+  the theorem's **own** proof cites it, and the only way to reach it — a bare
+  hypothesis citable by anyone would prove anything — with `proofs.theorem_id`
+  saying which proof that is.
 - **`side_conditions`** — a definition's proviso (`where` clause) stored as the
   kernel's closed side-condition algebra (`side_conditions.py`) rather than an
   opaque string: one row per algebra node (`occurs`/`equal`/`disjoint`/`atom`/

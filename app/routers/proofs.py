@@ -49,11 +49,12 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy import select, text
 from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import Session, selectinload
 
 from app.auth import current_active_user, current_active_user_optional
 from app.db import (
     FormalSystem,
+    cited_labels,
     Proof,
     ProofLineRow,
     ProofReference,
@@ -62,6 +63,8 @@ from app.db import (
     load_proof_for_check,
     load_proof_lines,
     load_schema_terms,
+    load_hypotheses,
+    load_theorems,
     store_proof_lines,
     store_schema_terms,
     system_to_spec,
@@ -92,7 +95,7 @@ from app.schemas import (
     TermSummary,
     VerifyProofResponse,
 )
-from website.logical.declarative import build_spec
+from website.logical.declarative import build_spec, library_digest
 from website.logical.graphs import topological_order
 
 if TYPE_CHECKING:
@@ -428,14 +431,47 @@ async def _verify_with_references(
     #
     # The checker raises on malformed proofs against otherwise-valid systems;
     # reshape into a structured error rather than a 500.
+    # A system's library is unbounded — an imported corpus has tens of thousands
+    # of theorems — so it is not built with the system and cannot be. What a proof
+    # cites is knowable before it is checked, from its own lines either way, so
+    # resolve exactly those labels and promote them (P4). A label with no row is
+    # simply not a theorem: it may name a rule, a definition, or a cited proof's
+    # line, and the resolver settles that as it always did.
+    library = library_digest(spec)
+
+    def promote_cited(sync: Session, checked_proof: EngineProof) -> None:
+        labels = cited_labels(
+            line.reference_string for line in checked_proof.proof_lines
+        )
+        promoted = load_theorems(
+            sync, system.id, labels, compiled_system, context, library
+        )
+        # A proof that *establishes* a library entry proves under that entry's
+        # own hypotheses, and states them as lines citing their labels. They are
+        # reachable only through it — a bare hypothesis promoted for anyone would
+        # prove anything (see load_hypotheses).
+        if proof.theorem_id is not None:
+            promoted.update(
+                load_hypotheses(sync, proof.theorem_id, compiled_system, context)
+            )
+        for theorem in promoted.values():
+            compiled_system.promote(theorem)
+
     try:
         checked = await session.run_sync(
             lambda sync: load_proof_for_check(
-                sync, proof.id, compiled_system, context, proof=root
+                sync, proof.id, compiled_system, context, proof=root,
+                before_check=lambda populated: promote_cited(sync, populated),
             )
         )
         if checked is None:
-            compiled_system.parse(proof.source, proof=root)
+            # No rows: read the lines off the text, resolve what they cite, then
+            # check. The same two steps in the same order — `parse` is exactly
+            # this pair, and is not used here only because the library has to be
+            # resolved between them.
+            _read, read_context = compiled_system.read_proof(proof.source, proof=root)
+            await session.run_sync(lambda sync: promote_cited(sync, root))
+            compiled_system.check_proof(root, read_context)
     except Exception as exc:  # noqa: BLE001
         return _Verification(
             VerifyProofResponse(success=False, errors=[str(exc)]), None

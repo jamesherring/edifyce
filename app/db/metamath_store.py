@@ -18,16 +18,20 @@ as long as the stored system is the union of both — which
 the corpus lands in one term graph, so a subterm shared by two theorems is one
 row and the theorem search indexes them together.
 
-**What is stored is the parse, not yet the means to repeat it.** A system row
-holds a grammar, definitions, axioms and rules; it has nowhere to hold a
-*promoted theorem*, and the Metamath library is 49,000 of them. So the stored
-system is grammar-only, and re-parsing an imported proof against it fails on the
-first citation — the rows record a check that happened, not one that can be
-re-run from them. That is roadmap §3.2 (the axiom-vs-theorem split), which owns
-the storage decision; until it lands, an import is deliberately **ownerless**, so
-the owner-scoped proof routes cannot reach it — and in particular
-``POST /proofs/{id}/verify`` cannot re-check it, record ``valid=False`` and drop
-the imported structure on the way. ``test_metamath_persistence`` pins both halves.
+**The library is stored too**, so an imported proof can be re-checked from its
+rows rather than only described by them. Every assertion the walk promotes — the
+1,559 logical ``$a`` as much as the 47,546 ``$p`` — is written to
+``promoted_theorems`` with the term its statement composed to, and a verify then
+resolves the labels a proof cites and no more (roadmap §3.2; P4 of
+docs/verification-from-rows.md). The walk is what hands them over, because
+promotion parses a statement against the grammar *as of that statement's own
+position* and only the walk holds it.
+
+An import stays **ownerless** all the same. That was a guard while the library
+was missing — the owner-scoped proof routes could not reach an import, so
+``POST /proofs/{id}/verify`` could not re-check it, record ``valid=False`` and
+drop the imported structure. It is now a statement about provenance rather than a
+guard: a corpus belongs to no user. ``test_metamath_persistence`` pins it.
 
 Synchronous, like the rest of the mapping layer; an async caller reaches it
 through ``AsyncSession.run_sync`` (see ``scripts/import_metamath.py``).
@@ -39,12 +43,16 @@ import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
 from app.db.models import FormalSystem, Proof
+from app.db.promoted_theorems_mapping import store_theorem, theorem_digest
 from app.db.proofs_mapping import store_proof_lines
 from app.db.systems_mapping import spec_to_system
+from website.logical.declarative import library_digest
 from website.logical.metamath.corpus import corpus_spec, walk
+from website.logical.metamath.importer import LibraryEntry
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -75,6 +83,15 @@ class ImportReport:
     failed: int = 0
     lines: int = 0
     formulas: int = 0
+    # The citable library this run stored: every assertion the walk promoted,
+    # and how many of those are primitives of the imported system.
+    # ``theorems_failed`` is counted apart from ``failed`` because it is a
+    # different thing going wrong — a theorem that would not *store* against a
+    # proof that would not *check* — and adding them would make either number
+    # unreadable.
+    theorems: int = 0
+    primitives: int = 0
+    theorems_failed: int = 0
     failures: list[tuple[str, str]] = field(default_factory=list)
 
 
@@ -101,12 +118,14 @@ def import_corpus(
         raise ValueError(f"batch must be at least 1 if given, not {batch}.")
 
     # Raises for a `limit` below 1 (`corpus.theorems`) before anything is written.
-    system = spec_to_system(corpus_spec(database, limit, name))
+    spec = corpus_spec(database, limit, name)
+    system = spec_to_system(spec)
     session.add(system)
     session.flush()
     report = ImportReport(system_id=system.id)
+    library = _Library(session, system, report, library_digest(spec))
 
-    for position, checked in enumerate(walk(database, limit, name)):
+    for position, checked in enumerate(walk(database, limit, name, library.store)):
         report.checked += 1
         if checked.proof is None:
             _record_failure(report, checked.label, checked.error or "")
@@ -135,10 +154,91 @@ def import_corpus(
             progress(report, checked)
         if batch is not None and report.checked % batch == 0:
             system = _checkpoint(session, report)
+            library.rebind(system)
 
+    _link_proofs_to_theorems(session, report.system_id, library.ids)
     if batch is not None:
         session.commit()
     return report
+
+
+def _link_proofs_to_theorems(
+    session: Session, system_id: uuid.UUID, ids: dict[str, uuid.UUID]
+) -> None:
+    """Point each proof at the library entry it establishes.
+
+    Done after the walk rather than during it, because the walk promotes a
+    theorem *after* checking its proof — that ordering is what stops a theorem
+    justifying itself, so the row a proof would point at does not exist yet when
+    the proof is written. The name is the join: an import creates both from one
+    Metamath ``$p``, so ``proofs.name`` is the theorem's label by construction.
+    """
+    if not ids:
+        return
+    for name, theorem_id in ids.items():
+        session.execute(
+            sa_update(Proof)
+            .where(Proof.formal_system_id == system_id, Proof.name == name)
+            .values(theorem_id=theorem_id)
+        )
+
+
+class _Library:
+    """Writes each assertion the walk promotes into ``promoted_theorems``.
+
+    Held as an object rather than a closure because a batched run *rebinds* the
+    system: ``_checkpoint`` empties the identity map and re-fetches it, and the
+    symbol table a metavariable's sort resolves through has to follow.
+
+    Contained per theorem, like the proof writes: an assertion whose sort the
+    system does not declare, or whose statement will not store, costs itself and
+    is reported — not the run. It also stays *out* of the library rather than
+    landing there without its terms, so a later verify fails on the citation
+    rather than on a half-written row.
+    """
+
+    def __init__(
+        self,
+        session: Session,
+        system: FormalSystem,
+        report: ImportReport,
+        digest: str,
+    ) -> None:
+        self._session = session
+        self._report = report
+        self._digest = digest
+        # Label -> stored id, so a proof can be linked to the theorem it
+        # establishes. Ids survive a checkpoint; the ORM objects do not.
+        self.ids: dict[str, uuid.UUID] = {}
+        self.rebind(system)
+
+    def rebind(self, system: FormalSystem) -> None:
+        self._system = system
+        self._symbols = {symbol.name: symbol for symbol in system.symbols}
+
+    def store(self, entry: LibraryEntry) -> None:
+        try:
+            with self._session.begin_nested():
+                row = store_theorem(
+                    self._session,
+                    self._system,
+                    entry.spec,
+                    self._symbols,
+                    position=self._report.theorems,
+                    primitive=entry.primitive,
+                    digest=theorem_digest(self._digest, entry.spec),
+                    promoted=entry.theorem,
+                    premise_labels=entry.premise_labels,
+                )
+                self._session.flush()
+                self.ids[entry.spec.label] = row.id
+        except Exception as exc:  # noqa: BLE001 - reported, not fatal
+            self._report.theorems_failed += 1
+            if len(self._report.failures) < _FAILURES_KEPT:
+                self._report.failures.append((entry.spec.label, str(exc)))
+            return
+        self._report.theorems += 1
+        self._report.primitives += entry.primitive
 
 
 def _record_failure(report: ImportReport, label: str, message: str) -> None:

@@ -50,6 +50,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, uuid_pk_column
 
 if TYPE_CHECKING:
+    from app.db.promoted_theorems import PromotedTheoremRow
     from app.db.proof_lines import ProofLineRow
     from app.db.terms import TermRow
 
@@ -188,6 +189,17 @@ class FormalSystem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     rules: Mapped[list["RuleRow"]] = relationship(
         back_populates="system", cascade="all, delete-orphan", order_by="RuleRow.position"
     )
+    # The system's citable library — proved and imported theorems. Deliberately
+    # *not* loaded with the rest of a system: an imported corpus has tens of
+    # thousands, and a verify resolves only the labels its proof cites (see
+    # app/db/promoted_theorems.py). Declared so the cascade reaches them; nothing
+    # should read it as a collection.
+    promoted_theorems: Mapped[list["PromotedTheoremRow"]] = relationship(
+        back_populates="system",
+        cascade="all, delete-orphan",
+        order_by="PromotedTheoremRow.position",
+        lazy="raise",
+    )
 
 
 class ProofFolder(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -273,6 +285,16 @@ class Proof(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     result: Mapped[dict | None] = mapped_column(_JSON)
     valid: Mapped[bool | None] = mapped_column(Boolean)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The library entry this proof *establishes*, when it establishes one — set by
+    # a corpus import, where a proof and a promoted theorem are two views of one
+    # Metamath `$p`. What it buys is scope: the theorem's own `$e` hypotheses are
+    # citable from this proof and nowhere else, and this is the link that says
+    # which proof "this one" is (see app/db/promoted_theorems_mapping.py).
+    # SET NULL rather than CASCADE — losing the library entry must not delete the
+    # proof that established it.
+    theorem_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("promoted_theorems.id", ondelete="SET NULL"), index=True
+    )
 
     # One-directional to the owning user (single FK, so no back_populates needed).
     # A relationship adds no column, so this needs no migration.

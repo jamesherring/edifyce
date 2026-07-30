@@ -46,6 +46,10 @@ def test_expected_tables_present():
         "term_children",
         # Structured definition provisos (the kernel side-condition algebra).
         "side_conditions",
+        # The citable library: proved and imported theorems, resolved by label.
+        "promoted_theorems",
+        "promoted_theorem_premises",
+        "promoted_theorem_bindings",
     }
 
 

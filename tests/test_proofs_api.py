@@ -43,6 +43,11 @@ from app.db import (
     spec_to_system,
 )
 from app.db.terms_mapping import prefetch_terms
+from app.db.promoted_theorems import (
+    PromotedTheoremBindingRow,
+    PromotedTheoremPremiseRow,
+    PromotedTheoremRow,
+)
 from app.db.models import OAuthAccount, User
 from app.db.proofs_mapping import load_proof_lines
 from app.db.session import get_session
@@ -99,6 +104,10 @@ _TABLES = [
         RuleAntecedentRow, RuleBindingRow, SideConditionRow,
         ProofFolder, Proof, ProofReference,
         TermRow, TermChildRow, ProofLineRow, ProofLineAntecedentRow,
+        # A verify resolves the theorems a proof cites out of the library
+        # (app/db/promoted_theorems.py), so the table must exist even for a
+        # system that has none.
+        PromotedTheoremRow, PromotedTheoremPremiseRow, PromotedTheoremBindingRow,
     )
 ]
 
@@ -806,14 +815,18 @@ def test_verifying_parses_the_proof_and_none_of_its_lemmas(client, db, monkeypat
     )
     _set_refs(client, main, [{"referenced_proof_id": middle, "alias": "M"}])
 
+    # `read_proof`, not `parse`: reading a line off the grammar *is* the parse,
+    # and the route calls it separately from the check so the theorems a proof
+    # cites can be resolved between the two (P4). Counting `parse` would now
+    # count zero and prove nothing.
     parses: list[str] = []
-    original = EngineFormalSystem.parse
+    original = EngineFormalSystem.read_proof
 
     def counted(self, text, *args, **kwargs):
         parses.append(text)
         return original(self, text, *args, **kwargs)
 
-    monkeypatch.setattr(EngineFormalSystem, "parse", counted)
+    monkeypatch.setattr(EngineFormalSystem, "read_proof", counted)
     assert client.post(f"/api/proofs/{main}/verify").json()["success"] is True
 
     # Exactly one parse: the proof being verified. Neither lemma is re-read.
@@ -938,14 +951,18 @@ def test_re_verifying_checks_from_rows_and_parses_nothing(client, db, monkeypatc
     # justification graph are both rebuilt, not just flat lines.
     pid = _create_proof(client, sid, "CP", source=_SUBPROOF_SRC)
 
+    # `read_proof`, not `parse`: reading a line off the grammar *is* the parse,
+    # and the route calls it separately from the check so the theorems a proof
+    # cites can be resolved between the two (P4). Counting `parse` would now
+    # count zero and prove nothing.
     parses: list[str] = []
-    original = EngineFormalSystem.parse
+    original = EngineFormalSystem.read_proof
 
     def counted(self, text, *args, **kwargs):
         parses.append(text)
         return original(self, text, *args, **kwargs)
 
-    monkeypatch.setattr(EngineFormalSystem, "parse", counted)
+    monkeypatch.setattr(EngineFormalSystem, "read_proof", counted)
 
     first = client.post(f"/api/proofs/{pid}/verify").json()
     assert first["success"] is True
