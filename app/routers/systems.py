@@ -603,7 +603,9 @@ def _definition_binders(
                 defined_form=definition.higher.to_string(),
                 binders=[
                     DefinitionBinder(
-                        var=binder.name, sort=binder.sort.name, inferred=binder.scoped
+                        var=binder.name,
+                        sort=binder.sort.name,
+                        inferred=not binder.declared,
                     )
                     for binder in definition.fresh
                 ],

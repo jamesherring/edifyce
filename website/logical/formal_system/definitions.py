@@ -205,6 +205,7 @@ def parse_definition(
             # `setvar`, and it is the sort it ranges over that says what may
             # name it.
             default=parse(binder_sort, name, "Declared bound variable"),
+            declared=True,
         )
         for name, binder_sort in (fresh or {}).items()
     ]

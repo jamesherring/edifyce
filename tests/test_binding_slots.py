@@ -201,6 +201,10 @@ def test_an_inferred_clause_builds_the_same_defining_form(binding_theory):
     # and so which other binders it must differ from.
     assert [b.scoped for b in inferred.fresh] == [True]
     assert [b.scoped for b in declared.fresh] == [False]
+    # And in where it came from, which is a separate fact the engine states rather
+    # than leaves to be read off the placement (see `FreshBinder.declared`).
+    assert [b.declared for b in inferred.fresh] == [False]
+    assert [b.declared for b in declared.fresh] == [True]
 
 
 def test_an_inferred_binder_unfolds_capture_avoidingly(binding_theory):

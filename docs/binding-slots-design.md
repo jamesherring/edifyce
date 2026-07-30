@@ -238,6 +238,18 @@ would read as "dropped" for every definition at once.
    — the definitions read model returns stored rows, which is the *declared*
    clause by construction. The definition editor now shows that report beside the
    `fresh` field, which is what makes silent inference visible where it matters.
+
+   The flag reads `FreshBinder.declared`, which the kernel states outright, and
+   deliberately not its `scoped`. The two agree today and are not the same fact:
+   `scoped` says how far a binder reaches, `declared` says who wrote it, and they
+   coincide only because a declared clause is currently placed by name. Placing a
+   declared clause *by scope* — the obvious way to give a hand-written binder the
+   reach its author meant rather than the whole form, and the fix to the
+   one-sort-per-name limitation noted above — would set `scoped` on a binder its
+   author named. A report derived from it would then hand the author their own
+   work back as the engine's, silently and with no test able to fail. Nothing in
+   the kernel checks `declared`; it is carried for the reason `Definition.label`
+   is, and required rather than defaulted so that both construction sites answer.
 4. **Item 3 (scope-aware steps) needs a soundness argument** before any code. It
    widens what the checker accepts, which is the one direction that can be wrong.
 
