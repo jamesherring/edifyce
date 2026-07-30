@@ -1595,6 +1595,11 @@ def _finalise_definition(
     # exactly: could this form be read without any of them?
     production_context = copy(context_copy)
     production_context.definitions = set()
+    # A memo is shared across context copies and keyed only by pattern and string,
+    # so one filled while notations were in scope would answer this question with
+    # *their* reading. Dropped rather than reused: this is the one parse that must
+    # not see them.
+    production_context.parse_memo = None
     spelled_by_a_production = union.match(defn.higher, production_context) is not None
 
     registered_now = is_new and not spelled_by_a_production
