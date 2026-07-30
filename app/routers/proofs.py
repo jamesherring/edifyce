@@ -63,7 +63,6 @@ from app.db import (
     load_proof_for_check,
     load_proof_lines,
     load_schema_terms,
-    load_hypotheses,
     load_theorems,
     store_proof_lines,
     store_schema_terms,
@@ -371,7 +370,7 @@ async def _verify_with_references(
     lemma_ids = [pid for pid in order if pid != proof.id]
     # The whole closure in one go: reading a proof back is latency, not work, so
     # batching is what makes it cheaper than re-parsing (see load_proof_lines).
-    # A stored row that no longer matches its system raises out of `load_term`,
+    # A stored row that no longer matches its system raises out of `TermGraph.term`,
     # and the line-numbering guard raises deliberately. Both are defects in
     # stored data rather than in the proof being checked, but this function
     # reshapes every other failure into a verdict rather than a 500, and a
@@ -443,17 +442,14 @@ async def _verify_with_references(
         labels = cited_labels(
             line.reference_string for line in checked_proof.proof_lines
         )
+        # `hypotheses_of` covers the other half: a proof that *establishes* a
+        # library entry proves under that entry's own hypotheses, and states them
+        # as lines citing their labels. Both halves are one call because they are
+        # one query and one term sweep.
         promoted = load_theorems(
-            sync, system.id, labels, compiled_system, context, library
+            sync, system.id, labels, compiled_system, context, library,
+            hypotheses_of=proof.theorem_id,
         )
-        # A proof that *establishes* a library entry proves under that entry's
-        # own hypotheses, and states them as lines citing their labels. They are
-        # reachable only through it — a bare hypothesis promoted for anyone would
-        # prove anything (see load_hypotheses).
-        if proof.theorem_id is not None:
-            promoted.update(
-                load_hypotheses(sync, proof.theorem_id, compiled_system, context)
-            )
         for theorem in promoted.values():
             compiled_system.promote(theorem)
 
@@ -495,7 +491,7 @@ async def _verify_with_references(
 def _term_context(system: EngineSystem) -> Context:
     # The context stored terms are rebuilt against: the proof context (which
     # carries the defined notations) plus the build context's productions, which
-    # is what `load_term` resolves a constructor name in.
+    # is what `TermGraph.term` resolves a constructor name in.
     context = copy(system.context)
     context.variables.update(system.build_context.variables)
     return context

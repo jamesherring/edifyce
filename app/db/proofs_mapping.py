@@ -40,7 +40,7 @@ from app.db.proof_lines import (
     ProofLineRow,
 )
 from app.db.terms import TermRow
-from app.db.terms_mapping import load_term, prefetch_terms, store_term
+from app.db.terms_mapping import TermGraph, prefetch_terms, store_term
 from website.logical.formal_system.proof import Proof as EngineProof
 from website.logical.formal_system.proof import ProofLine as EngineProofLine
 
@@ -51,7 +51,6 @@ if TYPE_CHECKING:
     from website.logical.formal_system import FormalSystem as EngineSystem
     from website.logical.formal_system.line_type import LineType
     from website.logical.formal_system.proof import ProofLine
-    from website.logical.kernel.terms import Term
     from website.logical.matching.context import Context
 
     # A lemma this proof may cite, paired with its stored id. A sequence of live
@@ -229,18 +228,14 @@ def load_proof_lines(
 
     # One sweep for every term of every proof, before any of it is walked:
     # rebuilding a term through lazy relationships costs a query per node, which
-    # is what would make reading rows slower than the parse they replace. Seeded
-    # from `term_id` rather than `term` so the roots are not fetched twice. The
-    # result is bound because the identity map holds it weakly (see
-    # prefetch_terms) — dropping it here would undo the sweep.
-    prefetched = prefetch_terms(  # noqa: F841 - held so the rows stay loaded
+    # is what would make reading rows slower than the parse they replace. The
+    # graph memoises as it rebuilds, and term rows are interned per system, so a
+    # subterm shared across a proof's lines — or across the proofs citing it — is
+    # built once for the batch.
+    graph = prefetch_terms(
         session, [row.term_id for row in rows if row.term_id is not None]
     )
-
     line_types = {line_type.name: line_type for line_type in system.line_types}
-    # One memo for the batch: term rows are interned per system, so a subterm is
-    # shared across a proof's lines and across the proofs citing it.
-    memo: dict[object, Term] = {}
 
     proofs: dict[uuid.UUID, EngineProof] = {}
     for row in rows:
@@ -248,7 +243,7 @@ def load_proof_lines(
         if proof is None:
             proof = proofs[row.proof_id] = EngineProof(formal_system=system)
         _adopt_verdict(
-            proof, _load_line(proof, row, line_types, context, memo), row
+            proof, _load_line(proof, row, line_types, context, graph), row
         )
 
     for proof in proofs.values():
@@ -303,16 +298,15 @@ def load_proof_for_check(
     if not rows:
         return None
 
-    prefetched = prefetch_terms(  # noqa: F841 - held so the rows stay loaded
+    graph = prefetch_terms(
         session, [row.term_id for row in rows if row.term_id is not None]
     )
     line_types = {line_type.name: line_type for line_type in system.line_types}
-    memo: dict[object, Term] = {}
 
     if proof is None:
         proof = EngineProof(formal_system=system)
     for row in rows:
-        _load_line(proof, row, line_types, context, memo)
+        _load_line(proof, row, line_types, context, graph)
 
     if before_check is not None:
         before_check(proof)
@@ -324,7 +318,7 @@ def _load_line(
     row: ProofLineRow,
     line_types: dict[str, LineType],
     context: Context,
-    memo: dict[object, Term],
+    graph: TermGraph,
 ) -> EngineProofLine:
     # `indent` and `display` are stored apart precisely so the source line
     # reconstructs; ProofLine derives its own `indent` and `empty` from text.
@@ -336,12 +330,17 @@ def _load_line(
         label=row.label,
     )
     line.line_type = line_types.get(row.line_type) if row.line_type else None
-    if row.term is not None:
+    if row.term_id is not None:
         # The flat string the string-rewriting path reads is *derived* from the
         # term (ProofLine.formula_string), so it is neither stored a second time
         # nor guessed at here — this used to ask whether the system had a
         # string-matching rule, which a promoted theorem is not.
-        line.formula_term = load_term(row.term, context, memo)
+        term = graph.term(row.term_id, context)
+        if term is None:
+            raise LookupError(
+                f"Proof line {row.id} names term {row.term_id}, which has no row."
+            )
+        line.formula_term = term
     proof.proof_lines.append(line)
     return line
 

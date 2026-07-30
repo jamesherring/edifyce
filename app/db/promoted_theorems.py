@@ -140,7 +140,7 @@ class PromotedTheoremPremiseRow(Base):
     # theorem would be a bare `|- ph` that proves anything, for anyone. The walk
     # enforces that by promoting them for the length of one check and withdrawing
     # them (`corpus._givens`); storage enforces it by making them reachable only
-    # through the theorem that owns them (see `load_hypotheses`).
+    # through the theorem that owns them (`load_theorems`'s `hypotheses_of`).
     label: Mapped[str | None] = mapped_column(String(128))
     term_id: Mapped[uuid.UUID | None] = _term_fk()
 

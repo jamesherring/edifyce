@@ -24,7 +24,6 @@ from app.db.promoted_theorems import (
 )
 from app.db.promoted_theorems_mapping import (
     cited_labels,
-    load_hypotheses,
     load_theorems,
     store_theorem,
     theorem_digest,
@@ -61,7 +60,13 @@ from app.db.schema_terms import (
 from app.db.side_conditions import SideConditionRow
 from app.db.systems_mapping import spec_to_system, system_to_spec
 from app.db.terms import TermChildRow, TermRow
-from app.db.terms_mapping import alpha_digest, digest_term, load_term, store_term
+from app.db.terms_mapping import (
+    TermGraph,
+    alpha_digest,
+    digest_term,
+    prefetch_terms,
+    store_term,
+)
 
 __all__ = [
     "Base",
@@ -103,7 +108,6 @@ __all__ = [
     "PromotedTheoremPremiseRow",
     "PromotedTheoremRow",
     "cited_labels",
-    "load_hypotheses",
     "load_theorems",
     "store_theorem",
     "theorem_digest",
@@ -111,10 +115,11 @@ __all__ = [
     "system_to_spec",
     # Term graph (app/db/terms.py) + kernel-term round trip.
     "TermChildRow",
+    "TermGraph",
     "TermRow",
     "alpha_digest",
     "digest_term",
-    "load_term",
+    "prefetch_terms",
     "store_term",
     # Rule-schema term cache (app/db/schema_terms.py).
     "SchemaTermCache",

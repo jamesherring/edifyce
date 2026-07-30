@@ -32,8 +32,13 @@ from sqlalchemy import distinct as distinct_
 from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
-from app.db import Base, cited_labels, load_proof_for_check, load_term, load_theorems
-from app.db.promoted_theorems_mapping import load_hypotheses
+from app.db import (
+    Base,
+    cited_labels,
+    load_proof_for_check,
+    load_theorems,
+    prefetch_terms,
+)
 from website.logical.declarative import build_spec, library_digest
 from website.logical.formal_system.proof import Proof as EngineProof
 from app.db.promoted_theorems import (
@@ -316,9 +321,11 @@ def test_a_stored_term_reloads_without_the_mm_file(session, imported):
     context = copy(built["system"].context)
     context.variables.update(built["system"].build_context.variables)
 
-    for row in _lines(session, "a2i"):
+    rows = _lines(session, "a2i")
+    graph = prefetch_terms(session, [row.term_id for row in rows])
+    for row in rows:
         formula = row.display.split(" [")[0]
-        assert load_term(row.term, context).to_string() == formula
+        assert graph.term(row.term_id, context).to_string() == formula
 
 
 def test_equal_subterms_are_one_row_across_the_whole_corpus(session, imported):
@@ -544,12 +551,12 @@ def test_an_imported_theorem_re_checks_from_its_rows_alone(session, imported):
 
         def resolve(populated, _built=built, _ctx=context, _lib=library, _row=proof_row):
             labels = cited_labels(line.reference_string for line in populated.proof_lines)
+            # `hypotheses_of` also brings the `$e` hypotheses this proof proves
+            # under, reachable only through the theorem it establishes.
             promoted = load_theorems(
-                session, imported.system_id, labels, _built, _ctx, _lib
+                session, imported.system_id, labels, _built, _ctx, _lib,
+                hypotheses_of=_row.theorem_id,
             )
-            # A theorem proves under its own `$e` hypotheses, reachable only
-            # through the theorem this proof establishes.
-            promoted.update(load_hypotheses(session, _row.theorem_id, _built, _ctx))
             for theorem in promoted.values():
                 _built.promote(theorem)
 
@@ -650,6 +657,11 @@ def test_a_hypothesis_is_reachable_only_through_the_theorem_that_owns_it(
     ) == {}
 
     # Reached through their owner, they are exactly what the walk promoted.
-    hypotheses = load_hypotheses(session, mp2.id, built, context)
+    hypotheses = load_theorems(
+        session, imported.system_id, [], built, context, library_digest(spec),
+        hypotheses_of=mp2.id,
+    )
     assert set(hypotheses) == {"mp2.1", "mp2.2", "mp2.3"}
     assert all(h.antecedents == () for h in hypotheses.values())
+    # The owner itself is read for its hypotheses, not made citable by it.
+    assert "mp2" not in hypotheses

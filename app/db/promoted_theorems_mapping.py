@@ -29,7 +29,7 @@ import json
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import false, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.db.promoted_theorems import (
@@ -42,16 +42,15 @@ from app.db.side_conditions_mapping import (
     build_theorem_side_conditions,
     theorem_side_conditions_list,
 )
-from app.db.terms_mapping import load_term, prefetch_terms, store_term
+from app.db.terms_mapping import prefetch_terms, store_term
 from website.logical.matching import StringPattern
 from website.logical.promotion import TheoremSpec, promote_spec
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping, Sequence
+    from collections.abc import Callable, Iterable, Mapping, Sequence
 
     from app.db.models import FormalSystem
     from app.db.systems import SymbolRow
-    from app.db.terms import TermRow
     from website.logical.formal_system import FormalSystem as EngineSystem
     from website.logical.formal_system import PromotedTheorem
     from website.logical.kernel.terms import Term
@@ -194,12 +193,28 @@ def load_theorems(
     built: EngineSystem,
     context: Context,
     library: str,
+    hypotheses_of: uuid.UUID | None = None,
 ) -> dict[str, PromotedTheorem]:
-    """Promote the stored theorems ``labels`` names, against the compiled ``built``.
+    """Promote everything one proof may cite: the library entries it names, and
+    the hypotheses of the entry it *establishes*.
 
     Labels with no row are simply absent from the result: a citation may name a
     rule, a line of a cited proof, or nothing at all, and it is the caller's job
     to over-collect rather than this function's to know which is which.
+
+    ``hypotheses_of`` is the theorem this proof proves, when it proves one. A
+    theorem proves *under* its ``$e`` hypotheses and its proof states them as
+    lines citing their labels, so re-checking needs them registered — exactly as
+    the walk registers them for one check and withdraws them
+    (``corpus._givens``). They are reached only through the theorem that owns
+    them, which is what keeps a bare ``|- ph`` from being citable by anybody
+    else, and each becomes a zero-premise theorem over the owner's
+    metavariables. A hypothesis wins a name clash with a cited theorem, matching
+    the walk, where `_givens` promotes into the same namespace last.
+
+    Both halves are one call because they are one query and, more to the point,
+    one term sweep: done separately they each paid a recursive closure over
+    `term_children` and a row fetch, which was a third of a re-check.
 
     ``library`` is :func:`~website.logical.declarative.library_digest` for the
     spec ``built`` was built from — what decides whether the stored terms may be
@@ -207,22 +222,27 @@ def load_theorems(
     proof line.
     """
     wanted = list(dict.fromkeys(labels))
-    if not wanted:
+    if not wanted and hypotheses_of is None:
         return {}
+
+    reachable = PromotedTheoremRow.label.in_(wanted) if wanted else false()
+    if hypotheses_of is not None:
+        reachable = or_(reachable, PromotedTheoremRow.id == hypotheses_of)
 
     rows = list(
         session.scalars(
             select(PromotedTheoremRow)
-            .where(
-                PromotedTheoremRow.system_id == system_id,
-                PromotedTheoremRow.label.in_(wanted),
-            )
+            .where(PromotedTheoremRow.system_id == system_id, reachable)
             .options(
                 selectinload(PromotedTheoremRow.premises),
-                selectinload(PromotedTheoremRow.bindings).selectinload(
+                # `joinedload` under the collection, not `selectinload`: a
+                # binding's symbol and a proviso's sort are *many-to-one*, so
+                # each is one more row on a query already being issued rather
+                # than a round trip of its own. Two fewer per verify.
+                selectinload(PromotedTheoremRow.bindings).joinedload(
                     PromotedTheoremBindingRow.symbol
                 ),
-                selectinload(PromotedTheoremRow.side_conditions).selectinload(
+                selectinload(PromotedTheoremRow.side_conditions).joinedload(
                     SideConditionRow.sort_symbol
                 ),
             )
@@ -231,36 +251,39 @@ def load_theorems(
     if not rows:
         return {}
 
-    specs = {row.label: theorem_spec_from_row(row) for row in rows}
+    owner = next((row for row in rows if row.id == hypotheses_of), None)
+    # The owner is fetched to be *read for its hypotheses*, not to be citable:
+    # a theorem's own statement is what its proof is establishing.
+    cited = [row for row in rows if row.label in set(wanted)]
+
+    specs = {row.label: theorem_spec_from_row(row) for row in cited}
     fresh = {
         row.label: row
-        for row in rows
+        for row in cited
         if row.schema_digest is not None
         and row.schema_digest == theorem_digest(library, specs[row.label])
     }
 
-    # Every cached term of every theorem asked for, in one sweep. `by_id` holds
-    # the whole graph, descendants included, for as long as terms are being read
-    # out of it: the identity map's references are weak, so a row nothing refers
-    # to is collected and the edge that reaches it goes back to the database
-    # (see prefetch_terms).
+    # Every cached term of every theorem asked for, in one sweep — and one memo
+    # across all of them, so a subterm two statements share is rebuilt once.
     ids = [
         term_id
         for row in fresh.values()
         for term_id in (row.statement_term_id, *(p.term_id for p in row.premises))
         if term_id is not None
     ]
-    by_id: dict[uuid.UUID, TermRow] = {
-        term.id: term for term in prefetch_terms(session, ids)
-    }
-    memo: dict[object, Term] = {}
+    if owner is not None:
+        # A hypothesis's term is guarded by nothing of its own — it is the
+        # owner's premise, and the owner's digest is what says whether the
+        # owner's terms are current.
+        ids += [p.term_id for p in owner.premises if p.term_id is not None]
+    graph = prefetch_terms(session, ids)
 
     def term(term_id: uuid.UUID | None) -> Term | None:
-        row = None if term_id is None else by_id.get(term_id)
-        return None if row is None else load_term(row, context, memo)
+        return graph.term(term_id, context)
 
     promoted: dict[str, PromotedTheorem] = {}
-    for row in rows:
+    for row in cited:
         current = fresh.get(row.label)
         promoted[row.label] = promote_spec(
             built,
@@ -271,70 +294,38 @@ def load_theorems(
                 else [term(premise.term_id) for premise in current.premises]
             ),
         )
+
+    if owner is not None:
+        promoted.update(_hypotheses(owner, built, context, term))
     return promoted
 
 
-def load_hypotheses(
-    session: Session,
-    theorem_id: uuid.UUID,
+def _hypotheses(
+    owner: PromotedTheoremRow,
     built: EngineSystem,
     context: Context,
+    term: Callable[[uuid.UUID | None], Term | None],
 ) -> dict[str, PromotedTheorem]:
-    """The labelled hypotheses of one theorem, promoted for its own proof.
-
-    A theorem proves *under* its ``$e`` hypotheses, and its proof states them as
-    lines justified by the hypothesis label — so re-checking that proof needs them
-    registered, exactly as the walk registers them for the length of one check
-    (``corpus._givens``). They are reached only through the theorem that owns
-    them, which is what keeps a bare ``|- ph`` from being citable by anybody else.
-
-    Each becomes a zero-premise theorem over the owner's metavariables, which is
-    what ``_givens`` builds and what a hypothesis *is* — including its default
-    ``matching``, rather than the owner's. Inheriting would arguably be better,
-    but only *arguably*: what matters is that a hypothesis promoted from rows and
-    one promoted by the walk are the same object, and a divergence between those
-    two paths is the bug class P2 shipped twice.
-    """
-    row = session.get(
-        PromotedTheoremRow,
-        theorem_id,
-        options=(
-            selectinload(PromotedTheoremRow.premises),
-            selectinload(PromotedTheoremRow.bindings).selectinload(
-                PromotedTheoremBindingRow.symbol
-            ),
-        ),
-    )
-    if row is None:
-        return {}
-
-    metavariables = {b.var: b.symbol.name for b in row.bindings}
-    # Held for the duration of the reads below; see `load_theorems`.
-    by_id = {
-        term.id: term
-        for term in prefetch_terms(
-            session, [p.term_id for p in row.premises if p.term_id is not None]
-        )
-    }
-    memo: dict[object, Term] = {}
-
-    hypotheses: dict[str, PromotedTheorem] = {}
-    for premise in row.premises:
-        if premise.label is None:
-            continue
-        term_row = None if premise.term_id is None else by_id.get(premise.term_id)
-        hypotheses[premise.label] = promote_spec(
+    # Each labelled premise of `owner`, as the zero-premise theorem `_givens`
+    # builds — including its *default* `matching` rather than the owner's.
+    # Inheriting would arguably be better, but only arguably: what matters is
+    # that a hypothesis promoted from rows and one promoted by the walk are the
+    # same object, and a divergence between those two paths is the bug class P2
+    # shipped twice.
+    metavariables = {b.var: b.symbol.name for b in owner.bindings}
+    return {
+        premise.label: promote_spec(
             built,
             TheoremSpec(
                 label=premise.label,
                 statement=premise.statement,
                 metavariables=metavariables,
             ),
-            statement_term=(
-                None if term_row is None else load_term(term_row, context, memo)
-            ),
+            statement_term=term(premise.term_id),
         )
-    return hypotheses
+        for premise in owner.premises
+        if premise.label is not None
+    }
 
 
 def cited_labels(references: Iterable[str | None]) -> list[str]:

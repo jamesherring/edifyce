@@ -1903,7 +1903,7 @@ def _shadowed_grammar_names(spec: SystemSpec) -> list[str]:
     ``ctx.variables["implication"]`` holding the axiom's line type.
 
     That matters to a *stored* term, which names its constructors by name and
-    resolves them back through this namespace (``app.db.terms_mapping.load_term``).
+    resolves them back through this namespace (``app.db.terms_mapping.TermGraph``).
     Composing has no such problem: it parses against the sort unions, which hold
     the production objects themselves and are indifferent to what the name now
     means. So a collision is exactly a case where a warm build and a cold build

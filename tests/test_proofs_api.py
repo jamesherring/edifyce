@@ -873,9 +873,10 @@ def test_the_reference_closure_is_read_in_a_fixed_number_of_queries(client, db):
         finally:
             engine.dispose()
 
-    # Same number of round trips for one lemma as for six.
+    # Same number of round trips for one lemma as for six: the line rows, and
+    # one sweep for every term below them.
     assert queries_for(1) == queries_for(6)
-    assert queries_for(6) <= 3
+    assert queries_for(6) <= 2
 
 
 def test_an_unverified_reference_the_proof_never_cites_is_not_reported(client, db):
@@ -917,7 +918,7 @@ def test_an_unverified_reference_no_failing_line_names_is_not_blamed(client, db)
 
 
 def test_a_lemma_that_cannot_be_read_is_a_verdict_not_a_500(client, db, monkeypatch):
-    # A stored row that no longer matches its system raises out of `load_term`,
+    # A stored row that no longer matches its system raises out of `TermGraph.term`,
     # and the line-numbering guard raises deliberately. Both are defects in
     # stored data, but every other failure on this path becomes a structured
     # verdict, and a corrupt lemma should not be the one that 500s.
@@ -1376,7 +1377,11 @@ def _proof_terms(db_path, proof_id) -> list[TermRow]:
                     ProofLineRow.term_id.is_not(None),
                 )
             ))
-            return prefetch_terms(session, roots)
+            # The closure as `TermGraph` knows it, then the rows themselves: this
+            # asserts on what was *stored*, so it reads the ORM rows rather than
+            # the flat ones the graph rebuilds from.
+            ids = prefetch_terms(session, roots).ids
+            return list(session.scalars(select(TermRow).where(TermRow.id.in_(ids))))
     finally:
         engine.dispose()
 
