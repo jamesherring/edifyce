@@ -63,7 +63,6 @@ from app.db import (
     load_proof_for_check,
     load_proof_lines,
     load_schema_terms,
-    load_hypotheses,
     load_theorems,
     store_proof_lines,
     store_schema_terms,
@@ -443,17 +442,14 @@ async def _verify_with_references(
         labels = cited_labels(
             line.reference_string for line in checked_proof.proof_lines
         )
+        # `hypotheses_of` covers the other half: a proof that *establishes* a
+        # library entry proves under that entry's own hypotheses, and states them
+        # as lines citing their labels. Both halves are one call because they are
+        # one query and one term sweep.
         promoted = load_theorems(
-            sync, system.id, labels, compiled_system, context, library
+            sync, system.id, labels, compiled_system, context, library,
+            hypotheses_of=proof.theorem_id,
         )
-        # A proof that *establishes* a library entry proves under that entry's
-        # own hypotheses, and states them as lines citing their labels. They are
-        # reachable only through it — a bare hypothesis promoted for anyone would
-        # prove anything (see load_hypotheses).
-        if proof.theorem_id is not None:
-            promoted.update(
-                load_hypotheses(sync, proof.theorem_id, compiled_system, context)
-            )
         for theorem in promoted.values():
             compiled_system.promote(theorem)
 

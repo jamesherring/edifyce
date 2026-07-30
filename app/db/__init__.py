@@ -24,7 +24,6 @@ from app.db.promoted_theorems import (
 )
 from app.db.promoted_theorems_mapping import (
     cited_labels,
-    load_hypotheses,
     load_theorems,
     store_theorem,
     theorem_digest,
@@ -103,7 +102,6 @@ __all__ = [
     "PromotedTheoremPremiseRow",
     "PromotedTheoremRow",
     "cited_labels",
-    "load_hypotheses",
     "load_theorems",
     "store_theorem",
     "theorem_digest",

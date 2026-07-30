@@ -335,28 +335,51 @@ every verdict is re-derived, and the ones that hide are those settled by an
 absence.** A test that only exercises proofs which fail *loudly* will not find
 them, which is why the agreement test runs over shapes rather than cases.
 
-### P2a. The constant factor — *follow-up*
+### P2a. The constant factor — *partly done*
 
-Deliberately not done here, because the phase is about where the parse happens
-rather than how fast the read is, and because both levers are self-contained
-enough to land on their own evidence.
+Profiled before touching anything, and the profile moved the target. This
+section predicted the cost was in *reading a proof back*; by P4 it was not. On a
+set.mm re-check, **76% of a check was the library resolution** P4 added, not the
+proof-line load — three separate term sweeps and 15.5 queries for one proof.
 
-- **Three round trips could be two.** A load is the line rows, the recursive
-  closure over `term_children`, then the term rows with their edges. The first
-  two could be one statement; the closure is only ever the filter for the third.
-- **Term rows are hydrated through the ORM.** `prefetch_terms` builds a
-  `TermRow` object graph and `load_term` walks relationships, when the shape
-  needed is flat tuples fed straight to the kernel's constructors. P1's profile
-  put most of the remaining time in SQLAlchemy's instance machinery, not in the
-  term rebuild.
-- **A single-proof load pays the batching penalty P1 documented.** Verifying one
-  proof is inherently one proof, so the fixed cost cannot be amortised the way a
-  reference closure's is. That argues for cutting the per-load floor rather than
-  batching harder.
+**Done: one query and one term sweep for everything a proof may cite.**
+`load_theorems` and `load_hypotheses` were two functions doing the same shape of
+work on the same table, back to back, each paying its own recursive closure over
+`term_children` and its own row fetch. They are one function with a
+`hypotheses_of` argument. And the many-to-one loads *under* a collection (a
+binding's symbol, a proviso's sort) are `joinedload` rather than `selectinload`,
+so each is a row on a query already being issued rather than a round trip.
 
-Worth measuring against a *large* grammar before choosing: the crossover moves
-with grammar size, and set.mm's full 1,441 productions may put it below the
-current numbers without any of this.
+| | per re-checked proof |
+|---|---|
+| before | 12.96 ms, 15.5 queries |
+| after | **9.4 ms, 9.0 queries** |
+
+−27% and −42%. Worth being precise about which change bought what: the merge is
+essentially all of the time and most of the queries; the `joinedload` change is
+one query and no measurable time, and is in because a many-to-one under a
+collection should not be a round trip, not because it showed up.
+
+**Still open, and now the largest single item: one term sweep instead of two.**
+A check still prefetches twice — once for the proof's own line terms, once for
+the library's. They could be one, and the enabler is already there: a line's
+citation is `proof_lines.reference`, a plain column, so *what a proof cites is
+knowable before any term is loaded*. The order would become read line rows →
+read theorem rows → one sweep over both sets of roots → build and check. What
+stops it being a small change is the interface: `load_proof_for_check`'s
+`before_check` hook would have to split into "given the citations, tell me which
+term roots you need" and "here they are, finish". That is worth doing and worth
+doing deliberately, on its own evidence.
+
+**Also still open**, both unchanged from the original reading:
+
+- **Term rows are hydrated through the ORM.** `prefetch_terms` builds a `TermRow`
+  object graph and `load_term` walks relationships, where the shape needed is
+  flat tuples fed to the kernel's constructors. Still the bulk of what remains —
+  `prefetch_terms` is 45% of a check even after the merge.
+- **A single-proof load cannot amortise its floor.** Verifying one proof is one
+  proof, which is why the levers worth pulling are the ones that cut the fixed
+  cost rather than batch harder.
 
 ### P3. Store schema terms — *done*
 
