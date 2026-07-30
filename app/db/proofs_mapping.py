@@ -241,9 +241,6 @@ def load_proof_lines(
     # One memo for the batch: term rows are interned per system, so a subterm is
     # shared across a proof's lines and across the proofs citing it.
     memo: dict[object, Term] = {}
-    # A term's flat string is only ever read by the string-rewriting rule path,
-    # and rendering one is not free. Ask the system once rather than per line.
-    needs_strings = any(rule.matching == "string" for rule in system.inference_rules)
 
     proofs: dict[uuid.UUID, EngineProof] = {}
     for row in rows:
@@ -251,7 +248,7 @@ def load_proof_lines(
         if proof is None:
             proof = proofs[row.proof_id] = EngineProof(formal_system=system)
         _adopt_verdict(
-            proof, _load_line(proof, row, line_types, context, memo, needs_strings), row
+            proof, _load_line(proof, row, line_types, context, memo), row
         )
 
     for proof in proofs.values():
@@ -311,12 +308,11 @@ def load_proof_for_check(
     )
     line_types = {line_type.name: line_type for line_type in system.line_types}
     memo: dict[object, Term] = {}
-    needs_strings = any(rule.matching == "string" for rule in system.inference_rules)
 
     if proof is None:
         proof = EngineProof(formal_system=system)
     for row in rows:
-        _load_line(proof, row, line_types, context, memo, needs_strings)
+        _load_line(proof, row, line_types, context, memo)
 
     if before_check is not None:
         before_check(proof)
@@ -329,7 +325,6 @@ def _load_line(
     line_types: dict[str, LineType],
     context: Context,
     memo: dict[object, Term],
-    needs_strings: bool,
 ) -> EngineProofLine:
     # `indent` and `display` are stored apart precisely so the source line
     # reconstructs; ProofLine derives its own `indent` and `empty` from text.
@@ -342,13 +337,11 @@ def _load_line(
     )
     line.line_type = line_types.get(row.line_type) if row.line_type else None
     if row.term is not None:
+        # The flat string the string-rewriting path reads is *derived* from the
+        # term (ProofLine.formula_string), so it is neither stored a second time
+        # nor guessed at here — this used to ask whether the system had a
+        # string-matching rule, which a promoted theorem is not.
         line.formula_term = load_term(row.term, context, memo)
-        if needs_strings:
-            # A string-rewriting rule matches on flat text rather than structure
-            # (InferenceRule._string_pairs). A term renders back to the string it
-            # was parsed from, so the flat form is recovered rather than stored a
-            # second time and kept in step by hand.
-            line.formula_string = line.formula_term.to_string()
     proof.proof_lines.append(line)
     return line
 

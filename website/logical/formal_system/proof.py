@@ -851,10 +851,11 @@ class ProofLine:
         # declares no formula field, or whose field is absent from the parse.
         self.formula_term: Term | None = None
 
-        # The formula's surface string, kept beside the term because the
-        # string-rewriting rule path (semi-Thue systems like MIU) matches on
-        # flat text rather than structure - see InferenceRule._string_pairs.
-        self.formula_string: str | None = None
+        # The formula's surface string, read by the string-rewriting path (a
+        # semi-Thue system like MIU matches flat text rather than structure -
+        # see InferenceRule._string_pairs). Set by the parse; *derived* from the
+        # term otherwise - see the `formula_string` property below.
+        self._formula_string: str | None = None
 
         # The LineType used for this line
         self.line_type = None
@@ -917,6 +918,32 @@ class ProofLine:
         # Line may be empty
         self.empty = len(self.text) == 0
 
+    @property
+    def formula_string(self) -> str | None:
+        """The formula's surface string — as parsed, or rendered from the term.
+
+        A parse records the substring it matched, and that is authoritative. A
+        line rebuilt from its stored row has no substring to record, so the
+        string is *rendered* from the term instead (`Term.to_string`), which is
+        exact: a term renders through its constructor's template pieces, a ground
+        leaf renders its own literal, and the matcher accepts no source spelling
+        that differs from those. See docs/verification-from-rows.md §4.
+
+        Derived rather than asked for, because no caller is in a position to know
+        whether it will be needed. The string is read only by the string-matching
+        path, and what selects that path can be an inference rule *or* a promoted
+        theorem — and the library is resolved after a proof's lines are populated,
+        so a load-time "does this system need strings?" question is asked before
+        its answer exists. It got the answer wrong, and a proof that verified when
+        parsed failed when checked from its rows.
+        """
+        if self._formula_string is not None:
+            return self._formula_string
+        return None if self.formula_term is None else self.formula_term.to_string()
+
+    @formula_string.setter
+    def formula_string(self, value: str | None) -> None:
+        self._formula_string = value
     def execute(self, context):
         # Execute this proof line in the system.
 

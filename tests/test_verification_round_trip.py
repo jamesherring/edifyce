@@ -67,7 +67,7 @@ from app.db.systems import (
 from app.db.systems_mapping import system_to_spec
 from app.db.terms import TermChildRow, TermRow
 from tests.zfc_systems import scoped_zfc_spec
-from website.logical.declarative import build_spec
+from website.logical.declarative import SystemSpec, build_spec
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
@@ -299,3 +299,109 @@ def test_erasing_a_line_never_makes_a_proof_more_valid(
                 .values(**{column: erased})
             )
             session.commit()
+
+
+# ---------------------------------------------------------------------------
+# The string-rewriting regime (P5)
+# ---------------------------------------------------------------------------
+def _string_system() -> SystemSpec:
+    """A system whose *only* string-matching schema is a promoted theorem.
+
+    Deliberately no string-matching **rule**: that is what the row path used to
+    ask about when deciding whether to recover a line's flat string, and a
+    library entry is not one. `Mx ⊢ Mxx` also needs genuine associative matching
+    — it concatenates a variable with itself, which the term unifier cannot
+    express — so nothing but the flat string can justify the step.
+    """
+    from website.logical.declarative import LinePart, LineSpec, Production, Rule
+
+    return SystemSpec(
+        name="Rewrite",
+        productions=[Production(sort="w", name="raw", regex="[MIU]+")],
+        lines=[LineSpec(
+            name="statement", shape="<w> [<reference>]",
+            parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,.]+")],
+            logical_sort="w",
+        )],
+        axioms=[Rule(label="AX", name="start", antecedents=[], deduction="MI",
+                     bindings=[])],
+    )
+
+
+def _with_double(built: EngineSystem) -> EngineSystem:
+    from website.logical.promotion import TheoremSpec, promote_spec
+
+    built.promote(promote_spec(built, TheoremSpec(
+        label="DOUBLE", statement="Mxx", metavariables={"x": "w"},
+        premises=("Mx",), matching="string",
+    )))
+    return built
+
+
+@pytest.mark.parametrize(
+    "source,valid",
+    [
+        ("MI\nMII [DOUBLE, 1]", True),
+        ("MI\nMIII [DOUBLE, 1]", False),
+    ],
+)
+def test_a_string_matched_theorem_checks_the_same_from_rows(
+    engine: Engine, source: str, valid: bool
+) -> None:
+    """A flat string is *derived* from the term, not stored and not guessed at.
+
+    The row path used to decide whether to recover one by asking whether the
+    system had a string-matching **inference rule**. A promoted theorem carries
+    the same `matching` and is not a rule — and is resolved *after* a proof's
+    lines are populated, so the question was being asked before its answer
+    existed. A proof that verified when parsed failed when checked from its rows.
+    """
+    spec = _string_system()
+    with Session(engine) as session:
+        row = spec_to_system(spec)
+        session.add(row)
+        session.commit()
+        stored = system_to_spec(row)
+
+        parsed = _with_double(build_spec(stored)["system"]).parse(source)
+        assert parsed.valid is valid, "the fixture proof lacks its stated verdict"
+
+        proof_row = Proof(
+            formal_system_id=row.id, name="rw", slug="rw", source=source
+        )
+        session.add(proof_row)
+        session.flush()
+        store_proof_lines(session, proof_row, row, parsed, replace=False)
+        session.commit()
+
+        built = _with_double(build_spec(stored)["system"])
+        context = copy(built.context)
+        context.variables.update(built.build_context.variables)
+        loaded = load_proof_for_check(session, proof_row.id, built, context)
+
+    assert _fingerprint(loaded) == _fingerprint(parsed)
+    assert loaded.valid is parsed.valid
+
+
+def test_a_rendered_formula_string_is_the_one_the_parse_recorded(
+    engine: Engine, system: Compiled
+) -> None:
+    """What makes deriving the string sound rather than merely convenient.
+
+    A term renders through its constructor's template pieces and a ground leaf
+    renders its own literal, so a render can only differ from the source if a
+    template *literal* matched text it does not equal — and the matcher accepts
+    no such spelling. Asserted here rather than argued for, over every line shape
+    the round trip already composes proofs from.
+    """
+    _system_id, built, _context = system
+    checked = 0
+    for _name, source in _sources():
+        for line in built.parse(source).proof_lines:
+            if line.formula_term is None:
+                continue
+            checked += 1
+            # `_formula_string` is what the parse recorded; the property falls
+            # back to the render only when it is absent.
+            assert line._formula_string == line.formula_term.to_string()
+    assert checked > 0, "no formula-bearing line was examined"
