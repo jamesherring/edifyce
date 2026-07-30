@@ -121,6 +121,53 @@ def test_a_renamed_slot_still_matches_its_declaration() -> None:
     assert restricted.scopes_over == {"x": ["ph"]}
 
 
+# A binder that is *also* a declared `$f` variable of the assertion — which every
+# Metamath binder is, since `A. x ph` needs `x` typed. The classifier must not
+# then declare it a parameter of the definition.
+BINDER_IS_A_FLOATING = r"""
+$c |- wff setvar ( ) -> <-> = A. NEW $.
+$v x ph ps $.
+vx $f setvar x $.
+wph $f wff ph $.
+wps $f wff ps $.
+wi $a wff ( ph -> ps ) $.
+wb $a wff ( ph <-> ps ) $.
+weq $a wff x = x $.
+wal $a wff A. x ph $.
+wnew $a wff NEW ph $.
+df-new $a |- ( NEW ph <-> A. x ( x = x -> ph ) ) $.
+ax-1 $a |- ( ph -> ( ps -> ph ) ) $.
+id $p |- ( ph -> ( ps -> ph ) ) $= ( ax-1 ) ABC $.
+"""
+
+
+def test_a_binder_is_not_declared_a_parameter_of_the_definition() -> None:
+    # The defect this pins was invisible to every small fixture and cost 242 of
+    # set.mm's 1,335 candidates. A definition's `bindings` become *metavariables*
+    # in the context its forms are re-parsed against; a binder declared among them
+    # parses to a `Var`, and `bind_scoped` skips `Var`s by design — they are
+    # parameters the defined form supplies. The binder is then never placed,
+    # `unbound_parameters` reports it free, and registration refuses a definition
+    # the classifier admitted.
+    verdicts: list[Classified] = []
+    checked = list(
+        walk(
+            parse(BINDER_IS_A_FLOATING),
+            equivalences=EQUIVALENCES,
+            classified=verdicts.append,
+            binders=FORALL_BINDS,
+        )
+    )
+    (df_new,) = [v for v in verdicts if v.label == "df-new"]
+
+    assert df_new.is_definition, df_new.reason
+    # `x` is a `$f` variable of the assertion and a binder of the defining form.
+    # Only `ph`, which the defined form supplies, is a parameter.
+    assert [var for var, _sort in df_new.definition.bindings] == ["ph"]
+    # And it registered, which is the half a verdict alone would not show.
+    assert all(c.verified for c in checked), [c.error for c in checked]
+
+
 def test_the_set_mm_table_names_only_real_binders() -> None:
     # The table is data about one library, so what it claims is checkable against
     # that library. Here only its shape is checked (a corpus test would need the

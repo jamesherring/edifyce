@@ -411,7 +411,23 @@ def classify(
             name=assertion.label,
             higher=defined,
             lower=lower.to_string(),
-            bindings=[(h.variable, h.typecode) for h in assertion.floatings],
+            # Only the variables the *defined* form supplies. A definition's
+            # parameters are its defined form's slots — what a use of the notation
+            # provides — and the rest of the `$f` variables are the defining form's
+            # binders, which are a different thing and must not be declared here.
+            #
+            # It is not a tidiness point. A declared binding becomes a
+            # *metavariable* in the context the forms are re-parsed against, so a
+            # binder declared as one parses to a `Var`, and `bind_scoped` skips
+            # `Var`s by design — they are parameters the defined form supplies. The
+            # binder is then never placed, `unbound_parameters` reports it free,
+            # and registration refuses a definition the classifier admitted. That
+            # cost 242 of set.mm's 1,335 candidates before this line read this way.
+            bindings=[
+                (h.variable, h.typecode)
+                for h in assertion.floatings
+                if h.variable in supplied
+            ],
             # A `$d` restricts which substitutions the definition admits, so it
             # has to travel with it: 1,033 of set.mm's definition-shaped
             # statements carry one, and
