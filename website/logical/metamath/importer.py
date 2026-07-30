@@ -168,6 +168,13 @@ def _declared_scopes(
     # A name the axiom does not declare is an author's error about *this* axiom
     # and is refused: silently dropping it would leave a binder undeclared, and an
     # undeclared binder is exactly what this exists to fix.
+    #
+    # An entry for a *label* the database does not declare is ignored rather than
+    # refused, and the asymmetry is deliberate: one table may be offered to several
+    # `.mm` files, and a variant lacking `cesum` should import rather than fail
+    # over a production it never had. The cost is that a misspelled label is
+    # silently inert, so a table is worth checking against its own database once
+    # (see the roadmap's A4 measurement) rather than trusted.
     if not declared:
         return {}
     rename = {old: new for (old, _), (new, _) in zip(floatings, bindings)}

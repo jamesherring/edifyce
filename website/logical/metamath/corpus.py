@@ -111,6 +111,11 @@ def corpus_spec(
     The union of every grammar the walk checks against, because notation only
     accumulates -- so it is the one system a caller can store the whole walk's
     terms against (see :mod:`app.db.metamath_store`).
+
+    ``binders`` must be whatever :func:`walk` is given, and is on the signature so
+    a caller can say so: the stored grammar has to be the one the walk checked
+    against, and binding slots are part of a grammar. Nothing today passes either
+    -- ``import_corpus`` opts into neither -- so the two agree by both being empty.
     """
     walked = theorems(database, limit)
     if not walked:

@@ -168,15 +168,24 @@ def test_a_binder_is_not_declared_a_parameter_of_the_definition() -> None:
     assert all(c.verified for c in checked), [c.error for c in checked]
 
 
-def test_the_set_mm_table_names_only_real_binders() -> None:
-    # The table is data about one library, so what it claims is checkable against
-    # that library. Here only its shape is checked (a corpus test would need the
-    # 51 MB file); every entry is verified against set.mm's own syntax axioms in
-    # the roadmap's A4 measurement.
+def test_the_set_mm_table_is_well_formed() -> None:
+    # The table is data about one library, so what it *claims* is checkable only
+    # against that library, and a corpus test would need the 51 MB file. What can
+    # be checked here is that no entry is degenerate — a binder scoping over
+    # nothing binds nothing, and one scoping over itself says nothing either.
+    #
+    # No exact count is asserted: adding a binder is a legitimate edit, and a test
+    # that failed on it would be measuring the wrong thing. The roadmap's A4
+    # section carries the measured figure and the method.
     assert EQUIVALENCES == frozenset({"wb", "wceq"})
-    assert len(BINDERS) == 28
     for label, scopes in BINDERS.items():
         assert scopes, f"{label} declares no binder"
         for binder, scoped in scopes.items():
             assert scoped, f"{label}'s {binder} scopes over nothing"
             assert binder not in scoped, f"{label}'s {binder} scopes over itself"
+
+    # The productions the measurement found dominant, which is what the table
+    # exists for: if one of these went missing the corpus result would move by
+    # hundreds, and nothing else here would notice.
+    assert {"cmpo", "cmpt", "wral", "crab", "wrex", "copab", "cab", "csb", "wsbc",
+            "wex"} <= set(BINDERS)

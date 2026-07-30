@@ -44,27 +44,35 @@ a proved statement token-identical to the hypothesis, ahead of it in the file.
 Whether it really discharges the obligation is settled structurally when the
 definition is registered (`declarative._discharge_justification`), not here.
 
-The binding-slot wall
----------------------
-The largest refusal by far, and not a property of Metamath: **a defining form may
-not introduce a variable the defined form does not supply**. `df-tru` is
-``|- ( T. <-> ( A. x x = x -> A. x x = x ) )`` - `x` is quantified in the defining
-form and `T.` has no room for it - and *1,123 of set.mm's 1,433* `df-` statements
-are that shape.
+Binding slots, and why they decide most of this
+-----------------------------------------------
+**A defining form may not introduce a variable the defined form does not supply.**
+`df-tru` is ``|- ( T. <-> ( A. x x = x -> A. x x = x ) )`` - `x` is quantified in
+the defining form and `T.` has no room for it - and *1,123 of set.mm's 1,433*
+`df-` statements are that shape. Refused, this was by far the largest refusal;
+admitted, it is most of the corpus's definitions.
 
-Each is sound in Metamath, and would be here: the defining form *binds* the
-variable, and a `Definition` says so with a `fresh` clause, which is what makes
-the unfold capture-avoiding. But a `fresh` clause is inferred from the grammar's
-binding slots (``Production.scopes_over``), and a `.mm` file carries no trace of
-them - nothing in ``A. x ph`` says the first slot binds in the second. So this
-module cannot tell a bound `x` from one left free, and declaring it bound would be
-a guess in the unsafe direction.
+Each is sound in Metamath and is sound here, because the defining form *binds* the
+variable: a `Definition` says so with a `fresh` clause, which is what makes the
+unfold capture-avoiding. A `fresh` clause is inferred from the grammar's binding
+slots (``Production.scopes_over``), and a `.mm` file carries no trace of them -
+nothing in ``A. x ph`` says the first slot binds in the second. So the slots are
+*declared* per database (:mod:`~.setmm`), and where none are, this module cannot
+tell a bound `x` from one left free and refuses, which is the safe direction and
+exactly how it behaved before they could be declared.
 
-It is refused *here* rather than left to the kernel because the kernel refuses it
-by raising, which aborts a whole import; the contract of this module is that doubt
-costs an axiom, not a build. What lifts it is the importer learning binding slots
-- set.mm's `$j` annotations are the obvious source - after which most of these
-become definitions with no change to the tests above.
+Two consequences run through what follows. The introduced-variable test asks
+:func:`~website.logical.kernel.definitions.bind_scoped` - the same call
+``parse_definition`` makes to infer a `fresh` clause - rather than re-deriving the
+scopes, so its answer and registration's are one answer. And a definition's
+`bindings` carry only what the *defined* form supplies: a binder declared among
+them would parse to a `Var` in the context the forms are re-read in, `bind_scoped`
+skips `Var`s by design, and the binder would never be placed. That last cost 242
+of set.mm's 1,335 candidates until it was found by running the whole corpus.
+
+It is refused *here* rather than left to the kernel because the kernel refuses by
+raising, which aborts a whole import; the contract of this module is that doubt
+costs an axiom, not a build.
 
 None of the shape tests is load-bearing alone, and the reason test 1 names its
 relation rather than describing it is that describing it failed twice. Matching on
@@ -364,7 +372,7 @@ def classify(
     # Silent on a grammar declaring no binding slots, which is what a `.mm` file
     # says on its own, so an import that declares none classifies exactly as it did
     # before they existed.
-    bound, _binders = bind_scoped(lower, 0)
+    bound, placed = bind_scoped(lower, 0)
 
     introduced = sorted(variables_used(bound, variables) - supplied)
     if introduced:
@@ -386,7 +394,7 @@ def classify(
     # spelling, and then a proviso naming it could not say which. That is the same
     # rule `declarative._check_condition_is_checkable` applies, stated here so the
     # classifier refuses what registration would.
-    names = [binder.name for binder in _binders]
+    names = [binder.name for binder in placed]
     resolvable = supplied | {name for name in names if names.count(name) == 1}
 
     constrained = {v for group in assertion.distinct for v in group if v in variables}
