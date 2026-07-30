@@ -19,7 +19,8 @@
 		symbols,
 		onChanged,
 		notation = [],
-		validation = null
+		validation = null,
+		validating = false
 	}: {
 		systemId: string;
 		definitions: Definition[];
@@ -30,6 +31,8 @@
 		notation?: NotationGroup[];
 		/** Optional: the last build's report, for what it settled on per definition. */
 		validation?: SystemValidation | null;
+		/** Whether a fresh build is in flight, which makes the report above stale. */
+		validating?: boolean;
 	} = $props();
 
 	// Provisos are plain strings in the API; wrap each in a row so it has a stable
@@ -92,12 +95,17 @@
 	//
 	// Read only from a build that succeeded: on a failed one the report is empty,
 	// and absence would otherwise read as "dropped" for every definition at once.
+	//
+	// And only from one that has finished. A definition saved a moment ago is in
+	// the refreshed list before the build that would mention it has run, so a
+	// report still describing the build before it does not have the definition —
+	// which is indistinguishable from a definition that was dropped, and says so
+	// with the same confidence. Silence until the check lands is the honest answer.
+	const settled = $derived(validating ? null : (validation?.success ? validation : null));
 	const report = $derived(
-		validation?.success
-			? (validation.definitions.find((d) => d.definition_id === s.editing?.id) ?? null)
-			: null
+		settled?.definitions.find((d) => d.definition_id === s.editing?.id) ?? null
 	);
-	const dropped = $derived(!!validation?.success && !!s.editing && report === null);
+	const dropped = $derived(settled !== null && !!s.editing && report === null);
 
 	// Layering: a definition may expand into notation introduced by an *earlier*
 	// definition (the engine layers definitions by position). Offer those earlier
@@ -212,7 +220,7 @@
 		addLabel="Add bound variable"
 		removeLabel="Remove bound variable"
 	/>
-	{#if s.editing && validation?.success}
+	{#if s.editing && settled}
 		<p class="text-xs text-muted-foreground">
 			{#if dropped}
 				The last build <strong>dropped</strong> this definition: its expansion matched

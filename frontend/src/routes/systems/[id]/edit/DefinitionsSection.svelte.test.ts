@@ -241,14 +241,15 @@ describe('DefinitionsSection build report', () => {
 		};
 	}
 
-	function renderWith(v: SystemValidation | null) {
+	function renderWith(v: SystemValidation | null, validating = false) {
 		render(DefinitionsSection, {
 			systemId: 'sys1',
 			definitions: [defn()],
 			sortNames: ['formula'],
 			symbols: [],
 			onChanged: vi.fn(),
-			validation: v
+			validation: v,
+			validating
 		});
 	}
 
@@ -303,6 +304,19 @@ describe('DefinitionsSection build report', () => {
 		// The report is empty on a failed build, so absence proves nothing — saying
 		// "dropped" for every definition at once would be worse than staying quiet.
 		renderWith(validation({ success: false, errors: ['nope'], definitions: [] }));
+		await userEvent.click(screen.getByRole('button', { name: /^Edit / }));
+		await screen.findByRole('button', { name: /Save changes/ });
+
+		expect(screen.queryByText(/dropped/)).toBeNull();
+		expect(screen.queryByText(/settled on/)).toBeNull();
+	});
+
+	it('reports nothing while a fresh build is in flight', async () => {
+		// A definition saved a moment ago is in the refreshed list before the build
+		// that would mention it has run. A report from the build *before* it does
+		// not have the definition — which looks exactly like a dropped one, and
+		// would say so with the same confidence.
+		renderWith(validation({ definitions: [] }), true);
 		await userEvent.click(screen.getByRole('button', { name: /^Edit / }));
 		await screen.findByRole('button', { name: /Save changes/ });
 

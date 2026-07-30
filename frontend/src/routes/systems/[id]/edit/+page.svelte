@@ -117,6 +117,10 @@
 		const seq = ++loadSeq;
 		loading = true;
 		loadError = null;
+		// A report belongs to the system it was run against, and nothing else marks
+		// which. Carrying one across a navigation would describe this system's parts
+		// using the last one's build.
+		validation = null;
 		const ok = await fetchInto(id, seq, true);
 		if (seq !== loadSeq) return; // a newer load now owns the page state
 		loading = false;
@@ -363,7 +367,7 @@
 				<LineTypesSection systemId={system.id} lines={system.lines} {sortNames} {symbols} {notation} onChanged={refresh} />
 				<AxiomsSection systemId={system.id} axioms={system.axioms} {symbols} {notation} onChanged={refresh} />
 				<RulesSection systemId={system.id} rules={system.rules} {symbols} {notation} onChanged={refresh} />
-				<DefinitionsSection systemId={system.id} definitions={system.definitions} {sortNames} {symbols} {notation} {validation} onChanged={refresh} />
+				<DefinitionsSection systemId={system.id} definitions={system.definitions} {sortNames} {symbols} {notation} {validation} {validating} onChanged={refresh} />
 			</div>
 		</div>
 
