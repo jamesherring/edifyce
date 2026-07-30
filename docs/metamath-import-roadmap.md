@@ -3,12 +3,12 @@
 **Status:** whole corpus imported and checked — **all 47,546 theorems verify**,
 each against only the notation and theorems preceding it, every proof emitted from
 its stored compressed proof and checked by Edifyce's own kernel (§1.1). The
-primitive basis is now smaller than "every logical `$a`": 306 of `set.mm`'s
-definition-shaped statements import as **definitions** rather than axioms, and
-every theorem still verifies (§5, A4). The remaining qualification is one thing,
-and it is the same thing throughout: 1,123 more would be definitions if the
-importer could read binding slots, so until it can, this verifies `set.mm`
-against a larger primitive basis than a faithful import would use.
+primitive basis is no longer "every logical `$a`": **1,335 of `set.mm`'s 1,559
+import as definitions** rather than axioms, leaving 224 primitive, and every
+theorem still verifies (§5, A4). What remains is a short, enumerated tail — 119
+statements whose root is not a declared definitional equivalence, 92 carrying a
+`$d` over something neither form supplies, and 13 others — rather than the single
+structural wall it was.
 
 Goal: import Metamath's `set.mm` while keeping **full verifiability** and **full
 generality** (Edifyce stays a general proof assistant — any formal system, not a
@@ -42,7 +42,7 @@ are not relitigated), and what remains.
 | Token-collision defects (§1.2) | fixed — four instances of one shape |
 | `$t` typesetting / notation (§4) | **next** |
 | Axiom-vs-theorem split (§3.2) | engine done; storing the library open |
-| Definition classification (§5, A4) | done — wired into the walk, 306/1,253, capped by binding slots |
+| Definition classification (§5, A4) | done — wired into the walk; 1,335 definitions / 224 axioms with binding slots declared |
 
 `tests/test_metamath_import.py` imports `sqrt2re` from its verbatim `set.mm` proof
 and has Edifyce's kernel check the result:
@@ -82,8 +82,8 @@ own kernel.
 | verified | **47,546 (100%)** |
 | rejected by the kernel | 0 |
 | failed to promote | 0 |
-| definitions registered | 306 (§5, A4) |
-| wall clock | 22 min 45 s (23 min 10 s with definitions) |
+| definitions registered | 1,335 of 1,559 logical `$a` (§5, A4) |
+| wall clock | 22 min 45 s axioms only, 24 min 17 s with definitions |
 | peak memory | 3.6 GB |
 
 Cost is dominated by `check`; `promote` and `emit` are each under a fifth of it.
@@ -618,25 +618,39 @@ and the engine decides whether it discharges anything:
 Verified against the corpus: both obligations discharge on the real terms, and
 both inherit their theorem's `$d` restated over their own variables.
 
-**The binding-slot wall.** Over `set.mm` the classifier returns **306
-definitions, 1,253 axioms** — and the single dominant refusal, **1,123 of them**,
-is *a defining form introducing a variable the defined form does not supply*.
-`df-tru` is the shape: `|- ( T. <-> ( A. x x = x -> A. x x = x ) )`, where `x` is
-quantified in the defining form and `T.` has no room for it.
+**The binding-slot wall — now down.** Before binding slots were declared, the
+classifier returned **306 definitions, 1,253 axioms**, and the single dominant
+refusal, **1,123 of them**, was *a defining form introducing a variable the
+defined form does not supply*. `df-tru` is the shape:
+`|- ( T. <-> ( A. x x = x -> A. x x = x ) )`, where `x` is quantified in the
+defining form and `T.` has no room for it. With the slots declared it is
+**1,335 definitions, 224 axioms**, and all 47,546 theorems still verify.
 
-Every one of those is sound in Metamath and would be here, because the defining
-form *binds* the variable — which a `Definition` states with a `fresh` clause,
-and which is what makes the unfold capture-avoiding. But a `fresh` clause is
-inferred from `Production.scopes_over`, and a `.mm` file carries no trace of
-binding slots: nothing in `A. x ph` says the first slot binds in the second. The
-classifier cannot tell a bound `x` from one left free, and declaring it bound
-would be a guess in the unsafe direction, so it refuses.
+Every one of those is sound in Metamath and is sound here, because the defining
+form *binds* the variable — which a `Definition` states with a `fresh` clause, and
+which is what makes the unfold capture-avoiding. A `fresh` clause is inferred from
+`Production.scopes_over`, and a `.mm` file carries no trace of binding slots:
+nothing in `A. x ph` says the first slot binds in the second. So the wall was
+never about soundness; it was that nothing had told the importer.
 
 That refusal belongs to the classifier rather than the kernel for a reason worth
 keeping: the kernel refuses by *raising*, which aborts a whole import over one
-statement. The contract here is that doubt costs an axiom, not a build — and it is
-now checked, not assumed: 25 sampled definitions all register against a system
-built to their own position.
+statement. The contract here is that doubt costs an axiom, not a build.
+
+**And that contract is what a 25-definition sample was too small to check.** With
+the slots declared, 242 of 1,335 candidates classified and were then refused on
+registration — because `classify` declared every `$f` variable of the assertion a
+definition `binding`, a binding becomes a *metavariable* in the context the forms
+are re-parsed against, and `bind_scoped` skips `Var`s by design, they being
+parameters the defined form supplies. The binder was never placed and
+`unbound_parameters` reported it free. Every Metamath binder is a declared `$f`
+variable — `A. x ph` needs `x` typed — so it hit exactly the definitions binding
+slots exist to unlock and nothing else. A definition's parameters are its
+*defined* form's slots, which is what `build_kernel_definition` always said, and
+is what is declared now.
+
+The lesson is about the evidence rather than the bug: a contract of the form
+"what this returns, that accepts" is only tested by running both, over everything.
 
 ### Binding slots, and where they come from
 
@@ -690,6 +704,41 @@ classifier now asks it rather than re-deriving the scopes, so what it admits is
 what registration accepts. The `$d` check needed the same: a proviso naming a
 binder is resolvable, because an unfold settles the leaf that binder takes and
 exposes it under the binder's name.
+
+Measured over the whole corpus, all 47,546 verifying throughout:
+
+| | definitions | axioms | wall clock |
+|---|---|---|---|
+| axioms only | — | 1,559 | 1,364.7 s |
+| definitions wired (§A4) | 306 | 1,253 | 1,389.7 s |
+| **binding slots declared** | **1,335** | **224** | **1,456.8 s** |
+
+So the faithful reading of `set.mm` costs **6.8%** over importing every logical
+`$a` as an axiom, and the primitive basis falls from 1,559 to 224.
+
+**What the 224 are**, since the tail is now short enough to enumerate:
+
+| | |
+|---|---|
+| root is not a declared definitional equivalence | 119 |
+| a `$d` constrains what the defined side does not supply | 92 |
+| defined side is built from notation already in use | 9 |
+| defining side introduces a variable nothing binds | 2 |
+| defined side is a bare metavariable | 2 |
+
+The 119 are `df-bi` and its kind — statements whose root is not `↔`/`=`, so
+nothing about their shape says they define. The 9 are `df-clab`/`df-cleq`/`df-clel`
+and neighbours, genuinely axioms connecting class notation to set theory.
+
+**The 92 are the next item, and they include `df-sb` and `df-mo`.** Their `$d`
+names a variable in *neither* form — `df-sb`'s `z` lives only in `sbjust.1`, its
+`$e`. A proviso over it has nothing to resolve against at unfold, so it is refused,
+which means the justification mechanism *still* does not reach the two definitions
+it was built for, now for a different reason than before. There is a plausible
+answer — a `$d` whose variables appear only in the `$e` constrains the
+**obligation**, not the definition, and the obligation is discharged separately
+with the cited theorem's own provisos inherited — but it changes what is admitted,
+so it wants its own argument rather than being folded in here.
 
 **Abstract binders make both of set.mm's justifications unnecessary — and set.mm
 declines that on purpose.** Worth recording, because it decides what the binding-
