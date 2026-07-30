@@ -67,7 +67,15 @@ from app.db.systems import (
 from app.db.systems_mapping import system_to_spec
 from app.db.terms import TermChildRow, TermRow
 from tests.zfc_systems import scoped_zfc_spec
-from website.logical.declarative import SystemSpec, build_spec
+from website.logical.declarative import (
+    LinePart,
+    LineSpec,
+    Production,
+    Rule,
+    SystemSpec,
+    build_spec,
+)
+from website.logical.promotion import TheoremSpec, promote_spec
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
@@ -313,8 +321,6 @@ def _string_system() -> SystemSpec:
     — it concatenates a variable with itself, which the term unifier cannot
     express — so nothing but the flat string can justify the step.
     """
-    from website.logical.declarative import LinePart, LineSpec, Production, Rule
-
     return SystemSpec(
         name="Rewrite",
         productions=[Production(sort="w", name="raw", regex="[MIU]+")],
@@ -329,8 +335,6 @@ def _string_system() -> SystemSpec:
 
 
 def _with_double(built: EngineSystem) -> EngineSystem:
-    from website.logical.promotion import TheoremSpec, promote_spec
-
     built.promote(promote_spec(built, TheoremSpec(
         label="DOUBLE", statement="Mxx", metavariables={"x": "w"},
         premises=("Mx",), matching="string",
