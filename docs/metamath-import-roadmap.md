@@ -2,10 +2,13 @@
 
 **Status:** whole corpus imported and checked — **all 47,546 theorems verify**,
 each against only the notation and theorems preceding it, every proof emitted from
-its stored compressed proof and checked by Edifyce's own kernel (§1.1). One
-qualification on what that establishes: `df-` statements still import as axioms
-rather than definitions (§3.2, A4), so this verifies `set.mm` against a larger
-primitive basis than a faithful import would use.
+its stored compressed proof and checked by Edifyce's own kernel (§1.1). The
+primitive basis is now smaller than "every logical `$a`": 306 of `set.mm`'s
+definition-shaped statements import as **definitions** rather than axioms, and
+every theorem still verifies (§5, A4). The remaining qualification is one thing,
+and it is the same thing throughout: 1,123 more would be definitions if the
+importer could read binding slots, so until it can, this verifies `set.mm`
+against a larger primitive basis than a faithful import would use.
 
 Goal: import Metamath's `set.mm` while keeping **full verifiability** and **full
 generality** (Edifyce stays a general proof assistant — any formal system, not a
