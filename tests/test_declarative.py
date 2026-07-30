@@ -198,18 +198,23 @@ def test_dependent_definition_silently_drops_when_placed_before_its_dependency()
 
 
 def test_layering_is_positional_when_two_definitions_share_a_defined_form():
-    # `pos` (higher `x ⊆ y`, lower an atom) and `dep` (SAME higher `x ⊆ y`, lower
-    # `y ⊇ x`) both define `x ⊆ y`; `dep` builds on the separate `sup`. Tracking
+    # `pos` (higher `x ⊇ y`, lower an atom) and `dep` (SAME higher `x ⊇ y`, lower
+    # `y ⊆ x`) both define `x ⊇ y`; `dep` builds on the separate `sub`. Tracking
     # by position — not by defined-form string, which would collapse the two —
-    # catches that reordering `dep` ahead of `sup` drops `dep` even though the
-    # other `x ⊆ y` keeps the form present.
-    pos = defn("formula", "pos", "x ⊆ y", "x ∈ y", [("x", "variable"), ("y", "variable")])
-    sup = superset_def()
-    dep = defn("formula", "dep", "x ⊆ y", "y ⊇ x", [("x", "variable"), ("y", "variable")])
+    # catches that reordering `dep` ahead of `sub` drops `dep` even though the
+    # other `x ⊇ y` keeps the form present.
+    #
+    # The shared form is the *superset* one so that `dep` depends on `sub` and
+    # not the other way about: `x ⊆ y ≝ y ⊇ x` alongside `x ⊇ y ≝ y ⊆ x` is a
+    # mutual alias, which conservativity refuses as circular (see
+    # tests/test_conservativity.py) and which has nothing to do with layering.
+    sub = subset_def()
+    pos = defn("formula", "pos", "x ⊇ y", "y ∈ x", [("x", "variable"), ("y", "variable")])
+    dep = superset_def()
 
-    assert registered_definition_layering(_layered_spec([pos, sup, dep])) == [True, True, True]
-    # `dep` (position 0) now precedes `sup`, so its `y ⊇ x` is unrecognised.
-    assert registered_definition_layering(_layered_spec([dep, pos, sup])) == [False, True, True]
+    assert registered_definition_layering(_layered_spec([sub, pos, dep])) == [True, True, True]
+    # `dep` (position 0) now precedes `sub`, so its `y ⊆ x` is unrecognised.
+    assert registered_definition_layering(_layered_spec([dep, sub, pos])) == [False, True, True]
 
 
 def test_layering_is_unaffected_by_an_unrelated_draft_error():

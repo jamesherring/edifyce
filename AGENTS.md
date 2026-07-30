@@ -89,9 +89,30 @@ Two follow-ups this leaves open:
   definitional equality — which wants separate semantic-leaf metadata rather than
   anything to do with `free_vars`
   ([docs/scope-aware-definitional-steps.md](docs/scope-aware-definitional-steps.md)).
-- **Conservativity.** That a defined symbol is fresh and the definition
-  non-circular is still untreated, as in Metamath. Only the *capture* half of
-  admissibility is checked.
+- **Conservativity.** A definition must add notation, not assumptions, and both
+  halves are now settled. **Non-circularity** holds by construction *where the
+  defined form is new notation*: a defining form is matched against the grammar as
+  extended by the definitions before it, so a definition stated in terms of its own
+  notation matches nothing and is dropped. That argument stops at a form the
+  grammar already spells — a declared production, or an earlier definition's
+  notation — where the defining form matches and the definition registers, so a
+  cycle is expressible and is checked
+  (`declarative._require_a_non_circular_definition`). It refuses a cycle in the
+  "is defined using" relation, not the sharing of a defined form, which stays legal
+  and is Metamath's. **Freshness** is checked
+  (`declarative._require_a_fresh_defined_form`): a definition may not give meaning
+  to a symbol an axiom or rule is already stated over, since equating such a
+  symbol to something else is an axiom rather than a definition. Declaring the
+  defined form as a *production* is deliberately not disqualifying — that is how
+  `⊆` becomes grammatical before `df-subset` gives it meaning; what is refused is
+  defining a symbol the theory already reasons about. It runs *after* the defined
+  form's notation is registered, because the sharpest case is a rule stated over a
+  form **no production spells**: that schema parses against no sort, is stored as
+  flat text, and looks like a rule about nothing until the definition makes its
+  conclusion grammatical and rewritable. Both checks run on the late path too
+  (`register_definition`, which a corpus import takes), where the rules are read
+  again so one added after the build still counts. Pinned in
+  `tests/test_conservativity.py`.
 
 The bespoke `.edi` source language and its compiler are **gone**. A system is a
 `SystemSpec` and nothing else; there is no text form to round-trip through, and

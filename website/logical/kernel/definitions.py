@@ -84,9 +84,14 @@ Telling a constant of the object language (``⊥``) from a variable is a questio
 about the grammar, so the layer that owns the grammar filters (see
 ``formal_system/definitions.py``).
 
-Scope: this is the *capture* half of admissibility. Conservativity - that the
-defined symbol is fresh and the definition non-circular - is still untreated: as
-in Metamath, admitting a definition trusts it as an axiom.
+Scope: this is the *capture* half of admissibility. **Conservativity** - that the
+defined symbol is fresh and the definition non-circular - is settled one layer
+out, where the grammar is: non-circularity partly falls out of how definitions
+layer and is otherwise checked over the "is defined using" relation
+(``declarative._require_a_non_circular_definition``), and freshness is checked
+against the system's axioms and rules
+(``declarative._require_a_fresh_defined_form``). Neither is a question about the
+term graph, which is why neither lives here.
 
 Worked example - subset
 -----------------------
