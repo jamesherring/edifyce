@@ -468,23 +468,35 @@ class Pattern:
         # All ok
         return True
 
+    def notation_for(
+        self, defined: str, context: Context
+    ) -> tuple[DefinedNotation, bool]:
+        # The notation `defined` denotes as a production of this sort, and whether
+        # it is new to `context`. Nothing is registered: a caller that wants only
+        # the notation's *analysis* of the form - which slots it takes, at which
+        # sorts - has no business extending the grammar to get it, and a caller
+        # extending the grammar wants `add_notation` below.
+        #
+        # A notation already in scope is handed back rather than duplicated: the
+        # same template for the same sort is one production however many
+        # definitions declare it.
+        notation = definitions.DefinedNotation(defined, self, context)
+
+        for existing in context.definitions:
+            if existing.equivalent(notation, context):
+                return existing, False
+
+        return notation, True
+
     def add_notation(self, defined: str, context: Context) -> DefinedNotation:
         # Register `defined` as a production of this sort - the grammatical half
         # of a definition, and all of it the matching layer needs (see
         # DefinedNotation). What the notation unfolds to is the kernel's
         # business; the system builder pairs the two.
-        #
-        # Returns the notation now in `context`, which may be one registered
-        # earlier: the same template for the same sort is one production however
-        # many definitions declare it.
+        notation, is_new = self.notation_for(defined, context)
 
-        notation = definitions.DefinedNotation(defined, self, context)
-
-        for existing in context.definitions:
-            if existing.equivalent(notation, context):
-                return existing
-
-        context.definitions.add(notation)
+        if is_new:
+            context.definitions.add(notation)
 
         return notation
 

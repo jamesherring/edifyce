@@ -102,7 +102,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ..declarative import Definition, Justification
+from ..formal_system import statement_term
 from ..kernel.terms import Node
+from ..promotion import promote_from_source
 from .importer import _distinct_provisos, _proviso_safe_names
 
 if TYPE_CHECKING:
@@ -128,6 +130,29 @@ class Classified:
     @property
     def is_definition(self) -> bool:
         return self.definition is not None
+
+
+def statement_of(assertion: Assertion, system: FormalSystem) -> Term | None:
+    """``assertion``'s statement as a term of ``system``, or None if it will not
+    parse against the grammar as it stands.
+
+    Read with **no** metavariables, so each Metamath variable parses to the atom
+    production that declares it rather than staying schematic. That is the reading
+    every test here is stated over, and the one the shape tests need: `_sides`
+    asks what the root's operands *are*, and a `Var` would answer nothing.
+
+    Promotion rather than a proof-line parse because it composes the term at the
+    system's logical sorts, which is the same question without a dependency on how
+    a proof line happens to be shaped.
+    """
+    try:
+        theorem = promote_from_source(
+            system, label=assertion.label, statement=" ".join(assertion.tokens),
+            metavariables={},
+        )
+    except Exception:  # noqa: BLE001 - an unparsable statement is a refusal, not a fault
+        return None
+    return statement_term(theorem.deduction)
 
 
 def constructors_used(term: Term) -> set[str]:

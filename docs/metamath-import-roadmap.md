@@ -2,10 +2,13 @@
 
 **Status:** whole corpus imported and checked — **all 47,546 theorems verify**,
 each against only the notation and theorems preceding it, every proof emitted from
-its stored compressed proof and checked by Edifyce's own kernel (§1.1). One
-qualification on what that establishes: `df-` statements still import as axioms
-rather than definitions (§3.2, A4), so this verifies `set.mm` against a larger
-primitive basis than a faithful import would use.
+its stored compressed proof and checked by Edifyce's own kernel (§1.1). The
+primitive basis is now smaller than "every logical `$a`": 306 of `set.mm`'s
+definition-shaped statements import as **definitions** rather than axioms, and
+every theorem still verifies (§5, A4). The remaining qualification is one thing,
+and it is the same thing throughout: 1,123 more would be definitions if the
+importer could read binding slots, so until it can, this verifies `set.mm`
+against a larger primitive basis than a faithful import would use.
 
 Goal: import Metamath's `set.mm` while keeping **full verifiability** and **full
 generality** (Edifyce stays a general proof assistant — any formal system, not a
@@ -39,7 +42,7 @@ are not relitigated), and what remains.
 | Token-collision defects (§1.2) | fixed — four instances of one shape |
 | `$t` typesetting / notation (§4) | **next** |
 | Axiom-vs-theorem split (§3.2) | engine done; storing the library open |
-| Definition classification (§5, A4) | classifier done — 306/1,253, capped by binding slots; wiring open |
+| Definition classification (§5, A4) | done — wired into the walk, 306/1,253, capped by binding slots |
 
 `tests/test_metamath_import.py` imports `sqrt2re` from its verbatim `set.mm` proof
 and has Edifyce's kernel check the result:
@@ -79,7 +82,8 @@ own kernel.
 | verified | **47,546 (100%)** |
 | rejected by the kernel | 0 |
 | failed to promote | 0 |
-| wall clock | 23 min 57 s |
+| definitions registered | 306 (§5, A4) |
+| wall clock | 22 min 45 s (23 min 10 s with definitions) |
 | peak memory | 3.6 GB |
 
 Cost is dominated by `check`; `promote` and `emit` are each under a fifth of it.
@@ -706,16 +710,69 @@ supply — the capture half of admissibility — and nothing more. Non-circulari
 and conservativity are untreated there, as in Metamath, so those refusals are
 this module's and have nothing behind them.
 
-*What remains* is wiring it into the import, which changes the basis every
-imported proof is checked against and so wants the corpus re-verified as one step.
-`declarative.register_definition` is the entry point a walk needs — a definition
-registered against an already-built system, since the theorem its justification
-cites is promoted only as the walk reaches it. The blocker is that registering a
-definition also calls `add_notation`, which makes its defined form *defined*
-notation; for an imported system that form is already grammatical via its own
-syntax axiom, so the second reading shadows the first (`T.` stops parsing to
-`wtru`, and 12 of the first 3,000 theorems failed on it). Building the kernel
-definition without the notation half is the untried fix.
+### A4 wired in
+
+`corpus.walk` takes `equivalences` and registers the definitional ones as it
+reaches them. Naming none — the default — imports every logical `$a` as an axiom
+exactly as before, so no stored system and no existing caller changes behaviour.
+
+Two things had to be right, and neither was obvious from the classifier alone.
+
+**Definitions land before their own rule.** A definition may only give meaning to
+a symbol the system does not already reason with
+(`declarative._require_a_fresh_defined_form`), and a definitional `$a`'s own
+inference rule is stated over the very symbol it defines. Register the rule first
+and every definition refuses itself. So the walk classifies and registers the
+definition, *then* promotes the assertion — the same order the classifier's
+"notation not yet in use" test already assumes.
+
+**A definition whose defined form the grammar already spells registers no
+notation.** This was the blocker that forced the earlier revert, and it was worth
+more than it looked. A sort tries its own productions before its notations, so a
+notation for an imported definition's defined form — grammatical from its own
+syntax axiom — can never be *reached* by a parse. But it is scanned by every parse
+that falls through to `try_definitions`, and, worse, any notation in scope
+switches off the first-character leaf index that keeps a parse's cost proportional
+to the formula rather than to the grammar (`UnionPattern.leaf_candidates`). On a
+1,441-production grammar that is the difference between free and not:
+
+| 5,000 theorems | wall clock |
+|---|---|
+| axioms only (before) | 15.3 s |
+| definitions wired, notation registered | 37.4 s (**2.4×**) |
+| definitions wired, notation skipped | **15.7 s** |
+
+`UnionPattern.notation_for` is the split that allows it: build-or-find the
+notation without registering it, so the builder can take its analysis of the
+defined form — which slots, at which sorts — and extend the grammar only when
+nothing else spells the form. The kernel definition is stated over the
+production's constructor either way, which is what made the notation redundant
+rather than merely unused.
+
+Measured as matched pairs in one session, with every theorem verifying either way:
+
+| | axioms only | definitions wired | cost |
+|---|---|---|---|
+| 5,000 theorems (30 definitions) | 15.3 s | 15.7 s | +2.6% |
+| 20,000 theorems (134 definitions) | 280.2 s | 292.9 s | +4.5% |
+| **47,546 theorems (306 definitions)** | **1,364.7 s** | **1,389.7 s** | **+1.8%** |
+
+So the whole corpus still imports and verifies in 23 minutes, and the definitions
+cost under two per cent of it. The residue tracks the number of definitions rather
+than the corpus — a statement parse per logical `$a`, and the freshness scan over
+the system's axioms and rules at each registration — which is why the proportion
+*falls* as the walk lengthens: definitions are declared early and the theorems
+that follow them are not.
+
+The classification the walk produces is identical to the standalone classifier's,
+breakdown included (306 definitions; 1,123 / 119 / 9 / 2 refused). Worth stating
+because it is not a restatement: the walk derives `in_use` from the order it
+actually registers in, and the classifier derived it from a separate pass.
+
+*What remains*: `app/db/metamath_store.import_corpus` does not pass
+`equivalences`, so a stored import is still all-axioms — the definitions would
+have nowhere to go, since `corpus_spec` carries none. Storing them is the same
+work as §3.2.
 
 `df-div`/`df-sqrt` define via `iota` and will need the `fresh`-aware path with
 their existence lemmas as cited premises — the first real test of whether the

@@ -66,6 +66,13 @@ def only_definition(system):
 def only_notation(system):
     # The system's single defined notation - the production that lets the defined
     # form parse. Paired with the definition above, but a separate object.
+    #
+    # Only a definition whose defined form *no production spells* registers one:
+    # a sort tries its productions before its notations, so a notation for a form
+    # the grammar already reads is never reached, and registering it would cost
+    # every later parse (see `declarative._finalise_definition`). So this is asked
+    # of a system defining new notation, never of `fresh_spec`, whose `(x ⊆ y)`
+    # is a declared production.
     notations = list(context_of(system).definitions)
     assert len(notations) == 1, notations
     return notations[0]
@@ -173,12 +180,15 @@ def const_system():
 # ---------------------------------------------------------------------------
 
 
-def test_notation_carries_no_definitional_payload(guarded_system):
+def test_notation_carries_no_definitional_payload():
     # The parser half is a production and nothing else. It used to carry the
     # defining form, the provisos and the kernel definition itself, each "held
     # opaquely" so this layer could avoid importing the kernel - which is the
     # shape of a courier, not of a parser.
-    notation = only_notation(guarded_system)
+    #
+    # Asked of `S ≝ ⊥`, whose defined form is notation the grammar gains here —
+    # the case that registers one at all.
+    notation = only_notation(build_declarative(nullary_spec(closed=True)))
     assert set(vars(notation)) == {"sort", "template"}
 
     # And it cannot apply anything: there is one way to check a step.
@@ -357,28 +367,31 @@ def test_every_constructor_snapshots_its_production_s_declared_role():
     assert constructor_for(notation.template).denotes_constant is True
 
 
-def test_a_defined_form_the_grammar_already_parses_is_not_a_constant():
-    # A nullary notation whose form a declared production *already* parses. A
-    # sort tries its productions before its notations, so this notation never
-    # fires and its form parses to a compound, not to a leaf of its own — the
-    # opposite of what makes a nullary abbreviation a constant.
-    #
-    # "Nullary" alone would mark it constant, which is the unsafe direction: the
-    # flag is what excuses a later definition from accounting for a token.
+def test_a_defined_form_the_grammar_already_parses_registers_no_notation():
+    # A definition whose defined form a declared production *already* parses. A
+    # sort tries its productions before its notations, so a notation here could
+    # never fire — and would still be scanned by every parse that falls through
+    # to the notations, and would switch off the first-character leaf index that
+    # keeps a parse's cost proportional to the formula rather than the grammar
+    # (`UnionPattern.leaf_candidates`). So none is registered.
     spec = nullary_spec(closed=True)
     spec.definitions = [defn("formula", "shadowed", "(⊥ → ⊥)", "⊥", [])]
     system = build_declarative(spec)
 
-    notation = only_notation(system)
-    assert notation.template.pattern == "(⊥ → ⊥)"
-    assert notation.template.denotes_constant is False
-    assert constructor_for(notation.template).denotes_constant is False
+    assert list(context_of(system).definitions) == []
 
-    # And the form really is parsed by the declared production, not the notation.
+    # The definition itself is registered, and its defined form still parses —
+    # through the production, which is what made the notation redundant.
+    definition = only_definition(system)
     formula = context_of(system).variables["formula"]
-    matched = formula.match("(⊥ → ⊥)", context_of(system))
-    assert matched is not None
-    assert matched.pattern is not notation.template
+    assert formula.match("(⊥ → ⊥)", context_of(system)) is not None
+
+    # And the definition is stated over the *production's* constructor, so a step
+    # citing it checks against an ordinary implication line — which is what makes
+    # a notation for the same form redundant rather than merely unused.
+    implication = context_of(system).variables["implication"]
+    assert definition.higher.constructor is constructor_for(implication)
+    assert definition.higher.constructor.denotes_constant is False
 
 
 def test_layering_on_a_definition_with_parameters_introduces_nothing():
@@ -587,9 +600,12 @@ def test_a_definition_has_no_second_way_to_be_applied(guarded_system):
     assert not hasattr(definition, "check_application")
     assert not hasattr(definition, "get_lower")
 
-    # The notation parses the defined form; it has no way to apply anything.
-    notation = only_notation(guarded_system)
-    higher = notation.template.match("(a ⊆ b)", context_of(guarded_system))
+    # The grammar parses the defined form; the match it returns has no way to
+    # apply anything. (`(x ⊆ y)` is a declared production here, so no notation is
+    # registered for it — see `only_notation`. The point is about the match.)
+    higher = context_of(guarded_system).variables["formula"].match(
+        "(a ⊆ b)", context_of(guarded_system)
+    )
     assert higher is not None
     assert not hasattr(higher, "equivalent_under_definitions")
     assert not hasattr(higher, "maps_to_up_to_definition")

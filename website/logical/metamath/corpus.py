@@ -38,8 +38,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ..declarative import build_system
+from ..declarative import DeclarativeError, build_system, register_definition
 from ..promotion import promote_from_source
+from .definitions import Classified, classify, constructors_used, statement_of
 from .importer import (
     GrammarSchedule,
     LibraryEntry,
@@ -56,6 +57,7 @@ if TYPE_CHECKING:
     from ..declarative import SystemSpec
     from ..formal_system import FormalSystem
     from ..formal_system.proof import Proof
+    from ..kernel.terms import Term
     from .parser import Assertion, Database
 
 
@@ -119,6 +121,8 @@ def walk(
     limit: int | None = None,
     name: str = "Metamath",
     registered: Callable[[LibraryEntry], None] | None = None,
+    equivalences: frozenset[str] = frozenset(),
+    classified: Callable[[Classified], None] | None = None,
 ) -> Iterator[CheckedTheorem]:
     """Check each of ``database``'s first ``limit`` theorems, in file order.
 
@@ -130,6 +134,12 @@ def walk(
     promotion parses a statement against the grammar *as of its own position*, so
     only the walk is in a position to hand over what it built (see
     ``app/db/promoted_theorems_mapping.py``). Nothing here reads it back.
+
+    ``equivalences`` names the productions meaning *definitional equivalence* in
+    this database (`set.mm`'s are `wb` and `wceq`). Naming them is what lets a
+    logical ``$a`` be imported as a **definition** as well as an axiom; naming
+    none - the default - imports every one as an axiom exactly as before. See
+    :mod:`~.definitions`, and ``classified`` for the per-assertion verdicts.
     """
     walked = theorems(database, limit)
     if not walked:
@@ -160,6 +170,11 @@ def walk(
 
     _reset_sorts(system, schedule)
     admitted = 0
+    # The constructor names every logical assertion *so far* has used, which is
+    # what tells a definition (notation given meaning for the first time) from an
+    # equation between things the theory already reasons about. Accumulated here
+    # because only the walk sees the order.
+    in_use: set[str] = set()
 
     for label in database.order[: database.position(horizon) + 1]:
         assertion = database.assertions[label]
@@ -191,11 +206,55 @@ def walk(
                 continue
             yield _check(database, assertion, system)
 
+        # Definitions before the rule, and it has to be that way round: a
+        # definition may only give meaning to a symbol the system does not
+        # already reason with (`declarative._require_a_fresh_defined_form`), and
+        # this assertion's own rule mentions the very symbol it defines. Register
+        # the rule first and every definition refuses itself.
+        statement = _classify(assertion, database, system, in_use, equivalences, classified)
+
         # Promoted whatever the verdict was, exactly as `import_theorem`
         # would have: a rejected proof does not retract its statement from
         # the library, so a later theorem citing it fails for its own
         # reasons rather than for a missing label.
         _promote(system, assertion, database, registered)
+
+        if statement is not None:
+            in_use |= constructors_used(statement)
+
+
+def _classify(
+    assertion: Assertion,
+    database: Database,
+    system: FormalSystem,
+    in_use: set[str],
+    equivalences: frozenset[str],
+    report: Callable[[Classified], None] | None,
+) -> Term | None:
+    # Decide what this assertion is and, when it is a definition, register it.
+    # Returns its statement term for the caller to fold into `in_use`, or None if
+    # it did not parse.
+    #
+    # Only an asserted statement can be a definition: a `$p` is *derived*, so
+    # whatever it says is already a consequence and abbreviating it defines
+    # nothing. Skipping them also skips 47,000 statement parses.
+    if not equivalences or not assertion.is_axiom:
+        return None
+
+    statement = statement_of(assertion, system)
+    verdict = classify(assertion, statement, in_use, database, system, equivalences)
+    if verdict.is_definition:
+        try:
+            register_definition(verdict.definition, system)
+        except DeclarativeError as exc:
+            # The classifier promises what it returns will register, so this is a
+            # defect rather than a verdict — but one assertion's is not worth
+            # abandoning the corpus for, and the assertion stays an axiom either
+            # way. Reported through `classified` so a caller can count them.
+            verdict = Classified(assertion.label, reason=f"refused on registration: {exc}")
+    if report is not None:
+        report(verdict)
+    return statement
 
 
 def _reset_sorts(system: FormalSystem, schedule: GrammarSchedule) -> None:
