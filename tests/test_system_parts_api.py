@@ -9,6 +9,7 @@ owner scoping.
 
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from types import SimpleNamespace
 
 import pytest
 
@@ -57,6 +58,8 @@ from app.db.systems import (
     SymbolRow,
 )
 from app.main import app
+from app.routers.systems import _definition_binders
+from website.logical.kernel.definitions import FreshBinder
 from tests.database import (
     async_url,
     create_tables,
@@ -1636,6 +1639,40 @@ def test_validate_reports_the_fresh_clause_the_engine_settled_on(client):
     # The report names the stored row, so a client can join it to the detail API.
     detail = client.get(f"/api/formal-systems/{sid}").json()
     assert reported["definition_id"] == detail["definitions"][0]["id"]
+
+
+def test_the_report_reads_a_binder_s_origin_not_its_placement():
+    """`inferred` follows `FreshBinder.declared`, and nothing else.
+
+    The two facts a binder carries answer different questions — `scoped` how far
+    it reaches, `declared` who wrote it — and they agree today only because a
+    declared `fresh` clause is currently placed by name. Placing one *by scope* on
+    a grammar that declares its binding slots would set `scoped` on a binder its
+    author named; deriving the report from it would then hand the author their own
+    work back as the engine's.
+
+    Built by hand because a build cannot produce the disagreement: it is the
+    coincidence itself that is being pinned as incidental.
+    """
+    setvar = SimpleNamespace(name="setvar")
+
+    def report(binder: FreshBinder) -> bool:
+        definition = SimpleNamespace(
+            label="df", higher=SimpleNamespace(to_string=lambda: "(x ⊆ y)"), fresh=[binder]
+        )
+        compiled = SimpleNamespace(definitions=[definition], definition_layering=[True])
+        stored = SimpleNamespace(definitions=[SimpleNamespace(id=uuid.uuid4())])
+        (reported,) = _definition_binders(stored, compiled)
+        return reported.binders[0].inferred
+
+    # An author's binder, placed by scope: still the author's.
+    assert report(
+        FreshBinder(name="z", sort=setvar, default=None, scoped=True, declared=True)
+    ) is False
+    # The engine's binder, placed by name: still the engine's.
+    assert report(
+        FreshBinder(name="z", sort=setvar, default=None, scoped=False, declared=False)
+    ) is True
 
 
 def test_validate_identifies_each_definition_by_row_not_by_form(client):

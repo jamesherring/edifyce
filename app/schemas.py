@@ -292,13 +292,12 @@ class DefinitionBinder(BaseModel):
 
     var: str
     sort: str
-    # Whether the *engine* placed this binder rather than the author. Reads
-    # `FreshBinder.scoped`, which the engine sets when a binder is placed from the
-    # grammar's binding slots rather than from a declared `fresh` clause. The two
-    # coincide by construction in `formal_system.definitions.parse_definition`,
-    # which is the only thing that builds a `FreshBinder`: declared binders come
-    # from the `fresh` argument and are placed by name, everything else comes from
-    # `bind_scoped`. Named for what an author wants to know, not for the mechanism.
+    # Whether the *engine* worked this binder out rather than the author writing
+    # it. Reads `FreshBinder.declared`, which the engine states outright — not its
+    # `scoped`, which answers the different question of how far the binder reaches.
+    # The two agree today and are not the same fact: placing a *declared* clause by
+    # scope would set `scoped` on a binder its author named, and this field would
+    # then report their own work back to them as the engine's.
     inferred: bool
 
 

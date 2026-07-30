@@ -107,7 +107,7 @@ compares the result to line 2.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from .side_conditions import And, DisjointLeaves
@@ -148,6 +148,22 @@ class FreshBinder:
     one in a disjoint scope. ``(∀z.P → ∀z.Q)`` is two scoped binders that may share
     a name; ``∀z.∀z.P`` is two that may not; and a name-bound binder must differ
     from all of them, since its scope covers them.
+
+    ``declared`` says where the binder came *from*: True when the definition's
+    author named it in a ``fresh`` clause, False when the engine read it off the
+    grammar's binding slots. Nothing in the kernel checks it — it is carried for
+    the same reason ``Definition.label`` is, because a caller outside needs it and
+    only the layer that built the binder can answer. It is required rather than
+    defaulted so that both construction sites must say, and there are exactly two.
+
+    It is deliberately **not** derived from ``scoped``, though the two agree today.
+    They answer different questions — one about a binder's scope, one about its
+    origin — and they coincide only because a declared clause is currently placed
+    by name. Placing a declared clause *by scope* on a grammar that declares its
+    binding slots is a live improvement (it would give the binder the reach its
+    author meant rather than the whole form), and it would set ``scoped`` on a
+    binder the author wrote. Reading one for the other would then report the
+    author's own work back to them as the engine's.
     """
 
     name: str
@@ -155,6 +171,7 @@ class FreshBinder:
     default: Term
     enclosing: tuple[int, ...] = ()
     scoped: bool = False
+    declared: bool = field(kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -285,6 +302,7 @@ def bind_scoped(term: Term, first_index: int) -> tuple[Term, tuple[FreshBinder, 
                     name=name, sort=sort, default=child,
                     enclosing=(*enclosing, *(s for s in siblings if s != index)),
                     scoped=True,
+                    declared=False,
                 )
             )
             node = _bound(index, sort)
