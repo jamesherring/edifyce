@@ -363,7 +363,7 @@
 				<LineTypesSection systemId={system.id} lines={system.lines} {sortNames} {symbols} {notation} onChanged={refresh} />
 				<AxiomsSection systemId={system.id} axioms={system.axioms} {symbols} {notation} onChanged={refresh} />
 				<RulesSection systemId={system.id} rules={system.rules} {symbols} {notation} onChanged={refresh} />
-				<DefinitionsSection systemId={system.id} definitions={system.definitions} {sortNames} {symbols} {notation} onChanged={refresh} />
+				<DefinitionsSection systemId={system.id} definitions={system.definitions} {sortNames} {symbols} {notation} {validation} onChanged={refresh} />
 			</div>
 		</div>
 

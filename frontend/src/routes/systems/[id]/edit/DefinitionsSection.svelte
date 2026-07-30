@@ -7,7 +7,7 @@
 	import { Label } from '$lib/components/ui/label';
 	import { Input } from '$lib/components/ui/input';
 	import { Combobox, type ComboboxOption } from '$lib/components/ui/combobox';
-	import { api, type Definition, type Binding } from '$lib/api';
+	import { api, type Definition, type Binding, type SystemValidation } from '$lib/api';
 	import type { SymbolEntry } from '$lib/symbols';
 	import type { NotationGroup } from '$lib/notation';
 	import { createSectionController } from './section.svelte';
@@ -18,7 +18,8 @@
 		sortNames,
 		symbols,
 		onChanged,
-		notation = []
+		notation = [],
+		validation = null
 	}: {
 		systemId: string;
 		definitions: Definition[];
@@ -27,6 +28,8 @@
 		onChanged: () => Promise<void> | void;
 		/** Optional: the grammar reference shown in the edit sheet. */
 		notation?: NotationGroup[];
+		/** Optional: the last build's report, for what it settled on per definition. */
+		validation?: SystemValidation | null;
 	} = $props();
 
 	// Provisos are plain strings in the API; wrap each in a row so it has a stable
@@ -81,6 +84,20 @@
 			fresh: fresh.filter((b) => b.var.trim() && b.sort.trim())
 		};
 	}
+
+	// What the last build made of the definition being edited. A `fresh` clause
+	// need not be written — a grammar that declares binding slots has one inferred
+	// from the parsed defining form — and inference is otherwise silent, so this is
+	// where the author sees what it concluded.
+	//
+	// Read only from a build that succeeded: on a failed one the report is empty,
+	// and absence would otherwise read as "dropped" for every definition at once.
+	const report = $derived(
+		validation?.success
+			? (validation.definitions.find((d) => d.definition_id === s.editing?.id) ?? null)
+			: null
+	);
+	const dropped = $derived(!!validation?.success && !!s.editing && report === null);
 
 	// Layering: a definition may expand into notation introduced by an *earlier*
 	// definition (the engine layers definitions by position). Offer those earlier
@@ -191,10 +208,26 @@
 		bind:bindings={fresh}
 		label="Bound variables"
 		hint="(fresh)"
-		description="Variables the expansion binds (e.g. the z in ∀z …). Declaring them lets a quantified definition and its provisos be checked capture-avoidingly."
+		description="Variables the expansion binds (e.g. the z in ∀z …). Declaring them lets a quantified definition and its provisos be checked capture-avoidingly. A production that declares which of its slots bind has these read off the grammar instead."
 		addLabel="Add bound variable"
 		removeLabel="Remove bound variable"
 	/>
+	{#if s.editing && validation?.success}
+		<p class="text-xs text-muted-foreground">
+			{#if dropped}
+				The last build <strong>dropped</strong> this definition: its expansion matched
+				nothing in the grammar as the definitions before it left it. Nothing can cite it
+				until it is reordered or its expansion changed.
+			{:else if report && report.binders.length > 0}
+				The last build settled on
+				{#each report.binders as binder, i (binder.var + binder.sort + i)}{#if i > 0},
+					{/if}<span class="font-mono">{binder.var} : {binder.sort}</span>
+					<span>({binder.inferred ? 'inferred from the grammar' : 'as declared'})</span>{/each}.
+			{:else if report}
+				The last build settled on no bound variables.
+			{/if}
+		</p>
+	{/if}
 	<RepeatableRows
 		bind:items={provisos}
 		label="Provisos"

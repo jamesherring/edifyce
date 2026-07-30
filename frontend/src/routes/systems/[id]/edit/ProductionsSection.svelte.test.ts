@@ -175,9 +175,10 @@ function atomConstant() {
 	};
 }
 
-// The editor round-trips a binder's `scopes_over` but has no control to edit it,
-// so a slot rename or removal would otherwise send a target that no longer
-// exists — a 400 the user has no way to repair from this form.
+// A slot's `scopes_over` names its siblings, and the editor refers to them by an
+// editor-local id rather than by name — so a rename carries the declaration with
+// it, and a target that no longer exists is unrepresentable rather than a 400 the
+// user has no way to repair from this form.
 describe('ProductionsSection binding slots', () => {
 	function binder() {
 		return {
@@ -209,7 +210,7 @@ describe('ProductionsSection binding slots', () => {
 		]);
 	});
 
-	it('drops a scope target whose slot was renamed away', async () => {
+	it('follows a scope target through a rename', async () => {
 		render(ProductionsSection, {
 			systemId: 'sys-1',
 			productions: [binder()],
@@ -225,8 +226,69 @@ describe('ProductionsSection binding slots', () => {
 
 		const { api } = await import('$lib/api');
 		expect(vi.mocked(api.parts.productions.update).mock.calls[0][2].bindings).toEqual([
-			{ var: 'x', sort: 'setvar', scopes_over: [] },
+			{ var: 'x', sort: 'setvar', scopes_over: ['psi'] },
 			{ var: 'psi', sort: 'formula', scopes_over: [] }
 		]);
+	});
+
+	it('drops a scope target whose slot was removed', async () => {
+		render(ProductionsSection, {
+			systemId: 'sys-1',
+			productions: [binder()],
+			sortNames: ['formula', 'setvar'],
+			symbols: [],
+			onChanged: vi.fn()
+		});
+		await user.click(screen.getByRole('button', { name: /^Edit / }));
+		const remove = await screen.findAllByRole('button', { name: /Remove slot/ });
+		await user.click(remove[1]);
+		await user.click(screen.getByRole('button', { name: /Save changes/ }));
+
+		const { api } = await import('$lib/api');
+		expect(vi.mocked(api.parts.productions.update).mock.calls[0][2].bindings).toEqual([
+			{ var: 'x', sort: 'setvar', scopes_over: [] }
+		]);
+	});
+
+	it('toggles a scope target off and back on', async () => {
+		render(ProductionsSection, {
+			systemId: 'sys-1',
+			productions: [binder()],
+			sortNames: ['formula', 'setvar'],
+			symbols: [],
+			onChanged: vi.fn()
+		});
+		await user.click(screen.getByRole('button', { name: /^Edit / }));
+
+		// One button per sibling slot: `x` offers `phi`, and `phi` offers `x`.
+		const [xBindsPhi, phiBindsX] = await screen.findAllByRole('button', { name: /binds over/ });
+		expect(xBindsPhi.getAttribute('aria-pressed')).toBe('true');
+		expect(phiBindsX.getAttribute('aria-pressed')).toBe('false');
+
+		await user.click(xBindsPhi);
+		expect(xBindsPhi.getAttribute('aria-pressed')).toBe('false');
+		await user.click(phiBindsX);
+		await user.click(screen.getByRole('button', { name: /Save changes/ }));
+
+		const { api } = await import('$lib/api');
+		expect(vi.mocked(api.parts.productions.update).mock.calls[0][2].bindings).toEqual([
+			{ var: 'x', sort: 'setvar', scopes_over: [] },
+			{ var: 'phi', sort: 'formula', scopes_over: ['x'] }
+		]);
+	});
+
+	it('offers no target for a production with one slot', async () => {
+		render(ProductionsSection, {
+			systemId: 'sys-1',
+			productions: [
+				{ ...prod('formula'), bindings: [{ var: 's', sort: 'term', scopes_over: [] }] }
+			],
+			sortNames: ['formula', 'term'],
+			symbols: [],
+			onChanged: vi.fn()
+		});
+		await user.click(screen.getByRole('button', { name: /^Edit / }));
+		await screen.findByRole('button', { name: /Save changes/ });
+		expect(screen.queryByRole('button', { name: /binds over/ })).toBeNull();
 	});
 });

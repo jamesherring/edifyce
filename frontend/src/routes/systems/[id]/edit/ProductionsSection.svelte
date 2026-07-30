@@ -2,11 +2,12 @@
 	import PartSection from './PartSection.svelte';
 	import EditSheet from '$lib/components/EditSheet.svelte';
 	import FormField from '$lib/components/FormField.svelte';
-	import BindingsEditor from './BindingsEditor.svelte';
+	import ProductionSlotsEditor from './ProductionSlotsEditor.svelte';
 	import { Label } from '$lib/components/ui/label';
 	import { Input } from '$lib/components/ui/input';
 	import { Button } from '$lib/components/ui/button';
-	import { api, type Production, type ProductionBinding } from '$lib/api';
+	import { api, type Production } from '$lib/api';
+	import { toProductionBindings, toSlotRows, type SlotRow } from './slots';
 	import type { SymbolEntry } from '$lib/symbols';
 	import type { NotationGroup } from '$lib/notation';
 	import { createSectionController } from './section.svelte';
@@ -41,14 +42,14 @@
 	let mode = $state<Mode>('template');
 	let value = $state('');
 	let denotesConstant = $state(false);
-	let bindings = $state<ProductionBinding[]>([]);
+	let slots = $state<SlotRow[]>([]);
 
 	// A composite with slots is never a leaf, so the question cannot arise for it;
 	// a nullary template (`S`, `∅`) *is* a leaf, so it keeps the toggle. An indexed
 	// family is a supply of interchangeable tokens and can never be a constant —
 	// the engine refuses that declaration outright, so don't offer it.
 	const canDeclareConstant = $derived(
-		mode !== 'atom_base' && (mode !== 'template' || bindings.length === 0)
+		mode !== 'atom_base' && (mode !== 'template' || slots.length === 0)
 	);
 
 	const placeholder = $derived(MODES.find((m) => m.key === mode)!.placeholder);
@@ -82,7 +83,7 @@
 				? (item.template ?? item.regex ?? item.atom_value ?? item.atom_base ?? '')
 				: '';
 			denotesConstant = item?.denotes_constant ?? false;
-			bindings = item?.bindings.map((b) => ({ ...b })) ?? [];
+			slots = toSlotRows(item?.bindings ?? []);
 		},
 		payload
 	});
@@ -90,10 +91,8 @@
 	function payload() {
 		// Send all four discriminator fields with the inactive ones nulled so a
 		// mode switch clears the others; the backend requires exactly one set.
-		// Bindings only apply to a composite template.
+		// Slots only apply to a composite template.
 		const v = value.trim();
-		const slots = mode === 'template' ? bindings.filter((b) => b.var.trim() && b.sort.trim()) : [];
-		const slotNames = new Set(slots.map((b) => b.var.trim()));
 		return {
 			name: name.trim(),
 			sort: sortName,
@@ -107,19 +106,7 @@
 			// off for a family, where it is not inert but a build error, so switching
 			// a declared constant to Family mode can't store an unbuildable row.
 			denotes_constant: mode === 'atom_base' ? false : denotesConstant,
-			// A binder's `scopes_over` names sibling slots, and there is no control
-			// here to edit it (see docs/binding-slots-design.md) — so it rides along
-			// untouched, and renaming or removing the slot it names would send a
-			// target that no longer exists. The backend rejects that, which would
-			// dead-end an edit the user has no way to repair. Drop the stale target
-			// instead: a scope over a slot that is gone is not a declaration worth
-			// keeping.
-			bindings: slots.map((b) => ({
-				...b,
-				scopes_over: (b.scopes_over ?? []).filter(
-					(target) => slotNames.has(target) && target !== b.var.trim()
-				)
-			}))
+			bindings: mode === 'template' ? toProductionBindings(slots) : []
 		};
 	}
 </script>
@@ -196,7 +183,7 @@
 		<Input bind:value class="font-mono" data-symbol-field {placeholder} maxlength={512} />
 	</div>
 	{#if mode === 'template'}
-		<BindingsEditor bind:bindings />
+		<ProductionSlotsEditor bind:slots />
 	{/if}
 	{#if canDeclareConstant}
 		<div class="space-y-2">
