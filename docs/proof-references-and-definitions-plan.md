@@ -57,13 +57,16 @@ and surface* existing engine capability rather than reinvent it.
 - `proof_references` (M2M on `proofs`, cascade) exists but is **never read or
   written** by any `app/` code; no endpoint touches references; every `parse()`
   call omits `reference_proofs`, so imports are unreachable via the API.
-- The declarative model has **no import line type** (`LineSpec` has no behaviour;
-  `SystemSpec.line` is a single logical line) — so DB-built systems can't emit
-  `behaviour: import`. *We avoid this by pre-seeding `reference_context` from
-  stored references instead of emitting import lines.*
-- Definition provisos are surfaced in the API/UI as a **single `condition`
+- The declarative model has **no import line type** — so DB-built systems can't
+  emit `behaviour: import`. *We avoid this by pre-seeding `reference_context`
+  from stored references instead of emitting import lines.* (`LineSpec` has since
+  grown a `behaviour`, and `SystemSpec.lines` is a list rather than the single
+  `line` this bullet was written against; neither changes the workaround.)
+- ~~Definition provisos are surfaced in the API/UI as a **single `condition`
   string** (vs rules' structured `side_conditions: list`), and the
-  `DefinitionsSection` condition field is one bare text box.
+  `DefinitionsSection` condition field is one bare text box.~~ **Closed by D0/D1**
+  — `provisos: list[str]` throughout, and the `condition` compatibility surface
+  has since been removed rather than merely deprecated.
 - ~~Definition provisos (`kernel_condition`) are enforced only on the kernel
   definitional-step path; the string-application path refuses a proviso-carrying
   definition.~~ **Closed by D2** — the string-application path is gone, so there
@@ -137,16 +140,18 @@ transitively, with cycles rejected, and a clean picker UX.
 Goal: definitions are a top-level entity (still system-scoped), build on other
 definitions, and use the full proviso.
 
-### D0 — definition proviso parity with rules (backend, small)
+### D0 — definition proviso parity with rules (backend, small) — **done**
 - Change the definition API surface from `condition: str | None` to
   `provisos: list[str]` (structured, like rules' `side_conditions`), backed by the
   existing `build_rule_side_conditions` + list rendering. **Storage is unchanged**
   (already `SideConditionRow`); this only upgrades the surface encoding, unlocking
   multi-line, full-vocabulary provisos in the API.
-- Keep a compatibility read (`condition` derivable from the tree) during the
-  transition. Tests mirroring the rule-proviso API tests.
+- ~~Keep a compatibility read (`condition` derivable from the tree) during the
+  transition.~~ The transition is over: `condition` is gone from the API schemas,
+  the TypeScript client and the declarative `Definition`, and the `;`
+  join/split path with it. Tests mirroring the rule-proviso API tests.
 
-### D1 — structured definition proviso editor + layering awareness (frontend)
+### D1 — structured definition proviso editor + layering awareness (frontend) — **done**
 - Replace the single "Condition" input in `DefinitionsSection.svelte` with the
   multi-row proviso editor already used by `RulesSection.svelte` (`RepeatableRows`
   + grammar guidance).
