@@ -62,11 +62,13 @@ from app.db import (
     get_session,
     PendingCitations,
     PendingLibrary,
+    load_definition_terms,
     load_proof_for_check,
     load_proof_lines,
     load_schema_terms,
     load_theorems,
     read_library,
+    store_definition_terms,
     store_proof_lines,
     store_schema_terms,
     system_to_spec,
@@ -334,7 +336,14 @@ async def _verify_with_references(
     schema_terms = await session.run_sync(
         lambda sync: load_schema_terms(sync, system, spec)
     )
-    build = build_spec(spec, schema_terms=schema_terms)
+    # The same trade for each definition's two surface forms, which the build
+    # parses into the terms an unfold is checked against (app/db/definition_terms.py).
+    definition_terms = await session.run_sync(
+        lambda sync: load_definition_terms(sync, system, spec)
+    )
+    build = build_spec(
+        spec, schema_terms=schema_terms, definition_terms=definition_terms
+    )
     if "errors" in build:
         return _Verification(
             VerifyProofResponse(success=False, errors=build["errors"]), None
@@ -343,6 +352,11 @@ async def _verify_with_references(
     if persist:
         await session.run_sync(
             lambda sync: store_schema_terms(sync, system, compiled_system, schema_terms)
+        )
+        await session.run_sync(
+            lambda sync: store_definition_terms(
+                sync, system, compiled_system, definition_terms
+            )
         )
 
     closure, edges = await _reference_closure(session, proof.id)

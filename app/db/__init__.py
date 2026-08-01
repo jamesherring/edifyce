@@ -55,6 +55,11 @@ from app.db.systems import (
     RuleRow,
     SymbolRow,
 )
+from app.db.definition_terms import (
+    DefinitionTermCache,
+    load_definition_terms,
+    store_definition_terms,
+)
 from app.db.schema_terms import (
     SchemaTermCache,
     load_schema_terms,
@@ -131,6 +136,10 @@ __all__ = [
     "SchemaTermCache",
     "load_schema_terms",
     "store_schema_terms",
+    # Definition-form term cache (app/db/definition_terms.py).
+    "DefinitionTermCache",
+    "load_definition_terms",
+    "store_definition_terms",
     # Metamath corpus import (app/db/metamath_store.py).
     "ImportReport",
     "import_corpus",

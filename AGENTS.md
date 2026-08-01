@@ -47,18 +47,29 @@ proof. Start there when tracing behaviour.
 ### Where text still becomes structure
 
 Everything a *verification* needs now has a row/term representation: proof
-formulas, rule schemas, citations, promoted theorems, scopes and provisos are all
+formulas, rule schemas, citations, promoted theorems, scopes, provisos, and — as
+of `app/db/definition_terms.py` — a definition's two surface forms are all
 rebuilt from stored terms rather than reparsed
-([docs/verification-from-rows.md](docs/verification-from-rows.md)). One seam is
-left: a definition's `higher` and `lower` forms are stored as **strings** and
-parsed while the system is built. That is not a soundness gap — the parse happens
-upstream of the kernel, which still receives terms — but it is the last place
-rebuilding a stored system reads semantic structure out of text, and persisting
-those two as terms is what would finish "parse exactly once".
+([docs/verification-from-rows.md](docs/verification-from-rows.md)). The kernel
+definition an unfold is checked against no longer derives from text on the read
+path.
+
+What a rebuild still reads the two form *strings* for is **grammar**, not
+structure: whether the defining form parses at all given the definitions before
+it (layering), whether the definition is circular, and the notation template that
+makes the defined form grammatical in the first place. Those are the parser
+answering questions about the grammar, and a `Match` is the right answer to them
+— none produces a term the checker uses.
 
 Text-to-structure that is *supposed* to stay: `matching/patterns.py`, `Match`, and
 explicit string rewriting. They are the parser and the semi-Thue semantics, not a
 second proof checker.
+
+Two smaller derivations still run at build time, both bounded and neither on the
+kernel's path: a declared `fresh` binder's `default` is its bare name parsed
+against its own sort, and a definition's provisos are parsed from their surface
+lines into the kernel side-condition algebra. Either could be persisted the same
+way if a profile ever asks for it.
 
 ### Constants vs variables of the object language
 

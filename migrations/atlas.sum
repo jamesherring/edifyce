@@ -1,4 +1,4 @@
-h1:D3Ks26s6NBxdSPU4WYbpcpEsSSSlXulIqJNH6WE3KNk=
+h1:whX5ia6Te1UONdr5FwF+fk+5hffotiFJpV4jTVmvx3A=
 20260715084842_initial_schema.sql h1:li+tGjd1xfzUC+Oet1ytZRgaeJlFFn6zwKJKRRHQR5o=
 20260717121403_normalize_constraint_names.sql h1:VfGJbOd7VWShF/0kWpgvlm+iMJLrutRP+qweQ/rJR4k=
 20260721060312_unify_symbols.sql h1:TEriOjT9h56DIRBgors2hB/rmp9gUzezuiMsaX5Fk8Q=
@@ -24,3 +24,4 @@ h1:D3Ks26s6NBxdSPU4WYbpcpEsSSSlXulIqJNH6WE3KNk=
 20260727064438_schema_terms.sql h1:Z1hjVpBC0jsUEXUjGgEXG6GBGTkFZY0Li8Wy9vH/8HA=
 20260727161209_add_definition_justification.sql h1:h5OslLw+4o7wruCZ66oDmwijjRVtedgQ4bKzSill684=
 20260729061602_promoted_theorems.sql h1:AQUAjtuI2DkIaIfx+C+cogVBAR6rFvHGt6Y58iIr7TI=
+20260801214455_persist_definition_terms.sql h1:8ydtmQA2Xw+pdQxVTjt0Qmk+V2wScCS+nWiG5W6fq9I=

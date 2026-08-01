@@ -23,6 +23,7 @@ evolve it.
 | `app/db/promoted_theorems.py` | The citable library: proved and imported theorems as rows, resolved by label |
 | `app/db/promoted_theorems_mapping.py` | `store_theorem` / `load_theorems`: the library round trip |
 | `app/db/schema_terms.py` | `store_schema_terms` / `load_schema_terms`: a rule's schema templates as composed kernel terms, so a build need not re-parse them |
+| `app/db/definition_terms.py` | `store_definition_terms` / `load_definition_terms`: the same for a definition's two surface forms |
 | `app/db/proof_lines.py` | Proof structure: a checked proof's lines + the justification edges between them |
 | `app/db/proofs_mapping.py` | `store_proof_lines`: project a checked engine `Proof` into those rows |
 | `app/db/metamath_store.py` | `import_corpus`: walk a Metamath `.mm` database and store the system, its proofs, and their line graphs |
@@ -81,6 +82,17 @@ Modernised from the original Django app (`website/models.py` on `main`):
   *miss* even under a matching digest — never "this template composes to
   nothing" — because the same NULL is what a deleted term, and a slot that
   resolved to a declared pattern instead of a composed one, both leave behind.
+
+  `definitions` carries the same kind of cache for its two surface forms
+  (`definition_terms.py`): `higher_term_id` / `lower_term_id` hold the terms the
+  build parsed them into, under `definitions.term_digest`. Two differences from a
+  rule's, both forced by what a definition is. The digest is **per system**, not
+  per row — a definition's forms are parsed against the grammar as extended by the
+  definitions before it, and the slot key is a spec position that an insertion
+  moves — so every row of a system carries one value. And the stored term stops
+  **before binder placement**: `bind_scoped` binds ground leaves sitting in binder
+  slots, so storing the finished `Definition.lower` would rebuild with no binders
+  at all and quietly drop the definition's capture-avoidance proviso.
 - **`promoted_theorems`, `promoted_theorem_premises`,
   `promoted_theorem_bindings`** — a system's **citable library**
   (`promoted_theorems.py`): results it has proved, or imported from a corpus, and

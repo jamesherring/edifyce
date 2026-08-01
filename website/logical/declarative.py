@@ -39,6 +39,7 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from .build_context import (
+    DefinitionSlot,
     FormalSystemContext,
     SchemaSlot,
     build_schema_pattern,
@@ -64,7 +65,7 @@ from .matching import AtomPattern, Pattern, RegexPattern, StringPattern, UnionPa
 from .promotion import promote_from_source
 
 if TYPE_CHECKING:
-    from .build_context import SchemaTermSource
+    from .build_context import DefinitionTermSource, SchemaTermSource
     from .kernel import SideCondition
     from .kernel.constructors import Constructor
     from .kernel.definitions import Definition as KernelDefinition
@@ -646,7 +647,9 @@ def _validate_constant_declarations(spec: SystemSpec, ctx: FormalSystemContext) 
 
 
 def build_system(
-    spec: SystemSpec, schema_terms: SchemaTermSource | None = None
+    spec: SystemSpec,
+    schema_terms: SchemaTermSource | None = None,
+    definition_terms: DefinitionTermSource | None = None,
 ) -> FormalSystem:
     """Build a :class:`FormalSystem` directly from a :class:`SystemSpec`.
 
@@ -655,9 +658,11 @@ def build_system(
     the ``{"errors": [...]}`` contract.
 
     ``schema_terms`` supplies previously-composed rule-schema terms so the build
-    need not re-parse the templates (see :func:`schema_digests`). It is a
-    *projection* of the spec, never part of it: passing none, or one that answers
-    for no slot, builds exactly the same system by the longer route.
+    need not re-parse the templates (see :func:`schema_digests`), and
+    ``definition_terms`` does the same for each definition's two surface forms
+    (see :func:`definition_digest`). Both are *projections* of the spec, never
+    part of it: passing none, or one that answers for no slot, builds exactly the
+    same system by the longer route.
     """
     # A string-rewriting rule is justified by associative matching over surface
     # strings, with no term binding to evaluate side-conditions against; refuse
@@ -869,12 +874,16 @@ def build_system(
     # takes.
     system.primitive_schemas = scan
 
-    for defn in spec.definitions:
+    for index, defn in enumerate(spec.definitions):
         if defn.label is not None:
             if defn.label in seen_labels:
                 raise DeclarativeError(f"Duplicate definition label '{defn.label}'.")
             seen_labels.add(defn.label)
-        layering.append(_finalise_definition(defn, ctx, system, scan))
+        layering.append(
+            _finalise_definition(
+                defn, ctx, system, scan, _FormCache(index, definition_terms, system)
+            )
+        )
     system.definition_layering = layering
 
     # 9. Parse each rule's provisos now that definitions have resolved, so a
@@ -1520,11 +1529,51 @@ def _check_condition_is_checkable(defn: Definition, built: KernelDefinition) -> 
         )
 
 
+@dataclass(frozen=True)
+class _FormCache:
+    """Both directions of the definition-term cache, bound to one spec position.
+
+    ``read`` answers the build with a term a previous one parsed (``None`` to
+    parse it now, on :data:`SchemaTermSource`'s contract); ``write`` takes back
+    what this build ended up with, so a persistence layer can store it.
+
+    Threaded down to ``build_kernel_definition`` rather than resolved where the
+    walk starts, because a defined form's constructor *is* the notation
+    registered two calls further in — before that, a stored ``higher`` term has
+    nothing to resolve against.
+    """
+
+    index: int
+    source: DefinitionTermSource | None
+    # None on the late path (`register_definition`), which has neither end of the
+    # cache: a definition added after the build occupies no position in any spec,
+    # so a stored term has no slot to arrive at and a derived one has none to be
+    # filed under. Recording it against `len(definitions)` would be worse than
+    # recording nothing — the persistence layer keys on *row* order, so a system
+    # that mixes built-in and late-registered definitions would file one
+    # definition's forms under another's row.
+    system: FormalSystem | None
+
+    @classmethod
+    def absent(cls) -> _FormCache:
+        return cls(index=0, source=None, system=None)
+
+    def read(self, slot: str, context: Context) -> Term | None:
+        if self.source is None:
+            return None
+        return self.source(DefinitionSlot(self.index, slot), context)
+
+    def write(self, higher: Term, lower: Term) -> None:
+        if self.system is not None:
+            self.system.definition_forms[self.index] = (higher, lower)
+
+
 def _finalise_definition(
     defn: Definition,
     ctx: FormalSystemContext,
     system: FormalSystem,
     scan: Callable[[], _SchemaScan],
+    forms: _FormCache,
 ) -> bool:
     """Register ``defn`` against the now-complete grammar, returning whether it
     layered — ``True`` when its defining (lower) form was recognised (given the
@@ -1595,7 +1644,7 @@ def _finalise_definition(
     try:
         return _register_notated_definition(
             defn, union, notation, ctx, context_copy, fresh_patterns, inherited,
-            system, scan,
+            system, scan, forms,
         )
     except DeclarativeError:
         # Every refusal past this point is a *late* one: the notation is already
@@ -1623,6 +1672,7 @@ def _register_notated_definition(
     inherited: list[SideCondition],
     system: FormalSystem,
     scan: Callable[[], _SchemaScan],
+    forms: _FormCache,
 ) -> bool:
     # The half of `_finalise_definition` that runs with the defined form's notation
     # already in scope — which is what makes that form grammatical, and so what
@@ -1680,6 +1730,12 @@ def _register_notated_definition(
             system.context,
             fresh=fresh_patterns or None,
             label=defn.label,
+            # Asked here rather than earlier because a defined form's constructor
+            # is the notation registered just above, so this is the first point at
+            # which a stored `higher` term can resolve at all.
+            higher_term=forms.read("higher", system.context),
+            lower_term=forms.read("lower", system.context),
+            record=forms.write,
         )
     except DefinitionError as exc:
         raise DeclarativeError(str(exc)) from exc
@@ -1741,7 +1797,10 @@ def register_definition(defn: Definition, system: FormalSystem) -> bool:
             scanned, signatures=scanned.signatures | _rule_term_signatures(system)
         )
 
-    layered = _finalise_definition(defn, system.build_context, system, scan)
+    # Neither end of the definition-term cache on this path; see `_FormCache.absent`.
+    layered = _finalise_definition(
+        defn, system.build_context, system, scan, _FormCache.absent()
+    )
     system.definition_layering.append(layered)
     return layered
 
@@ -1750,6 +1809,7 @@ def build_spec(
     spec: SystemSpec,
     system_dict: dict | None = None,
     schema_terms: SchemaTermSource | None = None,
+    definition_terms: DefinitionTermSource | None = None,
 ) -> dict:
     """Build a ``FormalSystem`` from a :class:`SystemSpec`.
 
@@ -1763,11 +1823,11 @@ def build_spec(
     so it is currently unused; it is kept on the signature so callers of the
     engine's public build entry point don't break when that lands.
 
-    ``schema_terms`` is an optional cache of already-composed rule-schema terms;
-    see :func:`build_system`.
+    ``schema_terms`` and ``definition_terms`` are optional caches of already-derived
+    rule-schema and definition-form terms; see :func:`build_system`.
     """
     try:
-        return {"system": build_system(spec, schema_terms)}
+        return {"system": build_system(spec, schema_terms, definition_terms)}
     except DeclarativeError as exc:
         return {"errors": [str(exc)]}
     except Exception as exc:  # noqa: BLE001
@@ -1819,6 +1879,39 @@ def schema_digests(spec: SystemSpec) -> list[str]:
         )
         for rule in spec.rules
     ]
+
+
+def definition_digest(spec: SystemSpec) -> str:
+    """What determines the terms a definition's two surface forms parse to.
+
+    :func:`schema_digests`' counterpart for definitions, and — like
+    :func:`library_digest` — **one digest for the whole block** rather than one
+    per definition. That is not a shortcut. A definition's forms are parsed
+    against the grammar *as extended by the definitions before it*, so an edit to
+    any definition can change what a later one parses to; and the defined forms
+    are registered in spec order, so an insertion or a reorder moves every
+    subsequent slot index. A per-definition digest would have to cover every
+    earlier definition anyway, and would still be wrong about the indices.
+
+    Covers the grammar and, per definition in order, everything the two parses
+    read: the sort the forms are parsed against, the two forms themselves, the
+    parameters abstracted out of them, and the ``fresh`` clause that decides which
+    leaves become binders.
+
+    What is absent: ``label``, ``name``, ``provisos`` and ``justification``. A
+    label and a name decide nothing either parse reads; a proviso becomes the
+    definition's ``condition``, which is attached after the forms are built and
+    replaces nothing in them.
+    """
+    return _fingerprint(
+        [
+            _grammar_fingerprint(spec),
+            [
+                [defn.sort, defn.higher, defn.lower, defn.bindings, defn.fresh]
+                for defn in spec.definitions
+            ],
+        ]
+    )
 
 
 def library_digest(spec: SystemSpec) -> str:
