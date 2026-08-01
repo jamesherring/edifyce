@@ -82,7 +82,7 @@ own kernel.
 | verified | **47,546 (100%)** |
 | rejected by the kernel | 0 |
 | failed to promote | 0 |
-| definitions registered | 1,335 of 1,559 logical `$a` (§5, A4) |
+| definitions registered | 1,427 of 1,559 logical `$a` (§5, A4) |
 | wall clock | 22 min 45 s axioms only, 24 min 17 s with definitions |
 | peak memory | 3.6 GB |
 
@@ -718,6 +718,12 @@ Measured over the whole corpus, all 47,546 verifying throughout:
 So the faithful reading of `set.mm` costs **6.8%** over importing every logical
 `$a` as an axiom, and the primitive basis falls from 1,559 to 224.
 
+These three were taken back to back on one machine, which is what makes them
+comparable to each other — and *only* to each other. A later container ran the
+same 1,456.8 s walk in 1,861.3 s, so a figure from this table must never be
+compared against one measured elsewhere; the next section shows what that mistake
+looks like.
+
 **What the 224 are**, since the tail is now short enough to enumerate:
 
 | | |
@@ -793,7 +799,18 @@ for the import, which takes no definitional steps. Relaxing it means quantifying
 the obligation over its own dummies, which is a separate change.
 
 Measured over the whole corpus, all 47,546 still verifying: **1,427 definitions,
-132 axioms**. The primitive basis is now
+132 axioms**, at **+0.90%** wall clock — 1,878.0 s against a `develop` control of
+1,861.3 s.
+
+That control is the point, and it is worth saying why it was run. The first
+measurement read 1,931 s against the 1,456.8 s in the table above and looked like
+a 33% regression; the table's figures were taken on a *faster container*, and this
+one reproduces the pre-change walk at 1,861.3 s. So an absolute number from that
+table and one from this paragraph are not comparable, and the only honest
+comparison is a same-machine A/B. (The 1,931 s run was also sharing four cores
+with the test suite, which is the rest of the gap.)
+
+The primitive basis is now
 
 | | |
 |---|---|
