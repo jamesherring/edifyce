@@ -2,10 +2,10 @@
 
 Replaces the opaque ``definitions.condition`` string with the kernel's
 side-condition algebra stored as rows: a proviso is parsed into a
-``SideConditionRow`` tree on the way in, rebuilt to the identical ``where``
-surface string on the way out, and its shape is queryable in plain SQL. A
-drift guard checks the storage grammar accepts exactly what the engine's
-``parse_side_condition`` accepts.
+``SideConditionRow`` tree on the way in, rebuilt to the identical surface lines
+on the way out, and its shape is queryable in plain SQL. A drift guard checks the
+storage grammar accepts exactly what the engine's ``parse_side_condition``
+accepts.
 """
 
 from copy import copy
@@ -27,10 +27,9 @@ from app.db.promoted_theorems import (
 from app.db.terms import TermChildRow, TermRow
 from app.db.models import FormalSystem
 from app.db.side_conditions import SideConditionRow
-from app.db.side_conditions_mapping import (  # grammars under test
-    _parse,
+from app.db.side_conditions_mapping import (  # grammar under test
     _parse_lines,
-    definition_condition_string,
+    definition_provisos_list,
     rule_side_conditions_list,
 )
 from app.db.systems import (
@@ -85,7 +84,7 @@ _TABLES = [
 # ZFC-ish grammar with two provisos: a single disjoint leaf, and a conjunction
 # of a negated occurs and a sorted atom — exercising leaf/sort/not/and. The two
 # custom rules carry their provisos in the `side_conditions` list; the two
-# provisoed definitions carry theirs in the `condition` field (a `;` conjoins).
+# provisoed definitions carry theirs in `provisos`, one line each.
 def zfc_spec() -> SystemSpec:
     return SystemSpec(
         name="ZFC",
@@ -105,10 +104,10 @@ def zfc_spec() -> SystemSpec:
         definitions=[
             subset_def(),
             defn("formula", "distinct", "x ≠ y", "¬(x = y)",
-                 [("x", "variable"), ("y", "variable")], "disjoint(x, y, variable)"),
+                 [("x", "variable"), ("y", "variable")], ["disjoint(x, y, variable)"]),
             defn("formula", "fresh", "x ⊘ y", "¬(x = y)",
                  [("x", "variable"), ("y", "variable")],
-                 "not occurs(y, x) ; atom(x, variable)"),
+                 ["not occurs(y, x)", "atom(x, variable)"]),
         ],
     )
 
@@ -357,7 +356,7 @@ def or_def_spec() -> SystemSpec:
         lines=[statement_line()],
         definitions=[
             defn("formula", "rel", "x ~ y", "x = y",
-                 [("x", "variable"), ("y", "variable")], "disjoint(x, y) or atom(x)"),
+                 [("x", "variable"), ("y", "variable")], ["disjoint(x, y) or atom(x)"]),
         ],
     )
 
@@ -376,7 +375,7 @@ def test_definition_where_or_round_trips(or_def_system):
     root = next(sc for sc in rel.side_conditions if sc.parent_id is None)
     assert root.kind == "or"
     assert [child.kind for child in root.children] == ["disjoint", "atom"]
-    assert definition_condition_string(rel) == "disjoint(x, y) or atom(x)"
+    assert definition_provisos_list(rel) == ["disjoint(x, y) or atom(x)"]
 
 
 # ---------------------------------------------------------------------------
@@ -600,8 +599,7 @@ def test_storage_grammar_matches_the_engine_parser():
     ]
     for text in accepted:
         parse_side_condition(text, context)  # engine: must not raise
-        assert _parse(text) is not None  # storage (definition `where`): must not raise
-        assert _parse_lines([text]) is not None  # storage (rule block): must not raise
+        assert _parse_lines([text]) is not None  # storage: must not raise
 
     rejected = [
         "occurs(x)", "bogus(x, y)", "disjoint()", "atom(x, y, z)", "occurs(x, y, z)",
@@ -611,7 +609,5 @@ def test_storage_grammar_matches_the_engine_parser():
     for text in rejected:
         with pytest.raises(ValueError):
             parse_side_condition(text, context)
-        with pytest.raises(ValueError):
-            _parse(text)
         with pytest.raises(ValueError):
             _parse_lines([text])

@@ -33,9 +33,9 @@ from website.logical.declarative import (
 
 from app.db.models import FormalSystem
 from app.db.side_conditions_mapping import (
+    build_definition_provisos,
     build_rule_side_conditions,
-    build_side_condition_rows,
-    definition_condition_string,
+    definition_provisos_list,
     proviso_sorts,
     rule_side_conditions_list,
 )
@@ -98,12 +98,12 @@ def _named_sorts(spec: SystemSpec) -> list[str]:
             note(sort)
         # A proviso's sort argument is resolved to a symbol too — `disjoint(x, y,
         # setvar)` names a sort as surely as a binding does.
-        for sort in proviso_sorts(defn.condition):
+        for sort in proviso_sorts(defn.provisos):
             note(sort)
     for rule in [*spec.axioms, *spec.rules]:
         for _var, sort in rule.bindings:
             note(sort)
-        for sort in proviso_sorts(None, rule.side_conditions):
+        for sort in proviso_sorts(rule.side_conditions):
             note(sort)
     return names
 
@@ -198,7 +198,7 @@ def spec_to_system(spec: SystemSpec) -> FormalSystem:
             row.bindings.append(DefinitionBindingRow(position=j, var=var, symbol=symbols[sort]))
         for j, (var, sort) in enumerate(defn.fresh):
             row.fresh.append(DefinitionFreshRow(position=j, var=var, symbol=symbols[sort]))
-        build_side_condition_rows(row, defn.condition, symbols, {var for var, _ in defn.bindings})
+        build_definition_provisos(row, defn.provisos, symbols, {var for var, _ in defn.bindings})
         system.definitions.append(row)
 
     for i, axiom in enumerate(spec.axioms):
@@ -282,7 +282,7 @@ def system_to_spec(system: FormalSystem) -> SystemSpec:
             higher=defn.higher,
             lower=defn.lower,
             bindings=[(b.var, b.symbol.name) for b in defn.bindings],
-            condition=definition_condition_string(defn),
+            provisos=definition_provisos_list(defn),
             fresh=[(f.var, f.symbol.name) for f in defn.fresh],
             label=defn.label,
             # Both columns are written together, so the label alone decides

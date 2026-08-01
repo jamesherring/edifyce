@@ -171,9 +171,6 @@ class Definition(BaseModel):
     # Soundness provisos, one kernel-vocabulary line each (implicit conjunction) —
     # the same structured surface a rule exposes via `side_conditions`.
     provisos: list[str] = Field(default_factory=list)
-    # Deprecated compatibility view: the provisos joined with `;` as a single
-    # `where` string. Derived from the same tree as `provisos`; prefer `provisos`.
-    condition: str | None = None
     bindings: list[Binding] = Field(default_factory=list)
     # The defining form's bound variables (the `fresh` clause). Declaring them lets
     # a quantified definition take the kernel path, so a proviso on it is enforced.
@@ -421,16 +418,38 @@ class LineTypeUpdate(BaseModel):
     parts: list[LinePartInput] | None = None
 
 
-class DefinitionCreate(BaseModel):
+class _RejectsCondition(BaseModel):
+    """Refuses the removed ``condition`` field rather than ignoring it.
+
+    Pydantic drops an unknown field by default, which is the wrong answer for this
+    one: a proviso is a *soundness restriction* on definitional unfolding, so a
+    pre-`provisos` client would get a 200 and a definition that unfolds where it
+    asked for one that does not. Fail the write instead, naming the replacement.
+
+    Scoped to `condition` alone — the rest of the payload keeps the API's ordinary
+    tolerance for unknown fields.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _condition_is_gone(cls, data: object) -> object:
+        if isinstance(data, dict) and "condition" in data:
+            raise ValueError(
+                "'condition' has been removed; send 'provisos' as a list of "
+                "kernel-vocabulary lines instead (a ';'-joined condition becomes "
+                "one list entry per clause)."
+            )
+        return data
+
+
+class DefinitionCreate(_RejectsCondition):
     sort: str = Field(..., min_length=1, max_length=128)
     name: str = Field(..., min_length=1, max_length=128)
     higher: _Text512
     lower: _Text512
-    # Structured provisos (preferred), mirroring rules' `side_conditions`.
+    # Soundness provisos, one kernel-vocabulary line each (implicit conjunction),
+    # mirroring rules' `side_conditions`.
     provisos: list[_Text512] = Field(default_factory=list)
-    # Deprecated compatibility input: a single `;`-joined `where` string. Ignored
-    # when `provisos` is supplied; kept so pre-D0 clients keep working.
-    condition: str | None = Field(None, max_length=512)
     bindings: list[Binding] = Field(default_factory=list)
     # The defining form's bound variables (the `fresh` clause).
     fresh: list[Binding] = Field(default_factory=list)
@@ -442,15 +461,12 @@ class DefinitionCreate(BaseModel):
     justification: Justification | None = None
 
 
-class DefinitionUpdate(BaseModel):
+class DefinitionUpdate(_RejectsCondition):
     sort: str | None = Field(None, max_length=128)
     name: str | None = Field(None, min_length=1, max_length=128)
     higher: str | None = Field(None, max_length=512)
     lower: str | None = Field(None, max_length=512)
-    # Provisos (preferred); wins over `condition` when both are present.
     provisos: list[_Text512] | None = None
-    # Deprecated compatibility input; see DefinitionCreate.
-    condition: str | None = Field(None, max_length=512)
     bindings: list[Binding] | None = None
     fresh: list[Binding] | None = None
     label: str | None = Field(None, max_length=64)

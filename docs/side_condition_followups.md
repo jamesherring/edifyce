@@ -1,21 +1,26 @@
 # Side-condition follow-ups
 
-Definition provisos are written with a `where` clause —
-`Define <higher> as <lower> [fresh <binds>] [where <provisos>]` — and checked
-structurally over kernel terms (see `website/logical/formal_system/definitions.py`).
-`where`, like a rule's `side_conditions:` block, parses through the closed kernel
-algebra in `website/logical/kernel/side_conditions.py`
+A definition carries its provisos in `Definition.provisos` — one kernel-vocabulary
+line each — and they are checked structurally over kernel terms (see
+`website/logical/formal_system/definitions.py`). They parse through the closed
+kernel algebra in `website/logical/kernel/side_conditions.py`
 (`occurs` / `equal` / `disjoint` / `atom` / `member`, with `not` on a predicate,
-`or` between predicates within a clause, and an implicit `and` across clauses — a
-rule's lines, or a `where`'s `;`-separated parts). There is no parenthesised
+`or` between predicates within a clause, and an implicit `and` across clauses),
+exactly as a rule's `side_conditions` block does. There is no parenthesised
 grouping, so the boolean structure is a flat conjunction-of-disjunctions.
 
+*Nomenclature:* this document was written when a definition's provisos were a
+`where` clause in the retired `.edi` source language, and still calls them that in
+places — as it does the `.edi` compiler, which is also gone. `where` is now
+`provisos`; the `;`-joined string it once lowered to is gone from both the spec
+and the API, and there is no source text left to reject at compile time.
+
 The legacy pseudo-python `if <cond>` proviso on definitions has been **retired**:
-`Define ... if ...` is now a compile error directing the author to `where`, and
-the `matching.Definition` no longer carries a string `Condition` guard. (The
-`Condition` / `get_by_path` interpreter still backs the unrelated pattern-function
-DSL — `while` loops, `instances(...; condition)` filters, `SystemConditionPattern`
-— which is a separate, larger retirement; see the last section.)
+`Define ... if ...` was made a compile error directing the author to `where`, and
+the `matching.Definition` no longer carries a string `Condition` guard. The
+`Condition` / `get_by_path` interpreter it once shared with the pattern-function
+DSL has since been **deleted outright** — see the last section, which supersedes
+the "separate, larger retirement" this paragraph originally pointed at.
 
 The extensions below were considered and **deliberately deferred**. They are
 tracked here so the decisions aren't relitigated from scratch.
@@ -88,20 +93,22 @@ the rest of the draft-tolerant part API. In storage, `side_conditions` gains
 *metavariable* argument still names is still caught early, while term arguments
 defer to compile.
 
-## Not in scope *for the algebra work*: retiring `get_by_path`
+## Not in scope *for the algebra work*: retiring `get_by_path` — **superseded**
 
-Retiring the definition `if` proviso does **not** remove the pseudo-python value
-interpreter (`website/logical/matching/paths.py` `get_by_path`) or
-`matching/conditions.py`. Those still back the pattern-function DSL
-(`instances(...; condition)` filters, `SystemConditionPattern`) and the engine's
-value derivation (proof-line `formula()`/`label()`, definition construction,
-custom pattern functions). Retiring that value interpreter is a separate, larger
-project — planned below.
+*Historical, kept for the reasoning.* At the time, retiring the definition `if`
+proviso did **not** remove the pseudo-python value interpreter
+(`website/logical/matching/paths.py` `get_by_path`) or `matching/conditions.py`:
+those still backed the pattern-function DSL (`instances(...; condition)` filters,
+`SystemConditionPattern`) and the engine's value derivation (proof-line
+`formula()`/`label()`, definition construction, custom pattern functions).
+Retiring the interpreter was scoped as a separate, larger project — and that
+project has since **completed**. The next section is the record of it; neither
+module exists any more.
 
-## Roadmap: fully retiring `get_by_path`
+## Roadmap: fully retiring `get_by_path` — **done**
 
-This section plans the deletion of the string interpreter as its own body of
-work. It supersedes the "separate, larger project" note above.
+This section planned the deletion of the string interpreter as its own body of
+work, and is now its record. It supersedes the note above.
 
 ### What the interpreter actually is (characterization)
 
@@ -253,9 +260,10 @@ already folded into this document. The shippable work:
    - Trimmed the vestiges the interpreter left in kept code: `Match.replace`'s
      dead `condition` parameter, the compiler's dead `type(current_object) is
      Condition` branch, and the unsupported `mapsto` reference-mapping (which
-     resolved its source through the interpreter — it now raises, and the
-     caller's reference-resolution fallback leaves such a reference unresolved so
-     the citing line fails to justify).
+     resolved its source through the interpreter). The `mapsto` stub and the
+     permanently-empty `mapping` dicts it fed on `InferenceReference` and
+     `ProofLine` have since been deleted too; a cited ref that is not a proof
+     line is now simply an error.
    - Methods the definitional-step / kernel path calls directly — `Match.replace`,
      `equivalent`, `equivalent_under_definitions`, `maps_to_up_to_definition`,
      `MatchSet.contains`/`union`/… — were **kept**; only the string-dispatch layer

@@ -1,21 +1,21 @@
 """Bridge between a proviso's surface form and the side-condition rows.
 
-``build_side_condition_rows`` parses a definition's declarative ``where`` proviso
-(``"not occurs(x, phi) ; disjoint(x, y, setvar)"``) into a
+``build_definition_provisos`` parses a definition's provisos — one
+kernel-vocabulary line each (``["not occurs(x, phi)", "disjoint(x, y, setvar)"]``),
+implicitly conjoined — into a
 :class:`~app.db.side_conditions.SideConditionRow` tree attached to that
-definition; ``build_rule_side_conditions`` does the same for a rule's
-``side_conditions`` block (a list of one-predicate lines). ``*_string`` /
-``*_list`` render the stored tree back to the same surface form, so
+definition; ``build_rule_side_conditions`` and ``build_theorem_side_conditions``
+do the same for a rule's ``side_conditions`` block and a promoted theorem's
+provisos. The ``*_list`` readers render a stored tree back to the same lines, so
 ``systems_mapping``'s spec round trip is unchanged behind structured storage.
 
 The grammar mirrors the engine's
 :mod:`website.logical.formal_system.side_condition_syntax` (a closed vocabulary:
-``occurs`` / ``equal`` / ``disjoint`` / ``atom``, optional leading ``not``, lines
-joined by ``;`` as an implicit conjunction). It is re-implemented here — rather
-than imported — because that parser resolves a sort argument to a live
-``Pattern`` via a compiled context, whereas storage resolves it to a
-``SymbolRow`` and needs no engine. A test cross-checks that the two accept the
-same strings so they cannot drift.
+``occurs`` / ``equal`` / ``disjoint`` / ``atom``, optional leading ``not``). It is
+re-implemented here — rather than imported — because that parser resolves a sort
+argument to a live ``Pattern`` via a compiled context, whereas storage resolves it
+to a ``SymbolRow`` and needs no engine. A test cross-checks that the two accept
+the same strings so they cannot drift.
 """
 
 from __future__ import annotations
@@ -152,26 +152,12 @@ def _parse_disjunction(text: str) -> _Leaf | _Combinator:
     return _Combinator(SIDE_KIND_OR, tuple(disjuncts))
 
 
-def _parse(condition: str) -> _Leaf | _Combinator | None:
-    condition = condition.strip()
-    if not condition:
-        return None
-    conjuncts = [_parse_disjunction(part.strip()) for part in condition.split(";") if part.strip()]
-    if not conjuncts:
-        return None
-    if len(conjuncts) == 1:
-        return conjuncts[0]
-    return _Combinator(SIDE_KIND_AND, tuple(conjuncts))
-
-
 def _parse_lines(lines: list[str]) -> _Leaf | _Combinator | None:
-    """Parse a rule's proviso lines into one tree (implicit conjunction).
+    """Parse an owner's proviso lines into one tree (implicit conjunction).
 
-    A rule stores its provisos as a list of already-split lines (one disjunction
-    each), whereas a definition's ``where`` is a single ``;``-joined string — so
-    rules skip the ``;`` split ``_parse`` does. Two or more lines combine into an
-    ``and``, matching how the engine treats the ``side_conditions:`` block; a line
-    may itself be an ``or`` disjunction.
+    Each line is one disjunction. Two or more lines combine into an ``and``,
+    matching how the engine treats the ``side_conditions:`` block; a line may
+    itself be an ``or`` disjunction.
 
     A blank line is a malformed proviso, not a no-op: it is rejected (an empty
     ``lines`` list, meaning "no proviso at all", is the only empty case allowed).
@@ -189,7 +175,7 @@ def _parse_lines(lines: list[str]) -> _Leaf | _Combinator | None:
     return _Combinator(SIDE_KIND_AND, tuple(conjuncts))
 
 
-def proviso_sorts(condition: str | None, lines: Sequence[str] = ()) -> list[str]:
+def proviso_sorts(lines: Sequence[str]) -> list[str]:
     """Every sort name a proviso names, in first-mention order.
 
     What ``spec_to_system`` needs before it can resolve one to a symbol: a
@@ -197,14 +183,12 @@ def proviso_sorts(condition: str | None, lines: Sequence[str] = ()) -> list[str]
     needs a row holding that name (see ``systems_mapping._named_sorts``). Reuses
     the parser rather than scanning the text, so the two cannot drift.
 
-    A proviso that will not parse yields nothing rather than raising:
-    :func:`build_side_condition_rows` is a few lines later and is where that
-    failure belongs, with its own message.
+    A proviso that will not parse yields nothing rather than raising: the
+    ``build_*`` functions below are where that failure belongs, with their own
+    message.
     """
-    trees: list[_Leaf | _Combinator | None] = []
     try:
-        trees.append(_parse(condition) if condition else None)
-        trees.append(_parse_lines(list(lines)) if lines else None)
+        tree = _parse_lines(list(lines))
     except ValueError:
         return []
 
@@ -218,30 +202,8 @@ def proviso_sorts(condition: str | None, lines: Sequence[str] = ()) -> list[str]
             for child in node.children:
                 walk(child)
 
-    for tree in trees:
-        walk(tree)
+    walk(tree)
     return found
-
-
-def build_side_condition_rows(
-    definition: DefinitionRow,
-    condition: str | None,
-    symbols: dict[str, SymbolRow],
-    metavars: set[str],
-) -> None:
-    """Parse ``condition`` and attach its proviso tree to ``definition`` (unsaved).
-
-    A sort argument is resolved to a symbol in ``symbols``; an unknown sort name
-    is a malformed proviso (it could not have compiled) and raises. A predicate's
-    metavariable arguments must be among ``metavars`` (the owner's declared
-    binding names) — a proviso over an undeclared name has no binding to check
-    against and would raise deep in the kernel, so it is rejected here.
-    """
-    if condition is None:
-        return
-    tree = _parse(condition)
-    if tree is not None:
-        _materialise(tree, symbols, metavars, parent=None, position=0, definition=definition)
 
 
 def build_rule_side_conditions(
@@ -252,9 +214,11 @@ def build_rule_side_conditions(
 ) -> None:
     """Parse a rule's proviso ``lines`` and attach the tree to ``rule`` (unsaved).
 
-    Mirrors :func:`build_side_condition_rows` for the rule owner; an empty list
-    (axioms, unconditioned rules) attaches nothing. ``metavars`` are the rule's
-    declared binding names; a predicate over any other name is rejected.
+    An empty list (axioms, unconditioned rules) attaches nothing. A sort argument
+    is resolved to a symbol in ``symbols``; an unknown sort name is a malformed
+    proviso (it could not have compiled) and raises. ``metavars`` are the rule's
+    declared binding names; a predicate over any other name has no binding to
+    check against and would raise deep in the kernel, so it is rejected here.
     """
     tree = _parse_lines(provisos)
     if tree is not None:
@@ -290,12 +254,9 @@ def build_definition_provisos(
 ) -> None:
     """Parse a definition's proviso ``lines`` and attach the tree to it (unsaved).
 
-    The structured (list-of-lines) analogue of :func:`build_side_condition_rows`,
-    which takes a single ``;``-joined ``where`` string: this gives a definition the
-    same full-vocabulary, multi-line proviso surface a rule has via
-    :func:`build_rule_side_conditions`. The two produce the same tree — a list of
-    ``n`` lines and a ``;``-joined string of the same ``n`` clauses both lower to
-    one ``and`` root — so the storage and every reader are unchanged.
+    The definition owner of :func:`build_rule_side_conditions`, giving a definition
+    the same full-vocabulary, multi-line proviso surface a rule has, and producing
+    the same tree — so the storage and every reader treat the two alike.
     """
     tree = _parse_lines(provisos)
     if tree is not None:
@@ -437,15 +398,6 @@ def _owner_tree(
     return root, children
 
 
-def definition_condition_string(definition: DefinitionRow) -> str | None:
-    """Render a definition's proviso tree back to its ``where`` surface string."""
-    tree = _owner_tree(list(definition.side_conditions))
-    if tree is None:
-        return None
-    root, children = tree
-    return _render(root, children)
-
-
 def rule_side_conditions_list(rule: RuleRow) -> list[str]:
     """Render a rule's proviso tree back to its ``side_conditions`` lines.
 
@@ -459,11 +411,9 @@ def rule_side_conditions_list(rule: RuleRow) -> list[str]:
 def definition_provisos_list(definition: DefinitionRow) -> list[str]:
     """Render a definition's proviso tree back to a ``provisos`` list.
 
-    The inverse of :func:`build_definition_provisos`, and the list-shaped analogue
-    of :func:`definition_condition_string`: an ``and`` root becomes one line per
-    conjunct, any other root a single line. Empty when the definition has no
-    proviso. Same node collection as ``definition_condition_string`` reads, so the
-    ``;``-joined string and this list stay in agreement.
+    The inverse of :func:`build_definition_provisos`: an ``and`` root becomes one
+    line per conjunct, any other root a single line. Empty when the definition has
+    no proviso.
     """
     return proviso_lines(list(definition.side_conditions))
 
