@@ -33,9 +33,9 @@ from app.auth import current_active_user, current_active_user_optional
 from app.db import (
     Base,
     FormalSystem,
-    chain_libraries,
+    LibraryChain,
     discard_system_checks,
-    effective_spec,
+    effective_library,
     get_session,
     inherited_rule_count,
     system_to_spec,
@@ -91,7 +91,6 @@ from app.schemas import (
     SystemValidation,
     VerifyProofResponse,
 )
-from app.db.promoted_theorems_mapping import LibraryChain
 from website.logical.declarative import DeclarativeError, SystemSpec, build_spec
 
 router = APIRouter(prefix="/formal-systems", tags=["formal-systems"])
@@ -301,6 +300,11 @@ class EffectiveSystem:
 
     chain: list[FormalSystem]
     spec: SystemSpec | None = None
+    # Where a citation resolves: this system's library, then its ancestors',
+    # nearest first. Read alongside `spec` rather than derived from the chain on
+    # demand — both come from the same per-layer specs, and reading the rows
+    # twice measured at five times the cost of reading them once.
+    library: LibraryChain = LibraryChain(())
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -308,16 +312,6 @@ class EffectiveSystem:
         """How many of ``spec.rules`` an ancestor contributed; see `schema_terms`."""
         return inherited_rule_count(self.chain)
 
-    @property
-    def library(self) -> LibraryChain:
-        """Where a citation resolves, nearest first — this system, then upward.
-
-        A system's citable library is its own entries and its ancestors', which
-        is what makes a theorem proved low in a tower usable high in it. Each
-        layer carries its own digest; see :class:`LibraryChain` for why an
-        ancestor's stored terms are guarded by the ancestor's.
-        """
-        return LibraryChain(tuple(reversed(chain_libraries(self.chain))))
 
 
 async def load_effective(
@@ -329,7 +323,8 @@ async def load_effective(
     if errors:
         return EffectiveSystem(chain, errors=errors)
     try:
-        return EffectiveSystem(chain, spec=effective_spec(chain))
+        spec, library = effective_library(chain)
+        return EffectiveSystem(chain, spec=spec, library=library)
     except DeclarativeError as exc:
         # A cross-layer collision. The chain describes no system at all, so this
         # is the same kind of failure as a spec that will not build, reported the

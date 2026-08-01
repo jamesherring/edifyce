@@ -17,7 +17,6 @@ round-trip — is unchanged by the unified storage.
 from __future__ import annotations
 
 import re
-import uuid
 from collections.abc import Sequence
 
 from website.logical.declarative import (
@@ -34,6 +33,7 @@ from website.logical.declarative import (
 )
 
 from app.db.models import FormalSystem
+from app.db.promoted_theorems_mapping import LibraryChain
 from app.db.side_conditions_mapping import (
     build_definition_provisos,
     build_rule_side_conditions,
@@ -359,27 +359,26 @@ def effective_spec(chain: Sequence[FormalSystem]) -> SystemSpec:
     return layered_spec([system_to_spec(system) for system in chain])
 
 
-def chain_libraries(chain: Sequence[FormalSystem]) -> list[tuple[uuid.UUID, str]]:
-    """Each system in ``chain`` with the digest guarding *its own* stored terms.
+def effective_library(chain: Sequence[FormalSystem]) -> tuple[SystemSpec, LibraryChain]:
+    """What a system is built from, and where its citations resolve — in one pass.
 
-    Root first, as ``chain`` is. A library entry's cached terms were composed
-    against the system that owns the entry, so what says they are still current
-    is that system's own :func:`~website.logical.declarative.library_digest` —
-    which for an ancestor is the digest of the ancestor's chain, not the citing
-    system's. Hence the running prefix: layer *i*'s digest covers layers 0..i.
+    Both answers come from the same per-layer specs, and a verify needs both, so
+    they are read together: reading the rows twice measured at five times the
+    cost of reading them once, for a system with no ancestors at all.
 
-    Reverse it for :class:`~app.db.promoted_theorems_mapping.LibraryChain`, which
-    wants nearest first.
-
-    Reads the rows a second time rather than sharing :func:`effective_spec`'s
-    pass. That is row-walking, not parsing — the expensive half of building a
-    system is the grammar parse, which happens once either way.
+    The spec is :func:`effective_spec`. The chain is **nearest first** — the rule
+    that a label declared twice resolves to the closer system — and each layer
+    carries the digest guarding *its own* stored terms, which for an ancestor is
+    the digest of the ancestor's chain rather than the citing system's (see
+    :class:`~app.db.promoted_theorems_mapping.LibraryChain`). Hence the running
+    prefix: layer *i*'s digest covers layers 0..i.
     """
     specs = [system_to_spec(system) for system in chain]
-    return [
+    libraries = [
         (system.id, library_digest(layered_spec(specs[: index + 1])))
         for index, system in enumerate(chain)
     ]
+    return layered_spec(specs), LibraryChain(tuple(reversed(libraries)))
 
 
 def inherited_rule_count(chain: Sequence[FormalSystem]) -> int:

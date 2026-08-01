@@ -298,18 +298,26 @@ class LibraryChain:
 
     def rank(self, system_id: uuid.UUID) -> int:
         """How near ``system_id`` is; lower wins a label."""
-        for index, (candidate, _) in enumerate(self.layers):
-            if candidate == system_id:
-                return index
-        # Not in the chain at all. Sorts last, so a row that should not have been
-        # read never shadows one that should.
-        return len(self.layers)
+        return self._layer(system_id)[0]
 
-    def digest(self, system_id: uuid.UUID) -> str | None:
-        for candidate, library in self.layers:
+    def digest(self, system_id: uuid.UUID) -> str:
+        """The digest guarding ``system_id``'s own stored terms."""
+        return self._layer(system_id)[1]
+
+    def _layer(self, system_id: uuid.UUID) -> tuple[int, str]:
+        # Raised rather than defaulted. Every entry comes from a query over
+        # `system_ids`, so a system not in the chain is a mis-wired chain rather
+        # than a case to tolerate — and tolerating it would substitute a digest
+        # that matches nothing, turning the defect into a silent re-parse, which
+        # is the *wrong* answer for a cross-layer citation and not merely a
+        # slower one (see this class's own note).
+        for index, (candidate, library) in enumerate(self.layers):
             if candidate == system_id:
-                return library
-        return None
+                return index, library
+        raise LookupError(
+            f"Library entry from system {system_id} is outside the chain it was "
+            f"read for ({', '.join(str(s) for s, _ in self.layers)})."
+        )
 
 
 @dataclass(frozen=True)
@@ -432,7 +440,7 @@ def read_library(
         for entry in cited
         if entry.schema_digest is not None
         and entry.schema_digest
-        == theorem_digest(chain.digest(entry.system_id) or "", specs[entry.label])
+        == theorem_digest(chain.digest(entry.system_id), specs[entry.label])
     }
     return PendingLibrary(cited=cited, owner=owner, specs=specs, fresh=fresh)
 

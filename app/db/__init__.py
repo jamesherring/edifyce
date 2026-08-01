@@ -23,6 +23,7 @@ from app.db.promoted_theorems import (
     PromotedTheoremRow,
 )
 from app.db.promoted_theorems_mapping import (
+    LibraryChain,
     PendingLibrary,
     cited_labels,
     load_theorems,
@@ -62,7 +63,7 @@ from app.db.schema_terms import (
 )
 from app.db.side_conditions import SideConditionRow
 from app.db.systems_mapping import (
-    chain_libraries,
+    effective_library,
     effective_spec,
     inherited_rule_count,
     spec_to_system,
@@ -119,6 +120,7 @@ __all__ = [
     "PromotedTheoremRow",
     "PendingLibrary",
     "cited_labels",
+    "LibraryChain",
     "load_theorems",
     "read_library",
     "store_theorem",
@@ -126,7 +128,7 @@ __all__ = [
     "spec_to_system",
     "system_to_spec",
     "effective_spec",
-    "chain_libraries",
+    "effective_library",
     "inherited_rule_count",
     # Term graph (app/db/terms.py) + kernel-term round trip.
     "TermChildRow",

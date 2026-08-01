@@ -17,7 +17,6 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from copy import copy
-from datetime import datetime, timezone
 
 import pytest
 
@@ -32,28 +31,24 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import Session
 
 import app.auth.backend as backend
-from app.db import FormalSystem, chain_libraries, effective_spec
+from app.db import FormalSystem, LibraryChain, effective_library
 from app.db.promoted_theorems import PromotedTheoremRow
 from app.db.promoted_theorems_mapping import (
-    LibraryChain,
     load_theorems,
     store_theorem,
     theorem_digest,
 )
 from app.db.session import get_session
 from app.main import app
-from app.routers.systems import load_chain
 from tests.database import async_url, create_tables, database_url, enable_foreign_keys
 from tests.layered_systems import (
     first_order_logic_spec,
     propositional_calculus_spec,
-    tower,
-    zfc_spec,
 )
 from tests.test_proofs_api import _TABLES
 from tests.test_system_inheritance import seed, seed_tower
 from tests.test_systems_api import _register_login
-from website.logical.declarative import build_spec, library_digest
+from website.logical.declarative import build_spec
 from website.logical.promotion import TheoremSpec, promote_spec
 
 
@@ -99,7 +94,7 @@ def promote_into(db_path, system_id: str, spec: TheoremSpec) -> None:
         with Session(engine) as session:
             system = session.get(FormalSystem, uuid.UUID(system_id))
             chain = _chain(session, system)
-            effective = effective_spec(chain)
+            effective, library = effective_library(chain)
             built = build_spec(effective)
             assert "errors" not in built, built["errors"]
             promoted = promote_spec(built["system"], spec)
@@ -116,7 +111,10 @@ def promote_into(db_path, system_id: str, spec: TheoremSpec) -> None:
                     .where(PromotedTheoremRow.system_id == system.id)
                 ),
                 primitive=False,
-                digest=theorem_digest(library_digest(effective), spec),
+                # The digest this system's *own* verify would stamp — which for
+                # a layer with ancestors covers the whole chain beneath it, and
+                # is what `LibraryChain` then checks it against.
+                digest=theorem_digest(library.digest(system.id), spec),
                 promoted=promoted,
             )
             session.commit()
@@ -136,12 +134,6 @@ def _chain(session: Session, system: FormalSystem) -> list[FormalSystem]:
     return chain
 
 
-async def library_of(session: AsyncSession, system_id: str) -> LibraryChain:
-    system = await session.get(FormalSystem, uuid.UUID(system_id))
-    chain = await load_chain(session, system)
-    return LibraryChain(tuple(reversed(chain_libraries(chain))))
-
-
 def resolve(db_path, system_id: str, labels: list[str], before=None) -> dict:
     """Promote ``labels`` against ``system_id``, through its whole chain.
 
@@ -153,10 +145,13 @@ def resolve(db_path, system_id: str, labels: list[str], before=None) -> dict:
         with Session(engine) as session:
             system = session.get(FormalSystem, uuid.UUID(system_id))
             chain = _chain(session, system)
-            built = build_spec(effective_spec(chain))["system"]
+            # `effective_library`, not a chain assembled here: it is what the
+            # verify route uses, and a test that rebuilt the ordering or the
+            # per-layer digests itself would pass with either of them wrong.
+            spec, library = effective_library(chain)
+            built = build_spec(spec)["system"]
             context = copy(built.context)
             context.variables.update(built.build_context.variables)
-            library = LibraryChain(tuple(reversed(chain_libraries(chain))))
             if before is not None:
                 before()
             return load_theorems(session, library, labels, built, context)
@@ -417,10 +412,10 @@ def test_an_ancestors_entry_is_guarded_by_the_ancestors_own_digest(db, client):
     engine = create_engine(db)
     try:
         with Session(engine) as session:
-            pc_system = session.get(FormalSystem, uuid.UUID(pc))
             zfc_system = session.get(FormalSystem, uuid.UUID(zfc))
-            own = library_digest(effective_spec(_chain(session, pc_system)))
-            citing = library_digest(effective_spec(_chain(session, zfc_system)))
+            _spec, library = effective_library(_chain(session, zfc_system))
+            own = library.digest(uuid.UUID(pc))
+            citing = library.digest(uuid.UUID(zfc))
     finally:
         engine.dispose()
 
