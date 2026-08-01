@@ -46,6 +46,7 @@ from app.db.promoted_theorems import (
     PromotedTheoremPremiseRow,
     PromotedTheoremRow,
 )
+from app.db.promoted_theorems_mapping import read_theorems
 from app.db import metamath_store
 from app.db.metamath_store import import_corpus
 from app.db.models import FormalSystem, Proof
@@ -627,6 +628,36 @@ def test_a_cited_label_with_no_theorem_row_is_simply_absent(session, imported):
         built, context, library_digest(spec),
     )
     assert set(loaded) == {"ax-1"}
+
+
+def test_a_degenerate_ask_reads_no_library_at_all(session, imported):
+    """Neither "no labels" nor "no owner" may widen to the whole library.
+
+    `read_theorems` asks for both in one statement — an expanding `IN` for the
+    labels and a bound `owner` that is `NULL` when there is none — precisely so
+    that neither has to be a separate query. Both degenerate cases must therefore
+    render *false* rather than true. Get it wrong and nothing is incorrect (the
+    caller filters by what it asked for either way), which is what makes this
+    worth pinning: it would show up only as every verify scanning 49,000 rows.
+    """
+    system_id = imported.system_id
+    total = session.scalar(
+        select(func.count()).select_from(PromotedTheoremRow)
+        .where(PromotedTheoremRow.system_id == system_id)
+    )
+    assert total > 1, "the fixture must have a library to over-read"
+
+    # No labels and no owner: nothing is reachable.
+    assert read_theorems(session, system_id, []) == []
+
+    # Labels but no owner: the `owner` half must not match a row.
+    assert [t.label for t in read_theorems(session, system_id, ["ax-1"])] == ["ax-1"]
+
+    # An owner but no labels: the `labels` half must not match a row.
+    mp2 = session.scalar(
+        select(PromotedTheoremRow).where(PromotedTheoremRow.label == "mp2")
+    )
+    assert [t.label for t in read_theorems(session, system_id, [], mp2.id)] == ["mp2"]
 
 
 def test_a_hypothesis_is_reachable_only_through_the_theorem_that_owns_it(

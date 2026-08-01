@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Protocol
 
 from app.db.side_conditions import (
     SIDE_KIND_AND,
@@ -36,6 +37,9 @@ from app.db.side_conditions import (
 )
 from app.db.promoted_theorems import PromotedTheoremRow
 from app.db.systems import DefinitionRow, RuleRow, SymbolRow
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 # Leaf predicate -> (kind, allowed arg counts, arg-index of the sort or None).
 _PREDICATES = {
@@ -339,9 +343,45 @@ def _materialise(
     return row
 
 
+class ProvisoNode(Protocol):
+    """What rendering a stored proviso reads — an ORM row or flat data alike.
+
+    :class:`~app.db.side_conditions.SideConditionRow` satisfies this, and so does
+    any record carrying the same six names. That is deliberate: the library read
+    path fetches its provisos as Core rows rather than ORM instances (see
+    ``app/db/promoted_theorems_mapping.py``), and rendering them should not
+    require re-hydrating an object graph to do it.
+
+    ``sort_name`` rather than ``sort_symbol`` is the whole reason a protocol is
+    needed: the row reaches its symbol through a relationship, while a flat read
+    resolves the name in the join that fetched it, and the renderer wants only
+    the name.
+
+    Every member is a *read-only* property rather than an attribute, which is not
+    a stylistic choice: a protocol attribute is read-write, and a frozen
+    dataclass — which is what the flat read hands over — cannot satisfy one. A
+    mapped column satisfies either, so this is the form both implementers meet.
+    """
+
+    @property
+    def id(self) -> uuid.UUID: ...
+    @property
+    def parent_id(self) -> uuid.UUID | None: ...
+    @property
+    def position(self) -> int: ...
+    @property
+    def kind(self) -> str: ...
+    @property
+    def left_name(self) -> str | None: ...
+    @property
+    def right_name(self) -> str | None: ...
+    @property
+    def sort_name(self) -> str | None: ...
+
+
 def _owner_tree(
-    nodes: list[SideConditionRow],
-) -> tuple[SideConditionRow, dict[uuid.UUID, list[SideConditionRow]]] | None:
+    nodes: Sequence[ProvisoNode],
+) -> tuple[ProvisoNode, dict[uuid.UUID, list[ProvisoNode]]] | None:
     """Rebuild the proviso tree from an owner's flat node collection.
 
     Groups children by ``parent_id`` (rather than walking the self-referential
@@ -351,8 +391,8 @@ def _owner_tree(
     """
     if not nodes:
         return None
-    children: dict[uuid.UUID, list[SideConditionRow]] = {}
-    root: SideConditionRow | None = None
+    children: dict[uuid.UUID, list[ProvisoNode]] = {}
+    root: ProvisoNode | None = None
     for node in nodes:
         if node.parent_id is None:
             root = node
@@ -381,12 +421,7 @@ def rule_side_conditions_list(rule: RuleRow) -> list[str]:
     line per conjunct (the block's implicit conjunction); any other root is a
     single line. Empty when the rule has no proviso.
     """
-    return _proviso_lines(list(rule.side_conditions))
-
-
-def theorem_side_conditions_list(theorem: PromotedTheoremRow) -> list[str]:
-    """Render a promoted theorem's proviso tree back to its ``distinct`` lines."""
-    return _proviso_lines(list(theorem.side_conditions))
+    return proviso_lines(list(rule.side_conditions))
 
 
 def definition_provisos_list(definition: DefinitionRow) -> list[str]:
@@ -398,12 +433,17 @@ def definition_provisos_list(definition: DefinitionRow) -> list[str]:
     proviso. Same node collection as ``definition_condition_string`` reads, so the
     ``;``-joined string and this list stay in agreement.
     """
-    return _proviso_lines(list(definition.side_conditions))
+    return proviso_lines(list(definition.side_conditions))
 
 
-def _proviso_lines(nodes: list[SideConditionRow]) -> list[str]:
-    # Shared by the rule and definition list readers: an ``and`` root is the
-    # implicit conjunction of one line per child; any other root is a single line.
+def proviso_lines(nodes: Sequence[ProvisoNode]) -> list[str]:
+    """Render an owner's proviso tree back to its surface lines.
+
+    Shared by the rule, definition and library readers: an ``and`` root is the
+    implicit conjunction of one line per child; any other root is a single line.
+    Public because the library reads its provisos as flat Core rows and renders
+    them without an owner row to hang them off.
+    """
     tree = _owner_tree(nodes)
     if tree is None:
         return []
@@ -413,20 +453,20 @@ def _proviso_lines(nodes: list[SideConditionRow]) -> list[str]:
     return [_render(root, children)]
 
 
-def _render(row: SideConditionRow, children: dict[uuid.UUID, list[SideConditionRow]]) -> str:
+def _render(row: ProvisoNode, children: dict[uuid.UUID, list[ProvisoNode]]) -> str:
     if row.kind in (SIDE_KIND_OCCURS, SIDE_KIND_EQUAL):
         return f"{row.kind}({row.left_name}, {row.right_name})"
     if row.kind == SIDE_KIND_DISJOINT:
-        if row.sort_symbol is not None:
-            return f"disjoint({row.left_name}, {row.right_name}, {row.sort_symbol.name})"
+        if row.sort_name is not None:
+            return f"disjoint({row.left_name}, {row.right_name}, {row.sort_name})"
         return f"disjoint({row.left_name}, {row.right_name})"
     if row.kind == SIDE_KIND_ATOM:
-        if row.sort_symbol is not None:
-            return f"atom({row.left_name}, {row.sort_symbol.name})"
+        if row.sort_name is not None:
+            return f"atom({row.left_name}, {row.sort_name})"
         return f"atom({row.left_name})"
     if row.kind == SIDE_KIND_MEMBER:
         # The sort is required for `member`, so it is always present.
-        return f"member({row.left_name}, {row.sort_symbol.name})"
+        return f"member({row.left_name}, {row.sort_name})"
     kids = children.get(row.id, [])
     if row.kind == SIDE_KIND_NOT:
         return f"not {_render(kids[0], children)}"

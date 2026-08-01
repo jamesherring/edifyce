@@ -27,10 +27,11 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from sqlalchemy import false, or_, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import bindparam, or_, select
+from sqlalchemy.orm import Session
 
 from app.db.promoted_theorems import (
     PromotedTheoremBindingRow,
@@ -38,10 +39,8 @@ from app.db.promoted_theorems import (
     PromotedTheoremRow,
 )
 from app.db.side_conditions import SideConditionRow
-from app.db.side_conditions_mapping import (
-    build_theorem_side_conditions,
-    theorem_side_conditions_list,
-)
+from app.db.side_conditions_mapping import build_theorem_side_conditions, proviso_lines
+from app.db.systems import SymbolRow
 from app.db.terms_mapping import prefetch_terms, store_term
 from website.logical.matching import StringPattern
 from website.logical.promotion import TheoremSpec, promote_spec
@@ -49,8 +48,9 @@ from website.logical.promotion import TheoremSpec, promote_spec
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping, Sequence
 
+    from sqlalchemy import Select
+
     from app.db.models import FormalSystem
-    from app.db.systems import SymbolRow
     from website.logical.formal_system import FormalSystem as EngineSystem
     from website.logical.formal_system import PromotedTheorem
     from website.logical.kernel.terms import Term
@@ -174,15 +174,83 @@ def _term_id(
     return stored.id
 
 
-def theorem_spec_from_row(row: PromotedTheoremRow) -> TheoremSpec:
-    """The declarative form a stored theorem round-trips to."""
+@dataclass(frozen=True)
+class _Premise:
+    """One ``promoted_theorem_premises`` row as flat data."""
+
+    statement: str
+    label: str | None
+    term_id: uuid.UUID | None
+
+
+@dataclass(frozen=True)
+class _Proviso:
+    """One of a theorem's ``side_conditions`` rows, its sort already named.
+
+    Satisfies :class:`~app.db.side_conditions_mapping.ProvisoNode`, which is what
+    lets the renderer read this and an ORM row alike.
+    """
+
+    id: uuid.UUID
+    parent_id: uuid.UUID | None
+    position: int
+    kind: str
+    left_name: str | None
+    right_name: str | None
+    sort_name: str | None
+
+
+@dataclass(frozen=True)
+class StoredTheorem:
+    """One library entry as flat data — no ORM instance, no identity map.
+
+    A theorem is read to be promoted and never written back, so hydrating four
+    tables into an object graph buys nothing: the instrumented attributes are
+    never assigned to, the identity map is never consulted twice, and the unit of
+    work has nothing to flush. Reading it as Core rows was 36% of a re-check
+    (docs/verification-from-rows.md, P2a) and is the same argument that moved
+    term rows off the ORM — see :class:`~app.db.terms_mapping.TermGraph`, which
+    also records why *holding* the rows stops being something a caller can get
+    wrong.
+    """
+
+    id: uuid.UUID
+    label: str
+    statement: str
+    matching: str
+    statement_term_id: uuid.UUID | None
+    schema_digest: str | None
+    premises: tuple[_Premise, ...]
+    metavariables: tuple[tuple[str, str], ...]
+    provisos: tuple[_Proviso, ...]
+
+    @property
+    def term_ids(self) -> list[uuid.UUID]:
+        """Every cached term this entry names, for seeding one sweep."""
+        return [
+            term_id
+            for term_id in (
+                self.statement_term_id,
+                *(premise.term_id for premise in self.premises),
+            )
+            if term_id is not None
+        ]
+
+
+def theorem_spec(theorem: StoredTheorem) -> TheoremSpec:
+    """The declarative form a stored theorem round-trips to.
+
+    Named for what it takes now: a :class:`StoredTheorem` rather than an ORM row,
+    so the whole read path from query to `TheoremSpec` touches no instrumented
+    attribute.
+    """
     return TheoremSpec(
-        label=row.label,
-        statement=row.statement,
-        metavariables={b.var: b.symbol.name for b in row.bindings},
-        premises=tuple(p.statement for p in row.premises),
-        distinct=tuple(theorem_side_conditions_list(row)),
-        matching=row.matching,
+        label=theorem.label,
+        statement=theorem.statement,
+        metavariables=dict(theorem.metavariables),
+        premises=tuple(premise.statement for premise in theorem.premises),
+        distinct=tuple(proviso_lines(theorem.provisos)),
+        matching=theorem.matching,
     )
 
 
@@ -225,53 +293,27 @@ def load_theorems(
     if not wanted and hypotheses_of is None:
         return {}
 
-    reachable = PromotedTheoremRow.label.in_(wanted) if wanted else false()
-    if hypotheses_of is not None:
-        reachable = or_(reachable, PromotedTheoremRow.id == hypotheses_of)
-
-    rows = list(
-        session.scalars(
-            select(PromotedTheoremRow)
-            .where(PromotedTheoremRow.system_id == system_id, reachable)
-            .options(
-                selectinload(PromotedTheoremRow.premises),
-                # `joinedload` under the collection, not `selectinload`: a
-                # binding's symbol and a proviso's sort are *many-to-one*, so
-                # each is one more row on a query already being issued rather
-                # than a round trip of its own. Two fewer per verify.
-                selectinload(PromotedTheoremRow.bindings).joinedload(
-                    PromotedTheoremBindingRow.symbol
-                ),
-                selectinload(PromotedTheoremRow.side_conditions).joinedload(
-                    SideConditionRow.sort_symbol
-                ),
-            )
-        )
-    )
-    if not rows:
+    entries = read_theorems(session, system_id, wanted, hypotheses_of)
+    if not entries:
         return {}
 
-    owner = next((row for row in rows if row.id == hypotheses_of), None)
-    # The owner is fetched to be *read for its hypotheses*, not to be citable:
-    # a theorem's own statement is what its proof is establishing.
-    cited = [row for row in rows if row.label in set(wanted)]
+    owner = next((e for e in entries if e.id == hypotheses_of), None)
+    # The owner is read for *its hypotheses*, not to be citable: a theorem's own
+    # statement is what its proof is establishing.
+    asked_for = set(wanted)
+    cited = [entry for entry in entries if entry.label in asked_for]
 
-    specs = {row.label: theorem_spec_from_row(row) for row in cited}
+    specs = {entry.label: theorem_spec(entry) for entry in cited}
     fresh = {
-        row.label: row
-        for row in cited
-        if row.schema_digest is not None
-        and row.schema_digest == theorem_digest(library, specs[row.label])
+        entry.label: entry
+        for entry in cited
+        if entry.schema_digest is not None
+        and entry.schema_digest == theorem_digest(library, specs[entry.label])
     }
 
     # Every cached term of every theorem asked for, in one sweep — and one memo
     # across all of them, so a subterm two statements share is rebuilt once.
-    ids = [
-        term_id
-        for row in fresh.values()
-        for term_id in (row.statement_term_id, *(p.term_id for p in row.premises))
-        if term_id is not None
-    ]
+    ids = [term_id for entry in fresh.values() for term_id in entry.term_ids]
     if owner is not None:
         # A hypothesis's term is guarded by nothing of its own — it is the
         # owner's premise, and the owner's digest is what says whether the
@@ -283,11 +325,11 @@ def load_theorems(
         return graph.term(term_id, context)
 
     promoted: dict[str, PromotedTheorem] = {}
-    for row in cited:
-        current = fresh.get(row.label)
-        promoted[row.label] = promote_spec(
+    for entry in cited:
+        current = fresh.get(entry.label)
+        promoted[entry.label] = promote_spec(
             built,
-            specs[row.label],
+            specs[entry.label],
             statement_term=None if current is None else term(current.statement_term_id),
             premise_terms=(
                 () if current is None
@@ -296,14 +338,13 @@ def load_theorems(
         )
 
     if owner is not None:
-        promoted.update(_hypotheses(owner, built, context, term))
+        promoted.update(_hypotheses(owner, built, term))
     return promoted
 
 
 def _hypotheses(
-    owner: PromotedTheoremRow,
+    owner: StoredTheorem,
     built: EngineSystem,
-    context: Context,
     term: Callable[[uuid.UUID | None], Term | None],
 ) -> dict[str, PromotedTheorem]:
     # Each labelled premise of `owner`, as the zero-premise theorem `_givens`
@@ -312,7 +353,7 @@ def _hypotheses(
     # that a hypothesis promoted from rows and one promoted by the walk are the
     # same object, and a divergence between those two paths is the bug class P2
     # shipped twice.
-    metavariables = {b.var: b.symbol.name for b in owner.bindings}
+    metavariables = dict(owner.metavariables)
     return {
         premise.label: promote_spec(
             built,
@@ -326,6 +367,171 @@ def _hypotheses(
         for premise in owner.premises
         if premise.label is not None
     }
+
+
+def _statements() -> tuple[Select, Select, Select, Select]:
+    """The four library queries, built once — everything varying is bound.
+
+    Constructing a statement is not free, and at four per verify it showed:
+    hoisting the term sweep's was worth a third of it (P2a).
+
+    **The children take the ids the first query found**, which is worth being
+    explicit about, because the term sweep next door had to stop doing exactly
+    that (P2a): an ``IN`` list that grows with the *answer* rather than with the
+    ask will eventually pass the driver's parameter limit. It is not the same
+    situation here, and the difference is amplification. A sweep's closure is
+    unboundedly larger than its roots — 269 nodes from a proof's six, 8,190 from
+    a 5,000-theorem library — whereas the ids here are *at most* one per label
+    asked for, and that ``IN`` list is already in the first query. So the
+    children add no order of magnitude the caller was not already spending: if
+    the ids overflow, the labels overflowed first.
+
+    Re-asking instead was tried, and costs 19%: repeating the label lookup three
+    more times is dearer than the ids it saves. `selectinload`'s 500-per-query
+    chunking was incidental to how it works, not a guarantee this relied on.
+    """
+    theorems = select(
+        PromotedTheoremRow.id,
+        PromotedTheoremRow.label,
+        PromotedTheoremRow.statement,
+        PromotedTheoremRow.matching,
+        PromotedTheoremRow.statement_term_id,
+        PromotedTheoremRow.schema_digest,
+    ).where(
+        PromotedTheoremRow.system_id == bindparam("system_id"),
+        or_(
+            PromotedTheoremRow.label.in_(bindparam("labels", expanding=True)),
+            # `NULL` is the "no owner" case: `id = NULL` is never true, so a
+            # caller with no owning theorem needs no second statement. An empty
+            # `labels` needs no special case either — an expanding `IN` over
+            # nothing renders as a false expression, which is what
+            # `load_theorems` means by a proof that cites no library entry.
+            # `test_a_degenerate_ask_reads_no_library_at_all` pins both.
+            PromotedTheoremRow.id == bindparam("owner"),
+        ),
+    )
+    wanted = bindparam("ids", expanding=True)
+
+    premises = (
+        select(
+            PromotedTheoremPremiseRow.theorem_id,
+            PromotedTheoremPremiseRow.statement,
+            PromotedTheoremPremiseRow.label,
+            PromotedTheoremPremiseRow.term_id,
+        )
+        .where(PromotedTheoremPremiseRow.theorem_id.in_(wanted))
+        .order_by(
+            PromotedTheoremPremiseRow.theorem_id, PromotedTheoremPremiseRow.position
+        )
+    )
+
+    # The symbol is joined rather than fetched: a binding's sort and a proviso's
+    # are *many-to-one*, so each is one more column on a query already being
+    # issued rather than a round trip of its own.
+    bindings = (
+        select(
+            PromotedTheoremBindingRow.theorem_id,
+            PromotedTheoremBindingRow.var,
+            SymbolRow.name,
+        )
+        .join(SymbolRow, PromotedTheoremBindingRow.symbol_id == SymbolRow.id)
+        .where(PromotedTheoremBindingRow.theorem_id.in_(wanted))
+        .order_by(
+            PromotedTheoremBindingRow.theorem_id, PromotedTheoremBindingRow.position
+        )
+    )
+
+    provisos = (
+        select(
+            SideConditionRow.promoted_theorem_id,
+            SideConditionRow.id,
+            SideConditionRow.parent_id,
+            SideConditionRow.position,
+            SideConditionRow.kind,
+            SideConditionRow.left_name,
+            SideConditionRow.right_name,
+            SymbolRow.name,
+        )
+        # Outer: most provisos carry no sort, and one that does not must still be
+        # read. An inner join here would silently drop every `occurs`.
+        .join(SymbolRow, SideConditionRow.sort_symbol_id == SymbolRow.id, isouter=True)
+        .where(SideConditionRow.promoted_theorem_id.in_(wanted))
+    )
+    return theorems, premises, bindings, provisos
+
+
+_THEOREMS, _PREMISES, _BINDINGS, _PROVISOS = _statements()
+
+
+def read_theorems(
+    session: Session,
+    system_id: uuid.UUID,
+    labels: Sequence[str],
+    hypotheses_of: uuid.UUID | None = None,
+) -> list[StoredTheorem]:
+    """Read the named library entries as flat data, in four queries.
+
+    One per table rather than one statement joining all four: a theorem has three
+    independent child collections, so a single join would be their cartesian
+    product — the reason SQLAlchemy's own `selectinload` issues a query per
+    collection. This is the same four queries it issued, without the ORM
+    machinery on top of them (see :class:`StoredTheorem`).
+
+    The first query is parameterised by the ask; the three child queries by the
+    ids it found — see :func:`_statements` for why that way round, given the term
+    sweep next door had to go the other.
+
+    A label with no row is simply absent, which is the contract
+    :func:`load_theorems` documents.
+    """
+    rows = list(
+        session.execute(
+            _THEOREMS,
+            {"system_id": system_id, "labels": list(labels), "owner": hypotheses_of},
+        )
+    )
+    if not rows:
+        return []
+
+    ids = {"ids": [row.id for row in rows]}
+    premises: dict[uuid.UUID, list[_Premise]] = {}
+    for row in session.execute(_PREMISES, ids):
+        premises.setdefault(row.theorem_id, []).append(
+            _Premise(statement=row.statement, label=row.label, term_id=row.term_id)
+        )
+
+    bindings: dict[uuid.UUID, list[tuple[str, str]]] = {}
+    for row in session.execute(_BINDINGS, ids):
+        bindings.setdefault(row.theorem_id, []).append((row.var, row.name))
+
+    provisos: dict[uuid.UUID, list[_Proviso]] = {}
+    for row in session.execute(_PROVISOS, ids):
+        provisos.setdefault(row.promoted_theorem_id, []).append(
+            _Proviso(
+                id=row.id,
+                parent_id=row.parent_id,
+                position=row.position,
+                kind=row.kind,
+                left_name=row.left_name,
+                right_name=row.right_name,
+                sort_name=row.name,
+            )
+        )
+
+    return [
+        StoredTheorem(
+            id=row.id,
+            label=row.label,
+            statement=row.statement,
+            matching=row.matching,
+            statement_term_id=row.statement_term_id,
+            schema_digest=row.schema_digest,
+            premises=tuple(premises.get(row.id, ())),
+            metavariables=tuple(bindings.get(row.id, ())),
+            provisos=tuple(provisos.get(row.id, ())),
+        )
+        for row in rows
+    ]
 
 
 def cited_labels(references: Iterable[str | None]) -> list[str]:

@@ -150,3 +150,13 @@ class SideConditionRow(Base):
         cascade="all, delete-orphan",
         order_by="SideConditionRow.position",
     )
+
+    @property
+    def sort_name(self) -> str | None:
+        """The sort's name, which is all rendering a proviso wants of it.
+
+        Satisfies ``side_conditions_mapping.ProvisoNode`` — the renderer is
+        written against the *name* so that a flat read, which resolves it in the
+        join that fetched the row, need not hydrate a `SymbolRow` to be rendered.
+        """
+        return None if self.sort_symbol is None else self.sort_symbol.name
