@@ -1,6 +1,6 @@
 # Design: verification from rows, not from text
 
-**Status:** P1–P5 shipped · **Prerequisite work:** merged (the term
+**Status:** P1–P5 and P2a shipped · **Prerequisite work:** merged (the term
 graph, `proof_lines`, the kernel-takes-terms change #121, and the Metamath
 corpus import #124)
 
