@@ -58,7 +58,12 @@ from app.db.schema_terms import (
     store_schema_terms,
 )
 from app.db.side_conditions import SideConditionRow
-from app.db.systems_mapping import spec_to_system, system_to_spec
+from app.db.systems_mapping import (
+    effective_spec,
+    inherited_rule_count,
+    spec_to_system,
+    system_to_spec,
+)
 from app.db.terms import TermChildRow, TermRow
 from app.db.terms_mapping import (
     TermGraph,
@@ -113,6 +118,8 @@ __all__ = [
     "theorem_digest",
     "spec_to_system",
     "system_to_spec",
+    "effective_spec",
+    "inherited_rule_count",
     # Term graph (app/db/terms.py) + kernel-term round trip.
     "TermChildRow",
     "TermGraph",

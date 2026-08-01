@@ -17,6 +17,7 @@ round-trip — is unchanged by the unified storage.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 
 from website.logical.declarative import (
     Definition,
@@ -27,6 +28,7 @@ from website.logical.declarative import (
     Rule,
     Subproof,
     SystemSpec,
+    layered_spec,
 )
 
 from app.db.models import FormalSystem
@@ -58,6 +60,47 @@ def _slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "system"
 
 
+def _named_sorts(spec: SystemSpec) -> list[str]:
+    """Every sort name ``spec`` needs a symbol for, in first-mention order.
+
+    ``SystemSpec.sort_names`` reads the *productions*, which is what a system
+    declaring its own grammar needs. A layer in an inheritance chain also
+    **refers** to sorts it does not declare: ZFC's ``⊆`` is a ``formula`` over
+    ``term``, and both of those are the layers below it. Storage resolves a
+    name to a symbol by FK, so such a name still needs a row of its own —
+    self-contained, rather than an FK into another system's namespace, which a
+    parent's delete would take with it.
+
+    What it leaves behind is a union row with no members, which is exactly what
+    a *declared* sort of a layer looks like too, and which ``system_to_spec``
+    emits nothing for either way. The sort itself comes back from the chain
+    (`effective_spec`), where the layer that declares it is in front.
+    """
+    names = list(spec.sort_names())
+    # A binding may name a *production* rather than a sort (`x : variable`), and
+    # a production of this spec gets its own row below. Only a name nothing here
+    # declares needs holding.
+    declared = {prod.name for prod in spec.productions}
+
+    def note(name: str | None) -> None:
+        if name and name not in names and name not in declared:
+            names.append(name)
+
+    for prod in spec.productions:
+        for _var, sort in prod.bindings:
+            note(sort)
+    for line in spec.lines:
+        note(line.logical_sort)
+    for defn in spec.definitions:
+        note(defn.sort)
+        for _var, sort in [*defn.bindings, *defn.fresh]:
+            note(sort)
+    for rule in [*spec.axioms, *spec.rules]:
+        for _var, sort in rule.bindings:
+            note(sort)
+    return names
+
+
 def spec_to_system(spec: SystemSpec) -> FormalSystem:
     """Build the ORM graph for ``spec`` (unsaved; add it to a session to persist)."""
 
@@ -72,7 +115,7 @@ def spec_to_system(spec: SystemSpec) -> FormalSystem:
     # `symbols` resolves any binding/definition/logical reference by name.
     symbols: dict[str, SymbolRow] = {}
     position = 0
-    for name in spec.sort_names():
+    for name in _named_sorts(spec):
         symbol = SymbolRow(position=position, name=name, kind="union")
         symbols[name] = symbol
         system.symbols.append(symbol)
@@ -289,3 +332,28 @@ def _subproof_from_row(rule: RuleRow) -> Subproof | None:
         assume=rule.subproof_assume,
         fresh=rule.subproof_fresh,
     )
+
+
+def effective_spec(chain: Sequence[FormalSystem]) -> SystemSpec:
+    """The spec a system is actually built from: its ancestors' parts, then its own.
+
+    ``chain`` is the inheritance chain **root first**, ending in the system being
+    built — what ``formal_systems.inherits_from_id`` describes, resolved. Each
+    system contributes only its *own* rows (:func:`system_to_spec` is unchanged,
+    because that is what the parts CRUD edits and what the API renders), and
+    :func:`~website.logical.declarative.layered_spec` concatenates them.
+
+    Raises :class:`~website.logical.declarative.DeclarativeError` when two layers
+    collide on a name — see that function for why a name may be declared only
+    once down a chain.
+    """
+    return layered_spec([system_to_spec(system) for system in chain])
+
+
+def inherited_rule_count(chain: Sequence[FormalSystem]) -> int:
+    """How many of :func:`effective_spec`'s rules belong to systems before the last.
+
+    The ``offset`` :mod:`app.db.schema_terms` pairs one system's rule *rows* with
+    the whole chain's spec by.
+    """
+    return sum(len(system.rules) for system in chain[:-1])

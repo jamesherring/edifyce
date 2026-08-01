@@ -1,10 +1,12 @@
 # Relationships between formal systems: analysis and roadmap
 
-**Status:** design. Nothing here is built. `formal_systems.inherits_from_id`
-exists, is validated on write, and is read by nothing — `app/routers/systems.py`
-says so in as many words ("inheritance is not resolved yet … deferred to the
-inheritance phase"). This is that phase, plus the two things it turns out to be a
-prerequisite for.
+**Status:** **R1 delivered**; the rest is design. `formal_systems.inherits_from_id`
+used to be validated on write and read by nothing — `app/routers/systems.py` said
+so in as many words ("inheritance is not resolved yet … deferred to the
+inheritance phase"). It now means what §5.1 says it means: a child's effective
+system is its ancestors' parts followed by its own, and every path that builds a
+system builds the chain. See §8's R1 for what landed and §9.9–9.11 for what it
+turned up.
 
 Goal: express and store the relationships between formal systems well enough that
 
@@ -651,12 +653,19 @@ Two standing rules, both consequences of §3:
 
 ### Track R — the relationship itself
 
-#### R1 — resolve `inherits_from_id`
+#### R1 — resolve `inherits_from_id` — **done**
 
 **Delivers** a child system that builds on its parent's grammar.
 `declarative.layered_spec`, ancestor loading, the seven guards of §5.1, a
 transitive cycle check, digests over the chain, `_require_owned_reference`
 relaxed to owned-or-published.
+
+What landed, and where: `declarative.layered_spec` (the concatenation and its
+collision rules) and `SystemSpec.definition_scope` (§9.9); `app.db.effective_spec`
++ `inherited_rule_count`; `systems.load_chain` / `load_effective` /
+`draft_ancestor_errors` / `_require_inheritable_reference`, with `validate`,
+`publish`, both `verify` routes and the schema-term cache going through the chain.
+Two things it turned up on the way are recorded as §9.9 and §9.10.
 
 **Tests and verification** — `tests/layered_systems.py`,
 `tests/test_layered_spec.py` (engine), `tests/test_system_inheritance.py` (API).
@@ -978,6 +987,41 @@ S1 and D1 depend on nothing and can start immediately.
    rejected — invisible to a suite that only tests rejections. That is why §8.0
    requires a complex accepted case per phase, and why the bound-variable tests
    are written in accepted/rejected pairs.
+
+The three below are **findings from R1**, kept here because each is a live
+constraint on the phases after it rather than a closed question.
+
+9. **The freshness check was position-blind, and a tower is not.** §5.1 predicted
+   `_require_a_fresh_defined_form` getting *stricter* under inheritance, which it
+   does and should. What it missed is the other direction: read flat, the chain
+   also holds an *ancestor's* definition to a *descendant's* axioms. That refuses
+   the ordinary tower — the propositional layer defines `∧`, ZFC's extensionality
+   axiom is stated over `∧`, and the definition then looks like it is redefining
+   a symbol the theory already constrains. Within one layer the whole-spec
+   reading is right (every axiom is built before every definition, so there is no
+   order to respect); across layers it is wrong, because publishing the parent
+   *is* the order. `SystemSpec.definition_scope` records, per definition, how many
+   of `axioms`/`rules` precede it; empty means the flat reading and is what a
+   single-layer spec still says. Pinned both ways in `tests/test_layered_spec.py`
+   — the tower builds, and the same spec with the scope flattened does not.
+10. **A layer's rows must name sorts it does not declare.** ZFC's `⊆` is a
+    `formula` over `term`, and neither is its own. `spec_to_system` built symbols
+    from `SystemSpec.sort_names()`, which reads the *productions*, so storing such
+    a layer raised `KeyError`. The fix keeps each system's rows self-contained —
+    a symbol row of its own for every sort it *mentions* (`_named_sorts`), rather
+    than an FK into an ancestor's namespace that the ancestor's delete would take
+    with it. The row is a union with no members, which is what a declared sort of
+    a layer already looks like, and `system_to_spec` emits nothing for either.
+11. **The schema-term cache is per system, and a chain has several.** A rule's
+    composed term is a function of the whole chain's grammar, but `rules` carries
+    one `schema_digest` column, so an ancestor's row cannot cache what its
+    template composes to in a descendant. R1 caches a system's **own** rules only
+    (the `offset` in `app/db/schema_terms.py`), which is correct and leaves a
+    child recomposing its inherited rules on every verify. Fine at the tower's
+    scale and *not* fine for a layered set.mm, where the propositional layer holds
+    the rules and everything above it inherits them. The fix is a row per (rule,
+    digest) rather than a column — a table, and one D3 should be measured against
+    before it is built.
 
 ---
 

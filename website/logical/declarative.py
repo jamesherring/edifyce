@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from copy import copy
 from dataclasses import InitVar, dataclass, field, replace
 from typing import TYPE_CHECKING
@@ -300,6 +300,18 @@ class SystemSpec:
     definitions: list[Definition] = field(default_factory=list)
     axioms: list[Rule] = field(default_factory=list)
     rules: list[Rule] = field(default_factory=list)
+    # Per definition, in `definitions` order, how many of `axioms` and `rules`
+    # were declared *before* it — what the freshness check may look at
+    # (`_require_a_fresh_defined_form`).
+    #
+    # Empty, the default, means "all of them", and that is what a single-layer
+    # spec means: `build_system` builds every axiom and rule before any
+    # definition, so there every primitive does precede every definition. Only
+    # `layered_spec` fills it, because an inheritance chain is the one case where
+    # the flat reading is false — a parent's definition of `∧` precedes a child's
+    # axiom stated over `∧`, and holding the parent to a primitive its own layer
+    # had never heard of would refuse a tower that is built the ordinary way.
+    definition_scope: list[tuple[int, int]] = field(default_factory=list)
     # Back-compat for the former single-line API (`SystemSpec(line=...)`). An
     # `InitVar` so it is accepted at construction but never a stored field —
     # otherwise it would perturb the dataclass `==` the storage round-trip relies
@@ -865,24 +877,37 @@ def build_system(
     # not give meaning to a symbol they already constrain. Read on demand and
     # memoised, because reading them means re-parsing every schema — a fifth of a
     # ZFC build's cost, paid once, and not at all by a system with no definitions.
-    scan_cache: list[_SchemaScan] = []
+    #
+    # Memoised per *scope* rather than once: a layered spec asks the question
+    # several times, once per layer that declares a definition, and a flat spec
+    # asks it with one scope and so still pays for one scan.
+    everything = (len(spec.axioms), len(spec.rules))
+    scan_cache: dict[tuple[int, int], _SchemaScan] = {}
 
-    def scan() -> _SchemaScan:
-        if not scan_cache:
-            scan_cache.append(_scan_schemas(spec, ctx))
-        return scan_cache[0]
+    def scan(scope: tuple[int, int] = everything) -> _SchemaScan:
+        if scope not in scan_cache:
+            scan_cache[scope] = _scan_schemas(spec, ctx, scope)
+        return scan_cache[scope]
 
     # Kept on the system so a definition registered *later* is held to the same
     # freshness rule (`register_definition`), which is the path a corpus import
-    # takes.
+    # takes. At the full scope, which is right for a definition arriving after
+    # the build: every primitive the system has does precede it.
     system.primitive_schemas = scan
 
-    for defn in spec.definitions:
+    for index, defn in enumerate(spec.definitions):
         if defn.label is not None:
             if defn.label in seen_labels:
                 raise DeclarativeError(f"Duplicate definition label '{defn.label}'.")
             seen_labels.add(defn.label)
-        layering.append(_finalise_definition(defn, ctx, system, scan))
+        scope = (
+            spec.definition_scope[index]
+            if index < len(spec.definition_scope)
+            else everything
+        )
+        layering.append(
+            _finalise_definition(defn, ctx, system, lambda s=scope: scan(s))
+        )
     system.definition_layering = layering
 
     # 9. Parse each rule's provisos now that definitions have resolved, so a
@@ -1052,8 +1077,15 @@ class _SchemaScan:
     unions: tuple[Pattern, ...]
 
 
-def _scan_schemas(spec: SystemSpec, ctx: FormalSystemContext) -> _SchemaScan:
+def _scan_schemas(
+    spec: SystemSpec, ctx: FormalSystemContext, scope: tuple[int, int]
+) -> _SchemaScan:
     """Read the system's primitive statements, for the freshness check.
+
+    ``scope`` is how far down ``spec.axioms`` and ``spec.rules`` to read — the
+    primitives that precede the definition asking (see
+    ``SystemSpec.definition_scope``). For a single-layer spec it is all of both,
+    which is the only reading that existed before inheritance.
 
     Taken from the spec's own schema *text*, re-parsed against the grammar, and
     that is not an accident: a schema is stored as a pattern whose template is
@@ -1093,9 +1125,9 @@ def _scan_schemas(spec: SystemSpec, ctx: FormalSystemContext) -> _SchemaScan:
             return
         found.update(_signatures_in(matched))
 
-    for ax in spec.axioms:
+    for ax in spec.axioms[: scope[0]]:
         collect(ax.deduction, ax.bindings)
-    for rule in spec.rules:
+    for rule in spec.rules[: scope[1]]:
         collect(rule.deduction, rule.bindings)
         for antecedent in rule.antecedents:
             collect(antecedent, rule.bindings)
@@ -1760,9 +1792,178 @@ def register_definition(defn: Definition, system: FormalSystem) -> bool:
     return layered
 
 
+# ---------------------------------------------------------------------------
+# Inheritance: one spec from a chain of them
+# ---------------------------------------------------------------------------
+
+
+def _declares_a_name(prod: Production) -> bool:
+    # A production with no shape declares no name: it *includes* one sort into
+    # another (`setvar_var` into `setvar`), which is an edge rather than a
+    # declaration. See `app.db.systems_mapping.spec_to_system`, which stores it
+    # as membership on the sub-sort for the same reason.
+    return (
+        prod.template is not None
+        or prod.regex is not None
+        or prod.atom_value is not None
+        or prod.atom_base is not None
+    )
+
+
+def layered_spec(specs: Sequence[SystemSpec]) -> SystemSpec:
+    """One :class:`SystemSpec` from an inheritance chain, **ancestors first**.
+
+    This is what ``formal_systems.inherits_from_id`` means: a child's effective
+    system is its ancestors' parts followed by its own. Concatenating the parts
+    is the whole of it, because a part names its sort by *string* — a child
+    adding ``∀x p`` to ``formula`` says ``sort="formula"``, and the union it
+    lands in is the one the ancestor declared. So sorts merge, and
+    :func:`build_system` sees one flat spec: neither it nor the kernel learns a
+    new concept, and inheritance is a fact about how a spec was assembled rather
+    than something the checker has to reason about.
+
+    That is also what makes the child's guarantee cheap. A theorem proved against
+    an ancestor transfers to the child only because the child's primitives *are*
+    the ancestor's rows — not a copy of them — so an ancestor's derivation is a
+    child's derivation and there is nothing to verify. See
+    docs/system-relationships-roadmap.md §2.
+
+    A name may be declared **once** across the chain. A child redeclaring an
+    ancestor's ``implication`` would take over the build namespace
+    (``ctx.variables`` is one dictionary), silently changing what every theorem
+    inherited from that ancestor means — and stored terms name their constructors
+    by name, so it would change what those read back as too. Sorts are the
+    exception, and the point: they are *meant* to be shared and grown.
+
+    ``token_separated`` is the disjunction over the chain: the promise is about
+    the whole notation, so a layer adding glued templates under a token-separated
+    ancestor is told so by ``_check_token_separation`` rather than quietly
+    exempted. The system's ``name`` is the most derived layer's.
+
+    Raises :class:`DeclarativeError` on a cross-layer collision, naming both
+    layers. Parts are shared with the input specs, not copied, and are treated as
+    immutable — as they already are by ``build_system``.
+    """
+    if not specs:
+        raise DeclarativeError("An inheritance chain needs at least one system.")
+
+    layers = [spec.name or f"layer {index}" for index, spec in enumerate(specs)]
+
+    # name -> (layer, what it was), for everything that shares `ctx.variables`.
+    names: dict[str, tuple[str, str]] = {}
+    # A citation resolves a label against rules, then promoted theorems, then
+    # definitions, so those three share one namespace too.
+    labels: dict[str, tuple[str, str]] = {}
+    sorts: dict[str, str] = {}
+    openings: dict[str, tuple[str, str]] = {}
+
+    def claim(
+        table: dict[str, tuple[str, str]], name: str, layer: str, what: str
+    ) -> None:
+        held = table.get(name)
+        if held is not None and held[0] != layer:
+            raise DeclarativeError(
+                f"{what} {name!r} is declared by {layer!r}, but {held[0]!r} "
+                f"already declares a {held[1].lower()} of that name. A name may "
+                f"be declared once across an inheritance chain: redeclaring an "
+                f"ancestor's would change what every theorem inherited from it "
+                f"means."
+            )
+        table.setdefault(name, (layer, what))
+
+    productions: list[Production] = []
+    lines: list[LineSpec] = []
+    definitions: list[Definition] = []
+    axioms: list[Rule] = []
+    rules: list[Rule] = []
+    brackets: list[tuple[str, str]] = []
+    definition_scope: list[tuple[int, int]] = []
+
+    for layer, spec in zip(layers, specs):
+        for opening, closing in spec.brackets:
+            held = openings.get(opening)
+            if held is not None and held[1] != layer:
+                if held[0] != closing:
+                    raise DeclarativeError(
+                        f"Bracket {opening!r} closes with {closing!r} in {layer!r} "
+                        f"and with {held[0]!r} in {held[1]!r}. A chain has one "
+                        f"bracket map, so the two readings cannot both hold."
+                    )
+                # The ancestor already declared this pair; one map, one entry.
+                continue
+            openings[opening] = (closing, layer)
+            brackets.append((opening, closing))
+
+        for sort in spec.sort_names():
+            sorts.setdefault(sort, layer)
+        for prod in spec.productions:
+            if _declares_a_name(prod):
+                claim(names, prod.name, layer, "Production")
+            productions.append(prod)
+
+        for line in spec.lines:
+            claim(names, line.name, layer, "Line type")
+            for part in line.parts:
+                claim(names, part.name, layer, "Line part")
+            lines.append(line)
+
+        for ax in spec.axioms:
+            # An axiom becomes a line type, so it takes a name in the same
+            # namespace the grammar uses (see `_shadowed_grammar_names`).
+            claim(names, _identifier(ax.name), layer, "Axiom")
+            claim(labels, ax.label, layer, "Axiom")
+            axioms.append(ax)
+        for rule in spec.rules:
+            claim(labels, rule.label, layer, "Rule")
+            rules.append(rule)
+
+        # Recorded after this layer's primitives are in, and before the next
+        # layer's: a definition may be held to the axioms it was declared under,
+        # never to one a descendant added later.
+        #
+        # A layer that is *itself* a chain already knows where its own
+        # boundaries fall, and its counts are relative to its own lists — so
+        # shift them past what precedes it rather than flattening them into one
+        # scope. That is what makes layering associative: grouping a chain
+        # differently must describe the same system.
+        before = (len(axioms) - len(spec.axioms), len(rules) - len(spec.rules))
+        outer = (len(axioms), len(rules))
+        for index, defn in enumerate(spec.definitions):
+            if defn.label is not None:
+                claim(labels, defn.label, layer, "Definition")
+            definitions.append(defn)
+            inner = (
+                spec.definition_scope[index]
+                if index < len(spec.definition_scope)
+                else None
+            )
+            definition_scope.append(
+                outer
+                if inner is None
+                else (before[0] + inner[0], before[1] + inner[1])
+            )
+
+    return SystemSpec(
+        name=specs[-1].name,
+        brackets=brackets,
+        token_separated=any(spec.token_separated for spec in specs),
+        productions=productions,
+        lines=lines,
+        definitions=definitions,
+        axioms=axioms,
+        rules=rules,
+        # One flat layer is the flat reading, and says so by leaving this empty —
+        # which is what keeps `layered_spec([spec]) == spec`. One layer that is
+        # already a chain keeps the boundaries it arrived with.
+        definition_scope=(
+            [] if len(specs) == 1 and not specs[0].definition_scope
+            else definition_scope
+        ),
+    )
+
+
 def build_spec(
     spec: SystemSpec,
-    system_dict: dict | None = None,
     schema_terms: SchemaTermSource | None = None,
 ) -> dict:
     """Build a ``FormalSystem`` from a :class:`SystemSpec`.
@@ -1772,10 +1973,9 @@ def build_spec(
     directly. Returns ``{"system": FormalSystem}`` on success or
     ``{"errors": [...]}`` when the spec is invalid.
 
-    ``system_dict`` is reserved for cross-system references (a parent system a
-    child inherits from). The declarative path does not resolve inheritance yet,
-    so it is currently unused; it is kept on the signature so callers of the
-    engine's public build entry point don't break when that lands.
+    A system that inherits from another is built by handing this the chain's
+    :func:`layered_spec`, not by giving the builder a parent to resolve — see
+    that function for why the parts are concatenated rather than referenced.
 
     ``schema_terms`` is an optional cache of already-composed rule-schema terms;
     see :func:`build_system`.
