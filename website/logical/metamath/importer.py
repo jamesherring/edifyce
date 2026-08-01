@@ -27,6 +27,7 @@ syntax axioms state.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from ..promotion import TheoremSpec, promote_from_source, promote_spec
 from ..declarative import LinePart, LineSpec, Production, SystemSpec, build_system
@@ -54,6 +55,7 @@ def build_spec(
     name: str = "Metamath",
     before: str | None = None,
     variable_scope: str | None = None,
+    binders: Mapping[str, Mapping[str, Sequence[str]]] | None = None,
 ) -> SystemSpec:
     """Build the Edifyce grammar declared by ``database``'s syntax axioms.
 
@@ -76,14 +78,25 @@ def build_spec(
     each into its sort as the theorem that may mention it is reached
     (:func:`.corpus.variable_schedule`) - the same discipline notation gets, on a
     grammar that can grow rather than one that has to be rebuilt.
+
+    ``binders`` declares which slots of a syntax axiom **bind**, and over which
+    others: ``{"wal": {"x": ["ph"]}}`` for ``A. x ph``. A ``.mm`` file says
+    nothing about this - a binder and a two-argument connective are the same
+    shape - so it is supplied per database rather than read, and defaults to
+    none, which is how every import behaved before it existed. See
+    :mod:`~.setmm` for `set.mm`'s, and ``docs/binding-slots-design.md`` for what
+    declaring it buys.
     """
+    declared = binders or {}
     productions: list[Production] = []
 
     for assertion in _syntax_before(database, before):
-        tokens, bindings = _uncollide(
-            assertion.tokens, [(h.variable, h.typecode) for h in assertion.floatings]
-        )
+        floatings = [(h.variable, h.typecode) for h in assertion.floatings]
+        tokens, bindings = _uncollide(assertion.tokens, floatings)
         text = " ".join(tokens)
+        scopes_over = _declared_scopes(
+            declared.get(assertion.label), floatings, bindings, assertion.label
+        )
 
         if bindings:
             productions.append(
@@ -92,6 +105,7 @@ def build_spec(
                     name=assertion.label,
                     template=text,
                     bindings=bindings,
+                    scopes_over=scopes_over,
                 )
             )
         else:
@@ -134,6 +148,51 @@ def build_spec(
             )
         ],
     )
+
+
+def _declared_scopes(
+    declared: Mapping[str, Sequence[str]] | None,
+    floatings: list[tuple[str, str]],
+    bindings: list[tuple[str, str]],
+    label: str,
+) -> dict[str, list[str]]:
+    # A syntax axiom's declared binding slots, keyed by the slot names the
+    # production actually ends up with.
+    #
+    # `_uncollide` may have renamed a slot whose name occurs inside one of the
+    # template's constants (`wral`'s class `A`, found inside the quantifier `A.`),
+    # and a declaration is written against the `$f` names an author reads in the
+    # `.mm` file. Both lists are in floating order, so the rename is recoverable
+    # positionally - which is the only place the two namings meet.
+    #
+    # A name the axiom does not declare is an author's error about *this* axiom
+    # and is refused: silently dropping it would leave a binder undeclared, and an
+    # undeclared binder is exactly what this exists to fix.
+    #
+    # An entry for a *label* the database does not declare is ignored rather than
+    # refused, and the asymmetry is deliberate: one table may be offered to several
+    # `.mm` files, and a variant lacking `cesum` should import rather than fail
+    # over a production it never had. The cost is that a misspelled label is
+    # silently inert, so a table is worth checking against its own database once
+    # (see the roadmap's A4 measurement) rather than trusted.
+    if not declared:
+        return {}
+    rename = {old: new for (old, _), (new, _) in zip(floatings, bindings)}
+    scopes: dict[str, list[str]] = {}
+    for binder, scoped in declared.items():
+        if binder not in rename:
+            raise MetamathError(
+                f"Binding slots for '{label}' name '{binder}', which is not one of "
+                f"its variables ({', '.join(sorted(rename)) or 'none'})."
+            )
+        for name in scoped:
+            if name not in rename:
+                raise MetamathError(
+                    f"Binding slots for '{label}' say '{binder}' scopes over "
+                    f"'{name}', which is not one of its variables."
+                )
+        scopes[rename[binder]] = [rename[name] for name in scoped]
+    return scopes
 
 
 def _uncollide(

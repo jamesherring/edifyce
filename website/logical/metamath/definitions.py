@@ -44,27 +44,35 @@ a proved statement token-identical to the hypothesis, ahead of it in the file.
 Whether it really discharges the obligation is settled structurally when the
 definition is registered (`declarative._discharge_justification`), not here.
 
-The binding-slot wall
----------------------
-The largest refusal by far, and not a property of Metamath: **a defining form may
-not introduce a variable the defined form does not supply**. `df-tru` is
-``|- ( T. <-> ( A. x x = x -> A. x x = x ) )`` - `x` is quantified in the defining
-form and `T.` has no room for it - and *1,123 of set.mm's 1,433* `df-` statements
-are that shape.
+Binding slots, and why they decide most of this
+-----------------------------------------------
+**A defining form may not introduce a variable the defined form does not supply.**
+`df-tru` is ``|- ( T. <-> ( A. x x = x -> A. x x = x ) )`` - `x` is quantified in
+the defining form and `T.` has no room for it - and *1,123 of set.mm's 1,433*
+`df-` statements are that shape. Refused, this was by far the largest refusal;
+admitted, it is most of the corpus's definitions.
 
-Each is sound in Metamath, and would be here: the defining form *binds* the
-variable, and a `Definition` says so with a `fresh` clause, which is what makes
-the unfold capture-avoiding. But a `fresh` clause is inferred from the grammar's
-binding slots (``Production.scopes_over``), and a `.mm` file carries no trace of
-them - nothing in ``A. x ph`` says the first slot binds in the second. So this
-module cannot tell a bound `x` from one left free, and declaring it bound would be
-a guess in the unsafe direction.
+Each is sound in Metamath and is sound here, because the defining form *binds* the
+variable: a `Definition` says so with a `fresh` clause, which is what makes the
+unfold capture-avoiding. A `fresh` clause is inferred from the grammar's binding
+slots (``Production.scopes_over``), and a `.mm` file carries no trace of them -
+nothing in ``A. x ph`` says the first slot binds in the second. So the slots are
+*declared* per database (:mod:`~.setmm`), and where none are, this module cannot
+tell a bound `x` from one left free and refuses, which is the safe direction and
+exactly how it behaved before they could be declared.
 
-It is refused *here* rather than left to the kernel because the kernel refuses it
-by raising, which aborts a whole import; the contract of this module is that doubt
-costs an axiom, not a build. What lifts it is the importer learning binding slots
-- set.mm's `$j` annotations are the obvious source - after which most of these
-become definitions with no change to the tests above.
+Two consequences run through what follows. The introduced-variable test asks
+:func:`~website.logical.kernel.definitions.bind_scoped` - the same call
+``parse_definition`` makes to infer a `fresh` clause - rather than re-deriving the
+scopes, so its answer and registration's are one answer. And a definition's
+`bindings` carry only what the *defined* form supplies: a binder declared among
+them would parse to a `Var` in the context the forms are re-read in, `bind_scoped`
+skips `Var`s by design, and the binder would never be placed. That last cost 242
+of set.mm's 1,335 candidates until it was found by running the whole corpus.
+
+It is refused *here* rather than left to the kernel because the kernel refuses by
+raising, which aborts a whole import; the contract of this module is that doubt
+costs an axiom, not a build.
 
 None of the shape tests is load-bearing alone, and the reason test 1 names its
 relation rather than describing it is that describing it failed twice. Matching on
@@ -103,6 +111,7 @@ from typing import TYPE_CHECKING
 
 from ..declarative import Definition, Justification
 from ..formal_system import statement_term
+from ..kernel.definitions import bind_scoped
 from ..kernel.terms import Node
 from ..promotion import promote_from_source
 from .importer import _distinct_provisos, _proviso_safe_names
@@ -353,34 +362,58 @@ def classify(
     variables = {h.variable for h in assertion.floatings}
     supplied = variables_used(higher, variables)
 
-    introduced = sorted(variables_used(lower, variables) - supplied)
+    # A leaf sitting in a *binder* slot is bound, not introduced. Which slots bind
+    # is the grammar's to say (`Production.scopes_over`, declared per database by
+    # the importer's caller), and `bind_scoped` is what reads it off a parsed
+    # defining form - the very call `parse_definition` makes to infer the `fresh`
+    # clause. Asking it here rather than re-deriving the scopes keeps the two
+    # answers one answer: what this admits is what registration will accept.
+    #
+    # Silent on a grammar declaring no binding slots, which is what a `.mm` file
+    # says on its own, so an import that declares none classifies exactly as it did
+    # before they existed.
+    try:
+        bound, placed = bind_scoped(lower, 0)
+    except ValueError as exc:
+        # A defining form two of whose *sibling* binder slots hold the same leaf.
+        # The kernel refuses it rather than resolving by declaration order, and
+        # rightly - neither slot shadows the other, so an occurrence in the scope
+        # they share belongs to neither. But it refuses by raising, and this is the
+        # module that must not: an assertion no definition can be made of is an
+        # axiom, not a reason to abandon the corpus.
+        return Classified(assertion.label, reason=f"binders cannot be placed: {exc}")
+
+    introduced = sorted(variables_used(bound, variables) - supplied)
     if introduced:
-        # A variable the defining form uses and the defined form does not supply.
-        # The unfold would conjure it, and under a binder of the same name that
-        # silently rebinds it - the capture half of admissibility, which the
-        # kernel refuses (`kernel.definitions.unbound_parameters`).
-        #
-        # A defining form that *binds* it would be sound, and a `fresh` clause is
-        # how a definition says so - inferred from the grammar's binding slots
-        # (`Production.scopes_over`). A `.mm` file carries no trace of them, so
-        # nothing here can tell `A. y ( ... )` binding `y` from a `y` left free,
-        # and declaring it either way would be a guess in the unsafe direction.
-        # This is what holds `df-sb` and `df-mo` back (see the roadmap, A4), and
-        # it lifts the moment the importer can declare binding slots.
+        # A variable the defining form uses, the defined form does not supply, and
+        # no binder of the defining form binds. The unfold would conjure it, and
+        # under a binder of the same name that silently rebinds it - the capture
+        # half of admissibility, which the kernel refuses
+        # (`kernel.definitions.unbound_parameters`).
         listed = ", ".join(repr(name) for name in introduced)
         return Classified(
             assertion.label,
             reason=f"defining side introduces {listed}, which the defined side does not supply",
         )
 
+    # A binder is resolvable too: an unfold settles the leaf each one takes and
+    # exposes it under the binder's own name, so a proviso may constrain it
+    # (`kernel.definitions._condition_binding`). Only where the name is
+    # unambiguous - binders are placed per occurrence, so two of them may share a
+    # spelling, and then a proviso naming it could not say which. That is the same
+    # rule `declarative._check_condition_is_checkable` applies, stated here so the
+    # classifier refuses what registration would.
+    names = [binder.name for binder in placed]
+    resolvable = supplied | {name for name in names if names.count(name) == 1}
+
     constrained = {v for group in assertion.distinct for v in group if v in variables}
-    orphaned = sorted(constrained - supplied)
+    orphaned = sorted(constrained - resolvable)
     if orphaned:
-        # A `$d` over a variable the defined form does not supply. Its proviso is
-        # checked against the match between the defined form and the term being
-        # unfolded, so there would be nothing to resolve it against; carrying it
-        # anyway makes every unfold raise, and dropping it silently widens what
-        # the definition admits. Neither is faithful, so this stays an axiom.
+        # A `$d` over a variable neither the defined form supplies nor a binder
+        # names. Its proviso is checked against what an unfold determines, so there
+        # would be nothing to resolve it against; carrying it anyway makes every
+        # unfold raise, and dropping it silently widens what the definition
+        # admits. Neither is faithful, so this stays an axiom.
         listed = ", ".join(repr(name) for name in orphaned)
         return Classified(
             assertion.label,
@@ -395,7 +428,23 @@ def classify(
             name=assertion.label,
             higher=defined,
             lower=lower.to_string(),
-            bindings=[(h.variable, h.typecode) for h in assertion.floatings],
+            # Only the variables the *defined* form supplies. A definition's
+            # parameters are its defined form's slots — what a use of the notation
+            # provides — and the rest of the `$f` variables are the defining form's
+            # binders, which are a different thing and must not be declared here.
+            #
+            # It is not a tidiness point. A declared binding becomes a
+            # *metavariable* in the context the forms are re-parsed against, so a
+            # binder declared as one parses to a `Var`, and `bind_scoped` skips
+            # `Var`s by design — they are parameters the defined form supplies. The
+            # binder is then never placed, `unbound_parameters` reports it free,
+            # and registration refuses a definition the classifier admitted. That
+            # cost 242 of set.mm's 1,335 candidates before this line read this way.
+            bindings=[
+                (h.variable, h.typecode)
+                for h in assertion.floatings
+                if h.variable in supplied
+            ],
             # A `$d` restricts which substitutions the definition admits, so it
             # has to travel with it: 1,033 of set.mm's definition-shaped
             # statements carry one, and
