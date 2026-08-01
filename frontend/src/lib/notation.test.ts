@@ -152,7 +152,6 @@ describe('notationReference', () => {
 						higher: 'x ⊆ y',
 						lower: '∀z (z ∈ x → z ∈ y)',
 						provisos: [],
-						condition: null,
 						bindings: [],
 						fresh: [],
 						label: null,

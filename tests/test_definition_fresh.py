@@ -30,7 +30,7 @@ from tests.spec_helpers import (
 )
 
 
-def _subset_spec(*, fresh: bool, condition: str | None) -> SystemSpec:
+def _subset_spec(*, fresh: bool, provisos: list[str]) -> SystemSpec:
     # df-subset over a first-order grammar. `z` is the defining form's bound
     # variable: declared via `fresh`, or, when fresh=False, not declared at all —
     # an undeclared binder, which the build rejects.
@@ -40,7 +40,7 @@ def _subset_spec(*, fresh: bool, condition: str | None) -> SystemSpec:
         "x ⊆ y",
         "∀z (z ∈ x → z ∈ y)",
         [("x", "variable"), ("y", "variable")],
-        condition=condition,
+        provisos=provisos,
         fresh=[("z", "variable")] if fresh else (),
     )
     return SystemSpec(
@@ -72,7 +72,7 @@ def _only_notation(system):
 def test_fresh_lets_a_quantified_proviso_definition_verify_a_step():
     # The headline: a proviso-carrying quantified definition, authored through the
     # declarative path with `fresh`, takes the kernel path and enforces its proviso.
-    result = build_spec(_subset_spec(fresh=True, condition="disjoint(x, y, term)"))
+    result = build_spec(_subset_spec(fresh=True, provisos=["disjoint(x, y, term)"]))
     assert "errors" not in result, result.get("errors")
     system = result["system"]
 
@@ -89,8 +89,8 @@ def test_fresh_builds_a_kernel_definition_and_no_fresh_fails_the_build():
     # The same definition builds a kernel counterpart with `fresh`; without it the
     # binder is undeclared, which is not a definition the kernel can express — so
     # the *system* is rejected, naming the variable and the fix.
-    with_fresh = _subset_spec(fresh=True, condition="disjoint(x, y, term)")
-    without_fresh = _subset_spec(fresh=False, condition="disjoint(x, y, term)")
+    with_fresh = _subset_spec(fresh=True, provisos=["disjoint(x, y, term)"])
+    without_fresh = _subset_spec(fresh=False, provisos=["disjoint(x, y, term)"])
 
     fresh_system = build_spec(with_fresh)["system"]
     (fresh_def,) = fresh_system.definitions
@@ -125,7 +125,7 @@ def test_fresh_round_trips_through_storage():
     pytest.importorskip("sqlalchemy")
     from app.db import spec_to_system, system_to_spec
 
-    spec = _subset_spec(fresh=True, condition="disjoint(x, y, term)")
+    spec = _subset_spec(fresh=True, provisos=["disjoint(x, y, term)"])
     rebuilt = system_to_spec(spec_to_system(spec))
     (definition,) = rebuilt.definitions
     assert definition.fresh == [("z", "variable")]

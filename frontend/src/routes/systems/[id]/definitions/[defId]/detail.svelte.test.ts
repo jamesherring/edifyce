@@ -21,7 +21,6 @@ function definition(over: Partial<Definition> = {}): Definition {
 		higher: 'x ⊆ y',
 		lower: '∀z (z ∈ x → z ∈ y)',
 		provisos: ['disjoint(x, y)'],
-		condition: 'disjoint(x, y)',
 		bindings: [{ var: 'x', sort: 'variable' }],
 		fresh: [{ var: 'z', sort: 'variable' }],
 		label: null,
