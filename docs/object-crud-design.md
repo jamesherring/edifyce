@@ -1,21 +1,32 @@
 # Design: object-level CRUD for formal systems
 
-**Status:** proposal (no code yet) · **Branch:** `claude/formal-system-object-crud`
+**Status:** **implemented** — this is the design record, not an open proposal.
+The routers are `app/routers/systems.py` and `app/routers/system_parts.py`, the
+schemas `app/schemas.py`, the editors `frontend/src/routes/systems/`.
 
-> **Prerequisites — all met.** The normalised store, the **async** session
-> (`app.db.get_session`), the **users** table, and now **authentication**
-> (`app.auth.current_active_user`, cookie+JWT, with login/register/account UI)
-> are all in `develop`. Nothing blocks implementation — see
-> [Prerequisites](#prerequisites-everything-is-in).
+> **Two things below were designed and then dropped, and the text still describes
+> them.** They are flagged in place rather than deleted, because the reasoning
+> around them is still the reasoning:
+>
+> - **`GET /{id}/source`, the "lowered `.edi`" export, does not exist.** The
+>   bespoke `.edi` source language and its compiler are gone; a system *is* a
+>   `SystemSpec` and there is no text form to lower to. Wherever this document
+>   says "lowered `.edi`", read "nothing — the rows are the source of truth".
+> - **Inheritance is still unresolved**, as the deferred-limitation note below
+>   says. `inherits_from_id` is stored and validated on write, but nothing
+>   compiles a system against its parents.
 
 ## Goal
 
-Today a user authors a formal system as one `.edi` (or declarative) text blob
-and we compile it. This design lets users **create and edit the component parts
-of a system directly** — its sorts, productions, definitions, axioms and rules —
-through typed REST endpoints and a set of Svelte editors, with **no `.edi`
-authoring required**. The normalised store (now in `app/db/`) is the substrate;
-this work puts an API and a UI on top of it.
+*As written:* a user authors a formal system as one `.edi` (or declarative) text
+blob and we compile it. This design lets users **create and edit the component
+parts of a system directly** — its sorts, productions, definitions, axioms and
+rules — through typed REST endpoints and a set of Svelte editors, with **no
+`.edi` authoring required**. The normalised store (now in `app/db/`) is the
+substrate; this work puts an API and a UI on top of it.
+
+*Since:* the `.edi` language went away entirely, so "no `.edi` authoring
+required" became the only way to author a system at all.
 
 Scope is bounded by the phrase *"up to the limit of our current data storage"*:
 we expose CRUD for exactly what the `app/db/systems.py` models can represent, and
@@ -50,7 +61,11 @@ Being honest about the "current data storage" boundary:
 - **Code-mode side-conditions / pattern functions** (`.each(...)`, `return
   self.f`) are not modelled — only a single `condition` string per definition
   and rule. Systems that need the code-mode escape hatch can't be fully built
-  through objects yet.
+  through objects yet. *Since:* the code-mode escape hatch was deleted, not
+  modelled, and the `condition` string became a structured `provisos` list over
+  the closed kernel algebra — stored as `side_conditions` rows for definitions
+  and rules alike (see `docs/side_condition_followups.md`). The limitation this
+  bullet describes no longer exists in either direction.
 - **General notation** beyond a bracket pair (symbol table, fixity, precedence)
   isn't stored. Notation CRUD is limited to bracket pairs.
 - **Proofs, folders, theorems** live alongside the system tables in `app/db/`
@@ -111,7 +126,7 @@ GET    /formal-systems/{id}                 full structured system (all children
 PATCH  /formal-systems/{id}                 update system-level fields
 DELETE /formal-systems/{id}                 delete (cascades to children)
 POST   /formal-systems/{id}/validate        assemble + compile; return errors/summary
-GET    /formal-systems/{id}/source          read-only lowered .edi (transparency/export)
+GET    /formal-systems/{id}/source          NOT BUILT — there is no .edi to lower to
 
 # child collections (same pattern for each part type)
 GET    /formal-systems/{id}/productions
@@ -210,11 +225,15 @@ system-editor.svelte            orchestrates load/save/validate, holds state
     production-row.svelte        name, sort, template/regex
       bindings-editor.svelte     shared: var : sort rows
   line-editor.svelte            shape + parts + logical sort
-  definitions-editor.svelte     higher / means lower / condition (+ bindings)
+  definitions-editor.svelte     higher / means lower / provisos (+ bindings)
   axioms-editor.svelte          label / name / formula (+ bindings)
   rules-editor.svelte           label / from … ; … / infer … (+ bindings)
-  system-source.svelte          read-only lowered .edi (collapsible)
+  system-source.svelte          NOT BUILT — see the note at the top
 ```
+
+*As built*, the section editors live in `frontend/src/routes/systems/[id]/edit/`
+and are named `DefinitionsSection.svelte`, `RulesSection.svelte` and so on; the
+names above are the sketch, not the tree.
 
 Built with the existing stack — Svelte 5 runes (`$state`/`$derived`),
 shadcn-svelte `Card`/`Button`/`Input`/`Label`/`Alert`, lucide icons — matching
@@ -229,10 +248,12 @@ that has bindings.
 - A **debounced `validate` call** after edits drives a header badge
   ("Valid" / "N errors") and inline error surfacing — the same information the
   compile page shows, but continuous.
-- The read-only **lowered `.edi`** panel keeps the text representation visible
-  for transparency and copy-out, so nothing is hidden by moving to objects.
-- *Optional later:* an **import** path (paste declarative/`.edi` → parse →
-  objects) so existing systems can be brought into the object editor.
+- ~~The read-only **lowered `.edi`** panel keeps the text representation visible
+  for transparency and copy-out.~~ Dropped with the `.edi` language: there is no
+  text representation to keep visible, and the rows are the source of truth.
+- ~~*Optional later:* an **import** path (paste declarative/`.edi` → parse →
+  objects).~~ Same reason. Importing a *Metamath* database is a different thing
+  and does exist (`website/logical/metamath/`).
 
 ## Decisions (resolved)
 
@@ -257,8 +278,8 @@ table, and authentication (`current_active_user` + auth UI) are all in
    reorder.
 3. `api.ts` client + TS types.
 4. Svelte `/systems` list and `/systems/[id]` editor shell (gated on `auth.user`).
-5. Section editors (one per part) + `bindings-editor`; live validation badge +
-   read-only source panel.
+5. Section editors (one per part) + `bindings-editor`; live validation badge.
+   (The read-only source panel this phase also listed was dropped — no `.edi`.)
 
 The frontend phases depend only on the endpoints, not on the DB directly.
 

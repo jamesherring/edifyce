@@ -307,8 +307,8 @@ def test_a_distinct_variable_constraint_travels_with_the_definition():
     classified = classify_all(WITH_PROVISO)["df-new"]
 
     assert classified.is_definition
-    condition = classified.definition.condition
-    assert condition is not None and "disjoint(" in condition
+    provisos = classified.definition.provisos
+    assert provisos and all("disjoint(" in line for line in provisos)
 
 
 

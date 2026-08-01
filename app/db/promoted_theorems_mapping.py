@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from sqlalchemy import Select
 
     from app.db.models import FormalSystem
+    from app.db.terms_mapping import TermGraph
     from website.logical.formal_system import FormalSystem as EngineSystem
     from website.logical.formal_system import PromotedTheorem
     from website.logical.kernel.terms import Term
@@ -254,21 +255,88 @@ def theorem_spec(theorem: StoredTheorem) -> TheoremSpec:
     )
 
 
-def load_theorems(
+@dataclass(frozen=True)
+class PendingLibrary:
+    """A proof's library, read and digest-checked, waiting only on its terms.
+
+    The half of :func:`load_theorems` that needs a database, split from the half
+    that needs a :class:`~app.db.terms_mapping.TermGraph` — because which terms
+    it wants is decided *here*, by rows and digests alone, and a caller with a
+    sweep of its own can therefore fold this one into it. That is what
+    ``load_proof_for_check`` does: a proof's lines and the theorems they cite are
+    one sweep rather than two, which is only possible because a citation is a
+    plain column and settles the whole question before any term is loaded.
+
+    Nothing here is a verdict. The entries are what the rows say and ``fresh``
+    is which of them a build may skip re-parsing; promoting still runs in full.
+    """
+
+    cited: tuple[StoredTheorem, ...]
+    owner: StoredTheorem | None
+    specs: Mapping[str, TheoremSpec]
+    # The cited entries whose cached terms still describe the system. A miss
+    # costs a parse, never a difference (see the module docstring).
+    fresh: Mapping[str, StoredTheorem]
+
+    @property
+    def term_ids(self) -> list[uuid.UUID]:
+        """Every cached term worth loading — the roots this contributes to a sweep."""
+        ids = [term_id for entry in self.fresh.values() for term_id in entry.term_ids]
+        if self.owner is not None:
+            # A hypothesis's term is guarded by nothing of its own — it is the
+            # owner's premise, and the owner's digest is what says whether the
+            # owner's terms are current.
+            ids += [p.term_id for p in self.owner.premises if p.term_id is not None]
+        return ids
+
+    def promote(
+        self, built: EngineSystem, context: Context, graph: TermGraph
+    ) -> dict[str, PromotedTheorem]:
+        """Build the citable theorems, taking cached terms from ``graph``.
+
+        ``graph`` need only *contain* :attr:`term_ids`; it may hold anything else
+        besides, since a root it does not have is a miss and a miss is a parse.
+        That is what lets a caller pass the sweep it did for its own reasons.
+        """
+
+        def term(term_id: uuid.UUID | None) -> Term | None:
+            return graph.term(term_id, context)
+
+        promoted: dict[str, PromotedTheorem] = {}
+        for entry in self.cited:
+            current = self.fresh.get(entry.label)
+            promoted[entry.label] = promote_spec(
+                built,
+                self.specs[entry.label],
+                statement_term=(
+                    None if current is None else term(current.statement_term_id)
+                ),
+                premise_terms=(
+                    () if current is None
+                    else [term(premise.term_id) for premise in current.premises]
+                ),
+            )
+
+        if self.owner is not None:
+            promoted.update(_hypotheses(self.owner, built, term))
+        return promoted
+
+
+_NOTHING_PENDING = PendingLibrary(cited=(), owner=None, specs={}, fresh={})
+
+
+def read_library(
     session: Session,
     system_id: uuid.UUID,
     labels: Iterable[str],
-    built: EngineSystem,
-    context: Context,
     library: str,
     hypotheses_of: uuid.UUID | None = None,
-) -> dict[str, PromotedTheorem]:
-    """Promote everything one proof may cite: the library entries it names, and
-    the hypotheses of the entry it *establishes*.
+) -> PendingLibrary:
+    """Read and digest-check everything one proof may cite, without its terms.
 
-    Labels with no row are simply absent from the result: a citation may name a
-    rule, a line of a cited proof, or nothing at all, and it is the caller's job
-    to over-collect rather than this function's to know which is which.
+    Labels with no row are simply absent: a citation may name a rule, a line of a
+    cited proof, or nothing at all, and it is the caller's job to over-collect
+    rather than this function's to know which is which.
 
     ``hypotheses_of`` is the theorem this proof proves, when it proves one. A
     theorem proves *under* its ``$e`` hypotheses and its proof states them as
@@ -285,23 +353,22 @@ def load_theorems(
     `term_children` and a row fetch, which was a third of a re-check.
 
     ``library`` is :func:`~website.logical.declarative.library_digest` for the
-    spec ``built`` was built from — what decides whether the stored terms may be
-    used. ``context`` is where those terms' constructors resolve, as for a stored
-    proof line.
+    spec the result will be promoted against — what decides whether the stored
+    terms may be used.
     """
     wanted = list(dict.fromkeys(labels))
     if not wanted and hypotheses_of is None:
-        return {}
+        return _NOTHING_PENDING
 
     entries = read_theorems(session, system_id, wanted, hypotheses_of)
     if not entries:
-        return {}
+        return _NOTHING_PENDING
 
-    owner = next((e for e in entries if e.id == hypotheses_of), None)
     # The owner is read for *its hypotheses*, not to be citable: a theorem's own
     # statement is what its proof is establishing.
+    owner = next((e for e in entries if e.id == hypotheses_of), None)
     asked_for = set(wanted)
-    cited = [entry for entry in entries if entry.label in asked_for]
+    cited = tuple(entry for entry in entries if entry.label in asked_for)
 
     specs = {entry.label: theorem_spec(entry) for entry in cited}
     fresh = {
@@ -310,36 +377,29 @@ def load_theorems(
         if entry.schema_digest is not None
         and entry.schema_digest == theorem_digest(library, specs[entry.label])
     }
+    return PendingLibrary(cited=cited, owner=owner, specs=specs, fresh=fresh)
 
-    # Every cached term of every theorem asked for, in one sweep — and one memo
-    # across all of them, so a subterm two statements share is rebuilt once.
-    ids = [term_id for entry in fresh.values() for term_id in entry.term_ids]
-    if owner is not None:
-        # A hypothesis's term is guarded by nothing of its own — it is the
-        # owner's premise, and the owner's digest is what says whether the
-        # owner's terms are current.
-        ids += [p.term_id for p in owner.premises if p.term_id is not None]
-    graph = prefetch_terms(session, ids)
 
-    def term(term_id: uuid.UUID | None) -> Term | None:
-        return graph.term(term_id, context)
+def load_theorems(
+    session: Session,
+    system_id: uuid.UUID,
+    labels: Iterable[str],
+    built: EngineSystem,
+    context: Context,
+    library: str,
+    hypotheses_of: uuid.UUID | None = None,
+) -> dict[str, PromotedTheorem]:
+    """Promote everything one proof may cite, sweeping for its terms as it goes.
 
-    promoted: dict[str, PromotedTheorem] = {}
-    for entry in cited:
-        current = fresh.get(entry.label)
-        promoted[entry.label] = promote_spec(
-            built,
-            specs[entry.label],
-            statement_term=None if current is None else term(current.statement_term_id),
-            premise_terms=(
-                () if current is None
-                else [term(premise.term_id) for premise in current.premises]
-            ),
-        )
-
-    if owner is not None:
-        promoted.update(_hypotheses(owner, built, term))
-    return promoted
+    :func:`read_library` then :meth:`PendingLibrary.promote`, with a sweep of
+    exactly the terms between them. For the caller that has no sweep of its own
+    to share — the *parse* path, whose lines already carry their terms because
+    they were just parsed. A caller reading its lines from rows should use the
+    two halves and sweep once for both (see ``proofs_mapping``).
+    """
+    pending = read_library(session, system_id, labels, library, hypotheses_of)
+    graph = prefetch_terms(session, pending.term_ids)
+    return pending.promote(built, context, graph)
 
 
 def _hypotheses(

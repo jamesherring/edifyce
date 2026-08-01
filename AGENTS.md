@@ -37,12 +37,28 @@ adapter over it, and the frontend is a thin client over the API.
 | `website/logical/graphs.py` | Leaf graph utilities: bipartite matching for antecedent-slot assignment, topological order for proof dependencies. |
 | `frontend/` | SvelteKit (Svelte 5) SPA styled with Tailwind CSS v4 + shadcn-svelte. Static build talks to the API. `src/routes/` = pages, `src/lib/api.ts` = the API client. See `frontend/README.md`. |
 | `tests/` | pytest suite covering the API, engine, kernel, and matching. |
-| `benchmarks/` | What a parse costs. Proof checking *is* parsing, so the matching layer is where a slow system is slow; take a baseline with `uv run python -m benchmarks.bench_matching --save base.json` before touching it and `--compare base.json` after. See `benchmarks/README.md`. |
+| `benchmarks/` | What a parse costs. Checking a proof *from text* is parsing, so the matching layer is where a slow system is slow; take a baseline with `uv run python -m benchmarks.bench_matching --save base.json` before touching it and `--compare base.json` after. A *stored* proof no longer reparses — its lines, rule schemas, citations and promoted theorems are all rebuilt from terms — so the parse cost this measures is the authoring path, not re-verification. See `benchmarks/README.md`. |
 
 The two public entry points into the engine are `declarative.build_spec(spec)` —
 which the API reaches via `app.db.system_to_spec`, so the relational rows are the
 source of truth, not any source blob — and `FormalSystem.parse(text)` for a
 proof. Start there when tracing behaviour.
+
+### Where text still becomes structure
+
+Everything a *verification* needs now has a row/term representation: proof
+formulas, rule schemas, citations, promoted theorems, scopes and provisos are all
+rebuilt from stored terms rather than reparsed
+([docs/verification-from-rows.md](docs/verification-from-rows.md)). One seam is
+left: a definition's `higher` and `lower` forms are stored as **strings** and
+parsed while the system is built. That is not a soundness gap — the parse happens
+upstream of the kernel, which still receives terms — but it is the last place
+rebuilding a stored system reads semantic structure out of text, and persisting
+those two as terms is what would finish "parse exactly once".
+
+Text-to-structure that is *supposed* to stay: `matching/patterns.py`, `Match`, and
+explicit string rewriting. They are the parser and the semi-Thue semantics, not a
+second proof checker.
 
 ### Constants vs variables of the object language
 

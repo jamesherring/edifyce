@@ -31,9 +31,9 @@ from website.logical.declarative import (
 
 from app.db.models import FormalSystem
 from app.db.side_conditions_mapping import (
+    build_definition_provisos,
     build_rule_side_conditions,
-    build_side_condition_rows,
-    definition_condition_string,
+    definition_provisos_list,
     rule_side_conditions_list,
 )
 from app.db.systems import (
@@ -148,7 +148,7 @@ def spec_to_system(spec: SystemSpec) -> FormalSystem:
             row.bindings.append(DefinitionBindingRow(position=j, var=var, symbol=symbols[sort]))
         for j, (var, sort) in enumerate(defn.fresh):
             row.fresh.append(DefinitionFreshRow(position=j, var=var, symbol=symbols[sort]))
-        build_side_condition_rows(row, defn.condition, symbols, {var for var, _ in defn.bindings})
+        build_definition_provisos(row, defn.provisos, symbols, {var for var, _ in defn.bindings})
         system.definitions.append(row)
 
     for i, axiom in enumerate(spec.axioms):
@@ -232,7 +232,7 @@ def system_to_spec(system: FormalSystem) -> SystemSpec:
             higher=defn.higher,
             lower=defn.lower,
             bindings=[(b.var, b.symbol.name) for b in defn.bindings],
-            condition=definition_condition_string(defn),
+            provisos=definition_provisos_list(defn),
             fresh=[(f.var, f.symbol.name) for f in defn.fresh],
             label=defn.label,
             # Both columns are written together, so the label alone decides

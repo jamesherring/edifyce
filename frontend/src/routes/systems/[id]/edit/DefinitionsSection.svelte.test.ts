@@ -30,7 +30,6 @@ function defn(over: Partial<Definition> = {}): Definition {
 		higher: 'x sub y',
 		lower: 'all z (z in x -> z in y)',
 		provisos: ['disjoint(x, y)'],
-		condition: 'disjoint(x, y)',
 		bindings: [
 			{ var: 'x', sort: 'variable' },
 			{ var: 'y', sort: 'variable' }
@@ -108,7 +107,7 @@ describe('DefinitionsSection provisos', () => {
 		expect(screen.getByDisplayValue('disjoint(x, y)')).toBeInTheDocument();
 	});
 
-	it('sends edited provisos (trimmed, blank-filtered) and no condition', async () => {
+	it('sends edited provisos, trimmed and blank-filtered', async () => {
 		renderSection([defn()]);
 		await userEvent.click(screen.getByRole('button', { name: /^Edit / }));
 
@@ -123,8 +122,6 @@ describe('DefinitionsSection provisos', () => {
 
 		const [, , payload] = vi.mocked(api.parts.definitions.update).mock.calls[0];
 		expect(payload).toMatchObject({ provisos: ['disjoint(x, y)', 'not occurs(x, y)'] });
-		// The deprecated `condition` field is no longer sent from the editor.
-		expect(payload).not.toHaveProperty('condition');
 	});
 });
 

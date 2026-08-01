@@ -24,6 +24,7 @@ async routes reach it through ``AsyncSession.run_sync``.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from sqlalchemy import delete as sa_delete
@@ -254,13 +255,33 @@ def load_proof_lines(
     return proofs
 
 
+@dataclass(frozen=True)
+class PendingCitations:
+    """What a proof's citations still want from the database, in two parts.
+
+    Returned by ``load_proof_for_check``'s ``resolve_citations`` hook: the term
+    roots the caller needs, and what to do once they have been loaded. Two parts
+    rather than one callback because a proof's own lines need a sweep anyway, and
+    the whole point is that there be *one* — so the caller has to be able to name
+    its roots before any term is built, and to be handed the result after.
+
+    That it can is a fact about the schema rather than about this interface: a
+    line's citation is ``proof_lines.reference``, a plain column, so what a proof
+    cites — and therefore which theorems, and therefore which of their terms — is
+    settled by rows alone.
+    """
+
+    term_ids: Sequence[uuid.UUID]
+    resolve: Callable[[TermGraph], None]
+
+
 def load_proof_for_check(
     session: Session,
     proof_id: uuid.UUID,
     system: EngineSystem,
     context: Context,
     proof: EngineProof | None = None,
-    before_check: Callable[[EngineProof], None] | None = None,
+    resolve_citations: Callable[[Sequence[str | None]], PendingCitations] | None = None,
 ) -> EngineProof | None:
     """Rebuild a proof from its rows *for re-checking*, with no parse at all.
 
@@ -283,10 +304,11 @@ def load_proof_for_check(
     it has never been checked, or its snapshot was invalidated, so there is
     nothing to check and the caller must parse.
 
-    ``before_check`` runs once the lines are populated and before they are
-    checked — the moment at which what a proof *cites* is known but nothing has
-    been resolved yet, which is what a system with an unbounded library needs
-    (see ``app/db/promoted_theorems_mapping.py``).
+    ``resolve_citations`` is how a system with an unbounded library gets its
+    theorems into the same term sweep as the proof's own lines. It is handed the
+    stored citations — before any line is built, because a citation is a column
+    and needs no term to be read — and returns the roots it wants plus what to do
+    with them (see :class:`PendingCitations`).
     """
     rows = list(
         session.scalars(
@@ -298,9 +320,18 @@ def load_proof_for_check(
     if not rows:
         return None
 
-    graph = prefetch_terms(
-        session, [row.term_id for row in rows if row.term_id is not None]
+    pending = (
+        None if resolve_citations is None
+        else resolve_citations([row.reference for row in rows])
     )
+    # One sweep for the proof's lines *and* whatever its citations resolved to.
+    # Two sweeps was two recursive closures over `term_children` for one check,
+    # and they share far more than they do not: a lemma's statement is a line of
+    # the proof citing it, interned to the very same row.
+    roots = [row.term_id for row in rows if row.term_id is not None]
+    if pending is not None:
+        roots.extend(pending.term_ids)
+    graph = prefetch_terms(session, roots)
     line_types = {line_type.name: line_type for line_type in system.line_types}
 
     if proof is None:
@@ -308,8 +339,8 @@ def load_proof_for_check(
     for row in rows:
         _load_line(proof, row, line_types, context, graph)
 
-    if before_check is not None:
-        before_check(proof)
+    if pending is not None:
+        pending.resolve(graph)
     return system.check_proof(proof, context)
 
 

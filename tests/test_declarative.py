@@ -460,27 +460,6 @@ def test_multiple_logical_line_types_build_and_parse():
     assert system.parse("⊢ (a → b) [HYP]").valid is True
 
 
-def test_single_line_kwarg_is_accepted_for_back_compat():
-    # The former single-line API (`line=`) still constructs and builds; it
-    # normalises into `lines` without becoming a compared field.
-    spec = SystemSpec(
-        name="Compat",
-        brackets=brackets(),
-        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
-        line=statement_line(),
-        rules=[hyp_rule()],
-    )
-    assert [ls.name for ls in spec.lines] == ["statement"]
-    assert spec == SystemSpec(
-        name="Compat",
-        brackets=brackets(),
-        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
-        lines=[statement_line()],
-        rules=[hyp_rule()],
-    )
-    assert build_system(spec).parse("(a → b) [HYP]").valid is True
-
-
 def test_same_named_line_parts_are_scoped_per_line():
     # Two lines both name their reference part "reference" but with different
     # regexes; each line must keep its own — the later, narrower `assume` part

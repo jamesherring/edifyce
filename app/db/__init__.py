@@ -23,12 +23,15 @@ from app.db.promoted_theorems import (
     PromotedTheoremRow,
 )
 from app.db.promoted_theorems_mapping import (
+    PendingLibrary,
     cited_labels,
     load_theorems,
+    read_library,
     store_theorem,
     theorem_digest,
 )
 from app.db.proofs_mapping import (
+    PendingCitations,
     clear_proof_lines,
     discard_system_checks,
     load_proof_for_check,
@@ -84,6 +87,7 @@ __all__ = [
     "ProofLineRow",
     "clear_proof_lines",
     "discard_system_checks",
+    "PendingCitations",
     "load_proof_for_check",
     "load_proof_lines",
     "store_proof_lines",
@@ -107,8 +111,10 @@ __all__ = [
     "PromotedTheoremBindingRow",
     "PromotedTheoremPremiseRow",
     "PromotedTheoremRow",
+    "PendingLibrary",
     "cited_labels",
     "load_theorems",
+    "read_library",
     "store_theorem",
     "theorem_digest",
     "spec_to_system",

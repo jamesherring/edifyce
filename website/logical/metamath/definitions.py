@@ -32,7 +32,7 @@ Nothing about the *label*. Two structural tests, in order, and then the kernel:
 Then the refusals, for what a `Definition` cannot faithfully carry: a defining form
 built from the very form being defined (a recursive alias, not something
 eliminable), a metavariable the proviso syntax cannot name, and the two below.
-A `$d` *can* be carried, as the definition's condition, and must be: 1,033 of
+A `$d` *can* be carried, as the definition's provisos, and must be: 1,033 of
 set.mm's definition-shaped statements have one.
 
 A `$d` names *pairs*, though, and it is per pair that this holds. A pair whose
@@ -494,10 +494,9 @@ def classify(
             # Pairwise, and only over what a proviso can name here - the pairs
             # `resolvable` covers. What the other pairs constrain, and why the
             # definition keeps its meaning without them, is argued above.
-            condition="; ".join(
+            provisos=list(
                 _distinct_provisos(assertion, database, system, only=resolvable)
-            )
-            or None,
+            ),
             label=assertion.label,
             justification=justification,
         ),

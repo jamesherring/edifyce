@@ -135,7 +135,7 @@ def binder_spec(
         definitions=[
             defn(
                 "formula", "df_subset", "(x ⊆ y)", "∀z.((z ∈ x) → (z ∈ y))",
-                bindings, condition=where,
+                bindings, provisos=[where] if where else [],
             ),
         ],
         rules=[_hyp_rule()],
@@ -494,7 +494,8 @@ def fresh_spec(where: str | None = None) -> SystemSpec:
         definitions=[
             defn(
                 "formula", "df_subset", "(x ⊆ y)", "∀z.((z ∈ x) → (z ∈ y))",
-                [("x", "setvar"), ("y", "setvar")], condition=where, fresh=[("z", "setvar")],
+                [("x", "setvar"), ("y", "setvar")],
+                provisos=[where] if where else [], fresh=[("z", "setvar")],
             ),
         ],
     )

@@ -646,8 +646,8 @@ def test_undeclared_argument_is_accepted_as_a_term_not_rejected_at_write(client)
 
 def test_definition_binding_and_proviso_updated_together(client):
     # A single PATCH that adds a binding AND a proviso referencing it must
-    # succeed: bindings are applied before the condition is validated, so the
-    # proviso is checked against the new binding set, not the stale one.
+    # succeed: bindings are applied before the proviso is validated, so it is
+    # checked against the new binding set, not the stale one.
     _login(client, "ada@example.com")
     sid = _new_system(client)
     _post(client, f"/api/formal-systems/{sid}/sorts", {"name": "term"})
@@ -657,10 +657,10 @@ def test_definition_binding_and_proviso_updated_together(client):
     })
     updated = client.patch(f"/api/formal-systems/{sid}/definitions/{defn['id']}", json={
         "bindings": [{"var": "x", "sort": "term"}, {"var": "y", "sort": "term"}],
-        "condition": "disjoint(x, y)",
+        "provisos": ["disjoint(x, y)"],
     })
     assert updated.status_code == 200, updated.text
-    assert updated.json()["condition"] == "disjoint(x, y)"
+    assert updated.json()["provisos"] == ["disjoint(x, y)"]
 
 
 def test_a_definition_s_justification_round_trips_through_the_api(client):
@@ -847,8 +847,6 @@ def test_definition_provisos_round_trip_through_the_api(client):
         "provisos": ["not occurs(x, y)", "disjoint(x, y)"],
     })
     assert defn["provisos"] == ["not occurs(x, y)", "disjoint(x, y)"]
-    # The deprecated `condition` view is the same tree, `;`-joined.
-    assert defn["condition"] == "not occurs(x, y) ; disjoint(x, y)"
 
     # Read back through the aggregate detail.
     detail = client.get(f"/api/formal-systems/{sid}").json()
@@ -866,46 +864,41 @@ def test_definition_provisos_round_trip_through_the_api(client):
         f"/api/formal-systems/{sid}/definitions/{defn['id']}", json={"provisos": ["disjoint(x, y)"]}
     )
     assert single.json()["provisos"] == ["disjoint(x, y)"]
-    assert single.json()["condition"] == "disjoint(x, y)"
     cleared = client.patch(
         f"/api/formal-systems/{sid}/definitions/{defn['id']}", json={"provisos": []}
     )
     assert cleared.json()["provisos"] == []
-    assert cleared.json()["condition"] is None
 
 
-def test_definition_condition_input_still_works_and_reads_back_as_provisos(client):
-    # A pre-D0 client sending the old `;`-joined `condition` keeps working, and the
-    # stored tree reads back through the new `provisos` surface too.
+def test_the_removed_condition_field_is_refused_not_ignored(client):
+    # A proviso is a soundness restriction on unfolding, so a pre-`provisos` client
+    # sending `condition` must not get a 200 and a definition that unfolds freely.
+    # Pydantic would drop the unknown field silently; the schema rejects it instead.
     _login(client, "ada@example.com")
     sid = _defn_system(client)
-    defn = _post(client, f"/api/formal-systems/{sid}/definitions", {
+    created = client.post(f"/api/formal-systems/{sid}/definitions", json={
         "sort": "term", "name": "d", "higher": "x", "lower": "y",
         "bindings": [{"var": "x", "sort": "term"}, {"var": "y", "sort": "term"}],
-        "condition": "not occurs(x, y) ; disjoint(x, y)",
+        "condition": "disjoint(x, y)",
     })
-    assert defn["condition"] == "not occurs(x, y) ; disjoint(x, y)"
-    assert defn["provisos"] == ["not occurs(x, y)", "disjoint(x, y)"]
+    assert created.status_code == 422
+    assert "provisos" in created.text
 
-    # A PATCH sending only `condition` still rewrites the tree.
-    updated = client.patch(
-        f"/api/formal-systems/{sid}/definitions/{defn['id']}", json={"condition": "disjoint(x, y)"}
+    # And on the PATCH path, where the silent drop would be a no-op edit: the
+    # definition keeps the proviso it had rather than appearing to have changed.
+    defn = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "term", "name": "e", "higher": "x", "lower": "y",
+        "bindings": [{"var": "x", "sort": "term"}, {"var": "y", "sort": "term"}],
+        "provisos": ["equal(x, y)"],
+    })
+    patched = client.patch(
+        f"/api/formal-systems/{sid}/definitions/{defn['id']}",
+        json={"condition": "disjoint(x, y)"},
     )
-    assert updated.json()["provisos"] == ["disjoint(x, y)"]
-
-
-def test_definition_provisos_win_over_condition_when_both_sent(client):
-    # When a client sends both, the structured `provisos` is authoritative.
-    _login(client, "ada@example.com")
-    sid = _defn_system(client)
-    defn = _post(client, f"/api/formal-systems/{sid}/definitions", {
-        "sort": "term", "name": "d", "higher": "x", "lower": "y",
-        "bindings": [{"var": "x", "sort": "term"}, {"var": "y", "sort": "term"}],
-        "provisos": ["disjoint(x, y)"],
-        "condition": "not occurs(x, y)",
-    })
-    assert defn["provisos"] == ["disjoint(x, y)"]
-    assert defn["condition"] == "disjoint(x, y)"
+    assert patched.status_code == 422
+    stored = client.get(f"/api/formal-systems/{sid}").json()["definitions"]
+    unchanged = next(d for d in stored if d["id"] == defn["id"])
+    assert unchanged["provisos"] == ["equal(x, y)"]
 
 
 def test_definition_or_proviso_round_trips_through_the_api(client):
@@ -931,9 +924,9 @@ def test_malformed_definition_proviso_is_422(client):
 
 
 def test_metadata_only_patch_preserves_the_stored_provisos(client):
-    # The crux of the provisos/condition dispatch: a PATCH that touches neither
-    # field (here, a rename) must leave the stored proviso tree untouched. Guards
-    # the model_fields_set-vs-all-fields distinction the write path hinges on.
+    # A PATCH that does not mention `provisos` (here, a rename) must leave the
+    # stored proviso tree untouched. Guards the model_fields_set-vs-all-fields
+    # distinction the write path hinges on.
     _login(client, "ada@example.com")
     sid = _defn_system(client)
     defn = _post(client, f"/api/formal-systems/{sid}/definitions", {

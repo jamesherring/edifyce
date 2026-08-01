@@ -1,6 +1,6 @@
 # Design: verification from rows, not from text
 
-**Status:** P1–P5 shipped · **Prerequisite work:** merged (the term
+**Status:** P1–P5 and P2a shipped · **Prerequisite work:** merged (the term
 graph, `proof_lines`, the kernel-takes-terms change #121, and the Metamath
 corpus import #124)
 
@@ -403,16 +403,38 @@ node column per edge, and those cancel. `prefetch_terms` no longer appears in th
 profile's top twenty-six; what is left is dominated by the ORM load of the
 theorem rows themselves.
 
-**Still open: one term sweep instead of two.**
-A check still prefetches twice — once for the proof's own line terms, once for
-the library's. They could be one, and the enabler is already there: a line's
-citation is `proof_lines.reference`, a plain column, so *what a proof cites is
-knowable before any term is loaded*. The order would become read line rows →
-read theorem rows → one sweep over both sets of roots → build and check. What
-stops it being a small change is the interface: `load_proof_for_check`'s
-`before_check` hook would have to split into "given the citations, tell me which
-term roots you need" and "here they are, finish". That is worth doing and worth
-doing deliberately, on its own evidence.
+**Done: one term sweep instead of two.** A check prefetched twice — once for the
+proof's own line terms, once for the library's — and the enabler for merging them
+was always there: a line's citation is `proof_lines.reference`, a plain column,
+so *what a proof cites is settled before any term is loaded*. The order is now
+read line rows → read theorem rows → one sweep over both sets of roots → build
+and check.
+
+What made it worth doing deliberately was the interface. `before_check` was one
+callback run after the lines were built, which is too late to contribute roots to
+their sweep, so it splits: `resolve_citations` is handed the stored citations and
+returns a `PendingCitations` — the term roots it wants, and what to do once they
+are loaded. On the library side that is `read_library` (rows and digests, no
+terms) and `PendingLibrary.promote(built, context, graph)` (terms, no database),
+with `load_theorems` still composing the two for the caller that has no sweep to
+share: the **parse** path, whose lines already carry their terms because they
+were just parsed.
+
+| | per re-checked proof |
+|---|---|
+| two sweeps | 8.05 ms, 7.0 queries |
+| one sweep | **7.08 ms, 6.0 queries** |
+
+−12%, against dev Postgres, paired. The query is the certain part; the time is
+not, and the gap between databases is the point. On SQLite in-memory the same
+comparison is ~5%, because a saved round trip costs nothing when the database is
+in-process. This is P1's "reading a proof back is **latency, not work**" showing
+up as a measurement — so loopback Postgres is itself a floor for a deployed one.
+
+`test_a_re_check_sweeps_the_term_graph_once` counts the closure queries, because
+nothing about the *result* changes if this regresses: the same terms arrive
+either way, just in two round trips instead of one, which no assertion on a
+verdict could see.
 
 **Done: theorem rows come back as data too.** The same argument as for term
 rows, applied to the four tables a library entry spans. `load_theorems` selected
@@ -470,13 +492,14 @@ either way. It would show up only as every verify scanning the whole library.
 `test_a_degenerate_ask_reads_no_library_at_all` is there because a silent
 whole-library scan is exactly what this phase exists to prevent.
 
-**Also still open:**
-
-- **A single-proof load cannot amortise its floor.** Verifying one proof is one
-  proof, which is why the levers worth pulling are the ones that cut the fixed
-  cost rather than batch harder. What is left of a re-check is now roughly a
-  third term sweep, a third library read and a third engine work (`promote_spec`
-  composing what the caches miss), with no single hot spot.
+**What is left, and why the phase stops here.** A re-check is now roughly a third
+term sweep, a third library read and a third engine work (`promote_spec`
+composing what the caches miss), with no single hot spot — which is the shape a
+constant-factor phase should end in. The remaining lever is the one it never
+had: **a single-proof load cannot amortise its floor.** Verifying one proof is
+one proof, six round trips is close to the number of distinct questions being
+asked, and the levers worth pulling from here are ones that change *what* is
+asked rather than how it is fetched.
 
 ### P3. Store schema terms — *done*
 
@@ -680,7 +703,9 @@ Two things had to move to make the citations knowable before the check:
   read the lines, resolve what they cite, and only then check. `parse` is now
   exactly that pair, and the route calls the halves separately.
 - **`load_proof_for_check(..., before_check=…)`** — the same moment on the row
-  path: lines populated, nothing resolved yet.
+  path: lines populated, nothing resolved yet. P2a moved it *earlier* still, to
+  before the lines are built, so the library's terms could join their sweep; it
+  is `resolve_citations` now.
 
 **Hypotheses are scoped by storage, as the walk scopes them in time.** A theorem
 proves *under* its `$e` hypotheses, and its proof states them as lines citing
@@ -734,9 +759,10 @@ needs_strings = any(rule.matching == "string" for rule in system.inference_rules
 
 Two things wrong with that question, and they compound. A promoted theorem
 carries `matching` too and is **not** an inference rule — so a system whose only
-string-matching schema is a library entry answered "no". And the library is
-resolved in `before_check`, *after* a proof's lines are populated — so even
-asking about it would have been asking before the answer existed. The result was
+string-matching schema is a library entry answered "no". And the library was
+resolved after a proof's lines were populated — so even asking about it would
+have been asking before the answer existed. (P2a since reversed that order, which
+would have fixed this instance and not the class.) The result was
 the P2 bug class exactly: a proof that verified when parsed failed when checked
 from its rows, silently, with `formula_string` left `None` on every line.
 

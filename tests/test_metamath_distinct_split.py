@@ -81,11 +81,10 @@ def test_the_pairs_a_shared_spelling_is_in_are_the_ones_dropped() -> None:
     # Precisely: what the definition keeps is the pairs among names it can resolve.
     # `y` names two binders, so every pair it is in goes; `A` and `B` are supplied
     # by the defined form, so the pair between them stays.
-    condition = classify_all(SHARED_BINDER, BINDERS)["df-new"].definition.condition
+    provisos = classify_all(SHARED_BINDER, BINDERS)["df-new"].definition.provisos
 
-    assert condition is not None
-    assert "disjoint(A, B" in condition
-    assert "y" not in condition
+    assert any(line.startswith("disjoint(A, B") for line in provisos)
+    assert not any("y" in line for line in provisos)
 
 
 def test_without_the_declaration_the_same_statement_is_still_an_axiom() -> None:
@@ -141,9 +140,9 @@ def test_a_d_over_the_obligations_own_dummy_no_longer_costs_the_definition() -> 
     # `z` is not a variable of either form, so the definition states nothing about
     # it. What licences dropping it is that the citation carries it: `newjust` holds
     # under its own `$d`, and `declarative._discharge_justification` inherits those.
-    condition = classified.definition.condition
-    assert condition is not None and "z" not in condition
-    assert "disjoint(ph, y" in condition
+    provisos = classified.definition.provisos
+    assert not any("z" in line for line in provisos)
+    assert any(line.startswith("disjoint(ph, y") for line in provisos)
 
 
 def test_the_same_statement_with_nothing_to_cite_is_still_an_axiom() -> None:

@@ -41,7 +41,7 @@ are not relitigated), and what remains.
 | Scale (§5, A5) | **measured** — 24 min, 3.6 GB (§1.1) |
 | Token-collision defects (§1.2) | fixed — four instances of one shape |
 | `$t` typesetting / notation (§4) | **next** |
-| Axiom-vs-theorem split (§3.2) | engine done; storing the library open |
+| Axiom-vs-theorem split (§3.2) | done — engine, and the library stored by provenance |
 | Definition classification (§5, A4) | done — wired into the walk; 1,427 definitions / 132 axioms with binding slots declared and `$d` split per pair |
 
 `tests/test_metamath_import.py` imports `sqrt2re` from its verbatim `set.mm` proof
@@ -542,16 +542,23 @@ in declaration order. The floating slot supplies the substitution (`A := 2`); th
 essentials become the cited lines. Wrong order or count silently misaligns every
 application, so it is computed at parse time (`Assertion.mandatory`).
 
-**A3. Statement mapping — *partly done; blocker***.
+**A3. Statement mapping — *done, bar the notation layer***.
 `$c`→terminals, `$v`→metavariable names, `$f`→sort bindings, `$e`→antecedents,
 `$a`→axiom or definition, `$p`→proof + promoted theorem, `$d`→`disjoint` provisos,
-`${ $}`→scope. The reader handles all of these. Remaining: **the axiom-vs-theorem
-split (§3.2)** — the real gap; the `$t` block (§4); typecodes beyond
-`wff`/`class`/`setvar`; `$[ … $]` inclusion (low priority, set.mm is
-self-contained). Import faithfully as Metamath's own sorts first; a richer type
-discipline risks needing to re-prove things and is best deferred.
+`${ $}`→scope. The reader handles all of these. The axiom-vs-theorem split that
+was this item's real gap is settled in both halves (§3.2). Remaining: the `$t`
+block (§4); typecodes beyond `wff`/`class`/`setvar`; `$[ … $]` inclusion (low
+priority, set.mm is self-contained). Import faithfully as Metamath's own sorts
+first; a richer type discipline risks needing to re-prove things and is best
+deferred.
 
-**A4. Definition classification — *classifier done; not yet wired in*.**
+**A4. Definition classification — *done; see "A4 wired in" below*.**
+The classifier and its wiring are both in place — 1,427 of set.mm's 1,559 logical
+`$a` register as definitions and 132 stay primitive. The rationale below is kept
+as the record of why the split is worth having, and the figures inside it are
+*staged*: each states the corpus result as of the step it describes, so 1,335 /
+224 appears below as the state after binding slots and before the `$d` split.
+
 Metamath does not distinguish a definition from an axiom: both are `$a`, `df-` is
 a convention its verifier never reads, and soundness of the definitional ones is
 left to an *external* checker. Importing every logical `$a` as an axiom is
@@ -571,7 +578,7 @@ then the kernel:
 
 Two further refusals cover what a `Definition` cannot faithfully carry: a defining
 form built from the form being defined, and a metavariable the proviso syntax
-cannot name. A `$d` *is* carried, as the definition's condition — 1,033 of the
+cannot name. A `$d` *is* carried, as the definition's provisos — 1,033 of the
 definition-shaped statements have one, and dropping them would licence the
 captures Metamath forbids. Carried **per pair**, though: a `$d` naming a variable
 the definition has no name for keeps every pair it can state and drops the rest,
@@ -1020,18 +1027,23 @@ argument. General because the justification is always a cited lemma.
 
 ## 6. Sequencing
 
+Items 2–4 are **done**; they are struck rather than deleted because each records
+a decision worth not relitigating.
+
 1. **`$t` + Unicode source + term-fold renderer** (§4) — wanted now, and part of A3.
-2. **Store the imported library** (§3.2) — the axioms first, which need no
-   schema work now the split names them; then the 47,546 derived theorems,
-   which is the question still open.
-3. **A4 definition classification** — cheaper before bulk than after.
+2. ~~**Store the imported library.**~~ *Done* (§3.2) — but split by **provenance**
+   rather than by kind, which is the opposite of what this item proposed. A
+   measurement overturned it: building 1,559 axioms-as-rules eagerly would have
+   put seconds on every verify. `promoted_theorems` holds both kinds and a
+   `primitive` column records which is which.
+3. ~~**A4 definition classification.**~~ *Done* — wired into the walk, and it did
+   land before the bulk store as this item wanted.
 4. ~~**Persist the parse.**~~ *Done* (§1.3) — the walk stores the system, its
-   proofs, their line graphs and their terms. The scale half of this item is
-   done too: the walk extends one live system's grammar in place rather than
-   rebuilding it, so a whole-corpus store no longer re-promotes the library at
-   each notation change (§1.4, 16× on 20,000 theorems). What is left is
-   **storing the library**, which is item 2's to decide (§3.2) and is what would
-   let an imported proof be re-checked from its rows.
+   proofs, their line graphs and their terms. The scale half is done too: the
+   walk extends one live system's grammar in place rather than rebuilding it, so
+   a whole-corpus store no longer re-promotes the library at each notation change
+   (§1.4, 16× on 20,000 theorems). With item 2 settled, an imported proof
+   re-checks from its rows — measured over set.mm's first 1,000 theorems.
 5. **B1 + B2**, then **B4** and **B3**; then the stretch items **B5 / B6**. The
    tactic framework and closure solver come first because they shorten *new*
    Edifyce proofs as well as imported ones.
