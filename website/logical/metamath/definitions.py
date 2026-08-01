@@ -35,6 +35,14 @@ eliminable), a metavariable the proviso syntax cannot name, and the two below.
 A `$d` *can* be carried, as the definition's condition, and must be: 1,033 of
 set.mm's definition-shaped statements have one.
 
+A `$d` names *pairs*, though, and it is per pair that this holds. A pair whose
+subject the definition has no name for is dropped where dropping it is argued -
+a spelling several binders share, whose constraint the representation already
+enforces or has decided otherwise, and a variable living only in the discharged
+obligation, whose constraint travels with that obligation. `classify` carries
+both arguments. Every other such pair is still a refusal, since dropping one
+silently would widen what the definition admits.
+
 A `$e` is carried too, as a `Justification`. A definition holds unconditionally,
 so a hypothesis has to be settled once and for all rather than per unfold - and
 `set.mm` shows how, because it does it itself: `df-sb`'s `$e sbjust.1` is stated
@@ -406,15 +414,48 @@ def classify(
     names = [binder.name for binder in placed]
     resolvable = supplied | {name for name in names if names.count(name) == 1}
 
+    # A `$d` names *pairs*, and Edifyce's algebra takes one pair per proviso
+    # (`_distinct_provisos`), so a pair naming something the definition cannot state
+    # is dropped rather than costing the whole assertion. Only where dropping it is
+    # argued, and there are exactly two such arguments - which between them account
+    # for every one of set.mm's 92 `$d` refusals:
+    #
+    # **A spelling several binders share** (90 of the 92; `df-sup` quantifies `y`
+    # twice). Pair it with a *parameter* and the representation already enforces it:
+    # `_bounds_are_fresh` requires every binder's chosen leaf to be disjoint from
+    # every parameter's substitution, at every unfold, stated or not. Pair it with
+    # another *binder* and the kernel holds the scope-aware rule instead of
+    # Metamath's blanket one - two binders may share a spelling where their scopes
+    # do not nest, which alpha-conversion makes sound and which the kernel admits
+    # deliberately. So the pair is either redundant or already decided elsewhere.
+    #
+    # **A variable of the obligation alone** (`df-sb`'s and `df-mo`'s `z`, which
+    # lives only in the `$e`). Metamath makes it mandatory because it re-proves the
+    # hypothesis per use; here the hypothesis is discharged once by citation, so no
+    # unfold chooses a `z` for the pair to constrain. What licences the discharge is
+    # the cited theorem holding under its own `$d`, and those provisos are inherited
+    # (`declarative._discharge_justification`) - so the constraint travels with the
+    # obligation rather than being dropped.
     constrained = {v for group in assertion.distinct for v in group if v in variables}
-    orphaned = sorted(constrained - resolvable)
-    if orphaned:
-        # A `$d` over a variable neither the defined form supplies nor a binder
-        # names. Its proviso is checked against what an unfold determines, so there
-        # would be nothing to resolve it against; carrying it anyway makes every
-        # unfold raise, and dropping it silently widens what the definition
-        # admits. Neither is faithful, so this stays an axiom.
-        listed = ", ".join(repr(name) for name in orphaned)
+    obligation = (
+        set()
+        if justification is None
+        else {t for h in assertion.essentials for t in h.tokens if t in variables}
+    )
+    unaccounted = sorted(constrained - resolvable - set(names) - obligation)
+    if unaccounted:
+        # A `$d` over a variable the definition has no name for and no argument
+        # about. Its proviso is checked against what an unfold determines, so there
+        # would be nothing to resolve it against: carrying it makes every unfold
+        # raise, and dropping it widens what the definition admits with nothing to
+        # say the widening is safe. Neither is faithful, so this stays an axiom.
+        #
+        # That nothing reaches this is a *claim*, not a coincidence about set.mm: a
+        # `$a`'s mandatory `$f` are exactly the variables of its statement and its
+        # `$e`, and a statement variable is supplied, bound, or was refused above as
+        # free in the defining form. The guard stands because this module's default
+        # is an axiom, and a reordering of the tests above would make it live.
+        listed = ", ".join(repr(name) for name in unaccounted)
         return Classified(
             assertion.label,
             reason=f"a $d constrains {listed}, which the defined side does not supply",
@@ -449,7 +490,13 @@ def classify(
             # has to travel with it: 1,033 of set.mm's definition-shaped
             # statements carry one, and
             # dropping them would licence exactly the captures Metamath forbids.
-            condition="; ".join(_distinct_provisos(assertion, database, system))
+            #
+            # Pairwise, and only over what a proviso can name here - the pairs
+            # `resolvable` covers. What the other pairs constrain, and why the
+            # definition keeps its meaning without them, is argued above.
+            condition="; ".join(
+                _distinct_provisos(assertion, database, system, only=resolvable)
+            )
             or None,
             label=assertion.label,
             justification=justification,

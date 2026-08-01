@@ -27,7 +27,7 @@ syntax axioms state.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from ..promotion import TheoremSpec, promote_from_source, promote_spec
 from ..declarative import LinePart, LineSpec, Production, SystemSpec, build_system
@@ -516,11 +516,21 @@ def _distinct_provisos(
     database: Database,
     system: FormalSystem,
     rename: dict[str, str] | None = None,
+    only: Collection[str] | None = None,
 ) -> tuple[str, ...]:
     # A `$d x y z` constrains every *pair* among its variables, and Edifyce's
     # algebra takes one pair per proviso, so expand. Only variables the assertion
     # actually binds are kept: a $d naming something outside its metavariables
     # would fail to resolve, and constrains nothing here anyway.
+    #
+    # ``only`` narrows that further, to the names the *reader* of these provisos
+    # can resolve, dropping the pairs that would mention anything else. A theorem
+    # passes none, its metavariables being exactly its `$f` variables; a definition
+    # passes what its defined form supplies plus the binders it names unambiguously,
+    # because the rest of a `$d` constrains something the definition does not have
+    # (`definitions.classify` argues why dropping such a pair loses nothing). Named
+    # before the rename, which renames a production's private slot and is not what
+    # a caller reads.
     #
     # `$d` forbids the two substitutions sharing a **variable** - of any typecode,
     # not only the binder one - while leaving them free to share a *constant*:
@@ -542,6 +552,8 @@ def _distinct_provisos(
 
     rename = rename or {}
     bound = {h.variable for h in assertion.floatings}
+    if only is not None:
+        bound &= set(only)
     provisos: list[str] = []
     for group in assertion.distinct:
         members = sorted(rename.get(v, v) for v in group if v in bound)
