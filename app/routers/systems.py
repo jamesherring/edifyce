@@ -33,12 +33,19 @@ from app.auth import current_active_user, current_active_user_optional
 from app.db import (
     Base,
     FormalSystem,
+    discard_system_checks,
     effective_spec,
     get_session,
     inherited_rule_count,
     system_to_spec,
 )
-from app.routers._common import PageParams, page_params, paginate_summaries, unique_slug
+from app.routers._common import (
+    PageParams,
+    lock_system,
+    page_params,
+    paginate_summaries,
+    unique_slug,
+)
 from app.db.models import User
 from app.db.side_conditions import SideConditionRow
 from app.db.side_conditions_mapping import (
@@ -173,21 +180,25 @@ async def load_system(session: AsyncSession, system_id: uuid.UUID) -> FormalSyst
     return await session.scalar(stmt)
 
 
-# A chain this long is a data defect, not a design: `inherits_from_id` is
-# cycle-checked on write, so the only way to reach it is a hand-edited row. The
-# bound is here so a walk over one terminates rather than hanging a request.
+# How deep a chain may be. Enforced when an edge is *written*
+# (`_require_inheritable_reference`), so a legal chain is always walkable; the
+# bound is repeated in the walk so a row that got past that — a hand edit, or an
+# ancestor repointed under a descendant — terminates rather than hanging a
+# request.
 MAX_INHERITANCE_DEPTH = 32
 
 
 async def load_chain(session: AsyncSession, system: FormalSystem) -> list[FormalSystem]:
     """``system`` and its ancestors, **root first** — `effective_spec`'s argument.
 
-    Stops early rather than raising on a chain that should not exist: a missing
-    parent (the FK is ``SET NULL``, but a concurrent delete can be read either
-    way), a cycle, or a chain past ``MAX_INHERITANCE_DEPTH``. Each of those makes
-    the system build against *less* than it declares, which surfaces as an
-    unresolved production rather than as a 500 — and every one of them is
-    rejected at the point a chain is written.
+    Stops early on a chain that should not exist: a missing parent (the FK is
+    ``SET NULL``, but a concurrent delete can be read either way), a cycle, or
+    one past ``MAX_INHERITANCE_DEPTH``. The caller can tell, because the chain
+    it gets back still declares a parent it does not contain — and must refuse
+    to build it (`truncated_chain_errors`). Building the prefix would be
+    building a *different system* from the one the rows declare, quietly: an
+    intermediate layer that adds only definitions would still compile with the
+    root's grammar missing.
     """
     chain = [system]
     seen = {system.id}
@@ -198,6 +209,23 @@ async def load_chain(session: AsyncSession, system: FormalSystem) -> list[Formal
         seen.add(parent.id)
         chain.insert(0, parent)
     return chain
+
+
+def truncated_chain_errors(chain: Sequence[FormalSystem]) -> list[str]:
+    """Refuse a chain :func:`load_chain` could not walk to the top.
+
+    The root of what came back still names a parent, so an ancestor is missing:
+    deleted under us, part of a cycle, or past the depth bound. Every one of
+    those means the rows declare a system this is not.
+    """
+    if chain[0].inherits_from_id is None:
+        return []
+    return [
+        f"This system inherits from {chain[0].inherits_from_id}, which could not "
+        "be loaded: it no longer exists, the chain cycles, or it is more than "
+        f"{MAX_INHERITANCE_DEPTH} systems deep. A system is built from its whole "
+        "chain, so it cannot be built from part of one."
+    ]
 
 
 def draft_ancestor_errors(chain: Sequence[FormalSystem]) -> list[str]:
@@ -285,7 +313,7 @@ async def load_effective(
 ) -> EffectiveSystem:
     """Resolve ``system`` against its ancestors, or say why it cannot be."""
     chain = await load_chain(session, system)
-    errors = draft_ancestor_errors(chain)
+    errors = truncated_chain_errors(chain) + draft_ancestor_errors(chain)
     if errors:
         return EffectiveSystem(chain, errors=errors)
     try:
@@ -315,6 +343,10 @@ async def _require_inheritable_reference(
     **Not already below the child** — the guard this replaces caught only
     ``parent == child``, so a two-step cycle went through and every walk over a
     chain had to be written to survive one.
+
+    And **shallow enough**: the depth bound belongs here, where a chain is made,
+    rather than only in the walk that reads one. Enforced only at the write, a
+    chain past it would be legal to build and impossible to load whole.
     """
     row = (
         await session.execute(
@@ -339,6 +371,25 @@ async def _require_inheritable_reference(
             status.HTTP_400_BAD_REQUEST,
             "That would make the inheritance chain cycle.",
         )
+    if await _chain_depth(session, parent_id) >= MAX_INHERITANCE_DEPTH:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"An inheritance chain may be at most {MAX_INHERITANCE_DEPTH} systems "
+            "deep, and this one already is.",
+        )
+
+
+async def _chain_depth(session: AsyncSession, system_id: uuid.UUID) -> int:
+    # How many systems `system_id` and its ancestors make. Bounded by the same
+    # limit it is used to enforce, so a pre-existing over-deep chain terminates.
+    seen: set[uuid.UUID] = set()
+    current: uuid.UUID | None = system_id
+    while current is not None and current not in seen and len(seen) <= MAX_INHERITANCE_DEPTH:
+        seen.add(current)
+        current = await session.scalar(
+            select(FormalSystem.inherits_from_id).where(FormalSystem.id == current)
+        )
+    return len(seen)
 
 
 async def _inherits_from(
@@ -669,8 +720,19 @@ async def update_system(
         system.slug = await _unique_slug(session, user.id, changes["name"], exclude_id=system.id)
     if "description" in changes:
         system.description = changes["description"]
-    if "inherits_from_id" in changes:
+    if "inherits_from_id" in changes and changes["inherits_from_id"] != system.inherits_from_id:
         system.inherits_from_id = changes["inherits_from_id"]
+        # Repointing the parent changes the grammar, the rules and the
+        # definitions this system's proofs were checked against — a bigger edit
+        # than any part edit, and those all invalidate. Without this the proofs
+        # keep the verdict *and* the stored line terms of a check against the old
+        # chain, and a verify trusts a stored lemma rather than re-checking it
+        # (docs/verification-from-rows.md, P1) — so another proof could go on
+        # citing one under a parent it was never checked against. Under the
+        # system lock, for the reason the part routes take it: a verify in flight
+        # is reading those rows and believing them.
+        await lock_system(session, system_id)
+        await session.run_sync(lambda sync: discard_system_checks(sync, system_id))
     if changes.get("token_separated") is not None:
         system.token_separated = changes["token_separated"]
 
@@ -691,6 +753,12 @@ async def delete_system(
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
+    # Ownership first. The dependent check below names systems that may be
+    # someone else's private drafts, so asking it for a system the caller does
+    # not own would answer 409-with-names where the rest of this router answers
+    # 404 — and ids are exactly what that convention keeps from leaking.
+    await owned_system_id_or_404(session, system_id, user.id)
+
     # A system something *inherits from* cannot be deleted. `inherits_from_id` is
     # `ON DELETE SET NULL`, so the delete would succeed and silently take the
     # descendants' grammar with it: what they build from changes, while their

@@ -32,6 +32,7 @@ from app.db import spec_to_system, system_to_spec
 from app.db.session import get_session
 from app.db.systems import RuleRow
 from app.main import app
+from app.routers.systems import MAX_INHERITANCE_DEPTH
 from tests.database import async_url, create_tables, database_url, enable_foreign_keys
 from tests.layered_systems import (
     bound_constant_spec,
@@ -313,20 +314,6 @@ def test_a_draft_ancestor_is_refused_at_build_time_too(client, db):
     assert any("not published" in error for error in body["errors"])
 
 
-def test_a_missing_parent_leaves_the_child_buildable_on_its_own_parts(client, db):
-    # `inherits_from_id` is `ON DELETE SET NULL`, so a dangling id is not
-    # reachable through the API — but the walk must terminate on one all the
-    # same, reporting a system that does not build rather than hanging.
-    owner = _register_login(client, "dangling@example.com")
-    child = seed(
-        db,
-        propositional_calculus_spec(),
-        owner,
-        parent_id=str(uuid.uuid4()),
-        published=False,
-    )
-    body = client.post(f"/api/formal-systems/{child}/validate").json()
-    assert body["success"] is True
 
 
 def test_the_summary_still_reports_the_parent(client, db):
@@ -480,3 +467,113 @@ def test_a_definition_reorder_is_guarded_against_the_whole_chain(client, db):
         f"/api/formal-systems/{child}/definitions/order", json={"ids": ids}
     )
     assert kept.status_code == 200, kept.text
+
+
+def test_repointing_the_parent_invalidates_the_childs_proofs(client, db):
+    # Changing `inherits_from_id` changes the grammar, rules and definitions the
+    # child's proofs were checked against — a bigger edit than any part edit, and
+    # those all invalidate. Left standing, the proof keeps its verdict *and* its
+    # stored line terms, and a verify trusts a stored lemma rather than
+    # re-checking it, so another proof could cite it under a parent it was never
+    # checked against.
+    owner = _register_login(client, "repoint@example.com")
+    pc = seed(db, propositional_calculus_spec(), owner)
+    fol = seed(db, first_order_logic_spec(), owner, pc)
+    child = seed(db, zfc_spec(), owner, fol, published=False)
+
+    created = client.post(
+        "/api/proofs",
+        json={
+            "name": "Inherited",
+            "formal_system_id": child,
+            "source": "(A → (B → A)) [ax-1]",
+        },
+    )
+    proof_id = created.json()["id"]
+    assert client.post(f"/api/proofs/{proof_id}/verify").json()["success"]
+    assert client.get(f"/api/proofs/{proof_id}").json()["valid"] is True
+    assert client.get(f"/api/proofs/{proof_id}/structure").json()["lines"]
+
+    moved = client.patch(
+        f"/api/formal-systems/{child}", json={"inherits_from_id": pc}
+    )
+    assert moved.status_code == 200, moved.text
+
+    # No verdict, and no structure to be trusted as a lemma's.
+    assert client.get(f"/api/proofs/{proof_id}").json()["valid"] is None
+    assert client.get(f"/api/proofs/{proof_id}/structure").json()["lines"] == []
+
+
+def test_repointing_to_the_same_parent_keeps_the_verdict(client, db):
+    # The control: a PATCH that names the parent it already has changes nothing,
+    # so it must not throw the proofs away. Otherwise any unrelated edit that
+    # echoes the field costs every proof in the system a re-verify.
+    owner = _register_login(client, "same-parent@example.com")
+    pc = seed(db, propositional_calculus_spec(), owner)
+    child = seed(db, first_order_logic_spec(), owner, pc, published=False)
+
+    created = client.post(
+        "/api/proofs",
+        json={
+            "name": "Kept",
+            "formal_system_id": child,
+            "source": "(A → (B → A)) [ax-1]",
+        },
+    )
+    proof_id = created.json()["id"]
+    assert client.post(f"/api/proofs/{proof_id}/verify").json()["success"]
+
+    unchanged = client.patch(
+        f"/api/formal-systems/{child}",
+        json={"inherits_from_id": pc, "description": "unrelated edit"},
+    )
+    assert unchanged.status_code == 200, unchanged.text
+    assert client.get(f"/api/proofs/{proof_id}").json()["valid"] is True
+
+
+def test_deleting_someone_elses_system_still_404s(client, db):
+    # The dependent check names systems that may be private drafts, so it must
+    # run *after* ownership: asking it first would answer 409-with-names where
+    # the rest of the router answers 404, and ids are what that keeps from
+    # leaking.
+    other = _register_login(client, "owner@example.com")
+    published = seed(db, propositional_calculus_spec(), other)
+    seed(db, first_order_logic_spec(), other, published, published=False)
+
+    _register_login(client, "outsider@example.com")
+    response = client.delete(f"/api/formal-systems/{published}")
+    assert response.status_code == 404
+    assert "First-order logic" not in response.text
+
+
+def test_a_chain_may_not_be_built_from_part_of_itself(client, db):
+    # A chain the walk cannot reach the top of describes a system this is not.
+    # Building the prefix would compile something the rows do not declare —
+    # quietly, for a layer that adds only definitions.
+    owner = _register_login(client, "truncated@example.com")
+    orphan = seed(
+        db,
+        first_order_logic_spec(),
+        owner,
+        parent_id=str(uuid.uuid4()),
+        published=False,
+    )
+    body = client.post(f"/api/formal-systems/{orphan}/validate").json()
+    assert body["success"] is False
+    assert any("could not be loaded" in error for error in body["errors"])
+
+
+def test_an_inheritance_chain_is_bounded_when_it_is_written(client, db):
+    # The depth bound belongs where a chain is *made*. Enforced only in the walk,
+    # a chain past it would be legal to build and impossible to load whole.
+    owner = _register_login(client, "deep@example.com")
+    parent = seed(db, propositional_calculus_spec(), owner)
+    for depth in range(MAX_INHERITANCE_DEPTH - 1):
+        # Distinct names: slugs are unique per owner.
+        parent = seed(db, SystemSpec(name=f"Layer {depth}"), owner, parent)
+
+    response = client.post(
+        "/api/formal-systems", json={"name": "One too many", "inherits_from_id": parent}
+    )
+    assert response.status_code == 400
+    assert "deep" in response.json()["detail"]

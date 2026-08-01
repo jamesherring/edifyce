@@ -1990,6 +1990,7 @@ def layered_spec(specs: Sequence[SystemSpec]) -> SystemSpec:
 
 def build_spec(
     spec: SystemSpec,
+    *,
     schema_terms: SchemaTermSource | None = None,
 ) -> dict:
     """Build a ``FormalSystem`` from a :class:`SystemSpec`.
@@ -2004,7 +2005,11 @@ def build_spec(
     that function for why the parts are concatenated rather than referenced.
 
     ``schema_terms`` is an optional cache of already-composed rule-schema terms;
-    see :func:`build_system`.
+    see :func:`build_system`. Keyword-only: it took second place from a
+    ``system_dict`` parameter that was reserved for exactly the inheritance this
+    signature no longer needs (a chain is layered into one spec *before* it gets
+    here, see :func:`layered_spec`), and a caller still passing one positionally
+    should be told so rather than have it read as a schema-term cache.
     """
     try:
         return {"system": build_system(spec, schema_terms)}

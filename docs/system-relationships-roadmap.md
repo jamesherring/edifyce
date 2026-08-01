@@ -668,7 +668,10 @@ collision rules) and `SystemSpec.definition_scope` (§9.9); `app.db.effective_sp
 cache going through the chain. Deleting a system something inherits from is
 refused — `inherits_from_id` is `ON DELETE SET NULL`, so the delete would take
 the descendants' grammar away while their proofs kept the verdict of a check
-against it. Three things it turned up on the way are recorded as §9.9–§9.11.
+against it — and **repointing** the parent invalidates the child's proofs, for
+the same reason every part edit does: it is a bigger grammar change than any of
+them, and a verify trusts a stored lemma rather than re-checking it. Three things
+it turned up on the way are recorded as §9.9–§9.11.
 
 **Tests and verification** — `tests/layered_systems.py`,
 `tests/test_layered_spec.py` (engine), `tests/test_system_inheritance.py` (API).
