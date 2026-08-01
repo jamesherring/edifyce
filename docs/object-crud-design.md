@@ -175,15 +175,14 @@ fields); *semantic* validity (does it compile?) is surfaced by `validate` and
 shown as a live indicator in the UI, not enforced on every keystroke. Publishing
 (a later concern) can gate on validity.
 
-**Known limitation (deferred): inheritance is not resolved in `validate` /
-`source`.** `inherits_from_id` is stored and its reference validated on write,
-but phase-1 `validate` and `source` compile each system in isolation
-(`system_to_spec` describes one system; the declarative pipeline has no
-`inherit` directive and no parent `system_dict` is supplied). Resolving a
-system against its ancestors — emitting `inherit <slug>` and compiling the
-parent chain into a `system_dict` — is its own phase spanning the declarative
-front-end and the engine wiring, not just this router. Until then, a system that
-relies on a parent's grammar/rules will report errors from `validate`.
+~~**Known limitation (deferred): inheritance is not resolved in `validate` /
+`source`.**~~ **Closed.** `validate` and every other path that builds a system
+now do so against its whole inheritance chain (`app.db.effective_spec`). It did
+not need the `inherit` directive or the `system_dict` this section anticipated:
+a child's effective system is its ancestors' parts *concatenated* in front of its
+own, which is a pure `SystemSpec → SystemSpec` operation
+(`declarative.layered_spec`), so the engine learns no new concept. See
+[`docs/system-relationships-roadmap.md`](system-relationships-roadmap.md) §5.1.
 
 ### Keeping it thin (per AGENTS.md)
 

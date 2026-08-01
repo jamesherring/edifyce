@@ -48,6 +48,7 @@ from website.logical.declarative import definition_digest
 
 if TYPE_CHECKING:
     from app.db.models import FormalSystem
+    from app.db.systems import DefinitionRow
     from website.logical.declarative import SystemSpec
     from website.logical.formal_system import FormalSystem as EngineSystem
     from website.logical.kernel.terms import Term
@@ -84,7 +85,7 @@ class DefinitionTermCache:
 
 
 def load_definition_terms(
-    session: Session, system: FormalSystem, spec: SystemSpec
+    session: Session, system: FormalSystem, spec: SystemSpec, offset: int = 0
 ) -> DefinitionTermCache:
     """Every usable stored definition-form term of ``system``.
 
@@ -92,12 +93,24 @@ def load_definition_terms(
     ``spec.definitions``, and the digest is computed from it. Always returns a
     cache, empty when nothing stored is still current; hand the same one back to
     :func:`store_definition_terms` after the build.
+
+    ``offset`` is how many of ``spec.definitions`` belong to systems *before* this
+    one, which is what an inheritance chain contributes: the spec is the whole
+    chain's (``app.db.systems_mapping.effective_spec``) while these rows are one
+    system's, so ``system.definitions[i]`` is ``spec.definitions[offset + i]``.
+    Counted separately from the rule offset — `effective_spec` concatenates each
+    part list independently.
+
+    Only this system's own definitions are cached, for the reason
+    :func:`~app.db.schema_terms.load_schema_terms` gives: an ancestor's row cannot
+    hold the term its form parses to *here*, because that term is a function of
+    the whole chain's grammar and the ancestor has its own.
     """
     digest = definition_digest(spec)
     ids: dict[DefinitionSlot, uuid.UUID] = {}
     # By position in the ORM collection, which `system_to_spec` reads in the same
-    # order to build `spec.definitions` — not by the `position` column, which need
-    # not run 0, 1, 2 …. The two agree on the ordinal either way.
+    # order to build this layer's definitions — not by the `position` column, which
+    # need not run 0, 1, 2 …. The two agree on the ordinal either way.
     for index, row in enumerate(system.definitions):
         if row.term_digest != digest:
             continue
@@ -106,7 +119,7 @@ def load_definition_terms(
             ("lower", row.lower_term_id),
         ):
             if term_id is not None:
-                ids[DefinitionSlot(index, slot)] = term_id
+                ids[DefinitionSlot(offset + index, slot)] = term_id
 
     if not ids:
         return DefinitionTermCache(digest, {}, TermGraph({}, {}))
@@ -125,6 +138,7 @@ def store_definition_terms(
     system: FormalSystem,
     built: EngineSystem,
     cache: DefinitionTermCache,
+    offset: int = 0,
 ) -> int:
     """Persist the definition-form terms ``built`` derived, returning rows changed.
 
@@ -135,6 +149,8 @@ def store_definition_terms(
     are stamped with, and recomputing it here would fingerprint the whole grammar
     a second time for the same answer.
 
+    ``offset`` pairs these rows with the spec exactly as it does on the way in.
+
     A definition the build *dropped* — its defining form matched nothing given the
     definitions before it — registered no kernel definition and so derived no
     forms. Its row is left untouched, digest and all, so it keeps parsing (and
@@ -143,8 +159,8 @@ def store_definition_terms(
     """
     written = 0
     for index, row in enumerate(system.definitions):
-        forms = built.definition_forms.get(index)
-        if forms is None or row.term_digest == cache.digest:
+        forms = built.definition_forms.get(offset + index)
+        if forms is None or _is_current(row, cache.digest):
             continue
         higher, lower = forms
         row.higher_term_id = _term_id(session, system, higher)
@@ -152,6 +168,25 @@ def store_definition_terms(
         row.term_digest = cache.digest
         written += 1
     return written
+
+
+def _is_current(row: DefinitionRow, digest: str) -> bool:
+    """Whether ``row`` already holds both terms this build would write.
+
+    A matching digest is not enough on its own. The FKs are ``ON DELETE SET
+    NULL``, so sweeping a term leaves the row with its digest intact and a hole
+    where the term was — and a write skipped on the digest alone would never fill
+    it, leaving that form reparsed on every verify for the life of the system.
+
+    Both ids, because a registered definition always derives *both* forms: unlike
+    a rule's schema slot, where a NULL is the ordinary way to record a slot that
+    resolved to a declared grammar pattern, a NULL here can only be a hole.
+    """
+    return (
+        row.term_digest == digest
+        and row.higher_term_id is not None
+        and row.lower_term_id is not None
+    )
 
 
 def _term_id(session: Session, system: FormalSystem, term: Term) -> uuid.UUID:

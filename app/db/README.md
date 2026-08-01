@@ -15,7 +15,7 @@ evolve it.
 | `app/db/base.py` | Declarative `Base`, naming convention, id/timestamp mixins |
 | `app/db/models.py` | Account + proof-surface ORM models |
 | `app/db/systems.py` | Normalised formal-system decomposition (grammar/rules/definitions as flat rows) |
-| `app/db/systems_mapping.py` | `spec_to_system` / `system_to_spec` round trip between the declarative `SystemSpec` and the rows |
+| `app/db/systems_mapping.py` | `spec_to_system` / `system_to_spec` round trip between the declarative `SystemSpec` and the rows, and `effective_spec`, which layers an inheritance chain into one |
 | `app/db/side_conditions.py` | Definition provisos as the kernel side-condition algebra, stored as rows |
 | `app/db/side_conditions_mapping.py` | Parse/render a `where` proviso ↔ side-condition rows |
 | `app/db/terms.py` | Term graph: kernel-term DAGs as shared `terms` / `term_children` rows |
@@ -49,6 +49,19 @@ Modernised from the original Django app (`website/models.py` on `main`):
   `slug`, optional `owner`, self-referential `inherits_from_id` (system
   inheritance), and `published_at`. Its grammar/rules/definitions are **not** a
   blob here — they live in the decomposition tables below.
+
+  **`inherits_from_id` is resolved.** A system's rows are its *own* parts; what
+  it is *built from* is its ancestors' parts followed by them
+  (`effective_spec` → `declarative.layered_spec`), so a child adding `∀x φ` to
+  `formula` says `sort="formula"` and lands in the union its ancestor declared.
+  A name may be declared once down a chain — a child redeclaring an ancestor's
+  `→` would change what every theorem inherited from it means — and a parent
+  must be **published** before a child may build on it, since publishing is what
+  freezes the grammar the descendants' proofs are checked against. A layer also
+  gets a symbol row for every sort it merely *mentions* (`⊆` is a `formula` over
+  `term`, neither of which ZFC declares), so no row ever references another
+  system's namespace. See
+  [`docs/system-relationships-roadmap.md`](../../docs/system-relationships-roadmap.md).
 - **`sorts`, `productions`, `production_bindings`, `production_binding_scopes`,
   `line_types`, `line_parts`,
   `definitions`, `definition_bindings`, `axioms`, `axiom_bindings`, `rules`,

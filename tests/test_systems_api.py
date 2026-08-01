@@ -358,10 +358,22 @@ def test_delete_cascades_to_symbols_and_bindings(client, db):
 # ---------------------------------------------------------------------------
 
 
-def test_inherits_from_must_be_an_owned_system(client):
+def test_inherits_from_must_name_a_published_system(client):
+    # Owned is no longer sufficient and no longer necessary. A parent must be
+    # *published*, because publishing is what freezes the grammar its
+    # descendants' proofs are checked against; and a published parent may be
+    # anyone's, since an imported corpus belongs to no user. See
+    # docs/system-relationships-roadmap.md §5.1.
     _register_login(client, "ada@example.com")
     base = client.post("/api/formal-systems", json={"name": "Base"}).json()
 
+    draft = client.post(
+        "/api/formal-systems", json={"name": "Early", "inherits_from_id": base["id"]}
+    )
+    assert draft.status_code == 400
+    assert "unpublished draft" in draft.json()["detail"]
+
+    client.patch(f"/api/formal-systems/{base['id']}", json={"published": True})
     ok = client.post("/api/formal-systems", json={"name": "Derived", "inherits_from_id": base["id"]})
     assert ok.status_code == 201
     assert ok.json()["inherits_from_id"] == base["id"]
@@ -587,22 +599,50 @@ def test_cannot_publish_a_non_compiling_system(client, db):
     ]
 
 
-def test_cannot_publish_a_system_inheriting_from_an_unpublished_parent(client):
+def test_a_child_of_a_published_parent_publishes(client, db):
     # A published child exposes inherits_from_id, and GET /{parent} 404s for
-    # anonymous viewers when the parent is still a private draft — so block the
-    # publish until the parent is public.
-    _register_login(client, "ada@example.com")
+    # anonymous viewers when the parent is a private draft. That used to be
+    # caught at publish time; the edge can no longer be *written* onto a draft
+    # at all (see test_inherits_from_must_name_a_published_system), so what is
+    # left to check here is that the allowed case goes through.
+    owner = _register_login(client, "ada@example.com")
     parent = client.post("/api/formal-systems", json={"name": "Parent"}).json()
+    assert client.patch(
+        f"/api/formal-systems/{parent['id']}", json={"published": True}
+    ).status_code == 200
     child = client.post(
         "/api/formal-systems", json={"name": "Child", "inherits_from_id": parent["id"]}
     ).json()
 
-    blocked = client.patch(f"/api/formal-systems/{child['id']}", json={"published": True})
-    assert blocked.status_code == 400
+    assert client.patch(
+        f"/api/formal-systems/{child['id']}", json={"published": True}
+    ).status_code == 200
 
-    # Publishing the parent first unblocks the child.
-    assert client.patch(f"/api/formal-systems/{parent['id']}", json={"published": True}).status_code == 200
-    assert client.patch(f"/api/formal-systems/{child['id']}", json={"published": True}).status_code == 200
+    # The publish gate still refuses a draft ancestor reached some other way —
+    # a row that predates the write rule, seeded here directly.
+    def named(name: str) -> SystemSpec:
+        # Distinct names, because a slug is unique per owner.
+        spec = zfc_spec()
+        spec.name = name
+        return spec
+
+    stale_parent = _seed_spec(db, owner, named("Stale parent"))
+    stale_child = _seed_spec(db, owner, named("Stale child"))
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            session.get(FormalSystem, uuid.UUID(stale_child)).inherits_from_id = uuid.UUID(
+                stale_parent
+            )
+            session.commit()
+    finally:
+        engine.dispose()
+
+    blocked = client.patch(
+        f"/api/formal-systems/{stale_child}", json={"published": True}
+    )
+    assert blocked.status_code == 422
+    assert any("not published" in error for error in blocked.json()["detail"])
 
 
 def test_cannot_unpublish_a_published_system(client):

@@ -3,12 +3,12 @@
 **Status:** whole corpus imported and checked — **all 47,546 theorems verify**,
 each against only the notation and theorems preceding it, every proof emitted from
 its stored compressed proof and checked by Edifyce's own kernel (§1.1). The
-primitive basis is no longer "every logical `$a`": **1,335 of `set.mm`'s 1,559
-import as definitions** rather than axioms, leaving 224 primitive, and every
+primitive basis is no longer "every logical `$a`": **1,427 of `set.mm`'s 1,559
+import as definitions** rather than axioms, leaving 132 primitive, and every
 theorem still verifies (§5, A4). What remains is a short, enumerated tail — 119
-statements whose root is not a declared definitional equivalence, 92 carrying a
-`$d` over something neither form supplies, and 13 others — rather than the single
-structural wall it was.
+statements whose root is not a declared definitional equivalence, and 13 others —
+and every one of them is a statement whose *shape* says it does not define, rather
+than one the representation cannot carry.
 
 Goal: import Metamath's `set.mm` while keeping **full verifiability** and **full
 generality** (Edifyce stays a general proof assistant — any formal system, not a
@@ -42,7 +42,7 @@ are not relitigated), and what remains.
 | Token-collision defects (§1.2) | fixed — four instances of one shape |
 | `$t` typesetting / notation (§4) | **next** |
 | Axiom-vs-theorem split (§3.2) | done — engine, and the library stored by provenance |
-| Definition classification (§5, A4) | done — wired into the walk; 1,335 definitions / 224 axioms with binding slots declared |
+| Definition classification (§5, A4) | done — wired into the walk; 1,427 definitions / 132 axioms with binding slots declared and `$d` split per pair |
 
 `tests/test_metamath_import.py` imports `sqrt2re` from its verbatim `set.mm` proof
 and has Edifyce's kernel check the result:
@@ -82,7 +82,7 @@ own kernel.
 | verified | **47,546 (100%)** |
 | rejected by the kernel | 0 |
 | failed to promote | 0 |
-| definitions registered | 1,335 of 1,559 logical `$a` (§5, A4) |
+| definitions registered | 1,427 of 1,559 logical `$a` (§5, A4) |
 | wall clock | 22 min 45 s axioms only, 24 min 17 s with definitions |
 | peak memory | 3.6 GB |
 
@@ -553,9 +553,11 @@ first; a richer type discipline risks needing to re-prove things and is best
 deferred.
 
 **A4. Definition classification — *done; see "A4 wired in" below*.**
-The classifier and its wiring are both in place — 1,335 of set.mm's 1,559 logical
-`$a` register as definitions and 224 stay primitive. The rationale below is kept
-as the record of why the split is worth having.
+The classifier and its wiring are both in place — 1,427 of set.mm's 1,559 logical
+`$a` register as definitions and 132 stay primitive. The rationale below is kept
+as the record of why the split is worth having, and the figures inside it are
+*staged*: each states the corpus result as of the step it describes, so 1,335 /
+224 appears below as the state after binding slots and before the `$d` split.
 
 Metamath does not distinguish a definition from an axiom: both are `$a`, `df-` is
 a convention its verifier never reads, and soundness of the definitional ones is
@@ -576,9 +578,11 @@ then the kernel:
 
 Two further refusals cover what a `Definition` cannot faithfully carry: a defining
 form built from the form being defined, and a metavariable the proviso syntax
-cannot name. A `$d` *is* carried, as the definition's condition — 1,033 of the
+cannot name. A `$d` *is* carried, as the definition's provisos — 1,033 of the
 definition-shaped statements have one, and dropping them would licence the
-captures Metamath forbids.
+captures Metamath forbids. Carried **per pair**, though: a `$d` naming a variable
+the definition has no name for keeps every pair it can state and drops the rest,
+where dropping them is argued (below).
 
 **The `$e` case has a known shape, and it is not a side condition — *done*.**
 `df-sb` defines proper substitution using a bound `y` appearing on the right only,
@@ -721,6 +725,12 @@ Measured over the whole corpus, all 47,546 verifying throughout:
 So the faithful reading of `set.mm` costs **6.8%** over importing every logical
 `$a` as an axiom, and the primitive basis falls from 1,559 to 224.
 
+These three were taken back to back on one machine, which is what makes them
+comparable to each other — and *only* to each other. A later container ran the
+same 1,456.8 s walk in 1,861.3 s, so a figure from this table must never be
+compared against one measured elsewhere; the next section shows what that mistake
+looks like.
+
 **What the 224 are**, since the tail is now short enough to enumerate:
 
 | | |
@@ -735,15 +745,89 @@ The 119 are `df-bi` and its kind — statements whose root is not `↔`/`=`, so
 nothing about their shape says they define. The 9 are `df-clab`/`df-cleq`/`df-clel`
 and neighbours, genuinely axioms connecting class notation to set theory.
 
-**The 92 are the next item, and they include `df-sb` and `df-mo`.** Their `$d`
-names a variable in *neither* form — `df-sb`'s `z` lives only in `sbjust.1`, its
-`$e`. A proviso over it has nothing to resolve against at unfold, so it is refused,
-which means the justification mechanism *still* does not reach the two definitions
-it was built for, now for a different reason than before. There is a plausible
-answer — a `$d` whose variables appear only in the `$e` constrains the
-**obligation**, not the definition, and the obligation is discharged separately
-with the cited theorem's own provisos inherited — but it changes what is admitted,
-so it wants its own argument rather than being folded in here.
+### A `$d` names pairs, and a definition need not state all of them — *done*
+
+**The 92 were the next item, and an earlier revision of this section said they
+were `df-sb`'s shape: a `$d` over a variable in neither form.** Measured, that is
+2 of them. The other **90** are a different shape entirely, and the arithmetic is
+worth stating because it changed what the fix had to be:
+
+| what the refused `$d` names | |
+|---|---|
+| **a spelling several binders share** (2–9 of them) | **90** |
+| a variable living only in the `$e` (`df-sb`, `df-mo`) | 2 |
+
+The unlock is the same in both cases, and it starts from noticing that a `$d` is
+not one constraint. `$d x y z` is **three** — one per pair — and Edifyce's algebra
+already takes one pair per proviso (`importer._distinct_provisos`). The refusal was
+all-or-nothing over the whole assertion, so one unnameable variable cost every pair
+the definition *could* state. It now drops the pair, and only where dropping it is
+argued:
+
+**A spelling several binders share.** `df-sup` quantifies `y` twice, and binders
+are placed per *occurrence*, so `y` names two of them and no proviso can say which
+(`kernel.definitions._condition_binding`). Pair it with a **parameter** and the
+representation already enforces the constraint: `_bounds_are_fresh` requires every
+binder's chosen leaf to be disjoint from every parameter's substitution, at every
+unfold, written down or not — so the proviso was redundant. Pair it with another
+**binder** and the kernel holds the *scope-aware* rule in place of Metamath's
+blanket one: two binders may share a spelling where their scopes do not nest,
+which alpha-conversion makes sound and which the kernel admits deliberately (its
+docstring calls the blanket rule a regression). Either way the pair is redundant
+or already decided, and stating it adds nothing.
+
+**A variable living only in the `$e`.** `df-sb`'s `z` appears in `sbjust.1` and
+nowhere else. Metamath makes it a mandatory variable because it re-proves the
+hypothesis at every use; here the hypothesis is discharged **once**, by citation,
+so no unfold ever chooses a `z` for the `$d` to constrain. What licences the
+discharge is that `sbjust` holds under its own `$d` — and those provisos are
+inherited (`declarative._discharge_justification`), so the constraint travels with
+the obligation rather than being dropped.
+
+Refusing is still the default for a pair neither argument covers. Nothing in
+`set.mm` reaches that branch, and that is a claim rather than a coincidence: a
+`$a`'s mandatory `$f` are exactly the variables of its statement and its `$e`, and
+a statement variable is supplied, bound, or was already refused as free in the
+defining form.
+
+**Which is what finally reaches `df-sb` and `df-mo`** — the two definitions the
+`Justification` mechanism was built for, refused until now first for their binders
+and then for their `$d`. Both classify, both register, and both cite the theorem
+`set.mm` proves for exactly that purpose.
+
+One consequence is worth recording as *strictness*, not a defect. The obligation
+is promoted with only the defined form's parameters as metavariables, so its
+dummies (`y`, `z`) are ground leaves; the inherited provisos therefore name them
+literally, and `df-sb` will not unfold under a `ph` mentioning the concrete
+variables `y` or `z`. That is the once-and-for-all discharge showing its cost, as
+§A4 said it would — Metamath re-proves the hypothesis per use and pays nothing.
+Sound, since over-strictness refuses steps rather than admitting them, and free
+for the import, which takes no definitional steps. Relaxing it means quantifying
+the obligation over its own dummies, which is a separate change.
+
+Measured over the whole corpus, all 47,546 still verifying: **1,427 definitions,
+132 axioms**, at **+0.90%** wall clock — 1,878.0 s against a `develop` control of
+1,861.3 s.
+
+That control is the point, and it is worth saying why it was run. The first
+measurement read 1,931 s against the 1,456.8 s in the table above and looked like
+a 33% regression; the table's figures were taken on a *faster container*, and this
+one reproduces the pre-change walk at 1,861.3 s. So an absolute number from that
+table and one from this paragraph are not comparable, and the only honest
+comparison is a same-machine A/B. (The 1,931 s run was also sharing four cores
+with the test suite, which is the rest of the gap.)
+
+The primitive basis is now
+
+| | |
+|---|---|
+| root is not a declared definitional equivalence | 119 |
+| defined side is built from notation already in use | 9 |
+| defining side introduces a variable nothing binds | 2 |
+| defined side is a bare metavariable | 2 |
+
+— and every one of those is a statement whose *shape* says it does not define,
+rather than one Edifyce cannot express. The `$d` column is gone.
 
 **Abstract binders make both of set.mm's justifications unnecessary — and set.mm
 declines that on purpose.** Worth recording, because it decides what the binding-
@@ -793,11 +877,12 @@ each unfold to whatever leaf the binder takes there. Before, the condition was
 checked before the binders were resolved, so `z` in a proviso could only mean the
 literal token `z`.
 
-Of the 310 non-binding refusals: 119 root is not a declared equivalence (`df-bi`
+Of the 132 that remain: 119 root is not a declared equivalence (`df-bi`
 among them — it defines `↔` and so cannot use it, root `-.`), 9 defined side
 already in use (`df-clab`/`df-cleq`/`df-clel`, the axioms connecting class
-notation to set theory), 2 a bare metavariable. No assertion Metamath names `ax-`
-is classified as a definition.
+notation to set theory), 2 a defining side introducing a variable nothing binds,
+2 a bare metavariable. No assertion Metamath names `ax-` is classified as a
+definition.
 
 None of the three tests is load-bearing alone, and the set is not trusted to be
 complete. Test 1 admits an implication, since `( ph -> ps )` has a

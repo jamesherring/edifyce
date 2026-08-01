@@ -512,6 +512,31 @@ def test_a_slot_with_no_stored_term_is_a_miss_not_an_answer(engine: Engine) -> N
     assert loaded(SchemaSlot(0, "deduction"), None) is None
 
 
+@pytest.mark.parametrize(
+    "edit", [_collide_axiom_with_production, _collide_line_part_with_production],
+    ids=lambda v: v.__name__,
+)
+def test_a_collision_present_from_the_start_still_reads_back(engine: Engine, edit) -> None:
+    # The tests above collide a name by *editing* a stored system, so the digest
+    # moves and the rows go inert — which is the guard working. A system that has
+    # the collision from the outset gets no such protection: the digest matches at
+    # both ends, so the stored terms are served and a name resolves to the line
+    # type. That verified once and then failed on every later verify with
+    # `'LineType' object has no attribute 'kernel_constructor'`.
+    #
+    # The digest cannot fix this — it is right that nothing changed. Resolving the
+    # constructor through the sort unions rather than the shadowed key is what
+    # does (`terms_mapping._in_grammar`).
+    spec = hilbert_spec()
+    edit(spec)
+    assert "errors" not in build_spec(spec), "the fixture must build cold"
+
+    _store(engine, spec)
+    warm, served = _rebuild(engine)
+    assert served > 0, "the collision must not merely have gone uncached"
+    assert _schemas(warm) == _schemas(build_spec(spec)["system"])
+
+
 def test_a_deleted_term_costs_a_re_compose_and_not_a_rule(engine: Engine) -> None:
     """What the ``ON DELETE SET NULL`` on the schema-term FKs actually promises.
 

@@ -32,6 +32,7 @@ from app.db.terms import (
     TermRow,
 )
 from website.logical.kernel import Bound, Node, Term, Var, constructor_for, intern
+from website.logical.matching import Pattern, UnionPattern
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -570,6 +571,51 @@ def prefetch_terms(session: Session, root_ids: Sequence[uuid.UUID]) -> TermGraph
     return TermGraph(rows, children)
 
 
+def _in_grammar(name: str, context: Context) -> Pattern | None:
+    """The grammar pattern called ``name``, found through the sort unions.
+
+    **The authority for a stored constructor name, and consulted before
+    ``context.variables``.** That namespace is shared: lines, line parts, axioms
+    and the system itself are registered into it *after* the grammar
+    (``declarative.build_system`` steps 5 and 6), and a name declared twice
+    resolves to the later one. So a production named ``implication`` and an axiom
+    of that name leave the axiom's ``LineType`` under the key, and a line *part*
+    of that name leaves a ``RegexPattern`` there — which is worse, because it is
+    a pattern and so passes for an answer.
+
+    Composing never noticed: it parses against the sort unions, which hold the
+    production objects themselves and are indifferent to what the name now means.
+    A *stored* term names its constructors by name and comes back through here,
+    so before this a system with such a collision verified once and then failed on
+    every later verify — with an ``AttributeError`` for the axiom case, and with a
+    silently wrong term for the line-part one.
+
+    Searching the unions is not a fallback but the correct lookup: a grammar name
+    is unique within a system (``uq_symbols_system_name``), a declared production
+    is always a member of its sort's union, and a sort that is included in another
+    is a member of that one. Only what nothing includes — a top-level sort — is
+    absent here, which is why the callers still fall back to the namespace.
+    """
+    for candidate in context.variables.values():
+        if not isinstance(candidate, UnionPattern):
+            continue
+        for member in candidate.patterns:
+            if isinstance(member, Pattern) and member.name == name:
+                return member
+    return None
+
+
+def _in_namespace(name: str, context: Context) -> Pattern | None:
+    """What ``name`` denotes in the build namespace, if it denotes a pattern.
+
+    The fallback for what :func:`_in_grammar` cannot see — a top-level sort union,
+    which is nobody's member. Still filtered to patterns, so a name bound only by
+    a line type or an axiom reads as absent rather than as an answer.
+    """
+    found = context.variables.get(name)
+    return found if isinstance(found, Pattern) else None
+
+
 def _constructor_named(name: str, context: Context) -> Constructor:
     """The constructor a stored name denotes: a declared production, or the
     defined notation of that name.
@@ -577,12 +623,18 @@ def _constructor_named(name: str, context: Context) -> Constructor:
     One lookup covers both because a notation's name carries a ``:``, which a
     declared production's name never can (see ``DefinedNotation``) - so the two
     namespaces cannot collide and a row needs no kind to tell them apart.
+
+    Grammar first, then the registered notations, then the build namespace for a
+    top-level sort — see :func:`_in_grammar` for why that order and not the
+    reverse.
     """
-    pattern = context.variables.get(name)
+    pattern = _in_grammar(name, context)
     if pattern is None:
         pattern = next(
             (n.template for n in context.definitions if n.template.name == name), None
         )
+    if pattern is None:
+        pattern = _in_namespace(name, context)
     if pattern is None:
         raise LookupError(f"No production or defined notation named {name!r} in context")
     return constructor_for(pattern)
@@ -594,8 +646,10 @@ def _sort_named(name: str, context: Context) -> Constructor:
     Narrower than :func:`_constructor_named`: a sort is always a declared union of
     the grammar, never an ad-hoc defined form, so a miss is a genuine mismatch
     between the stored rows and the system rather than something to search for.
+    Same order and the same reason — a sort name is as shadowable as a
+    production's.
     """
-    pattern = context.variables.get(name)
+    pattern = _in_grammar(name, context) or _in_namespace(name, context)
     if pattern is None:
         raise LookupError(f"No sort named {name!r} in context")
     return constructor_for(pattern)

@@ -63,6 +63,7 @@ from app.db.terms import TermChildRow, TermRow
 from app.db.terms_mapping import digest_term
 from tests.database import enable_foreign_keys
 from tests.spec_helpers import (
+    axiom,
     brackets,
     defn,
     hyp_rule,
@@ -486,6 +487,52 @@ def test_a_dropped_definition_stores_nothing_and_stays_droppable(engine: Engine)
 
     warm, _served = _rebuild(engine)
     assert [d.label for d in warm.definitions] == ["dfsub", "dfnsub"]
+
+
+def test_a_swept_term_is_written_again_rather_than_left_a_hole(engine: Engine) -> None:
+    # A matching digest is not enough to skip the write. `ON DELETE SET NULL`
+    # leaves the digest intact and the term id NULL, so a store that skipped on
+    # the digest alone would never fill the hole — and that form would be reparsed
+    # on every verify for the life of the system. Unlike a rule's schema slot, a
+    # NULL here can only be a hole: a registered definition always derives both.
+    spec = scoped_spec()
+    _store(engine, spec)
+    with Session(engine) as session:
+        row = session.scalars(select(FormalSystem)).one()
+        (definition,) = row.definitions
+        target = definition.lower_term_id
+        session.execute(sa_delete(TermChildRow).where(TermChildRow.parent_id == target))
+        session.execute(sa_delete(TermRow).where(TermRow.id == target))
+        session.commit()
+
+    # A verify that reparses the missing form must also write it back.
+    with Session(engine) as session:
+        row = session.scalars(select(FormalSystem)).one()
+        spec_now = system_to_spec(row)
+        cache = load_definition_terms(session, row, spec_now)
+        built = build_spec(spec_now, definition_terms=cache)["system"]
+        assert store_definition_terms(session, row, built, cache) == 1
+        session.commit()
+
+    # And the next build is served both slots again — the cache healed.
+    _warm, served = _rebuild(engine)
+    assert served == 2
+
+
+def test_a_shadowed_production_name_still_resolves_from_rows(engine: Engine) -> None:
+    # `ctx.variables` is one namespace: an axiom named after a production leaves
+    # the axiom's LineType under that key. Composing is indifferent (it parses
+    # against the sort unions), but a *stored* term names its constructors by name
+    # — so before `terms_mapping._in_grammar`, such a system verified once and then
+    # failed on every later verify with an AttributeError, once its terms existed.
+    spec = scoped_spec()
+    spec.axioms = [axiom("MEMB", "membership", "(a ∈ a)")]
+    assert "errors" not in build_spec(spec), "the fixture must build cold"
+
+    _store(engine, spec)
+    warm, served = _rebuild(engine)
+    assert served == 2
+    assert _shape(warm) == _shape(build_spec(spec)["system"])
 
 
 def test_a_system_with_stored_definition_terms_can_still_be_deleted(
