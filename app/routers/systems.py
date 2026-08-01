@@ -33,6 +33,7 @@ from app.auth import current_active_user, current_active_user_optional
 from app.db import (
     Base,
     FormalSystem,
+    chain_libraries,
     discard_system_checks,
     effective_spec,
     get_session,
@@ -90,6 +91,7 @@ from app.schemas import (
     SystemValidation,
     VerifyProofResponse,
 )
+from app.db.promoted_theorems_mapping import LibraryChain
 from website.logical.declarative import DeclarativeError, SystemSpec, build_spec
 
 router = APIRouter(prefix="/formal-systems", tags=["formal-systems"])
@@ -305,6 +307,17 @@ class EffectiveSystem:
     def rule_offset(self) -> int:
         """How many of ``spec.rules`` an ancestor contributed; see `schema_terms`."""
         return inherited_rule_count(self.chain)
+
+    @property
+    def library(self) -> LibraryChain:
+        """Where a citation resolves, nearest first — this system, then upward.
+
+        A system's citable library is its own entries and its ancestors', which
+        is what makes a theorem proved low in a tower usable high in it. Each
+        layer carries its own digest; see :class:`LibraryChain` for why an
+        ancestor's stored terms are guarded by the ancestor's.
+        """
+        return LibraryChain(tuple(reversed(chain_libraries(self.chain))))
 
 
 async def load_effective(

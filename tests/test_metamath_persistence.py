@@ -48,7 +48,7 @@ from app.db.promoted_theorems import (
     PromotedTheoremPremiseRow,
     PromotedTheoremRow,
 )
-from app.db.promoted_theorems_mapping import read_theorems
+from app.db.promoted_theorems_mapping import LibraryChain, read_theorems
 from app.db import metamath_store
 from app.db.metamath_store import import_corpus
 from app.db.models import FormalSystem, Proof
@@ -544,7 +544,7 @@ def test_an_imported_theorem_re_checks_from_its_rows_alone(session, imported):
     built = build_spec(spec)["system"]
     context = copy(built.context)
     context.variables.update(built.build_context.variables)
-    library = library_digest(spec)
+    library = LibraryChain.of(imported.system_id, library_digest(spec))
 
     for name in IMPORTED:
         proof_row = session.scalar(select(Proof).where(Proof.name == name))
@@ -556,7 +556,7 @@ def test_an_imported_theorem_re_checks_from_its_rows_alone(session, imported):
             # `hypotheses_of` also brings the `$e` hypotheses this proof proves
             # under, reachable only through the theorem it establishes.
             pending = read_library(
-                session, imported.system_id, cited_labels(references), _lib,
+                session, _lib, cited_labels(references),
                 hypotheses_of=_row.theorem_id,
             )
 
@@ -596,7 +596,7 @@ def test_a_re_check_sweeps_the_term_graph_once(session, imported):
     built = build_spec(spec)["system"]
     context = copy(built.context)
     context.variables.update(built.build_context.variables)
-    library = library_digest(spec)
+    library = LibraryChain.of(imported.system_id, library_digest(spec))
 
     # `a2i` cites `ax-2` and `ax-mp` and proves under a hypothesis of its own, so
     # it exercises both halves of what a citation can resolve to.
@@ -610,7 +610,7 @@ def test_a_re_check_sweeps_the_term_graph_once(session, imported):
 
     def resolve(references):
         pending = read_library(
-            session, imported.system_id, cited_labels(references), library,
+            session, library, cited_labels(references),
             hypotheses_of=proof_row.theorem_id,
         )
 
@@ -661,8 +661,8 @@ def test_a_theorem_whose_digest_moved_is_promoted_by_parsing_instead(session, im
     context.variables.update(built.build_context.variables)
 
     loaded = load_theorems(
-        session, imported.system_id, ["ax-1", "ax-mp"], built, context,
-        library_digest(spec),
+        session, LibraryChain.of(imported.system_id, library_digest(spec)),
+        ["ax-1", "ax-mp"], built, context,
     )
     assert set(loaded) == {"ax-1", "ax-mp"}
     # `ax-1`'s conclusion is compound, so composing it is what the cache saved;
@@ -681,8 +681,8 @@ def test_a_cited_label_with_no_theorem_row_is_simply_absent(session, imported):
     context.variables.update(built.build_context.variables)
 
     loaded = load_theorems(
-        session, imported.system_id, ["ax-1", "no-such-label", "ax-mp, 1, 2"],
-        built, context, library_digest(spec),
+        session, LibraryChain.of(imported.system_id, library_digest(spec)),
+        ["ax-1", "no-such-label", "ax-mp, 1, 2"], built, context,
     )
     assert set(loaded) == {"ax-1"}
 
@@ -705,16 +705,16 @@ def test_a_degenerate_ask_reads_no_library_at_all(session, imported):
     assert total > 1, "the fixture must have a library to over-read"
 
     # No labels and no owner: nothing is reachable.
-    assert read_theorems(session, system_id, []) == []
+    assert read_theorems(session, [system_id], []) == []
 
     # Labels but no owner: the `owner` half must not match a row.
-    assert [t.label for t in read_theorems(session, system_id, ["ax-1"])] == ["ax-1"]
+    assert [t.label for t in read_theorems(session, [system_id], ["ax-1"])] == ["ax-1"]
 
     # An owner but no labels: the `labels` half must not match a row.
     mp2 = session.scalar(
         select(PromotedTheoremRow).where(PromotedTheoremRow.label == "mp2")
     )
-    assert [t.label for t in read_theorems(session, system_id, [], mp2.id)] == ["mp2"]
+    assert [t.label for t in read_theorems(session, [system_id], [], mp2.id)] == ["mp2"]
 
 
 def test_a_hypothesis_is_reachable_only_through_the_theorem_that_owns_it(
@@ -740,14 +740,14 @@ def test_a_hypothesis_is_reachable_only_through_the_theorem_that_owns_it(
 
     # Cited as a theorem, they resolve to nothing: no library row bears the name.
     assert load_theorems(
-        session, imported.system_id, ["mp2.1", "mp2.2"], built, context,
-        library_digest(spec),
+        session, LibraryChain.of(imported.system_id, library_digest(spec)),
+        ["mp2.1", "mp2.2"], built, context,
     ) == {}
 
     # Reached through their owner, they are exactly what the walk promoted.
     hypotheses = load_theorems(
-        session, imported.system_id, [], built, context, library_digest(spec),
-        hypotheses_of=mp2.id,
+        session, LibraryChain.of(imported.system_id, library_digest(spec)), [],
+        built, context, hypotheses_of=mp2.id,
     )
     assert set(hypotheses) == {"mp2.1", "mp2.2", "mp2.3"}
     assert all(h.antecedents == () for h in hypotheses.values())

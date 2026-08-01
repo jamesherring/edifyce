@@ -216,6 +216,10 @@ class StoredTheorem:
     """
 
     id: uuid.UUID
+    # Which system's library this entry belongs to — its own or an ancestor's.
+    # What says whose digest guards its cached terms, and how near it is when two
+    # systems of one chain share a label (see :class:`LibraryChain`).
+    system_id: uuid.UUID
     label: str
     statement: str
     matching: str
@@ -253,6 +257,59 @@ def theorem_spec(theorem: StoredTheorem) -> TheoremSpec:
         distinct=tuple(proviso_lines(theorem.provisos)),
         matching=theorem.matching,
     )
+
+
+@dataclass(frozen=True)
+class LibraryChain:
+    """Where a citation may resolve, and what guards each system's stored terms.
+
+    A system's library is its own entries **and its ancestors'** — that is what
+    makes a theorem proved in propositional calculus citable in a proof written
+    in ZFC (docs/system-relationships-roadmap.md §5.2). ``layers`` is the
+    inheritance chain **nearest first**, so a label declared twice resolves to
+    the closest system that has it; an ancestor's entry is shadowed, never
+    ambiguous.
+
+    Each layer carries its **own** ``library_digest``, and that is the subtle
+    part. A stored term is guarded by the digest of the system it was composed
+    against, which for an ancestor's entry is the *ancestor's*, not the citing
+    system's. Checking it against the child's would miss every time and re-parse
+    every cross-layer citation — and the re-parse would be the *worse* answer:
+    the ancestor composed its statement against the grammar it was proved in,
+    while the child's is wider, so re-composing can read the statement through
+    notation declared later. That is the same argument this module's docstring
+    makes for an imported corpus, where the union grammar is the approximation
+    and the stored term is the faithful one.
+
+    An ancestor is frozen (a parent must be published before a child may build on
+    it), so its digest does not move and a cross-layer citation reliably hits.
+    """
+
+    layers: tuple[tuple[uuid.UUID, str], ...]
+
+    @classmethod
+    def of(cls, system_id: uuid.UUID, library: str) -> LibraryChain:
+        """The one-system case — a system that inherits from nothing."""
+        return cls(((system_id, library),))
+
+    @property
+    def system_ids(self) -> list[uuid.UUID]:
+        return [system_id for system_id, _ in self.layers]
+
+    def rank(self, system_id: uuid.UUID) -> int:
+        """How near ``system_id`` is; lower wins a label."""
+        for index, (candidate, _) in enumerate(self.layers):
+            if candidate == system_id:
+                return index
+        # Not in the chain at all. Sorts last, so a row that should not have been
+        # read never shadows one that should.
+        return len(self.layers)
+
+    def digest(self, system_id: uuid.UUID) -> str | None:
+        for candidate, library in self.layers:
+            if candidate == system_id:
+                return library
+        return None
 
 
 @dataclass(frozen=True)
@@ -327,9 +384,8 @@ _NOTHING_PENDING = PendingLibrary(cited=(), owner=None, specs={}, fresh={})
 
 def read_library(
     session: Session,
-    system_id: uuid.UUID,
+    chain: LibraryChain,
     labels: Iterable[str],
-    library: str,
     hypotheses_of: uuid.UUID | None = None,
 ) -> PendingLibrary:
     """Read and digest-check everything one proof may cite, without its terms.
@@ -352,15 +408,15 @@ def read_library(
     one term sweep: done separately they each paid a recursive closure over
     `term_children` and a row fetch, which was a third of a re-check.
 
-    ``library`` is :func:`~website.logical.declarative.library_digest` for the
-    spec the result will be promoted against — what decides whether the stored
-    terms may be used.
+    ``chain`` is where a label may resolve and what guards each layer's terms;
+    see :class:`LibraryChain` for why an ancestor's entry is checked against the
+    ancestor's own digest rather than the citing system's.
     """
     wanted = list(dict.fromkeys(labels))
     if not wanted and hypotheses_of is None:
         return _NOTHING_PENDING
 
-    entries = read_theorems(session, system_id, wanted, hypotheses_of)
+    entries = read_theorems(session, chain.system_ids, wanted, hypotheses_of)
     if not entries:
         return _NOTHING_PENDING
 
@@ -368,25 +424,44 @@ def read_library(
     # statement is what its proof is establishing.
     owner = next((e for e in entries if e.id == hypotheses_of), None)
     asked_for = set(wanted)
-    cited = tuple(entry for entry in entries if entry.label in asked_for)
+    cited = _nearest(chain, (entry for entry in entries if entry.label in asked_for))
 
     specs = {entry.label: theorem_spec(entry) for entry in cited}
     fresh = {
         entry.label: entry
         for entry in cited
         if entry.schema_digest is not None
-        and entry.schema_digest == theorem_digest(library, specs[entry.label])
+        and entry.schema_digest
+        == theorem_digest(chain.digest(entry.system_id) or "", specs[entry.label])
     }
     return PendingLibrary(cited=cited, owner=owner, specs=specs, fresh=fresh)
 
 
+def _nearest(
+    chain: LibraryChain, entries: Iterable[StoredTheorem]
+) -> tuple[StoredTheorem, ...]:
+    """One entry per label: the nearest system in ``chain`` that has it.
+
+    A label is a citation, and a citation must resolve to exactly one theorem. A
+    chain can offer several — a child may prove its own `id` over an ancestor's —
+    and the child's is the answer, on the same rule the rest of inheritance
+    follows: what the nearer layer says about a name is what that name means.
+    Order is otherwise the query's, which is stable for a given ask.
+    """
+    best: dict[str, StoredTheorem] = {}
+    for entry in entries:
+        held = best.get(entry.label)
+        if held is None or chain.rank(entry.system_id) < chain.rank(held.system_id):
+            best[entry.label] = entry
+    return tuple(best.values())
+
+
 def load_theorems(
     session: Session,
-    system_id: uuid.UUID,
+    chain: LibraryChain,
     labels: Iterable[str],
     built: EngineSystem,
     context: Context,
-    library: str,
     hypotheses_of: uuid.UUID | None = None,
 ) -> dict[str, PromotedTheorem]:
     """Promote everything one proof may cite, sweeping for its terms as it goes.
@@ -397,7 +472,7 @@ def load_theorems(
     they were just parsed. A caller reading its lines from rows should use the
     two halves and sweep once for both (see ``proofs_mapping``).
     """
-    pending = read_library(session, system_id, labels, library, hypotheses_of)
+    pending = read_library(session, chain, labels, hypotheses_of)
     graph = prefetch_terms(session, pending.term_ids)
     return pending.promote(built, context, graph)
 
@@ -452,13 +527,16 @@ def _statements() -> tuple[Select, Select, Select, Select]:
     """
     theorems = select(
         PromotedTheoremRow.id,
+        PromotedTheoremRow.system_id,
         PromotedTheoremRow.label,
         PromotedTheoremRow.statement,
         PromotedTheoremRow.matching,
         PromotedTheoremRow.statement_term_id,
         PromotedTheoremRow.schema_digest,
     ).where(
-        PromotedTheoremRow.system_id == bindparam("system_id"),
+        # The whole inheritance chain, not one system: a citation resolves
+        # against an ancestor's library too (see `LibraryChain`).
+        PromotedTheoremRow.system_id.in_(bindparam("system_ids", expanding=True)),
         or_(
             PromotedTheoremRow.label.in_(bindparam("labels", expanding=True)),
             # `NULL` is the "no owner" case: `id = NULL` is never true, so a
@@ -525,7 +603,7 @@ _THEOREMS, _PREMISES, _BINDINGS, _PROVISOS = _statements()
 
 def read_theorems(
     session: Session,
-    system_id: uuid.UUID,
+    system_ids: Sequence[uuid.UUID],
     labels: Sequence[str],
     hypotheses_of: uuid.UUID | None = None,
 ) -> list[StoredTheorem]:
@@ -547,7 +625,11 @@ def read_theorems(
     rows = list(
         session.execute(
             _THEOREMS,
-            {"system_id": system_id, "labels": list(labels), "owner": hypotheses_of},
+            {
+                "system_ids": list(system_ids),
+                "labels": list(labels),
+                "owner": hypotheses_of,
+            },
         )
     )
     if not rows:
@@ -581,6 +663,7 @@ def read_theorems(
     return [
         StoredTheorem(
             id=row.id,
+            system_id=row.system_id,
             label=row.label,
             statement=row.statement,
             matching=row.matching,

@@ -17,6 +17,7 @@ round-trip — is unchanged by the unified storage.
 from __future__ import annotations
 
 import re
+import uuid
 from collections.abc import Sequence
 
 from website.logical.declarative import (
@@ -29,6 +30,7 @@ from website.logical.declarative import (
     Subproof,
     SystemSpec,
     layered_spec,
+    library_digest,
 )
 
 from app.db.models import FormalSystem
@@ -355,6 +357,29 @@ def effective_spec(chain: Sequence[FormalSystem]) -> SystemSpec:
     once down a chain.
     """
     return layered_spec([system_to_spec(system) for system in chain])
+
+
+def chain_libraries(chain: Sequence[FormalSystem]) -> list[tuple[uuid.UUID, str]]:
+    """Each system in ``chain`` with the digest guarding *its own* stored terms.
+
+    Root first, as ``chain`` is. A library entry's cached terms were composed
+    against the system that owns the entry, so what says they are still current
+    is that system's own :func:`~website.logical.declarative.library_digest` —
+    which for an ancestor is the digest of the ancestor's chain, not the citing
+    system's. Hence the running prefix: layer *i*'s digest covers layers 0..i.
+
+    Reverse it for :class:`~app.db.promoted_theorems_mapping.LibraryChain`, which
+    wants nearest first.
+
+    Reads the rows a second time rather than sharing :func:`effective_spec`'s
+    pass. That is row-walking, not parsing — the expensive half of building a
+    system is the grammar parse, which happens once either way.
+    """
+    specs = [system_to_spec(system) for system in chain]
+    return [
+        (system.id, library_digest(layered_spec(specs[: index + 1])))
+        for index, system in enumerate(chain)
+    ]
 
 
 def inherited_rule_count(chain: Sequence[FormalSystem]) -> int:

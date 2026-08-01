@@ -1,12 +1,13 @@
 # Relationships between formal systems: analysis and roadmap
 
-**Status:** **R1 delivered**; the rest is design. `formal_systems.inherits_from_id`
+**Status:** **R1 and R2 delivered**; the rest is design. `formal_systems.inherits_from_id`
 used to be validated on write and read by nothing — `app/routers/systems.py` said
 so in as many words ("inheritance is not resolved yet … deferred to the
 inheritance phase"). It now means what §5.1 says it means: a child's effective
 system is its ancestors' parts followed by its own, and every path that builds a
-system builds the chain. See §8's R1 for what landed and §9.9–9.11 for what it
-turned up.
+system builds the chain, and §5.2 as well: a citation resolves against the
+system's own library and then its ancestors'. See §8's R1/R2 for what landed and
+§9.9–9.14 for what they turned up.
 
 Goal: express and store the relationships between formal systems well enough that
 
@@ -713,9 +714,14 @@ it turned up on the way are recorded as §9.9–§9.11.
 - `token_separated` disjoins: a token-separated parent plus a glued child
   template is a `_check_token_separation` failure, not a silent pass.
 
-#### R2 — library resolution through the chain
+#### R2 — library resolution through the chain — **done**
 
 **Delivers (a) and (b)** for imported and promoted theorems.
+
+What landed: `LibraryChain` (the systems a citation may resolve in, nearest
+first, each carrying its own `library_digest`), `read_theorems` over the chain,
+`_nearest` for shadowing, and `chain_libraries` to build it. §9.12 records the
+one thing the design got wrong on paper.
 
 **Tests and verification** — `tests/test_cross_system_citation.py`.
 
@@ -1018,7 +1024,27 @@ constraint on the phases after it rather than a closed question.
     than an FK into an ancestor's namespace that the ancestor's delete would take
     with it. The row is a union with no members, which is what a declared sort of
     a layer already looks like, and `system_to_spec` emits nothing for either.
-11. **The schema-term cache is per system, and a chain has several.** A rule's
+12. **An ancestor's cached term is guarded by the *ancestor's* digest.** §5.2
+    said the child promotes an ancestor's entry "applying the edge's sort map",
+    and left the digest unsaid — which reads as though the citing system's
+    digest guards it. It cannot: the two cover different grammars by
+    construction, so every cross-layer citation would miss and re-parse. Worse,
+    the re-parse is the *wrong* answer, by exactly the argument
+    `promoted_theorems_mapping` already makes for an imported corpus — the
+    ancestor composed its statement against the grammar it was proved in, and
+    the child's is wider, so re-composing can read the statement through
+    notation declared later. So each layer carries its own digest, and because
+    an ancestor is frozen, a cross-layer citation reliably hits. Pinned by a
+    test that makes composing fatal and cites across two layers anyway.
+13. **The raw-text verify route resolves no library at all.**
+    `POST /formal-systems/{id}/verify` builds the system and parses the text,
+    but never calls `load_theorems` — so a citation of a *theorem* does not
+    resolve there, inherited or not. Older than inheritance and untouched by it;
+    surfaced because the natural way to test a cross-layer citation is that
+    route, and it fails for a reason that has nothing to do with the chain. It
+    wants either the library resolution the stored-proof path does, or a
+    docstring saying it is a grammar check and not a proof check.
+14. **The schema-term cache is per system, and a chain has several.** A rule's
     composed term is a function of the whole chain's grammar, but `rules` carries
     one `schema_digest` column, so an ancestor's row cannot cache what its
     template composes to in a descendant. R1 caches a system's **own** rules only

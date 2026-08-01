@@ -62,6 +62,7 @@ from app.db.schema_terms import (
 )
 from app.db.side_conditions import SideConditionRow
 from app.db.systems_mapping import (
+    chain_libraries,
     effective_spec,
     inherited_rule_count,
     spec_to_system,
@@ -125,6 +126,7 @@ __all__ = [
     "spec_to_system",
     "system_to_spec",
     "effective_spec",
+    "chain_libraries",
     "inherited_rule_count",
     # Term graph (app/db/terms.py) + kernel-term round trip.
     "TermChildRow",

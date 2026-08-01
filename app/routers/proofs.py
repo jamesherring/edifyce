@@ -96,7 +96,7 @@ from app.schemas import (
     TermSummary,
     VerifyProofResponse,
 )
-from website.logical.declarative import build_spec, library_digest
+from website.logical.declarative import build_spec
 from website.logical.graphs import topological_order
 
 if TYPE_CHECKING:
@@ -452,7 +452,11 @@ async def _verify_with_references(
     # resolve exactly those labels and promote them (P4). A label with no row is
     # simply not a theorem: it may name a rule, a definition, or a cited proof's
     # line, and the resolver settles that as it always did.
-    library = library_digest(spec)
+    #
+    # And *its ancestors'* libraries: a theorem proved in a system this one
+    # inherits from is citable here, resolved nearest-first with each layer's own
+    # digest guarding its own cached terms (see `LibraryChain`).
+    library = effective.library
 
     # `hypotheses_of` covers the other half of both paths below: a proof that
     # *establishes* a library entry proves under that entry's own hypotheses, and
@@ -469,7 +473,7 @@ async def _verify_with_references(
         # `term_children`. They overlap heavily: a lemma's statement is a line of
         # the proof citing it, interned to the very same row.
         pending: PendingLibrary = read_library(
-            sync, system.id, cited_labels(references), library,
+            sync, library, cited_labels(references),
             hypotheses_of=proof.theorem_id,
         )
         return PendingCitations(
@@ -497,12 +501,12 @@ async def _verify_with_references(
             await session.run_sync(
                 lambda sync: promote(
                     load_theorems(
-                        sync, system.id,
+                        sync, library,
                         cited_labels(
                             line.reference_string
                             for line in root.proof_lines
                         ),
-                        compiled_system, context, library,
+                        compiled_system, context,
                         hypotheses_of=proof.theorem_id,
                     )
                 )
