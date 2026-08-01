@@ -3,8 +3,8 @@
 **Status:** whole corpus imported and checked — **all 47,546 theorems verify**,
 each against only the notation and theorems preceding it, every proof emitted from
 its stored compressed proof and checked by Edifyce's own kernel (§1.1). The
-primitive basis is no longer "every logical `$a`": **1,427 of `set.mm`'s 1,559
-import as definitions** rather than axioms, leaving 132 primitive, and every
+primitive basis is no longer "every logical `$a`": **1,428 of `set.mm`'s 1,559
+import as definitions** rather than axioms, leaving 131 primitive, and every
 theorem still verifies (§5, A4). What remains is a short, enumerated tail — 119
 statements whose root is not a declared definitional equivalence, and 13 others —
 and every one of them is a statement whose *shape* says it does not define, rather
@@ -42,7 +42,7 @@ are not relitigated), and what remains.
 | Token-collision defects (§1.2) | fixed — four instances of one shape |
 | `$t` typesetting / notation (§4) | **next** |
 | Axiom-vs-theorem split (§3.2) | done — engine, and the library stored by provenance |
-| Definition classification (§5, A4) | done — wired into the walk; 1,427 definitions / 132 axioms with binding slots declared and `$d` split per pair |
+| Definition classification (§5, A4) | done — wired into the walk; 1,428 definitions / 131 axioms, of which 126 are `set.mm`'s own `ax-` |
 
 `tests/test_metamath_import.py` imports `sqrt2re` from its verbatim `set.mm` proof
 and has Edifyce's kernel check the result:
@@ -82,7 +82,7 @@ own kernel.
 | verified | **47,546 (100%)** |
 | rejected by the kernel | 0 |
 | failed to promote | 0 |
-| definitions registered | 1,427 of 1,559 logical `$a` (§5, A4) |
+| definitions registered | 1,428 of 1,559 logical `$a` (§5, A4) |
 | wall clock | 22 min 45 s axioms only, 24 min 17 s with definitions |
 | peak memory | 3.6 GB |
 
@@ -553,8 +553,8 @@ first; a richer type discipline risks needing to re-prove things and is best
 deferred.
 
 **A4. Definition classification — *done; see "A4 wired in" below*.**
-The classifier and its wiring are both in place — 1,427 of set.mm's 1,559 logical
-`$a` register as definitions and 132 stay primitive. The rationale below is kept
+The classifier and its wiring are both in place — 1,428 of set.mm's 1,559 logical
+`$a` register as definitions and 131 stay primitive. The rationale below is kept
 as the record of why the split is worth having, and the figures inside it are
 *staged*: each states the corpus result as of the step it describes, so 1,335 /
 224 appears below as the state after binding slots and before the `$d` split.
@@ -817,17 +817,118 @@ table and one from this paragraph are not comparable, and the only honest
 comparison is a same-machine A/B. (The 1,931 s run was also sharing four cores
 with the test suite, which is the rest of the gap.)
 
-The primitive basis is now
+### `cmpo` binds backwards, and `cmpt3` does not — *done*
+
+Enumerating the tail found one entry of the binder table wrong rather than one
+statement awkward. `df-linc` was refused for introducing a `v`, and its defining
+form is `( s e. ( ( Base ` ( Scalar ` m ) ) ^m v ) , v e. ~P ( Base ` m ) |-> … )`
+— the *second* binder used inside the *first* binder's domain. The table declared
+`cmpo` as `{"x": ["B", "C"], "y": ["C"]}`, so that `v` read as free.
+
+It is bound, and the definiens says so: `df-mpo` unfolds to
+`{ <. <. x , y >. , z >. | ( ( x e. A /\ y e. B ) /\ z = C ) }`, an abstraction
+binding `x`, `y`, `z` **simultaneously** across the whole body — `A` included. So
+`y` reaches `A`, and the entry gains it.
+
+**The instructive half is `cmpt3`, which was left alone.** Its notation is the
+same shape one argument longer, `( x e. A , y e. B , z e. C |-> D )`, and widening
+it by analogy is the obvious next move. It would have been wrong. `df-bj-mpt3`
+unfolds to `{ <. s , t >. | E. x e. A E. y e. B E. z e. C ( … /\ t = D ) }` —
+*nested restricted existentials*, not a simultaneous abstraction — so its scoping
+really is strictly forward and `y` never reaches `A`. Two productions, identically
+shaped, with different binding structure, and only the definiens distinguishes
+them. That is the third time position or shape has been tried as a guide to
+binding here and the third time it has failed; the table earns its keep again.
+
+A binder's own domain is deliberately out of scope throughout. Each definiens does
+bind it — `{ <. x , y >. | ( x e. A /\ … ) }` captures an `x` in `A` — but
+`x e. A ( x )` is degenerate, `set.mm` forbids it by `$d` wherever it could arise,
+and omitting it is the safe direction: an occurrence read as free costs a refused
+definition, one wrongly read as bound would hide a capture.
+
+**1,428 definitions, 131 axioms**, all 47,546 verifying.
+
+### What is left primitive, and why almost none of it is ours
 
 | | |
 |---|---|
 | root is not a declared definitional equivalence | 119 |
 | defined side is built from notation already in use | 9 |
-| defining side introduces a variable nothing binds | 2 |
 | defined side is a bare metavariable | 2 |
+| defining side introduces a variable nothing binds | 1 |
 
-— and every one of those is a statement whose *shape* says it does not define,
-rather than one Edifyce cannot express. The `$d` column is gone.
+The composition matters more than the count. **126 of the 131 are named `ax-` by
+`set.mm` itself**, no assertion named `ax-` is classified as a definition, and no
+remaining axiom is named anything but `ax-` or `df-`. The tail is `set.mm`'s own
+primitive basis — `ax-1`, `ax-mp`, `ax-ext`, `ax-rep`, `ax-sep`, `ax-pow`,
+`ax-inf`, `ax-ac`, `ax-groth`, the complex-number and Hilbert-space axioms, the
+Frege and `ax-c*` alternate systems, and the unproved number-theory results used
+as hypotheses (`ax-hgt749`, `ax-ros335`). Admitting any of them would be a defect.
+
+That leaves five `df-` named, and three of those are axioms whatever they are
+called: `df-clab`, `df-cleq` and `df-clel` connect class notation to set theory
+and `set.mm`'s own literature treats them as axioms. Of the two that remain:
+
+- **`df-gmdl`** is not ours. Its `A. c e. ( mTC ` t ) …` and the `( mUV ` c )`
+  inside a later quantifier's domain are *sibling* conjuncts of a `w3a` — checked
+  by bracket depth, both at depth 2 — so `c` genuinely is free there, and every
+  sibling conjunct writes `( mUV ` t )`. It reads as a typo in a mathbox, and
+  refusing it is right.
+- **`df-bi`** is the bootstrap, and is treated in its own right next.
+
+### `df-bi`, the one definition that cannot state itself — *analysed, not taken*
+
+Every other definition in `set.mm` gives meaning to a symbol using symbols that
+already have it. `df-bi` cannot, because the symbol it defines is the one the
+classifier recognises a definition *by*:
+
+```
+df-an  |- ( ( ph /\ ps ) <-> -. ( ph -> -. ps ) )
+
+df-bi  |- -. ( ( ( ph <-> ps ) -> -. ( ( ph -> ps ) -> -. ( ps -> ph ) ) )
+              -> -. ( -. ( ( ph -> ps ) -> -. ( ps -> ph ) ) -> ( ph <-> ps ) ) )
+```
+
+`df-an`'s root is `wb`, a declared equivalence, with the defined form on one side
+and the definiens on the other; test 1 passes and the rest follows. `df-bi`'s root
+is `wn`. Structurally it is "not (not (L → R) and not (R → L))" — a biconditional
+spelled longhand in `¬` and `→`, because `↔` has no meaning yet at the point it is
+asserted. The syntax axiom `wb` is declared immediately above it; the *meaning* is
+what this statement supplies, so this statement cannot use it.
+
+That defeats all three tests, not only the first. Each presupposes that the root
+*is* the equivalence and its two operands are the two forms. Here there is no such
+root: the defined form `( ph <-> ps )` occurs twice, at depths 3 and 4 inside a
+negation nest, and the definiens occurs twice as well. Nothing about `wn` says
+which of its descendants is being defined, so tests 2 and 3 never get a defined
+side to run on.
+
+**It is the only one, and structurally must be.** A system bootstraps once.
+`df-bi` is the first definition in the file and the only one asserted before an
+equivalence connective means anything; all 1,428 that follow have `↔` or `=` and
+use it. No second instance of the shape exists in the corpus, and none can.
+
+Admitting it means deciding that `-. ( X -> -. Y )` *is* the conjunction of `X`
+and `Y`, hence that the nest is an equivalence between the two forms — semantic
+reasoning about what the connectives mean, inferred from shape. That is the fourth
+time this project would have inferred a logical property rather than declaring it,
+and the previous three were each tried and each failed:
+
+| | inferred first | now declared |
+|---|---|---|
+| `denotes_constant` | read off the constructor's shape; had holes | per production |
+| `equivalences` | "two slots of one sort" admits `→` as readily as `↔` | per database |
+| binding slots | position tried; `citg`, `cmpo`, `wral` each break it | per production |
+
+So the consistent route is a **declaration** — a database naming a derived
+equivalence pattern, or simply naming `df-bi` with the two forms it relates,
+exactly as `EQUIVALENCES` and `BINDERS` name what cannot be inferred.
+
+The prior question is whether it buys anything. `df-bi` staying primitive costs
+one entry in a 131-strong basis and nothing in verification: all 47,546 theorems
+check either way. The case for doing it is that the basis would then contain
+nothing `set.mm` itself calls `df-` except the three class axioms and one mathbox
+typo — which is worth a declaration, and is not worth an inference.
 
 **Abstract binders make both of set.mm's justifications unnecessary — and set.mm
 declines that on purpose.** Worth recording, because it decides what the binding-
@@ -877,7 +978,7 @@ each unfold to whatever leaf the binder takes there. Before, the condition was
 checked before the binders were resolved, so `z` in a proviso could only mean the
 literal token `z`.
 
-Of the 132 that remain: 119 root is not a declared equivalence (`df-bi`
+Of the 131 that remain: 119 root is not a declared equivalence (`df-bi`
 among them — it defines `↔` and so cannot use it, root `-.`), 9 defined side
 already in use (`df-clab`/`df-cleq`/`df-clel`, the axioms connecting class
 notation to set theory), 2 a defining side introducing a variable nothing binds,
