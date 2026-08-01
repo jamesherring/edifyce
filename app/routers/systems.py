@@ -691,8 +691,28 @@ async def delete_system(
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    # One owner-scoped Core DELETE; the children (and proofs/folders/theorems)
-    # go via their ON DELETE CASCADE foreign keys, so nothing is loaded here.
+    # A system something *inherits from* cannot be deleted. `inherits_from_id` is
+    # `ON DELETE SET NULL`, so the delete would succeed and silently take the
+    # descendants' grammar with it: what they build from changes, while their
+    # proofs keep the `valid`, `result` and `proof_lines` rows of a check against
+    # a system that no longer exists. Refused rather than cascaded, because the
+    # cascade is not the author's to trigger from here — the descendants may be
+    # someone else's, and a published parent is exactly the case where they are.
+    dependents = (
+        await session.scalars(
+            select(FormalSystem.name).where(FormalSystem.inherits_from_id == system_id)
+        )
+    ).all()
+    if dependents:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This system cannot be deleted while "
+            + ", ".join(repr(name) for name in dependents)
+            + " inherits from it. Delete those first.",
+        )
+
+    # One owner-scoped Core DELETE; the folders/proofs/parts go via their
+    # ON DELETE CASCADE foreign keys, so nothing is loaded here.
     result = await session.execute(
         sa_delete(FormalSystem).where(
             FormalSystem.id == system_id, FormalSystem.owner_id == user.id
@@ -723,6 +743,11 @@ async def validate_system(
         return SystemValidation(success=False, errors=result["errors"])
 
     compiled = result["system"]
+    # The counts describe the *effective* system — the chain — because that is
+    # what was built and what a proof here is checked against. `definitions` is
+    # narrower on purpose: it carries row ids, and only this system's rows are
+    # addressable through this system's routes. Two scopes in one response, and
+    # deliberately so; the schema says which is which.
     return SystemValidation(
         success=True,
         system_name=compiled.name or None,

@@ -38,9 +38,11 @@ from tests.layered_systems import (
     first_order_logic_spec,
     propositional_calculus_spec,
     redeclared_implication_spec,
+    stacked_definitions_spec,
     tower,
     zfc_spec,
 )
+from tests.spec_helpers import rule
 from tests.test_proofs_api import _TABLES
 from tests.test_systems_api import _register_login
 from website.logical.declarative import SystemSpec
@@ -413,3 +415,68 @@ def test_only_the_childs_own_rules_cache_their_schema_terms(client, db):
     inherited = digests(pc)
     assert set(inherited) == {"ax-1", "ax-2", "ax-3", "MP"}
     assert all(digest is None for digest in inherited.values())
+
+
+def test_a_layer_may_store_a_proviso_over_an_ancestors_sort():
+    # A proviso's sort argument is resolved to a symbol exactly as a binding's is,
+    # so a layer whose `disjoint(..., term)` names a sort it does not declare
+    # needs a row holding that name too.
+    spec = SystemSpec(
+        name="Provisos",
+        rules=[
+            rule(
+                "R",
+                "restricted",
+                [],
+                "P",
+                [("P", "formula"), ("x", "term")],
+                side_conditions=["disjoint(x, P, term)"],
+            )
+        ],
+    )
+    assert system_to_spec(spec_to_system(spec)) == spec
+
+
+def test_a_system_cannot_be_deleted_while_something_inherits_from_it(client, db):
+    # `inherits_from_id` is `ON DELETE SET NULL`, so the delete would succeed and
+    # silently take the descendants' grammar with it — while their proofs keep
+    # the verdict of a check against a system that no longer exists.
+    owner = _register_login(client, "delete@example.com")
+    pc, fol, zfc = seed_tower(db, owner)
+
+    blocked = client.delete(f"/api/formal-systems/{pc}")
+    assert blocked.status_code == 409
+    assert "inherits from it" in blocked.json()["detail"]
+
+    # Bottom-up is allowed, and each delete frees the one below it.
+    assert client.delete(f"/api/formal-systems/{zfc}").status_code == 204
+    assert client.delete(f"/api/formal-systems/{fol}").status_code == 204
+    assert client.delete(f"/api/formal-systems/{pc}").status_code == 204
+
+
+def test_a_definition_reorder_is_guarded_against_the_whole_chain(client, db):
+    # Read against this system alone, a child's definitions are written in
+    # notation nothing declares — so none of them layer, no order can *lose* one,
+    # and the guard silently passes everything. `df-nor` is written in `df-nand`'s
+    # notation, so putting it first must be refused.
+    owner = _register_login(client, "reorder@example.com")
+    pc = seed(db, propositional_calculus_spec(), owner)
+    child = seed(db, stacked_definitions_spec(), owner, pc, published=False)
+
+    body = client.get(f"/api/formal-systems/{child}").json()
+    ids = [row["id"] for row in body["definitions"]]
+    assert len(ids) == 2
+
+    refused = client.put(
+        f"/api/formal-systems/{child}/definitions/order",
+        json={"ids": [ids[1], ids[0]]},
+    )
+    assert refused.status_code == 400, refused.text
+    assert "un-define" in refused.json()["detail"]
+
+    # The control: the order it already has is accepted, so the guard is
+    # refusing an order rather than refusing to reorder.
+    kept = client.put(
+        f"/api/formal-systems/{child}/definitions/order", json={"ids": ids}
+    )
+    assert kept.status_code == 200, kept.text

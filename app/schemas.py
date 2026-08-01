@@ -318,17 +318,25 @@ class DefinitionBinders(BaseModel):
 
 
 class SystemValidation(BaseModel):
-    """Result of assembling the stored rows and compiling them."""
+    """Result of assembling the stored rows and compiling them.
+
+    A system that inherits is compiled against its **whole chain**, so the counts
+    below are the effective system's — its ancestors' line types and rules as
+    well as its own — which is what a proof written here is checked against.
+    `definitions` is the exception, and is scoped to this system's own rows,
+    because it carries the `definition_id`s only this system's routes address.
+    """
 
     success: bool
     errors: list[str] = Field(default_factory=list)
     system_name: str | None = None
+    # Chain-wide: what the system was built from, not what it declares.
     line_type_count: int | None = None
     inference_rule_count: int | None = None
-    # Per compiled definition, the `fresh` clause the engine settled on. Only
-    # definitions that *layer* appear (one whose defining form matched nothing is
-    # dropped at build), so this is a report on what was built, not on what was
-    # stored.
+    # Per compiled definition **of this system**, the `fresh` clause the engine
+    # settled on. Only definitions that *layer* appear (one whose defining form
+    # matched nothing is dropped at build), so this is a report on what was
+    # built, not on what was stored.
     definitions: list[DefinitionBinders] = Field(default_factory=list)
 
 

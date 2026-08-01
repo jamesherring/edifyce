@@ -27,6 +27,7 @@ from website.logical.declarative import (
 )
 from website.logical.kernel.constructors import constructor_for
 
+from tests.spec_helpers import template_prod
 from tests.layered_systems import (
     bound_constant_spec,
     extra_line_spec,
@@ -267,3 +268,29 @@ def test_an_ancestors_definition_is_not_held_to_a_descendants_axiom():
 def test_an_empty_chain_is_refused():
     with pytest.raises(DeclarativeError):
         layered_spec([])
+
+
+def test_layers_are_told_apart_by_position_not_by_name():
+    # A layer's name is free text and two layers of a chain may well share one.
+    # Identifying a layer by it would make every check above skip exactly the
+    # pair it exists to catch — and the collision is silent, because the child's
+    # production simply replaces the ancestor's in the build namespace.
+    pc = propositional_calculus_spec()
+    clash = replace(redeclared_implication_spec(), name=pc.name)
+    message = refusal(pc, clash)
+    assert "'implication'" in message
+
+
+def test_a_production_may_not_take_an_ancestors_sort_name():
+    # A sort is shared, but its name is still one entry in `ctx.variables`: a
+    # production spelled like an ancestor's sort would take the union's place,
+    # and the sort would then admit nothing. Refused with the sort named, rather
+    # than surfacing later as an attribute error out of the builder.
+    shadow = SystemSpec(
+        name="Shadow",
+        productions=[
+            template_prod("formula", "formula", "[P]", [("P", "formula")])
+        ],
+    )
+    message = refusal(propositional_calculus_spec(), shadow)
+    assert "'formula'" in message and "sort of that name" in message

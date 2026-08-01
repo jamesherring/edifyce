@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.auth import current_active_user
-from app.db import Base, discard_system_checks, get_session, system_to_spec
+from app.db import Base, discard_system_checks, get_session
 from app.db.models import User
 from app.db.side_conditions import SideConditionRow
 from app.db.side_conditions_mapping import (
@@ -63,6 +63,7 @@ from app.routers.systems import (
     bracket_out,
     definition_out,
     line_out,
+    load_effective,
     load_system,
     production_out,
     require_editable_system,
@@ -775,26 +776,46 @@ async def _guard_definition_reorder(
         # Not a valid permutation — let _apply_order raise the canonical 400.
         return
 
+    # Against the whole inheritance chain, not this system alone: a child's
+    # definitions are written in its ancestors' notation, so read in isolation
+    # none of them layer, every set below is empty and the guard silently passes
+    # everything.
+    effective = await load_effective(session, system)
+    if effective.spec is None:
+        # The chain describes no system at all (a draft ancestor, a cross-layer
+        # collision). There is no layering to compare orders against, and
+        # `validate` is where that failure is reported.
+        return
+    spec = effective.spec
+
     # Layering is tracked by position and mapped back to the row id at that
     # position, so a definition is identified by *which row* it is — not by its
     # defined form (two definitions can share one) nor by structural identity
-    # (equivalent definitions de-duplicate). `system.definitions` and
-    # `spec.definitions` are both in stored order, so index i lines up.
-    spec = system_to_spec(system)
-    layered_before = registered_definition_layering(spec)
+    # (equivalent definitions de-duplicate). This system's definitions are the
+    # tail of the chain's, so index i of `stored` is `inherited + i` of the spec.
+    inherited = len(spec.definitions) - len(stored)
+    layered_before = registered_definition_layering(spec)[inherited:]
     live_before = {stored[i] for i, ok in enumerate(layered_before) if ok}
 
     index_of = {row_id: i for i, row_id in enumerate(stored)}
-    proposed = system_to_spec(system)
-    proposed.definitions = [proposed.definitions[index_of[i]] for i in ids]
-    layered_after = registered_definition_layering(proposed)
+    # Only this system's own definitions move; an ancestor's stay where the
+    # chain put them. `definition_scope` needs no permuting with them — every
+    # definition of one layer carries the same scope.
+    proposed = replace(
+        spec,
+        definitions=[
+            *spec.definitions[:inherited],
+            *(spec.definitions[inherited + index_of[i]] for i in ids),
+        ],
+    )
+    layered_after = registered_definition_layering(proposed)[inherited:]
     live_after = {ids[i] for i, ok in enumerate(layered_after) if ok}
 
     lost = live_before - live_after
     if not lost:
         return
     names = [
-        spec.definitions[i].name or spec.definitions[i].higher
+        spec.definitions[inherited + i].name or spec.definitions[inherited + i].higher
         for i, row_id in enumerate(stored)
         if row_id in lost
     ]

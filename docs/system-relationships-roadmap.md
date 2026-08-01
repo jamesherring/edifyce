@@ -664,8 +664,11 @@ What landed, and where: `declarative.layered_spec` (the concatenation and its
 collision rules) and `SystemSpec.definition_scope` (§9.9); `app.db.effective_spec`
 + `inherited_rule_count`; `systems.load_chain` / `load_effective` /
 `draft_ancestor_errors` / `_require_inheritable_reference`, with `validate`,
-`publish`, both `verify` routes and the schema-term cache going through the chain.
-Two things it turned up on the way are recorded as §9.9 and §9.10.
+`publish`, both `verify` routes, the definition-reorder guard and the schema-term
+cache going through the chain. Deleting a system something inherits from is
+refused — `inherits_from_id` is `ON DELETE SET NULL`, so the delete would take
+the descendants' grammar away while their proofs kept the verdict of a check
+against it. Three things it turned up on the way are recorded as §9.9–§9.11.
 
 **Tests and verification** — `tests/layered_systems.py`,
 `tests/test_layered_spec.py` (engine), `tests/test_system_inheritance.py` (API).

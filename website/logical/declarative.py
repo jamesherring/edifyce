@@ -1847,27 +1847,36 @@ def layered_spec(specs: Sequence[SystemSpec]) -> SystemSpec:
     if not specs:
         raise DeclarativeError("An inheritance chain needs at least one system.")
 
-    layers = [spec.name or f"layer {index}" for index, spec in enumerate(specs)]
+    # A layer is identified by its **position**, never by its name: names are
+    # free text and two layers of a chain may well share one, which would make
+    # every check below skip the pair it exists to catch. The name is for the
+    # message only.
+    def label(layer: int) -> str:
+        return specs[layer].name or f"layer {layer}"
 
     # name -> (layer, what it was), for everything that shares `ctx.variables`.
-    names: dict[str, tuple[str, str]] = {}
+    names: dict[str, tuple[int, str]] = {}
     # A citation resolves a label against rules, then promoted theorems, then
     # definitions, so those three share one namespace too.
-    labels: dict[str, tuple[str, str]] = {}
-    sorts: dict[str, str] = {}
-    openings: dict[str, tuple[str, str]] = {}
+    labels: dict[str, tuple[int, str]] = {}
+    # sort name -> the layer that first declared it. Sorts are the one namespace
+    # that is *meant* to be shared, so they are recorded rather than claimed —
+    # and cross-checked against `names` at the end, since a production taking an
+    # ancestor's sort name would take its union out of the build namespace.
+    sorts: dict[str, int] = {}
+    openings: dict[str, tuple[str, int]] = {}
 
     def claim(
-        table: dict[str, tuple[str, str]], name: str, layer: str, what: str
+        table: dict[str, tuple[int, str]], name: str, layer: int, what: str
     ) -> None:
         held = table.get(name)
         if held is not None and held[0] != layer:
             raise DeclarativeError(
-                f"{what} {name!r} is declared by {layer!r}, but {held[0]!r} "
-                f"already declares a {held[1].lower()} of that name. A name may "
-                f"be declared once across an inheritance chain: redeclaring an "
-                f"ancestor's would change what every theorem inherited from it "
-                f"means."
+                f"{what} {name!r} is declared by {label(layer)!r}, but "
+                f"{label(held[0])!r} already declares a {held[1].lower()} of that "
+                f"name. A name may be declared once across an inheritance chain: "
+                f"redeclaring an ancestor's would change what every theorem "
+                f"inherited from it means."
             )
         table.setdefault(name, (layer, what))
 
@@ -1879,15 +1888,16 @@ def layered_spec(specs: Sequence[SystemSpec]) -> SystemSpec:
     brackets: list[tuple[str, str]] = []
     definition_scope: list[tuple[int, int]] = []
 
-    for layer, spec in zip(layers, specs):
+    for layer, spec in enumerate(specs):
         for opening, closing in spec.brackets:
             held = openings.get(opening)
             if held is not None and held[1] != layer:
                 if held[0] != closing:
                     raise DeclarativeError(
-                        f"Bracket {opening!r} closes with {closing!r} in {layer!r} "
-                        f"and with {held[0]!r} in {held[1]!r}. A chain has one "
-                        f"bracket map, so the two readings cannot both hold."
+                        f"Bracket {opening!r} closes with {closing!r} in "
+                        f"{label(layer)!r} and with {held[0]!r} in "
+                        f"{label(held[1])!r}. A chain has one bracket map, so the "
+                        f"two readings cannot both hold."
                     )
                 # The ancestor already declared this pair; one map, one entry.
                 continue
@@ -1941,6 +1951,22 @@ def layered_spec(specs: Sequence[SystemSpec]) -> SystemSpec:
                 outer
                 if inner is None
                 else (before[0] + inner[0], before[1] + inner[1])
+            )
+
+    # A sort is shared, but its *name* is still one entry in the build namespace:
+    # a production of one layer spelled like a sort of another would replace the
+    # union in `ctx.variables`, and the sort would then admit nothing. Checked
+    # here rather than in `claim`, because within one layer the two coexisting is
+    # long-standing behaviour that `_shadowed_grammar_names` records for the
+    # digest instead of refusing.
+    for name, (layer, what) in names.items():
+        declared_in = sorts.get(name)
+        if declared_in is not None and declared_in != layer:
+            raise DeclarativeError(
+                f"{what} {name!r} is declared by {label(layer)!r}, but "
+                f"{label(declared_in)!r} declares a sort of that name. A chain "
+                f"has one build namespace, so the production would take the "
+                f"sort's place in it and the sort would admit nothing."
             )
 
     return SystemSpec(

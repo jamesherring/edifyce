@@ -36,6 +36,7 @@ from app.db.side_conditions_mapping import (
     build_rule_side_conditions,
     build_side_condition_rows,
     definition_condition_string,
+    proviso_sorts,
     rule_side_conditions_list,
 )
 from app.db.systems import (
@@ -95,8 +96,14 @@ def _named_sorts(spec: SystemSpec) -> list[str]:
         note(defn.sort)
         for _var, sort in [*defn.bindings, *defn.fresh]:
             note(sort)
+        # A proviso's sort argument is resolved to a symbol too — `disjoint(x, y,
+        # setvar)` names a sort as surely as a binding does.
+        for sort in proviso_sorts(defn.condition):
+            note(sort)
     for rule in [*spec.axioms, *spec.rules]:
         for _var, sort in rule.bindings:
+            note(sort)
+        for sort in proviso_sorts(None, rule.side_conditions):
             note(sort)
     return names
 

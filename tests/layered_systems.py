@@ -365,3 +365,35 @@ def extra_line_spec(name: str = "Extra line") -> SystemSpec:
             )
         ],
     )
+
+
+def stacked_definitions_spec(name: str = "Stacked") -> SystemSpec:
+    """A child whose second definition is written in its first one's notation.
+
+    Both defined forms are new — no production spells them — so each is
+    grammatical only because the definition before it registered it. That is what
+    makes their *order* load-bearing, and it is only visible with the ancestors
+    in front: read alone, neither `∧` nor anything else here parses, so nothing
+    layers and there is nothing an order could lose.
+    """
+    return SystemSpec(
+        name=name,
+        definitions=[
+            defn(
+                "formula",
+                "nand",
+                "(P ⊼ Q)",
+                "¬(P ∧ Q)",
+                [("P", "formula"), ("Q", "formula")],
+                label="df-nand",
+            ),
+            defn(
+                "formula",
+                "nor",
+                "(P ⊽ Q)",
+                "¬(P ⊼ Q)",
+                [("P", "formula"), ("Q", "formula")],
+                label="df-nor",
+            ),
+        ],
+    )
