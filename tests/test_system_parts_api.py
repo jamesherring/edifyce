@@ -870,6 +870,37 @@ def test_definition_provisos_round_trip_through_the_api(client):
     assert cleared.json()["provisos"] == []
 
 
+def test_the_removed_condition_field_is_refused_not_ignored(client):
+    # A proviso is a soundness restriction on unfolding, so a pre-`provisos` client
+    # sending `condition` must not get a 200 and a definition that unfolds freely.
+    # Pydantic would drop the unknown field silently; the schema rejects it instead.
+    _login(client, "ada@example.com")
+    sid = _defn_system(client)
+    created = client.post(f"/api/formal-systems/{sid}/definitions", json={
+        "sort": "term", "name": "d", "higher": "x", "lower": "y",
+        "bindings": [{"var": "x", "sort": "term"}, {"var": "y", "sort": "term"}],
+        "condition": "disjoint(x, y)",
+    })
+    assert created.status_code == 422
+    assert "provisos" in created.text
+
+    # And on the PATCH path, where the silent drop would be a no-op edit: the
+    # definition keeps the proviso it had rather than appearing to have changed.
+    defn = _post(client, f"/api/formal-systems/{sid}/definitions", {
+        "sort": "term", "name": "e", "higher": "x", "lower": "y",
+        "bindings": [{"var": "x", "sort": "term"}, {"var": "y", "sort": "term"}],
+        "provisos": ["equal(x, y)"],
+    })
+    patched = client.patch(
+        f"/api/formal-systems/{sid}/definitions/{defn['id']}",
+        json={"condition": "disjoint(x, y)"},
+    )
+    assert patched.status_code == 422
+    stored = client.get(f"/api/formal-systems/{sid}").json()["definitions"]
+    unchanged = next(d for d in stored if d["id"] == defn["id"])
+    assert unchanged["provisos"] == ["equal(x, y)"]
+
+
 def test_definition_or_proviso_round_trips_through_the_api(client):
     _login(client, "ada@example.com")
     sid = _defn_system(client)
