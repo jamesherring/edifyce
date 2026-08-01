@@ -27,17 +27,19 @@ import pytest
 pytest.importorskip("regex")
 pytest.importorskip("sqlalchemy")
 
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, event, func, select
 from sqlalchemy import distinct as distinct_
 from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
 from app.db import (
     Base,
+    PendingCitations,
     cited_labels,
     load_proof_for_check,
     load_theorems,
     prefetch_terms,
+    read_library,
 )
 from website.logical.declarative import build_spec, library_digest
 from website.logical.formal_system.proof import Proof as EngineProof
@@ -550,25 +552,80 @@ def test_an_imported_theorem_re_checks_from_its_rows_alone(session, imported):
 
         assert proof_row.theorem_id is not None, f"{name} was not linked to its theorem"
 
-        def resolve(populated, _built=built, _ctx=context, _lib=library, _row=proof_row):
-            labels = cited_labels(line.reference_string for line in populated.proof_lines)
+        def resolve(references, _built=built, _ctx=context, _lib=library, _row=proof_row):
             # `hypotheses_of` also brings the `$e` hypotheses this proof proves
             # under, reachable only through the theorem it establishes.
-            promoted = load_theorems(
-                session, imported.system_id, labels, _built, _ctx, _lib,
+            pending = read_library(
+                session, imported.system_id, cited_labels(references), _lib,
                 hypotheses_of=_row.theorem_id,
             )
-            for theorem in promoted.values():
-                _built.promote(theorem)
+
+            def promote(graph, _p=pending, _b=_built, _c=_ctx):
+                for theorem in _p.promote(_b, _c, graph).values():
+                    _b.promote(theorem)
+
+            return PendingCitations(pending.term_ids, promote)
 
         checked = load_proof_for_check(
-            session, proof_row.id, built, context, proof=root, before_check=resolve
+            session, proof_row.id, built, context, proof=root,
+            resolve_citations=resolve,
         )
         assert checked is not None, f"{name} stored no lines"
         assert checked.valid is True, [
             (line.display, line.invalid_message) for line in checked.proof_lines
         ]
         assert checked.valid == proof_row.valid
+
+
+def test_a_re_check_sweeps_the_term_graph_once(session, imported):
+    """A proof's own lines and the theorems it cites are *one* closure query.
+
+    Two was the natural shape — the lines are loaded, then what they cite is
+    resolved — and it cost a second recursive walk of `term_children` for one
+    check. It is avoidable because a citation is `proof_lines.reference`, a plain
+    column: what a proof cites is settled before any term is built, so both sets
+    of roots are known in time to be swept together. They overlap heavily, since
+    a lemma's statement is a line of the proof citing it, interned to one row.
+
+    Pinned by counting, because nothing about the result changes if it regresses
+    — the same terms arrive either way, just in two round trips instead of one,
+    which no assertion on the verdict could see.
+    """
+    system = session.get(FormalSystem, imported.system_id)
+    spec = system_to_spec(system)
+    built = build_spec(spec)["system"]
+    context = copy(built.context)
+    context.variables.update(built.build_context.variables)
+    library = library_digest(spec)
+
+    # `a2i` cites `ax-2` and `ax-mp` and proves under a hypothesis of its own, so
+    # it exercises both halves of what a citation can resolve to.
+    proof_row = session.scalar(select(Proof).where(Proof.name == "a2i"))
+    sweeps: list[str] = []
+
+    @event.listens_for(session.get_bind(), "before_cursor_execute")
+    def _count(conn, cursor, statement, parameters, ctx, many):  # noqa: ANN001, ANN202
+        if "reachable_terms" in statement:
+            sweeps.append(statement)
+
+    def resolve(references):
+        pending = read_library(
+            session, imported.system_id, cited_labels(references), library,
+            hypotheses_of=proof_row.theorem_id,
+        )
+
+        def promote(graph):
+            for theorem in pending.promote(built, context, graph).values():
+                built.promote(theorem)
+
+        return PendingCitations(pending.term_ids, promote)
+
+    checked = load_proof_for_check(
+        session, proof_row.id, built, context,
+        proof=EngineProof(formal_system=built), resolve_citations=resolve,
+    )
+    assert checked is not None and checked.valid is True
+    assert len(sweeps) == 1, f"{len(sweeps)} term sweeps for one re-check"
 
 
 def test_a_stored_theorem_carries_the_term_its_statement_composed_to(session, imported):

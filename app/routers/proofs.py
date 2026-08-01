@@ -60,10 +60,13 @@ from app.db import (
     ProofReference,
     clear_proof_lines,
     get_session,
+    PendingCitations,
+    PendingLibrary,
     load_proof_for_check,
     load_proof_lines,
     load_schema_terms,
     load_theorems,
+    read_library,
     store_proof_lines,
     store_schema_terms,
     system_to_spec,
@@ -98,9 +101,10 @@ from website.logical.declarative import build_spec, library_digest
 from website.logical.graphs import topological_order
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from website.logical.formal_system import FormalSystem as EngineSystem
+    from website.logical.formal_system import PromotedTheorem
     from website.logical.matching.context import Context
 
 router = APIRouter(prefix="/proofs", tags=["proofs"])
@@ -438,26 +442,34 @@ async def _verify_with_references(
     # line, and the resolver settles that as it always did.
     library = library_digest(spec)
 
-    def promote_cited(sync: Session, checked_proof: EngineProof) -> None:
-        labels = cited_labels(
-            line.reference_string for line in checked_proof.proof_lines
-        )
-        # `hypotheses_of` covers the other half: a proof that *establishes* a
-        # library entry proves under that entry's own hypotheses, and states them
-        # as lines citing their labels. Both halves are one call because they are
-        # one query and one term sweep.
-        promoted = load_theorems(
-            sync, system.id, labels, compiled_system, context, library,
-            hypotheses_of=proof.theorem_id,
-        )
+    # `hypotheses_of` covers the other half of both paths below: a proof that
+    # *establishes* a library entry proves under that entry's own hypotheses, and
+    # states them as lines citing their labels.
+    def promote(promoted: Mapping[str, PromotedTheorem]) -> None:
         for theorem in promoted.values():
             compiled_system.promote(theorem)
+
+    def cited_terms(sync: Session, references: Sequence[str | None]) -> PendingCitations:
+        # The row path resolves its library *into the proof's own term sweep*.
+        # What a proof cites is a plain column, so the theorems it names are
+        # settled before any term is built — and their cached terms then load
+        # alongside the lines' rather than in a second closure over
+        # `term_children`. They overlap heavily: a lemma's statement is a line of
+        # the proof citing it, interned to the very same row.
+        pending: PendingLibrary = read_library(
+            sync, system.id, cited_labels(references), library,
+            hypotheses_of=proof.theorem_id,
+        )
+        return PendingCitations(
+            pending.term_ids,
+            lambda graph: promote(pending.promote(compiled_system, context, graph)),
+        )
 
     try:
         checked = await session.run_sync(
             lambda sync: load_proof_for_check(
                 sync, proof.id, compiled_system, context, proof=root,
-                before_check=lambda populated: promote_cited(sync, populated),
+                resolve_citations=lambda refs: cited_terms(sync, refs),
             )
         )
         if checked is None:
@@ -465,8 +477,24 @@ async def _verify_with_references(
             # check. The same two steps in the same order — `parse` is exactly
             # this pair, and is not used here only because the library has to be
             # resolved between them.
+            #
+            # `load_theorems` rather than the split above, because there is no
+            # sweep to share: these lines were just parsed and already carry
+            # their terms, so the library's is the only one this path does.
             _read, read_context = compiled_system.read_proof(proof.source, proof=root)
-            await session.run_sync(lambda sync: promote_cited(sync, root))
+            await session.run_sync(
+                lambda sync: promote(
+                    load_theorems(
+                        sync, system.id,
+                        cited_labels(
+                            line.reference_string
+                            for line in root.proof_lines
+                        ),
+                        compiled_system, context, library,
+                        hypotheses_of=proof.theorem_id,
+                    )
+                )
+            )
             compiled_system.check_proof(root, read_context)
     except Exception as exc:  # noqa: BLE001
         return _Verification(
