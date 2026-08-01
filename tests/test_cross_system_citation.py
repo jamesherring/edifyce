@@ -374,16 +374,45 @@ def test_an_ancestors_cached_term_is_used_rather_than_re_parsed(db, client, monk
     ) == {"id"}
 
 
-def test_falling_back_to_a_parse_costs_time_and_not_a_difference(db, client):
-    # The other half of the contract: a term that cannot be used is a *miss*.
-    # Stripping the ancestor's digest forces the parse, and the theorem that
-    # comes back must be the same one.
+def test_an_entry_of_this_system_falls_back_to_a_parse(db, client):
+    # The same-system contract, unchanged: a term that cannot be used is a
+    # *miss*, which costs a parse and never a difference. The grammar the
+    # statement is re-read against is the one that owns it, so re-reading it is
+    # right.
     owner = _register_login(client, "fallback@example.com")
+    alone = seed(db, propositional_calculus_spec(), owner, published=False)
+    promote_into(db, alone, IDENTITY)
+    cached = resolve(db, alone, ["id"])["id"]
+    _make_stale(db)
+
+    parsed = resolve(db, alone, ["id"])["id"]
+    assert parsed.deduction.pattern == cached.deduction.pattern
+    assert parsed.deduction.schema_term is not None
+
+
+def test_an_inherited_entry_with_no_usable_term_is_refused(db, client):
+    # And the case that must *not* fall back. Re-reading an ancestor's statement
+    # against the citing system's wider grammar can give it a different parse —
+    # notation declared later captures an earlier statement, which is why the
+    # corpus walk scopes notation by position at all — so the theorem would mean
+    # something its own system never established. Refused rather than
+    # approximated: here a miss is a difference, not a cost.
+    owner = _register_login(client, "inherited-miss@example.com")
     pc, _fol, zfc = seed_tower(db, owner)
     promote_into(db, pc, IDENTITY)
-    cached = resolve(db, zfc, ["id"])["id"]
+    assert set(resolve(db, zfc, ["id"])) == {"id"}
 
-    engine = create_engine(db)
+    _make_stale(db)
+    with pytest.raises(LookupError, match="inherited from another system"):
+        resolve(db, zfc, ["id"])
+    # The ancestor itself is unaffected — it is that grammar the statement is
+    # current against, so its own citation still resolves, by parsing.
+    assert set(resolve(db, pc, ["id"])) == {"id"}
+
+
+def _make_stale(db_path) -> None:
+    """Drop the digest guarding `id`'s cached terms, forcing the fallback."""
+    engine = create_engine(db_path)
     try:
         with Session(engine) as session:
             session.execute(
@@ -394,10 +423,6 @@ def test_falling_back_to_a_parse_costs_time_and_not_a_difference(db, client):
             session.commit()
     finally:
         engine.dispose()
-
-    parsed = resolve(db, zfc, ["id"])["id"]
-    assert parsed.deduction.pattern == cached.deduction.pattern
-    assert parsed.deduction.schema_term is not None
 
 
 def test_an_ancestors_entry_is_guarded_by_the_ancestors_own_digest(db, client):

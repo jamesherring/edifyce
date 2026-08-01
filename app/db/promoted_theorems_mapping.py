@@ -339,9 +339,13 @@ class PendingLibrary:
     cited: tuple[StoredTheorem, ...]
     owner: StoredTheorem | None
     specs: Mapping[str, TheoremSpec]
-    # The cited entries whose cached terms still describe the system. A miss
-    # costs a parse, never a difference (see the module docstring).
+    # The cited entries whose cached terms still describe the system that owns
+    # them. For an entry of the citing system a miss costs a parse and never a
+    # difference; for an *inherited* one it is fatal — see :meth:`promote`.
     fresh: Mapping[str, StoredTheorem]
+    # The chain the entries were read from, so `promote` can tell an inherited
+    # entry from one of the citing system's own.
+    chain: LibraryChain = LibraryChain(())
 
     @property
     def term_ids(self) -> list[uuid.UUID]:
@@ -370,6 +374,28 @@ class PendingLibrary:
         promoted: dict[str, PromotedTheorem] = {}
         for entry in self.cited:
             current = self.fresh.get(entry.label)
+            if current is None and self.chain.rank(entry.system_id) > 0:
+                # An *inherited* entry with no usable cached term. Falling back to
+                # the parse would compose its statement against the citing
+                # system's grammar, which is wider than the one it was proved in —
+                # and notation declared later can capture an earlier statement's
+                # parse (metamath roadmap §1.4, `bj-0`). The theorem would then
+                # mean something its own system never established, and could
+                # justify a step that system could not. So this is refused rather
+                # than approximated: unlike the same-system fallback, a miss here
+                # is a difference and not a cost.
+                #
+                # Reached only by an entry stored without its terms
+                # (`store_theorem(..., promoted=None)`) or one whose own system's
+                # grammar has moved — which publishing is supposed to prevent. The
+                # citation simply does not resolve, so the proof fails on it.
+                raise LookupError(
+                    f"Theorem {entry.label!r} is inherited from another system and "
+                    "its stored terms are missing or stale, so it cannot be cited "
+                    "here: re-reading its statement against this system's grammar "
+                    "could give it a different meaning from the one it was proved "
+                    "with. Re-verify the system that owns it."
+                )
             promoted[entry.label] = promote_spec(
                 built,
                 self.specs[entry.label],
@@ -442,7 +468,9 @@ def read_library(
         and entry.schema_digest
         == theorem_digest(chain.digest(entry.system_id), specs[entry.label])
     }
-    return PendingLibrary(cited=cited, owner=owner, specs=specs, fresh=fresh)
+    return PendingLibrary(
+        cited=cited, owner=owner, specs=specs, fresh=fresh, chain=chain
+    )
 
 
 def _nearest(
