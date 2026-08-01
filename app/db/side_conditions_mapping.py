@@ -21,8 +21,9 @@ the same strings so they cannot drift.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
 from app.db.side_conditions import (
     SIDE_KIND_AND,
@@ -37,9 +38,6 @@ from app.db.side_conditions import (
 )
 from app.db.promoted_theorems import PromotedTheoremRow
 from app.db.systems import DefinitionRow, RuleRow, SymbolRow
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
 
 # Leaf predicate -> (kind, allowed arg counts, arg-index of the sort or None).
 _PREDICATES = {
@@ -175,6 +173,37 @@ def _parse_lines(lines: list[str]) -> _Leaf | _Combinator | None:
     if len(conjuncts) == 1:
         return conjuncts[0]
     return _Combinator(SIDE_KIND_AND, tuple(conjuncts))
+
+
+def proviso_sorts(lines: Sequence[str]) -> list[str]:
+    """Every sort name a proviso names, in first-mention order.
+
+    What ``spec_to_system`` needs before it can resolve one to a symbol: a
+    ``disjoint(x, y, setvar)`` in a layer that does not declare ``setvar`` still
+    needs a row holding that name (see ``systems_mapping._named_sorts``). Reuses
+    the parser rather than scanning the text, so the two cannot drift.
+
+    A proviso that will not parse yields nothing rather than raising: the
+    ``build_*`` functions below are where that failure belongs, with their own
+    message.
+    """
+    try:
+        tree = _parse_lines(list(lines))
+    except ValueError:
+        return []
+
+    found: list[str] = []
+
+    def walk(node: _Leaf | _Combinator | None) -> None:
+        if isinstance(node, _Leaf):
+            if node.sort is not None and node.sort not in found:
+                found.append(node.sort)
+        elif isinstance(node, _Combinator):
+            for child in node.children:
+                walk(child)
+
+    walk(tree)
+    return found
 
 
 def build_rule_side_conditions(

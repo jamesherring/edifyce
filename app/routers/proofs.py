@@ -69,7 +69,6 @@ from app.db import (
     read_library,
     store_proof_lines,
     store_schema_terms,
-    system_to_spec,
 )
 from app.db.models import User
 from app.routers._common import (
@@ -79,7 +78,7 @@ from app.routers._common import (
     paginate_summaries,
     unique_slug,
 )
-from app.routers.systems import load_system
+from app.routers.systems import load_effective, load_system
 from website.logical.formal_system.proof import Proof as EngineProof
 from app.schemas import (
     Page,
@@ -330,9 +329,20 @@ async def _verify_with_references(
     # verify, and a grammar edit makes the stored terms inert rather than wrong
     # (see app/db/schema_terms.py). Under the system lock, like everything else
     # this function writes.
-    spec = system_to_spec(system)
+    #
+    # Against the system's whole inheritance chain: a child is only a system at
+    # all once its ancestors' parts are in front of its own, so the spec that is
+    # built — and the digests computed from it — cover the chain rather than this
+    # row (app.db.effective_spec).
+    effective = await load_effective(session, system)
+    if effective.errors:
+        return _Verification(
+            VerifyProofResponse(success=False, errors=effective.errors), None
+        )
+    spec = effective.spec
+    offset = effective.rule_offset
     schema_terms = await session.run_sync(
-        lambda sync: load_schema_terms(sync, system, spec)
+        lambda sync: load_schema_terms(sync, system, spec, offset)
     )
     build = build_spec(spec, schema_terms=schema_terms)
     if "errors" in build:
@@ -342,7 +352,9 @@ async def _verify_with_references(
     compiled_system = build["system"]
     if persist:
         await session.run_sync(
-            lambda sync: store_schema_terms(sync, system, compiled_system, schema_terms)
+            lambda sync: store_schema_terms(
+                sync, system, compiled_system, schema_terms, offset
+            )
         )
 
     closure, edges = await _reference_closure(session, proof.id)

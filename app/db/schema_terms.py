@@ -109,7 +109,7 @@ class SchemaTermCache:
 
 
 def load_schema_terms(
-    session: Session, system: FormalSystem, spec: SystemSpec
+    session: Session, system: FormalSystem, spec: SystemSpec, offset: int = 0
 ) -> SchemaTermCache:
     """Every usable stored schema term of ``system``.
 
@@ -117,12 +117,23 @@ def load_schema_terms(
     ``spec.rules``, and the digests are computed from it. Always returns a cache,
     empty when nothing stored is still current; hand the same one back to
     :func:`store_schema_terms` after the build.
+
+    ``offset`` is how many of ``spec.rules`` belong to systems *before* this one,
+    which is what an inheritance chain contributes: the spec is the whole chain's
+    (``app.db.systems_mapping.effective_spec``) while these rows are one system's,
+    so ``system.rules[i]`` is ``spec.rules[offset + i]``. Only this system's own
+    rules are cached — an ancestor's row cannot hold the term its template
+    composes to *here*, because that term is a function of the whole chain's
+    grammar and the ancestor has its own. A child with inherited rules therefore
+    recomposes them each build; the fix is a row per (rule, digest) rather than
+    one column, and it is not worth a table until a layered system is slow.
     """
     digests = schema_digests(spec)
     fresh = [
-        (index, rule)
+        (offset + index, rule)
         for index, rule in enumerate(system.rules)
-        if index < len(digests) and rule.schema_digest == digests[index]
+        if offset + index < len(digests)
+        and rule.schema_digest == digests[offset + index]
     ]
     if not fresh:
         return SchemaTermCache(digests, {}, TermGraph({}, {}))
@@ -155,6 +166,7 @@ def store_schema_terms(
     system: FormalSystem,
     built: EngineSystem,
     cache: SchemaTermCache,
+    offset: int = 0,
 ) -> int:
     """Persist the schema terms ``built`` composed, returning how many rules changed.
 
@@ -164,6 +176,9 @@ def store_schema_terms(
     returned for the spec ``built`` was built from — its digests are what the
     rows are stamped with, and recomputing them here would fingerprint the whole
     grammar a second time for the same answer.
+
+    ``offset`` pairs these rows with the spec exactly as it does on the way in;
+    it must be the same value :func:`load_schema_terms` was given.
     """
     digests = cache.digests
     rules = list(system.rules)
@@ -178,7 +193,10 @@ def store_schema_terms(
     surviving = {row.label: index for index, row in enumerate(rules)}
 
     written = 0
-    for index, (row, digest) in enumerate(zip(rules, digests)):
+    for index, row in enumerate(rules):
+        if offset + index >= len(digests):
+            break
+        digest = digests[offset + index]
         if row.schema_digest == digest or surviving[row.label] != index:
             continue
         engine_rule = built.rule_by_label(row.label)

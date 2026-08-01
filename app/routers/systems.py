@@ -2,8 +2,13 @@
 
 Systems are stored as normalised rows (`app/db/systems.py`); this router is the
 thin HTTP layer over them. Reads assemble the full aggregate; `validate`
-rebuilds a `SystemSpec` (`app.db.system_to_spec`) and hands it to the engine
-(`declarative.build_spec`) — no compile logic lives here.
+rebuilds a `SystemSpec` and hands it to the engine (`declarative.build_spec`) —
+no compile logic lives here.
+
+A system's rows are its **own** parts, but what it is *built* from is its
+inheritance chain: `load_effective` walks `inherits_from_id` and hands
+`app.db.effective_spec` the ancestors, root first. Every path that builds a
+system goes through it, here and in `app/routers/proofs.py`.
 
 This phase covers **system-level** writes (create / update / delete) plus read
 and validate. Editing the component parts (productions, definitions, rules, …)
@@ -15,6 +20,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -24,8 +30,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.auth import current_active_user, current_active_user_optional
-from app.db import Base, FormalSystem, get_session, system_to_spec
-from app.routers._common import PageParams, page_params, paginate_summaries, unique_slug
+from app.db import (
+    Base,
+    FormalSystem,
+    discard_system_checks,
+    effective_spec,
+    get_session,
+    inherited_rule_count,
+    system_to_spec,
+)
+from app.routers._common import (
+    PageParams,
+    lock_system,
+    page_params,
+    paginate_summaries,
+    unique_slug,
+)
 from app.db.models import User
 from app.db.side_conditions import SideConditionRow
 from app.db.side_conditions_mapping import (
@@ -70,7 +90,7 @@ from app.schemas import (
     SystemValidation,
     VerifyProofResponse,
 )
-from website.logical.declarative import build_spec
+from website.logical.declarative import DeclarativeError, SystemSpec, build_spec
 
 router = APIRouter(prefix="/formal-systems", tags=["formal-systems"])
 
@@ -159,6 +179,80 @@ async def load_system(session: AsyncSession, system_id: uuid.UUID) -> FormalSyst
     return await session.scalar(stmt)
 
 
+# How deep a chain may be. Enforced when an edge is *written*
+# (`_require_inheritable_reference`), so a legal chain is always walkable; the
+# bound is repeated in the walk so a row that got past that — a hand edit, or an
+# ancestor repointed under a descendant — terminates rather than hanging a
+# request.
+MAX_INHERITANCE_DEPTH = 32
+
+
+async def load_chain(session: AsyncSession, system: FormalSystem) -> list[FormalSystem]:
+    """``system`` and its ancestors, **root first** — `effective_spec`'s argument.
+
+    Stops early on a chain that should not exist: a missing parent (the FK is
+    ``SET NULL``, but a concurrent delete can be read either way), a cycle, or
+    one past ``MAX_INHERITANCE_DEPTH``. The caller can tell, because the chain
+    it gets back still declares a parent it does not contain — and must refuse
+    to build it (`truncated_chain_errors`). Building the prefix would be
+    building a *different system* from the one the rows declare, quietly: an
+    intermediate layer that adds only definitions would still compile with the
+    root's grammar missing.
+    """
+    chain = [system]
+    seen = {system.id}
+    while chain[0].inherits_from_id is not None and len(chain) < MAX_INHERITANCE_DEPTH:
+        parent = await load_system(session, chain[0].inherits_from_id)
+        if parent is None or parent.id in seen:
+            break
+        seen.add(parent.id)
+        chain.insert(0, parent)
+    return chain
+
+
+def truncated_chain_errors(chain: Sequence[FormalSystem]) -> list[str]:
+    """Refuse a chain :func:`load_chain` could not walk to the top.
+
+    The root of what came back still names a parent, so an ancestor is missing:
+    deleted under us, part of a cycle, or past the depth bound. Every one of
+    those means the rows declare a system this is not.
+    """
+    if chain[0].inherits_from_id is None:
+        return []
+    return [
+        f"This system inherits from {chain[0].inherits_from_id}, which could not "
+        "be loaded: it no longer exists, the chain cycles, or it is more than "
+        f"{MAX_INHERITANCE_DEPTH} systems deep. A system is built from its whole "
+        "chain, so it cannot be built from part of one."
+    ]
+
+
+def draft_ancestor_errors(chain: Sequence[FormalSystem]) -> list[str]:
+    """Refuse to build on an ancestor that is still a draft.
+
+    Publishing freezes a system, and that freeze is what a descendant rests on:
+    a parent edit changes the grammar every proof beneath it was checked against,
+    and the parts routes only ever invalidate the *edited* system's proofs. With
+    the parent frozen there is nothing to cascade, so this rule is what keeps a
+    stale-but-believed proof snapshot out of the schema.
+
+    Enforced when a chain is written too (`_require_inheritable_reference`), so
+    this reaches only a row that predates the rule or a parent unpublished by
+    some other route. Returned as build errors rather than raised, because every
+    caller here is already reporting a system that does not build.
+    """
+    drafts = [system.name for system in chain[:-1] if system.published_at is None]
+    if not drafts:
+        return []
+    return [
+        "This system inherits from "
+        + ", ".join(repr(name) for name in drafts)
+        + ", which is not published. A system may only build on a published "
+        "parent, because publishing is what freezes the grammar its proofs were "
+        "checked against."
+    ]
+
+
 def _is_readable(system: FormalSystem, user: User | None) -> bool:
     # Published systems are public; drafts are visible only to their owner.
     if system.published_at is not None:
@@ -194,31 +288,142 @@ async def owned_system_id_or_404(
     return owned
 
 
-async def _require_owned_reference(
-    session: AsyncSession, system_id: uuid.UUID, owner_id: uuid.UUID
+@dataclass(frozen=True)
+class EffectiveSystem:
+    """A stored system resolved against its inheritance chain, ready to build.
+
+    ``spec`` is ``None`` exactly when ``errors`` is non-empty. Both routers take
+    this shape because both already report a system that does not build as
+    errors rather than as an exception.
+    """
+
+    chain: list[FormalSystem]
+    spec: SystemSpec | None = None
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def rule_offset(self) -> int:
+        """How many of ``spec.rules`` an ancestor contributed; see `schema_terms`."""
+        return inherited_rule_count(self.chain)
+
+
+async def load_effective(
+    session: AsyncSession, system: FormalSystem
+) -> EffectiveSystem:
+    """Resolve ``system`` against its ancestors, or say why it cannot be."""
+    chain = await load_chain(session, system)
+    errors = truncated_chain_errors(chain) + draft_ancestor_errors(chain)
+    if errors:
+        return EffectiveSystem(chain, errors=errors)
+    try:
+        return EffectiveSystem(chain, spec=effective_spec(chain))
+    except DeclarativeError as exc:
+        # A cross-layer collision. The chain describes no system at all, so this
+        # is the same kind of failure as a spec that will not build, reported the
+        # same way.
+        return EffectiveSystem(chain, errors=[str(exc)])
+
+
+async def _require_inheritable_reference(
+    session: AsyncSession,
+    parent_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    child_id: uuid.UUID | None = None,
 ) -> None:
-    exists = await session.scalar(
-        select(FormalSystem.id).where(
-            FormalSystem.id == system_id, FormalSystem.owner_id == owner_id
+    """The three things a parent must be, checked before the edge is stored.
+
+    **Visible** — owned, or published. Owned-only was the rule while inheritance
+    resolved to nothing; it would now lock every user out of building on an
+    imported corpus, which is ownerless by construction.
+
+    **Published** — see :func:`draft_ancestor_errors` for why the freeze is
+    load-bearing rather than tidy.
+
+    **Not already below the child** — the guard this replaces caught only
+    ``parent == child``, so a two-step cycle went through and every walk over a
+    chain had to be written to survive one.
+
+    And **shallow enough**: the depth bound belongs here, where a chain is made,
+    rather than only in the walk that reads one. Enforced only at the write, a
+    chain past it would be legal to build and impossible to load whole.
+    """
+    row = (
+        await session.execute(
+            select(FormalSystem.owner_id, FormalSystem.published_at).where(
+                FormalSystem.id == parent_id
+            )
         )
-    )
-    if exists is None:
+    ).first()
+    if row is None or (row.owner_id != owner_id and row.published_at is None):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            f"inherits_from_id {system_id} is not one of your systems.",
+            f"inherits_from_id {parent_id} is not a system you can build on.",
         )
+    if row.published_at is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"inherits_from_id {parent_id} is an unpublished draft. Publish it "
+            "first: a system may only build on a parent whose grammar is frozen.",
+        )
+    if child_id is not None and await _inherits_from(session, parent_id, child_id):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "That would make the inheritance chain cycle.",
+        )
+    if await _chain_depth(session, parent_id) >= MAX_INHERITANCE_DEPTH:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"An inheritance chain may be at most {MAX_INHERITANCE_DEPTH} systems "
+            "deep, and this one already is.",
+        )
+
+
+async def _chain_depth(session: AsyncSession, system_id: uuid.UUID) -> int:
+    # How many systems `system_id` and its ancestors make. Bounded by the same
+    # limit it is used to enforce, so a pre-existing over-deep chain terminates.
+    seen: set[uuid.UUID] = set()
+    current: uuid.UUID | None = system_id
+    while current is not None and current not in seen and len(seen) <= MAX_INHERITANCE_DEPTH:
+        seen.add(current)
+        current = await session.scalar(
+            select(FormalSystem.inherits_from_id).where(FormalSystem.id == current)
+        )
+    return len(seen)
+
+
+async def _inherits_from(
+    session: AsyncSession, start_id: uuid.UUID, ancestor_id: uuid.UUID
+) -> bool:
+    # Whether `ancestor_id` is at or above `start_id`. Walked one row at a time
+    # rather than with a recursive CTE: a chain is a handful of systems deep, and
+    # this runs once per write.
+    seen: set[uuid.UUID] = set()
+    current: uuid.UUID | None = start_id
+    while current is not None and current not in seen:
+        if current == ancestor_id:
+            return True
+        seen.add(current)
+        current = await session.scalar(
+            select(FormalSystem.inherits_from_id).where(FormalSystem.id == current)
+        )
+    return False
 
 
 async def _require_publishable(session: AsyncSession, system: FormalSystem) -> None:
     """Reject a publish that would expose a broken or dangling public system.
 
     Two things a published system must not do, since it becomes world-readable:
-    it must compile (otherwise public read/validate and future public consumers
-    break on it), and if it inherits from another system that parent must itself be
-    public — a published child exposes `inherits_from_id`, and `GET /{parent}`
+    it must compile — against its whole chain, which is what it is actually built
+    from — and if it inherits from another system that parent must itself be
+    public. A published child exposes `inherits_from_id`, and `GET /{parent}`
     404s for anonymous viewers when the parent is a private draft.
     """
-    result = build_spec(system_to_spec(system))
+    effective = await load_effective(session, system)
+    if effective.errors:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, detail=effective.errors
+        )
+    result = build_spec(effective.spec)
     if "errors" in result:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=result["errors"])
 
@@ -453,7 +658,7 @@ async def create_system(
     session: AsyncSession = Depends(get_session),
 ) -> FormalSystemDetail:
     if payload.inherits_from_id is not None:
-        await _require_owned_reference(session, payload.inherits_from_id, user.id)
+        await _require_inheritable_reference(session, payload.inherits_from_id, user.id)
 
     system = FormalSystem(
         owner_id=user.id,
@@ -504,15 +709,28 @@ async def update_system(
     if "inherits_from_id" in changes and changes["inherits_from_id"] is not None:
         if changes["inherits_from_id"] == system_id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "A system cannot inherit from itself.")
-        await _require_owned_reference(session, changes["inherits_from_id"], user.id)
+        await _require_inheritable_reference(
+            session, changes["inherits_from_id"], user.id, child_id=system_id
+        )
 
     if changes.get("name") is not None:
         system.name = changes["name"]
         system.slug = await _unique_slug(session, user.id, changes["name"], exclude_id=system.id)
     if "description" in changes:
         system.description = changes["description"]
-    if "inherits_from_id" in changes:
+    if "inherits_from_id" in changes and changes["inherits_from_id"] != system.inherits_from_id:
         system.inherits_from_id = changes["inherits_from_id"]
+        # Repointing the parent changes the grammar, the rules and the
+        # definitions this system's proofs were checked against — a bigger edit
+        # than any part edit, and those all invalidate. Without this the proofs
+        # keep the verdict *and* the stored line terms of a check against the old
+        # chain, and a verify trusts a stored lemma rather than re-checking it
+        # (docs/verification-from-rows.md, P1) — so another proof could go on
+        # citing one under a parent it was never checked against. Under the
+        # system lock, for the reason the part routes take it: a verify in flight
+        # is reading those rows and believing them.
+        await lock_system(session, system_id)
+        await session.run_sync(lambda sync: discard_system_checks(sync, system_id))
     if changes.get("token_separated") is not None:
         system.token_separated = changes["token_separated"]
 
@@ -533,8 +751,34 @@ async def delete_system(
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    # One owner-scoped Core DELETE; the children (and proofs/folders/theorems)
-    # go via their ON DELETE CASCADE foreign keys, so nothing is loaded here.
+    # Ownership first. The dependent check below names systems that may be
+    # someone else's private drafts, so asking it for a system the caller does
+    # not own would answer 409-with-names where the rest of this router answers
+    # 404 — and ids are exactly what that convention keeps from leaking.
+    await owned_system_id_or_404(session, system_id, user.id)
+
+    # A system something *inherits from* cannot be deleted. `inherits_from_id` is
+    # `ON DELETE SET NULL`, so the delete would succeed and silently take the
+    # descendants' grammar with it: what they build from changes, while their
+    # proofs keep the `valid`, `result` and `proof_lines` rows of a check against
+    # a system that no longer exists. Refused rather than cascaded, because the
+    # cascade is not the author's to trigger from here — the descendants may be
+    # someone else's, and a published parent is exactly the case where they are.
+    dependents = (
+        await session.scalars(
+            select(FormalSystem.name).where(FormalSystem.inherits_from_id == system_id)
+        )
+    ).all()
+    if dependents:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This system cannot be deleted while "
+            + ", ".join(repr(name) for name in dependents)
+            + " inherits from it. Delete those first.",
+        )
+
+    # One owner-scoped Core DELETE; the folders/proofs/parts go via their
+    # ON DELETE CASCADE foreign keys, so nothing is loaded here.
     result = await session.execute(
         sa_delete(FormalSystem).where(
             FormalSystem.id == system_id, FormalSystem.owner_id == user.id
@@ -553,19 +797,23 @@ async def validate_system(
 ) -> SystemValidation:
     system = await _get_readable_or_404(session, system_id, user)
 
-    # NOTE: inheritance is not resolved yet. `inherits_from_id` is stored (and
-    # its reference validated on write), but the declarative pipeline has no
-    # `inherit` concept — `system_to_spec`/`build_spec` describe this system
-    # alone and no parent `system_dict` is supplied — so a child that relies on a
-    # parent's grammar/rules would validate in isolation. Wiring the parent chain
-    # through here is deferred to the inheritance phase; see
-    # docs/object-crud-design.md.
-    result = build_spec(system_to_spec(system))
+    # Validated against the whole chain: a child that relies on its parent's
+    # grammar is only a system at all once the parent's parts are in front of
+    # its own (`app.db.effective_spec`).
+    effective = await load_effective(session, system)
+    if effective.errors:
+        return SystemValidation(success=False, errors=effective.errors)
+    result = build_spec(effective.spec)
 
     if "errors" in result:
         return SystemValidation(success=False, errors=result["errors"])
 
     compiled = result["system"]
+    # The counts describe the *effective* system — the chain — because that is
+    # what was built and what a proof here is checked against. `definitions` is
+    # narrower on purpose: it carries row ids, and only this system's rows are
+    # addressable through this system's routes. Two scopes in one response, and
+    # deliberately so; the schema says which is which.
     return SystemValidation(
         success=True,
         system_name=compiled.name or None,
@@ -587,10 +835,21 @@ def _definition_binders(
     counterpart. Zipped strictly — a length mismatch would mean the builder and
     the rows disagree about what a definition is, which is a bug rather than a
     condition to paper over.
+
+    ``compiled`` is built from the whole inheritance chain, so its lists are the
+    ancestors' definitions followed by this system's. Only this system's are
+    reported, because only they have a row here to name; the ancestors' belong to
+    the systems that declare them, and are reported by *their* validate.
     """
-    kernel_definitions = iter(compiled.definitions)
+    inherited = len(compiled.definition_layering) - len(system.definitions)
+    layering = compiled.definition_layering[inherited:]
+    # The kernel list is the true-flagged subsequence of the whole chain, so skip
+    # what the ancestors contributed to it before pairing.
+    kernel_definitions = iter(
+        compiled.definitions[sum(compiled.definition_layering[:inherited]):]
+    )
     reported: list[DefinitionBinders] = []
-    for row, layered in zip(system.definitions, compiled.definition_layering, strict=True):
+    for row, layered in zip(system.definitions, layering, strict=True):
         if not layered:
             continue
         definition = next(kernel_definitions)
@@ -623,12 +882,15 @@ async def verify_proof(
 
     Replaces the raw-source verify: the client sends only the proof text and the
     system id, never a serialised copy of the system itself. Readable systems are published ones
-    (any viewer) or the owner's own drafts. Inheritance is not resolved yet (see
-    the note on `validate_system`).
+    (any viewer) or the owner's own drafts. Built against the system's whole
+    inheritance chain, as everything else that builds one is.
     """
     system = await _get_readable_or_404(session, system_id, user)
 
-    result = build_spec(system_to_spec(system))
+    effective = await load_effective(session, system)
+    if effective.errors:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=effective.errors)
+    result = build_spec(effective.spec)
     if "errors" in result:
         # The stored system no longer compiles; surface the compile errors as a
         # 400 the client renders verbatim, as the old raw-source verify did.
