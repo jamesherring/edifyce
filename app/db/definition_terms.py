@@ -54,9 +54,6 @@ if TYPE_CHECKING:
     from website.logical.kernel.terms import Term
     from website.logical.matching.context import Context
 
-# The two forms, in the order they are named throughout.
-_SLOTS = ("higher", "lower")
-
 
 class DefinitionTermCache:
     """The definition-form terms of one system, ready to answer a build.

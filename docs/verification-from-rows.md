@@ -834,6 +834,31 @@ remain, both bounded: a declared binder's `default` (its bare name, parsed again
 its own sort) and a definition's provisos (surface lines into the side-condition
 algebra).
 
+**A shadowed grammar name, found in review, and older than this phase.**
+`ctx.variables` is one namespace: lines, line parts, axioms and the system are
+registered into it after the productions, so an axiom named after a production
+leaves a `LineType` under that key and a line *part* leaves a `RegexPattern`.
+Composing never noticed — it parses against the sort unions, which hold the
+production objects — but a stored term resolves its constructors *by name*. So a
+system with such a collision verified once, stored its terms, and then failed on
+every later verify: an `AttributeError` for the axiom case, a **silently wrong
+term** for the line-part one.
+
+`_shadowed_grammar_names` is in the digest, which reads like a guard against
+exactly this, and is not: it catches a collision being *introduced*, while one
+present from the outset matches at both ends and is served. The digest is right
+that nothing changed — the defect is in the lookup, not the freshness.
+
+So `TermGraph` now resolves a stored constructor through the sort unions and
+falls back to the namespace only for a top-level sort, which is the one grammar
+pattern no union contains. The index is built once per graph rather than searched
+per node: an O(grammar) scan there measured **68× a dict lookup at 400
+productions**, on a path that runs per node, which is the mistake
+`build_context._GrammarIndex` already records for the build side.
+
+This predates P6 — the same failure reproduces against P3's rule schemas on a
+tree without it — but P6 is what surfaced it, and the fix repairs both.
+
 **Measure:** monkeypatching `abstract` — the one call every definition-form parse
 goes through — to raise, and requiring a warm build to succeed anyway
 (`test_a_served_form_is_not_parsed_at_all`). It does, with zero calls, and

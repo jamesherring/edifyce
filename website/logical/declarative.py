@@ -2215,12 +2215,18 @@ def _shadowed_grammar_names(spec: SystemSpec) -> list[str]:
     production named ``implication`` and an axiom named ``implication`` leave
     ``ctx.variables["implication"]`` holding the axiom's line type.
 
-    That matters to a *stored* term, which names its constructors by name and
-    resolves them back through this namespace (``app.db.terms_mapping.TermGraph``).
+    That matters to a *stored* term, which names its constructors by name.
     Composing has no such problem: it parses against the sort unions, which hold
     the production objects themselves and are indifferent to what the name now
-    means. So a collision is exactly a case where a warm build and a cold build
-    would disagree, and it has to reach the digest.
+    means. So a rename onto a production's name changes nothing a template
+    composes to, and would leave the stored rows looking current when what they
+    resolve *to* has moved — which is why it has to reach the digest.
+
+    This is not what makes such a system correct, and was once mistaken for it: a
+    collision present from the outset matches the digest at both ends. Resolving a
+    stored constructor through the grammar rather than through this namespace is
+    what settles that (``app.db.terms_mapping.TermGraph._grammar_of``); the digest
+    only has to notice the *change*.
 
     Only the *collisions*, not every outside name: a line renamed to something no
     production is called shadows nothing, and invalidating every schema term for

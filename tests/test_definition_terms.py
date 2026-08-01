@@ -60,7 +60,7 @@ from app.db.systems import (
 )
 from app.db.systems_mapping import system_to_spec
 from app.db.terms import TermChildRow, TermRow
-from app.db.terms_mapping import digest_term
+from app.db.terms_mapping import digest_term, store_term
 from tests.database import enable_foreign_keys
 from tests.spec_helpers import (
     axiom,
@@ -76,6 +76,7 @@ from website.logical.declarative import (
     SystemSpec,
     build_spec,
     definition_digest,
+    layered_spec,
 )
 
 if TYPE_CHECKING:
@@ -533,6 +534,51 @@ def test_a_shadowed_production_name_still_resolves_from_rows(engine: Engine) -> 
     warm, served = _rebuild(engine)
     assert served == 2
     assert _shape(warm) == _shape(build_spec(spec)["system"])
+
+
+def test_a_layers_own_slots_are_the_ones_it_reads_and_writes(engine: Engine) -> None:
+    # A system that inherits is built from its whole *chain's* spec, so this
+    # layer's `definitions[i]` is `spec.definitions[offset + i]`. Get the offset
+    # wrong and a child reads an ancestor's slot as its own — which is not a crash
+    # but a definition of the wrong thing, since every form in the chain parses
+    # against the same grammar and so resolves happily.
+    #
+    # Two layers, each with a definition, and the parent's comes first in the
+    # layered spec. `df_notsubset` (the child's) must be served the child's forms.
+    parent = subset_spec()
+    parent.definitions = [parent.definitions[0]]      # just df_subset
+    child = SystemSpec(
+        name="Child",
+        definitions=[subset_spec().definitions[1]],   # just df_notsubset
+    )
+    chain = layered_spec([parent, child])
+    offset = len(parent.definitions)
+
+    with Session(engine) as session:
+        row = spec_to_system(child)
+        session.add(row)
+        session.flush()
+        cache = load_definition_terms(session, row, chain, offset)
+        built = build_spec(chain)["system"]
+        assert store_definition_terms(session, row, built, cache, offset) == 1
+        session.commit()
+
+        # The child's row holds the child's forms — the ones at the offset slot,
+        # not the parent's at slot 0.
+        (stored,) = session.scalars(select(DefinitionRow)).all()
+        assert stored.name == "df_notsubset"
+        higher, lower = built.definition_forms[offset]
+        assert stored.higher_term_id == store_term(session, row, higher).id
+        assert stored.lower_term_id == store_term(session, row, lower).id
+
+    # And a warm build of the chain reads them back at that slot, unchanged.
+    with Session(engine) as session:
+        row = session.scalars(select(FormalSystem)).one()
+        source = load_definition_terms(session, row, chain, offset)
+        assert len(source) == 2, "the child's two forms, and only those"
+        warm = build_spec(chain, definition_terms=source)["system"]
+
+    assert _shape(warm) == _shape(build_spec(chain)["system"])
 
 
 def test_a_system_with_stored_definition_terms_can_still_be_deleted(
