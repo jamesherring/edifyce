@@ -146,9 +146,6 @@ export interface Definition {
 	/** Soundness provisos, one kernel-vocabulary line each (implicit conjunction),
 	 * mirroring a rule's `side_conditions`. */
 	provisos: string[];
-	/** Deprecated: the provisos joined with `;` as one `where` string. Derived
-	 * from the same tree as `provisos`; prefer `provisos`. */
-	condition: string | null;
 	bindings: Binding[];
 	/** The defining form's bound variables (the `fresh` clause). Declaring them
 	 * lets a quantified definition take the kernel path so its proviso is enforced. */
@@ -335,11 +332,9 @@ export interface DefinitionCreate {
 	name: string;
 	higher: string;
 	lower: string;
-	/** Structured provisos (preferred), mirroring rules' `side_conditions`. */
+	/** Soundness provisos, one kernel-vocabulary line each (implicit conjunction),
+	 * mirroring rules' `side_conditions`. */
 	provisos?: string[];
-	/** Deprecated: single `;`-joined `where` string. Ignored when `provisos` is
-	 * supplied; kept so pre-D0 clients keep working. */
-	condition?: string | null;
 	bindings?: Binding[];
 	/** The defining form's bound variables (the `fresh` clause). */
 	fresh?: Binding[];

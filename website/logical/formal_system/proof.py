@@ -172,13 +172,12 @@ class InferenceReference:
     """A reference that resolves to an inference rule application.
 
     Returned by :meth:`Proof.get_reference` when a reference string names an
-    inference rule (optionally with antecedent lines and a variable mapping).
+    inference rule (optionally with antecedent lines).
     """
 
     inference_rule: object
     key: str
     antecedents: list = field(default_factory=list)
-    mapping: dict = field(default_factory=dict)
 
 
 @dataclass(eq=False)
@@ -327,39 +326,24 @@ class Proof:
             if (not line.empty) and (line.line_type is not None) and line.line_type.behaviour == "logical"
         ])
 
-    def _resolve_antecedents(
-        self, refs: list[str], context: Context
-    ) -> tuple[list[ProofLine], dict]:
+    def _resolve_antecedents(self, refs: list[str], context: Context) -> list[ProofLine]:
         # Resolve the cited-line refs following a rule/theorem label into the
-        # antecedent lines (and any reference mapping). Shared by the inference-
-        # rule and promoted-theorem branches of get_reference. A ref that does not
-        # resolve to a proof line (nor a mapping on the previous one) is an error.
+        # antecedent lines. Shared by the inference-rule and promoted-theorem
+        # branches of get_reference. A ref that does not resolve to a proof line
+        # is an error.
         antecedents: list[ProofLine] = []
-        mapping: dict = {}
-        last_proof_line: ProofLine | None = None
         for r in refs:
             try:
                 item = self.get_reference(r, context)
-
-                if isinstance(item, ProofLine):
-                    antecedents.append(item)
-                    last_proof_line = item
-                    continue
-
             except Exception:
-                # Not a line reference; it may be a mapping on the previous line.
-                try:
-                    if last_proof_line is not None:
-                        mapping.update(self.get_reference_mapping(r, last_proof_line, context))
-                        continue
+                raise Exception(f"{r} is not a proof line.") from None
 
-                except Exception:
-                    pass
+            if not isinstance(item, ProofLine):
+                raise Exception(f"{r} is not a proof line.")
 
-            # Otherwise this is not a proof line
-            raise Exception(f"{r} is not a proof line.")
+            antecedents.append(item)
 
-        return antecedents, mapping
+        return antecedents
 
     def get_reference(self, ref, context):
         # Get the referenced line from a ref string
@@ -386,10 +370,8 @@ class Proof:
 
             rule = self.formal_system.rule_by_label(key)
             if rule is not None:
-                antecedents, mapping = self._resolve_antecedents(ref_parts[1:], context)
-                return InferenceReference(
-                    inference_rule=rule, key=key, antecedents=antecedents, mapping=mapping
-                )
+                antecedents = self._resolve_antecedents(ref_parts[1:], context)
+                return InferenceReference(inference_rule=rule, key=key, antecedents=antecedents)
 
             # A proved/imported theorem applied to cited premises, `[<Thm>, i, ...]`.
             # Resolved exactly like a rule - its schematic statement is
@@ -397,9 +379,9 @@ class Proof:
             # `$d` provisos (now `disjoint` side-conditions) are enforced.
             promoted = self.formal_system.promoted_theorems.get(key)
             if promoted is not None:
-                antecedents, mapping = self._resolve_antecedents(ref_parts[1:], context)
+                antecedents = self._resolve_antecedents(ref_parts[1:], context)
                 return InferenceReference(
-                    inference_rule=promoted.as_rule(), key=key, antecedents=antecedents, mapping=mapping
+                    inference_rule=promoted.as_rule(), key=key, antecedents=antecedents
                 )
 
             # A definitional step: `[<name>, <line>]` cites a named definition,
@@ -444,23 +426,6 @@ class Proof:
         # Nothing works
         raise Exception(f"Invalid reference: {ref}")
 
-    @staticmethod
-    def get_reference_mapping(ref, source_proof_line, context):
-        # Get the mapping on a proof line with reference to the source proof line.
-
-        if " mapsto " not in ref:
-            return {}
-
-        # The `<source> mapsto <target>` reference-mapping syntax resolved
-        # `source` to a pattern through the get_by_path interpreter, now retired.
-        # It was unused (no proof in the corpus contains `mapsto`). Raising here
-        # is caught by the reference-resolution fallback in the caller, so the
-        # net effect is that a `mapsto` reference no longer resolves - the citing
-        # line's reference stays unresolved and the line fails to justify. That
-        # is the right outcome for an unsupported syntax; a typed reference
-        # mechanism would reintroduce it deliberately.
-        raise Exception("Reference mapping ('<source> mapsto <target>') is no longer supported.")
-
     def check_logical_line(self, proof_line, context):
         # Check if the given proof line is valid.
 
@@ -504,7 +469,6 @@ class Proof:
 
         inference_rule = reference.inference_rule
         key = reference.key
-        proof_line.reference_mapping = reference.mapping
 
         # Get the antecedent lines
         antecedents = reference.antecedents
@@ -834,9 +798,6 @@ class ProofLine:
         # The reference string for this line (if any)
         self.reference_string = reference_string
         self.reference_string_display = reference_string
-
-        # A reference mapping given on the line
-        self.reference_mapping = {}
 
         # The label for this line (if any)
         self.label = label

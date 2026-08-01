@@ -67,7 +67,6 @@ function definition(higher: string, lower: string): Definition {
 		higher,
 		lower,
 		provisos: [],
-		condition: null,
 		bindings: [],
 		fresh: [],
 		label: null,

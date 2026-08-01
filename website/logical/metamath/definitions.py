@@ -449,8 +449,7 @@ def classify(
             # has to travel with it: 1,033 of set.mm's definition-shaped
             # statements carry one, and
             # dropping them would licence exactly the captures Metamath forbids.
-            condition="; ".join(_distinct_provisos(assertion, database, system))
-            or None,
+            provisos=list(_distinct_provisos(assertion, database, system)),
             label=assertion.label,
             justification=justification,
         ),

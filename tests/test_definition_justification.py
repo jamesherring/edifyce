@@ -60,7 +60,7 @@ METAVARIABLES = [
 
 def subset_defn(
     justification: Justification | None,
-    condition: str | None = None,
+    provisos: tuple[str, ...] = (),
     label: str | None = None,
 ):
     return defn(
@@ -69,7 +69,7 @@ def subset_defn(
         "x ⊆ y",
         "∀z (z ∈ x → z ∈ y)",
         METAVARIABLES,
-        condition=condition,
+        provisos=provisos,
         fresh=[("z", "variable")],
         label=label,
         justification=justification,
@@ -298,7 +298,7 @@ def test_an_inherited_proviso_joins_the_definition_s_own():
     system = _promote(_built_system(), distinct=["disjoint(x, y, variable)"])
 
     register_definition(
-        subset_defn(Justification("dummy-immaterial", OBLIGATION), condition="disjoint(x, y)"),
+        subset_defn(Justification("dummy-immaterial", OBLIGATION), provisos=("disjoint(x, y)",)),
         system,
     )
 
@@ -373,7 +373,7 @@ def test_a_proviso_may_constrain_a_binder_by_its_declared_name():
     # the literal token `z`. Before, the condition was checked before the binders
     # were resolved and could only mean the token.
     system = _built_system()
-    register_definition(subset_defn(None, condition=NOT_C), system)
+    register_definition(subset_defn(None, provisos=(NOT_C,)), system)
     definition = system.definitions[0]
     redex = system.parse("a ⊆ b [HYP]").proof_lines[0].formula_term
 
@@ -396,7 +396,7 @@ def test_a_binder_proviso_reaches_the_proof_checker_too():
     # proviso has to be checked there after recovery too, or the rule holds for
     # `kernel.unfold` and not for any actual proof.
     system = _built_system()
-    register_definition(subset_defn(None, condition=NOT_C, label="sub"), system)
+    register_definition(subset_defn(None, provisos=(NOT_C,), label="sub"), system)
 
     ok = system.parse("a ⊆ b [HYP]\n∀d (d ∈ a → d ∈ b) [sub, 1]")
     assert ok.proof_lines[1].valid is True
@@ -417,7 +417,7 @@ def test_a_proviso_names_an_inferred_binder_as_readily_as_a_declared_one():
         built.definitions = [
             defn("formula", "subset", "(x ⊆ y)", "∀z.((z ∈ x) → (z ∈ y))",
                  [("x", "setvar"), ("y", "setvar")],
-                 condition="not equal(z, c)",
+                 provisos=["not equal(z, c)"],
                  fresh=[] if scopes_over else [("z", "setvar")])
         ]
         return built
@@ -440,7 +440,7 @@ def test_a_definition_s_own_proviso_is_held_to_the_same_rule():
     # Not a justification-only rule: a hand-written `where` clause naming a
     # non-parameter has always had the same defect, and is refused the same way.
     with pytest.raises(DeclarativeError) as excinfo:
-        build_system(_spec([subset_defn(None, condition="disjoint(w, y)")]))
+        build_system(_spec([subset_defn(None, provisos=("disjoint(w, y)",))]))
 
     assert "does not supply" in str(excinfo.value)
 

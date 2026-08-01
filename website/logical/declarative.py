@@ -35,7 +35,7 @@ import hashlib
 import json
 from collections.abc import Callable, Iterable
 from copy import copy
-from dataclasses import InitVar, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from .build_context import (
@@ -183,13 +183,14 @@ class Definition:
     higher: str
     lower: str
     bindings: list[tuple[str, str]]
-    # Soundness provisos (the `where` clause), `;`-separated kernel-vocabulary
-    # lines. Checked at every unfold against what that unfold binds, so a proviso
-    # may name a parameter of the *defined* form or one of the `fresh` binders
-    # below (by its declared name — a binder is stored abstractly, so the proviso
-    # constrains whatever leaf it takes there). Naming anything else is refused at
-    # build: there would be nothing to resolve it against.
-    condition: str | None = None
+    # Soundness provisos, one kernel-vocabulary line each and implicitly conjoined
+    # — the same shape a rule's `side_conditions` takes. Checked at every unfold
+    # against what that unfold binds, so a proviso may name a parameter of the
+    # *defined* form or one of the `fresh` binders below (by its declared name — a
+    # binder is stored abstractly, so the proviso constrains whatever leaf it takes
+    # there). Naming anything else is refused at build: there would be nothing to
+    # resolve it against.
+    provisos: list[str] = field(default_factory=list)
     # The defining form's bound variables, `[(var, sort)]` (the `fresh` clause).
     # Declaring a binder lets the term checker unfold the definition
     # capture-avoidingly, so a quantified definition (and any proviso on it) takes
@@ -300,15 +301,6 @@ class SystemSpec:
     definitions: list[Definition] = field(default_factory=list)
     axioms: list[Rule] = field(default_factory=list)
     rules: list[Rule] = field(default_factory=list)
-    # Back-compat for the former single-line API (`SystemSpec(line=...)`). An
-    # `InitVar` so it is accepted at construction but never a stored field —
-    # otherwise it would perturb the dataclass `==` the storage round-trip relies
-    # on. Prefer `lines`.
-    line: InitVar[LineSpec | None] = None
-
-    def __post_init__(self, line: LineSpec | None) -> None:
-        if line is not None:
-            self.lines = [line, *self.lines]
 
     def sort_names(self) -> list[str]:
         seen = []
@@ -1479,13 +1471,7 @@ def _definition_condition(
     # (`kernel.definitions._condition_binding`) — which is what an author writing it
     # means. Without the binders here `z` parses as the literal token `z`, a
     # coherent reading of nothing anybody wanted.
-    #
-    # A `;` inside a `where` proviso conjoins several kernel conditions.
-    where_strings = (
-        [part.strip() for part in defn.condition.split(";") if part.strip()]
-        if defn.condition
-        else []
-    )
+    where_strings = [line.strip() for line in defn.provisos if line.strip()]
     proviso_context = copy(context_copy)
     proviso_context.string_variables = {
         **_binder_patterns(built, ctx),
@@ -1864,7 +1850,7 @@ def library_digest(spec: SystemSpec) -> str:
             [
                 [
                     defn.sort, defn.name, defn.higher, defn.lower, defn.bindings,
-                    defn.condition, defn.fresh, defn.label,
+                    defn.provisos, defn.fresh, defn.label,
                 ]
                 for defn in spec.definitions
             ],
