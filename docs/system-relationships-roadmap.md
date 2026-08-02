@@ -1048,6 +1048,16 @@ constraint on the phases after it rather than a closed question.
     the theorem would mean something its own system never established, and could
     justify a step that system could not. An inherited entry with no usable
     cached term is therefore **refused**, and the citation does not resolve.
+    Two ways in, because a matching digest is not on its own enough: the digest
+    can be missing or stale, and — since a term FK is `ON DELETE SET NULL` and a
+    NULL is documented as a *miss* rather than "composes to nothing" — an entry
+    can pass the digest and still have lost the term the digest promised. The
+    second is checked as the hazard itself rather than by a proxy, because
+    refusing every NULL would be far too strict: a bare metavariable composes
+    nothing in *any* grammar, and that is the ordinary shape of a hypothesis
+    (every Metamath `$e` of the form `|- ph` stores NULL and always did). So for
+    an inherited entry a schema term must have come from the cache or not exist;
+    one composed *here* was composed against the wrong grammar.
     Reachable only through `store_theorem(..., promoted=None)` or a published
     system whose grammar moved, so it costs nothing today — but it is a
     difference rather than a cost, which is what decides it. The capability it

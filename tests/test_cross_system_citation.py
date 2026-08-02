@@ -514,3 +514,57 @@ def test_the_scratchpad_still_reports_a_system_that_does_not_build(db, client):
     )
     assert response.status_code == 400
     assert any("not published" in error for error in response.json()["detail"])
+
+
+def test_an_inherited_term_that_vanished_under_a_matching_digest_is_refused(db, client):
+    # A digest that matches is not enough on its own. A term FK is
+    # `ON DELETE SET NULL` and a NULL is a *miss*, not "composes to nothing" —
+    # so an entry can pass the digest and still have lost the term the digest
+    # promised, and promoting it would compose that statement against the citing
+    # system's grammar. The digest is left alone here; only the term goes.
+    owner = _register_login(client, "vanished@example.com")
+    pc, _fol, zfc = seed_tower(db, owner)
+    promote_into(db, pc, IDENTITY)
+    assert set(resolve(db, zfc, ["id"])) == {"id"}
+
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            session.execute(
+                update(PromotedTheoremRow)
+                .where(PromotedTheoremRow.label == "id")
+                .values(statement_term_id=None)
+            )
+            session.commit()
+    finally:
+        engine.dispose()
+
+    with pytest.raises(LookupError, match="composed that statement"):
+        resolve(db, zfc, ["id"])
+
+
+def test_an_inherited_premise_with_nothing_to_compose_is_not_refused(db, client):
+    # The over-refusal the guard above must not become. A bare metavariable
+    # composes nothing in *any* grammar, so its term id is NULL by construction —
+    # and that is the ordinary shape of a hypothesis, every Metamath `$e` of the
+    # form `|- ph` among them. Refusing on the NULL alone would refuse most real
+    # inherited theorems; what is refused is a term composed *here*.
+    owner = _register_login(client, "bare-premise@example.com")
+    pc, _fol, zfc = seed_tower(db, owner)
+    promote_into(
+        db,
+        pc,
+        TheoremSpec(
+            label="mp-like",
+            statement="Q",
+            metavariables={"P": "formula", "Q": "formula"},
+            premises=("P", "(P → Q)"),
+        ),
+    )
+
+    (promoted,) = resolve(db, zfc, ["mp-like"]).values()
+    # The bare statement and the bare premise cached nothing and needed nothing;
+    # the compound premise cached a term and used it.
+    assert promoted.deduction.schema_term is None
+    assert promoted.antecedents[0].schema_term is None
+    assert promoted.antecedents[1].schema_term is not None

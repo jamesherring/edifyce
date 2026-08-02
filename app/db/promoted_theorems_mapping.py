@@ -396,7 +396,7 @@ class PendingLibrary:
                     "could give it a different meaning from the one it was proved "
                     "with. Re-verify the system that owns it."
                 )
-            promoted[entry.label] = promote_spec(
+            built_theorem = promote_spec(
                 built,
                 self.specs[entry.label],
                 statement_term=(
@@ -407,10 +407,56 @@ class PendingLibrary:
                     else [term(premise.term_id) for premise in current.premises]
                 ),
             )
+            if current is not None and self.chain.rank(entry.system_id) > 0:
+                _require_nothing_was_composed(entry, current, built_theorem, term)
+            promoted[entry.label] = built_theorem
 
         if self.owner is not None:
             promoted.update(_hypotheses(self.owner, built, term))
         return promoted
+
+
+def _require_nothing_was_composed(
+    entry: StoredTheorem,
+    current: StoredTheorem,
+    theorem: PromotedTheorem,
+    term: Callable[[uuid.UUID | None], Term | None],
+) -> None:
+    """Refuse an inherited theorem that composed a term *here*.
+
+    A digest that matches is not enough on its own. A term FK is
+    ``ON DELETE SET NULL`` and a NULL is documented as a *miss* rather than
+    "composes to nothing", because the same NULL is what a deleted term and a
+    slot with nothing to compose both leave behind (see `app/db/README.md`). So
+    an entry can pass the digest and still have lost the term the digest
+    promised — and promotion would then compose that statement against the
+    citing system's grammar, which for an inherited entry is the wrong one.
+
+    Refusing every NULL would be far too strict: a bare metavariable composes
+    nothing in *any* grammar, and that is the ordinary shape of a hypothesis —
+    every Metamath ``$e`` of the form ``|- ph`` stores NULL and always did. So
+    the check is the hazard itself rather than a proxy for it: for an inherited
+    entry, a schema term must have come from the cache or not exist. One that
+    was composed here was composed against the wrong grammar.
+    """
+    cached = [current.statement_term_id, *(p.term_id for p in current.premises)]
+    patterns = [theorem.deduction, *theorem.antecedents]
+    for term_id, pattern in zip(cached, patterns):
+        # What `promote_spec` was actually handed, not what the row said: a term
+        # id absent from the sweep arrives as None just as a NULL one does, and
+        # both mean it composed for itself.
+        if term(term_id) is not None:
+            continue
+        # Only a `StringPattern` carries a composed term at all — the same test
+        # `_term_id` makes on the way in.
+        if isinstance(pattern, StringPattern) and pattern.schema_term is not None:
+            raise LookupError(
+                f"Theorem {entry.label!r} is inherited from another system and one "
+                "of its stored terms is gone, so promoting it here composed that "
+                "statement against this system's grammar — which is wider than the "
+                "one it was proved in, and could give it a different meaning. "
+                "Re-verify the system that owns it."
+            )
 
 
 _NOTHING_PENDING = PendingLibrary(cited=(), owner=None, specs={}, fresh={})
