@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 import app.auth.backend as backend
 from app.db import spec_to_system, system_to_spec
 from app.db.session import get_session
-from app.db.systems import RuleRow
+from app.db.systems import DefinitionRow, RuleRow
 from app.main import app
 from app.routers.systems import MAX_INHERITANCE_DEPTH
 from tests.database import async_url, create_tables, database_url, enable_foreign_keys
@@ -402,6 +402,53 @@ def test_only_the_childs_own_rules_cache_their_schema_terms(client, db):
     inherited = digests(pc)
     assert set(inherited) == {"ax-1", "ax-2", "ax-3", "MP"}
     assert all(digest is None for digest in inherited.values())
+
+
+def test_only_the_childs_own_definitions_cache_their_form_terms(client, db):
+    # The same pairing for definition forms, which have their own offset: every
+    # layer of this tower declares one, so a child keyed by the *rule* offset — or
+    # by none — would stamp its terms onto an ancestor's row, or read an
+    # ancestor's slot as its own. Both would be silent: a definition's forms parse
+    # against the whole chain's grammar, so a mispaired term is a real definition
+    # of the wrong thing rather than something that fails to resolve.
+    owner = _register_login(client, "defcache@example.com")
+    pc, fol, _zfc = seed_tower(db, owner)
+    created = client.post(
+        "/api/proofs",
+        json={
+            "name": "Generalised",
+            "formal_system_id": fol,
+            "source": "(A → (B → A)) [ax-1]\n∀x (A → (B → A)) [GEN, 1]",
+        },
+    )
+    assert created.status_code == 201, created.text
+    verified = client.post(f"/api/proofs/{created.json()['id']}/verify")
+    assert verified.status_code == 200 and verified.json()["success"], verified.text
+
+    def stored(system_id: str) -> dict[str, tuple[bool, bool, bool]]:
+        engine = create_engine(db)
+        try:
+            with Session(engine) as session:
+                rows = session.scalars(
+                    select(DefinitionRow).where(
+                        DefinitionRow.system_id == uuid.UUID(system_id)
+                    )
+                ).all()
+                return {
+                    row.name: (
+                        row.term_digest is not None,
+                        row.higher_term_id is not None,
+                        row.lower_term_id is not None,
+                    )
+                    for row in rows
+                }
+        finally:
+            engine.dispose()
+
+    # The middle layer's own definition is cached, both forms.
+    assert stored(fol) == {"existential": (True, True, True)}
+    # Its ancestor's is untouched — the offset stamped past it, not onto it.
+    assert stored(pc) == {"conjunction": (False, False, False)}
 
 
 def test_a_layer_may_store_a_proviso_over_an_ancestors_sort():

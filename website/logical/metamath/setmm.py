@@ -36,7 +36,8 @@ EQUIVALENCES = frozenset({"wb", "wceq"})
 # decide it, which is worth seeing before trusting any rule that says it does:
 #
 #     citg    class S. A B _d x        the binder is the last token, and binds `B`
-#     cmpo    class ( x e. A , y e. B |-> C )     `x` reaches `B` as well as `C`
+#     cmpo    class ( x e. A , y e. B |-> C )   `y` reaches *back* to `A`, and `x`
+#                                               forward to `B`; neither by position
 #     wral    wff A. x e. A ph         `x` binds `ph` and *not* the domain `A`
 #
 # `set.mm` says as much itself, in the other direction: `$j free_var 'wsb' with
@@ -68,10 +69,29 @@ BINDERS: dict[str, dict[str, list[str]]] = {
     "wsb": {"x": ["ph"]},                       # [ y / x ] ph
     "wsbc": {"x": ["ph"]},                      # [. A / x ]. ph
     "csb": {"x": ["B"]},                        # [_ A / x ]_ B
-    # Maps. A later domain may mention an earlier binder, so `cmpo` and `cmpt3`
-    # scope across the domains as well as the body.
+    # Maps, whose binders reach the domains as well as the body — but not to the
+    # same extent, and the difference is in their definientia rather than in their
+    # notation, which is identically shaped:
+    #
+    #     df-mpo    ( x e. A , y e. B |-> C ) = { <. <. x , y >. , z >. |
+    #                                             ( ( x e. A /\ y e. B ) /\ z = C ) }
+    #     df-bj-mpt3  ( x e. A , y e. B , z e. C |-> D )
+    #                 = { <. s , t >. | E. x e. A E. y e. B E. z e. C ( … /\ t = D ) }
+    #
+    # `cmpo` abstracts its binders **simultaneously**, so each of them binds across
+    # every slot and `y` reaches `A` — which `df-linc` is the corpus's one use of,
+    # writing `( s e. ( … ^m v ) , v e. ~P ( Base ` m ) |-> … )`. `cmpt3` nests
+    # *restricted existentials* instead, so its scoping is strictly forward and `y`
+    # reaches `C` and `D` but never `A`. Reading the second off the first is exactly
+    # the analogy to avoid.
+    #
+    # A binder's own domain is left out of its scope throughout. Each definiens does
+    # bind it — `{ <. x , y >. | ( x e. A /\ … ) }` captures an `x` in `A` — but
+    # `x e. A ( x )` is degenerate, `set.mm` forbids it by `$d` wherever it could
+    # arise, and omitting it is the safe direction: an occurrence read as free costs
+    # a refused definition, one wrongly read as bound would hide a capture.
     "cmpt": {"x": ["B"]},                       # ( x e. A |-> B )
-    "cmpo": {"x": ["B", "C"], "y": ["C"]},      # ( x e. A , y e. B |-> C )
+    "cmpo": {"x": ["B", "C"], "y": ["A", "C"]},  # ( x e. A , y e. B |-> C )
     "cmpt3": {"x": ["B", "C", "D"], "y": ["C", "D"], "z": ["D"]},
     # ( x e. A , y e. B , z e. C |-> D )
     # Indexed families and big operators: the index binds the body, never the

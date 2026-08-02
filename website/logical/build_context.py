@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from website.logical.kernel.constructors import Constructor
     from website.logical.kernel.side_conditions import SideCondition
     from website.logical.kernel.terms import Term
+    from website.logical.matching.context import Context
 
 
 @dataclass(eq=False)
@@ -109,6 +110,34 @@ class SchemaSlot:
 # template that composes to nothing and can never cost correctness. Reading an
 # absence as an answer is the shape of the two bugs P2 shipped with.
 SchemaTermSource = Callable[[SchemaSlot, "FormalSystemContext"], "Term | None"]
+
+
+@dataclass(frozen=True)
+class DefinitionSlot:
+    """Which of a definition's two surface forms a stored kernel term belongs to.
+
+    Positional for the same reason :class:`SchemaSlot` is: a ``SystemSpec`` names
+    nothing, and the persistence layer and the build walk ``spec.definitions`` in
+    the same order. The index is into the *spec*, not into the built system's
+    definitions — a definition whose defining form matches nothing is dropped, so
+    the two lists need not be the same length.
+    """
+
+    definition: int
+    # "higher" (the defined form) or "lower" (the defining form).
+    slot: str
+
+
+# Supplies the stored term for a definition form, given the parsing context its
+# constructors resolve in. `None` means "parse it", on exactly the contract
+# `SchemaTermSource` documents above: an absence is never read as an answer.
+#
+# The context here is a proof `Context` rather than a `FormalSystemContext`,
+# because a defined form is grammatical only through the notation registered on
+# the *system's* context. Both satisfy what resolving a stored constructor needs
+# (`variables` and `definitions`), so the two sources differ only in which one
+# the caller is holding at the point it asks.
+DefinitionTermSource = Callable[[DefinitionSlot, "Context"], "Term | None"]
 
 
 def build_schema_pattern(

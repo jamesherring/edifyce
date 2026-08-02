@@ -33,6 +33,7 @@ from app.db.terms import (
     TermRow,
 )
 from website.logical.kernel import Bound, Node, Term, Var, constructor_for, intern
+from website.logical.matching import Pattern, UnionPattern
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -390,6 +391,13 @@ class TermGraph:
         # Shared across every root, so a subterm two statements have in common is
         # rebuilt once. Interning means that is the usual case, not the exception.
         self._memo: dict[uuid.UUID, Term] = {}
+        # Name -> grammar pattern, built once on first use. A stored constructor
+        # cannot be resolved through `context.variables` alone (see `_grammar_of`),
+        # and the alternative — searching the sort unions per node — is O(grammar)
+        # on a path that runs once per *node*: 68x a dict lookup at 400
+        # productions, and set.mm declares 1,441. This is the same lesson
+        # `build_context._GrammarIndex` records for the build side.
+        self._grammar: dict[str, Pattern] | None = None
 
     def __len__(self) -> int:
         return len(self._rows)
@@ -414,13 +422,89 @@ class TermGraph:
         corruption, not something to paper over, and the digest guards above this
         are what decide whether a term is current.
 
-        One graph is meant for one context — the memo is keyed by row id alone —
-        which holds for every caller, since a build's contexts are copies sharing
-        one ``variables``.
+        One graph is meant for one context — the memo is keyed by row id alone,
+        and the grammar index (:meth:`_grammar_of`) is built from the first
+        context handed in — which holds for every caller, since a build's
+        contexts are copies sharing one ``variables``.
         """
         if term_id is None or term_id not in self._rows:
             return None
         return intern(self._build(term_id, context))
+
+    def _grammar_of(self, context: Context) -> dict[str, Pattern]:
+        """``name -> grammar pattern`` for ``context``, built once per graph.
+
+        Why the grammar and not ``context.variables``: that namespace is shared
+        with lines, line parts, axioms and the system itself, which are registered
+        into it *after* the productions (``declarative.build_system`` steps 5 and
+        6), and a name declared twice resolves to the later one. A production
+        named ``implication`` and an axiom of that name leave the axiom's
+        ``LineType`` under the key; a line *part* of that name leaves a
+        ``RegexPattern``, which is worse, because it is a pattern and so passes
+        for an answer.
+
+        Composing never noticed — it parses against the sort unions, which hold
+        the production objects themselves. A stored term names its constructors by
+        name and comes back through here, so before this a system with such a
+        collision verified once and then failed on every later verify: an
+        ``AttributeError`` for the axiom case, a silently wrong term for the
+        line-part one.
+
+        The unions are the authority: a grammar name is unique within a system
+        (``uq_symbols_system_name``), a declared production is always a member of
+        its sort's union, and a sort included in another is a member of that one.
+        Built here rather than looked up per node because it is O(grammar) and
+        ``_build`` runs per node — the mistake ``build_context._GrammarIndex``
+        already records. One graph is one context, so one index serves it.
+        """
+        if self._grammar is None:
+            grammar: dict[str, Pattern] = {}
+            for candidate in context.variables.values():
+                if not isinstance(candidate, UnionPattern):
+                    continue
+                for member in candidate.patterns:
+                    if isinstance(member, Pattern):
+                        grammar.setdefault(member.name, member)
+            self._grammar = grammar
+        return self._grammar
+
+    def _constructor(self, name: str, context: Context) -> Constructor:
+        """The constructor a stored ``name`` denotes: a production, or a notation.
+
+        One lookup covers both because a notation's name carries a ``:``, which a
+        declared production's name never can (see ``DefinedNotation``) — so the
+        two namespaces cannot collide and a row needs no kind to tell them apart.
+
+        Grammar first, then the registered notations, then the build namespace for
+        a top-level sort — which is the one grammar pattern no union contains.
+        """
+        pattern = self._grammar_of(context).get(name)
+        if pattern is None:
+            pattern = next(
+                (n.template for n in context.definitions if n.template.name == name),
+                None,
+            )
+        if pattern is None:
+            pattern = _in_namespace(name, context)
+        if pattern is None:
+            raise LookupError(
+                f"No production or defined notation named {name!r} in context"
+            )
+        return constructor_for(pattern)
+
+    def _sort(self, name: str, context: Context) -> Constructor:
+        """The constructor a stored *sort* name denotes.
+
+        Narrower than :meth:`_constructor`: a sort is always a declared union of
+        the grammar, never an ad-hoc defined form, so a miss is a genuine mismatch
+        between the stored rows and the system rather than something to search
+        for. Same order and the same reason — a sort name is as shadowable as a
+        production's.
+        """
+        pattern = self._grammar_of(context).get(name) or _in_namespace(name, context)
+        if pattern is None:
+            raise LookupError(f"No sort named {name!r} in context")
+        return constructor_for(pattern)
 
     def _build(self, term_id: uuid.UUID, context: Context) -> Term:
         cached = self._memo.get(term_id)
@@ -430,18 +514,18 @@ class TermGraph:
         row = self._rows[term_id]
         term: Term
         if row.kind == TERM_KIND_VAR:
-            term = Var(row.var_name, _sort_named(row.sort, context))
+            term = Var(row.var_name, self._sort(row.sort, context))
         elif row.kind == TERM_KIND_BOUND:
-            term = Bound(row.bound_index, _sort_named(row.sort, context))
+            term = Bound(row.bound_index, self._sort(row.sort, context))
         elif row.kind == TERM_KIND_NODE:
             term = Node(
-                constructor=_constructor_named(row.constructor, context),
+                constructor=self._constructor(row.constructor, context),
                 children={
                     slot: self._build(child, context)
                     for slot, child in self._children.get(term_id, ())
                 },
                 literal=row.literal,
-                sort=_sort_named(row.sort, context) if row.sort is not None else None,
+                sort=self._sort(row.sort, context) if row.sort is not None else None,
             )
         else:
             raise ValueError(f"Unknown term row kind: {row.kind!r}")
@@ -586,32 +670,14 @@ def prefetch_terms(session: Session, root_ids: Sequence[uuid.UUID]) -> TermGraph
     return TermGraph(rows, children)
 
 
-def _constructor_named(name: str, context: Context) -> Constructor:
-    """The constructor a stored name denotes: a declared production, or the
-    defined notation of that name.
+def _in_namespace(name: str, context: Context) -> Pattern | None:
+    """What ``name`` denotes in the build namespace, if it denotes a pattern.
 
-    One lookup covers both because a notation's name carries a ``:``, which a
-    declared production's name never can (see ``DefinedNotation``) - so the two
-    namespaces cannot collide and a row needs no kind to tell them apart.
+    The fallback for what :meth:`TermGraph._grammar_of` cannot see — a top-level
+    sort union, which is nobody's member. Still filtered to patterns, so a name
+    bound only by a line type or an axiom reads as absent rather than as an answer.
     """
-    pattern = context.variables.get(name)
-    if pattern is None:
-        pattern = next(
-            (n.template for n in context.definitions if n.template.name == name), None
-        )
-    if pattern is None:
-        raise LookupError(f"No production or defined notation named {name!r} in context")
-    return constructor_for(pattern)
+    found = context.variables.get(name)
+    return found if isinstance(found, Pattern) else None
 
 
-def _sort_named(name: str, context: Context) -> Constructor:
-    """The constructor a stored *sort* name denotes.
-
-    Narrower than :func:`_constructor_named`: a sort is always a declared union of
-    the grammar, never an ad-hoc defined form, so a miss is a genuine mismatch
-    between the stored rows and the system rather than something to search for.
-    """
-    pattern = context.variables.get(name)
-    if pattern is None:
-        raise LookupError(f"No sort named {name!r} in context")
-    return constructor_for(pattern)

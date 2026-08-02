@@ -1,6 +1,6 @@
 # Design: verification from rows, not from text
 
-**Status:** P1–P5 and P2a shipped · **Prerequisite work:** merged (the term
+**Status:** P1–P6 and P2a shipped · **Prerequisite work:** merged (the term
 graph, `proof_lines`, the kernel-takes-terms change #121, and the Metamath
 corpus import #124)
 
@@ -51,7 +51,7 @@ checking does.
 ## 2. What is stored, and what is thrown away
 
 This table is what the phases below work through; **used** is the state after
-P1–P5.
+P1–P6.
 
 | Verification needs | Stored | Used |
 |---|---|---|
@@ -62,7 +62,7 @@ P1–P5.
 | Justification edges | yes — `proof_line_antecedents` | no — *re-derived* from the citation, deliberately |
 | Scope tree (for discharge) | yes — `proof_lines.opens_scope` / `scope_id` | no — *re-derived*, deliberately |
 | Rule schema terms | yes — `rules.deduction_term_id` etc. → `terms` | **yes** (P3), when `rules.schema_digest` still matches |
-| Definition higher/lower forms | **no** | stored as strings, matched against the grammar at build |
+| Definition higher/lower forms | yes — `definitions.higher_term_id` / `lower_term_id` → `terms` | **yes** (P6), when `definitions.term_digest` still matches |
 | A line's flat string (string-rewriting) | no — *derived* | **yes** (P5), rendered from the term rather than stored |
 | Promoted theorems | yes — `promoted_theorems` → `terms` | **yes** (P4), resolved by label per citation |
 
@@ -75,12 +75,18 @@ Everything a verdict rests on is recomputed; the rows supply only what each line
 **The proof side is closed.** Everything a proof contributes is in rows and read
 back on every check.
 
-**The system side is closed but for one seam.** Rule schemas are stored as
-composed terms and read back (P3); the citable library is stored and resolved by
-label (P4), so an imported Metamath proof re-checks from its own rows. What is
-left is a definition's forms, which are *registered as notation* against the
-finished grammar rather than composed against it — a different mechanism, and the
-only remaining thing a build reads from a string.
+**The system side is closed too.** Rule schemas are stored as composed terms and
+read back (P3); the citable library is stored and resolved by label (P4), so an
+imported Metamath proof re-checks from its own rows; and a definition's two forms
+are stored as the terms they parse to (P6), so the kernel definition an unfold is
+checked against no longer derives from text on the read path.
+
+A rebuild still reads the two form strings, but for *grammar* rather than
+structure: whether the defining form parses at all given the definitions before
+it, whether the definition is circular, and the notation template that makes the
+defined form grammatical. Each is the parser answering a question about the
+grammar, and none produces a term the checker uses — which is the line this
+document has drawn throughout.
 
 ## 3. The contract this inverts
 
@@ -651,7 +657,9 @@ composes to nothing, and is what the build did before this existed.
 definition's forms do not go through `build_schema_pattern` at all — they are
 matched and registered as *notation* against the finished grammar
 (`_finalise_definition`), which mutates the grammar rather than reading it. That
-is a different seam and belongs with P5's tidying, not here.
+is a different seam. It is now P6, and the difference held up: the storage is
+P3's shape exactly, while everything about *where* the cache is consulted follows
+from the notation.
 
 ### P4. Store promoted theorems — *done*
 
@@ -783,6 +791,80 @@ regime *term*-checked — `_string_pairs` still matches flat text, because an
 associative rule like `Mx ⊢ Mxx` has no term-unification expression. The claim
 this document makes is that verification never *parses*, and that now holds for
 string-rewriting systems too. It was never that everything is unification.
+
+### P6. Store definition forms — *done*
+
+P3's deferral, taken up. A definition is written as two strings — `(x ⊆ y)` and
+`∀z.((z ∈ x) → (z ∈ y))` — and the build parsed both into the terms an unfold is
+checked against. `definitions.higher_term_id` / `lower_term_id` now hold those
+terms, guarded by `definitions.term_digest`, on P3's contract exactly: a
+mismatched digest makes the rows inert rather than wrong, and a NULL is a miss
+rather than "parses to nothing".
+
+**The digest is per system, not per definition**, which is the one place this
+diverges from P3. `declarative.definition_digest` fingerprints the grammar and the
+*whole ordered block*, and every row of a system carries that one value. Two
+reasons, either sufficient: a definition's forms are parsed against the grammar as
+extended by the definitions before it, so no definition's terms survive another's
+edit; and the slot key is a spec position, which an insertion or a reorder moves
+under every later definition. A per-definition digest would have had to cover
+every earlier definition anyway, and would still have been wrong about the
+indices.
+
+**The stored term stops before binder placement**, and this is the failure this
+phase could most easily have shipped. The obvious thing to store is the finished
+`Definition.lower`. It round-trips *wrong*: `bind_scoped` places one binder per
+ground leaf sitting in a binder slot, and a form that has already been through it
+has no such leaves left — so a rebuilt definition would come back with an empty
+`fresh`, silently losing the capture-avoidance proviso that is the whole reason
+binders are abstract. Nothing about that failure is visible in a proof's verdict;
+`test_the_binders_survive_the_round_trip` is what pins it. So `parse_definition`
+hands its `record` callback the pair *before* `bind`/`bind_scoped`, and a rebuild
+runs both on the stored term exactly as on a parsed one.
+
+That is the general rule this phase confirms, and P3 stated: store what the parse
+produced, not what the build did with it. A cache of a derivation's *input* is
+inert when stale; a cache of its output is a second implementation.
+
+**What is not skipped.** Only the two parses that produce kernel terms. A rebuild
+still matches both forms against the grammar to decide layering and
+non-circularity, and still registers the defined form as notation — see §2 on why
+those are grammar questions rather than structure. Two smaller derivations also
+remain, both bounded: a declared binder's `default` (its bare name, parsed against
+its own sort) and a definition's provisos (surface lines into the side-condition
+algebra).
+
+**A shadowed grammar name, found in review, and older than this phase.**
+`ctx.variables` is one namespace: lines, line parts, axioms and the system are
+registered into it after the productions, so an axiom named after a production
+leaves a `LineType` under that key and a line *part* leaves a `RegexPattern`.
+Composing never noticed — it parses against the sort unions, which hold the
+production objects — but a stored term resolves its constructors *by name*. So a
+system with such a collision verified once, stored its terms, and then failed on
+every later verify: an `AttributeError` for the axiom case, a **silently wrong
+term** for the line-part one.
+
+`_shadowed_grammar_names` is in the digest, which reads like a guard against
+exactly this, and is not: it catches a collision being *introduced*, while one
+present from the outset matches at both ends and is served. The digest is right
+that nothing changed — the defect is in the lookup, not the freshness.
+
+So `TermGraph` now resolves a stored constructor through the sort unions and
+falls back to the namespace only for a top-level sort, which is the one grammar
+pattern no union contains. The index is built once per graph rather than searched
+per node: an O(grammar) scan there measured **68× a dict lookup at 400
+productions**, on a path that runs per node, which is the mistake
+`build_context._GrammarIndex` already records for the build side.
+
+This predates P6 — the same failure reproduces against P3's rule schemas on a
+tree without it — but P6 is what surfaced it, and the fix repairs both.
+
+**Measure:** monkeypatching `abstract` — the one call every definition-form parse
+goes through — to raise, and requiring a warm build to succeed anyway
+(`test_a_served_form_is_not_parsed_at_all`). It does, with zero calls, and
+produces a definition set structurally identical to a cold build's. Agreement
+alone would not have shown this: a build that consulted the cache and discarded
+its answer would pass every other test in the file.
 
 ---
 

@@ -87,7 +87,7 @@ from ..kernel.definitions import FreshBinder, bind_scoped
 from ..kernel.terms import Node, _bound, abstract, bind, from_match
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from ..kernel.constructors import Constructor
     from ..kernel.side_conditions import SideCondition
@@ -144,6 +144,9 @@ def parse_definition(
     condition: SideCondition | None = None,
     fresh: dict[str, Pattern] | None = None,
     label: str | None = None,
+    higher_term: Term | None = None,
+    lower_term: Term | None = None,
+    record: Callable[[Term, Term], None] | None = None,
 ) -> Definition:
     """Build a kernel :class:`~website.logical.kernel.definitions.Definition` by
     parsing its two surface forms.
@@ -174,6 +177,20 @@ def parse_definition(
     trace of, and what an author would otherwise write by hand. The two may be
     mixed: a declared name is bound first, so the scoped walk steps over it.
 
+    ``higher_term`` / ``lower_term`` supply the abstracted term a form was last
+    parsed to, letting a caller holding a stored one skip that parse (see
+    ``app/db/definition_terms.py``). Each is independent, and passing neither —
+    or one that is ``None`` — parses as before; nothing downstream can tell which
+    route a term arrived by. Only the *derivation* is skipped: the binder
+    placement and admissibility checks below run on a supplied term exactly as on
+    a parsed one, so a stored term buys no leniency.
+
+    ``record`` is handed the pair actually used, whether parsed here or supplied
+    — the write half of that cache. It is called *before* any binder is placed,
+    which is the only pair worth storing: :func:`bind_scoped` binds ground leaves
+    sitting in binder slots, so a form that has already been through it has none
+    left to offer and would rebuild with no binders at all.
+
     This lives here, not on ``Definition``, because it is the one thing a
     definition needed the *grammar* for. The kernel checks a step against terms;
     turning surface syntax into those terms is this layer's job, and keeping the
@@ -190,8 +207,10 @@ def parse_definition(
     def schema(text: str) -> Term:
         return abstract(parse(sort, text, "Definition form"), parameter_sorts)
 
-    higher_term = schema(higher)
-    lower_term = schema(lower)
+    higher_term = schema(higher) if higher_term is None else higher_term
+    lower_term = schema(lower) if lower_term is None else lower_term
+    if record is not None:
+        record(higher_term, lower_term)
 
     # Each declared binder carries the leaf its name denotes. Parsing that name
     # here is what lets an unfold fall back to it without re-reading a string: a
@@ -323,6 +342,9 @@ def build_kernel_definition(
     # the definition it returns holds no pattern.
     fresh: dict[str, Pattern] | None = None,
     label: str | None = None,
+    higher_term: Term | None = None,
+    lower_term: Term | None = None,
+    record: Callable[[Term, Term], None] | None = None,
 ) -> Definition:
     """The kernel definition that unfolds ``notation`` to ``lower``.
 
@@ -334,7 +356,12 @@ def build_kernel_definition(
 
     ``context`` must already hold ``notation``: a defined form is grammatical
     only because its notation is registered, so that is what lets ``higher``
-    parse at all.
+    parse at all — and, for a stored ``higher_term``, what lets its constructor
+    resolve.
+
+    ``higher_term`` / ``lower_term`` / ``record`` are passed through to
+    :func:`parse_definition`; see there for what supplying one does and does not
+    skip, and what ``record`` is handed.
 
     Raises :class:`DefinitionError` when the pair cannot be expressed as a kernel
     definition — because a form does not parse, or because the defining form
@@ -363,6 +390,9 @@ def build_kernel_definition(
             condition=condition,
             fresh=dict(fresh) if fresh else None,
             label=label,
+            higher_term=higher_term,
+            lower_term=lower_term,
+            record=record,
         )
     except Exception as exc:
         # A surface form the grammar cannot recognise on its own, or a deeper

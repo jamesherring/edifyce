@@ -38,6 +38,7 @@ from app.db import (
     discard_system_checks,
     effective_library,
     get_session,
+    inherited_definition_count,
     inherited_rule_count,
     load_theorems,
     system_to_spec,
@@ -315,6 +316,14 @@ class EffectiveSystem:
         """How many of ``spec.rules`` an ancestor contributed; see `schema_terms`."""
         return inherited_rule_count(self.chain)
 
+    @property
+    def definition_offset(self) -> int:
+        """The same for ``spec.definitions``; see `definition_terms`.
+
+        Its own count rather than `rule_offset`'s: `effective_spec` concatenates
+        each part list independently, so the two offsets are unrelated.
+        """
+        return inherited_definition_count(self.chain)
 
 
 async def load_effective(
