@@ -1284,7 +1284,21 @@ constraint on the phases after it rather than a closed question.
       close. `ax-5`'s proviso is a `SideCondition` and travels; a *discharge*
       rule's freshness is `Subproof.eigenvariable_is_fresh`, and a discharge
       builds no `Inference` — so there is no binding to restate and nothing to
-      carry. Refused until there is, which is the one piece of R3a still open.
+      carry.
+    - A **definitional step** is the same gap by a second route (Codex, on #160):
+      it cites a definition rather than a rule, so it too builds no `Inference`,
+      and what goes missing is a definition's own proviso *and* the binder
+      freshness `fresh` generates. Unfold `a ⊆ b`, hold `a` schematic, and the
+      theorem hands a citation the instance putting the bound `z` where `a` was —
+      the capture the unfold itself refuses. Refused in the narrow form: a
+      nomination that *changes* an unfolded line, not any proof that unfolds,
+      since otherwise a system whose notation is defined could never promote
+      schematically at all.
+
+    Those last two are **the piece of R3a still open**, and they are one piece:
+    both want the constraint restated over a binding that discharge and
+    definitional steps do not currently record. Retaining it for them is what
+    `Inference.binding` already does for ordinary rule steps.
 
     A fourth refusal is about the *carrying* rather than the abstraction: a
     citation binds only the metavariables its statement mentions, so a proviso
