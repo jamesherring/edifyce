@@ -1473,6 +1473,35 @@ def test_stored_terms_are_interned_per_system_not_per_line(client, db):
     assert len(_proof_terms(db, pid)) == 3
 
 
+def test_verifying_stores_the_definition_forms_and_reuses_them(client, db):
+    # The route wiring for app/db/definition_terms.py: everything in
+    # tests/test_definition_terms.py drives load/store directly, so this is what
+    # says the verify path actually calls them. The seeded system carries one
+    # definition, whose two forms the first build parses and stores.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    pid = _create_proof(client, sid, "MP", source=_MP_SRC)
+
+    def stored_forms():
+        with Session(create_engine(db)) as session:
+            return [
+                (d.term_digest, d.higher_term_id, d.lower_term_id)
+                for d in session.scalars(select(DefinitionRow))
+            ]
+
+    assert stored_forms() == [(None, None, None)]
+
+    client.post(f"/api/proofs/{pid}/verify")
+    (digest, higher, lower) = stored_forms()[0]
+    assert digest is not None
+    assert higher is not None and lower is not None
+
+    # A second verify reads them and writes nothing new — the digest already
+    # matches, so `store_definition_terms` is a comparison per definition.
+    client.post(f"/api/proofs/{pid}/verify")
+    assert stored_forms() == [(digest, higher, lower)]
+
+
 def test_stored_edges_record_the_lines_the_checker_actually_used(client, db):
     uid = _register_login(client, "ada@example.com")
     sid = _seed_system(db, uid)

@@ -19,10 +19,11 @@ evolve it.
 | `app/db/side_conditions.py` | Definition provisos as the kernel side-condition algebra, stored as rows |
 | `app/db/side_conditions_mapping.py` | Parse/render a `where` proviso ↔ side-condition rows |
 | `app/db/terms.py` | Term graph: kernel-term DAGs as shared `terms` / `term_children` rows |
-| `app/db/terms_mapping.py` | `store_term` / `prefetch_terms` round trip between kernel `Term`s and the rows |
+| `app/db/terms_mapping.py` | `store_term` / `prefetch_terms` round trip between kernel `Term`s and the rows. A stored constructor resolves through the **sort unions**, not `context.variables`: that namespace is shared with lines, axioms and line parts, and a name declared twice resolves to the later one |
 | `app/db/promoted_theorems.py` | The citable library: proved and imported theorems as rows, resolved by label |
 | `app/db/promoted_theorems_mapping.py` | `store_theorem` / `load_theorems`: the library round trip |
 | `app/db/schema_terms.py` | `store_schema_terms` / `load_schema_terms`: a rule's schema templates as composed kernel terms, so a build need not re-parse them |
+| `app/db/definition_terms.py` | `store_definition_terms` / `load_definition_terms`: the same for a definition's two surface forms |
 | `app/db/proof_lines.py` | Proof structure: a checked proof's lines + the justification edges between them |
 | `app/db/proofs_mapping.py` | `store_proof_lines`: project a checked engine `Proof` into those rows |
 | `app/db/metamath_store.py` | `import_corpus`: walk a Metamath `.mm` database and store the system, its proofs, and their line graphs |
@@ -86,14 +87,27 @@ Modernised from the original Django app (`website/models.py` on `main`):
   bindings, and a row whose digest no longer matches is simply not read — so a
   part edit needs no invalidation sweep, and a stale row is inert rather than
   believed. The digest also covers which grammar names a line, part or axiom
-  *shadows* in the build namespace: composing is indifferent to those (it parses
-  against the sort unions) but `TermGraph` resolves a stored constructor by name
-  through that namespace, so a collision is where a warm build and a cold build
-  would disagree. The FKs into `terms` are `ON DELETE SET NULL` for the same reason:
+  *shadows* in the build namespace, because a rename onto a production's name
+  changes nothing a template composes to and so would otherwise leave the rows
+  looking current. (It is not what makes such a system *correct* — a collision
+  present from the outset matches the digest at both ends. `TermGraph` resolves a
+  stored constructor through the sort unions rather than that namespace, which is
+  what settles it either way.) The FKs into `terms` are `ON DELETE SET NULL`:
   losing a term must cost a re-compose, never a rule. And a NULL term id is a
   *miss* even under a matching digest — never "this template composes to
   nothing" — because the same NULL is what a deleted term, and a slot that
   resolved to a declared pattern instead of a composed one, both leave behind.
+
+  `definitions` carries the same kind of cache for its two surface forms
+  (`definition_terms.py`): `higher_term_id` / `lower_term_id` hold the terms the
+  build parsed them into, under `definitions.term_digest`. Two differences from a
+  rule's, both forced by what a definition is. The digest is **per system**, not
+  per row — a definition's forms are parsed against the grammar as extended by the
+  definitions before it, and the slot key is a spec position that an insertion
+  moves — so every row of a system carries one value. And the stored term stops
+  **before binder placement**: `bind_scoped` binds ground leaves sitting in binder
+  slots, so storing the finished `Definition.lower` would rebuild with no binders
+  at all and quietly drop the definition's capture-avoidance proviso.
 - **`promoted_theorems`, `promoted_theorem_premises`,
   `promoted_theorem_bindings`** — a system's **citable library**
   (`promoted_theorems.py`): results it has proved, or imported from a corpus, and

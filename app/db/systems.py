@@ -267,6 +267,20 @@ class DefinitionRow(Base):
     # is unreachable until the import writes definitions.
     justification_label: Mapped[str | None] = mapped_column(String(64))
     justification_statement: Mapped[str | None] = mapped_column(String(512))
+    # The kernel term each of the two forms above parses to, so a build need not
+    # parse them again (see app/db/definition_terms.py). Same contract as a rule's
+    # schema terms: NULL is "parse it", never "parses to nothing", and
+    # `term_digest` — the whole definition block plus the grammar
+    # (declarative.definition_digest) — is what decides whether either still means
+    # anything. A mismatch makes them inert, not wrong.
+    #
+    # The digest is per *definition block*, not per definition, so every row of a
+    # system carries the same value: a definition's forms are parsed against the
+    # grammar as extended by the definitions before it, so no definition's terms
+    # survive another's edit.
+    term_digest: Mapped[str | None] = mapped_column(String(64))
+    higher_term_id: Mapped[uuid.UUID | None] = _schema_term_fk()
+    lower_term_id: Mapped[uuid.UUID | None] = _schema_term_fk()
 
     system: Mapped[FormalSystem] = relationship(back_populates="definitions")
     symbol: Mapped[SymbolRow] = relationship()

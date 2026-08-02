@@ -364,3 +364,13 @@ def inherited_rule_count(chain: Sequence[FormalSystem]) -> int:
     the whole chain's spec by.
     """
     return sum(len(system.rules) for system in chain[:-1])
+
+
+def inherited_definition_count(chain: Sequence[FormalSystem]) -> int:
+    """The same, for definitions — :mod:`app.db.definition_terms`' ``offset``.
+
+    A separate count rather than a shared one: :func:`effective_spec` concatenates
+    each part list independently, so a chain's definitions and its rules are
+    offset by different amounts.
+    """
+    return sum(len(system.definitions) for system in chain[:-1])

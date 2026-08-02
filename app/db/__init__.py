@@ -55,6 +55,11 @@ from app.db.systems import (
     RuleRow,
     SymbolRow,
 )
+from app.db.definition_terms import (
+    DefinitionTermCache,
+    load_definition_terms,
+    store_definition_terms,
+)
 from app.db.schema_terms import (
     SchemaTermCache,
     load_schema_terms,
@@ -63,6 +68,7 @@ from app.db.schema_terms import (
 from app.db.side_conditions import SideConditionRow
 from app.db.systems_mapping import (
     effective_spec,
+    inherited_definition_count,
     inherited_rule_count,
     spec_to_system,
     system_to_spec,
@@ -125,6 +131,7 @@ __all__ = [
     "spec_to_system",
     "system_to_spec",
     "effective_spec",
+    "inherited_definition_count",
     "inherited_rule_count",
     # Term graph (app/db/terms.py) + kernel-term round trip.
     "TermChildRow",
@@ -138,6 +145,10 @@ __all__ = [
     "SchemaTermCache",
     "load_schema_terms",
     "store_schema_terms",
+    # Definition-form term cache (app/db/definition_terms.py).
+    "DefinitionTermCache",
+    "load_definition_terms",
+    "store_definition_terms",
     # Metamath corpus import (app/db/metamath_store.py).
     "ImportReport",
     "import_corpus",
