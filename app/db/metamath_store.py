@@ -48,15 +48,20 @@ from sqlalchemy.orm import Session
 
 from app.db.models import FormalSystem, Proof
 from app.db.promoted_theorems_mapping import store_theorem, theorem_digest
+from app.db.notations_mapping import store_notation
 from app.db.proofs_mapping import store_proof_lines
 from app.db.systems_mapping import spec_to_system
-from website.logical.declarative import library_digest
+from website.logical.declarative import build_system, library_digest
 from website.logical.metamath.corpus import corpus_spec, walk
+from website.logical.metamath.display import notation_constructors, unicode_projection
+from website.logical.metamath.typesetting import typesetting_of
+from website.logical.rendering import total_projection
 from website.logical.metamath.importer import LibraryEntry
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from website.logical.declarative import SystemSpec
     from website.logical.metamath.corpus import CheckedTheorem
     from website.logical.metamath.parser import Database
 
@@ -83,6 +88,9 @@ class ImportReport:
     failed: int = 0
     lines: int = 0
     formulas: int = 0
+    # Constructors given a spelling in the stored `unicode` notation, or 0 for a
+    # database carrying no `$t` block to derive one from.
+    notation: int = 0
     # The citable library this run stored: every assertion the walk promoted,
     # and how many of those are primitives of the imported system.
     # ``theorems_failed`` is counted apart from ``failed`` because it is a
@@ -157,9 +165,43 @@ def import_corpus(
             library.rebind(system)
 
     _link_proofs_to_theorems(session, report.system_id, library.ids)
+    report.notation = _store_notation(session, database, spec, report.system_id)
     if batch is not None:
         session.commit()
     return report
+
+
+def _store_notation(
+    session: Session, database: Database, spec: SystemSpec, system_id: uuid.UUID
+) -> int:
+    # The motivating case for notations, and the reason they are stored at all: a
+    # `.mm` file carries its own readable spellings in a `$t` block, and without
+    # somewhere to put them an imported corpus can only ever be read as ASCII.
+    #
+    # Derived here because deriving needs what only an import has - the file's
+    # `$t` and the grammar the file built. A reader has rows.
+    typesetting = typesetting_of(database.comments)
+    if typesetting is None or not typesetting.unicode:
+        # A `$t` block need not declare `althtmldef` at all - it may carry only
+        # `latexdef`/`htmldef`, or nothing but site configuration - and a block
+        # that declares no Unicode is as good as no block. Checked before the
+        # build, which is the expensive half.
+        return 0
+
+    engine = build_system(spec)
+    spellings = unicode_projection(engine, typesetting)
+    if not spellings.templates:
+        # Declared, but about tokens this grammar's productions never use. Storing
+        # the completion anyway would advertise a `unicode` notation that re-spells
+        # nothing - every constructor at its source template, which is what a
+        # reader already gets by asking for no notation at all.
+        return 0
+
+    projection = total_projection(
+        notation_constructors(engine.build_context, engine.definitions),
+        spellings,
+    )
+    return store_notation(session, system_id, projection)
 
 
 def _link_proofs_to_theorems(

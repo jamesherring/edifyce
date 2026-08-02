@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 
 import app.auth.backend as backend
 from app.db import spec_to_system, system_to_spec
+from app.db.notations_mapping import store_notation
 from app.db.session import get_session
 from app.db.systems import DefinitionRow, RuleRow
 from app.main import app
@@ -47,6 +48,7 @@ from tests.spec_helpers import rule
 from tests.test_proofs_api import _TABLES
 from tests.test_systems_api import _register_login
 from website.logical.declarative import SystemSpec
+from website.logical.rendering import Projection
 
 
 @pytest.fixture
@@ -624,3 +626,71 @@ def test_an_inheritance_chain_is_bounded_when_it_is_written(client, db):
     )
     assert response.status_code == 400
     assert "deep" in response.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# A notation is layered like the system it reads
+# ---------------------------------------------------------------------------
+
+
+def store_notation_on(db_path, system_id: str, name: str, templates: dict) -> None:
+    engine = create_engine(db_path)
+    try:
+        with Session(engine) as session:
+            store_notation(
+                session, uuid.UUID(system_id), Projection(templates=templates, name=name)
+            )
+            session.commit()
+    finally:
+        engine.dispose()
+
+
+def test_a_child_can_be_read_in_an_ancestors_notation(client, db):
+    # The whole reason reading is layered. The notation worth having is a
+    # corpus's — a `$t` block is where one comes from — and a system built on a
+    # corpus adds a handful of productions to its thousands. Keyed on the child's
+    # own rows alone, building on an imported corpus would cost you its notation.
+    owner = _register_login(client, "layers@example.com")
+    pc, _fol, zfc = seed_tower(db, owner)
+    store_notation_on(db, pc, "ascii", {"implication": (("lit", "("), ("slot", "p"),
+        ("lit", " -> "), ("slot", "q"), ("lit", ")"))})
+
+    assert client.get(f"/api/formal-systems/{zfc}").json()["notations"] == ["ascii"]
+
+    created = client.post(
+        "/api/proofs",
+        json={"name": "Tower", "formal_system_id": zfc, "source": TOWER_PROOF},
+    )
+    proof_id = created.json()["id"]
+    assert client.post(f"/api/proofs/{proof_id}/verify").json()["success"] is True
+
+    read = client.get(f"/api/proofs/{proof_id}/structure", params={"notation": "ascii"})
+    assert read.status_code == 200, read.text
+    assert read.json()["lines"][0]["rendered"] == "(A -> (B -> A))"
+
+
+def test_a_childs_own_spelling_wins_over_its_ancestors(client, db):
+    # Per constructor, not per notation: a child re-spells what it has an opinion
+    # about and keeps the ancestor's reading of everything else — which is how a
+    # notation stays useful on a system that adds ten productions to ten thousand.
+    owner = _register_login(client, "override@example.com")
+    pc, _fol, zfc = seed_tower(db, owner)
+    store_notation_on(db, pc, "ascii", {
+        "implication": (("lit", "("), ("slot", "p"), ("lit", " -> "), ("slot", "q"),
+                        ("lit", ")")),
+        "negation": (("lit", "~"), ("slot", "p")),
+    })
+    store_notation_on(db, zfc, "ascii", {
+        "implication": (("lit", "("), ("slot", "p"), ("lit", " IMPLIES "),
+                        ("slot", "q"), ("lit", ")")),
+    })
+
+    created = client.post(
+        "/api/proofs",
+        json={"name": "Tower", "formal_system_id": zfc, "source": TOWER_PROOF},
+    )
+    proof_id = created.json()["id"]
+    assert client.post(f"/api/proofs/{proof_id}/verify").json()["success"] is True
+
+    read = client.get(f"/api/proofs/{proof_id}/structure", params={"notation": "ascii"})
+    assert read.json()["lines"][0]["rendered"] == "(A IMPLIES (B IMPLIES A))"

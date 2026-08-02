@@ -258,6 +258,10 @@ class FormalSystemDetail(FormalSystemSummary):
     definitions: list[Definition] = Field(default_factory=list)
     axioms: list[Axiom] = Field(default_factory=list)
     rules: list[Rule] = Field(default_factory=list)
+    # Named notations this system's terms may be *read* through, as against the
+    # grammar they are written in. Names only; the templates are served by
+    # rendering a proof through one, not by handing the map to a client.
+    notations: list[str] = Field(default_factory=list)
 
 
 class FormalSystemCreate(BaseModel):
@@ -742,6 +746,14 @@ class ProofLineOut(BaseModel):
     valid: bool
     invalid_message: str | None = None
     warning_message: str | None = None
+    # The line's formula re-spelled in the requested notation, or null when none
+    # was asked for or the line bears no formula. `display` is left alone: it is
+    # the source the proof was written in, and the two are different questions.
+    #
+    # Narrower than `display` in one more way — this is the *term*, so it carries
+    # no citation. A client showing a notation writes the citation itself, from
+    # `reference` and `rule`.
+    rendered: str | None = None
     # The scope kind this line opens, and the opener of the subproof it sits in.
     opens_scope: str | None = None
     scope_id: uuid.UUID | None = None
@@ -762,6 +774,10 @@ class ProofStructure(BaseModel):
     proof_id: uuid.UUID
     stored: bool
     lines: list[ProofLineOut] = Field(default_factory=list)
+    # The notation the lines were rendered through, echoed so a client can tell a
+    # served rendering from a silently ignored request. Null when none was asked
+    # for; a name the system does not store is a 404 rather than a null.
+    notation: str | None = None
 
 
 class ProofCreate(BaseModel):

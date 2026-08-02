@@ -231,6 +231,10 @@ export interface FormalSystemDetail extends FormalSystemSummary {
 	definitions: Definition[];
 	axioms: Axiom[];
 	rules: Rule[];
+	/** Named notations this system's terms may be *read* through, as against the
+	 * grammar they are written in. Names only — the templates never leave the
+	 * server; a client asks for a rendering by passing one to `proofs.structure`. */
+	notations: string[];
 }
 
 /** One bound variable of a definition's defining form, as the engine reads it.
@@ -498,6 +502,11 @@ export interface ProofStructureLine {
 	scope_id: string | null;
 	/** The line's formula in the term graph; null for a line that bears none. */
 	term: TermSummary | null;
+	/** The line's formula re-spelled in the requested notation, or null when none
+	 * was asked for. Narrower than `display` twice over: that is the whole
+	 * authored line, this is the term alone — so a client showing a notation
+	 * writes the citation itself, from `reference`. */
+	rendered: string | null;
 	antecedents: ProofStructureAntecedent[];
 }
 
@@ -508,6 +517,9 @@ export interface ProofStructure {
 	 * proof checked before this store existed materialises on its next verify.
 	 * Read `ProofSummary.valid` for whether it was checked. */
 	stored: boolean;
+	/** The notation the lines were rendered through, echoed back; null when none
+	 * was asked for. A name the system does not store is a 404, not a null. */
+	notation: string | null;
 	lines: ProofStructureLine[];
 }
 
@@ -787,8 +799,15 @@ export const api = {
 		verify: (id: string) => request<VerifyResponse>(`/proofs/${id}/verify`, { method: 'POST' }),
 		/** The structure the last verification stored — lines, their kernel terms,
 		 * and the justification edges between them. Never re-checks: an unverified
-		 * proof reports `stored: false`. */
-		structure: (id: string) => request<ProofStructure>(`/proofs/${id}/structure`),
+		 * proof reports `stored: false`.
+		 *
+		 * `notation` names one of the parent system's stored notations
+		 * (`FormalSystemDetail.notations`) to read the lines through; omitted, the
+		 * lines carry only the source they were written in. */
+		structure: (id: string, notation?: string) =>
+			request<ProofStructure>(
+				`/proofs/${id}/structure${notation ? `?notation=${encodeURIComponent(notation)}` : ''}`
+			),
 		/** Replace this proof's outgoing references (lemmas it cites) wholesale. */
 		setReferences: (id: string, references: ProofReferenceInput[]) =>
 			request<ProofDetail>(`/proofs/${id}/references`, {

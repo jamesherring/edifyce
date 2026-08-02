@@ -21,6 +21,7 @@ function system(parts: Partial<FormalSystemDetail> = {}): FormalSystemDetail {
 		definitions: [],
 		axioms: [],
 		rules: [],
+		notations: [],
 		...parts
 	};
 }

@@ -353,8 +353,13 @@ def store_term(
 
 
 @dataclass(frozen=True)
-class _TermRow:
-    """One ``terms`` row as flat data — no ORM instance, no identity map."""
+class StoredTerm:
+    """One ``terms`` row as flat data — no ORM instance, no identity map.
+
+    Public because a reader that only wants to *display* a term walks these rows
+    directly rather than rebuilding kernel terms (see
+    :func:`app.db.notations_mapping.render_stored`), and rebuilding needs a system.
+    """
 
     kind: str
     constructor: str | None
@@ -384,7 +389,7 @@ class TermGraph:
 
     def __init__(
         self,
-        rows: dict[uuid.UUID, _TermRow],
+        rows: dict[uuid.UUID, StoredTerm],
         children: dict[uuid.UUID, list[tuple[str, uuid.UUID]]],
     ) -> None:
         self._rows = rows
@@ -411,6 +416,19 @@ class TermGraph:
     def ids(self) -> set[uuid.UUID]:
         """Every row id in the graph — the roots and everything below them."""
         return set(self._rows)
+
+    def node(self, term_id: uuid.UUID) -> StoredTerm | None:
+        """The stored row for ``term_id``, or ``None`` if the sweep did not find it.
+
+        The rows themselves, for a caller that wants the stored shape rather than
+        a rebuilt term — rendering, which needs no grammar and should not pay for
+        one. Everything that *checks* goes through :meth:`term`.
+        """
+        return self._rows.get(term_id)
+
+    def children_of(self, term_id: uuid.UUID) -> tuple[tuple[str, uuid.UUID], ...]:
+        """``(slot, child id)`` edges below ``term_id``, in stored order."""
+        return tuple(self._children.get(term_id, ()))
 
     def term(
         self,
@@ -683,11 +701,11 @@ def prefetch_terms(session: Session, root_ids: Sequence[uuid.UUID]) -> TermGraph
     if not roots:
         return TermGraph({}, {})
 
-    rows: dict[uuid.UUID, _TermRow] = {}
+    rows: dict[uuid.UUID, StoredTerm] = {}
     children: dict[uuid.UUID, list[tuple[str, uuid.UUID]]] = {}
     for row in session.execute(_SWEEP, {"roots": roots}):
         if row.id not in rows:
-            rows[row.id] = _TermRow(
+            rows[row.id] = StoredTerm(
                 kind=row.kind,
                 constructor=row.constructor,
                 literal=row.literal,
@@ -702,7 +720,7 @@ def prefetch_terms(session: Session, root_ids: Sequence[uuid.UUID]) -> TermGraph
     return TermGraph(rows, children)
 
 
-def _literal(row: _TermRow, constructor: Constructor) -> str | None:
+def _literal(row: StoredTerm, constructor: Constructor) -> str | None:
     """The surface token a rebuilt leaf carries, in *this* system's spelling.
 
     A **constant** atom's literal is its constructor's value — the production
