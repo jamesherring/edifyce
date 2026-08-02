@@ -45,7 +45,15 @@
 				{/if}
 			</div>
 			{#if folder.description}
-				<p class="ml-5.5 whitespace-pre-line text-xs text-muted-foreground">
+				<!-- Clamped, because a section's introduction can be enormous: set.mm's
+				     21 part-level descriptions run to 27,820 characters between them and
+				     one subsection's is 20,783 on its own. Unclamped they bury the tree
+				     they are meant to annotate. `title` puts the whole of it one hover
+				     away, and the folder's own page is where it belongs in full. -->
+				<p
+					class="ml-5.5 line-clamp-2 text-xs text-muted-foreground"
+					title={folder.description}
+				>
 					{folder.description}
 				</p>
 			{/if}

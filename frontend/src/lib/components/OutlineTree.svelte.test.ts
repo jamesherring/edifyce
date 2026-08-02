@@ -66,3 +66,16 @@ describe('the outline tree', () => {
 	});
 });
 
+
+describe('a long description', () => {
+	it('is clamped and offered whole on hover', () => {
+		// set.mm's part-level descriptions run to 27,820 characters between them and
+		// one subsection's is 20,783 on its own. Unclamped they bury the tree.
+		const long = 'A long section introduction. '.repeat(200);
+		render(OutlineTree, { folders: [folder({ name: 'Part', description: long })] });
+
+		const shown = screen.getByText(long.trim());
+		expect(shown).toHaveClass('line-clamp-2');
+		expect(shown).toHaveAttribute('title', long);
+	});
+});

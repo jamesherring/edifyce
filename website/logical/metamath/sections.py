@@ -31,9 +31,15 @@ what tells them apart.
 The prose that follows
 ----------------------
 308 of `set.mm`'s headers carry explanatory text after the closing rule, and the
-part-level ones carry a great deal of it — one runs to 525 lines. It is kept: a
-section's introduction is content, and the alternative is discarding the only
-prose a `.mm` file has about its own structure.
+part-level ones carry a great deal of it — one runs to 20,783 characters. It is
+kept: a section's introduction is content, and the alternative is discarding the
+only prose a `.mm` file has about its own structure.
+
+It is read through :func:`~.comments.unwrap`, the same rule a *statement's*
+description gets: the file's hard wrapping is not content and goes, and a blank
+line is — being the only way a comment marks a paragraph — and stays. 141 of the
+308 are multi-paragraph, and all 141 survive; flattening them would turn a
+structured introduction into a run-on blob with the breaks unrecoverable.
 
 Nothing here reads a statement. A header is positioned by
 :class:`~.parser.Commentary`'s ``at``, which is where the file put it.
@@ -44,6 +50,8 @@ from __future__ import annotations
 from bisect import bisect_right
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
+from .comments import unwrap
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -107,15 +115,22 @@ def read_header(body: str) -> tuple[int, str, str] | None:
     than assumed, so a wrapped one survives instead of being truncated.
     """
     lines = [line.strip() for line in body.splitlines()]
-    lines = [line for line in lines if line]
-    if len(lines) < 3:
+    # The structural scan ignores blank lines, but the *prose* must not: a blank
+    # line is the only way a comment marks a paragraph. So the rules are found by
+    # their index into the original lines rather than into a compacted copy.
+    filled = [index for index, line in enumerate(lines) if line]
+    if len(filled) < 3:
         return None
 
-    level = _rule_level(lines[0])
+    level = _rule_level(lines[filled[0]])
     if level is None:
         return None
     closing = next(
-        (index for index in range(1, len(lines)) if _rule_level(lines[index]) == level),
+        (
+            position
+            for position in range(1, len(filled))
+            if _rule_level(lines[filled[position]]) == level
+        ),
         None,
     )
     # A rule with no matching rule after it is decoration, not a header: there is
@@ -123,9 +138,8 @@ def read_header(body: str) -> tuple[int, str, str] | None:
     if closing is None or closing == 1:
         return None
 
-    title = " ".join(lines[1:closing])
-    text = "\n".join(lines[closing + 1:]).strip()
-    return level, title, text
+    title = " ".join(lines[filled[position]] for position in range(1, closing))
+    return level, title, unwrap("\n".join(lines[filled[closing] + 1:]))
 
 
 def outline(database: Database) -> list[Section]:

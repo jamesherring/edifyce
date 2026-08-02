@@ -168,3 +168,19 @@ late $a |- ph $.
 
 def test_a_file_with_no_headers_has_no_outline() -> None:
     assert outline(parse("$c |- wff $.\n$v ph $.\nwph $f wff ph $.\n")) == []
+
+
+def test_the_prose_keeps_its_paragraphs_and_loses_its_wrapping() -> None:
+    # The same rule a statement's description gets. A `.mm` comment is wrapped to
+    # a column and the wrapping is not content; a blank line is, being the only
+    # way a comment marks a paragraph. 141 of set.mm's 308 header prose blocks
+    # have one, and flattening them would make each a run-on blob.
+    _level, _title, text = read_header(
+        f"{PART}\nA title\n{PART}\n"
+        "A first paragraph that the file\nwrapped across two lines.\n"
+        "\n"
+        "And a second one."
+    )
+    assert text == (
+        "A first paragraph that the file wrapped across two lines.\n\nAnd a second one."
+    )

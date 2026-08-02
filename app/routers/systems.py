@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -791,11 +791,25 @@ async def get_system_folders(
     ).all()
     # How many proofs sit *directly* in each folder. One grouped query rather than
     # one per node, and directly rather than cumulatively — see `Folder.proofs`.
+    #
+    # Counted only over proofs this viewer may actually read, which is the same
+    # rule `proofs._is_readable` applies one row at a time. An imported corpus is
+    # ownerless and every proof in it is a draft, so a published system would
+    # otherwise report tens of thousands of proofs that `/proofs/public` omits and
+    # `GET /proofs/{id}` 404s on — a count of things the reader cannot reach, and
+    # a disclosure of drafts besides.
+    readable = [Proof.published_at.is_not(None)]
+    if user is not None:
+        readable.append(Proof.owner_id == user.id)
     counts = dict(
         (
             await session.execute(
                 select(Proof.folder_id, func.count())
-                .where(Proof.formal_system_id == system.id, Proof.folder_id.is_not(None))
+                .where(
+                    Proof.formal_system_id == system.id,
+                    Proof.folder_id.is_not(None),
+                    or_(*readable),
+                )
                 .group_by(Proof.folder_id)
             )
         ).all()

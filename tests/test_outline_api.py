@@ -58,15 +58,23 @@ def client(db, monkeypatch) -> Iterator[TestClient]:
         yield test_client
 
 
-def seed(db_path) -> str:
-    """Import the sectioned fixture, published so an anonymous read reaches it."""
+def seed(db_path, publish_proofs: bool = False) -> str:
+    """Import the sectioned fixture, published so an anonymous read reaches it.
+
+    ``publish_proofs`` is separate because an import leaves every proof a draft:
+    a corpus is ownerless and unpublished, which is exactly the case the counts
+    have to get right.
+    """
     engine = create_engine(db_path)
     try:
         with Session(engine) as session:
             report = import_corpus(session, parse(SOURCE), name="t")
             session.commit()
-            proof = session.scalars(select(Proof)).first()
-            proof.formal_system.published_at = proof.created_at
+            proofs = list(session.scalars(select(Proof)))
+            proofs[0].formal_system.published_at = proofs[0].created_at
+            if publish_proofs:
+                for proof in proofs:
+                    proof.published_at = proof.created_at
             session.commit()
             return str(report.system_id)
     finally:
@@ -91,13 +99,28 @@ def test_a_folder_counts_the_proofs_directly_in_it(client, db):
     # Directly, not cumulatively: a corpus's part-level node holds nothing itself
     # and thousands beneath it, and a subtree total would make every ancestor look
     # equally full.
-    system_id = seed(db)
+    system_id = seed(db, publish_proofs=True)
 
     (part,) = client.get(f"/api/formal-systems/{system_id}/folders").json()
     assert part["proofs"] == 0
     identity = part["children"][0]["children"][0]["children"][0]
     assert (identity["name"], identity["proofs"]) == ("The identity", 1)
     assert part["children"][1]["proofs"] == 1  # `Afterwards` holds `id2`
+
+
+def test_a_count_omits_proofs_the_reader_cannot_read(client, db):
+    # The same rule a single proof read applies. An import is ownerless and every
+    # proof in it is a draft, so a published system would otherwise advertise
+    # counts for proofs `/proofs/public` omits and `GET /proofs/{id}` 404s on —
+    # a disclosure of drafts, and a number nobody can act on.
+    system_id = seed(db)
+
+    (part,) = client.get(f"/api/formal-systems/{system_id}/folders").json()
+    identity = part["children"][0]["children"][0]["children"][0]
+    assert identity["proofs"] == 0
+    assert part["children"][1]["proofs"] == 0
+    # The structure is still served — it is the file's, not the proofs'.
+    assert identity["name"] == "The identity"
 
 
 def test_a_system_that_draws_no_outline_serves_an_empty_tree(client, db):
