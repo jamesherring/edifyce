@@ -31,7 +31,14 @@ from tests.layered_systems import (
     statement_line,
     with_defined_disjunction,
 )
-from tests.spec_helpers import brackets, defn, regex_prod, template_prod
+from tests.spec_helpers import (
+    atom_const_prod,
+    atom_family_prod,
+    brackets,
+    defn,
+    regex_prod,
+    template_prod,
+)
 from website.logical.declarative import SystemSpec
 
 
@@ -240,6 +247,42 @@ def test_a_rename_across_differing_kinds_is_refused():
     errors = translation_errors(pc(), odd, PC_MAP)
 
     assert any("regex" in error and "string" in error for error in errors)
+
+
+def test_a_constant_may_be_relabelled_but_not_turned_into_a_family():
+    # From review (Codex). An atom's *value* is free to differ: sending `⊥` to a
+    # constant this system spells `bot` is what an interpretation does, and the
+    # rebuild honours it by taking the spelling from the target's production
+    # (`terms_mapping._literal`).
+    #
+    # Which *kind* of atom it is, is not free. A family (`p_#`) is a supply of
+    # variables whose literals are its base plus a suffix — the term's own names,
+    # which no rename touches — so a family read as another base would put tokens
+    # into the target that its own grammar cannot mint. Nothing in the two tables
+    # describes that rewriting, so it is refused rather than guessed at.
+    def with_bottom(spec, sort, production):
+        spec.productions = list(spec.productions) + [production]
+        return spec
+
+    source = built(with_bottom(
+        propositional_calculus_spec(), "formula",
+        atom_const_prod("formula", "falsum", "⊥", denotes_constant=True),
+    ))
+    relabelled = Translation(PC_MAP.sorts, {**PC_MAP.symbols, "falsum": "falsum"})
+
+    spelled = built(with_bottom(
+        renamed_propositional_calculus_spec(), "wff",
+        atom_const_prod("wff", "falsum", "bot", denotes_constant=True),
+    ))
+    assert translation_errors(source, spelled, relabelled) == []
+
+    supplied = built(with_bottom(
+        renamed_propositional_calculus_spec(), "wff",
+        atom_family_prod("wff", "falsum", "f"),
+    ))
+    errors = translation_errors(source, supplied, relabelled)
+
+    assert any("atoms of different kinds" in error for error in errors)
 
 
 def test_a_rename_that_loses_a_binder_is_refused():

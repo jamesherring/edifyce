@@ -545,13 +545,14 @@ class TermGraph:
         elif row.kind == TERM_KIND_BOUND:
             term = Bound(row.bound_index, self._sort(row.sort, context, translation))
         elif row.kind == TERM_KIND_NODE:
+            constructor = self._constructor(row.constructor, context, translation)
             term = Node(
-                constructor=self._constructor(row.constructor, context, translation),
+                constructor=constructor,
                 children={
                     slot: self._build(child, context, translation)
                     for slot, child in self._children.get(term_id, ())
                 },
-                literal=row.literal,
+                literal=_literal(row, constructor),
                 sort=(
                     self._sort(row.sort, context, translation)
                     if row.sort is not None
@@ -699,6 +700,28 @@ def prefetch_terms(session: Session, root_ids: Sequence[uuid.UUID]) -> TermGraph
             children.setdefault(row.id, []).append((row.slot, row.child_id))
 
     return TermGraph(rows, children)
+
+
+def _literal(row: _TermRow, constructor: Constructor) -> str | None:
+    """The surface token a rebuilt leaf carries, in *this* system's spelling.
+
+    A **constant** atom's literal is its constructor's value — the production
+    names one fixed thing (`⊥`, `∅`) and that thing's spelling is the
+    production's, not the term's. So after a rename it has to come from the
+    constructor the term was rebuilt over: a translation may send the source's
+    `⊥` to a target atom spelled `F` (deliberately — relabelling a constant is
+    what an interpretation does), and a node carrying the source's token would
+    then render as `⊥` and compare unequal to every `F` the target can write.
+    The theorem would apply to nothing at all. Found in review.
+
+    Every **other** leaf's literal is a variable's *name* — a regex token, an
+    atom family's member — which is the term's own and which no rename touches,
+    so it survives verbatim. Under the identity this is a no-op either way: a
+    constant atom's stored literal is the value its constructor already carries.
+    """
+    if constructor.atom_value is not None:
+        return constructor.atom_value
+    return row.literal
 
 
 def _in_namespace(name: str, context: Context) -> Pattern | None:

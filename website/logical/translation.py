@@ -58,10 +58,18 @@ what an author may write rather than a soundness argument, and it is here
 because the tables of §5.4 carry a sort map and a symbol map and no *slot* map:
 the surface template and the name are what a rename is allowed to move.
 
-What is deliberately **not** compared is an atom's value. Sending the source's
-`⊥` to a target constant spelled otherwise is not a mistake — it is what an
-interpretation *is*, and §2's obligations are what make it sound, one per source
-primitive. Structure is this module's business; meaning is theirs.
+What is deliberately **not** compared is a constant atom's value. Sending the
+source's `⊥` to a target constant spelled otherwise is not a mistake — it is what
+an interpretation *is*, and §2's obligations are what make it sound, one per
+source primitive. Structure is this module's business; meaning is theirs.
+
+That permission has a debt on the other side, and forgetting it made the
+transfer useless rather than wrong (found in review): a constant's spelling
+belongs to the *production*, so a term rebuilt over the target's constructor has
+to take the target's token with it, or it renders as the source's and matches
+nothing here. :func:`~app.db.terms_mapping._literal` is that half. Which *kind*
+of atom it is stays fixed, because a family (`p_#`) supplies variables whose
+literals are the term's own names rather than the production's.
 
 What is *not* here is the statement template of §5.4 — `'{Γ} ⊢ {0}'`, which
 wraps a transferred statement rather than renaming it. That is S2's, and it
@@ -334,6 +342,21 @@ def _shape_errors(
             f"{renamed!r} takes {list(to_constructor.slots)}. A stored term keys "
             "its children by slot name, and an edge carries no slot map, so two "
             "related productions must spell their slots alike."
+        )
+    if from_constructor.atom_base != to_constructor.atom_base:
+        # An atom is one of two things and a rename may not change which. A
+        # *constant* names one fixed thing, whose spelling the target's
+        # production supplies (`terms_mapping._literal`), so its value is free to
+        # differ. A **family** (`p_#`) is a supply of interchangeable variables
+        # whose literals are its base plus a suffix — the term's own names, which
+        # a rename does not touch — so a family under another base would put
+        # tokens it cannot mint into the target's language. Neither table
+        # describes that rewriting, so it is refused rather than guessed at.
+        errors.append(
+            f"{original!r} and {renamed!r} are atoms of different kinds — "
+            f"{from_constructor.atom_base or 'a constant'} against "
+            f"{to_constructor.atom_base or 'a constant'} — so the tokens one "
+            "supplies are not tokens the other can spell."
         )
     if from_constructor.scopes_over != to_constructor.scopes_over:
         errors.append(

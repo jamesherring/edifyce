@@ -60,7 +60,7 @@ from tests.layered_systems import (
     respelled_propositional_calculus_spec,
     with_defined_disjunction,
 )
-from tests.spec_helpers import hyp_rule
+from tests.spec_helpers import atom_const_prod, hyp_rule
 from website.logical.declarative import build_spec
 from website.logical.promotion import TheoremSpec
 from tests.test_cross_system_citation import (
@@ -477,6 +477,49 @@ def test_a_defined_form_crosses_a_rename(db, client):
     _rename(db, relate(db, source, target), **PC_RENAME)
 
     assert verify_proof(client, db, target, "(A ∨ A) [oraa]")["success"] is True
+
+
+def test_a_renamed_constant_is_rebuilt_in_the_targets_spelling(db, client):
+    # From review (Codex). An atom's *value* is deliberately not compared by the
+    # map — relabelling a constant is what an interpretation does — so the rebuild
+    # has to honour that: a node keeping the source's `⊥` renders as `⊥` and
+    # compares unequal to every `bot` this system can write, and the theorem then
+    # applies to nothing at all. A constant's spelling belongs to the production,
+    # so it comes from the constructor the term was rebuilt over.
+    #
+    # The pair is the two spellings of one theorem: the target's stands, and the
+    # source's is not even grammatical here — which is what says the statement
+    # was rewritten rather than merely accepted.
+    owner = _register_login(client, "atom-rename@example.com")
+    source = seed(db, _with_falsum(propositional_calculus_spec("Source"), "⊥"), owner)
+    target = seed(
+        db,
+        _with_falsum(renamed_propositional_calculus_spec("Target"), "bot", "wff"),
+        owner,
+    )
+    promote_into(db, source, TheoremSpec(label="botid", statement="(⊥ → ⊥)"))
+    # `falsum` is mapped **to itself**: the two productions share a name and
+    # spell different things, which an unmapped pair is refused for, and saying
+    # so is how an author declares that they correspond.
+    _rename(db, relate(db, source, target), PC_RENAME["sorts"],
+            {**PC_RENAME["symbols"], "falsum": "falsum"})
+
+    assert verify_proof(client, db, target, "(bot → bot) [botid]")["success"] is True
+    assert verify_proof(client, db, target, "(⊥ → ⊥) [botid]")["success"] is False
+
+
+def _with_falsum(spec, spelling: str, sort: str = "formula"):
+    """``spec`` with a constant of the object language, spelled ``spelling``.
+
+    Lower-case on the target side on purpose: this suite's formula variables are
+    ``[A-Z][A-Z0-9]*``, so a one-letter upper-case constant would be spelled by
+    two productions at once and the test would turn on which the parser reached
+    first rather than on the rename.
+    """
+    spec.productions = list(spec.productions) + [
+        atom_const_prod(sort, "falsum", spelling, denotes_constant=True)
+    ]
+    return spec
 
 
 def test_a_proviso_over_a_term_expression_cannot_cross_a_rename(db, client):

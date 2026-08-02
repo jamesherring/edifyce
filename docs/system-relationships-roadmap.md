@@ -13,7 +13,7 @@ citation resolves against the system's own library and then its ancestors'. A
 proof proved here enters that library (§5.3), schematically if its author says
 so; and where the spine cannot reach, an edge does — including between two
 systems that disagree about what to call things (§5.4). See §8's R1–R4 for what
-landed and §9.9–9.19 for what they turned up.
+landed and §9.9–9.20 for what they turned up.
 
 What is left on Track R is the edge **CRUD**: every edge above is written
 straight to its rows, because no route creates one yet. That is also where a
@@ -934,7 +934,9 @@ failure mode is over-refusal:
   correspondence declared; a map collapsing two source names onto one; a
   definition the target spells differently, against the one it states alike; a
   proviso over a term expression, against the same theorem's proviso over a
-  metavariable.
+  metavariable; and an atom family read as another base, against the constant
+  relabelled from `⊥` to `bot` — whose two spellings of one theorem are the pair
+  that says the statement was rewritten rather than merely accepted (§9.20).
 - *The negative control* is the edge **without** its map: the same two systems,
   the same theorem, the same proof, and the citation does not resolve at all —
   which is what says the map is doing the work rather than the edge.
@@ -1141,7 +1143,7 @@ S1 and D1 depend on nothing and can start immediately.
    requires a complex accepted case per phase, and why the bound-variable tests
    are written in accepted/rejected pairs.
 
-The eleven below are **findings from the phases that landed**, kept here because
+The twelve below are **findings from the phases that landed**, kept here because
 each is a live constraint on the work after it rather than a closed question.
 
 9. **The freshness check was position-blind, and a tower is not.** §5.1 predicted
@@ -1514,6 +1516,29 @@ each is a live constraint on the work after it rather than a closed question.
     more widely than it is declared, the check belongs on the application and not
     on the declaration.** The three checks R4b shipped with all read the two
     tables, which is why all three passed each of these.
+
+20. **A permission the map gives is a debt the rebuild owes** (Codex, on #165).
+    §9.18 records that a constant atom's *value* is deliberately not compared,
+    because relabelling a constant is what an interpretation does. What that
+    leaves unsaid is the other half: a constant's spelling belongs to the
+    **production**, so a term rebuilt over the target's constructor has to carry
+    the target's token. Keeping the row's — the source's `⊥` where this system
+    writes `bot` — left the transferred theorem rendering as `⊥` and comparing
+    unequal to everything the target can spell, so it applied to nothing at all.
+    The check said yes and the transfer was dead, which is the shape of failure
+    a suite of refusals is worst at seeing.
+
+    The literal now comes from the constructor for a constant and from the row
+    for everything else, which is the distinction that matters: every other
+    leaf's literal is a *variable's name*, the term's own and no production's.
+    That is also why an atom's **kind** is not free where its value is — a family
+    (`p_#`) read as another base would put tokens into the target that its own
+    grammar cannot mint, and no table describes that rewriting.
+
+    Worth stating as a rule, since R4b has now met it twice: **every "deliberately
+    not checked" is a claim about what some other code does with the difference.**
+    §9.18's other two — `slots` and `scopes_over` — are checked precisely because
+    nothing downstream could absorb them.
 
 ---
 
