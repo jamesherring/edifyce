@@ -49,6 +49,7 @@ from copy import copy
 from typing import TYPE_CHECKING
 
 from ..kernel import (
+    And,
     DisjointLeaves,
     Equal,
     IsAtom,
@@ -65,6 +66,8 @@ from ..matching.definitions import DefinedNotation
 from ..matching.patterns import Pattern, UnionPattern
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from ..matching.context import Context
     from ..kernel import Term
     from ..kernel.constructors import Constructor
@@ -234,3 +237,89 @@ def _parse_term(text: str, context: Context) -> Term | None:
         if matched is not None:
             return abstract(from_match(matched), project_sorts(context.string_variables))
     return None
+
+
+def render_side_condition(condition: SideCondition, sorts: Mapping[Constructor, str]) -> str:
+    """Write a :class:`SideCondition` back as one line of the surface syntax.
+
+    The inverse of :func:`parse_side_condition`, and it exists for one caller: a
+    schematic promotion restates the provisos its steps relied on over the
+    theorem's own metavariables (`promotion.schematic_theorem`), and a
+    ``TheoremSpec`` carries provisos as the lines an import would have written.
+    Rendering here rather than building rows directly keeps one path into
+    storage — the entry a promotion writes and the entry a Metamath ``$d`` writes
+    are the same rows, parsed by the same parser.
+
+    ``sorts`` names a constructor, for the predicates that carry one; a
+    constructor absent from it renders its own name, which is the production's
+    and so is what the grammar spells anyway.
+
+    A term argument renders through the term (``Var`` to its name, a compound to
+    its surface form), so the round trip back through ``_arg`` reads a bare
+    metavariable as a name and anything else as a term expression — the same
+    split it made on the way in.
+
+    Exhaustive over the algebra, raising on an unknown member for the reason
+    :func:`~website.logical.kernel.side_conditions.restate` does: a condition
+    that fell through silently would be a proviso dropped, and dropping one reads
+    as "this theorem has no proviso".
+    """
+    if isinstance(condition, Not):
+        inner = condition.inner
+        if isinstance(inner, (Not, Or, And)):
+            # `not` binds one predicate: the parser reads a leading `not` after
+            # splitting on top-level `or`, so `not (a or b)` would come back as
+            # `(not a) or b` and `not not a` as a parse error. Refused rather
+            # than rendered wrong — a proviso that reparses to something else is
+            # worse than one that will not render.
+            raise ValueError(
+                "A negated `not`/`or`/`and` has no single-line rendering: the "
+                "surface syntax negates one predicate."
+            )
+        return f"not {render_side_condition(inner, sorts)}"
+    if isinstance(condition, Or):
+        return " or ".join(render_side_condition(p, sorts) for p in condition.parts)
+    if isinstance(condition, And):
+        # `and` is the line separator rather than an infix, so a nested one has no
+        # single-line spelling. It only arises from a restated proviso block, and
+        # the caller splits those into lines before reaching here.
+        raise ValueError("An `and` of side-conditions has no single-line rendering.")
+    if isinstance(condition, Occurs):
+        return f"occurs({_argument(condition.needle)}, {_argument(condition.haystack)})"
+    if isinstance(condition, Equal):
+        return f"equal({_argument(condition.left)}, {_argument(condition.right)})"
+    if isinstance(condition, DisjointLeaves):
+        args = [_argument(condition.left), _argument(condition.right)]
+        if condition.sort is not None:
+            args.append(_sort_name(condition.sort, sorts))
+        return f"disjoint({', '.join(args)})"
+    if isinstance(condition, IsAtom):
+        args = [_argument(condition.name)]
+        if condition.sort is not None:
+            args.append(_sort_name(condition.sort, sorts))
+        return f"atom({', '.join(args)})"
+    if isinstance(condition, IsMember):
+        return f"member({_argument(condition.name)}, {_sort_name(condition.sort, sorts)})"
+    raise ValueError(
+        f"Cannot render a side-condition of type {type(condition).__name__}."
+    )
+
+
+def conjuncts(condition: SideCondition) -> list[SideCondition]:
+    """Flatten an ``and`` into the lines it was written as.
+
+    A proviso *block* is a conjunction of lines, so an `And` is the block and its
+    parts are the lines — which is the shape `TheoremSpec.distinct` wants, and
+    the one :func:`render_side_condition` can spell.
+    """
+    if isinstance(condition, And):
+        return [part for inner in condition.parts for part in conjuncts(inner)]
+    return [condition]
+
+
+def _argument(arg: str | Term) -> str:
+    return arg if isinstance(arg, str) else arg.to_string()
+
+
+def _sort_name(sort: Constructor, sorts: Mapping[Constructor, str]) -> str:
+    return sorts.get(sort, sort.name)

@@ -798,10 +798,10 @@ export const api = {
 		/** Enter this proof's conclusion in its system's library, so proofs here —
 		 * and in every system inheriting this one — can cite it by `label`. The
 		 * proof must be published; omit `label` to use its slug. */
-		promote: (id: string, label?: string) =>
+		promote: (id: string, label?: string, metavariables?: Record<string, string>) =>
 			request<PromotedTheorem>(`/proofs/${id}/promote`, {
 				method: 'POST',
-				body: JSON.stringify({ label: label ?? null })
+				body: JSON.stringify({ label: label ?? null, metavariables: metavariables ?? {} })
 			}),
 		/** Withdraw that entry. A no-op if the proof established none. */
 		retire: (id: string) => request<null>(`/proofs/${id}/promote`, { method: 'DELETE' })

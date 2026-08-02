@@ -812,9 +812,14 @@ that most nearly passed anyway is the rule-shadowing case — the first test of 
 had the citing lines resolving to a *different* label, so it agreed with a walk
 that had no shadow check at all.
 
-#### R3a — schematic promotion
+#### R3a — schematic promotion — **done**
 
 **Delivers** `⊢ (φ → φ)` proved once and cited at every instance.
+
+What landed: `metavariables` on the promote request, and
+`promotion.schematic_theorem`. The claim is **discharged rather than asserted** —
+see §9.16 for why that turned out to be the cheap option as well as the sound
+one, and for what the provisos have to do.
 
 **Tests and verification** — same module.
 
@@ -826,6 +831,18 @@ that had no shadow check at all.
   used `x` as an eigenvariable must carry the corresponding proviso into the
   entry, and a citation violating it must be rejected. Without this, schematic
   promotion is the obvious hole through which an eigenvariable condition escapes.
+
+All three, and a fourth the design did not anticipate: a proviso restated over
+leaves the nomination did **not** touch is dropped rather than stored, because it
+is a closed fact the check just established and no citation can vary it. Storing
+it would be an obligation with nothing to discharge it against. Both halves are
+pinned, since either alone passes for a rule that is not running.
+
+Plus the four refusals of §9.16, each with a mutation that makes its test fail.
+Two of them the review found by *running* the change against fixtures already in
+the suite — `tests/miu_system.py` and the scoped ZFC of `tests/zfc_systems.py` —
+which is the lesson: a soundness guard written against one worked example is
+tested against the systems that break it, and this suite already had them.
 
 #### R4 — `system_relations`
 
@@ -1221,6 +1238,78 @@ constraint on the phases after it rather than a closed question.
     citable as `[label]` and must fit `String(128)`. Derived defaults get the same
     validation an explicit label does, or the two failure modes are a citation
     that never parses and a Postgres truncation 500.
+
+16. **A nomination is a claim, and the checker can settle it.** Schematic
+    promotion looked like it needed a *schematicity analysis* — deciding whether
+    a proof is uniform in a leaf, which is the obligation §1.1 names and which
+    reads as hard. It is not, because the claim has a direct test: abstract the
+    nominated leaves in **every line** and re-check the proof. What comes back is
+    a proof of the schematic statement, so the theorem is warranted rather than
+    argued for, and the guards are the checker's own — a leaf a rule spells
+    literally, or one nominated at the wrong sort, simply stops the step
+    matching. Nothing here maintains a list of what may be generalised.
+
+    The abstraction is `kernel.abstract` over each line's already-checked term,
+    so it is §3's term-level operation and not a source rewrite: the leaves are
+    replaced by *what they denote*.
+
+    **The provisos have to travel, and `restate` already did the hard part.** A
+    step may have relied on a side condition — `ax-5`'s `not occurs(x, P)` — that
+    held for the concrete leaves and says nothing about an arbitrary instance.
+    Each is restated over the binding that step made and carried into the entry,
+    where a citation re-checks it against its own instantiation. The binding is
+    the one thing that had to be added: `Inference` recorded the rule and the
+    lines but discarded the match, so it now keeps it.
+
+    One rule the design did not anticipate: a restated condition mentioning
+    **none** of the theorem's metavariables is dropped. It is a closed fact about
+    ground terms, settled by the check that just ran, and storing it would be an
+    obligation with nothing to discharge it against. The converse trap is nearer
+    than it looks — `not occurs(x, y = y)` with only `x` nominated *does* mention
+    a metavariable and *is* a real constraint on the instance, so "the formula
+    side is ground" is not the test. Both cases are pinned.
+
+    **Three shapes are refused rather than generalised**, all found in review,
+    and all the same failure: re-checking the abstracted proof *passes without
+    having tested anything*, so accepting would mint a theorem on no evidence.
+
+    - A **string-rewriting** step matches surface text, and a variable renders as
+      its own name — so the abstracted proof is character-for-character the one
+      already checked. Left to the check, MIU's `MII` promotes to a theorem whose
+      whole statement is one metavariable, justifying `MU`, `MIU`, anything.
+    - An **axiom-behaviour line** is granted by matching its own shape; `execute`
+      short-circuits on it, so an abstracted term is never held to the axiom's
+      schema and a leaf the axiom spells could be generalised away unnoticed.
+    - An **eigenvariable subproof** is the sharper half of the hole R3a set out to
+      close. `ax-5`'s proviso is a `SideCondition` and travels; a *discharge*
+      rule's freshness is `Subproof.eigenvariable_is_fresh`, and a discharge
+      builds no `Inference` — so there is no binding to restate and nothing to
+      carry.
+    - A **definitional step** is the same gap by a second route (Codex, on #160):
+      it cites a definition rather than a rule, so it too builds no `Inference`,
+      and what goes missing is a definition's own proviso *and* the binder
+      freshness `fresh` generates. Unfold `a ⊆ b`, hold `a` schematic, and the
+      theorem hands a citation the instance putting the bound `z` where `a` was —
+      the capture the unfold itself refuses. Refused in the narrow form: a
+      nomination that *changes* an unfolded line, not any proof that unfolds,
+      since otherwise a system whose notation is defined could never promote
+      schematically at all.
+
+    Those last two are **the piece of R3a still open**, and they are one piece:
+    both want the constraint restated over a binding that discharge and
+    definitional steps do not currently record. Retaining it for them is what
+    `Inference.binding` already does for ordinary rule steps.
+
+    A fourth refusal is about the *carrying* rather than the abstraction: a
+    citation binds only the metavariables its statement mentions, so a proviso
+    naming anything else could never be discharged — it would raise inside every
+    citation and read as "this theorem does not apply". Refused at promotion
+    instead of stored uncitable.
+
+    What this does not do is decide uniformity for a proof it *cannot* re-check —
+    an imported theorem with no stored proof, say. There the nomination would
+    still have to be trusted, which is an argument for keeping promotion tied to
+    a proof that stands here.
 
 ---
 

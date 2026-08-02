@@ -43,9 +43,10 @@ from tests.database import async_url, create_tables, database_url, enable_foreig
 from tests.layered_systems import (
     first_order_logic_spec,
     propositional_calculus_spec,
+    propositional_variable_prod,
     zfc_spec,
 )
-from tests.spec_helpers import rule
+from tests.spec_helpers import atom_const_prod, rule
 from tests.test_proofs_api import _TABLES
 from tests.test_system_inheritance import seed, seed_tower
 from tests.test_systems_api import _register_login
@@ -132,8 +133,15 @@ def proved_and_published(client, system_id: str, source: str = IDENTITY_PROOF) -
     return proof_id
 
 
-def promote(client, proof_id: str, label: str | None = None) -> tuple[int, dict]:
+def promote(
+    client,
+    proof_id: str,
+    label: str | None = None,
+    metavariables: dict[str, str] | None = None,
+) -> tuple[int, dict]:
     body: dict = {} if label is None else {"label": label}
+    if metavariables is not None:
+        body["metavariables"] = metavariables
     response = client.post(f"/api/proofs/{proof_id}/promote", json=body)
     return response.status_code, (response.json() if response.content else {})
 
@@ -1044,3 +1052,388 @@ def test_a_stale_timestamp_is_not_what_gates_promotion(db, client):
     )
 
     assert promote(client, proof, "id")[0] == 400
+
+
+# ---------------------------------------------------------------------------
+# R3a — schematic promotion: proved once, cited at every instance
+# ---------------------------------------------------------------------------
+
+
+def test_a_schematic_theorem_is_cited_at_three_distinct_instances(db, client):
+    # The headline. The proof writes `(P → P)`; nominating `P : formula` makes
+    # the entry `⊢ (φ → φ)`, so it justifies every instance rather than the one
+    # instance the author happened to type — including, two layers up, one whose
+    # formula the system that proved it cannot spell.
+    pc, _fol, zfc = tower(db, client, "schematic@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+
+    status, entry = promote(client, proof, "id", {"P": "formula"})
+    assert status == 201, entry
+    assert entry["statement"] == "(P → P)"
+
+    assert check_in(client, zfc, "(Q → Q) [id]")["success"] is True
+    assert check_in(client, zfc, "((A → B) → (A → B)) [id]")["success"] is True
+    # The binder case §8.0 asks for: the instance quantifies, which is notation
+    # the propositional layer has no production for.
+    assert check_in(client, zfc, "(∀x x ∈ y → ∀x x ∈ y) [id]")["success"] is True
+
+
+def test_a_schematic_theorem_still_justifies_the_instance_it_was_proved_at(db, client):
+    pc, _fol, _zfc = tower(db, client, "schematic-self@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id", {"P": "formula"})[0] == 201
+
+    assert check_in(client, pc, "(P → P) [id]")["success"] is True
+
+
+def test_a_schematic_theorem_does_not_justify_a_different_shape(db, client):
+    # Generality is over the nominated leaf, not over everything: `(φ → φ)` says
+    # both sides agree, and an entry that justified `(A → B)` would be saying
+    # something the proof does not.
+    pc, _fol, _zfc = tower(db, client, "schematic-shape@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id", {"P": "formula"})[0] == 201
+
+    assert check_in(client, pc, "(A → B) [id]")["success"] is False
+
+
+def test_nominating_a_leaf_at_an_undeclared_sort_is_refused(db, client):
+    pc, _fol, _zfc = tower(db, client, "bad-sort@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+
+    status, body = promote(client, proof, "id", {"P": "nonesuch"})
+    assert status == 422, body
+    assert "not a declared pattern" in str(body)
+
+
+def test_nominating_a_leaf_at_the_wrong_sort_is_refused_by_the_recheck(db, client):
+    # `P` is a formula leaf; nominating it at `term` makes the abstracted proof
+    # stop matching `ax-2`. Refused by the checker rather than by a rule
+    # maintained here — which is the point of re-checking rather than asserting.
+    _pc, fol, _zfc = tower(db, client, "wrong-sort@example.com")
+    proof = proved_and_published(client, fol, IDENTITY_PROOF)
+
+    status, body = promote(client, proof, "id", {"P": "term"})
+    assert status == 422, body
+    assert "does not go through" in str(body)
+
+
+def test_nominating_a_leaf_a_rule_fixed_as_a_constant_is_refused(db, client):
+    # A leaf a rule names *literally* is not schematic in the system, so a proof
+    # that used it did not prove the general statement. `⊥` in `(⊥ → P)` is that
+    # leaf: the tower has no constant to make the case with, so the layer here
+    # declares one and a rule over it.
+    owner = _register_login(client, "constant@example.com")
+    spec = propositional_calculus_spec()
+    spec.productions.append(atom_const_prod("formula", "falsum", "⊥", True))
+    spec.rules.append(
+        rule("efq", "ex falso", [], "(⊥ → P)", [("P", "formula")])
+    )
+    system = seed(db, spec, owner, None, published=True)
+    proof = proved_and_published(client, system, "(⊥ → A) [efq]")
+
+    # `A` is the rule's own metavariable and generalises.
+    assert promote(client, proof, "efq-a", {"A": "formula"})[0] == 201
+    # `⊥` is not: the rule spells it, so the abstracted step stops matching.
+    status, body = promote(client, proof, "efq-bot", {"⊥": "formula"})
+    assert status == 422, body
+    assert "does not go through" in str(body)
+
+
+def test_an_eigenvariable_proviso_is_carried_into_the_entry(db, client):
+    # §8.0's sharpest case, and the hole R3a exists to close. `ax-5` holds only
+    # under `not occurs(x, P)`; the proof satisfied it for the concrete leaves it
+    # wrote, and that says nothing about an arbitrary instance. The entry has to
+    # carry the proviso, and a citation violating it has to be rejected.
+    _pc, fol, zfc = tower(db, client, "eigen@example.com")
+    proof = proved_and_published(client, fol, "(P → ∀x P) [ax-5]")
+
+    status, entry = promote(client, proof, "vac", {"P": "formula", "x": "term"})
+    assert status == 201, entry
+
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            stored = session.scalar(
+                select(PromotedTheoremRow).where(PromotedTheoremRow.label == "vac")
+            )
+            assert stored.side_conditions != []
+    finally:
+        engine.dispose()
+
+    # Accepted: the instance's formula does not mention the quantified variable.
+    assert check_in(client, zfc, "(y = y → ∀w y = y) [vac]")["success"] is True
+    # Rejected: it does. Both halves, because either alone passes for a proviso
+    # that is not enforced at all.
+    assert check_in(client, zfc, "(w = y → ∀w w = y) [vac]")["success"] is False
+
+
+def test_a_proviso_over_a_nominated_leaf_constrains_the_instance(db, client):
+    # Carrying is not only about the formula side. Nominating just `x` leaves
+    # `ax-5`'s `not occurs(x, y = y)` restated over a *ground* formula — still a
+    # real obligation, because it says the instance of `x` may not be `y`. Kept,
+    # and enforced.
+    _pc, fol, zfc = tower(db, client, "proviso-x@example.com")
+    proof = proved_and_published(client, fol, "(y = y → ∀x y = y) [ax-5]")
+
+    status, entry = promote(client, proof, "vac-x", {"x": "term"})
+    assert status == 201, entry
+    assert entry["statement"] == "(y = y → ∀x y = y)"
+
+    assert check_in(client, zfc, "(y = y → ∀w y = y) [vac-x]")["success"] is True
+    assert check_in(client, zfc, "(y = y → ∀y y = y) [vac-x]")["success"] is False
+
+
+def test_a_proviso_mentioning_no_nominated_leaf_is_dropped_as_settled(db, client):
+    # The other side: a restated condition that mentions none of the theorem's
+    # metavariables is a closed fact about ground terms, established by the check
+    # that just ran. Here `ax-5` is applied entirely on ground leaves and only the
+    # `Q` introduced later is nominated, so the proviso constrains nothing a
+    # citation can vary — and storing it would be an obligation with nothing to
+    # discharge it against.
+    _pc, fol, zfc = tower(db, client, "settled@example.com")
+    proof = proved_and_published(
+        client,
+        fol,
+        "(y = y → ∀x y = y) [ax-5]\n"
+        "((y = y → ∀x y = y) → (Q → (y = y → ∀x y = y))) [ax-1]\n"
+        "(Q → (y = y → ∀x y = y)) [MP, 1, 2]",
+    )
+
+    status, entry = promote(client, proof, "settled", {"Q": "formula"})
+    assert status == 201, entry
+
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            stored = session.scalar(
+                select(PromotedTheoremRow).where(
+                    PromotedTheoremRow.label == "settled"
+                )
+            )
+            assert stored.side_conditions == []
+    finally:
+        engine.dispose()
+
+    assert check_in(client, zfc, "(A → (y = y → ∀x y = y)) [settled]")["success"] is True
+
+
+def test_promoting_with_no_nomination_is_still_the_ground_theorem(db, client):
+    # R3's behaviour is unchanged by R3a's arrival: an empty `metavariables` is
+    # the verbatim promotion, not a schematic one over nothing.
+    pc, _fol, _zfc = tower(db, client, "still-ground@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id", {})[0] == 201
+
+    assert check_in(client, pc, "(P → P) [id]")["success"] is True
+    assert check_in(client, pc, "(Q → Q) [id]")["success"] is False
+
+
+def test_a_schematic_promotion_composes_the_conclusion_from_the_abstracted_term():
+    # The §3.1 control, for the schematic path. The conclusion promoted is the
+    # *abstracted* proof's conclusion term, so the entry's schema term has to be
+    # that object rather than something re-derived from `(P → P)`.
+    from website.logical.declarative import build_spec
+    from website.logical.promotion import schematic_theorem
+
+    from tests.layered_systems import propositional_calculus_spec
+
+    system = build_spec(propositional_calculus_spec())["system"]
+    proof, context = system.read_proof(IDENTITY_PROOF)
+    system.check_proof(proof, context)
+    assert proof.valid is True
+
+    spec, theorem = schematic_theorem(
+        system, proof, "id", {"P": "formula"}, context
+    )
+    assert set(spec.metavariables) == {"P"}
+    # The statement is schematic: its term has `P` free, where the ground
+    # promotion's had nothing free at all.
+    assert set(theorem.deduction.schema_term.free_vars()) == {"P"}
+
+
+# ---------------------------------------------------------------------------
+# The shapes a nomination cannot be settled for — refused, not generalised
+# ---------------------------------------------------------------------------
+
+
+def engine_promote(spec, source, metavariables, label="T"):
+    """Build, check, and promote schematically — outside the API, for a system
+    the tower does not have."""
+    from website.logical.declarative import build_spec
+    from website.logical.promotion import schematic_theorem
+
+    built = build_spec(spec)
+    assert "errors" not in built, built["errors"]
+    system = built["system"]
+    proof, context = system.read_proof(source)
+    system.check_proof(proof, context)
+    assert proof.valid is True, [
+        (line.number, line.invalid_message)
+        for line in proof.proof_lines
+        if not line.valid
+    ]
+    return system, schematic_theorem(system, proof, label, metavariables, context)
+
+
+def test_a_string_rewriting_step_cannot_be_generalised(db, client):
+    # Found in review. A string step matches surface *text*, and a variable
+    # renders as its own name — so the abstracted proof is character-for-character
+    # the proof that was already checked, and re-checking it discharges nothing.
+    # Left to the check, MIU's `MII` would promote to a theorem whose whole
+    # statement is one metavariable, justifying `MU`, `MIU`, anything.
+    from tests.miu_system import miu_spec
+
+    with pytest.raises(ValueError, match="string-rewriting"):
+        engine_promote(miu_spec(), "MI\nMII [R2, 1]", {"MII": "miustr"})
+
+
+def test_a_string_rewriting_proof_still_promotes_verbatim(db, client):
+    # The refusal is of the *nomination*, not of the system: a ground promotion
+    # in MIU is sound (with nothing to bind, unification of two ground terms is
+    # equality) and must still work.
+    from tests.miu_system import miu_spec
+
+    system, (spec, _theorem) = engine_promote(miu_spec(), "MI\nMII [R2, 1]", {})
+    assert spec.statement == "MII"
+    del system
+
+
+def test_an_axiom_line_cannot_have_its_own_leaves_generalised():
+    # Found in review. An axiom-behaviour line is granted by matching its shape,
+    # not by a step that gets re-checked — `execute` short-circuits on it — so an
+    # abstracted term is never held to the axiom's schema, and a leaf the axiom
+    # spells could be generalised away with nothing noticing.
+    #
+    # ZFC's `ax-ext` is that line: it holds by fiat, and its `z` is the concrete
+    # bound variable the axiom itself writes.
+    from website.logical.declarative import layered_spec
+
+    tower_spec = layered_spec(
+        [propositional_calculus_spec(), first_order_logic_spec(), zfc_spec()]
+    )
+    source = "(∀z ((z ∈ x → z ∈ y) ∧ (z ∈ y → z ∈ x)) → x = y)"
+    with pytest.raises(ValueError, match="axiom"):
+        engine_promote(tower_spec, source, {"z": "term"})
+
+
+def test_an_eigenvariable_subproof_is_refused_rather_than_generalised():
+    # Found in review, and the sharper half of the hole R3a set out to close.
+    # `ax-5`'s proviso is a `SideCondition` and travels; a *discharge* rule's
+    # eigenvariable freshness is `Subproof.eigenvariable_is_fresh`, and a
+    # discharge builds no `Inference`, so there is no binding to restate and
+    # nothing to carry. Refused until there is.
+    from tests.zfc_systems import scoped_zfc_spec
+
+    with pytest.raises(ValueError, match="eigenvariable"):
+        engine_promote(
+            scoped_zfc_spec(),
+            "let x\n"
+            "    assume x ∈ c\n"
+            "        x ∈ c [R, 2]\n"
+            "    (x ∈ c → x ∈ c) [CP, 2]\n"
+            "∀x (x ∈ c → x ∈ c) [UG, 1]",
+            {"c": "setvar"},
+        )
+
+
+def test_a_proviso_the_statement_cannot_bind_is_refused():
+    # Found in review. A citation binds only the metavariables its statement
+    # mentions, so a carried proviso naming anything else could never be
+    # discharged — it would raise inside every citation and read as "this theorem
+    # does not apply", for every instance. Refused at promotion rather than
+    # stored uncitable.
+    #
+    # Reached by nominating a leaf that `ax-5`'s proviso constrains but the
+    # conclusion has dropped: `x` survives only inside the discarded left-hand
+    # side of the final implication.
+    from website.logical.declarative import layered_spec
+
+    tower_spec = layered_spec([propositional_calculus_spec(), first_order_logic_spec()])
+    source = (
+        "(y = y → ∀x y = y) [ax-5]\n"
+        "((y = y → ∀x y = y) → (Q → Q)) [drop]\n"
+        "(Q → Q) [MP, 1, 2]"
+    )
+    # `drop` is not a rule of the tower, so build one that discards its premise.
+    tower_spec.rules.append(
+        rule(
+            "drop",
+            "weakening",
+            [],
+            "((y = y → ∀x y = y) → (Q → Q))",
+            [("Q", "formula"), ("x", "term"), ("y", "term")],
+        )
+    )
+    with pytest.raises(ValueError, match="no citation could discharge it"):
+        engine_promote(tower_spec, source, {"x": "term", "Q": "formula"})
+
+
+def test_a_negated_disjunction_has_no_rendering_rather_than_a_wrong_one():
+    # Found in review. `not` binds one predicate: the parser splits on top-level
+    # `or` and then reads a leading `not`, so `not (a or b)` would come back as
+    # `(not a) or b` — a different proviso — and `not not a` would not parse at
+    # all. Refused rather than rendered into something that reparses wrong.
+    from website.logical.formal_system.side_condition_syntax import (
+        render_side_condition,
+    )
+    from website.logical.kernel import Not, Occurs, Or
+
+    assert render_side_condition(Not(Occurs("x", "P")), {}) == "not occurs(x, P)"
+    with pytest.raises(ValueError, match="single-line"):
+        render_side_condition(Not(Or((Occurs("x", "P"), Occurs("y", "Q")))), {})
+    with pytest.raises(ValueError, match="single-line"):
+        render_side_condition(Not(Not(Occurs("x", "P"))), {})
+
+
+def test_a_definitional_step_cannot_have_its_leaves_generalised():
+    # Found in review (Codex). A definitional step cites a *definition*, not a
+    # rule, so it builds no `Inference` and there is no binding to restate — and
+    # a definition's constraints are exactly the ones that must not be lost: its
+    # own proviso, and the binder freshness `fresh` generates.
+    #
+    # The concrete escape: unfold `a ⊆ b` to `∀z (z ∈ a → z ∈ b)`, then hold `a`
+    # schematic. The unfold checked freshness for the concrete `a`; a citation
+    # could then instantiate it to the very variable the defining form binds —
+    # the capture the unfold itself refuses.
+    from tests.test_definition_fresh import _subset_spec
+
+    spec = _subset_spec(fresh=True, provisos=["disjoint(x, y, term)"])
+    # Matched on text only this refusal emits: the checker's own failure message
+    # also says "definition", so a looser match would agree with no guard at all.
+    with pytest.raises(ValueError, match="cannot yet be carried"):
+        engine_promote(
+            spec, "a ⊆ b [HYP]\n∀z (z ∈ a → z ∈ b) [Def, 1]", {"a": "term"}
+        )
+
+
+def test_a_definitional_step_the_nomination_does_not_touch_is_fine():
+    # The refusal is of a nomination that *changes* the unfolded line, not of
+    # every proof that ever unfolds a definition — otherwise a system whose
+    # notation is defined could never promote schematically at all.
+    from tests.test_definition_fresh import _subset_spec
+
+    spec_in = _subset_spec(fresh=True, provisos=["disjoint(x, y, term)"])
+    _system, (spec, _theorem) = engine_promote(
+        spec_in, "a ⊆ b [HYP]\n∀z (z ∈ a → z ∈ b) [Def, 1]", {}
+    )
+    assert spec.metavariables == {}
+
+
+@pytest.mark.parametrize(
+    "metavariables",
+    [
+        # Reaches `promoted_theorem_bindings.var`, a `String(128)`: unbounded, it
+        # is a Postgres truncation error at flush — a 500 where this is a 422.
+        {"P" * 200: "formula"},
+        {"P": "f" * 200},
+        {"": "formula"},
+        {"P": "   "},
+    ],
+)
+def test_a_metavariable_name_that_will_not_store_is_a_422(db, client, metavariables):
+    pc, _fol, _zfc = tower(db, client, f"names-{abs(hash(str(metavariables)))}@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+
+    status, _body = promote(client, proof, "id", metavariables)
+    assert status == 422

@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 T = TypeVar("T")
 
@@ -596,6 +596,37 @@ class ProofPromotionRequest(BaseModel):
     label: str | None = Field(
         None, min_length=1, max_length=THEOREM_LABEL_MAX, pattern=THEOREM_LABEL_PATTERN
     )
+    # Which leaves of the conclusion stand for *any* term of a sort, rather than
+    # for themselves: `{"P": "formula"}` turns the proved `(P → P)` into the
+    # theorem `⊢ (φ → φ)`, citable at every instance. Empty promotes the
+    # conclusion verbatim, which is a ground theorem justifying only itself.
+    #
+    # The claim is discharged, not taken: the proof is re-checked with these
+    # leaves held schematic, and refused if it no longer stands.
+    metavariables: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("metavariables")
+    @classmethod
+    def _names_must_fit_storage(cls, value: dict[str, str]) -> dict[str, str]:
+        """Bound both halves to what the rows hold.
+
+        A name reaches `promoted_theorem_bindings.var` (`String(128)`) and a sort
+        name is resolved against the system's symbols, so an unbounded key is a
+        Postgres truncation error at flush — a 500 where this is a 422. Neither
+        can be checked for *meaning* here (whether the grammar spells that leaf
+        is the engine's answer, and it gives it by refusing the abstracted
+        proof); what is checkable is that they fit and are not blank.
+        """
+        for name, sort in value.items():
+            for text, what in ((name, "metavariable"), (sort, "sort")):
+                if not text.strip():
+                    raise ValueError(f"A {what} name may not be blank.")
+                if len(text) > THEOREM_LABEL_MAX:
+                    raise ValueError(
+                        f"The {what} name {text[:32]!r}… exceeds "
+                        f"{THEOREM_LABEL_MAX} characters."
+                    )
+        return value
 
 
 class PromotedTheoremOut(BaseModel):
