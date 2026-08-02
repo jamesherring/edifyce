@@ -1,8 +1,9 @@
 # Relationships between formal systems: analysis and roadmap
 
-**Status:** **Track R is delivered** — R1, R2, R3, R3a and both halves of R4.
-Tracks S (sequents) and D (the layered importer) are still design; S1 and D1
-depend on nothing and can start whenever.
+**Status:** **Track R is delivered and complete** — R1, R2, R3, R3a, both halves
+of R4, and the edge CRUD an author reaches them through. Tracks S (sequents) and
+D (the layered importer) are still design; S1 and D1 depend on nothing and can
+start whenever.
 
 `formal_systems.inherits_from_id` used to be validated on write and read by
 nothing — `app/routers/systems.py` said so in as many words ("inheritance is not
@@ -13,11 +14,14 @@ citation resolves against the system's own library and then its ancestors'. A
 proof proved here enters that library (§5.3), schematically if its author says
 so; and where the spine cannot reach, an edge does — including between two
 systems that disagree about what to call things (§5.4). See §8's R1–R4 for what
-landed and §9.9–9.20 for what they turned up.
+landed and §9.9–9.21 for what they turned up.
 
-What is left on Track R is the edge **CRUD**: every edge above is written
-straight to its rows, because no route creates one yet. That is also where a
-rename's check belongs in the end (§9.17).
+The edge **CRUD** closes it: `app/routers/system_relations.py`, under the
+*target* — the system whose citations an edge widens, and whose owner may
+therefore say so. It is where §9.17 said a rename's check belongs, and §9.21
+records what taking that escape settled, including the one thing it could not:
+the resolution-time check stays, because either system may be a draft whose
+grammar moves after an edge is written.
 
 Goal: express and store the relationships between formal systems well enough that
 
@@ -858,8 +862,13 @@ tested against the systems that break it, and this suite already had them.
 
 **Delivers** multiple parents, sort renames, translations.
 
-Split in two, because the halves are independently testable and the second is
-where §3.2 has teeth. **Both are done.** **R4a — what an edge resolves**: the
+Split in three, and all three are done. The first two are the mechanism, split
+because they are independently testable and the second is where §3.2 has teeth;
+the third is the **CRUD** (`app/routers/system_relations.py`), which is how an
+author writes one — its routes hang under the *target*, and what they refuse and
+what they have to invalidate are §9.21.
+
+**The first two.** **R4a — what an edge resolves**: the
 four tables of §5.4, and `related_layers` turning the edges into a
 `LibraryChain`'s extra layers, all identity on names, which is exactly what a
 second parent is. **R4b — the rename**: `website/logical/translation.py`, a
@@ -955,6 +964,45 @@ from a boolean and say quite different things: `does not apply` (resolved, and
 the instance was refused), `Invalid reference` (the edge contributed no layer),
 and a whole-verify error (a term that could not be rebuilt). Every rejection
 above now names which one it means.
+
+#### R4c — the edge CRUD — **done**
+
+**Delivers** an edge an author can write, rather than one a test writes into its
+rows. `app/routers/system_relations.py`, mounted under the **target** — the
+system whose citations widen, and whose owner is therefore the one who may say
+so. The source need only be *visible* (owned or published), which is the rule
+inheritance follows and for the reason it follows it: the corpus this feature
+exists to build on is ownerless.
+
+What landed: list / create / patch / delete, with each of the edge's three
+collections replaced whole (the shape a rule's bindings already take); the map
+checked at the write, so an author gets `translation_errors`' own words (§9.17);
+the obligations checked for what they may point at; and
+`_invalidation.invalidate_library_reach`, which is §9.15's rule applied to a
+*library* rather than a label. §9.21 records what the three of those settled.
+
+**Tests and verification** — `tests/test_system_relations_api.py`, beside
+`tests/test_system_relations.py` rather than folded into it. The two ask
+different questions: what an edge *resolves* wants an edge in states the route
+refuses to write, and what the route *does* wants the states an author can
+actually reach.
+
+- *Valid:* an edge written through the route makes a citation resolve, against
+  the same proof failing before it existed; a draft edge is written, listed, and
+  transfers nothing; discharging its last obligation through a PATCH makes the
+  same proof stand.
+- *Invalid, each with its message asserted:* a narrowing map (paired with the
+  same map onto a target whose sort admits the branch); a map against a system
+  that does not build, which says *that* rather than naming the map; an edge
+  onto itself; a source that is neither owned nor published (paired with a
+  published one owned by someone else, which is the case that must work); a
+  second edge the same way round (paired with the reverse direction, which is a
+  different edge and not a duplicate); an obligation claiming two discharges;
+  an obligation naming a theorem the target cannot cite (paired with one it can).
+- *Pinned:* deleting an edge clears the verdict of a proof that resolved through
+  it, and leaves a proof that cited only its own system's axioms alone; a
+  **published** target refuses an edit to itself and accepts an edge, which is
+  the line between a frozen grammar and a library that was never frozen.
 
 ---
 
@@ -1096,12 +1144,15 @@ R1 ──▶ R2 ──▶ R3 ──▶ R3a
   │      └──▶ D3 ──▶ D4 ──▶ D5 ──▶ D6
   │                    ▲
   │            D1 ──▶ D2
-  └──▶ R4 ──▶ S2
-              ▲
-       S1 ────┘──▶ S3 ──▶ S4
+  └──▶ R4a ─▶ R4b ─▶ R4c
+        │
+        └──▶ S2
+             ▲
+      S1 ────┘──▶ S3 ──▶ S4
 ```
 
-S1 and D1 depend on nothing and can start immediately.
+S1 and D1 depend on nothing and can start immediately. S2 needs an edge that
+resolves (R4a) rather than one an author can write (R4c).
 
 ---
 
@@ -1143,7 +1194,7 @@ S1 and D1 depend on nothing and can start immediately.
    requires a complex accepted case per phase, and why the bound-variable tests
    are written in accepted/rejected pairs.
 
-The twelve below are **findings from the phases that landed**, kept here because
+The thirteen below are **findings from the phases that landed**, kept here because
 each is a live constraint on the work after it rather than a closed question.
 
 9. **The freshness check was position-blind, and a tower is not.** §5.1 predicted
@@ -1539,6 +1590,52 @@ each is a live constraint on the work after it rather than a closed question.
     not checked" is a claim about what some other code does with the difference.**
     §9.18's other two — `slots` and `scopes_over` — are checked precisely because
     nothing downstream could absorb them.
+
+21. **Taking §9.17's escape, and what it does not buy.** The CRUD is where a
+    rename's check belongs, and writing it settled three things the note left
+    open.
+
+    **The write-time check does not replace the resolution-time one.** §9.17
+    called the runtime placement the price of having no route to hang the check
+    on, which reads as though a route would let it go. It does not: either
+    system may be a **draft**, whose grammar moves freely after an edge is
+    written, so an edge checked once is not an edge that stays checked. What the
+    route buys is the *report* — `translation_errors`' own words, at the moment
+    the author can act on them — rather than a citation that silently does not
+    resolve. Cheapness would need a stored verdict, and §9.14 already says what
+    that costs.
+
+    **A published system may be related.** Publishing freezes a *grammar*, so a
+    proof checked against it stays checked against it. A system's **library** was
+    never frozen — `POST /proofs/{id}/promote` writes into a published system's
+    today — and an edge is library reach rather than grammar, so it belongs on
+    the same side of that line. The route refuses an edit to the system and
+    accepts an edge onto it, and the test asserts both halves in one place
+    because the pairing *is* the claim.
+
+    **Every field of an edge is one a verdict can rest on.** `status` is the
+    gate, the obligations are what the gate reads, the maps decide whether it
+    checks out at all, and `position` decides which of two edges wins a label
+    both offer — so there is no partial edit that can skip the invalidation.
+    Even *creating* one has to invalidate, which is not obvious: adding a
+    resolution cannot make a failing proof's verdict wrong, but an edge arriving
+    at a lower position silently redirects a citation that already resolved.
+
+    The invalidation itself is §9.15's rule asked of a *library* rather than a
+    label (`_invalidation.invalidate_library_reach`), and it differs from the
+    label version in one way worth recording: there is no single label to be
+    shadowed, so the walk stops nowhere and over-reaches by exactly the systems
+    that declare some of these names themselves. That is the direction R4a
+    already took for the edge half of the same walk — invalidation may reach
+    further than resolution, never less — and the cost of the difference is a
+    re-verify. The *proofs* are still narrowed, by joining `proof_lines.rule`
+    against the source chain's labels rather than listing them: an imported
+    corpus has tens of thousands, and a 49,000-item `IN` clause is not a query.
+
+    One thing the CRUD deliberately does **not** do: repoint an edge. Changing
+    its source is deleting one relationship and asserting another, and the two
+    have different obligations — so it is a delete and a create, which is also
+    two invalidations rather than one.
 
 ---
 

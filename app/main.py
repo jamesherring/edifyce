@@ -28,6 +28,7 @@ from app.auth.oauth import (
 )
 from app.routers.proofs import router as proofs_router
 from app.routers.system_parts import router as system_parts_router
+from app.routers.system_relations import router as system_relations_router
 from app.routers.systems import router as systems_router
 from app.schemas import (
     HealthResponse,
@@ -116,6 +117,10 @@ app.include_router(systems_router, prefix=API_PREFIX)
 # /api/formal-systems/{system_id}/... (fully parameterized), so there's nothing
 # for the SPA path guard to add.
 app.include_router(system_parts_router, prefix=API_PREFIX)
+# Edges between systems, under the *target* — the system whose citations they
+# widen. Fully parameterized like the parts router, so the SPA guard needs
+# nothing from it.
+app.include_router(system_relations_router, prefix=API_PREFIX)
 # Owner-scoped CRUD for proofs (stored rows verified against their system).
 # Like systems_router, its routes carry their own /proofs prefix under /api.
 app.include_router(proofs_router, prefix=API_PREFIX)

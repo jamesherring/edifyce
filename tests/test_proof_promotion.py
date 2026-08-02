@@ -909,6 +909,7 @@ def test_the_locks_are_taken_ancestor_first_and_the_root_is_first_of_all(db, cli
     #     alone would lock it first rather than last;
     #   * `right` is inserted after `left` but sorts before it, so a generation
     #     left in query order would come out the other way round.
+    import app.routers._invalidation as invalidation
     import app.routers.proofs as proofs_router
 
     owner = _register_login(client, "lock-order@example.com")
@@ -931,7 +932,12 @@ def test_the_locks_are_taken_ancestor_first_and_the_root_is_first_of_all(db, cli
         locked.append(system_id)
         await original(session, system_id)
 
+    # Two patch points, because the locking is split between two modules: the
+    # multi-key acquisition lives with the invalidation that needs it, and the
+    # router still takes its own system's key directly. Recording only one would
+    # see half an order.
     monkeypatch.setattr(proofs_router, "lock_system", record)
+    monkeypatch.setattr(invalidation, "lock_system", record)
     assert promote(client, proof, "id")[0] == 201
 
     first_seen: list[uuid.UUID] = []
@@ -947,6 +953,7 @@ def test_promotion_and_retirement_take_the_system_lock(db, client, monkeypatch):
     # Both write rows a concurrent verify reads. Asserted by observing the lock
     # is taken, as everywhere else in this router — the exclusion itself is only
     # observable against a real Postgres.
+    import app.routers._invalidation as invalidation
     import app.routers.proofs as proofs_router
 
     locked: list[uuid.UUID] = []
@@ -960,6 +967,7 @@ def test_promotion_and_retirement_take_the_system_lock(db, client, monkeypatch):
     proof = proved_and_published(client, pc, IDENTITY_PROOF)
 
     monkeypatch.setattr(proofs_router, "lock_system", record)
+    monkeypatch.setattr(invalidation, "lock_system", record)
     assert promote(client, proof, "id")[0] == 201
     assert uuid.UUID(pc) in locked
 
