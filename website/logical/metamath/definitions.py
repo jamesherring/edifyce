@@ -291,6 +291,19 @@ def _justification(assertion: Assertion, database: Database) -> Justification | 
     return Justification(label=proved, statement=" ".join(hypothesis.tokens))
 
 
+def _distinct_pairs(groups: tuple[frozenset[str], ...]) -> set[frozenset[str]]:
+    # A `$d` group constrains every *pair* among its variables, so comparing two
+    # declarations means comparing pair sets: `$d x y z` covers `$d x y` and a
+    # group-wise comparison would not see it.
+    return {
+        frozenset((left, right))
+        for group in groups
+        for left in group
+        for right in group
+        if left != right
+    }
+
+
 def _restatement(
     assertion: Assertion,
     restatements: Mapping[str, str],
@@ -321,6 +334,11 @@ def _restatement(
     restating = database.assertions.get(label)
     if restating is None:
         return f"is declared restated by '{label}', which the database does not have"
+    if not restating.is_logical:
+        # A syntax `$p` asserts well-formedness, not truth, so it restates nothing.
+        # `_proved_statement` makes the same check; making it here too keeps a
+        # typo in the table from reaching the shape tests at all.
+        return f"is declared restated by '{label}', which is not a logical statement"
     if restating.is_axiom:
         # An asserted restatement would be a second axiom about the same notation,
         # and nothing would tie it to the first. A *proved* one is a consequence of
@@ -328,17 +346,35 @@ def _restatement(
         return f"is declared restated by '{label}', which is asserted rather than proved"
     if restating.essentials:
         return f"is declared restated by '{label}', which holds only under hypotheses"
+    missing = _distinct_pairs(assertion.distinct) - _distinct_pairs(restating.distinct)
+    if missing:
+        # The two forms come from the restatement, so its `$d` is what travels with
+        # them - and a `$d` on the *assertion* that the restatement does not carry
+        # would simply be dropped, turning a conditionally-asserted statement into
+        # an unconditional rewrite. Metamath's own check makes this hard to reach
+        # (a verifying proof must meet the assertion's provisos at the instance it
+        # cites), but the classifier runs long before that proof is checked.
+        listed = ", ".join(sorted("/".join(sorted(pair)) for pair in missing))
+        return (
+            f"is declared restated by '{label}', which does not carry its $d ({listed})"
+        )
     try:
-        cited, _letters = compressed.split_proof(restating.proof)
+        labels, letters = compressed.split_proof(restating.proof)
+        steps = compressed.decode(letters, labels, compressed.mandatory_of(restating))
     except MetamathError as exc:
         return f"is declared restated by '{label}', whose proof cannot be read: {exc}"
-    if assertion.label not in cited:
+    if assertion.label not in {step.label for step in steps if step.label is not None}:
         # The check that carries the weight. No structural test can confirm that
         # `-. ( ( L -> R ) -> -. ( R -> L ) )` *is* the biconditional of `L` and
         # `R` - deciding that is the semantic reading this whole approach exists to
         # avoid. What is checkable is that the restatement was **derived from** the
         # assertion it restates, which is what makes it a consequence of the axiom
         # being reclassified rather than an unrelated equivalence pointed at it.
+        #
+        # Read off the *decoded steps*, not the label table. A table lists what a
+        # proof may cite, and a proof may list a label and never select it - so
+        # checking the table admits a restatement derived from something else
+        # entirely, which is the whole of what this check exists to catch.
         return f"is declared restated by '{label}', whose proof does not cite it"
     term = statement_of(restating, system)
     if term is None:

@@ -137,6 +137,51 @@ def test_a_restatement_whose_proof_does_not_cite_the_assertion_is_refused() -> N
     assert "whose proof does not cite it" in classified.reason
 
 
+def test_a_label_the_proof_lists_but_never_uses_does_not_count_as_a_citation() -> None:
+    # A compressed proof's label *table* lists what it may cite; the letter stream
+    # says what it does cite. Reading the table admits a restatement derived from
+    # something else entirely with the assertion's label sitting unused beside it —
+    # which defeats the one check standing between this declaration and a blank
+    # cheque. Here `df-new` is in the table and the letters select `ax-alt`, and
+    # the proof verifies, so nothing else would notice.
+    listed = BOOTSTRAP.replace(
+        "$= ( df-new ax-restate ) ABABCD $.", "$= ( df-new ax-alt ) ABD $."
+    )
+    classified = classify_all(listed, RESTATED)["df-new"]
+
+    assert not classified.is_definition
+    assert "whose proof does not cite it" in classified.reason
+
+
+def test_a_d_the_restatement_does_not_carry_is_refused() -> None:
+    # The two forms come from the restatement, so its `$d` travels with them. One
+    # on the *assertion* that the restatement lacks would simply be dropped,
+    # turning a conditionally-asserted statement into an unconditional rewrite.
+    # Scoped to `df-new` alone, since a file-level `$d` is active for both.
+    scoped = BOOTSTRAP.replace(
+        "df-new $a |- -. ( ( ph <-> ps ) -> -. ( ph -> ps ) ) $.",
+        "${\n  $d ph ps $.\n"
+        "  df-new $a |- -. ( ( ph <-> ps ) -> -. ( ph -> ps ) ) $.\n$}",
+    )
+    classified = classify_all(scoped, RESTATED)["df-new"]
+
+    assert not classified.is_definition
+    assert "does not carry its $d (ph/ps)" in classified.reason
+
+
+def test_a_syntax_proof_restates_nothing() -> None:
+    # A `$p` under a syntax typecode asserts well-formedness, not truth.
+    syntax = BOOTSTRAP.replace(
+        "newbi1 $p |- ( ( ph <-> ps ) <-> ( ph -> ps ) ) $= ( df-new ax-restate ) ABABCD $.",
+        "wsyn $p wff ( ph <-> ps ) $= ( wb ) ABC $.\n"
+        "walked $p |- ( ( ph <-> ps ) <-> ( ph -> ps ) ) $= ( ax-alt ) ABC $.",
+    )
+    classified = classify_all(syntax, {"df-new": "wsyn"})["df-new"]
+
+    assert not classified.is_definition
+    assert "is not a logical statement" in classified.reason
+
+
 def test_a_declaration_naming_something_absent_is_refused() -> None:
     classified = classify_all(BOOTSTRAP, {"df-new": "nope"})["df-new"]
 

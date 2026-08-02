@@ -958,18 +958,32 @@ the reported basis while leaving the axiom in it.
 **Why this is a declaration and not a loophole.** A table saying "read this
 assertion's shape from that theorem" could point anywhere, and a wrong entry would
 register a bogus definition while all 47,546 proofs still verified — they take no
-definitional steps, so nothing would notice. Three things are therefore checked
-(`_restatement`), and the third carries the weight:
+definitional steps, so nothing would notice. `_restatement` therefore checks five
+things, and the last carries the weight:
 
 - the restatement must exist in the database;
+- it must be **logical**. A syntax `$p` asserts well-formedness, not truth;
 - it must be **proved**, not asserted. An asserted one would be a second axiom
   about the same notation with nothing tying it to the first;
+- it must carry every **`$d`** the assertion does. The two forms come from the
+  restatement, so its provisos travel with them, and one on the assertion that the
+  restatement lacks would simply be dropped — turning a conditionally-asserted
+  statement into an unconditional rewrite. Compared pairwise, since `$d x y z`
+  covers `$d x y` and a group-wise comparison would not see it;
 - **its proof must cite the assertion it restates.** No structural test can
   confirm that `-. ( ( L -> R ) -> -. ( R -> L ) )` *is* the biconditional of `L`
   and `R` — deciding that is the semantic reading being avoided. What is checkable
   is that the restatement was *derived from* the assertion, which makes it a
   consequence of the axiom being reclassified rather than an unrelated equivalence
-  pointed at it. `dfbi1`'s proof is `( wb wi wn df-bi impbi con3rr3 mt3 )`.
+  pointed at it.
+
+That last check is read off the proof's **decoded steps**, and the distinction is
+not pedantic. A compressed proof carries a label *table* listing what it may cite
+and a letter stream saying what it does; the first version of this read the table,
+and a proof listing `df-bi` beside a derivation from something else entirely — a
+table entry never selected — passed it. The check that the whole mechanism rests
+on was satisfiable without citing anything. Found by review, reproduced against
+this section's own fixture, and pinned.
 
 Reading a later theorem's statement is a deliberate forward reference, and worth
 naming as one. It is the narrowest available: what it supplies is *which two forms
