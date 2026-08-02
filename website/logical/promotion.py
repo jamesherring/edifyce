@@ -22,7 +22,7 @@ from website.logical.build_context import (
     build_schema_pattern,
     warm_grammar_index,
 )
-from website.logical.formal_system import FormalSystem, PromotedTheorem
+from website.logical.formal_system import FormalSystem, Proof, PromotedTheorem
 from website.logical.formal_system.side_condition_syntax import parse_side_condition
 from website.logical.kernel import from_match
 from website.logical.matching import Pattern, StringPattern
@@ -256,6 +256,58 @@ def promote_from_source(
         variables=dict(string_variables),
         matching=matching,
     )
+
+
+def proved_theorem(
+    system: FormalSystem, proof: Proof, label: str
+) -> tuple[TheoremSpec, PromotedTheorem]:
+    """The library entry a completed proof establishes, as a *ground* theorem.
+
+    The counterpart of :func:`~website.logical.metamath.importer.register` for a
+    proof written here rather than imported: the same pair — the strings to store
+    and the engine object whose composed terms are worth caching beside them.
+
+    The statement is the conclusion's **term**, not its text. A proof's last
+    root-level formula-bearing line is what it establishes, that line already
+    carries the kernel term the checker unified against, and promoting from the
+    term means the entry says exactly what was checked, with no parse between the
+    two to disagree. The stored string is that term rendered
+    (:meth:`~website.logical.kernel.terms.Term.to_string`), so it is a record of
+    the term rather than a second source for it.
+
+    Ground, because nothing here nominates metavariables: the entry justifies its
+    own statement and no other instance of it, which is
+    :func:`promote_from_source`'s closed-theorem case. Note this stays right for a
+    *string-rewriting* system without being string-matched: with no metavariable
+    to bind, unification of two ground terms is equality, which is what an
+    associative matcher would have concluded too. Nominating metavariables — where
+    the regime does start to matter — is a later phase.
+
+    Raises :class:`ValueError` if the proof does not stand, carries a warning, or
+    has no formula-bearing conclusion at its root scope. Defensive rather than
+    the user-facing gate: a caller with an HTTP error to render should say so
+    before reaching here.
+    """
+    if not proof.valid:
+        raise ValueError("A proof that does not stand establishes no theorem.")
+    if proof.has_warnings:
+        raise ValueError(
+            "A proof carrying a warning establishes no theorem: the warning is "
+            "unresolved doubt about whether it stands."
+        )
+
+    # The *root* scope's conclusion: a line inside an assumption is proved under
+    # that assumption, so it is not what the proof as a whole establishes.
+    conclusion = None if proof.root_scope is None else proof.root_scope.conclusion
+    if conclusion is None or conclusion.formula_term is None:
+        raise ValueError(
+            "The proof has no formula-bearing conclusion at its root scope, so "
+            "there is nothing to promote."
+        )
+
+    term = conclusion.formula_term
+    spec = TheoremSpec(label=label, statement=term.to_string())
+    return spec, promote_spec(system, spec, statement_term=term)
 
 
 def promote_spec(

@@ -181,9 +181,15 @@ async def lock_system(session: AsyncSession, system_id: uuid.UUID) -> None:
     The third is why this is taken at the **start** of a verify rather than just
     before its write, and why every invalidation takes it too: the read and the
     write have to be inside one critical section, or the invalidation can land
-    between them. One key per system, always acquired first, so there is no lock
-    ordering to get wrong — and a proof may only reference proofs in its own
-    system, so one key covers a whole reference closure.
+    between them. One key per system, always acquired first — and a proof may
+    only reference proofs in its own system, so one key covers a whole reference
+    closure.
+
+    One caller needs **several** keys: retiring a library entry invalidates the
+    proofs that cited it, and a citation crosses systems (`proofs`'
+    ``_invalidate_citations``). That one acquires in id order, because a fixed
+    order is the only thing standing between two overlapping towers and a
+    deadlock. Any future caller taking more than one key must do the same.
 
     Postgres only; a no-op on SQLite (the test database, where requests do not
     run concurrently anyway), which is why the routes are covered by asserting

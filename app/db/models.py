@@ -302,6 +302,15 @@ class Proof(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     formal_system: Mapped["FormalSystem"] = relationship(back_populates="proofs")
     folder: Mapped["ProofFolder | None"] = relationship(back_populates="proofs")
     theorems: Mapped[list["Theorem"]] = relationship(back_populates="proof")
+    # The library entry above, as an object — so a read can say whether this
+    # proof has been promoted without a second query. `foreign_keys` because the
+    # two tables now reference each other: this side says which entry the proof
+    # establishes, `promoted_theorems.proved_by_id` says which proof warrants the
+    # entry, and only the first is this column. One-directional, so neither
+    # relationship has to declare an overlap with the other.
+    theorem: Mapped["PromotedTheoremRow | None"] = relationship(
+        foreign_keys=[theorem_id]
+    )
 
     # Outgoing reference edges (the lemmas this proof cites), owned by this proof
     # so editing/deleting them cascades. Ordered for stable display.

@@ -41,7 +41,8 @@ function detail(references: ProofDetail['references'] = []): ProofDetail {
 		source: '',
 		result: null,
 		references,
-		referenced_by: []
+		referenced_by: [],
+		theorem: null
 	};
 }
 

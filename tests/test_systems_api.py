@@ -30,7 +30,7 @@ from app.db.promoted_theorems import (
     PromotedTheoremRow,
 )
 from app.db.terms import TermChildRow, TermRow
-from app.db.models import OAuthAccount, User
+from app.db.models import OAuthAccount, Proof, ProofFolder, User
 from app.db.session import get_session
 from app.db.systems import (
     AxiomBindingRow,
@@ -84,7 +84,10 @@ _TABLES = [
         # be deleted — SQLite creates a table whose FK target is absent,
         # Postgres refuses to.
         TermRow, TermChildRow,
-        # `promoted_theorems` cascades from the system and references `terms`.
+        # `promoted_theorems` cascades from the system and references `terms` —
+        # and, since promotion (`proofs._retire_promotion`), `proofs` too, for
+        # the proof whose standing warrants a locally-proved entry.
+        ProofFolder, Proof,
         PromotedTheoremRow, PromotedTheoremPremiseRow, PromotedTheoremBindingRow,
     )
 ]

@@ -413,6 +413,20 @@ export interface ProofReferenceInput {
 	alias: string;
 }
 
+/** A citable library entry — mirrors `PromotedTheoremOut`.
+ *
+ * `statement` is the conclusion's kernel term rendered, not the source line the
+ * author typed: promotion takes the term the check ran on. `proved_by_id` is
+ * null for an entry that arrived with a corpus import, which no proof here may
+ * retire. */
+export interface PromotedTheorem {
+	id: string;
+	label: string;
+	statement: string;
+	formal_system_id: string;
+	proved_by_id: string | null;
+}
+
 export interface ProofDetail extends ProofSummary {
 	source: string;
 	/** Cached `proof.data()` from the last verification (null = never run). */
@@ -423,6 +437,8 @@ export interface ProofDetail extends ProofSummary {
 	/** Incoming references (proofs that cite this one as a lemma), filtered to
 	 * those the viewer may read. */
 	referenced_by: ProofReferrer[];
+	/** The library entry this proof establishes, null until it is promoted. */
+	theorem: PromotedTheorem | null;
 }
 
 // The stored structure of a checked proof — mirrors the ProofStructure models in
@@ -778,7 +794,17 @@ export const api = {
 			request<ProofDetail>(`/proofs/${id}/references`, {
 				method: 'PUT',
 				body: JSON.stringify({ references })
-			})
+			}),
+		/** Enter this proof's conclusion in its system's library, so proofs here —
+		 * and in every system inheriting this one — can cite it by `label`. The
+		 * proof must be published; omit `label` to use its slug. */
+		promote: (id: string, label?: string) =>
+			request<PromotedTheorem>(`/proofs/${id}/promote`, {
+				method: 'POST',
+				body: JSON.stringify({ label: label ?? null })
+			}),
+		/** Withdraw that entry. A no-op if the proof established none. */
+		retire: (id: string) => request<null>(`/proofs/${id}/promote`, { method: 'DELETE' })
 	},
 
 	/**

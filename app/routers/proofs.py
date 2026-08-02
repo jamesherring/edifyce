@@ -46,7 +46,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, selectinload
@@ -71,9 +71,12 @@ from app.db import (
     store_definition_terms,
     store_proof_lines,
     store_schema_terms,
+    store_theorem,
     term_context,
+    theorem_digest,
 )
 from app.db.models import User
+from app.db.promoted_theorems import PromotedTheoremRow
 from app.routers._common import (
     PageParams,
     lock_system,
@@ -91,20 +94,24 @@ from app.schemas import (
     ProofLineOut,
     ProofReferenceOut,
     ProofReferencesUpdate,
+    ProofPromotionRequest,
     ProofReferrerOut,
     ProofStructure,
     ProofSummary,
     ProofUpdate,
+    PromotedTheoremOut,
     SystemOwner,
     TermSummary,
     VerifyProofResponse,
 )
 from website.logical.declarative import build_spec
 from website.logical.graphs import topological_order
+from website.logical.promotion import proved_theorem
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from app.routers.systems import EffectiveSystem
     from website.logical.formal_system import FormalSystem as EngineSystem
     from website.logical.formal_system import PromotedTheorem
     from website.logical.matching.context import Context
@@ -142,6 +149,9 @@ _DETAIL_LOADS = (
     selectinload(Proof.owner),
     selectinload(Proof.reference_links).selectinload(ProofReference.referenced),
     selectinload(Proof.referenced_by_links).selectinload(ProofReference.proof),
+    # The library entry this proof establishes, so a detail read can say whether
+    # it has been promoted without the client asking a second question.
+    selectinload(Proof.theorem),
 )
 
 
@@ -281,6 +291,12 @@ class _Verification:
     valid: bool | None
     engine_proof: EngineProof | None = None
     system: FormalSystem | None = None
+    # The system as resolved and as built, kept because a caller that needs them
+    # after the check would otherwise read the chain's rows and compose every
+    # rule schema a second time — measured at five times the read and about half
+    # a build. Only `promote` wants them so far.
+    effective: EffectiveSystem | None = None
+    compiled_system: EngineSystem | None = None
     # Every lemma this proof may cite, paired with its stored id. Holding the
     # compiled proofs (not just their ids) is what lets the snapshot match a
     # cited line to its proof by identity — see store_proof_lines.
@@ -544,6 +560,8 @@ async def _verify_with_references(
         valid=root.valid,
         engine_proof=root,
         system=system,
+        effective=effective,
+        compiled_system=compiled_system,
         # The root's lines may cite lines of any lemma in the closure, and this
         # is how the snapshot names the proof they belong to.
         cited_proofs=[(engine, pid) for pid, engine in compiled.items()],
@@ -755,6 +773,134 @@ async def _require_publishable(session: AsyncSession, proof: Proof) -> None:
     await _record_verdict(session, proof, verification)
 
 
+# ---------------------------------------------------------------------------
+# Promotion — a proved proof entering its system's library
+# ---------------------------------------------------------------------------
+
+
+async def _citing_systems(
+    session: AsyncSession, system_id: uuid.UUID, label: str
+) -> list[uuid.UUID]:
+    """Every system whose proofs may resolve ``label`` to ``system_id``'s entry.
+
+    That system, plus the ones inheriting from it transitively — a citation
+    resolves against a system's own library and then its ancestors' (`R2`), so a
+    descendant's proof can rest on an entry stored here.
+
+    The walk stops at a system that declares ``label`` **itself**: its own entry
+    is nearer, so `LibraryChain` resolves the label there and neither it nor
+    anything below it was ever citing ours. Following the same shadowing rule the
+    resolver does is what keeps this from invalidating proofs that never depended
+    on the entry being retired.
+    """
+    reached = [system_id]
+    frontier = [system_id]
+    while frontier:
+        children = list(
+            await session.scalars(
+                select(FormalSystem.id).where(
+                    FormalSystem.inherits_from_id.in_(frontier)
+                )
+            )
+        )
+        if not children:
+            break
+        shadowing = set(
+            await session.scalars(
+                select(PromotedTheoremRow.system_id).where(
+                    PromotedTheoremRow.system_id.in_(children),
+                    PromotedTheoremRow.label == label,
+                )
+            )
+        )
+        frontier = [
+            child
+            for child in children
+            if child not in shadowing and child not in reached
+        ]
+        reached.extend(frontier)
+    return reached
+
+
+async def _invalidate_citations(
+    session: AsyncSession, system_id: uuid.UUID, label: str
+) -> None:
+    """Invalidate every proof that cited the entry ``label`` names, so retiring it
+    cannot leave a standing verdict resting on a theorem that is gone.
+
+    Which proofs cited it is a question the stored structure answers: a citation
+    of a promoted theorem resolves to an ephemeral rule carrying the theorem's
+    label, and `proof_lines.rule` records the rule that justified each line. So
+    this reads the rows rather than re-parsing any source.
+
+    Takes the system lock for each system it touches, in id order. Every other
+    caller locks exactly one system and so has no ordering to get wrong; this is
+    the first that spans a chain, and a fixed order is what keeps two retirements
+    over overlapping towers from deadlocking.
+    """
+    systems = await _citing_systems(session, system_id, label)
+    for locked in sorted(systems):
+        await lock_system(session, locked)
+
+    citing = list(
+        await session.scalars(
+            select(Proof.id)
+            .join(ProofLineRow, ProofLineRow.proof_id == Proof.id)
+            .where(
+                Proof.formal_system_id.in_(systems),
+                ProofLineRow.rule == label,
+            )
+            .distinct()
+        )
+    )
+    if not citing:
+        return
+    await session.execute(
+        sa_update(Proof).where(Proof.id.in_(citing)).values(valid=None, result=None)
+    )
+    await session.run_sync(lambda sync: clear_proof_lines(sync, citing))
+
+
+async def _retire_promotion(session: AsyncSession, proof: Proof) -> None:
+    """Withdraw the library entry ``proof`` established, if it established one.
+
+    Called wherever the proof stops being the standing thing it was promoted as —
+    a source edit, an unpublish, a delete. The entry's warrant *is* this proof
+    (`promoted_theorems.proved_by_id`), so once the proof no longer stands the
+    entry asserts something nothing here proves, and leaving it would make a
+    citation of it resolve to exactly that.
+
+    An **imported** entry is untouched: its `proved_by_id` is NULL because its
+    warrant is the corpus rather than the stored proof, so a grammar edit that
+    invalidates every proof in a corpus withdraws none of its library.
+    """
+    entry = (
+        await session.execute(
+            select(PromotedTheoremRow.id, PromotedTheoremRow.system_id,
+                   PromotedTheoremRow.label)
+            .where(PromotedTheoremRow.proved_by_id == proof.id)
+        )
+    ).first()
+    if entry is None:
+        return
+    entry_id, system_id, label = entry
+
+    # Before the delete: the query below reads `proof_lines`, and a line citing
+    # this entry is found by the label, not by the row.
+    await _invalidate_citations(session, system_id, label)
+    # Drop the proof's own pointer first, and through the relationship rather
+    # than the column: `proofs.theorem_id` is `ON DELETE SET NULL`, so the
+    # database would clear it either way, but the loaded object would keep the
+    # old entry — and this session's next read of it comes out of the identity
+    # map, which is what a route returning `_detail` then renders.
+    if proof.theorem_id == entry_id:
+        proof.theorem = None
+        await session.flush()
+    await session.execute(
+        sa_delete(PromotedTheoremRow).where(PromotedTheoremRow.id == entry_id)
+    )
+
+
 def _owner_out(proof: Proof) -> SystemOwner | None:
     if proof.owner is None:
         return None
@@ -814,6 +960,25 @@ def _referenced_by_out(proof: Proof, viewer: User | None) -> list[ProofReferrerO
     return referrers
 
 
+def _theorem_out(proof: Proof) -> PromotedTheoremOut | None:
+    """The library entry this proof establishes, if it establishes one.
+
+    Reported for an *imported* entry too, whose `proved_by_id` is then null —
+    the proof does establish it, and saying so is what lets a client tell an
+    entry it may retire from one it may not.
+    """
+    theorem = proof.theorem
+    if theorem is None:
+        return None
+    return PromotedTheoremOut(
+        id=theorem.id,
+        label=theorem.label,
+        statement=theorem.statement,
+        formal_system_id=theorem.system_id,
+        proved_by_id=theorem.proved_by_id,
+    )
+
+
 def _detail(proof: Proof, viewer: User | None) -> ProofDetail:
     return ProofDetail(
         **_summary(proof).model_dump(),
@@ -821,6 +986,7 @@ def _detail(proof: Proof, viewer: User | None) -> ProofDetail:
         result=proof.result,
         references=_references_out(proof, viewer),
         referenced_by=_referenced_by_out(proof, viewer),
+        theorem=_theorem_out(proof),
     )
 
 
@@ -926,6 +1092,12 @@ async def update_proof(
         # is stale.
         await _discard_check(session, proof)
         await _invalidate_dependents(session, proof.id, proof.formal_system_id)
+        # Including the library entry it established, whose statement was this
+        # proof's *previous* conclusion. Retired rather than re-derived: the new
+        # conclusion may say something else entirely, and silently swapping the
+        # statement under everything citing it would be worse than withdrawing
+        # it. Re-promote to put it back.
+        await _retire_promotion(session, proof)
 
     # Publishing is the write that makes a proof world-readable, so gate it —
     # after the field changes above so the checks see this request's final state.
@@ -943,6 +1115,11 @@ async def update_proof(
                 status.HTTP_409_CONFLICT,
                 "Cannot unpublish a proof that a published proof references.",
             )
+        else:
+            # Publication is what a promotion rests on — it is the gate, and it
+            # is what makes the proof's statement public in the first place — so
+            # withdrawing it withdraws the entry too.
+            await _retire_promotion(session, proof)
         proof.published_at = datetime.now(timezone.utc) if changes["published"] else None
     elif source_changed and proof.published_at is not None:
         await _require_publishable(session, proof)
@@ -1079,6 +1256,162 @@ async def set_proof_references(
     return _detail(await _get_owned_or_404(session, proof_id, user.id), user)
 
 
+@router.post(
+    "/{proof_id}/promote",
+    response_model=PromotedTheoremOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def promote_proof(
+    proof_id: uuid.UUID,
+    payload: ProofPromotionRequest,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_session),
+) -> PromotedTheoremOut:
+    """Enter this proof's conclusion in its system's library, as a ground theorem.
+
+    R3 of docs/system-relationships-roadmap.md, and the half of (a)/(b) that
+    reaches work a person proves: until now only an import wrote
+    `promoted_theorems`, so a lemma proved in propositional calculus could not be
+    cited from a proof written in ZFC however sound the citation was.
+
+    **Published, not merely valid.** R2 makes a system's library visible to every
+    descendant, and a descendant may be someone else's — a published parent is
+    exactly the case where it is — so promoting a draft would publish that proof's
+    statement to strangers by another route. Publication is also what keeps the
+    entry stable: `_require_publishable` re-runs on every source edit, so a
+    published proof cannot be edited into not standing, and the ways it *can*
+    stop standing (unpublish, edit, delete) each retire the entry.
+
+    The statement is the conclusion's stored term rather than its text; see
+    `website.logical.promotion.proved_theorem`. Re-promoting replaces the entry
+    rather than adding a second, so an author who re-promotes after an edit gets
+    one entry saying what the proof now concludes.
+    """
+    proof = await _get_owned_or_404(session, proof_id, user.id)
+    if proof.published_at is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Only a published proof can be promoted: its statement becomes "
+            "citable from every system that inherits this one. Publish it first.",
+        )
+
+    # Checked here rather than trusting `proof.valid`: the cached verdict is what
+    # the editor renders, and this is the write that lets other proofs rest on it.
+    verification = await _verify_with_references(session, proof)
+    await _record_verdict(session, proof, verification)
+    engine_proof = verification.engine_proof
+    if engine_proof is None or not _is_usable_lemma(engine_proof):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=verification.response.errors
+            or [
+                "Only a proof that verifies and carries no warning can be "
+                "promoted — a warning is unresolved doubt about whether it stands."
+            ],
+        )
+
+    label = payload.label or proof.slug
+    # Reused rather than re-derived: the verify above resolved the chain and
+    # built it, and doing either again is the duplicate work R2's review
+    # measured. Both are non-null exactly when `engine_proof` is.
+    system = verification.system
+    effective = verification.effective
+    compiled = verification.compiled_system
+
+    # A reference resolves rules before theorems, so a label a rule already
+    # carries would store an entry no citation could ever reach.
+    if any(rule.label == label for rule in compiled.inference_rules):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{label!r} is already an inference rule of this system, and a "
+            "citation resolves a rule before a theorem, so the entry would be "
+            "unreachable. Promote it under another label.",
+        )
+    # `is_distinct_from`, not `!=`: an imported entry's `proved_by_id` is NULL,
+    # and a NULL inequality is NULL rather than true — so a plain `!=` would let
+    # a clash with an imported label through the guard and into the unique index,
+    # answering 500 where this answers 409.
+    taken = await session.scalar(
+        select(PromotedTheoremRow.id).where(
+            PromotedTheoremRow.system_id == system.id,
+            PromotedTheoremRow.label == label,
+            PromotedTheoremRow.proved_by_id.is_distinct_from(proof.id),
+        )
+    )
+    if taken is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{label!r} already names a theorem in this system's library.",
+        )
+
+    try:
+        spec, promoted = proved_theorem(compiled, engine_proof, label)
+    except ValueError as exc:
+        # The engine's own guards — nothing to promote, or a proof that does not
+        # stand. The gates above should have caught the second; the first is
+        # reachable by a proof whose every line is commentary.
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+    # Replace rather than accumulate. Retiring first also invalidates whatever
+    # cited the old entry, which a re-promotion after an edit needs just as much
+    # as an outright withdrawal does: the statement may have changed under them.
+    await _retire_promotion(session, proof)
+
+    system_id = system.id
+    digest = theorem_digest(effective.library.digest(system_id), spec)
+    symbols = {symbol.name: symbol for symbol in system.symbols}
+    position = await session.scalar(
+        select(func.count())
+        .select_from(PromotedTheoremRow)
+        .where(PromotedTheoremRow.system_id == system_id)
+    )
+    row = await session.run_sync(
+        lambda sync: store_theorem(
+            sync,
+            system,
+            spec,
+            symbols,
+            position=position or 0,
+            # Derived, not assumed: this is a theorem the system proved, which is
+            # exactly the distinction `primitive` records.
+            primitive=False,
+            digest=digest,
+            promoted=promoted,
+            proved_by_id=proof.id,
+        )
+    )
+    await session.flush()
+    # The other direction, and a different claim: this proof proves *under* the
+    # entry's hypotheses. A ground promotion has none, so it buys nothing yet —
+    # it is set because the link is what says which proof "this one" is, and a
+    # schematic promotion with premises will need it (see `hypotheses_of`).
+    proof.theorem_id = row.id
+    await session.commit()
+    return PromotedTheoremOut(
+        id=row.id,
+        label=row.label,
+        statement=row.statement,
+        formal_system_id=system_id,
+        proved_by_id=proof.id,
+    )
+
+
+@router.delete("/{proof_id}/promote", status_code=status.HTTP_204_NO_CONTENT)
+async def retire_proof_promotion(
+    proof_id: uuid.UUID,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Withdraw the library entry this proof established.
+
+    Idempotent: a proof that established none is a no-op rather than a 404, since
+    the caller's intent — "this must not be citable" — is already true.
+    """
+    proof = await _get_owned_or_404(session, proof_id, user.id)
+    await _retire_promotion(session, proof)
+    await session.commit()
+
+
 @router.delete("/{proof_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_proof(
     proof_id: uuid.UUID,
@@ -1108,6 +1441,10 @@ async def delete_proof(
             "Cannot delete a proof that a published proof references.",
         )
     await _invalidate_dependents(session, proof_id, system_id)
+    # The library entry goes with the proof by `ON DELETE CASCADE`, but the
+    # proofs *citing* it would keep a verdict that rested on it — so retire it
+    # explicitly, which is the path that invalidates them.
+    await _retire_promotion(session, await _get_owned_or_404(session, proof_id, user.id))
 
     await session.execute(sa_delete(Proof).where(Proof.id == proof_id))
     await session.commit()

@@ -103,6 +103,20 @@ class PromotedTheoremRow(Base):
     # the contract; this is the same one.
     statement_term_id: Mapped[uuid.UUID | None] = _term_fk()
     schema_digest: Mapped[str | None] = mapped_column(String(64))
+    # The proof whose standing *warrants* this entry, for one promoted from a
+    # proof stored here. NULL for an imported entry, whose warrant is the corpus
+    # it came from — and that difference is the whole point of the column, since
+    # retirement has to tell them apart: an edit that stops a local proof
+    # standing withdraws what it established, while the same edit to an imported
+    # proof withdraws nothing (the import is not re-derived from it).
+    #
+    # Distinct from `proofs.theorem_id`, which points the other way and means
+    # something else: *that* says which entry's hypotheses a proof may cite, and
+    # an import sets it too. A promoted entry has both; an imported one only the
+    # latter. CASCADE, because an entry cannot outlive its only warrant.
+    proved_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("proofs.id", ondelete="CASCADE"), index=True
+    )
 
     system: Mapped[FormalSystem] = relationship(back_populates="promoted_theorems")
     premises: Mapped[list[PromotedTheoremPremiseRow]] = relationship(
