@@ -65,11 +65,13 @@ from app.db import (
     load_definition_terms,
     load_proof_for_check,
     load_proof_lines,
+    load_proviso_terms,
     load_schema_terms,
     load_theorems,
     read_library,
     store_definition_terms,
     store_proof_lines,
+    store_proviso_terms,
     store_schema_terms,
 )
 from app.db.models import User
@@ -353,8 +355,18 @@ async def _verify_with_references(
             sync, system, spec, effective.definition_offset
         )
     )
+    # And for any proviso argument that is a term expression rather than a
+    # metavariable — the last grammar read a build makes (app/db/proviso_terms.py).
+    # Unlike the two above this one is also an output: the build records what it
+    # had to parse into the same object, which is what the store then reads.
+    proviso_terms = await session.run_sync(
+        lambda sync: load_proviso_terms(sync, system, spec)
+    )
     build = build_spec(
-        spec, schema_terms=schema_terms, definition_terms=definition_terms
+        spec,
+        schema_terms=schema_terms,
+        definition_terms=definition_terms,
+        proviso_terms=proviso_terms,
     )
     if "errors" in build:
         return _Verification(
@@ -366,6 +378,9 @@ async def _verify_with_references(
             lambda sync: store_schema_terms(
                 sync, system, compiled_system, schema_terms, offset
             )
+        )
+        await session.run_sync(
+            lambda sync: store_proviso_terms(sync, system, compiled_system, spec)
         )
         await session.run_sync(
             lambda sync: store_definition_terms(

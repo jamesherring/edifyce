@@ -60,6 +60,10 @@ from app.db.definition_terms import (
     load_definition_terms,
     store_definition_terms,
 )
+from app.db.proviso_terms import (
+    load_proviso_terms,
+    store_proviso_terms,
+)
 from app.db.schema_terms import (
     SchemaTermCache,
     load_schema_terms,
@@ -145,6 +149,9 @@ __all__ = [
     "SchemaTermCache",
     "load_schema_terms",
     "store_schema_terms",
+    # Proviso term-argument cache (app/db/proviso_terms.py).
+    "load_proviso_terms",
+    "store_proviso_terms",
     # Definition-form term cache (app/db/definition_terms.py).
     "DefinitionTermCache",
     "load_definition_terms",

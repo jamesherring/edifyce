@@ -223,8 +223,11 @@ def test_a_cached_build_produces_the_same_definitions(engine: Engine, name: str)
     _store(engine, spec)
     warm, served = _rebuild(engine)
 
-    # Two slots per definition, and every definition here registers one.
-    assert served == 2 * len(spec.definitions)
+    # Two form slots per definition, plus one per *declared* binder. The scoped
+    # fixture declares none — its binder is inferred, and an inferred binder's
+    # default is a leaf already in the parsed form, so there is nothing to store.
+    declared_binders = sum(len(d.fresh) for d in spec.definitions)
+    assert served == 2 * len(spec.definitions) + declared_binders
     assert _shape(warm) == _shape(cold)
 
 
@@ -277,12 +280,60 @@ def test_a_served_form_is_not_parsed_at_all(
     _store(engine, subset_spec())
 
     def exploding(*args: object, **kwargs: object) -> None:
-        raise AssertionError("a definition form was parsed despite a stored term")
+        raise AssertionError("a definition read the grammar despite a stored term")
 
-    monkeypatch.setattr(definitions_module, "abstract", exploding)
+    # `from_match` rather than `abstract`: every term `parse_definition` derives
+    # goes through it — both forms *and* each declared binder's default, which
+    # `abstract` alone would not have covered.
+    monkeypatch.setattr(definitions_module, "from_match", exploding)
     warm, served = _rebuild(engine)
-    assert served == 4
+    assert served == 5, "two forms per definition, plus df_subset's declared binder"
     assert [d.label for d in warm.definitions] == ["dfsub", "dfnsub"]
+
+
+def test_a_declared_binders_default_round_trips(engine: Engine) -> None:
+    # A binder is stored abstractly as a `Bound`, so it has no name; `default` is
+    # the leaf it falls back to when an unfold chooses none. Deriving it means
+    # parsing the declared name against the binder's own sort — the third grammar
+    # read a definition makes, and now stored beside the two forms.
+    _store(engine, subset_spec())
+    with Session(engine) as session:
+        row = session.scalars(select(FormalSystem)).one()
+        by_name = {d.name: d for d in row.definitions}
+        (binder,) = by_name["df_subset"].fresh
+        assert binder.var == "z"
+        assert binder.term_id is not None, "a declared binder's default is stored"
+        # The other definition declares no binder, so it has no `fresh` row at all.
+        assert list(by_name["df_notsubset"].fresh) == []
+
+    warm, _served = _rebuild(engine)
+    subset = next(d for d in warm.definitions if d.label == "dfsub")
+    (fresh,) = subset.fresh
+    cold = next(
+        d for d in build_spec(subset_spec())["system"].definitions if d.label == "dfsub"
+    )
+    assert digest_term(fresh.default) == digest_term(cold.fresh[0].default)
+
+
+def test_an_inferred_binder_stores_no_default_and_is_not_a_hole(engine: Engine) -> None:
+    # A binder the grammar places (`scopes_over`) is not declared, so there is no
+    # `fresh` row and nothing to store — and that NULL must not read as a hole the
+    # store keeps trying to fill, or every verify would rewrite the definition.
+    _store(engine, scoped_spec())
+    with Session(engine) as session:
+        (row,) = session.scalars(select(DefinitionRow)).all()
+        assert list(row.fresh) == []
+        assert row.term_digest is not None
+
+        spec_now = system_to_spec(session.scalars(select(FormalSystem)).one())
+        cache = load_definition_terms(session, row.system, spec_now)
+        built = build_spec(spec_now, definition_terms=cache)["system"]
+        assert store_definition_terms(session, row.system, built, cache) == 0
+
+    # The binder still arrives, inferred from the stored form's ground leaf.
+    warm, _served = _rebuild(engine)
+    (subset,) = warm.definitions
+    assert [(b.name, b.declared, b.scoped) for b in subset.fresh] == [("z", False, True)]
 
 
 def test_a_layered_definition_reads_its_own_stored_form(engine: Engine) -> None:
@@ -292,7 +343,7 @@ def test_a_layered_definition_reads_its_own_stored_form(engine: Engine) -> None:
     # the reason the cache is consulted where it is and not at the top of the walk.
     _store(engine, subset_spec())
     warm, served = _rebuild(engine)
-    assert served == 4
+    assert served == 5
 
     notsubset = next(d for d in warm.definitions if d.label == "dfnsub")
     (inner,) = notsubset.lower.children.values()
@@ -567,9 +618,9 @@ def test_a_layers_own_slots_are_the_ones_it_reads_and_writes(engine: Engine) -> 
         # not the parent's at slot 0.
         (stored,) = session.scalars(select(DefinitionRow)).all()
         assert stored.name == "df_notsubset"
-        higher, lower = built.definition_forms[offset]
-        assert stored.higher_term_id == store_term(session, row, higher).id
-        assert stored.lower_term_id == store_term(session, row, lower).id
+        parsed = built.definition_forms[offset]
+        assert stored.higher_term_id == store_term(session, row, parsed.higher).id
+        assert stored.lower_term_id == store_term(session, row, parsed.lower).id
 
     # And a warm build of the chain reads them back at that slot, unchanged.
     with Session(engine) as session:

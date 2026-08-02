@@ -332,6 +332,12 @@ class DefinitionFreshRow(Base):
     position: Mapped[int] = _position()
     var: Mapped[str] = mapped_column(String(64))
     symbol_id: Mapped[uuid.UUID] = _symbol_fk()
+    # The leaf this binder's *name* denotes — the name it keeps when an unfold
+    # chooses none. A binder is stored abstractly as a `Bound`, so it has no name
+    # of its own and the kernel needs this term to fall back to; deriving it means
+    # parsing `var` against its own sort. Governed by the parent definition's
+    # `term_digest`, like the two form terms (see app/db/definition_terms.py).
+    term_id: Mapped[uuid.UUID | None] = _schema_term_fk()
 
     definition: Mapped[DefinitionRow] = relationship(back_populates="fresh")
     symbol: Mapped[SymbolRow] = relationship()

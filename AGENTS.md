@@ -65,11 +65,24 @@ Text-to-structure that is *supposed* to stay: `matching/patterns.py`, `Match`, a
 explicit string rewriting. They are the parser and the semi-Thue semantics, not a
 second proof checker.
 
-Two smaller derivations still run at build time, both bounded and neither on the
-kernel's path: a declared `fresh` binder's `default` is its bare name parsed
-against its own sort, and a definition's provisos are parsed from their surface
-lines into the kernel side-condition algebra. Either could be persisted the same
-way if a profile ever asks for it.
+The two smaller derivations that used to sit beside them are stored too. A
+declared `fresh` binder's `default` — the leaf its name denotes, which an unfold
+falls back to when it chooses none — is a term on `definition_fresh`, under the
+same digest as the forms. And a proviso's **term arguments** (`equal(t, ∅)`, the
+only thing a proviso reads the grammar for; the predicate vocabulary is closed, a
+metavariable stays a bare name, and a sort is a symbol FK) are terms on
+`side_conditions` (`app/db/proviso_terms.py`).
+
+Both follow the rule the seam established: **store what the parse produced, not
+what the build did with it.** A binder default is stored before binding, a
+proviso argument before abstraction — so one proviso cache serves a rule and a
+definition alike, since which leaves become `Var`s is the owner's business and
+the parse is the grammar's. A cache of a derivation's input goes inert when
+stale; a cache of its output is a second implementation.
+
+What is left is grammar, not structure — layering, non-circularity, and the
+notation template — plus `matching/patterns.py` and explicit string rewriting,
+which are meant to stay.
 
 ### Constants vs variables of the object language
 

@@ -1,6 +1,6 @@
 # Design: verification from rows, not from text
 
-**Status:** P1–P6 and P2a shipped · **Prerequisite work:** merged (the term
+**Status:** P1–P7 and P2a shipped · **Prerequisite work:** merged (the term
 graph, `proof_lines`, the kernel-takes-terms change #121, and the Metamath
 corpus import #124)
 
@@ -51,7 +51,7 @@ checking does.
 ## 2. What is stored, and what is thrown away
 
 This table is what the phases below work through; **used** is the state after
-P1–P6.
+P1–P7.
 
 | Verification needs | Stored | Used |
 |---|---|---|
@@ -63,6 +63,8 @@ P1–P6.
 | Scope tree (for discharge) | yes — `proof_lines.opens_scope` / `scope_id` | no — *re-derived*, deliberately |
 | Rule schema terms | yes — `rules.deduction_term_id` etc. → `terms` | **yes** (P3), when `rules.schema_digest` still matches |
 | Definition higher/lower forms | yes — `definitions.higher_term_id` / `lower_term_id` → `terms` | **yes** (P6), when `definitions.term_digest` still matches |
+| A declared binder's `default` | yes — `definition_fresh.term_id` → `terms` | **yes** (P7), under the definition's own digest |
+| A proviso's term arguments | yes — `side_conditions.left_term_id` / `right_term_id` → `terms` | **yes** (P7), when `side_conditions.term_digest` still matches |
 | A line's flat string (string-rewriting) | no — *derived* | **yes** (P5), rendered from the term rather than stored |
 | Promoted theorems | yes — `promoted_theorems` → `terms` | **yes** (P4), resolved by label per citation |
 
@@ -830,9 +832,8 @@ inert when stale; a cache of its output is a second implementation.
 still matches both forms against the grammar to decide layering and
 non-circularity, and still registers the defined form as notation — see §2 on why
 those are grammar questions rather than structure. Two smaller derivations also
-remain, both bounded: a declared binder's `default` (its bare name, parsed against
-its own sort) and a definition's provisos (surface lines into the side-condition
-algebra).
+remained at the time: a declared binder's `default` and a proviso's term
+arguments. Both are P7.
 
 **A shadowed grammar name, found in review, and older than this phase.**
 `ctx.variables` is one namespace: lines, line parts, axioms and the system are
@@ -865,6 +866,59 @@ goes through — to raise, and requiring a warm build to succeed anyway
 produces a definition set structurally identical to a cold build's. Agreement
 alone would not have shown this: a build that consulted the cache and discarded
 its answer would pass every other test in the file.
+
+### P7. The last two derivations — *done*
+
+P6 named two grammar reads it left behind, both bounded. Neither is large; taking
+them is what lets the claim be stated without a qualifier.
+
+**A declared binder's `default`.** A binder is stored abstractly as a `Bound` and
+so has no name; `default` is the leaf it falls back to when an unfold chooses
+none, derived by parsing the declared name against the *binder's own* sort.
+`definition_fresh.term_id` now holds it, under the parent definition's
+`term_digest` — the same guard, because `definition_digest` already covers the
+grammar and every definition's `fresh` clause.
+
+Its NULL is deliberately **not** treated as a hole (contrast the two form terms,
+where it is). A definition whose binders the grammar places declares no `fresh`
+at all, and one that does declare them still leaves a NULL for any binder the
+build *inferred* — so a NULL there is the ordinary case, and requiring one would
+rewrite every scoped definition on every verify.
+
+**A proviso's term arguments.** A predicate argument that is not a declared
+metavariable is a term expression parsed against the grammar (`equal(t, ∅)`), and
+it is the only thing a proviso reads the grammar for: the predicate vocabulary is
+closed, a metavariable stays a bare name, and a sort is a symbol FK.
+`side_conditions.left_term_id` / `right_term_id` hold it
+(`app/db/proviso_terms.py`).
+
+Two things fell out of this one that were not obvious from P6.
+
+*The digest could not be the owner's.* A rule's proviso may name defined notation
+— `equal(t, ∅)` where `∅` is a definition — so `rules.schema_digest`, which
+covers the grammar and the rule's own templates but not the definitions, would
+have believed a stale term after a definition edit. The guard is the definition
+block's digest, per row, and therefore uniform across all three owners.
+
+*Storing before abstraction collapsed the design.* The obvious store is the term
+`_arg` returns, which has had the owner's metavariables lifted to `Var`s. That
+makes the term the *owner's*, needing a per-owner key and a per-owner guard.
+Splitting the parse from the abstraction — the parse depends only on the grammar,
+the abstraction only on the owner — leaves one cache keyed by argument text
+alone, shared by every rule and definition in the system, with abstraction
+reapplied per owner for free. Same rule P6 arrived at from the other direction:
+store what the parse produced, not what the build did with it.
+
+**What the digest is actually for, here.** Keying by text makes most staleness
+self-guarding: change the argument and the lookup misses by key. The digest earns
+its place in one case — the text staying put while what it parses *to* moves. The
+test is exactly that (`∅` stops being defined notation and becomes an ordinary
+production), and it fails without the digest, where the two edit-the-text tests
+it replaced passed either way.
+
+**Measure:** poisoning `_parse_term`, the only place a proviso reads the grammar,
+and requiring a warm build to succeed anyway — plus the verdict itself, since a
+wrongly-served term shows up as a proof that should not check.
 
 ---
 

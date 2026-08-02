@@ -45,6 +45,7 @@ level above (across lines / ``;``).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from copy import copy
 from typing import TYPE_CHECKING
 
@@ -70,7 +71,48 @@ if TYPE_CHECKING:
     from ..kernel.constructors import Constructor
 
 
-def parse_side_condition(text: str, context: Context) -> SideCondition:
+# Supplies the stored parse of one proviso term argument, given the context its
+# constructors resolve in. `None` means "parse it", on the contract every cache
+# here keeps: an absence is never read as an answer. A callable rather than a
+# mapping because the context only exists once the build is under way — the
+# persistence layer holds rows, and what they resolve *to* is not settled until
+# the grammar they name has been assembled.
+ProvisoTermSource = Callable[[str, "Context"], "Term | None"]
+
+
+class ProvisoTerms:
+    """The parsed form of every proviso *term argument* in one system, by text.
+
+    A predicate argument that is not a declared metavariable is a term expression
+    parsed against the grammar (``equal(t, ∅)``), and that is the only thing a
+    proviso reads the grammar for — the predicate vocabulary is closed, a
+    metavariable stays a bare name, and a sort is a dictionary lookup. This is
+    what lets that one parse be stored and handed back.
+
+    **Keyed by text alone, and holding the term *before* ``abstract``.** Which
+    leaves become ``Var``s depends on the owner's metavariables, so an abstracted
+    term would be a rule's or a definition's rather than the system's, and would
+    need a per-owner key and a per-owner guard. The raw parse depends only on the
+    grammar and the notations in scope — one thing, guarded by one digest, shared
+    by every owner. Abstraction is applied per owner on the way out, and costs
+    nothing: it is the parse this exists to avoid.
+    """
+
+    def __init__(self, source: ProvisoTermSource | None = None) -> None:
+        self._source = source
+        self.derived: dict[str, Term] = {}
+
+    def get(self, text: str, context: Context) -> Term | None:
+        return None if self._source is None else self._source(text, context)
+
+    def record(self, text: str, term: Term) -> None:
+        """Note what a parse produced, so a caller can store it. Idempotent."""
+        self.derived.setdefault(text, term)
+
+
+def parse_side_condition(
+    text: str, context: Context, terms: ProvisoTerms | None = None
+) -> SideCondition:
     """Parse one side-condition line into a :class:`SideCondition`.
 
     A line is a disjunction: predicates joined by top-level ``or`` (each
@@ -79,8 +121,12 @@ def parse_side_condition(text: str, context: Context) -> SideCondition:
     :class:`ValueError` on anything outside the closed grammar - an unknown
     predicate, the wrong argument count, or a sort name that is not a pattern - so
     a malformed proviso is rejected at compile time rather than silently ignored.
+
+    ``terms`` is both halves of the term-argument cache: consulted for an argument
+    it already holds, and told about any this parse derives. See
+    :class:`ProvisoTerms`.
     """
-    disjuncts = [_parse_disjunct(part, context) for part in _split_or(text)]
+    disjuncts = [_parse_disjunct(part, context, terms) for part in _split_or(text)]
     return disjuncts[0] if len(disjuncts) == 1 else Or(tuple(disjuncts))
 
 
@@ -140,7 +186,9 @@ def _split_or(text: str) -> list[str]:
     return parts
 
 
-def _parse_disjunct(text: str, context: Context) -> SideCondition:
+def _parse_disjunct(
+    text: str, context: Context, terms: ProvisoTerms | None = None
+) -> SideCondition:
     """Parse one ``or``-separated predicate, with an optional leading ``not``."""
     text = text.strip()
 
@@ -158,25 +206,34 @@ def _parse_disjunct(text: str, context: Context) -> SideCondition:
     if any(not arg for arg in args):
         raise ValueError(f"Malformed side-condition arguments: '{text}'.")
 
-    condition = _build(name, args, text, context)
+    condition = _build(name, args, text, context, terms)
     return Not(condition) if negated else condition
 
 
-def _build(name: str, args: list[str], text: str, context: Context) -> SideCondition:
+def _build(
+    name: str,
+    args: list[str],
+    text: str,
+    context: Context,
+    terms: ProvisoTerms | None = None,
+) -> SideCondition:
+    def arg(index: int) -> str | Term:
+        return _arg(args[index], context, terms)
+
     if name == "occurs" and len(args) == 2:
-        return Occurs(_arg(args[0], context), _arg(args[1], context))
+        return Occurs(arg(0), arg(1))
     if name == "equal" and len(args) == 2:
-        return Equal(_arg(args[0], context), _arg(args[1], context))
+        return Equal(arg(0), arg(1))
     if name == "disjoint" and len(args) in (2, 3):
         sort = _sort(args[2], context) if len(args) == 3 else None
-        return DisjointLeaves(_arg(args[0], context), _arg(args[1], context), sort)
+        return DisjointLeaves(arg(0), arg(1), sort)
     if name == "atom" and len(args) in (1, 2):
         sort = _sort(args[1], context) if len(args) == 2 else None
-        return IsAtom(_arg(args[0], context), sort)
+        return IsAtom(arg(0), sort)
     if name == "member" and len(args) == 2:
         # The sort is required: `member(x, R)` asks "is x of sort R", so R must be
         # named (unlike `atom`, where the sort is an optional extra guard).
-        return IsMember(_arg(args[0], context), _sort(args[1], context))
+        return IsMember(arg(0), _sort(args[1], context))
     raise ValueError(f"Unknown or misapplied side-condition: '{text}'.")
 
 
@@ -189,7 +246,9 @@ def _sort(sort_name: str, context: Context) -> Constructor:
     return constructor_for(pattern)
 
 
-def _arg(text: str, context: Context) -> str | Term:
+def _arg(
+    text: str, context: Context, terms: ProvisoTerms | None = None
+) -> str | Term:
     """Resolve a predicate argument to a metavariable name or a literal term.
 
     A declared metavariable of the rule/definition (``context.string_variables``)
@@ -197,24 +256,32 @@ def _arg(text: str, context: Context) -> str | Term:
     existing proviso takes this path unchanged. Anything else is parsed as a term
     expression against the grammar (and may use defined notation), keeping the
     owner's metavariables schematic as ``Var`` nodes so they substitute later.
+
+    ``terms`` caches the *parse* and not the abstraction, which is why the
+    ``abstract`` below stays outside it: see :class:`ProvisoTerms`.
     """
     if text in context.string_variables:
         return text
-    term = _parse_term(text, context)
-    if term is None:
+    raw = None if terms is None else terms.get(text, context)
+    if raw is None:
+        raw = _parse_term(text, context)
+        if raw is not None and terms is not None:
+            terms.record(text, raw)
+    if raw is None:
         raise ValueError(
             f"Side-condition argument '{text}' is neither a declared metavariable "
             "nor a parseable term."
         )
-    return term
+    return abstract(raw, project_sorts(context.string_variables))
 
 
 def _parse_term(text: str, context: Context) -> Term | None:
     """Parse ``text`` as a term against the grammar's sorts (unions).
 
-    Tries each sort in declaration order and takes the first that matches, then
-    lifts any leaf that is a declared metavariable to a ``Var`` (via ``abstract``)
-    so it stays schematic. Returns ``None`` when nothing parses.
+    Tries each sort in declaration order and takes the first that matches.
+    Returns ``None`` when nothing parses. The result is the *raw* parse — lifting
+    the owner's metavariables to ``Var``s is :func:`_arg`'s job, because that step
+    depends on the owner while this one depends only on the grammar.
 
     Defined notation is allowed: the parse may use any notation already
     registered. Mid-build ``context.definitions`` can also hold the *spec* records
@@ -232,5 +299,5 @@ def _parse_term(text: str, context: Context) -> Term | None:
             continue
         matched = candidate.match(text, parse_context)
         if matched is not None:
-            return abstract(from_match(matched), project_sorts(context.string_variables))
+            return from_match(matched)
     return None
