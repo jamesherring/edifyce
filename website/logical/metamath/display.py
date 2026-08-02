@@ -48,6 +48,7 @@ if TYPE_CHECKING:
 
     from ..build_context import FormalSystemContext
     from ..formal_system import FormalSystem
+    from ..matching.definitions import DefinedNotation
     from ..kernel.constructors import Constructor, Piece
     from .typesetting import Typesetting
 
@@ -66,21 +67,42 @@ def _map_literal(text: str, tokens: Mapping[str, str]) -> str:
     return f"{lead}{mapped}{trail}"
 
 
+def _members(union: UnionPattern, seen: set[int]) -> list[Pattern]:
+    # Everything that can build a term of this sort, **through inclusions**. A
+    # union's member may itself be a union - that is how a sort is included into
+    # another, and how the Metamath importer puts each `$v` variable in a
+    # `<typecode>_var` sub-sort of its typecode. Stopping at the first level would
+    # compare `class`'s own productions with each other and never with the class
+    # *variables*, which compete for exactly the same slot.
+    if id(union) in seen:
+        return []
+    seen.add(id(union))
+    found: list[Pattern] = []
+    for member in union.patterns:
+        if isinstance(member, UnionPattern):
+            found.extend(_members(member, seen))
+        elif isinstance(member, (StringPattern, AtomPattern)):
+            found.append(member)
+    return found
+
+
 def _constructors_by_sort(
     context: FormalSystemContext,
 ) -> list[tuple[str, Constructor]]:
-    # Every production with the sort it belongs to. Two productions only compete
-    # for a parse within one sort, so a shared spelling across sorts is not an
-    # ambiguity and must not be reported as one.
+    # Every production with a sort it can build, inclusions followed. Two
+    # productions only compete for a parse within one sort, so a shared spelling
+    # across sorts is not an ambiguity and must not be reported as one - but a
+    # production reachable through two sorts competes in both, and appears twice.
     found: list[tuple[str, Constructor]] = []
-    seen: set[int] = set()
     for sort, pattern in context.variables.items():
         if not isinstance(pattern, UnionPattern):
             continue
-        for member in pattern.patterns:
-            if isinstance(member, (StringPattern, AtomPattern)) and id(member) not in seen:
-                seen.add(id(member))
-                found.append((sort, constructor_for(member)))
+        already: set[int] = set()
+        for member in _members(pattern, set()):
+            if id(member) in already:
+                continue
+            already.add(id(member))
+            found.append((sort, constructor_for(member)))
     return found
 
 
@@ -196,12 +218,19 @@ class NotationReport:
 
 
 def _spelling(constructor: Constructor, tokens: Mapping[str, str]) -> str | None:
-    # What a production would look like, with slots punched out so that two
-    # productions differing only in slot *names* count as spelled alike - a
-    # parser cannot tell those apart either.
+    # What a production would look like, with each slot shown as the *sort* it
+    # takes. Slot names are private to a production, so two templates differing
+    # only in what they call a slot are spelled alike and a parser cannot tell
+    # them apart - but two differing in a slot's **sort** can be told apart, and
+    # reporting those as colliding would bury the real ones. Showing the sort does
+    # both jobs, and leaves a spelling that can be printed.
     if constructor.pieces:
         return "".join(
-            _map_literal(text, tokens) if kind == "lit" else "\x00"
+            _map_literal(text, tokens)
+            if kind == "lit"
+            else f"<{constructor.slot_sorts[text].name}>"
+            if text in constructor.slot_sorts
+            else "<?>"
             for kind, text in constructor.pieces
         )
     if constructor.atom_value is not None:
@@ -210,7 +239,9 @@ def _spelling(constructor: Constructor, tokens: Mapping[str, str]) -> str | None
 
 
 def notation_report(
-    context: FormalSystemContext, tokens: Mapping[str, str]
+    context: FormalSystemContext,
+    tokens: Mapping[str, str],
+    notations: Iterable[DefinedNotation] = (),
 ) -> NotationReport:
     """Check ``tokens`` against ``context``'s grammar before adopting it.
 
@@ -218,18 +249,28 @@ def notation_report(
     at the *token* level and not at all at the production level, because arity and
     position tell productions apart where a token map cannot. On `set.mm` the
     `$t` Unicode map shares 50 renderings across 107 tokens, and that comes to
-    **19** colliding spellings over 38 productions - `∪` is three different
+    **32** colliding spellings over 64 productions - `∪` is three different
     tokens, but `( A ∪ B )`, `∪ A` and `∪ x ∈ A B` are three different shapes.
-    Its LaTeX map, measured the same way, collides on 8.
+    Its LaTeX map, measured the same way, collides on 19.
 
-    Scoped to the grammar's declared productions, whose sorts are known here. A
-    definition's defined form is notation too, but the kernel definition carries
-    no sort to group it by - and in a Metamath import it is a declared production
-    anyway, since a `$a` spells the form before a `df-` gives it meaning.
+    ``notations`` are the defined forms, which are notation too and can collide
+    with a declared production just as readily. Pass ``system.context.definitions``
+    - a `DefinedNotation` carries both the sort it builds and the pattern its
+    template is, so unlike a kernel definition it can be placed. In a Metamath
+    import they add nothing, a `$a` having spelled the form before a `df-` gave it
+    meaning; in a hand-authored system a definition may be the only thing that
+    spells it.
     """
     by_spelling: dict[tuple[str, str], list[str]] = {}
     unmapped: set[str] = set()
-    for sort, constructor in _constructors_by_sort(context):
+    placed = [
+        *_constructors_by_sort(context),
+        *(
+            (notation.sort.name, constructor_for(notation.template))
+            for notation in notations
+        ),
+    ]
+    for sort, constructor in placed:
         for kind, text in constructor.pieces:
             if kind == "lit":
                 unmapped.update(w for w in text.split() if w not in tokens)

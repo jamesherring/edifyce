@@ -543,28 +543,37 @@ nothing.
 Unicode map shares 50 renderings across 107 tokens, and §4.1 classes a source
 collision as a correctness bug. Measured at the level that decides a parse -
 whether two *productions of one sort* end up spelled alike, slot names punched out
-- it is **19 spellings over 38 productions**, because arity and position tell apart
-what a token map cannot: `∪` is `u.`, `U.` and `U_`, but `( A ∪ B )`, `∪ A` and
-`∪ x ∈ A B` are three different shapes.
+- it is **32 spellings over 64 productions**, still a fraction of the tokens,
+because arity and position tell apart what a token map cannot: `∪` is `u.`, `U.`
+and `U_`, but `( A ∪ B )`, `∪ A` and `∪ x ∈ A B` are three different shapes.
 
 | notation | colliding spellings | productions |
 |---|---|---|
 | source (ASCII) | **0** | 0 |
-| Unicode (`althtmldef`) | 19 | 38 |
-| LaTeX (`latexdef`) | 8 | 16 |
+| Unicode (`althtmldef`) | 32 | 64 |
+| LaTeX (`latexdef`) | 19 | 38 |
+
+(An earlier revision of this section said 19 and 8. Both were wrong, in opposite
+directions, and review caught the measurement rather than the conclusion: the walk
+stopped at a sort's own productions and never reached the sub-sorts included into
+it — so `class`'s operators were never compared with the class *variables* — while
+slots were punched out without their sorts, so two templates differing only in what
+sort a slot takes counted as colliding. Fixing both moved the figure up.)
 
 `metamath/display.notation_report` is the check, and §4.4's asked-for report: it
 gives the unmapped tokens and the colliding spellings for any candidate notation,
 so re-syncing is driven by a list. Both `$t` maps cover every token the grammar
 uses - `unmapped` is empty for each.
 
-**What remains is genuine ambiguity in `set.mm`'s own rendering**, not an artefact:
+**What remains is genuine ambiguity in `set.mm`'s own rendering**, not an artefact.
 `cpi` (the constant π) and `cppi` (the prime-counting function) are both `π` on its
 HTML pages, as are `cpnf`/`cpinfty` (`+∞`), `cz`/`cza` (`ℤ`) and `cnr`/`cright`
-(`R`). A reader disambiguates by context; a parser cannot. Adopting Unicode as the
-imported source therefore needs 19 editorial decisions about what to call the
-second of each pair - which is a judgement about `set.mm`, not a piece of
-engineering.
+(`R`). Sharper still, its *class variables* are spelled like its operators — the
+variable `.+` renders `+`, exactly as `caddc` does, and likewise `./`, `.-` — so
+`( A + B )` would not say which. A reader disambiguates by context; a parser
+cannot. Adopting Unicode as the imported source therefore needs 32 editorial
+decisions about what to call the second of each pair, which is a judgement about
+`set.mm` rather than a piece of engineering.
 
 **And a Unicode source needs no engine work at all**, which is the measurement that
 changes the recommendation. A grammar *declared* in Unicode already parses and
