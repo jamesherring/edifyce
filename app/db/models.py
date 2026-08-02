@@ -52,6 +52,7 @@ from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, uuid_pk_colum
 if TYPE_CHECKING:
     from app.db.promoted_theorems import PromotedTheoremRow
     from app.db.proof_lines import ProofLineRow
+    from app.db.systems import NotationPieceRow
     from app.db.terms import TermRow
 
 # JSONB on Postgres (the real deployment), generic JSON elsewhere so a SQLite
@@ -160,6 +161,12 @@ class FormalSystem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     folders: Mapped[list["ProofFolder"]] = relationship(
         back_populates="formal_system", cascade="all, delete-orphan"
+    )
+    # How this system's terms may be *read*, as against how they are written. Each
+    # named notation is a set of substitute templates; the grammar is unaffected.
+    notation_pieces: Mapped[list["NotationPieceRow"]] = relationship(
+        back_populates="system", cascade="all, delete-orphan",
+        order_by="NotationPieceRow.position",
     )
     proofs: Mapped[list["Proof"]] = relationship(
         back_populates="formal_system", cascade="all, delete-orphan"

@@ -11,7 +11,14 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
 	import * as Alert from '$lib/components/ui/alert';
-	import { api, ApiError, type ProofDetail, type VerifyResponse } from '$lib/api';
+	import {
+		api,
+		ApiError,
+		type ProofDetail,
+		type ProofStructure,
+		type VerifyResponse
+	} from '$lib/api';
+	import { readProof } from '$lib/reading';
 	import { auth } from '$lib/auth.svelte';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import Play from '@lucide/svelte/icons/play';
@@ -28,19 +35,37 @@
 	let result = $state<VerifyResponse | null>(null);
 	let requestError = $state<string | null>(null);
 
+	// How the proof is being read. `null` is the source it was written in, which
+	// is always available; the rest are the parent system's stored notations, and
+	// each is a fetch because the templates stay on the server.
+	let notations = $state<string[]>([]);
+	let notation = $state<string | null>(null);
+	let structure = $state<ProofStructure | null>(null);
+	let notationError = $state<string | null>(null);
+	let reading = $state(false);
+
 	// Bumped on every load so late responses from a previous id are dropped.
 	let loadSeq = 0;
 	let verifySeq = 0;
+	let notationSeq = 0;
 
 	async function load(id: string) {
 		const seq = ++loadSeq;
-		verifySeq++; // invalidate any in-flight verify from a previous proof
+		// Invalidate anything in flight for the previous proof: a late response
+		// would otherwise render its lines, or its error, inside this page.
+		verifySeq++;
+		notationSeq++;
 		verifying = false;
+		reading = false;
 		loading = true;
 		error = null;
 		result = null;
 		requestError = null;
 		systemName = null;
+		notations = [];
+		notation = null;
+		structure = null;
+		notationError = null;
 		let detail: ProofDetail;
 		try {
 			detail = await api.proofs.get(id);
@@ -69,11 +94,42 @@
 	async function loadSystemName(systemId: string, seq: number) {
 		try {
 			const system = await api.systems.get(systemId);
-			if (seq === loadSeq) systemName = system.name;
+			if (seq !== loadSeq) return;
+			systemName = system.name;
+			notations = system.notations;
 		} catch {
-			// Leave the link labelled generically if the system can't be read.
+			// Leave the link labelled generically if the system can't be read, and
+			// offer no notations — the source spelling is always readable.
 		}
 	}
+
+	async function readIn(name: string | null) {
+		const seq = ++notationSeq;
+		notation = name;
+		notationError = null;
+		// Clear the previous reading before fetching the next: leaving it up would
+		// show one notation's text under another's name.
+		structure = null;
+		if (name === null || !proof) {
+			reading = false;
+			return;
+		}
+		reading = true;
+		try {
+			const read = await api.proofs.structure(proof.id, name);
+			if (seq === notationSeq) structure = read;
+		} catch (err) {
+			if (seq !== notationSeq) return;
+			notationError = err instanceof ApiError ? err.message : String(err);
+		} finally {
+			if (seq === notationSeq) reading = false;
+		}
+	}
+
+	// Null until a check has stored terms to project: a proof checked before this
+	// store existed, or never checked at all, has nothing to read and stays on its
+	// source.
+	const readable = $derived(readProof(structure));
 
 	async function verify() {
 		if (!proof) return;
@@ -85,6 +141,9 @@
 			const res = await api.proofs.verify(proof.id);
 			if (seq !== verifySeq) return;
 			result = res;
+			// A check rewrites the structure a notation is read from, so a reading
+			// left on screen would be the previous check's.
+			if (notation !== null) void readIn(notation);
 		} catch (err) {
 			if (seq !== verifySeq) return;
 			requestError = err instanceof ApiError ? err.message : String(err);
@@ -148,10 +207,44 @@
 							{/if}
 						</Button>
 					</div>
-					<Card.Description>The proof source, checked line by line.</Card.Description>
+					<Card.Description>
+						{notation === null
+							? 'The proof source, checked line by line.'
+							: `The same checked proof, read in ${notation}.`}
+					</Card.Description>
+					{#if notations.length > 0}
+						<div class="flex flex-wrap items-center gap-1 pt-1" role="group" aria-label="Notation">
+							<Button
+								variant={notation === null ? 'secondary' : 'ghost'}
+								size="sm"
+								onclick={() => readIn(null)}>Source</Button
+							>
+							{#each notations as name (name)}
+								<Button
+									variant={notation === name ? 'secondary' : 'ghost'}
+									size="sm"
+									onclick={() => readIn(name)}>{name}</Button
+								>
+							{/each}
+						</div>
+					{/if}
 				</Card.Header>
 				<Card.Content>
-					{#if proof.source.trim()}
+					{#if notationError}
+						<Alert.Root variant="destructive">
+							<TriangleAlert class="size-4" />
+							<Alert.Description>{notationError}</Alert.Description>
+						</Alert.Root>
+					{:else if reading}
+						<LoadingSpinner message={`Reading in ${notation}…`} />
+					{:else if notation !== null && readable === null}
+						<p class="py-6 text-center text-sm text-muted-foreground">
+							Verify the proof to read it in {notation}: a notation re-spells the terms a
+							check stored, and this proof has none yet.
+						</p>
+					{:else if readable !== null}
+						<pre class="overflow-x-auto rounded-md border bg-muted/30 p-4 font-mono text-xs leading-relaxed">{readable}</pre>
+					{:else if proof.source.trim()}
 						<pre class="overflow-x-auto rounded-md border bg-muted/30 p-4 font-mono text-xs leading-relaxed">{proof.source}</pre>
 					{:else}
 						<p class="py-6 text-center text-sm text-muted-foreground">

@@ -80,8 +80,11 @@ def _always() -> list[Table]:
     `load_effective` queries `system_relations` on every build — an edge is one
     of the places a citation may resolve (R4) — so the table is part of the
     minimum a system needs, exactly as `terms` and `promoted_theorems` already
-    are. Added here rather than to each module's own list because "what a system
-    minimally needs" is one fact, and ten copies of it drift.
+    are. `notation_pieces` joins them for the same reason on the read side: a
+    system's detail reports which notations it stores, so every read of one
+    queries the table whether the test has heard of notations or not. Added here
+    rather than to each module's own list because "what a system minimally needs"
+    is one fact, and ten copies of it drift.
     """
     from app.db.system_relations import (
         SystemRelationObligationRow,
@@ -89,12 +92,14 @@ def _always() -> list[Table]:
         SystemRelationSortRow,
         SystemRelationSymbolRow,
     )
+    from app.db.systems import NotationPieceRow
 
     return [
         SystemRelationRow.__table__,
         SystemRelationSortRow.__table__,
         SystemRelationSymbolRow.__table__,
         SystemRelationObligationRow.__table__,
+        NotationPieceRow.__table__,
     ]
 
 
