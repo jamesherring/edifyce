@@ -52,8 +52,15 @@ from app.db import (
     get_session,
 )
 from app.db.models import User
+from app.db.systems import RuleRow
 from app.routers._invalidation import invalidate_library_reach
-from app.routers.systems import load_chain, load_system, owned_system_id_or_404
+from app.routers.systems import (
+    draft_ancestor_errors,
+    load_chain,
+    load_system,
+    owned_system_id_or_404,
+    truncated_chain_errors,
+)
 from app.schemas import (
     SystemRelation,
     SystemRelationCreate,
@@ -62,6 +69,7 @@ from app.schemas import (
     SystemRelationUpdate,
 )
 from website.logical.declarative import DeclarativeError, build_spec
+from website.logical.formal_system import FormalSystem as EngineSystem
 from website.logical.translation import Translation, translation_errors
 
 router = APIRouter(prefix="/formal-systems/{system_id}/relations", tags=["formal-systems"])
@@ -202,22 +210,27 @@ async def _assign(
     parts router uses for a rule's bindings and antecedents: an edge's map is one
     statement rather than a set of independently editable rows.
     """
+    _require_distinct_names(payload)
+
     if "sorts" in changes and payload.sorts is not None:
-        await _replace(session, edge, "sorts", [
+        await _clear(session, edge.sorts)
+        edge.sorts = [
             SystemRelationSortRow(
                 position=index, source_sort=entry.source, target_sort=entry.target
             )
             for index, entry in enumerate(payload.sorts)
-        ])
+        ]
     if "symbols" in changes and payload.symbols is not None:
-        await _replace(session, edge, "symbols", [
+        await _clear(session, edge.symbols)
+        edge.symbols = [
             SystemRelationSymbolRow(
                 position=index, source_symbol=entry.source, target_symbol=entry.target
             )
             for index, entry in enumerate(payload.symbols)
-        ])
+        ]
     if "obligations" in changes and payload.obligations is not None:
-        await _replace(session, edge, "obligations", [
+        await _clear(session, edge.obligations)
+        edge.obligations = [
             SystemRelationObligationRow(
                 position=index,
                 source_label=entry.source_label,
@@ -226,28 +239,57 @@ async def _assign(
                 status=entry.status,
             )
             for index, entry in enumerate(payload.obligations)
-        ])
+        ]
         await _require_discharges_the_target_can_honour(session, system_id, edge)
 
-    await _require_a_checkable_map(session, edge)
+    # Only when the map is what is being written. A grammar either side can move
+    # after an edge is checked, and an edge that has stopped checking out is
+    # exactly the one an author needs to edit — to turn it off, if nothing else.
+    # Refusing every later PATCH would leave it stuck resolving nothing and
+    # unable to say so. The resolution-time check is what keeps that safe (§9.21).
+    if "sorts" in changes or "symbols" in changes:
+        await _require_a_checkable_map(session, edge)
 
 
-async def _replace(
-    session: AsyncSession, edge: SystemRelationRow, attribute: str, rows: list
+def _require_distinct_names(
+    payload: SystemRelationCreate | SystemRelationUpdate,
 ) -> None:
-    """Swap one of the edge's collections out, flushing the removals first.
+    """Refuse a collection that says two things about one name.
 
     Each of these tables carries a unique index on (edge, source name) — a map
-    may say one thing about a name — and a unit of work issues its INSERTs
-    before its DELETEs. So replacing a map with one that reuses a name trips the
-    index against rows that are on their way out. The intermediate flush is what
-    orders the two, and it is skipped when there is nothing to remove (which is
-    every create).
+    may say one thing about a name, and an obligation is one primitive — so a
+    repeat is refused here rather than left to the index. Two reasons it cannot
+    be left there: the constraint surfaces during autoflush, which escapes a
+    PATCH as a 500 with a failed transaction; and on a create it is caught by
+    the same ``except IntegrityError`` as the (source, target) index, which then
+    reports "these two systems are already related" about an edge that does not
+    exist (both found in review).
     """
-    if getattr(edge, attribute):
-        setattr(edge, attribute, [])
+    for field, names in (
+        ("sorts", [entry.source for entry in payload.sorts or []]),
+        ("symbols", [entry.source for entry in payload.symbols or []]),
+        ("obligations", [entry.source_label for entry in payload.obligations or []]),
+    ):
+        repeated = sorted({name for name in names if names.count(name) > 1})
+        if repeated:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"{field} names {', '.join(repr(name) for name in repeated)} more "
+                "than once. An edge says one thing about each name.",
+            )
+
+
+async def _clear(session: AsyncSession, collection: list) -> None:
+    """Empty one of the edge's collections, flushing the removals immediately.
+
+    A unit of work issues its INSERTs before its DELETEs, so replacing a map with
+    one that reuses a name would trip the unique index against rows already on
+    their way out. This flush is what orders the two, and it is skipped when
+    there is nothing to remove — which is every create.
+    """
+    if collection:
+        collection.clear()
         await session.flush()
-    setattr(edge, attribute, rows)
 
 
 async def _require_discharges_the_target_can_honour(
@@ -255,15 +297,21 @@ async def _require_discharges_the_target_can_honour(
 ) -> None:
     """What an obligation may point at, checked before it is believed.
 
-    Two things. An obligation names **at most one** discharge — a primitive of
-    the target or a theorem it has proved — because the two are different claims
-    and a row asserting both says neither clearly. And a theorem it names has to
-    be one the **target** can actually reach, or the obligation is discharged by
-    something no proof here could cite; `related_layers` reads only whether the
-    columns are filled, so an unreachable warrant would pass the gate.
+    An obligation names **at most one** discharge — a primitive of the target or
+    a theorem it has proved — because the two are different claims and a row
+    asserting both says neither clearly.
 
-    The theorem is required to belong to the target's own chain rather than
-    merely to exist. An entry the target reaches *across another edge* would be
+    And whichever it names has to be something the **target can actually
+    reach**. `related_layers` reads only whether the columns are *filled*, so an
+    unreachable warrant passes the gate and the theorems transfer on it: a
+    primitive naming a rule nothing declares discharges §2's obligation with a
+    label, which is the one thing an obligation must not be (found in review —
+    the theorem half was checked here from the start and the primitive half was
+    not, which is the worse of the two to miss, since a label is easier to
+    mistype than a UUID).
+
+    Both are required to belong to the target's **own chain** rather than merely
+    to exist. Something the target reaches *across another edge* would be
     circular in a way nothing here unpicks — edge A discharged by a theorem that
     is only citable because of edge B, and B by one citable because of A.
     """
@@ -281,31 +329,61 @@ async def _require_discharges_the_target_can_honour(
             + ", ".join(repr(label) for label in both),
         )
 
-    wanted = [
+    theorems = [
         obligation.discharged_by_theorem_id
         for obligation in edge.obligations
         if obligation.discharged_by_theorem_id is not None
     ]
-    if not wanted:
+    primitives = [
+        obligation.discharged_by_primitive
+        for obligation in edge.obligations
+        if obligation.discharged_by_primitive is not None
+    ]
+    if not theorems and not primitives:
         return
+
     system = await load_system(session, system_id)
     chain = [layer.id for layer in await load_chain(session, system)]
-    reachable = set(
-        await session.scalars(
-            select(PromotedTheoremRow.id).where(
-                PromotedTheoremRow.id.in_(wanted),
-                PromotedTheoremRow.system_id.in_(chain),
+
+    if theorems:
+        reachable = set(
+            await session.scalars(
+                select(PromotedTheoremRow.id).where(
+                    PromotedTheoremRow.id.in_(theorems),
+                    PromotedTheoremRow.system_id.in_(chain),
+                )
             )
         )
-    )
-    missing = [theorem_id for theorem_id in wanted if theorem_id not in reachable]
-    if missing:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "An obligation names a theorem this system cannot cite: "
-            + ", ".join(str(theorem_id) for theorem_id in missing)
-            + ". A discharge must be a theorem of this system or one it inherits.",
+        missing = [entry for entry in theorems if entry not in reachable]
+        if missing:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "An obligation names a theorem this system cannot cite: "
+                + ", ".join(str(entry) for entry in missing)
+                + ". A discharge must be a theorem of this system or one it "
+                "inherits.",
+            )
+
+    if primitives:
+        # A *rule*, specifically. `Proof.get_reference` tries `rule_by_label`
+        # before the library, and it is the rules that are a system's primitives;
+        # a theorem it has proved is the other column.
+        declared = set(
+            await session.scalars(
+                select(RuleRow.label).where(
+                    RuleRow.label.in_(primitives), RuleRow.system_id.in_(chain)
+                )
+            )
         )
+        absent = sorted(set(primitives) - declared)
+        if absent:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "An obligation names a primitive this system does not have: "
+                + ", ".join(repr(label) for label in absent)
+                + ". A discharge must be a rule of this system or one it "
+                "inherits, or a theorem it has proved.",
+            )
 
 
 async def _require_a_checkable_map(
@@ -348,13 +426,25 @@ async def _require_a_checkable_map(
         )
 
 
-async def _build_effective(session: AsyncSession, system_id: uuid.UUID):
-    """``(built system, None)`` or ``(None, why it did not build)``."""
+async def _build_effective(
+    session: AsyncSession, system_id: uuid.UUID
+) -> tuple[EngineSystem | None, str | None]:
+    """``(built system, None)`` or ``(None, why it did not build)``.
+
+    The chain is refused on the same two grounds `load_effective` refuses one —
+    truncated, or resting on a draft ancestor — rather than only on what
+    `build_spec` says, so this cannot check a map against a system nobody could
+    verify a proof in.
+    """
     system = await load_system(session, system_id)
     if system is None:
         return None, f"system {system_id} not found"
+    chain = await load_chain(session, system)
+    refusals = truncated_chain_errors(chain) + draft_ancestor_errors(chain)
+    if refusals:
+        return None, f"{system.name}: " + "; ".join(refusals)
     try:
-        spec = effective_spec(await load_chain(session, system))
+        spec = effective_spec(chain)
     except DeclarativeError as exc:
         return None, f"{system.name}: {exc}"
     built = build_spec(spec)

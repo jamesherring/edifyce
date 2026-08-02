@@ -407,3 +407,134 @@ def _theorem_id(db_path, label: str, system: str | None = None) -> str:
             return str(entry.id)
     finally:
         engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# From review
+# ---------------------------------------------------------------------------
+
+
+def test_a_discharge_must_name_a_primitive_this_system_has(db, client):
+    # From review. The theorem half of a discharge was checked from the start and
+    # the primitive half was not — which is the worse of the two to miss, since a
+    # label is far easier to mistype than a UUID. `related_layers` reads only
+    # whether the column is *filled*, so a primitive naming a rule nothing
+    # declares discharged §2's obligation with a string, and the theorems
+    # transferred on it.
+    left, right = siblings(db, client, "primitive@example.com")
+    promote_into(db, left, IDENTITY)
+
+    status_code, body = relate(
+        client, right, left, status="discharged",
+        obligations=[{"source_label": "MP",
+                      "discharged_by_primitive": "no-such-rule-anywhere",
+                      "status": "discharged"}],
+    )
+    assert status_code == 422
+    assert "does not have" in body["detail"]
+
+    # The accepted half: `MP` is a rule this system does declare.
+    assert relate(
+        client, right, left, status="discharged",
+        obligations=[{"source_label": "MP", "discharged_by_primitive": "MP",
+                      "status": "discharged"}],
+    )[0] == 201
+    assert verify_proof(client, db, right, "(P → P) [id]")["success"] is True
+
+
+def test_a_collection_may_not_name_one_thing_twice(db, client):
+    # From review, and one refusal for two failures. The per-edge unique index
+    # was left to catch this, where it surfaced two different wrong ways: during
+    # a PATCH's autoflush, escaping as a 500 with a failed transaction; and on a
+    # create, caught by the same handler as the (source, target) index, which
+    # then reported "these two systems are already related" about an edge that
+    # did not exist.
+    left, right = siblings(db, client, "twice@example.com")
+
+    status_code, body = relate(
+        client, right, left,
+        obligations=[{"source_label": "MP"}, {"source_label": "MP"}],
+    )
+    assert status_code == 422
+    assert "more than once" in body["detail"]
+
+    _, edge = relate(client, right, left)
+    patched = client.patch(
+        f"/api/formal-systems/{right}/relations/{edge['id']}",
+        json={"obligations": [{"source_label": "MP"}, {"source_label": "MP"}]},
+    )
+    assert patched.status_code == 422
+    assert "more than once" in patched.json()["detail"]
+
+
+def test_a_map_that_has_gone_stale_can_still_be_turned_off(db, client):
+    # From review. The map's check ran on *every* PATCH, so once either grammar
+    # drifted the edge became un-editable — including the one edit that would
+    # stop it resolving. An edge that has stopped checking out is exactly the one
+    # an author needs to reach.
+    #
+    # So the check runs on what is being *written*: a status change goes through,
+    # and re-asserting the map is still refused.
+    owner = _register_login(client, "stale-map@example.com")
+    source = seed(db, propositional_calculus_spec("Source"), owner, None)
+    target = seed(db, renamed_propositional_calculus_spec("Target"), owner, None)
+    _, edge = relate(client, target, source, status="discharged",
+                     **rename(PC_RENAME))
+
+    _drop_production(db, target, "conj")
+
+    assert client.patch(
+        f"/api/formal-systems/{target}/relations/{edge['id']}",
+        json={"status": "draft"},
+    ).status_code == 200
+
+    rewritten = client.patch(
+        f"/api/formal-systems/{target}/relations/{edge['id']}",
+        json=rename(PC_RENAME),
+    )
+    assert rewritten.status_code == 422
+
+
+def test_deleting_the_source_invalidates_what_resolved_through_it(db, client):
+    # From review, and the one way an edge disappears that this router never
+    # sees: `system_relations` cascades from either end, so deleting the *source*
+    # took the edge with it and left the target's proofs holding a verdict that
+    # rested on theorems no longer in the database. The re-verify is asserted too,
+    # because it is what says the cleared verdict was the right answer rather
+    # than a cautious one.
+    left, right = siblings(db, client, "delete-source@example.com")
+    promote_into(db, left, IDENTITY)
+    relate(client, right, left, status="discharged")
+
+    proof = _proof(client, right, "(P → P) [id]")
+    assert client.post(f"/api/proofs/{proof}/verify").json()["success"] is True
+
+    assert client.delete(f"/api/formal-systems/{left}").status_code == 204
+
+    assert client.get(f"/api/proofs/{proof}").json()["valid"] is None
+    assert client.post(f"/api/proofs/{proof}/verify").json()["success"] is False
+
+
+def _drop_production(db_path, system_id: str, name: str) -> None:
+    """Move a system's grammar under an edge that was checked against it.
+
+    Straight to the row: the parts route refuses this one, because the target's
+    definition of `∧` still references it — and what is being simulated is any
+    ordinary part edit, not this particular one.
+    """
+    from app.db.systems import SymbolRow
+
+    engine = create_engine(db_path)
+    try:
+        with Session(engine) as session:
+            row = session.scalar(
+                select(SymbolRow).where(
+                    SymbolRow.name == name,
+                    SymbolRow.system_id == uuid.UUID(system_id),
+                )
+            )
+            assert row is not None, f"no production {name!r} to drop"
+            session.delete(row)
+            session.commit()
+    finally:
+        engine.dispose()

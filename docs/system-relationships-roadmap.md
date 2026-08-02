@@ -1004,6 +1004,14 @@ actually reach.
   **published** target refuses an edit to itself and accepts an edge, which is
   the line between a frozen grammar and a library that was never frozen.
 
+From review, four more, each pinned by one test that fails without its guard: a
+discharge naming a **primitive** the target does not have (paired with `MP`,
+which it does); a collection naming one thing **twice**, on both the create and
+the PATCH; a **stale** map that can still be turned off, paired with re-asserting
+it and being refused; and deleting an edge's **source**, after which the target's
+proof is invalidated *and* re-verifies to a failure — the second assertion being
+what says the cleared verdict was the right answer rather than a cautious one.
+
 ---
 
 ### Track S — sequents
@@ -1636,6 +1644,37 @@ each is a live constraint on the work after it rather than a closed question.
     its source is deleting one relationship and asserting another, and the two
     have different obligations — so it is a delete and a create, which is also
     two invalidations rather than one.
+
+    **What review found, and the pattern across it.** Four of the five findings
+    were the same mistake in different places: *a guard written for one half of
+    a pair*.
+
+    - The **theorem** half of a discharge was checked against the target's chain
+      and the **primitive** half was not — so a rule label nothing declares
+      discharged §2's obligation with a string, and the theorems transferred on
+      it. The label is the easier of the two to mistype, which makes it the
+      worse half to have missed.
+    - The **duplicate-name** index was left to catch a map that says two things
+      about one name, and it caught it twice wrongly: during a PATCH's autoflush,
+      escaping as a 500 with a failed transaction, and on a create, through the
+      same `except IntegrityError` as the (source, target) index — which then
+      reported "these two systems are already related" about an edge that did not
+      exist. One `except` per index, or the check before either.
+    - The map's check ran on **every** PATCH rather than on the map, so once a
+      grammar drifted the edge could not be edited at all — including the edit
+      that turns it off, which is exactly the one its author needs. A write-time
+      check belongs on *what is being written*; anything else is the
+      resolution-time check's job, and it is still there.
+    - And the fifth is the one this phase's own invariant should have predicted:
+      an edge cascades from **either** end, so deleting a *source* takes the edge
+      with it — and left the target's proofs holding a verdict resting on
+      theorems that left with it. Every way an edge can disappear has to clear
+      what resolved through it, and one of those ways is not in this router at
+      all (`systems.delete_system`).
+
+    Stated as a rule, since it is the same shape as §9.19's: **a guard on a
+    relationship has to cover every way the relationship can end**, and the ways
+    are rarely all in the module that creates it.
 
 ---
 
