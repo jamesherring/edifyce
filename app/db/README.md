@@ -20,9 +20,11 @@ evolve it.
 | `app/db/side_conditions.py` | Definition provisos as the kernel side-condition algebra, stored as rows |
 | `app/db/side_conditions_mapping.py` | Parse/render a `where` proviso ↔ side-condition rows |
 | `app/db/terms.py` | Term graph: kernel-term DAGs as shared `terms` / `term_children` rows |
-| `app/db/terms_mapping.py` | `store_term` / `prefetch_terms` round trip between kernel `Term`s and the rows. A stored constructor resolves through the **sort unions**, not `context.variables`: that namespace is shared with lines, axioms and line parts, and a name declared twice resolves to the later one |
+| `app/db/terms_mapping.py` | `store_term` / `prefetch_terms` round trip between kernel `Term`s and the rows. A stored constructor resolves through the **sort unions**, not `context.variables`: that namespace is shared with lines, axioms and line parts, and a name declared twice resolves to the later one. A `Translation` renames each stored name before that lookup, which is how a theorem crosses a renaming edge |
 | `app/db/promoted_theorems.py` | The citable library: proved and imported theorems as rows, resolved by label |
 | `app/db/promoted_theorems_mapping.py` | `store_theorem` / `load_theorems`: the library round trip |
+| `app/db/system_relations.py` | The general edge between two systems: where theorems transfer, the sort/symbol maps that rename them on the way, and one obligation per source primitive |
+| `app/db/system_relations_mapping.py` | `related_layers`: which systems an edge adds to a citation's reach, and — for an edge that renames — whether its map reads the source's language into the target's (`website/logical/translation.py`) |
 | `app/db/schema_terms.py` | `store_schema_terms` / `load_schema_terms`: a rule's schema templates as composed kernel terms, so a build need not re-parse them |
 | `app/db/definition_terms.py` | `store_definition_terms` / `load_definition_terms`: the same for a definition's two surface forms |
 | `app/db/proof_lines.py` | Proof structure: a checked proof's lines + the justification edges between them |

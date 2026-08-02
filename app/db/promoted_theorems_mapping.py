@@ -27,7 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from sqlalchemy import bindparam, or_, select
@@ -44,6 +44,7 @@ from app.db.systems import SymbolRow
 from app.db.terms_mapping import prefetch_terms, store_term
 from website.logical.matching import StringPattern
 from website.logical.promotion import TheoremSpec, promote_spec
+from website.logical.translation import IDENTITY, Translation
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -265,6 +266,23 @@ def theorem_spec(theorem: StoredTheorem) -> TheoremSpec:
 
 
 @dataclass(frozen=True)
+class LibraryLayer:
+    """One system a citation may resolve in, and how it is read from here.
+
+    ``digest`` guards *this* system's stored terms — see :class:`LibraryChain`
+    for why an ancestor's entry is checked against the ancestor's own.
+    ``translation`` is how its names are read here, and is the identity for
+    every layer of an inheritance chain: a child's ``implication`` *is* its
+    parent's row, so there is nothing to translate. Only a relation edge can
+    carry a rename (R4b, `website/logical/translation.py`).
+    """
+
+    system_id: uuid.UUID
+    digest: str
+    translation: Translation = IDENTITY
+
+
+@dataclass(frozen=True)
 class LibraryChain:
     """Where a citation may resolve, and what guards each system's stored terms.
 
@@ -290,38 +308,41 @@ class LibraryChain:
     it), so its digest does not move and a cross-layer citation reliably hits.
     """
 
-    layers: tuple[tuple[uuid.UUID, str], ...]
+    layers: tuple[LibraryLayer, ...]
 
     @classmethod
     def of(cls, system_id: uuid.UUID, library: str) -> LibraryChain:
         """The one-system case — a system that inherits from nothing."""
-        return cls(((system_id, library),))
+        return cls((LibraryLayer(system_id, library),))
 
     @property
     def system_ids(self) -> list[uuid.UUID]:
-        return [system_id for system_id, _ in self.layers]
+        return [layer.system_id for layer in self.layers]
 
     def rank(self, system_id: uuid.UUID) -> int:
         """How near ``system_id`` is; lower wins a label."""
-        return self._layer(system_id)[0]
+        return self.locate(system_id)[0]
 
     def digest(self, system_id: uuid.UUID) -> str:
         """The digest guarding ``system_id``'s own stored terms."""
-        return self._layer(system_id)[1]
+        return self.locate(system_id)[1].digest
 
-    def _layer(self, system_id: uuid.UUID) -> tuple[int, str]:
-        # Raised rather than defaulted. Every entry comes from a query over
-        # `system_ids`, so a system not in the chain is a mis-wired chain rather
-        # than a case to tolerate — and tolerating it would substitute a digest
-        # that matches nothing, turning the defect into a silent re-parse, which
-        # is the *wrong* answer for a cross-layer citation and not merely a
-        # slower one (see this class's own note).
-        for index, (candidate, library) in enumerate(self.layers):
-            if candidate == system_id:
-                return index, library
+    def locate(self, system_id: uuid.UUID) -> tuple[int, LibraryLayer]:
+        """How near ``system_id`` is, and the layer it is.
+
+        Raised rather than defaulted. Every entry comes from a query over
+        ``system_ids``, so a system not in the chain is a mis-wired chain rather
+        than a case to tolerate — and tolerating it would substitute a digest
+        that matches nothing, turning the defect into a silent re-parse, which is
+        the *wrong* answer for a cross-layer citation and not merely a slower one
+        (see this class's own note).
+        """
+        for index, layer in enumerate(self.layers):
+            if layer.system_id == system_id:
+                return index, layer
         raise LookupError(
             f"Library entry from system {system_id} is outside the chain it was "
-            f"read for ({', '.join(str(s) for s, _ in self.layers)})."
+            f"read for ({', '.join(str(x.system_id) for x in self.layers)})."
         )
 
 
@@ -371,54 +392,195 @@ class PendingLibrary:
         ``graph`` need only *contain* :attr:`term_ids`; it may hold anything else
         besides, since a root it does not have is a miss and a miss is a parse.
         That is what lets a caller pass the sweep it did for its own reasons.
+
+        A layer that **renames** reads its entries through its translation, which
+        rebuilds their stored terms over this system's constructors rather than
+        over the names they were stored under (R4b). Everything else about the
+        promotion is unchanged: it is the same graph read, with one substitution
+        in front of each lookup.
         """
 
-        def term(term_id: uuid.UUID | None) -> Term | None:
-            return graph.term(term_id, context)
+        def reader(
+            translation: Translation,
+        ) -> Callable[[uuid.UUID | None], Term | None]:
+            # One reader per layer, since the translation is the layer's.
+            def read(term_id: uuid.UUID | None) -> Term | None:
+                return graph.term(term_id, context, translation)
+
+            return read
 
         promoted: dict[str, PromotedTheorem] = {}
         for entry in self.cited:
+            rank, layer = self.chain.locate(entry.system_id)
+            term = reader(layer.translation)
             current = self.fresh.get(entry.label)
-            if current is None and self.chain.rank(entry.system_id) > 0:
-                # An *inherited* entry with no usable cached term. Falling back to
-                # the parse would compose its statement against the citing
-                # system's grammar, which is wider than the one it was proved in —
-                # and notation declared later can capture an earlier statement's
-                # parse (metamath roadmap §1.4, `bj-0`). The theorem would then
-                # mean something its own system never established, and could
-                # justify a step that system could not. So this is refused rather
-                # than approximated: unlike the same-system fallback, a miss here
-                # is a difference and not a cost.
-                #
-                # Reached only by an entry stored without its terms
-                # (`store_theorem(..., promoted=None)`) or one whose own system's
-                # grammar has moved — which publishing is supposed to prevent. The
-                # citation simply does not resolve, so the proof fails on it.
-                raise LookupError(
-                    f"Theorem {entry.label!r} is inherited from another system and "
-                    "its stored terms are missing or stale, so it cannot be cited "
-                    "here: re-reading its statement against this system's grammar "
-                    "could give it a different meaning from the one it was proved "
-                    "with. Re-verify the system that owns it."
+            _require_a_citable_entry(entry, layer, rank, current)
+            statement_term = (
+                None if current is None else term(current.statement_term_id)
+            )
+            premise_terms = (
+                []
+                if current is None
+                else [term(premise.term_id) for premise in current.premises]
+            )
+            spec = self.specs[entry.label]
+            if not layer.translation.identity:
+                # `current is entry` here: `fresh` holds the very objects `cited`
+                # does, and a translated layer is a related one, so `rank > 0`
+                # already refused the case with no cached term.
+                spec = _translated(
+                    entry, layer.translation, statement_term, premise_terms
                 )
             built_theorem = promote_spec(
                 built,
-                self.specs[entry.label],
-                statement_term=(
-                    None if current is None else term(current.statement_term_id)
-                ),
-                premise_terms=(
-                    () if current is None
-                    else [term(premise.term_id) for premise in current.premises]
-                ),
+                spec,
+                statement_term=statement_term,
+                premise_terms=premise_terms,
             )
-            if current is not None and self.chain.rank(entry.system_id) > 0:
+            if current is not None and rank > 0:
                 _require_nothing_was_composed(entry, current, built_theorem, term)
             promoted[entry.label] = built_theorem
 
         if self.owner is not None:
-            promoted.update(_hypotheses(self.owner, built, term))
+            # Untranslated: the owner is the *citing* system's own theorem — the
+            # one this proof is establishing — so its hypotheses are already in
+            # this system's names.
+            promoted.update(_hypotheses(self.owner, built, reader(IDENTITY)))
         return promoted
+
+
+def _require_a_citable_entry(
+    entry: StoredTheorem,
+    layer: LibraryLayer,
+    rank: int,
+    current: StoredTheorem | None,
+) -> None:
+    """Why an entry of *another* system cannot be cited here, when it cannot.
+
+    Both refusals are about a foreign entry only — an entry of the citing system
+    is layer zero, is never translated, and falls back to a parse as it always
+    did. And both surface as a citation that does not resolve, so the proof fails
+    on the line that made it.
+    """
+    if current is None and rank > 0:
+        # An *inherited* entry with no usable cached term. Falling back to the
+        # parse would compose its statement against the citing system's grammar,
+        # which is wider than the one it was proved in — and notation declared
+        # later can capture an earlier statement's parse (metamath roadmap §1.4,
+        # `bj-0`). The theorem would then mean something its own system never
+        # established, and could justify a step that system could not. So this is
+        # refused rather than approximated: unlike the same-system fallback, a
+        # miss here is a difference and not a cost.
+        #
+        # Reached only by an entry stored without its terms
+        # (`store_theorem(..., promoted=None)`) or one whose own system's grammar
+        # has moved — which publishing is supposed to prevent.
+        raise LookupError(
+            f"Theorem {entry.label!r} is inherited from another system and its "
+            "stored terms are missing or stale, so it cannot be cited here: "
+            "re-reading its statement against this system's grammar could give "
+            "it a different meaning from the one it was proved with. Re-verify "
+            "the system that owns it."
+        )
+    if not layer.translation.identity:
+        # A proviso argument that is not one of the theorem's metavariables is a
+        # *term expression* parsed against the grammar (`equal(t, ∅)`, AGENTS.md
+        # on where text still becomes structure) — and it is text in the source's
+        # notation, which a rename is free to spell differently here. Translating
+        # it would mean re-rendering a parse this layer never made, so the entry
+        # is refused instead. A metavariable name is not renamed by anything and
+        # travels as it is.
+        named = {var for var, _sort in entry.metavariables}
+        foreign = sorted(
+            {
+                argument
+                for proviso in entry.provisos
+                for argument in (proviso.left_name, proviso.right_name)
+                if argument is not None and argument not in named
+            }
+        )
+        if foreign:
+            raise LookupError(
+                f"Theorem {entry.label!r} carries a proviso over "
+                + ", ".join(repr(argument) for argument in foreign)
+                + ", which is written in the notation of the system that proved "
+                "it rather than in a metavariable. It cannot be cited across a "
+                "rename."
+            )
+    if not layer.translation.identity and entry.matching == "string":
+        # A string-rewriting theorem is checked against surface *text*, so what
+        # it says is a fact about the symbols its own system spells — and a
+        # rename is free to spell them differently here. Nothing in the two
+        # grammars settles whether the rewriting agrees, so this is refused
+        # rather than transferred, on the same ground as the string-step refusal
+        # in `promotion.schematic_theorem`.
+        raise LookupError(
+            f"Theorem {entry.label!r} is checked by string rewriting and reaches "
+            "this system through a renaming edge, so the symbols it was proved "
+            "over are not the symbols it would be checked against here. It "
+            "cannot be cited across a rename."
+        )
+
+
+def _translated(
+    entry: StoredTheorem,
+    translation: Translation,
+    statement_term: Term | None,
+    premise_terms: Sequence[Term | None],
+) -> TheoremSpec:
+    """``entry`` as a spec of the **target's** names, its terms already rebuilt.
+
+    The terms are the transfer (:meth:`~app.db.terms_mapping.TermGraph.term`
+    does that half); what is left is everything a ``TheoremSpec`` says in *names*
+    rather than in structure, and there are three such things.
+
+    A **metavariable's sort** is a name the target has to declare, or promoting
+    raises before anything is checked. A **proviso's sort argument** is the same
+    name in the surface syntax a side condition is parsed back from — §3.5's
+    "the transfer maps the sort argument and leaves the algebra untouched",
+    which is what keeps a transferred ``$d`` constraining the leaves it was
+    written for. Both are read off the rows and re-rendered rather than
+    string-substituted into the rendered line.
+
+    And the **statement** is re-rendered from its own translated term, so the
+    entry reads in the notation of the system it is being cited in. That is not
+    cosmetic: promotion scans the statement text for the metavariables it was
+    given (``StringPattern.add_variables``), and a ground statement with no
+    metavariables at all is composed *from* the text. Rendering the term is the
+    same move :func:`~website.logical.promotion.proved_theorem` makes — the
+    string is a record of the term rather than a second source for it. A premise
+    that composed no term of its own (a bare metavariable, the ordinary shape of
+    a hypothesis) keeps its text, which the rename does not touch anyway.
+    """
+    renamed = replace(
+        entry,
+        metavariables=tuple(
+            (var, translation.name(sort)) for var, sort in entry.metavariables
+        ),
+        provisos=tuple(
+            proviso
+            if proviso.sort_name is None
+            else replace(proviso, sort_name=translation.name(proviso.sort_name))
+            for proviso in entry.provisos
+        ),
+    )
+    spec = theorem_spec(renamed)
+    # Padded rather than zipped short: the two are the same length by
+    # construction (both come off `entry.premises`), and dropping a premise
+    # because they were not would be a theorem that assumes less than it was
+    # proved under.
+    terms = list(premise_terms)
+    terms += [None] * (len(spec.premises) - len(terms))
+    return replace(
+        spec,
+        statement=(
+            spec.statement if statement_term is None else statement_term.to_string()
+        ),
+        premises=tuple(
+            text if term is None else term.to_string()
+            for text, term in zip(spec.premises, terms)
+        ),
+    )
 
 
 def _require_nothing_was_composed(

@@ -343,7 +343,9 @@ async def load_effective(
         # (see `related_layers`). Read here rather than inside
         # `effective_library`, which takes systems and no session — an edge is
         # rows this chain does not carry.
-        extra = await session.run_sync(lambda sync: related_layers(sync, chain))
+        extra = await session.run_sync(
+            lambda sync: related_layers(sync, chain, spec)
+        )
         return EffectiveSystem(
             chain,
             spec=spec,

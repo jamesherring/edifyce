@@ -33,7 +33,7 @@ from website.logical.declarative import (
 )
 
 from app.db.models import FormalSystem
-from app.db.promoted_theorems_mapping import LibraryChain
+from app.db.promoted_theorems_mapping import LibraryChain, LibraryLayer
 from app.db.side_conditions_mapping import (
     build_definition_provisos,
     build_rule_side_conditions,
@@ -375,7 +375,10 @@ def effective_library(chain: Sequence[FormalSystem]) -> tuple[SystemSpec, Librar
     """
     specs = [system_to_spec(system) for system in chain]
     libraries = [
-        (system.id, library_digest(layered_spec(specs[: index + 1])))
+        # No translation: a child's productions *are* its ancestors' rows, so a
+        # name means one thing down the whole chain and there is nothing to
+        # rename. Only a relation edge can carry a map (`related_layers`).
+        LibraryLayer(system.id, library_digest(layered_spec(specs[: index + 1])))
         for index, system in enumerate(chain)
     ]
     return layered_spec(specs), LibraryChain(tuple(reversed(libraries)))
