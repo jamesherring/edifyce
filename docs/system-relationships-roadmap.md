@@ -1,12 +1,13 @@
 # Relationships between formal systems: analysis and roadmap
 
-**Status:** **R1 delivered**; the rest is design. `formal_systems.inherits_from_id`
+**Status:** **R1 and R2 delivered**; the rest is design. `formal_systems.inherits_from_id`
 used to be validated on write and read by nothing — `app/routers/systems.py` said
 so in as many words ("inheritance is not resolved yet … deferred to the
 inheritance phase"). It now means what §5.1 says it means: a child's effective
 system is its ancestors' parts followed by its own, and every path that builds a
-system builds the chain. See §8's R1 for what landed and §9.9–9.11 for what it
-turned up.
+system builds the chain, and §5.2 as well: a citation resolves against the
+system's own library and then its ancestors'. See §8's R1/R2 for what landed and
+§9.9–9.14 for what they turned up.
 
 Goal: express and store the relationships between formal systems well enough that
 
@@ -713,9 +714,15 @@ it turned up on the way are recorded as §9.9–§9.11.
 - `token_separated` disjoins: a token-separated parent plus a glued child
   template is a `_check_token_separation` failure, not a silent pass.
 
-#### R2 — library resolution through the chain
+#### R2 — library resolution through the chain — **done**
 
 **Delivers (a) and (b)** for imported and promoted theorems.
+
+What landed: `LibraryChain` (the systems a citation may resolve in, nearest
+first, each carrying its own `library_digest`), `read_theorems` over the chain,
+`_nearest` for shadowing, and `effective_library` — which reads a system's spec
+and its chain's digests in one pass, because a verify needs both. §9.11 and §9.12 record
+what the design got wrong on paper; §9.13 a gap it surfaced.
 
 **Tests and verification** — `tests/test_cross_system_citation.py`.
 
@@ -994,7 +1001,7 @@ S1 and D1 depend on nothing and can start immediately.
    requires a complex accepted case per phase, and why the bound-variable tests
    are written in accepted/rejected pairs.
 
-The three below are **findings from R1**, kept here because each is a live
+The six below are **findings from R1 and R2**, kept here because each is a live
 constraint on the phases after it rather than a closed question.
 
 9. **The freshness check was position-blind, and a tower is not.** §5.1 predicted
@@ -1018,16 +1025,85 @@ constraint on the phases after it rather than a closed question.
     than an FK into an ancestor's namespace that the ancestor's delete would take
     with it. The row is a union with no members, which is what a declared sort of
     a layer already looks like, and `system_to_spec` emits nothing for either.
-11. **The schema-term cache is per system, and a chain has several.** A rule's
-    composed term is a function of the whole chain's grammar, but `rules` carries
-    one `schema_digest` column, so an ancestor's row cannot cache what its
-    template composes to in a descendant. R1 caches a system's **own** rules only
-    (the `offset` in `app/db/schema_terms.py`), which is correct and leaves a
-    child recomposing its inherited rules on every verify. Fine at the tower's
-    scale and *not* fine for a layered set.mm, where the propositional layer holds
-    the rules and everything above it inherits them. The fix is a row per (rule,
-    digest) rather than a column — a table, and one D3 should be measured against
-    before it is built.
+11. **An ancestor's cached term is guarded by the *ancestor's* digest.** §5.2
+    said the child promotes an ancestor's entry "applying the edge's sort map",
+    and left the digest unsaid — which reads as though the citing system's
+    digest guards it. It cannot: the two cover different grammars by
+    construction, so every cross-layer citation would miss and re-parse. Worse,
+    the re-parse is the *wrong* answer, by exactly the argument
+    `promoted_theorems_mapping` already makes for an imported corpus — the
+    ancestor composed its statement against the grammar it was proved in, and
+    the child's is wider, so re-composing can read the statement through
+    notation declared later. So each layer carries its own digest, and because
+    an ancestor is frozen, a cross-layer citation reliably hits. Pinned by a
+    test that makes composing fatal and cites across two layers anyway.
+12. **The fallback parse is unsound *across* a layer, not merely approximate.**
+    §9.11 argued the cached term is the faithful one and the re-parse the
+    approximation — and then left the re-parse in place as the fallback, which
+    is the same mistake stated twice. For an entry of the citing system the
+    fallback is right: the grammar it is re-read against is the one that owns
+    it. For an *inherited* entry it is not — the citing grammar is wider, and
+    notation declared later captures an earlier statement's parse (the reason
+    `corpus.walk` scopes notation by position at all, metamath roadmap §1.4). So
+    the theorem would mean something its own system never established, and could
+    justify a step that system could not. An inherited entry with no usable
+    cached term is therefore **refused**, and the citation does not resolve.
+    Two ways in, because a matching digest is not on its own enough: the digest
+    can be missing or stale, and — since a term FK is `ON DELETE SET NULL` and a
+    NULL is documented as a *miss* rather than "composes to nothing" — an entry
+    can pass the digest and still have lost the term the digest promised. The
+    second is checked as the hazard itself rather than by a proxy, because
+    refusing every NULL would be far too strict: a bare metavariable composes
+    nothing in *any* grammar, and that is the ordinary shape of a hypothesis
+    (every Metamath `$e` of the form `|- ph` stores NULL and always did). So for
+    an inherited entry a schema term must have come from the cache or not exist;
+    one composed *here* was composed against the wrong grammar.
+    Reachable only through `store_theorem(..., promoted=None)` or a published
+    system whose grammar moved, so it costs nothing today — but it is a
+    difference rather than a cost, which is what decides it. The capability it
+    gives up is transferring an entry stored without terms; getting that back
+    means composing the statement against the *ancestor's* built system and
+    re-interning the result, which is the cached path computed on demand.
+13. ~~**The raw-text verify route resolves no library at all.**~~ **Closed.**
+    `POST /formal-systems/{id}/verify` built the system and parsed the text but
+    never resolved a citation, so a *theorem* resolved to nothing there. It is
+    not a grammar check — it is the scratchpad behind `/systems/{id}/verify`,
+    where a proof is typed against a stored system and checked without being
+    stored. Survivable for a system whose primitives are all rules; useless for
+    an imported corpus, where every logical statement is a promoted theorem
+    rather than a rule, and pointed for a layered system, whose whole purpose is
+    citing an ancestor's theorems. It now reads, resolves and checks — the same
+    three steps `parse` is, split so the library fits between them. What it still
+    does not resolve is a cited *proof*: a scratchpad proof is stored nowhere, so
+    it has no references and establishes no library entry of its own.
+14. **The schema-term cache is per system, and a chain has several — and it
+    costs less than this entry first claimed.** A rule's composed term is a
+    function of the whole chain's grammar, but `rules` carries one
+    `schema_digest` column, so an ancestor's row cannot cache what its template
+    composes to in a descendant. A system caches its own rules only (the
+    `offset` in `app/db/schema_terms.py`), which leaves a child recomposing its
+    inherited ones on every verify.
+
+    This entry originally said that was "*not* fine for a layered set.mm, where
+    the propositional layer holds the rules". That is **wrong**, and worth
+    correcting rather than deleting: `metamath.importer.build_spec` constructs a
+    `SystemSpec` with no `rules` and no `axioms` at all — every logical `$a` and
+    `$p` becomes a *promoted theorem*, because building 1,559 axioms eagerly is
+    what the metamath roadmap measured as not scaling. So a layered `set.mm`
+    inherits **no** rules and recomposes nothing. The case named as the danger is
+    the case that costs zero.
+
+    What it does cost, measured on the three-layer tower: 7.3 ms to build with
+    its 7 rules against 3.2 ms with them removed, so ~0.6 ms per rule at that
+    grammar size, rising with the grammar as any parse does (0.4 ms at 18
+    productions, 1.1 ms at 309). A deep hand-authored tower — say 30 inherited
+    rules at ZFC scale — is therefore tens of milliseconds per verify, next to
+    `load_effective`'s own ~24 ms. Real, and not a table's worth.
+
+    So: **do not build the row-per-(rule, digest) table.** If it ever does bite,
+    the cheaper answer is a process-level memo keyed by the chain's grammar
+    digest and the rule's label — the access pattern is one system verified
+    repeatedly — which needs no migration and no second invalidation contract.
 
 ---
 

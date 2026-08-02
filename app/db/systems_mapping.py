@@ -29,9 +29,11 @@ from website.logical.declarative import (
     Subproof,
     SystemSpec,
     layered_spec,
+    library_digest,
 )
 
 from app.db.models import FormalSystem
+from app.db.promoted_theorems_mapping import LibraryChain
 from app.db.side_conditions_mapping import (
     build_definition_provisos,
     build_rule_side_conditions,
@@ -355,6 +357,28 @@ def effective_spec(chain: Sequence[FormalSystem]) -> SystemSpec:
     once down a chain.
     """
     return layered_spec([system_to_spec(system) for system in chain])
+
+
+def effective_library(chain: Sequence[FormalSystem]) -> tuple[SystemSpec, LibraryChain]:
+    """What a system is built from, and where its citations resolve — in one pass.
+
+    Both answers come from the same per-layer specs, and a verify needs both, so
+    they are read together: reading the rows twice measured at five times the
+    cost of reading them once, for a system with no ancestors at all.
+
+    The spec is :func:`effective_spec`. The chain is **nearest first** — the rule
+    that a label declared twice resolves to the closer system — and each layer
+    carries the digest guarding *its own* stored terms, which for an ancestor is
+    the digest of the ancestor's chain rather than the citing system's (see
+    :class:`~app.db.promoted_theorems_mapping.LibraryChain`). Hence the running
+    prefix: layer *i*'s digest covers layers 0..i.
+    """
+    specs = [system_to_spec(system) for system in chain]
+    libraries = [
+        (system.id, library_digest(layered_spec(specs[: index + 1])))
+        for index, system in enumerate(chain)
+    ]
+    return layered_spec(specs), LibraryChain(tuple(reversed(libraries)))
 
 
 def inherited_rule_count(chain: Sequence[FormalSystem]) -> int:

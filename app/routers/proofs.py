@@ -71,6 +71,7 @@ from app.db import (
     store_definition_terms,
     store_proof_lines,
     store_schema_terms,
+    term_context,
 )
 from app.db.models import User
 from app.routers._common import (
@@ -98,7 +99,7 @@ from app.schemas import (
     TermSummary,
     VerifyProofResponse,
 )
-from website.logical.declarative import build_spec, library_digest
+from website.logical.declarative import build_spec
 from website.logical.graphs import topological_order
 
 if TYPE_CHECKING:
@@ -399,7 +400,7 @@ async def _verify_with_references(
     # Dependency order still matters, but only for *seeding*: a citation may
     # reach through a lemma into its own lemma, so a lemma's references must be
     # resolved before anything cites it.
-    context = _term_context(compiled_system)
+    context = term_context(compiled_system)
     lemma_ids = [pid for pid in order if pid != proof.id]
     # The whole closure in one go: reading a proof back is latency, not work, so
     # batching is what makes it cheaper than re-parsing (see load_proof_lines).
@@ -469,7 +470,11 @@ async def _verify_with_references(
     # resolve exactly those labels and promote them (P4). A label with no row is
     # simply not a theorem: it may name a rule, a definition, or a cited proof's
     # line, and the resolver settles that as it always did.
-    library = library_digest(spec)
+    #
+    # And *its ancestors'* libraries: a theorem proved in a system this one
+    # inherits from is citable here, resolved nearest-first with each layer's own
+    # digest guarding its own cached terms (see `LibraryChain`).
+    library = effective.library
 
     # `hypotheses_of` covers the other half of both paths below: a proof that
     # *establishes* a library entry proves under that entry's own hypotheses, and
@@ -486,7 +491,7 @@ async def _verify_with_references(
         # `term_children`. They overlap heavily: a lemma's statement is a line of
         # the proof citing it, interned to the very same row.
         pending: PendingLibrary = read_library(
-            sync, system.id, cited_labels(references), library,
+            sync, library, cited_labels(references),
             hypotheses_of=proof.theorem_id,
         )
         return PendingCitations(
@@ -514,12 +519,12 @@ async def _verify_with_references(
             await session.run_sync(
                 lambda sync: promote(
                     load_theorems(
-                        sync, system.id,
+                        sync, library,
                         cited_labels(
                             line.reference_string
                             for line in root.proof_lines
                         ),
-                        compiled_system, context, library,
+                        compiled_system, context,
                         hypotheses_of=proof.theorem_id,
                     )
                 )
@@ -543,15 +548,6 @@ async def _verify_with_references(
         # is how the snapshot names the proof they belong to.
         cited_proofs=[(engine, pid) for pid, engine in compiled.items()],
     )
-
-
-def _term_context(system: EngineSystem) -> Context:
-    # The context stored terms are rebuilt against: the proof context (which
-    # carries the defined notations) plus the build context's productions, which
-    # is what `TermGraph.term` resolves a constructor name in.
-    context = copy(system.context)
-    context.variables.update(system.build_context.variables)
-    return context
 
 
 def _unusable_errors(

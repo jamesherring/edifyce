@@ -216,6 +216,10 @@ class StoredTheorem:
     """
 
     id: uuid.UUID
+    # Which system's library this entry belongs to — its own or an ancestor's.
+    # What says whose digest guards its cached terms, and how near it is when two
+    # systems of one chain share a label (see :class:`LibraryChain`).
+    system_id: uuid.UUID
     label: str
     statement: str
     matching: str
@@ -256,6 +260,67 @@ def theorem_spec(theorem: StoredTheorem) -> TheoremSpec:
 
 
 @dataclass(frozen=True)
+class LibraryChain:
+    """Where a citation may resolve, and what guards each system's stored terms.
+
+    A system's library is its own entries **and its ancestors'** — that is what
+    makes a theorem proved in propositional calculus citable in a proof written
+    in ZFC (docs/system-relationships-roadmap.md §5.2). ``layers`` is the
+    inheritance chain **nearest first**, so a label declared twice resolves to
+    the closest system that has it; an ancestor's entry is shadowed, never
+    ambiguous.
+
+    Each layer carries its **own** ``library_digest``, and that is the subtle
+    part. A stored term is guarded by the digest of the system it was composed
+    against, which for an ancestor's entry is the *ancestor's*, not the citing
+    system's. Checking it against the child's would miss every time and re-parse
+    every cross-layer citation — and the re-parse would be the *worse* answer:
+    the ancestor composed its statement against the grammar it was proved in,
+    while the child's is wider, so re-composing can read the statement through
+    notation declared later. That is the same argument this module's docstring
+    makes for an imported corpus, where the union grammar is the approximation
+    and the stored term is the faithful one.
+
+    An ancestor is frozen (a parent must be published before a child may build on
+    it), so its digest does not move and a cross-layer citation reliably hits.
+    """
+
+    layers: tuple[tuple[uuid.UUID, str], ...]
+
+    @classmethod
+    def of(cls, system_id: uuid.UUID, library: str) -> LibraryChain:
+        """The one-system case — a system that inherits from nothing."""
+        return cls(((system_id, library),))
+
+    @property
+    def system_ids(self) -> list[uuid.UUID]:
+        return [system_id for system_id, _ in self.layers]
+
+    def rank(self, system_id: uuid.UUID) -> int:
+        """How near ``system_id`` is; lower wins a label."""
+        return self._layer(system_id)[0]
+
+    def digest(self, system_id: uuid.UUID) -> str:
+        """The digest guarding ``system_id``'s own stored terms."""
+        return self._layer(system_id)[1]
+
+    def _layer(self, system_id: uuid.UUID) -> tuple[int, str]:
+        # Raised rather than defaulted. Every entry comes from a query over
+        # `system_ids`, so a system not in the chain is a mis-wired chain rather
+        # than a case to tolerate — and tolerating it would substitute a digest
+        # that matches nothing, turning the defect into a silent re-parse, which
+        # is the *wrong* answer for a cross-layer citation and not merely a
+        # slower one (see this class's own note).
+        for index, (candidate, library) in enumerate(self.layers):
+            if candidate == system_id:
+                return index, library
+        raise LookupError(
+            f"Library entry from system {system_id} is outside the chain it was "
+            f"read for ({', '.join(str(s) for s, _ in self.layers)})."
+        )
+
+
+@dataclass(frozen=True)
 class PendingLibrary:
     """A proof's library, read and digest-checked, waiting only on its terms.
 
@@ -274,9 +339,13 @@ class PendingLibrary:
     cited: tuple[StoredTheorem, ...]
     owner: StoredTheorem | None
     specs: Mapping[str, TheoremSpec]
-    # The cited entries whose cached terms still describe the system. A miss
-    # costs a parse, never a difference (see the module docstring).
+    # The cited entries whose cached terms still describe the system that owns
+    # them. For an entry of the citing system a miss costs a parse and never a
+    # difference; for an *inherited* one it is fatal — see :meth:`promote`.
     fresh: Mapping[str, StoredTheorem]
+    # The chain the entries were read from, so `promote` can tell an inherited
+    # entry from one of the citing system's own.
+    chain: LibraryChain = LibraryChain(())
 
     @property
     def term_ids(self) -> list[uuid.UUID]:
@@ -305,7 +374,29 @@ class PendingLibrary:
         promoted: dict[str, PromotedTheorem] = {}
         for entry in self.cited:
             current = self.fresh.get(entry.label)
-            promoted[entry.label] = promote_spec(
+            if current is None and self.chain.rank(entry.system_id) > 0:
+                # An *inherited* entry with no usable cached term. Falling back to
+                # the parse would compose its statement against the citing
+                # system's grammar, which is wider than the one it was proved in —
+                # and notation declared later can capture an earlier statement's
+                # parse (metamath roadmap §1.4, `bj-0`). The theorem would then
+                # mean something its own system never established, and could
+                # justify a step that system could not. So this is refused rather
+                # than approximated: unlike the same-system fallback, a miss here
+                # is a difference and not a cost.
+                #
+                # Reached only by an entry stored without its terms
+                # (`store_theorem(..., promoted=None)`) or one whose own system's
+                # grammar has moved — which publishing is supposed to prevent. The
+                # citation simply does not resolve, so the proof fails on it.
+                raise LookupError(
+                    f"Theorem {entry.label!r} is inherited from another system and "
+                    "its stored terms are missing or stale, so it cannot be cited "
+                    "here: re-reading its statement against this system's grammar "
+                    "could give it a different meaning from the one it was proved "
+                    "with. Re-verify the system that owns it."
+                )
+            built_theorem = promote_spec(
                 built,
                 self.specs[entry.label],
                 statement_term=(
@@ -316,10 +407,56 @@ class PendingLibrary:
                     else [term(premise.term_id) for premise in current.premises]
                 ),
             )
+            if current is not None and self.chain.rank(entry.system_id) > 0:
+                _require_nothing_was_composed(entry, current, built_theorem, term)
+            promoted[entry.label] = built_theorem
 
         if self.owner is not None:
             promoted.update(_hypotheses(self.owner, built, term))
         return promoted
+
+
+def _require_nothing_was_composed(
+    entry: StoredTheorem,
+    current: StoredTheorem,
+    theorem: PromotedTheorem,
+    term: Callable[[uuid.UUID | None], Term | None],
+) -> None:
+    """Refuse an inherited theorem that composed a term *here*.
+
+    A digest that matches is not enough on its own. A term FK is
+    ``ON DELETE SET NULL`` and a NULL is documented as a *miss* rather than
+    "composes to nothing", because the same NULL is what a deleted term and a
+    slot with nothing to compose both leave behind (see `app/db/README.md`). So
+    an entry can pass the digest and still have lost the term the digest
+    promised — and promotion would then compose that statement against the
+    citing system's grammar, which for an inherited entry is the wrong one.
+
+    Refusing every NULL would be far too strict: a bare metavariable composes
+    nothing in *any* grammar, and that is the ordinary shape of a hypothesis —
+    every Metamath ``$e`` of the form ``|- ph`` stores NULL and always did. So
+    the check is the hazard itself rather than a proxy for it: for an inherited
+    entry, a schema term must have come from the cache or not exist. One that
+    was composed here was composed against the wrong grammar.
+    """
+    cached = [current.statement_term_id, *(p.term_id for p in current.premises)]
+    patterns = [theorem.deduction, *theorem.antecedents]
+    for term_id, pattern in zip(cached, patterns):
+        # What `promote_spec` was actually handed, not what the row said: a term
+        # id absent from the sweep arrives as None just as a NULL one does, and
+        # both mean it composed for itself.
+        if term(term_id) is not None:
+            continue
+        # Only a `StringPattern` carries a composed term at all — the same test
+        # `_term_id` makes on the way in.
+        if isinstance(pattern, StringPattern) and pattern.schema_term is not None:
+            raise LookupError(
+                f"Theorem {entry.label!r} is inherited from another system and one "
+                "of its stored terms is gone, so promoting it here composed that "
+                "statement against this system's grammar — which is wider than the "
+                "one it was proved in, and could give it a different meaning. "
+                "Re-verify the system that owns it."
+            )
 
 
 _NOTHING_PENDING = PendingLibrary(cited=(), owner=None, specs={}, fresh={})
@@ -327,9 +464,8 @@ _NOTHING_PENDING = PendingLibrary(cited=(), owner=None, specs={}, fresh={})
 
 def read_library(
     session: Session,
-    system_id: uuid.UUID,
+    chain: LibraryChain,
     labels: Iterable[str],
-    library: str,
     hypotheses_of: uuid.UUID | None = None,
 ) -> PendingLibrary:
     """Read and digest-check everything one proof may cite, without its terms.
@@ -352,15 +488,15 @@ def read_library(
     one term sweep: done separately they each paid a recursive closure over
     `term_children` and a row fetch, which was a third of a re-check.
 
-    ``library`` is :func:`~website.logical.declarative.library_digest` for the
-    spec the result will be promoted against — what decides whether the stored
-    terms may be used.
+    ``chain`` is where a label may resolve and what guards each layer's terms;
+    see :class:`LibraryChain` for why an ancestor's entry is checked against the
+    ancestor's own digest rather than the citing system's.
     """
     wanted = list(dict.fromkeys(labels))
     if not wanted and hypotheses_of is None:
         return _NOTHING_PENDING
 
-    entries = read_theorems(session, system_id, wanted, hypotheses_of)
+    entries = read_theorems(session, chain.system_ids, wanted, hypotheses_of)
     if not entries:
         return _NOTHING_PENDING
 
@@ -368,25 +504,46 @@ def read_library(
     # statement is what its proof is establishing.
     owner = next((e for e in entries if e.id == hypotheses_of), None)
     asked_for = set(wanted)
-    cited = tuple(entry for entry in entries if entry.label in asked_for)
+    cited = _nearest(chain, (entry for entry in entries if entry.label in asked_for))
 
     specs = {entry.label: theorem_spec(entry) for entry in cited}
     fresh = {
         entry.label: entry
         for entry in cited
         if entry.schema_digest is not None
-        and entry.schema_digest == theorem_digest(library, specs[entry.label])
+        and entry.schema_digest
+        == theorem_digest(chain.digest(entry.system_id), specs[entry.label])
     }
-    return PendingLibrary(cited=cited, owner=owner, specs=specs, fresh=fresh)
+    return PendingLibrary(
+        cited=cited, owner=owner, specs=specs, fresh=fresh, chain=chain
+    )
+
+
+def _nearest(
+    chain: LibraryChain, entries: Iterable[StoredTheorem]
+) -> tuple[StoredTheorem, ...]:
+    """One entry per label: the nearest system in ``chain`` that has it.
+
+    A label is a citation, and a citation must resolve to exactly one theorem. A
+    chain can offer several — a child may prove its own `id` over an ancestor's —
+    and the child's is the answer, on the same rule the rest of inheritance
+    follows: what the nearer layer says about a name is what that name means.
+    Order is otherwise the query's, which is stable for a given ask.
+    """
+    best: dict[str, StoredTheorem] = {}
+    for entry in entries:
+        held = best.get(entry.label)
+        if held is None or chain.rank(entry.system_id) < chain.rank(held.system_id):
+            best[entry.label] = entry
+    return tuple(best.values())
 
 
 def load_theorems(
     session: Session,
-    system_id: uuid.UUID,
+    chain: LibraryChain,
     labels: Iterable[str],
     built: EngineSystem,
     context: Context,
-    library: str,
     hypotheses_of: uuid.UUID | None = None,
 ) -> dict[str, PromotedTheorem]:
     """Promote everything one proof may cite, sweeping for its terms as it goes.
@@ -397,7 +554,7 @@ def load_theorems(
     they were just parsed. A caller reading its lines from rows should use the
     two halves and sweep once for both (see ``proofs_mapping``).
     """
-    pending = read_library(session, system_id, labels, library, hypotheses_of)
+    pending = read_library(session, chain, labels, hypotheses_of)
     graph = prefetch_terms(session, pending.term_ids)
     return pending.promote(built, context, graph)
 
@@ -452,13 +609,16 @@ def _statements() -> tuple[Select, Select, Select, Select]:
     """
     theorems = select(
         PromotedTheoremRow.id,
+        PromotedTheoremRow.system_id,
         PromotedTheoremRow.label,
         PromotedTheoremRow.statement,
         PromotedTheoremRow.matching,
         PromotedTheoremRow.statement_term_id,
         PromotedTheoremRow.schema_digest,
     ).where(
-        PromotedTheoremRow.system_id == bindparam("system_id"),
+        # The whole inheritance chain, not one system: a citation resolves
+        # against an ancestor's library too (see `LibraryChain`).
+        PromotedTheoremRow.system_id.in_(bindparam("system_ids", expanding=True)),
         or_(
             PromotedTheoremRow.label.in_(bindparam("labels", expanding=True)),
             # `NULL` is the "no owner" case: `id = NULL` is never true, so a
@@ -525,7 +685,7 @@ _THEOREMS, _PREMISES, _BINDINGS, _PROVISOS = _statements()
 
 def read_theorems(
     session: Session,
-    system_id: uuid.UUID,
+    system_ids: Sequence[uuid.UUID],
     labels: Sequence[str],
     hypotheses_of: uuid.UUID | None = None,
 ) -> list[StoredTheorem]:
@@ -547,7 +707,11 @@ def read_theorems(
     rows = list(
         session.execute(
             _THEOREMS,
-            {"system_id": system_id, "labels": list(labels), "owner": hypotheses_of},
+            {
+                "system_ids": list(system_ids),
+                "labels": list(labels),
+                "owner": hypotheses_of,
+            },
         )
     )
     if not rows:
@@ -581,6 +745,7 @@ def read_theorems(
     return [
         StoredTheorem(
             id=row.id,
+            system_id=row.system_id,
             label=row.label,
             statement=row.statement,
             matching=row.matching,
