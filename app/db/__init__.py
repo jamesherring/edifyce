@@ -75,6 +75,15 @@ from app.db.systems_mapping import (
     spec_to_system,
     system_to_spec,
 )
+from app.db.system_relations import (
+    RELATION_KINDS,
+    RELATION_STATUSES,
+    SystemRelationObligationRow,
+    SystemRelationRow,
+    SystemRelationSortRow,
+    SystemRelationSymbolRow,
+)
+from app.db.system_relations_mapping import related_layers
 from app.db.terms import TermChildRow, TermRow
 from app.db.terms_mapping import (
     TermGraph,
@@ -134,6 +143,14 @@ __all__ = [
     "theorem_digest",
     "spec_to_system",
     "system_to_spec",
+    # The general edge (app/db/system_relations.py).
+    "RELATION_KINDS",
+    "RELATION_STATUSES",
+    "SystemRelationObligationRow",
+    "SystemRelationRow",
+    "SystemRelationSortRow",
+    "SystemRelationSymbolRow",
+    "related_layers",
     "effective_spec",
     "effective_library",
     "inherited_definition_count",

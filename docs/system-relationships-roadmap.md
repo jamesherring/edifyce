@@ -848,6 +848,43 @@ tested against the systems that break it, and this suite already had them.
 
 **Delivers** multiple parents, sort renames, translations.
 
+Split in two, because the halves are independently testable and the second is
+where §3.2 has teeth. **R4a — what an edge resolves — is done**: the four tables
+of §5.4, and `related_layers` turning the edges into a `LibraryChain`'s extra
+layers. **R4b** is the rename: the sort/symbol maps applied as a term-level
+constructor remap, with the narrowing refusal coming from `Constructor.admits`
+rather than a name comparison. R4a's edges are all identity on names, which is
+exactly what a second parent is.
+
+Three things R4a settled that the design left open:
+
+- **Ordering puts the spine first.** Relation layers are appended *after* the
+  inheritance chain, so a label the tower already answers keeps its answer and an
+  edge can only add. The spine is a claim the builder checked; an edge is a claim
+  an author made, so the conservative direction is the spine's.
+- **An edge's `status` is not trusted alone.** The column is a cache of the
+  obligations' verdict, and it can go stale without anyone touching it — an
+  obligation is undischarged by its theorem disappearing (`ON DELETE SET NULL`),
+  which writes back to no edge. So the obligations are read too, and a stale
+  cache fails closed.
+- **An edge reaches the source's whole chain, and is reached from the target's.**
+  A theorem two layers below the source is citable across the edge exactly as it
+  is below the source; and an edge onto an *ancestor* reaches the descendant,
+  since the ancestor's library is already citable there. Anything else would make
+  an edge's reach depend on which layer of a tower it was attached to.
+- **Reach and invalidation are one question asked twice** (Codex, on #162).
+  Widening where a citation may resolve without widening `_citing_systems` left a
+  sibling target holding `valid`, `result` and its `proof_lines` after the
+  theorem they rested on was retired — and a verify trusts a lemma's stored rows,
+  so a third proof would have rested on it too. The walk now follows discharged
+  edges as well as the spine. §9.15's rule generalises: *any* new way for a label
+  to resolve is a new way for a verdict to go stale.
+- **A discharge can vanish without saying so.** An obligation discharged by a
+  theorem loses it to `ON DELETE SET NULL` when that theorem is retired, and
+  nothing writes back to the obligation's status — so an obligation naming
+  neither a primitive nor a theorem is outstanding whatever its status says. The
+  model already claimed this; only the column was doing it, not the query.
+
 **Tests and verification** — `tests/test_system_relations.py`.
 
 - *Valid:* an `interpretation` edge with a sort **rename** (`prop → wff`)

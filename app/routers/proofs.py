@@ -78,6 +78,7 @@ from app.db import (
 )
 from app.db.models import User
 from app.db.promoted_theorems import PromotedTheoremRow
+from app.db.system_relations import SystemRelationRow
 from app.db.systems import RuleRow
 from app.routers._common import (
     PageParams,
@@ -839,10 +840,25 @@ async def _citing_systems(
     reached = [system_id]
     frontier = [system_id]
     while frontier:
-        children = list(
-            await session.scalars(
-                select(FormalSystem.id).where(
-                    FormalSystem.inherits_from_id.in_(frontier)
+        # Both ways a library reaches further: down the spine, and across a
+        # discharged relation edge. Found in review — R4a widened where a
+        # citation may resolve without widening this, so a sibling target kept a
+        # verdict resting on a theorem it could no longer reach. Reach and
+        # invalidation are one question asked twice and have to agree.
+        children = sorted(
+            set(
+                await session.scalars(
+                    select(FormalSystem.id).where(
+                        FormalSystem.inherits_from_id.in_(frontier)
+                    )
+                )
+            )
+            | set(
+                await session.scalars(
+                    select(SystemRelationRow.target_system_id).where(
+                        SystemRelationRow.source_system_id.in_(frontier),
+                        SystemRelationRow.status == "discharged",
+                    )
                 )
             )
         )

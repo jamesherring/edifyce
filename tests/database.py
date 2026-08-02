@@ -69,9 +69,33 @@ def create_tables(url: str, tables: list[Table]) -> None:
     try:
         metadata = tables[0].metadata
         metadata.drop_all(engine)
-        metadata.create_all(engine, tables=tables)
+        metadata.create_all(engine, tables=[*tables, *_always()])
     finally:
         engine.dispose()
+
+
+def _always() -> list[Table]:
+    """Tables every system-building test needs whether it names them or not.
+
+    `load_effective` queries `system_relations` on every build — an edge is one
+    of the places a citation may resolve (R4) — so the table is part of the
+    minimum a system needs, exactly as `terms` and `promoted_theorems` already
+    are. Added here rather than to each module's own list because "what a system
+    minimally needs" is one fact, and ten copies of it drift.
+    """
+    from app.db.system_relations import (
+        SystemRelationObligationRow,
+        SystemRelationRow,
+        SystemRelationSortRow,
+        SystemRelationSymbolRow,
+    )
+
+    return [
+        SystemRelationRow.__table__,
+        SystemRelationSortRow.__table__,
+        SystemRelationSymbolRow.__table__,
+        SystemRelationObligationRow.__table__,
+    ]
 
 
 def enable_foreign_keys(engine) -> None:  # noqa: ANN001 - Engine or AsyncEngine's sync_engine

@@ -41,6 +41,7 @@ from app.db import (
     inherited_definition_count,
     inherited_rule_count,
     load_theorems,
+    related_layers,
     system_to_spec,
     term_context,
 )
@@ -336,7 +337,17 @@ async def load_effective(
         return EffectiveSystem(chain, errors=errors)
     try:
         spec, library = effective_library(chain)
-        return EffectiveSystem(chain, spec=spec, library=library)
+        # And the edges: a relation reaches theorems the spine cannot, and is
+        # appended *after* it so the tower keeps every label it already answers
+        # (see `related_layers`). Read here rather than inside
+        # `effective_library`, which takes systems and no session — an edge is
+        # rows this chain does not carry.
+        extra = await session.run_sync(lambda sync: related_layers(sync, chain))
+        return EffectiveSystem(
+            chain,
+            spec=spec,
+            library=LibraryChain(library.layers + tuple(extra)),
+        )
     except DeclarativeError as exc:
         # A cross-layer collision. The chain describes no system at all, so this
         # is the same kind of failure as a spec that will not build, reported the

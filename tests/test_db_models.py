@@ -50,6 +50,12 @@ def test_expected_tables_present():
         "promoted_theorems",
         "promoted_theorem_premises",
         "promoted_theorem_bindings",
+        # The general edge between two systems, where the spine cannot reach:
+        # a second parent, a sort rename, a notation map (app/db/system_relations.py).
+        "system_relations",
+        "system_relation_sorts",
+        "system_relation_symbols",
+        "system_relation_obligations",
     }
 
 
