@@ -486,6 +486,53 @@ Constraints when building it:
 - `to_string` probes with `getattr(pattern, "pattern", None)`. AGENTS.md
   discourages that idiom; dispatch on pattern type instead of copying it.
 
+### 4.3a What the `$t` block turned out to be — *read; §4.2 needs revisiting*
+
+`parser` now keeps comments (55,742 of them, and 60,661 attribution clauses on
+assertions), which is what makes the `$t` block reachable at all: it *is* a
+comment, so stripping comments was what blocked this whole section.
+`metamath/typesetting.py` scans it. Three measurements change what §4.2 assumes.
+
+**All three maps cover the same 1,794 tokens** — not the 1,818 / 1,867 / 1,882 a
+keyword count suggests. The surplus is directives commented out inside the block's
+own `/* … */`.
+
+**`althtmldef` is not Unicode.** It is *HTML that renders as* Unicode, and the
+difference is load-bearing: **719 of the 1,794 values carry `<SPAN>` markup**,
+including every variable —
+
+```
+ph   ->   <SPAN CLASS=wff STYLE="color:blue">&#x1D711;</SPAN>
+```
+
+— where the colour encodes the typecode. Of the 1,075 that are entity-only, only
+149 are non-ASCII once unescaped. `typesetting.as_text` does the derivation (682
+tokens yield a non-ASCII character), but dropping the tags discards a distinction
+the HTML makes, so it is a documented *policy* rather than a conversion.
+
+**And the derived map is not injective, which §4.2 has to answer for.** Passed
+through `as_text`, **50 renderings are shared by 107 of the 1,794 tokens**:
+
+| | |
+|---|---|
+| `∪` | `u.`, `U.`, `U_` |
+| `∩` | `i^i`, `\|^\|`, `\|^\|_` |
+| `⊥` | `F.`, `._\|_`, `_\|_` |
+| `,` | `.,`, `,`, `,.`, `,,` |
+
+§4.1's own rule is that a *display* collision is cosmetic and a **source**
+collision is a correctness bug. §4.2 proposes this map as the imported source, so
+these 107 are exactly the case it forbids, and adopting it wholesale would make
+three different unions unparseable from their own rendering.
+
+It is not fatal, and the shape of the answer is already in §4.4: the colliding
+tokens differ in *arity and position* (`u.` is binary, `U.` unary, `U_` indexed),
+which a per-**production** template distinguishes even where a per-token map
+cannot. So the collisions are an argument for production templates rather than
+against Unicode source — but §4.2 needs restating in those terms, and the §4.4
+collision report should start from this list of 50 rather than be discovered
+later.
+
 ### 4.4 Beyond per-token substitution
 
 A per-token map yields token-soup LaTeX (`( \surd \` 2 ) \in \mathbb{R}`). Because

@@ -85,6 +85,12 @@ class Assertion:
     # that are in scope but unmentioned by the statement. Recorded so a proof can
     # be checked to cite only what was actually in scope for it.
     active_hypotheses: tuple[str, ...] = ()
+    # The `$( … $)` comment immediately preceding the statement, verbatim, or None.
+    # Metamath has no description keyword: a statement is documented by the comment
+    # before it, and that convention is the whole of the association. Kept raw here
+    # so this module stays a reader - :mod:`~.comments` is what reads prose and
+    # attributions out of it.
+    comment: str | None = None
 
     @property
     def is_logical(self) -> bool:
@@ -128,6 +134,10 @@ class Database:
     # Assertion labels in file order - the order an import must follow, since a
     # theorem may only cite what precedes it.
     order: list[str] = field(default_factory=list)
+    # Every `$( … $)` comment, in file order, including those attached to a
+    # statement. The unattached ones are what carry a file's front matter and its
+    # `$t` typesetting block (:mod:`~.typesetting`).
+    comments: list[str] = field(default_factory=list)
     # Views derived from the fields above, built on first use. `parse` populates
     # a database and hands it over; nothing mutates one afterwards, so these stay
     # valid for its lifetime. They are cached because an import asks for them per
@@ -202,27 +212,37 @@ class Database:
         return (self.assertions[label] for label in self.order)
 
 
-def _strip_comments(text: str) -> str:
-    # Remove `$( ... $)` comments. Metamath forbids nesting, so a linear scan is
-    # correct; an unterminated comment is a hard error rather than a silent tail.
-    #
-    # Scan by index rather than re-slicing the remainder: set.mm holds ~56k
-    # comments in 51MB, so carrying the tail forward each time is quadratic and
-    # takes minutes, against well under a second for this.
-    out: list[str] = []
+def _tokenise(text: str) -> tuple[list[str], list[tuple[int, str]]]:
+    """Split ``text`` into tokens, keeping the ``$( … $)`` comments aside.
+
+    Returns the tokens and, per comment in file order, the index of the token it
+    immediately *precedes* - which is how a Metamath comment says what it is
+    about: the description of a statement is the comment before it.
+
+    Comments used to be discarded here. They carry most of what a `.mm` file
+    knows beyond its mathematics - `set.mm` has 55,742 of them, 46,976 with a
+    `(Contributed by …)` - and the `$t` typesetting block, which is the only
+    machine-readable notation the file has, is itself a comment.
+
+    Metamath forbids nesting, so a linear scan is correct; an unterminated
+    comment is a hard error rather than a silent tail. Scanned by index rather
+    than by re-slicing the remainder, because carrying the tail forward each time
+    is quadratic over 51 MB and takes minutes.
+    """
+    tokens: list[str] = []
+    comments: list[tuple[int, str]] = []
     position = 0
     while True:
         start = text.find("$(", position)
         if start == -1:
-            out.append(text[position:])
-            return "".join(out)
+            tokens.extend(text[position:].split())
+            return tokens, comments
 
-        out.append(text[position:start])
+        tokens.extend(text[position:start].split())
         end = text.find("$)", start + 2)
         if end == -1:
             raise MetamathError("Unterminated comment ($( with no $)).")
-        # Keep a space so tokens either side never fuse across the comment.
-        out.append(" ")
+        comments.append((len(tokens), text[start + 2:end]))
         position = end + 2
 
 
@@ -240,8 +260,12 @@ def parse(text: str) -> Database:
     Raises :class:`MetamathError` on malformed source. ``$[ … $]`` file
     inclusion is not supported - an import works on a self-contained database.
     """
-    tokens = _strip_comments(text).split()
+    tokens, comments = _tokenise(text)
     database = Database()
+    database.comments = [body for _index, body in comments]
+    # The comment a statement is documented by is the nearest one before it, so a
+    # later comment at the same token index wins.
+    preceding = {index: body for index, body in comments}
     scopes: list[_Scope] = [_Scope()]
     position = 0
 
@@ -280,6 +304,7 @@ def parse(text: str) -> Database:
             raise MetamathError(f"Dangling token {token!r} at end of file.")
 
         label, keyword = token, tokens[index + 1]
+        label_index = index
         body, index = _read_until(tokens, index + 2, "$.")
 
         if keyword in ("$f", "$e"):
@@ -322,6 +347,7 @@ def parse(text: str) -> Database:
                 distinct=tuple(d for scope in scopes for d in scope.distinct),
                 proof=proof,
                 active_hypotheses=tuple(h.label for h in active),
+                comment=preceding.get(label_index),
             )
             database.order.append(label)
             continue
