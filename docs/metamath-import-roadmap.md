@@ -533,6 +533,54 @@ against Unicode source — but §4.2 needs restating in those terms, and the §4
 collision report should start from this list of 50 rather than be discovered
 later.
 
+### 4.3b The fold, parameterised — *done*
+
+`website/logical/rendering.py` is `Node.to_string`'s fold with the templates
+swappable. A `Projection` maps a constructor name to render steps — the same
+`("lit", …)` / `("slot", …)` shape `Constructor.pieces` already holds, so a
+projection is a *substitute template* rather than a new kind of thing. A
+constructor it does not name renders from its own, so a partial projection is
+useful and `render(term)` with none is `to_string()` exactly. That identity is
+checked over all **49,105** of set.mm's parsed statements, which is what lets
+projections be added without changing any existing caller.
+
+It lives outside the kernel, as §4.3 requires: the kernel exposes `pieces` and
+nothing here reaches back in.
+
+`metamath/display.py` is the bridge from a token map to production templates, and
+the bridge is the whole trick. A production's template is *made of* the tokens the
+`$t` block renders, so mapping the tokens **inside the template** yields a
+production template — and the tree then supplies the brackets, the nesting and the
+argument order that per-token substitution loses:
+
+```
+wcel   ('slot','A'), ('lit',' e. '), ('slot','B')
+   ->  ('slot','A'), ('lit',' ∈ '),  ('slot','B')
+```
+
+Over set.mm that seeds **776** templates automatically and re-spells **48,824** of
+the 49,105 statements:
+
+```
+( sqrt ` 2 ) e. RR                          ( √ ‘ 2 ) ∈ ℝ
+( sqrt ` 2 ) e/ QQ                          ( √ ‘ 2 ) ∉ ℚ
+( A. z ( z e. x <-> z e. y ) -> x = y )     ( ∀ 𝑧 ( 𝑧 ∈ 𝑥 ↔ 𝑧 ∈ 𝑦 ) → 𝑥 = 𝑦 )
+```
+
+Two things it deliberately does not do. It does not invent notation the source
+lacks — `( sqrt \` 2 )` becomes `( √ ‘ 2 )`, not `√2`, because the parentheses and
+the application backtick are in the production and `set.mm` renders them. Turning
+that into `\sqrt{2}` means *overriding* the production's template, which is §4.4
+and is editorial rather than automatic; seeding from the file is the safe half.
+And it takes spacing from the *template*, not the map: a `$t` value carries HTML
+padding (`' &isin; '`) which would double every gap.
+
+Atoms are included, which is easy to miss and cost a first attempt: a Metamath
+constant is a nullary production (`RR`, `sqrt`, `0`) carrying its text rather than
+a template, so a projection reaching only compound productions renders `( √ ‘ 2 )
+∈ RR` — operators re-spelled, constants left in ASCII. Including them took the
+projection from 120 templates to 776.
+
 ### 4.4 Beyond per-token substitution
 
 A per-token map yields token-soup LaTeX (`( \surd \` 2 ) \in \mathbb{R}`). Because
