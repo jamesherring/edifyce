@@ -31,12 +31,20 @@ slot. That keeps ``( ph -> ps )`` rendering as ``( ph → ps )`` rather than
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ..kernel.constructors import constructor_for
 from ..kernel.definitions import Definition as KernelDefinition
 from ..kernel.terms import Node
-from ..matching.patterns import AtomPattern, Pattern, StringPattern, UnionPattern
+from ..matching.patterns import (
+    AtomPattern,
+    Pattern,
+    RegexPattern,
+    StringPattern,
+    UnionPattern,
+)
 from ..rendering import Projection
 from .typesetting import as_text
 
@@ -47,7 +55,8 @@ if TYPE_CHECKING:
 
     from ..build_context import FormalSystemContext
     from ..formal_system import FormalSystem
-    from ..kernel.constructors import Piece
+    from ..matching.definitions import DefinedNotation
+    from ..kernel.constructors import Constructor, Piece
     from .typesetting import Typesetting
 
 
@@ -63,6 +72,73 @@ def _map_literal(text: str, tokens: Mapping[str, str]) -> str:
     lead = " " if text[:1].isspace() else ""
     trail = " " if text[-1:].isspace() else ""
     return f"{lead}{mapped}{trail}"
+
+
+def _reachable_sorts(context: FormalSystemContext) -> dict[str, set[str]]:
+    # Each sort with every sort its inclusions reach, itself included. A sort
+    # *including* another means everything the inner one builds is also a term of
+    # the outer, so their input languages overlap and two slots taking them are
+    # not distinguishable by sort name alone.
+    direct: dict[str, set[str]] = {}
+    for sort, pattern in context.variables.items():
+        if not isinstance(pattern, UnionPattern):
+            continue
+        direct[sort] = {
+            member.name
+            for member in pattern.patterns
+            if isinstance(member, UnionPattern)
+        }
+    closed: dict[str, set[str]] = {}
+    for sort in direct:
+        seen = {sort}
+        stack = list(direct.get(sort, ()))
+        while stack:
+            inner = stack.pop()
+            if inner in seen:
+                continue
+            seen.add(inner)
+            stack.extend(direct.get(inner, ()))
+        closed[sort] = seen
+    return closed
+
+
+def _members(union: UnionPattern, seen: set[int]) -> list[Pattern]:
+    # Everything that can build a term of this sort, **through inclusions**. A
+    # union's member may itself be a union - that is how a sort is included into
+    # another, and how the Metamath importer puts each `$v` variable in a
+    # `<typecode>_var` sub-sort of its typecode. Stopping at the first level would
+    # compare `class`'s own productions with each other and never with the class
+    # *variables*, which compete for exactly the same slot.
+    if id(union) in seen:
+        return []
+    seen.add(id(union))
+    found: list[Pattern] = []
+    for member in union.patterns:
+        if isinstance(member, UnionPattern):
+            found.extend(_members(member, seen))
+        elif isinstance(member, (StringPattern, AtomPattern, RegexPattern)):
+            found.append(member)
+    return found
+
+
+def _constructors_by_sort(
+    context: FormalSystemContext,
+) -> list[tuple[str, Constructor]]:
+    # Every production with a sort it can build, inclusions followed. Two
+    # productions only compete for a parse within one sort, so a shared spelling
+    # across sorts is not an ambiguity and must not be reported as one - but a
+    # production reachable through two sorts competes in both, and appears twice.
+    found: list[tuple[str, Constructor]] = []
+    for sort, pattern in context.variables.items():
+        if not isinstance(pattern, UnionPattern):
+            continue
+        already: set[int] = set()
+        for member in _members(pattern, set()):
+            if id(member) in already:
+                continue
+            already.add(id(member))
+            found.append((sort, constructor_for(member)))
+    return found
 
 
 def _productions(context: FormalSystemContext) -> list[Pattern]:
@@ -138,6 +214,200 @@ def projection_for(
         if changed:
             templates[constructor.name] = tuple(pieces)
     return Projection(templates=templates, name=name)
+
+
+@dataclass(frozen=True)
+class Collision:
+    """Two or more productions of one sort that a notation spells the same."""
+
+    sort: str
+    spelling: str
+    productions: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class NotationReport:
+    """What a candidate notation would leave unsaid or say twice.
+
+    §4.4's "report of unmapped tokens and colliding renderings", so re-syncing a
+    notation against a grammar is driven by a list rather than by discovering
+    breakage. The two halves matter for different reasons.
+
+    ``unmapped`` is cosmetic: a token the notation does not spell renders in the
+    source spelling, and the result is mixed but readable and still correct.
+
+    ``collisions`` is not, and which it is depends on what the notation is *for*.
+    As a **display** it is cosmetic too - two things that look alike are a
+    presentation flaw, and the term is unambiguous underneath. As a **source** it
+    is a correctness bug: two productions spelled alike cannot be told apart by a
+    parser, so text no longer determines the term.
+
+    **This finds collisions; it does not certify their absence.** Deciding whether
+    a context-free grammar is ambiguous is not something a comparison of surface
+    templates can do, and three rounds of review each found another way an earlier
+    version answered "no collisions" for a grammar that had them - a regex leaf a
+    mapped atom now matches, two slots whose sorts differ by name but overlap by
+    inclusion, a defined form reachable from a sort that did not declare it. Those
+    are fixed, and the honest reading of an empty ``collisions`` is *nothing was
+    found by this check*, not *this notation is unambiguous*. Adopting a notation
+    as a source wants a parser run over the corpus as well.
+    """
+
+    unmapped: tuple[str, ...] = ()
+    collisions: tuple[Collision, ...] = ()
+
+    @property
+    def collision_free(self) -> bool:
+        """Whether this check found nothing - a necessary condition for a source
+        notation, and deliberately not called "usable": see the class docstring on
+        what an empty result does and does not establish."""
+        return not self.collisions
+
+
+def _skeleton(constructor: Constructor, tokens: Mapping[str, str]) -> str | None:
+    # The literal shape, with every slot anonymous. Slot names are private to a
+    # production, so two templates differing only in what they call a slot are
+    # indistinguishable to a parser; whether their *sorts* keep them apart is a
+    # separate question, asked per candidate pair by `_slots_overlap`.
+    if constructor.pieces:
+        return "".join(
+            _map_literal(text, tokens) if kind == "lit" else "\x00"
+            for kind, text in constructor.pieces
+        )
+    if constructor.atom_value is not None:
+        return tokens.get(constructor.atom_value, constructor.atom_value)
+    return None
+
+
+def _shown(constructor: Constructor, tokens: Mapping[str, str]) -> str:
+    # The same shape, printable: each slot as the sort it takes. A collision is a
+    # user-facing record, so it must survive a terminal and a text column.
+    if not constructor.pieces:
+        return _skeleton(constructor, tokens) or constructor.name
+    return "".join(
+        _map_literal(text, tokens)
+        if kind == "lit"
+        else f"<{constructor.slot_sorts[text].name}>"
+        if text in constructor.slot_sorts
+        else "<?>"
+        for kind, text in constructor.pieces
+    )
+
+
+def _slots_overlap(
+    left: Constructor, right: Constructor, reachable: Mapping[str, set[str]]
+) -> bool:
+    # Whether two same-shaped templates can accept the same text. Sorts are
+    # compared by *language*, not by name: a sort including another accepts
+    # everything it does, so a `<class>` slot and a `<setvar>` slot overlap
+    # wherever `setvar` is included in `class`, and `( x ★ y )` matches both.
+    if len(left.slots) != len(right.slots):
+        return False
+    for a, b in zip(left.slots, right.slots):
+        first, second = left.slot_sorts.get(a), right.slot_sorts.get(b)
+        if first is None or second is None:
+            continue
+        names = (first.name, second.name)
+        if names[1] not in reachable.get(names[0], {names[0]}) and names[
+            0
+        ] not in reachable.get(names[1], {names[1]}):
+            return False
+    return True
+
+
+def _matches_regex(leaf: Constructor, text: str) -> bool:
+    # Whether a regex leaf of the sort accepts this whole spelling. A regex
+    # production has a *language* rather than a spelling, so it cannot be compared
+    # by grouping - but it can be asked. `signature` carries the regex text, the
+    # constructor keeping no pattern object.
+    _kind, expression = leaf.signature
+    try:
+        return re.fullmatch(expression, text) is not None
+    except re.error:
+        # An expression this module cannot compile is not evidence of a collision;
+        # the grammar owns it, and refusing to report is the safe direction here
+        # because a false collision would bury the real ones.
+        return False
+
+
+def notation_report(
+    context: FormalSystemContext,
+    tokens: Mapping[str, str],
+    notations: Iterable[DefinedNotation] = (),
+) -> NotationReport:
+    """Check ``tokens`` against ``context``'s grammar before adopting it.
+
+    Run this rather than reasoning about the token map: a map may collide heavily
+    at the *token* level and not at all at the production level, because arity and
+    position tell productions apart where a token map cannot. On `set.mm` the
+    `$t` Unicode map shares 50 renderings across 107 tokens, and that comes to
+    **32** colliding spellings - `∪` is three different tokens, but `( A ∪ B )`,
+    `∪ A` and `∪ x ∈ A B` are three different shapes.
+
+    ``notations`` are the defined forms, which are notation too and can collide
+    with a declared production just as readily. Pass ``system.context.definitions``
+    - a `DefinedNotation` carries both the sort it builds and the pattern its
+    template is, so unlike a kernel definition it can be placed. In a Metamath
+    import they add nothing, a `$a` having spelled the form before a `df-` gave it
+    meaning; in a hand-authored system a definition may be the only thing that
+    spells it.
+
+    See :class:`NotationReport` on what an empty result does not establish.
+    """
+    reachable = _reachable_sorts(context)
+    placed: list[tuple[str, Constructor]] = list(_constructors_by_sort(context))
+    # A defined form is reachable from every sort that includes the one it builds,
+    # because the parser tries the definitions of each union it descends through.
+    for notation in notations:
+        constructor = constructor_for(notation.template)
+        own = notation.sort.name
+        for sort, reaches in reachable.items():
+            if own in reaches:
+                placed.append((sort, constructor))
+
+    unmapped: set[str] = set()
+    grouped: dict[tuple[str, str], list[Constructor]] = {}
+    regexes: dict[str, list[Constructor]] = {}
+    for sort, constructor in placed:
+        for kind, text in constructor.pieces:
+            if kind == "lit":
+                unmapped.update(w for w in text.split() if w not in tokens)
+        if constructor.atom_value is not None and constructor.atom_value not in tokens:
+            unmapped.add(constructor.atom_value)
+        if constructor.kind == "regex":
+            regexes.setdefault(sort, []).append(constructor)
+            continue
+        skeleton = _skeleton(constructor, tokens)
+        if skeleton is not None:
+            grouped.setdefault((sort, skeleton), []).append(constructor)
+
+    collisions: list[Collision] = []
+    for (sort, _skel), constructors in sorted(grouped.items()):
+        # Same shape is necessary but not sufficient: the slots must be able to
+        # take the same text too.
+        clashing: set[str] = set()
+        for i, left in enumerate(constructors):
+            for right in constructors[i + 1:]:
+                if _slots_overlap(left, right, reachable):
+                    clashing.update((left.name, right.name))
+        # A regex leaf of the sort accepts a language rather than a spelling, so
+        # ask it directly whether it would also match what this one now spells.
+        literal = _skeleton(constructors[0], tokens)
+        if literal is not None and "\x00" not in literal:
+            for leaf in regexes.get(sort, ()):
+                if _matches_regex(leaf, literal):
+                    clashing.update({c.name for c in constructors} | {leaf.name})
+        if clashing:
+            collisions.append(
+                Collision(
+                    sort=sort,
+                    spelling=_shown(constructors[0], tokens),
+                    productions=tuple(sorted(clashing)),
+                )
+            )
+    return NotationReport(
+        unmapped=tuple(sorted(unmapped)), collisions=tuple(collisions)
+    )
 
 
 def unicode_projection(system: FormalSystem, typesetting: Typesetting) -> Projection:

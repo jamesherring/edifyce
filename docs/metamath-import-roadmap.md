@@ -533,6 +533,84 @@ against Unicode source — but §4.2 needs restating in those terms, and the §4
 collision report should start from this list of 50 rather than be discovered
 later.
 
+### 4.2a Unicode as source, measured — *§4.2 revised*
+
+§4.2 proposed importing `set.mm` with Unicode as the **source** notation. Two
+measurements say most of that should not be done, and the part worth having costs
+nothing.
+
+**The collision is real but a fifth the size feared.** §4.3a recorded that the `$t`
+Unicode map shares 50 renderings across 107 tokens, and §4.1 classes a source
+collision as a correctness bug. Measured at the level that decides a parse -
+whether two *productions of one sort* end up spelled alike, slot names punched out
+- it is **32 spellings over 64 productions**, still a fraction of the tokens,
+because arity and position tell apart what a token map cannot: `∪` is `u.`, `U.`
+and `U_`, but `( A ∪ B )`, `∪ A` and `∪ x ∈ A B` are three different shapes.
+
+| notation | colliding spellings | productions |
+|---|---|---|
+| source (ASCII) | **0** | 0 |
+| Unicode (`althtmldef`) | 32 | 64 |
+| LaTeX (`latexdef`) | 19 | 38 |
+
+(An earlier revision said 19 and 8. Both were wrong, in opposite directions, and
+review caught the measurement rather than the conclusion: the walk stopped at a
+sort's own productions and never reached the sub-sorts included into it — so
+`class`'s operators were never compared with the class *variables* — while slots
+were punched out without their sorts, so two templates differing only in what sort
+a slot takes counted as colliding. Fixing both moved the figure up.)
+
+**And the check finds collisions rather than certifying their absence.** Three
+rounds of review each found another way it answered "none" for a grammar that had
+them: a regex leaf a mapped atom now matches, two slots whose sorts differ by name
+but overlap by inclusion, a defined form reachable from a sort that did not declare
+it. All three are fixed and pinned, and none changes `set.mm`'s figures — but the
+pattern is the lesson. Deciding whether a context-free grammar is ambiguous is not
+something a comparison of surface templates can do, so the property is named
+`collision_free` rather than `usable_as_source`, and adopting a notation as a
+source wants a parser run over the corpus as well as a clean report.
+
+`metamath/display.notation_report` is the check, and §4.4's asked-for report: it
+gives the unmapped tokens and the colliding spellings for any candidate notation,
+so re-syncing is driven by a list. Both `$t` maps cover every token the grammar
+uses - `unmapped` is empty for each.
+
+**What remains is genuine ambiguity in `set.mm`'s own rendering**, not an artefact.
+`cpi` (the constant π) and `cppi` (the prime-counting function) are both `π` on its
+HTML pages, as are `cpnf`/`cpinfty` (`+∞`), `cz`/`cza` (`ℤ`) and `cnr`/`cright`
+(`R`). Sharper still, its *class variables* are spelled like its operators — the
+variable `.+` renders `+`, exactly as `caddc` does, and likewise `./`, `.-` — so
+`( A + B )` would not say which. A reader disambiguates by context; a parser
+cannot. Adopting Unicode as the imported source therefore needs 32 editorial
+decisions about what to call the second of each pair, which is a judgement about
+`set.mm` rather than a piece of engineering.
+
+**And a Unicode source needs no engine work at all**, which is the measurement that
+changes the recommendation. A grammar *declared* in Unicode already parses and
+round-trips:
+
+```python
+Production(sort="formula", name="implication", template="(A → B)", ...)
+system.parse("(𝜑 → ¬⊥) [given]")     # parses, and to_string() gives it back
+```
+
+So there was never an engine gap. What §4.2 actually proposed was **re-spelling an
+imported corpus**, and that couples four things - production templates, proof
+emission (`import_proof` writes Metamath tokens), promotion, and proviso naming
+(`𝜑` would have to be legal in a proviso, which is what `_proviso_safe_names`
+exists to worry about) - and then wants all 47,546 proofs re-verified against a
+changed grammar.
+
+For what? Readability is already had: §4.3b renders any term in any notation
+without touching the grammar. The only thing re-spelling adds is *authoring the
+imported corpus in Unicode*, and nobody authors `set.mm` here - it is imported.
+
+**So §4.2 is revised.** Unicode source is for **new** systems, where an author
+declares the notation once and no re-spelling, collision list or re-verification
+arises. The imported corpus keeps `set.mm`'s tokens as its source and gains
+Unicode as a *projection*. If re-spelling the import is ever wanted, the report is
+what makes it safe and the 32 pairs are what must be decided first.
+
 ### 4.3b The fold, parameterised — *done*
 
 `website/logical/rendering.py` is `Node.to_string`'s fold with the templates

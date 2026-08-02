@@ -17,7 +17,11 @@ from website.logical.declarative import Production, SystemSpec, build_system
 from website.logical.formal_system import FormalSystem
 from website.logical.metamath import build_spec, parse
 from website.logical.metamath.definitions import statement_of
-from website.logical.metamath.display import projection_for, unicode_projection
+from website.logical.metamath.display import (
+    notation_report,
+    projection_for,
+    unicode_projection,
+)
 from website.logical.metamath.parser import Database
 from website.logical.metamath.typesetting import Typesetting, typesetting_of
 from website.logical.rendering import render
@@ -152,3 +156,226 @@ def test_a_definitions_own_notation_is_seeded_too() -> None:
         system.build_context, {"S": "⊤", "->": "→"}, definitions=system.definitions
     )
     assert render(term, with_definitions) == "(⊤ → p)"
+
+
+def test_a_notation_report_finds_nothing_wrong_with_the_source_spelling() -> None:
+    # The identity: a grammar's own tokens are distinct by construction, so no two
+    # productions are spelled alike. Everything is "unmapped" because the empty map
+    # spells nothing, which is what unmapped means and why it is only cosmetic.
+    _database, system, _ = built()
+    report = notation_report(system.build_context, {})
+
+    assert report.collision_free
+    assert report.collisions == ()
+    assert "e." in report.unmapped
+
+
+def test_a_notation_report_names_the_tokens_it_cannot_spell() -> None:
+    _database, system, _ = built()
+    report = notation_report(system.build_context, {"e.": "∈"})
+
+    assert "e." not in report.unmapped
+    assert "->" in report.unmapped
+
+
+def two_constants(sort_a: str, sort_b: str) -> FormalSystem:
+    """A grammar with two constants, so a notation can be made to confuse them."""
+    return build_system(
+        SystemSpec(
+            name="n",
+            productions=[
+                Production(sort="formula", name="var", regex="[p-r]"),
+                Production(sort=sort_a, name="first", atom_value="ALPHA"),
+                Production(sort=sort_b, name="second", atom_value="BETA"),
+            ],
+            lines=[LineSpec(name="statement", shape="<formula> [<reference>]",
+                            parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,.-]+")],
+                            logical_sort="formula")],
+        )
+    )
+
+
+def test_a_notation_that_spells_two_productions_alike_is_not_a_source() -> None:
+    # The distinction the whole of §4.2 turns on. As a *display* this is cosmetic —
+    # two things look alike and the term underneath is unambiguous. As a *source*
+    # it is a correctness bug, because text no longer determines a term.
+    system = two_constants("formula", "formula")
+    report = notation_report(system.build_context, {"ALPHA": "★", "BETA": "★"})
+
+    assert not report.collision_free
+    (collision,) = report.collisions
+    assert collision.sort == "formula"
+    assert collision.spelling == "★"
+    assert collision.productions == ("first", "second")
+
+
+def test_productions_of_different_sorts_may_share_a_spelling() -> None:
+    # Two productions only compete for a parse within one sort, so this is not an
+    # ambiguity and reporting it would bury the real ones.
+    system = two_constants("formula", "other")
+    report = notation_report(system.build_context, {"ALPHA": "★", "BETA": "★"})
+
+    assert report.collision_free
+
+
+def test_a_sub_sort_competes_in_the_sort_that_includes_it() -> None:
+    # The Metamath importer puts each `$v` variable in a `<typecode>_var` sub-sort
+    # included into the typecode, so a class variable and a class *constant* fill
+    # the same slot. A walk stopping at a sort's own members never compares them —
+    # and over set.mm that hid half the collisions, class variables like `.+` being
+    # spelled exactly as the `+` operator is.
+    _database, system, _ = built()
+    report = notation_report(system.build_context, {"RR": "𝐴", "A": "𝐴"})
+
+    assert not report.collision_free
+    (collision,) = report.collisions
+    assert collision.sort == "class"
+    assert collision.productions == ("class_var_A", "cr")
+
+
+def test_two_templates_differing_only_in_slot_sort_do_not_collide() -> None:
+    # A parser tells these apart by what each slot admits, so reporting them would
+    # bury the real collisions. Checked under the *identity* notation, where a
+    # grammar must always be usable as its own source.
+    system = build_system(
+        SystemSpec(
+            name="s",
+            productions=[
+                Production(sort="formula", name="var", regex="[p-r]"),
+                Production(sort="setvar", name="svar", regex="[x-z]"),
+                Production(sort="formula", name="frel", template="(A ~ B)",
+                           bindings=[("A", "formula"), ("B", "formula")]),
+                Production(sort="formula", name="srel", template="(A ~ B)",
+                           bindings=[("A", "setvar"), ("B", "setvar")]),
+            ],
+            lines=[LineSpec(name="statement", shape="<formula> [<reference>]",
+                            parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,.-]+")],
+                            logical_sort="formula")],
+        )
+    )
+    report = notation_report(system.build_context, {})
+
+    assert report.collision_free
+
+
+def test_a_collision_spelling_is_printable() -> None:
+    # It is a user-facing field, so slots show as the sort they take rather than a
+    # sentinel — which also has to survive a terminal, a log and a text column.
+    system = build_system(
+        SystemSpec(
+            name="s",
+            productions=[
+                Production(sort="formula", name="var", regex="[p-r]"),
+                Production(sort="formula", name="one", template="(A ~ B)",
+                           bindings=[("A", "formula"), ("B", "formula")]),
+                Production(sort="formula", name="two", template="(C ~ D)",
+                           bindings=[("C", "formula"), ("D", "formula")]),
+            ],
+            lines=[LineSpec(name="statement", shape="<formula> [<reference>]",
+                            parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,.-]+")],
+                            logical_sort="formula")],
+        )
+    )
+    (collision,) = notation_report(system.build_context, {}).collisions
+
+    assert collision.spelling == "(<formula> ~ <formula>)"
+    assert "\x00" not in collision.spelling
+
+
+def test_a_defined_form_can_collide_with_a_production() -> None:
+    # Defined forms are notation too. `projection_for` already reached them; the
+    # report has to as well, or a hand-authored system whose definition spells a
+    # form like an existing production is reported usable as a source when it is
+    # not.
+    system = build_system(
+        SystemSpec(
+            name="d",
+            productions=[
+                Production(sort="formula", name="var", regex="[p-r]"),
+                Production(sort="formula", name="implication", template="(A -> B)",
+                           bindings=[("A", "formula"), ("B", "formula")]),
+                Production(sort="formula", name="falsum", atom_value="F",
+                           denotes_constant=True),
+            ],
+            definitions=[Definition(sort="formula", name="d", higher="S",
+                                    lower="(F -> F)", bindings=[])],
+            lines=[LineSpec(name="statement", shape="<formula> [<reference>]",
+                            parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,.-]+")],
+                            logical_sort="formula")],
+        )
+    )
+    tokens = {"F": "★", "S": "★"}
+
+    assert notation_report(system.build_context, tokens).collision_free
+    report = notation_report(
+        system.build_context, tokens, notations=system.context.definitions
+    )
+    assert not report.collision_free
+    (collision,) = report.collisions
+    assert collision.productions == ("falsum", "formula:S")
+
+
+LINE = LineSpec(name="statement", shape="<formula> [<reference>]",
+                parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,.-]+")],
+                logical_sort="formula")
+
+
+def test_a_mapped_atom_that_a_regex_leaf_would_also_match_collides() -> None:
+    # A regex production has a *language*, not a spelling, so it cannot be grouped
+    # with the others — but it can be asked. Dropping them let a notation map an
+    # atom onto text the sort's variable leaf already accepts, and be reported
+    # clean.
+    system = build_system(SystemSpec(name="a", productions=[
+        Production(sort="formula", name="var", regex="[p-r]"),
+        Production(sort="formula", name="alpha", atom_value="ALPHA"),
+    ], lines=[LINE]))
+    report = notation_report(system.build_context, {"ALPHA": "p"})
+
+    assert not report.collision_free
+    (collision,) = report.collisions
+    assert collision.productions == ("alpha", "var")
+
+
+def test_slots_of_sorts_that_include_one_another_overlap() -> None:
+    # Sort *names* differing does not make the input languages disjoint: a sort
+    # including another accepts everything it does. With `setvar` in `class`,
+    # `( x ★ y )` matches both templates, so they collide despite `<class>` and
+    # `<setvar>` reading differently.
+    system = build_system(SystemSpec(name="b", productions=[
+        Production(sort="setvar", name="svar", regex="[x-z]"),
+        Production(sort="class", name="setvar"),
+        Production(sort="class", name="cconst", atom_value="CC"),
+        Production(sort="formula", name="crel", template="(A + B)",
+                   bindings=[("A", "class"), ("B", "class")]),
+        Production(sort="formula", name="srel", template="(A - B)",
+                   bindings=[("A", "setvar"), ("B", "setvar")]),
+    ], lines=[LINE]))
+    report = notation_report(system.build_context, {"+": "★", "-": "★"})
+
+    assert not report.collision_free
+    (collision,) = report.collisions
+    assert collision.productions == ("crel", "srel")
+
+
+def test_a_defined_form_competes_in_every_sort_that_includes_its_own() -> None:
+    # The parser tries the definitions of each union it descends through, so a
+    # `setvar` definition is a candidate when parsing a `class` too.
+    system = build_system(SystemSpec(name="c", productions=[
+        Production(sort="setvar", name="svar", regex="[x-z]"),
+        Production(sort="setvar", name="unit", atom_value="U",
+                   denotes_constant=True),
+        Production(sort="class", name="setvar"),
+        Production(sort="class", name="cconst", atom_value="CC"),
+        Production(sort="formula", name="rel", template="(A = B)",
+                   bindings=[("A", "class"), ("B", "class")]),
+    ], definitions=[Definition(sort="setvar", name="d", higher="S", lower="U",
+                               bindings=[])], lines=[LINE]))
+    report = notation_report(
+        system.build_context, {"S": "★", "CC": "★"},
+        notations=system.context.definitions,
+    )
+
+    assert not report.collision_free
+    (collision,) = report.collisions
+    assert collision.sort == "class"
+    assert collision.productions == ("cconst", "setvar:S")
