@@ -20,6 +20,24 @@ from __future__ import annotations
 # inferred.
 EQUIVALENCES = frozenset({"wb", "wceq"})
 
+# The one assertion that cannot be stated over either of them: `df-bi` *defines*
+# `<->`, so it is written in `-.` and `->` and the root test refuses it. `dfbi1` is
+# the same content the ordinary way round —
+#
+#     df-bi  |- -. ( ( ( ph <-> ps ) -> -. ( ( ph -> ps ) -> -. ( ps -> ph ) ) )
+#                   -> -. ( -. ( ( ph -> ps ) -> -. ( ps -> ph ) ) -> ( ph <-> ps ) ) )
+#     dfbi1  |- ( ( ph <-> ps ) <-> -. ( ( ph -> ps ) -> -. ( ps -> ph ) ) )
+#
+# — and `set.mm` says so itself, which is why this is one entry rather than a
+# reading of a negation nest: the file carries `$j definition 'dfbi1' for 'wb';`,
+# the sole `definition` directive among its 1,204 `$j`. The table is written from
+# that rather than invented, and `_restatement` checks what the directive cannot:
+# that `dfbi1` is *proved* and that its proof cites `df-bi`.
+#
+# A database bootstraps its equivalence connective once, so a second entry here
+# would be a surprise rather than a pattern.
+RESTATEMENTS: dict[str, str] = {"df-bi": "dfbi1"}
+
 
 # Which slot of a syntax axiom **binds**, and over which others.
 #

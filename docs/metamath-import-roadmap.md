@@ -3,12 +3,12 @@
 **Status:** whole corpus imported and checked — **all 47,546 theorems verify**,
 each against only the notation and theorems preceding it, every proof emitted from
 its stored compressed proof and checked by Edifyce's own kernel (§1.1). The
-primitive basis is no longer "every logical `$a`": **1,428 of `set.mm`'s 1,559
-import as definitions** rather than axioms, leaving 131 primitive, and every
+primitive basis is no longer "every logical `$a`": **1,429 of `set.mm`'s 1,559
+import as definitions** rather than axioms, leaving 130 primitive, and every
 theorem still verifies (§5, A4). What remains is a short, enumerated tail — 119
-statements whose root is not a declared definitional equivalence, and 12 others —
+statements whose root is not a declared definitional equivalence, and 11 others —
 and every one of them is a statement whose *shape* says it does not define, rather
-than one the representation cannot carry. 126 of the 131 are named `ax-` by
+than one the representation cannot carry. 126 of the 130 are named `ax-` by
 `set.mm` itself.
 
 Goal: import Metamath's `set.mm` while keeping **full verifiability** and **full
@@ -43,7 +43,7 @@ are not relitigated), and what remains.
 | Token-collision defects (§1.2) | fixed — four instances of one shape |
 | `$t` typesetting / notation (§4) | **next** |
 | Axiom-vs-theorem split (§3.2) | done — engine, and the library stored by provenance |
-| Definition classification (§5, A4) | done — wired into the walk; 1,428 definitions / 131 axioms, of which 126 are `set.mm`'s own `ax-` |
+| Definition classification (§5, A4) | done — wired into the walk; 1,429 definitions / 130 axioms, of which 126 are `set.mm`'s own `ax-` |
 
 `tests/test_metamath_import.py` imports `sqrt2re` from its verbatim `set.mm` proof
 and has Edifyce's kernel check the result:
@@ -83,7 +83,7 @@ own kernel.
 | verified | **47,546 (100%)** |
 | rejected by the kernel | 0 |
 | failed to promote | 0 |
-| definitions registered | 1,428 of 1,559 logical `$a` (§5, A4) |
+| definitions registered | 1,429 of 1,559 logical `$a` (§5, A4) |
 | wall clock | 22 min 45 s axioms only, 24 min 17 s with definitions |
 | peak memory | 3.6 GB |
 
@@ -554,13 +554,14 @@ first; a richer type discipline risks needing to re-prove things and is best
 deferred.
 
 **A4. Definition classification — *done; see "A4 wired in" below*.**
-The classifier and its wiring are both in place — 1,428 of set.mm's 1,559 logical
-`$a` register as definitions and 131 stay primitive. The rationale below is kept
+The classifier and its wiring are both in place — 1,429 of set.mm's 1,559 logical
+`$a` register as definitions and 130 stay primitive. The rationale below is kept
 as the record of why the split is worth having, and the figures inside it are
 *staged*: each states the corpus result as of the step it describes, so 1,335 /
 224 appears below as the state after binding slots and before the `$d` split, and
-1,427 / 132 as the state after that split and before the `cmpo` scope fix. Only
-the figures here and in the two tables above are the current result.
+1,427 / 132 as the state after that split and before the `cmpo` scope fix, and
+1,428 / 131 as the state before `df-bi` was declared. Only the figures here and
+in the two tables above are the current result.
 
 Metamath does not distinguish a definition from an axiom: both are `$a`, `df-` is
 a convention its verifier never reads, and soundness of the definitional ones is
@@ -879,7 +880,7 @@ and `set.mm`'s own literature treats them as axioms. Of the two that remain:
   refusing it is right.
 - **`df-bi`** is the bootstrap, and is treated in its own right next.
 
-### `df-bi`, the one definition that cannot state itself — *analysed, not taken*
+### `df-bi`, the one definition that cannot state itself — *done*
 
 Every other definition in `set.mm` gives meaning to a symbol using symbols that
 already have it. `df-bi` cannot, because the symbol it defines is the one the
@@ -923,15 +924,47 @@ and the previous three were each tried and each failed:
 | `equivalences` | "two slots of one sort" admits `→` as readily as `↔` | per database |
 | binding slots | position tried; `citg`, `cmpo`, `wral` each break it | per production |
 
-So the consistent route is a **declaration** — a database naming a derived
-equivalence pattern, or simply naming `df-bi` with the two forms it relates,
-exactly as `EQUIVALENCES` and `BINDERS` name what cannot be inferred.
+So the route taken is a **declaration**, and it turned out to be cheaper than
+inventing one: **`set.mm` already carries it.** Among the file's 1,204 `$j`
+directives is exactly one `definition` directive —
 
-The prior question is whether it buys anything. `df-bi` staying primitive costs
-one entry in a 131-strong basis and nothing in verification: all 47,546 theorems
-check either way. The case for doing it is that the basis would then contain
-nothing `set.mm` itself calls `df-` except the three class axioms and one mathbox
-typo — which is worth a declaration, and is not worth an inference.
+```
+$j definition 'dfbi1' for 'wb';
+```
+
+— and `dfbi1` is `|- ( ( ph <-> ps ) <-> -. ( ( ph -> ps ) -> -. ( ps -> ph ) ) )`,
+`df-bi`'s content the ordinary way round. `setmm.RESTATEMENTS` is written from
+that rather than invented, and `classify` reads the two forms off the restatement
+while naming the definition for the assertion — `df-bi` is what stops being an
+axiom, and a definitional step cites `df-bi`. Naming it for `dfbi1` would shrink
+the reported basis while leaving the axiom in it.
+
+**Why this is a declaration and not a loophole.** A table saying "read this
+assertion's shape from that theorem" could point anywhere, and a wrong entry would
+register a bogus definition while all 47,546 proofs still verified — they take no
+definitional steps, so nothing would notice. Three things are therefore checked
+(`_restatement`), and the third carries the weight:
+
+- the restatement must exist in the database;
+- it must be **proved**, not asserted. An asserted one would be a second axiom
+  about the same notation with nothing tying it to the first;
+- **its proof must cite the assertion it restates.** No structural test can
+  confirm that `-. ( ( L -> R ) -> -. ( R -> L ) )` *is* the biconditional of `L`
+  and `R` — deciding that is the semantic reading being avoided. What is checkable
+  is that the restatement was *derived from* the assertion, which makes it a
+  consequence of the axiom being reclassified rather than an unrelated equivalence
+  pointed at it. `dfbi1`'s proof is `( wb wi wn df-bi impbi con3rr3 mt3 )`.
+
+Reading a later theorem's statement is a deliberate forward reference, and worth
+naming as one. It is the narrowest available: what it supplies is *which two forms
+the assertion relates*, a fact about the file settled by parsing, of the same kind
+as `equivalences` and `BINDERS`. What licences the definition is `df-bi` itself,
+which sits at its own position. The restatement is evidence about a reading, not a
+step in a proof.
+
+**1,429 definitions, 130 axioms.** The basis now contains nothing `set.mm` itself
+calls `df-` except the three class axioms its own literature also calls axioms,
+and `df-gmdl`'s mathbox typo.
 
 **Abstract binders make both of set.mm's justifications unnecessary — and set.mm
 declines that on purpose.** Worth recording, because it decides what the binding-
@@ -984,7 +1017,7 @@ literal token `z`.
 What is left primitive is enumerated once, under "What is left primitive, and why
 almost none of it is ours" above — deliberately not repeated here, because a
 second copy is a second thing to update and the first time these numbers moved
-only one of the two copies did. The short of it: 126 of the 131 are `set.mm`'s
+only one of the two copies did. The short of it: 126 of the 130 are `set.mm`'s
 own `ax-`, and no assertion Metamath names `ax-` is classified as a definition.
 
 None of the three tests is load-bearing alone, and the set is not trusted to be

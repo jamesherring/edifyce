@@ -134,6 +134,7 @@ def walk(
     equivalences: frozenset[str] = frozenset(),
     classified: Callable[[Classified], None] | None = None,
     binders: Mapping[str, Mapping[str, Sequence[str]]] | None = None,
+    restatements: Mapping[str, str] | None = None,
 ) -> Iterator[CheckedTheorem]:
     """Check each of ``database``'s first ``limit`` theorems, in file order.
 
@@ -151,6 +152,10 @@ def walk(
     logical ``$a`` be imported as a **definition** as well as an axiom; naming
     none - the default - imports every one as an axiom exactly as before. See
     :mod:`~.definitions`, and ``classified`` for the per-assertion verdicts.
+
+    ``restatements`` names, per assertion, a proved theorem stating the same
+    definition with an equivalence at its root - for the one assertion that cannot
+    state itself, `set.mm`'s `df-bi`. :mod:`~.setmm` has it.
 
     ``binders`` declares which slots of a syntax axiom bind, and over which others
     (:func:`~.importer.build_spec`). It decides far more of the classification than
@@ -231,7 +236,9 @@ def walk(
         # already reason with (`declarative._require_a_fresh_defined_form`), and
         # this assertion's own rule mentions the very symbol it defines. Register
         # the rule first and every definition refuses itself.
-        statement = _classify(assertion, database, system, in_use, equivalences, classified)
+        statement = _classify(
+            assertion, database, system, in_use, equivalences, classified, restatements
+        )
 
         # Promoted whatever the verdict was, exactly as `import_theorem`
         # would have: a rejected proof does not retract its statement from
@@ -250,6 +257,7 @@ def _classify(
     in_use: set[str],
     equivalences: frozenset[str],
     report: Callable[[Classified], None] | None,
+    restatements: Mapping[str, str] | None = None,
 ) -> Term | None:
     # Decide what this assertion is and, when it is a definition, register it.
     # Returns its statement term for the caller to fold into `in_use`, or None if
@@ -262,7 +270,9 @@ def _classify(
         return None
 
     statement = statement_of(assertion, system)
-    verdict = classify(assertion, statement, in_use, database, system, equivalences)
+    verdict = classify(
+        assertion, statement, in_use, database, system, equivalences, restatements
+    )
     if verdict.is_definition:
         try:
             register_definition(verdict.definition, system)

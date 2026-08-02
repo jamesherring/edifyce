@@ -107,9 +107,14 @@ conservativity are untreated there, as in Metamath (see AGENTS.md), so the
 circularity refusal above has nothing behind it and every other gap of that kind
 is this module's to close.
 
-`df-bi` shows why the tests have to be structural. It defines ``<->`` and so
-cannot use it: its statement is a nest of negated implications, root ``-.``, and
-it falls to axiom exactly as it should.
+`df-bi` shows why the tests have to be structural, and is the one assertion they
+cannot reach on their own. It defines ``<->``, so it cannot be stated with it: its
+statement is a nest of negated implications, root ``-.``, and test 1 refuses it.
+Its two forms are perfectly ordinary and merely elsewhere, which is why the remedy
+is a *declaration* naming the theorem that states them the usual way
+(``restatements``, :func:`_restatement`) rather than a fourth attempt at reading a
+logical property off a shape. A database bootstraps its equivalence connective
+once, so nothing else in a file can need it.
 """
 
 from __future__ import annotations
@@ -122,9 +127,13 @@ from ..formal_system import statement_term
 from ..kernel.definitions import bind_scoped
 from ..kernel.terms import Node
 from ..promotion import promote_from_source
+from . import compressed
 from .importer import _distinct_provisos, _proviso_safe_names
+from .parser import MetamathError
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from ..formal_system import FormalSystem
     from ..kernel.terms import Term
     from .parser import Assertion, Database, Hypothesis
@@ -282,6 +291,61 @@ def _justification(assertion: Assertion, database: Database) -> Justification | 
     return Justification(label=proved, statement=" ".join(hypothesis.tokens))
 
 
+def _restatement(
+    assertion: Assertion,
+    restatements: Mapping[str, str],
+    database: Database,
+    system: FormalSystem,
+) -> tuple[Assertion, Term] | str | None:
+    # The assertion whose statement `assertion`'s shape should be read from, when a
+    # declaration says another one restates it - with its parsed statement. None
+    # when nothing is declared, a refusal *reason* when the declaration does not
+    # hold up.
+    #
+    # This exists for one shape, and `set.mm` has exactly one instance: `df-bi`
+    # defines `<->` and therefore cannot be stated with it, so its root is `-.` and
+    # the first shape test refuses it. Its two forms are perfectly ordinary; they
+    # are just not where a definition usually puts them. A database bootstraps its
+    # equivalence connective once, so this cannot arise twice in one file.
+    #
+    # Reading the *statement* of a later theorem is a deliberate forward reference,
+    # and the narrowest one that works. What it supplies is which two forms
+    # `assertion` relates - a fact about the file, settled by parsing, of the same
+    # kind as `equivalences` and `BINDERS`. What licences the definition is
+    # `assertion` itself, which is at its own position. So the restatement is
+    # evidence about a reading, not a step in a proof, and the checks below are
+    # what make it evidence rather than assertion:
+    label = restatements.get(assertion.label)
+    if label is None:
+        return None
+    restating = database.assertions.get(label)
+    if restating is None:
+        return f"is declared restated by '{label}', which the database does not have"
+    if restating.is_axiom:
+        # An asserted restatement would be a second axiom about the same notation,
+        # and nothing would tie it to the first. A *proved* one is a consequence of
+        # what the database already has.
+        return f"is declared restated by '{label}', which is asserted rather than proved"
+    if restating.essentials:
+        return f"is declared restated by '{label}', which holds only under hypotheses"
+    try:
+        cited, _letters = compressed.split_proof(restating.proof)
+    except MetamathError as exc:
+        return f"is declared restated by '{label}', whose proof cannot be read: {exc}"
+    if assertion.label not in cited:
+        # The check that carries the weight. No structural test can confirm that
+        # `-. ( ( L -> R ) -> -. ( R -> L ) )` *is* the biconditional of `L` and
+        # `R` - deciding that is the semantic reading this whole approach exists to
+        # avoid. What is checkable is that the restatement was **derived from** the
+        # assertion it restates, which is what makes it a consequence of the axiom
+        # being reclassified rather than an unrelated equivalence pointed at it.
+        return f"is declared restated by '{label}', whose proof does not cite it"
+    term = statement_of(restating, system)
+    if term is None:
+        return f"is declared restated by '{label}', whose statement does not parse"
+    return restating, term
+
+
 def classify(
     assertion: Assertion,
     statement: Term | None,
@@ -289,6 +353,7 @@ def classify(
     database: Database,
     system: FormalSystem,
     equivalences: frozenset[str] = frozenset(),
+    restatements: Mapping[str, str] | None = None,
 ) -> Classified:
     """Decide whether ``assertion`` is a definition, given what precedes it.
 
@@ -303,9 +368,27 @@ def classify(
     inferred because nothing structural distinguishes an equivalence from an
     implication, and it defaults to empty, so a caller that names none imports
     every logical ``$a`` as an axiom exactly as before.
+
+    ``restatements`` maps an assertion's label to that of a **proved** theorem
+    stating the same definition in equivalence form, for the one assertion that
+    cannot state itself: `set.mm`'s `df-bi` defines ``<->`` and so is written in
+    ``-.``/``->``, and `dfbi1` is the same content with ``<->`` at the root. The
+    shape tests then run against the restatement while the definition is named for
+    the assertion, which is what stops being an axiom. See :func:`_restatement`.
     """
     if statement is None:
         return Classified(assertion.label, reason="statement does not parse")
+
+    # A restatement replaces the *shape* the tests read, and nothing else: the
+    # verdict, the definition's name and label, and its obligation all stay with
+    # the assertion. `stated` is therefore what supplies the metavariables and the
+    # `$d` from here on, since the two forms are its.
+    restated = _restatement(assertion, restatements or {}, database, system)
+    if isinstance(restated, str):
+        return Classified(assertion.label, reason=restated)
+    stated = assertion
+    if restated is not None:
+        stated, statement = restated
 
     root = statement.constructor.name if isinstance(statement, Node) else "a variable"
     if root not in equivalences:
@@ -323,7 +406,7 @@ def classify(
 
     higher, lower = sides
     defined = higher.to_string()
-    if defined in {h.variable for h in assertion.floatings}:
+    if defined in {h.variable for h in stated.floatings}:
         # A bare metavariable defines nothing. Without this, `ax-1`
         # (``|- ( ph -> ( ps -> ph ) )``) reads as ``ph := ( ps -> ph )``: an
         # implication has the same shape as a biconditional, and `ph` is
@@ -358,7 +441,7 @@ def classify(
     if isinstance(justification, str):
         return Classified(assertion.label, reason=justification)
 
-    if _proviso_safe_names(assertion):
+    if _proviso_safe_names(stated):
         # A metavariable the proviso syntax cannot name (set.mm's `.,`). The
         # promotion path renames it, but a rename would have to reach the defined
         # and defining forms too, which are rendered from the parsed term.
@@ -367,7 +450,7 @@ def classify(
             reason="a metavariable cannot be named in a proviso",
         )
 
-    variables = {h.variable for h in assertion.floatings}
+    variables = {h.variable for h in stated.floatings}
     supplied = variables_used(higher, variables)
 
     # A leaf sitting in a *binder* slot is bound, not introduced. Which slots bind
@@ -436,11 +519,11 @@ def classify(
     # the cited theorem holding under its own `$d`, and those provisos are inherited
     # (`declarative._discharge_justification`) - so the constraint travels with the
     # obligation rather than being dropped.
-    constrained = {v for group in assertion.distinct for v in group if v in variables}
+    constrained = {v for group in stated.distinct for v in group if v in variables}
     obligation = (
         set()
         if justification is None
-        else {t for h in assertion.essentials for t in h.tokens if t in variables}
+        else {t for h in stated.essentials for t in h.tokens if t in variables}
     )
     unaccounted = sorted(constrained - resolvable - set(names) - obligation)
     if unaccounted:
@@ -483,7 +566,7 @@ def classify(
             # cost 242 of set.mm's 1,335 candidates before this line read this way.
             bindings=[
                 (h.variable, h.typecode)
-                for h in assertion.floatings
+                for h in stated.floatings
                 if h.variable in supplied
             ],
             # A `$d` restricts which substitutions the definition admits, so it
@@ -495,7 +578,7 @@ def classify(
             # `resolvable` covers. What the other pairs constrain, and why the
             # definition keeps its meaning without them, is argued above.
             provisos=list(
-                _distinct_provisos(assertion, database, system, only=resolvable)
+                _distinct_provisos(stated, database, system, only=resolvable)
             ),
             label=assertion.label,
             justification=justification,
