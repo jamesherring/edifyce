@@ -1691,6 +1691,10 @@ async def get_proof_structure(
         )
         for row in rows:
             shown = render_stored(graph, row.term_id, projection)
+            # `None` (no term) is dropped and `""` (a constructor the notation
+            # does not name) is kept, so a client can tell "nothing to read here"
+            # from "read, and the notation had nothing to say" — the second is a
+            # gap worth showing the source for.
             if shown is not None:
                 rendered[row.id] = shown
 

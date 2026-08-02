@@ -709,8 +709,13 @@ async def create_system(
     await session.commit()
 
     # Reload so the (empty) child collections are eagerly present for the
-    # detail serializer, and server-default timestamps are populated.
-    return _detail(await _get_owned_or_404(session, system.id, user.id))
+    # detail serializer, and server-default timestamps are populated. The
+    # notations need not be empty even here: a system created with a parent
+    # inherits that parent's.
+    return _detail(
+        await _get_owned_or_404(session, system.id, user.id),
+        await notation_names(session, system.id),
+    )
 
 
 @router.get("/{system_id}", response_model=FormalSystemDetail)
@@ -781,7 +786,12 @@ async def update_system(
         system.published_at = datetime.now(timezone.utc)
 
     await session.commit()
-    return _detail(await _get_owned_or_404(session, system_id, user.id))
+    # Read again rather than serving `[]`: a PATCH may repoint the parent, which
+    # is exactly the edit that changes which notations this system can be read in.
+    return _detail(
+        await _get_owned_or_404(session, system_id, user.id),
+        await notation_names(session, system_id),
+    )
 
 
 @router.delete("/{system_id}", status_code=status.HTTP_204_NO_CONTENT)

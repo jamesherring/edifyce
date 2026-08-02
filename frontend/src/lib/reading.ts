@@ -11,14 +11,19 @@ import type { ProofStructure, ProofStructureLine } from '$lib/api';
 
 /** One line as the chosen notation reads it, indent and citation restored.
  *
- * A line bearing no term — a blank, a comment, a scope opener — has nothing to
- * re-spell and keeps the source it was written in, so a reading is never missing
- * lines the proof has.
+ * A line the notation cannot read keeps the source it was written in, whole: a
+ * line bearing no term (a blank, a comment, a scope opener) has nothing to
+ * re-spell, and one whose constructor the notation does not name renders empty.
+ * `display` already carries its own citation, so the two cases are one — either
+ * the term was read and this writes the citation, or the source line stands as
+ * the author wrote it.
  */
 export function readProofLine(line: ProofStructureLine): string {
-	const body = line.rendered ?? line.display;
-	const cited = line.reference ? `${body} [${line.reference}]` : body;
-	return '    '.repeat(line.indent) + cited;
+	// Indentation is a count of leading spaces (`ProofLine.indent`), which is how
+	// the source line is reconstructed server-side too.
+	const indent = ' '.repeat(line.indent);
+	if (!line.rendered) return indent + line.display;
+	return indent + (line.reference ? `${line.rendered} [${line.reference}]` : line.rendered);
 }
 
 /** The whole proof read that way, or null when there is nothing stored to read.

@@ -51,8 +51,23 @@ describe('readProofLine', () => {
 		);
 	});
 
+	it('keeps the whole source line, citation included, when it falls back', () => {
+		// `display` is the authored line and already carries its citation, so the
+		// fallback must not append a second one.
+		expect(readProofLine(line({ rendered: null }))).toBe('x = x [HYP]');
+	});
+
+	it('falls back when the notation names nothing for the line', () => {
+		// A notation missing the line's constructor renders empty rather than null
+		// (the server distinguishes "not asked for" from "nothing to say"), and an
+		// empty formula with a citation hung off it is worse than the source.
+		expect(readProofLine(line({ rendered: '' }))).toBe('x = x [HYP]');
+	});
+
 	it('restores the indentation a subproof was written with', () => {
-		expect(readProofLine(line({ indent: 1 }))).toBe('    x ≡ x [HYP]');
+		// `indent` is a count of leading *spaces*, which is how the server rebuilds
+		// the source line too — not a nesting depth to expand.
+		expect(readProofLine(line({ indent: 4 }))).toBe('    x ≡ x [HYP]');
 	});
 });
 

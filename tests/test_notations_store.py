@@ -164,7 +164,7 @@ def test_the_stored_fold_agrees_with_the_engines_own() -> None:
     engine = build_system(build_spec(parsed, name="t"))
     typesetting = typesetting_of(parsed.comments)
     projection = total_projection(
-        notation_constructors(engine.build_context),
+        notation_constructors(engine.build_context, engine.definitions),
         unicode_projection(engine, typesetting),
     )
 

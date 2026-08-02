@@ -42,6 +42,7 @@
 	let notation = $state<string | null>(null);
 	let structure = $state<ProofStructure | null>(null);
 	let notationError = $state<string | null>(null);
+	let reading = $state(false);
 
 	// Bumped on every load so late responses from a previous id are dropped.
 	let loadSeq = 0;
@@ -50,8 +51,12 @@
 
 	async function load(id: string) {
 		const seq = ++loadSeq;
-		verifySeq++; // invalidate any in-flight verify from a previous proof
+		// Invalidate anything in flight for the previous proof: a late response
+		// would otherwise render its lines, or its error, inside this page.
+		verifySeq++;
+		notationSeq++;
 		verifying = false;
+		reading = false;
 		loading = true;
 		error = null;
 		result = null;
@@ -102,17 +107,22 @@
 		const seq = ++notationSeq;
 		notation = name;
 		notationError = null;
+		// Clear the previous reading before fetching the next: leaving it up would
+		// show one notation's text under another's name.
+		structure = null;
 		if (name === null || !proof) {
-			structure = null;
+			reading = false;
 			return;
 		}
+		reading = true;
 		try {
 			const read = await api.proofs.structure(proof.id, name);
 			if (seq === notationSeq) structure = read;
 		} catch (err) {
 			if (seq !== notationSeq) return;
-			structure = null;
 			notationError = err instanceof ApiError ? err.message : String(err);
+		} finally {
+			if (seq === notationSeq) reading = false;
 		}
 	}
 
@@ -225,6 +235,8 @@
 							<TriangleAlert class="size-4" />
 							<Alert.Description>{notationError}</Alert.Description>
 						</Alert.Root>
+					{:else if reading}
+						<LoadingSpinner message={`Reading in ${notation}…`} />
 					{:else if notation !== null && readable === null}
 						<p class="py-6 text-center text-sm text-muted-foreground">
 							Verify the proof to read it in {notation}: a notation re-spells the terms a

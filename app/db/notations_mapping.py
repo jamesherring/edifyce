@@ -9,6 +9,12 @@ The direction of travel matters. A notation is *derived* — from a `.mm` file's
 ``$t`` block, or from an author's overrides — and then stored, because deriving it
 needs the source the system was built from and a reader has only the database.
 Nothing here re-derives.
+
+Reading is **layered**, as the system is. A system inheriting from another is
+built from its ancestors' parts in front of its own, so their constructors are its
+constructors and their spellings are readings of it; a child's own rows win per
+constructor. Storing is not layered — a notation is stored against the one system
+it was derived for.
 """
 
 from __future__ import annotations
@@ -17,6 +23,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import delete, select
 
+from app.db.models import FormalSystem
 from app.db.systems import NotationPieceRow
 from website.logical.rendering import Projection
 
@@ -69,15 +76,59 @@ def store_notation(
     return len(projection.templates)
 
 
-async def notation_names(session: AsyncSession, system_id: uuid.UUID) -> list[str]:
-    """Every notation this system stores, in name order.
+# The same bound `systems.MAX_INHERITANCE_DEPTH` applies on the spine, restated
+# here rather than imported: this module is the persistence layer and must not
+# depend on a router (as `system_relations_mapping` already records). A cycle is
+# refused when the edge is stored, so the `seen` set below is a backstop against
+# data that predates that check.
+_MAX_DEPTH = 32
 
-    The source spelling is not among them: it is the grammar, not a notation, and
-    is what a reader gets by asking for none.
+
+async def notation_layers(
+    session: AsyncSession, system_id: uuid.UUID
+) -> list[uuid.UUID]:
+    """``system_id`` and its ancestors, **root first**.
+
+    A notation belongs to a grammar, and a system inheriting from another is built
+    from its ancestors' parts concatenated in front of its own (``layered_spec``),
+    so the ancestors' constructors are this system's constructors and their
+    spellings are readings of it. Without this, building on an imported corpus
+    would silently cost you the corpus's own notation — which, since a corpus is
+    where a `$t` block comes from, is every notation there is.
+
+    Ids only. The chain is walked here rather than through
+    ``systems.load_chain`` because that eagerly loads whole systems, and a
+    corpus-sized one is seconds — far more than a *reading* should cost.
+    """
+    layers = [system_id]
+    seen = {system_id}
+    current = system_id
+    while len(layers) < _MAX_DEPTH:
+        parent = await session.scalar(
+            select(FormalSystem.inherits_from_id).where(FormalSystem.id == current)
+        )
+        if parent is None or parent in seen:
+            break
+        seen.add(parent)
+        layers.insert(0, parent)
+        current = parent
+    return layers
+
+
+async def notation_names(session: AsyncSession, system_id: uuid.UUID) -> list[str]:
+    """Every notation this system can be read in, in name order.
+
+    Its own and its ancestors' (:func:`notation_layers`). The source spelling is
+    not among them: it is the grammar, not a notation, and is what a reader gets
+    by asking for none.
     """
     found = await session.scalars(
         select(NotationPieceRow.notation)
-        .where(NotationPieceRow.formal_system_id == system_id)
+        .where(
+            NotationPieceRow.formal_system_id.in_(
+                await notation_layers(session, system_id)
+            )
+        )
         .distinct()
         .order_by(NotationPieceRow.notation)
     )
@@ -87,18 +138,25 @@ async def notation_names(session: AsyncSession, system_id: uuid.UUID) -> list[st
 async def load_notation(
     session: AsyncSession, system_id: uuid.UUID, notation: str
 ) -> Projection | None:
-    """``system_id``'s notation of that name, or None if it stores none.
+    """The notation of that name for ``system_id``, or None if there is none.
 
-    None rather than an empty projection, so a caller can tell "this system has no
-    such notation" from "this notation re-spells nothing" — the first is worth
+    Layered like the system itself: the ancestors' rows first, then this system's
+    over the top, so a child re-spelling a constructor wins and everything it did
+    not mention keeps the parent's reading. That is what makes a notation useful
+    on a child of an imported corpus — the child adds a handful of productions and
+    inherits the spellings of the thousands it did not write.
+
+    None rather than an empty projection, so a caller can tell "no layer has such
+    a notation" from "this notation re-spells nothing" — the first is worth
     reporting to whoever asked for it, the second renders as the source and is
     unremarkable.
     """
+    layers = await notation_layers(session, system_id)
     rows = (
         await session.scalars(
             select(NotationPieceRow)
             .where(
-                NotationPieceRow.formal_system_id == system_id,
+                NotationPieceRow.formal_system_id.in_(layers),
                 NotationPieceRow.notation == notation,
             )
             .order_by(NotationPieceRow.constructor, NotationPieceRow.position)
@@ -107,9 +165,19 @@ async def load_notation(
     if not rows:
         return None
 
+    depth = {layer: index for index, layer in enumerate(layers)}
     templates: dict[str, list[Piece]] = {}
+    winner: dict[str, int] = {}
     for row in rows:
-        templates.setdefault(row.constructor, []).append((row.kind, row.text))
+        at = depth[row.formal_system_id]
+        if winner.get(row.constructor, -1) > at:
+            continue
+        if winner.get(row.constructor, -1) < at:
+            # A nearer layer re-spells this constructor, so the ancestor's steps
+            # are replaced rather than appended to.
+            winner[row.constructor] = at
+            templates[row.constructor] = []
+        templates[row.constructor].append((row.kind, row.text))
     return Projection(
         templates={name: tuple(pieces) for name, pieces in templates.items()},
         name=notation,

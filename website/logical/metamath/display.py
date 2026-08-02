@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from itertools import chain
 from typing import TYPE_CHECKING
 
 from ..kernel.constructors import constructor_for
@@ -141,7 +142,10 @@ def _constructors_by_sort(
     return found
 
 
-def notation_constructors(context: FormalSystemContext) -> list[Constructor]:
+def notation_constructors(
+    context: FormalSystemContext,
+    definitions: Iterable[KernelDefinition] = (),
+) -> list[Constructor]:
     """Every constructor a stored notation must give a spelling, deduplicated.
 
     What :func:`~website.logical.rendering.total_projection` completes a derived
@@ -149,13 +153,27 @@ def notation_constructors(context: FormalSystemContext) -> list[Constructor]:
     constructor the notation skips has no source template to fall back to and
     renders as a hole.
 
+    ``definitions`` are the system's registered definitions, for the same reason
+    :func:`projection_for` takes them — a *defined* form is notation the grammar
+    does not spell, so it is a member of no sort's union and walking the grammar
+    alone misses it. A stored term may carry one, so leaving it out would leave
+    exactly the hole this function exists to prevent. Pass ``system.definitions``.
+
     Deduplicated, unlike :func:`_constructors_by_sort`, which reports a production
     once per sort it competes in because that is what an *ambiguity* is about. A
     notation is keyed by constructor name, so the sorts are beside the point.
     """
+    everything = chain(
+        (constructor for _sort, constructor in _constructors_by_sort(context)),
+        (
+            definition.higher.constructor
+            for definition in definitions
+            if isinstance(definition.higher, Node)
+        ),
+    )
     found: list[Constructor] = []
     seen: set[str] = set()
-    for _sort, constructor in _constructors_by_sort(context):
+    for constructor in everything:
         if constructor.name in seen:
             continue
         seen.add(constructor.name)

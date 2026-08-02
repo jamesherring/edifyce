@@ -185,7 +185,7 @@ def _store_notation(
         return 0
     engine = build_system(spec)
     projection = total_projection(
-        notation_constructors(engine.build_context),
+        notation_constructors(engine.build_context, engine.definitions),
         unicode_projection(engine, typesetting),
     )
     return store_notation(session, system_id, projection)

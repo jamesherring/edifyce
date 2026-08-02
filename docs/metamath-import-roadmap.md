@@ -691,6 +691,16 @@ Three pieces wire it up:
   `$t` *and* the grammar that file built. A `.mm` with no `$t` stores none, and
   that is not a failed import.
 
+Reading is **layered**, as the system is. A system inheriting from another is
+built from its ancestors' parts in front of its own, so their constructors are its
+constructors and their spellings are readings of it; `notation_layers` walks the
+chain by id (not `load_chain`, which loads whole systems — seconds on a corpus,
+far more than a reading should cost) and a child's own rows win per constructor.
+Without that, building on an imported corpus would silently cost you the corpus's
+notation — and since a `$t` block is where a notation comes from, that is every
+notation there is. Storing stays unlayered: a notation is stored against the one
+system it was derived for.
+
 The API serves it: `GET /proofs/{id}/structure?notation=unicode` renders each
 line's term through the stored notation into `ProofLineOut.rendered`, and
 `FormalSystemDetail.notations` lists the names a system stores. `display` is left

@@ -143,7 +143,10 @@ Modernised from the original Django app (`website/models.py` on `main`):
   no source template to fall back to. `render_stored` folds it over the term rows,
   which is why showing a proof in a notation costs a query and not a system
   rebuild. Derived where the source is — a Metamath import reads the file's `$t`
-  block — never re-derived on the read path.
+  block — never re-derived on the read path. **Read** through the inheritance
+  chain (a child inherits its ancestors' notations and overrides them per
+  constructor, as its grammar layers on theirs); **stored** against the one system
+  it was derived for.
 - **`side_conditions`** — a definition's proviso (`where` clause) stored as the
   kernel's closed side-condition algebra (`side_conditions.py`) rather than an
   opaque string: one row per algebra node (`occurs`/`equal`/`disjoint`/`atom`/
