@@ -462,6 +462,22 @@ def _unsupported_for_abstraction(proof: Proof, sorts: FreeVars) -> str | None:
                 "nothing about other instances."
             )
 
+        if line.applied_definition is not None and line.formula_term is not None:
+            # A definitional step cites a *definition*, not a rule, so it builds
+            # no `Inference` and there is no binding to restate — and a
+            # definition's constraints are exactly the ones that must not be
+            # lost: its own proviso, and the binder freshness `fresh` generates.
+            # An unfold of `a ⊆ b` checked for the concrete `a`; holding `a`
+            # schematic would let a citation instantiate it to the very variable
+            # the defining form binds, which is the capture the unfold refused.
+            if abstract(line.formula_term, sorts) is not line.formula_term:
+                return (
+                    f"Line {line.number} applies a definition, whose freshness "
+                    "and provisos are checked against the concrete step and "
+                    "cannot yet be carried into a schematic theorem, and the "
+                    "nomination changes it. Promote it verbatim instead."
+                )
+
         if line.is_axiom and line.formula_term is not None:
             # An axiom-behaviour line is valid by fiat: `execute` grants it
             # without re-matching, so an abstracted term is never held to the

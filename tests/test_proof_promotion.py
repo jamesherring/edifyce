@@ -1384,3 +1384,56 @@ def test_a_negated_disjunction_has_no_rendering_rather_than_a_wrong_one():
         render_side_condition(Not(Or((Occurs("x", "P"), Occurs("y", "Q")))), {})
     with pytest.raises(ValueError, match="single-line"):
         render_side_condition(Not(Not(Occurs("x", "P"))), {})
+
+
+def test_a_definitional_step_cannot_have_its_leaves_generalised():
+    # Found in review (Codex). A definitional step cites a *definition*, not a
+    # rule, so it builds no `Inference` and there is no binding to restate — and
+    # a definition's constraints are exactly the ones that must not be lost: its
+    # own proviso, and the binder freshness `fresh` generates.
+    #
+    # The concrete escape: unfold `a ⊆ b` to `∀z (z ∈ a → z ∈ b)`, then hold `a`
+    # schematic. The unfold checked freshness for the concrete `a`; a citation
+    # could then instantiate it to the very variable the defining form binds —
+    # the capture the unfold itself refuses.
+    from tests.test_definition_fresh import _subset_spec
+
+    spec = _subset_spec(fresh=True, provisos=["disjoint(x, y, term)"])
+    # Matched on text only this refusal emits: the checker's own failure message
+    # also says "definition", so a looser match would agree with no guard at all.
+    with pytest.raises(ValueError, match="cannot yet be carried"):
+        engine_promote(
+            spec, "a ⊆ b [HYP]\n∀z (z ∈ a → z ∈ b) [Def, 1]", {"a": "term"}
+        )
+
+
+def test_a_definitional_step_the_nomination_does_not_touch_is_fine():
+    # The refusal is of a nomination that *changes* the unfolded line, not of
+    # every proof that ever unfolds a definition — otherwise a system whose
+    # notation is defined could never promote schematically at all.
+    from tests.test_definition_fresh import _subset_spec
+
+    spec_in = _subset_spec(fresh=True, provisos=["disjoint(x, y, term)"])
+    _system, (spec, _theorem) = engine_promote(
+        spec_in, "a ⊆ b [HYP]\n∀z (z ∈ a → z ∈ b) [Def, 1]", {}
+    )
+    assert spec.metavariables == {}
+
+
+@pytest.mark.parametrize(
+    "metavariables",
+    [
+        # Reaches `promoted_theorem_bindings.var`, a `String(128)`: unbounded, it
+        # is a Postgres truncation error at flush — a 500 where this is a 422.
+        {"P" * 200: "formula"},
+        {"P": "f" * 200},
+        {"": "formula"},
+        {"P": "   "},
+    ],
+)
+def test_a_metavariable_name_that_will_not_store_is_a_422(db, client, metavariables):
+    pc, _fol, _zfc = tower(db, client, f"names-{abs(hash(str(metavariables)))}@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+
+    status, _body = promote(client, proof, "id", metavariables)
+    assert status == 422
