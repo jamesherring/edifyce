@@ -96,6 +96,36 @@ def test_a_database_with_no_typesetting_stores_none() -> None:
         assert session.scalars(select(NotationPieceRow)).all() == []
 
 
+def test_a_typesetting_block_that_declares_no_unicode_stores_none() -> None:
+    # A `$t` block need not carry `althtmldef`: `set.mm` declares three maps over
+    # the same tokens, and a file may declare only the LaTeX and HTML ones, or
+    # nothing but site configuration. Completing an empty projection would store a
+    # `unicode` notation spelling every constructor exactly as the source does —
+    # advertising a reading that is the one a reader gets by asking for none.
+    latex_only = SOURCE.replace("althtmldef", "latexdef")
+    with database() as session:
+        report = import_corpus(session, parse(latex_only), name="t")
+        session.commit()
+
+        assert report.notation == 0
+        assert session.scalars(select(NotationPieceRow)).all() == []
+
+
+def test_a_typesetting_block_about_other_tokens_stores_none() -> None:
+    # The same conclusion one step later, and the reason the guard is on the
+    # derived projection and not only on the token map: a `$t` may declare plenty
+    # of Unicode for tokens no production of *this* grammar uses, which re-spells
+    # nothing just as surely.
+    foreign = SOURCE.replace('"e."', '"NOTATOKEN"').replace('"->"', '"NORTHIS"')
+    foreign = foreign.replace('"RR"', '"NORTHAT"').replace('"A."', '"NORTHEOTHER"')
+    with database() as session:
+        report = import_corpus(session, parse(foreign), name="t")
+        session.commit()
+
+        assert report.notation == 0
+        assert session.scalars(select(NotationPieceRow)).all() == []
+
+
 def test_storing_a_notation_replaces_the_one_before_it() -> None:
     # A notation is derived wholesale from a source that knows the whole grammar,
     # so a re-derivation dropping a constructor must drop its rows. Merging would

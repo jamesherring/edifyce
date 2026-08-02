@@ -181,12 +181,25 @@ def _store_notation(
     # Derived here because deriving needs what only an import has - the file's
     # `$t` and the grammar the file built. A reader has rows.
     typesetting = typesetting_of(database.comments)
-    if typesetting is None:
+    if typesetting is None or not typesetting.unicode:
+        # A `$t` block need not declare `althtmldef` at all - it may carry only
+        # `latexdef`/`htmldef`, or nothing but site configuration - and a block
+        # that declares no Unicode is as good as no block. Checked before the
+        # build, which is the expensive half.
         return 0
+
     engine = build_system(spec)
+    spellings = unicode_projection(engine, typesetting)
+    if not spellings.templates:
+        # Declared, but about tokens this grammar's productions never use. Storing
+        # the completion anyway would advertise a `unicode` notation that re-spells
+        # nothing - every constructor at its source template, which is what a
+        # reader already gets by asking for no notation at all.
+        return 0
+
     projection = total_projection(
         notation_constructors(engine.build_context, engine.definitions),
-        unicode_projection(engine, typesetting),
+        spellings,
     )
     return store_notation(session, system_id, projection)
 

@@ -688,8 +688,13 @@ Three pieces wire it up:
   display should not cost a system rebuild, which is what a *check* is for.
 - **`import_corpus`** derives and stores the `unicode` notation as the last step
   of an import, which is the only place it can be derived — it needs the file's
-  `$t` *and* the grammar that file built. A `.mm` with no `$t` stores none, and
-  that is not a failed import.
+  `$t` *and* the grammar that file built. A `.mm` storing none is not a failed
+  import, and there are three ways to store none: no `$t`; a `$t` declaring only
+  `latexdef`/`htmldef` (the three maps are independent, and a file may carry any
+  of them); and a `$t` whose Unicode is about tokens this grammar's productions
+  never use. The last two would otherwise complete to a `unicode` notation
+  spelling every constructor exactly as the source does — advertising a reading
+  that is the one a reader gets by asking for none.
 
 Reading is **layered**, as the system is. A system inheriting from another is
 built from its ancestors' parts in front of its own, so their constructors are its
