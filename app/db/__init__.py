@@ -89,6 +89,7 @@ from app.db.systems_mapping import (
 from app.db.system_relations import (
     RELATION_KINDS,
     RELATION_STATUSES,
+    SystemRelationExtraRow,
     SystemRelationObligationRow,
     SystemRelationRow,
     SystemRelationSortRow,
@@ -166,6 +167,7 @@ __all__ = [
     # The general edge (app/db/system_relations.py).
     "RELATION_KINDS",
     "RELATION_STATUSES",
+    "SystemRelationExtraRow",
     "SystemRelationObligationRow",
     "SystemRelationRow",
     "SystemRelationSortRow",

@@ -45,6 +45,7 @@ from app.db.terms_mapping import prefetch_terms, store_term
 from website.logical.matching import StringPattern
 from website.logical.promotion import TheoremSpec, promote_spec
 from website.logical.translation import IDENTITY, Translation
+from website.logical.wrapping import NO_TEMPLATE, StatementTemplate, build_template
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -58,6 +59,7 @@ if TYPE_CHECKING:
     from website.logical.kernel.terms import Term
     from website.logical.matching.context import Context
     from website.logical.matching.patterns import Pattern
+    from website.logical.wrapping import BuiltTemplate
 
 
 def theorem_digest(library: str, spec: TheoremSpec) -> str:
@@ -275,11 +277,23 @@ class LibraryLayer:
     every layer of an inheritance chain: a child's ``implication`` *is* its
     parent's row, so there is nothing to translate. Only a relation edge can
     carry a rename (R4b, `website/logical/translation.py`).
+
+    ``template`` is the other difference an edge can carry, and it is not a
+    rename: the target may state a different *kind* of thing than the source —
+    `Γ ⊢ φ` where the source proved `φ` — so a transferred statement is wrapped
+    rather than renamed (S2, `website/logical/wrapping.py`). Carried
+    **declaratively** and composed by :meth:`PendingLibrary.promote`, against the
+    very system the promotion is building against: sort admission compares
+    constructors by identity (`Constructor.admits`), so a wrap composed against
+    another build of the same grammar would produce a schema that unifies with
+    nothing. That is the same reason a stored term is rebuilt in the citing
+    system's context rather than shipped (§3.1).
     """
 
     system_id: uuid.UUID
     digest: str
     translation: Translation = IDENTITY
+    template: StatementTemplate = NO_TEMPLATE
 
 
 @dataclass(frozen=True)
@@ -409,6 +423,23 @@ class PendingLibrary:
 
             return read
 
+        # One built template per distinct wrap, since a chain can hold several
+        # layers and a wrap costs a parse of the template against the grammar.
+        wraps: dict[str, BuiltTemplate | None] = {}
+
+        def wrap_for(template: StatementTemplate) -> BuiltTemplate:
+            if template.key not in wraps:
+                wraps[template.key] = build_template(built, template)
+            composed = wraps[template.key]
+            if composed is None:
+                raise LookupError(
+                    f"The edge reaching this system restates a theorem as "
+                    f"{template.text!r}, which does not compose a statement of "
+                    "this system, so nothing crosses it. Fix the edge's "
+                    "statement template."
+                )
+            return composed
+
         promoted: dict[str, PromotedTheorem] = {}
         for entry in self.cited:
             rank, layer = self.chain.locate(entry.system_id)
@@ -431,13 +462,24 @@ class PendingLibrary:
                 spec = _translated(
                     entry, layer.translation, statement_term, premise_terms
                 )
+            if not layer.template.identity:
+                spec, statement_term, premise_terms = _wrapped(
+                    entry, wrap_for(layer.template), spec, statement_term,
+                    premise_terms,
+                )
             built_theorem = promote_spec(
                 built,
                 spec,
                 statement_term=statement_term,
                 premise_terms=premise_terms,
             )
-            if current is not None and rank > 0:
+            if current is not None and rank > 0 and layer.template.identity:
+                # A wrapped entry has already been held to something stricter:
+                # :func:`_wrapped` refuses one whose source term is missing
+                # rather than composing here, so there is nothing left for this
+                # to catch — and it would misread the wrap itself as a
+                # composition, since a wrapped schema term is by construction
+                # built here and not read from the cache.
                 _require_nothing_was_composed(entry, current, built_theorem, term)
             promoted[entry.label] = built_theorem
 
@@ -580,6 +622,85 @@ def _translated(
             text if term is None else term.to_string()
             for text, term in zip(spec.premises, terms)
         ),
+    )
+
+
+def _wrapped(
+    entry: StoredTheorem,
+    template: BuiltTemplate,
+    spec: TheoremSpec,
+    statement_term: Term | None,
+    premise_terms: Sequence[Term | None],
+) -> tuple[TheoremSpec, Term, list[Term]]:
+    """``spec`` restated in the target's shape, its terms wrapped (S2, §6.3).
+
+    Three things change, and the first is the only one that is not bookkeeping.
+
+    The **terms** are wrapped — `φ` becomes the term for `Γ ⊢ φ`, with the
+    source's own term as a subterm. That is a term construction and never a
+    string substitution, which matters because the target's grammar may read the
+    concatenation differently from how the source's read the part (§6.3, and the
+    `bj-0` hazard the same argument runs on for inheritance). The statement and
+    every premise are wrapped alike: a rule transferred with its hypotheses says
+    `Γ ⊢ P₁, …, Γ ⊢ Pₙ ⟹ Γ ⊢ C`, which is the only reading under which the
+    obligations discharge anything (§9.24).
+
+    The **extras** join the metavariables, so a citation instantiates `Γ` for
+    itself; and the **statement text** is re-rendered from the wrapped term, on
+    the same reasoning :func:`_translated` re-renders for a rename — the string
+    is a record of the term rather than a second source for it.
+
+    Refused rather than approximated: an extra that shadows one of the theorem's
+    own metavariables (it would capture), and a statement or premise whose term
+    is missing and which is not simply a metavariable. That second one is
+    :func:`_require_nothing_was_composed`'s rule stated where the wrap can act on
+    it — composing here would read the source's text against the *target's*
+    grammar, which is the one thing a transfer must never do.
+    """
+    shadowed = sorted(set(template.extras) & set(spec.metavariables))
+    if shadowed:
+        raise LookupError(
+            f"Theorem {entry.label!r} declares "
+            + ", ".join(repr(name) for name in shadowed)
+            + ", which the edge's statement template also introduces, so wrapping "
+            "it here would capture. Rename the template's metavariable."
+        )
+
+    def wrap(text: str, term: Term | None, what: str) -> Term:
+        if term is None:
+            # The one term nobody stores: a statement that is *only* a
+            # metavariable composes no structure, so there was nothing to cache
+            # (`_term_id`). Rebuild it rather than parse the text — the sort is
+            # the theorem's own declaration, so this reads nothing off the
+            # target's grammar that the map has not already been checked for.
+            sort = spec.metavariables.get(text.strip())
+            term = None if sort is None else template.variable(text.strip(), sort)
+        if term is None:
+            raise LookupError(
+                f"Theorem {entry.label!r} reaches this system through a statement "
+                f"template, and its {what} has no stored term to wrap. Composing "
+                "it here would read the statement against this system's grammar "
+                "rather than the one it was proved in. Re-verify the system that "
+                "owns it."
+            )
+        return template.wrap(term)
+
+    wrapped_statement = wrap(spec.statement, statement_term, "conclusion")
+    terms = list(premise_terms)
+    terms += [None] * (len(spec.premises) - len(terms))
+    wrapped_premises = [
+        wrap(text, term, f"premise {index + 1}")
+        for index, (text, term) in enumerate(zip(spec.premises, terms))
+    ]
+    return (
+        replace(
+            spec,
+            statement=wrapped_statement.to_string(),
+            premises=tuple(term.to_string() for term in wrapped_premises),
+            metavariables={**spec.metavariables, **template.extras},
+        ),
+        wrapped_statement,
+        wrapped_premises,
     )
 
 

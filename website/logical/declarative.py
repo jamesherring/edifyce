@@ -2178,7 +2178,7 @@ def library_digest(spec: SystemSpec) -> str:
     because promotion reads more of the system than a rule schema does. A rule
     template is parsed against the productions alone; a theorem's statement is a
     proof line's formula, so it is composed at the sorts a **line** is read at
-    (``promotion._logical_sorts``), and a *ground* one may use the system's
+    (``promotion.logical_sorts``), and a *ground* one may use the system's
     resolved **definitions** (``promotion._ground_schema_term``). Both therefore
     have to be here, where `schema_digests` can leave them out.
 

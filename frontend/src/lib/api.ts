@@ -303,6 +303,15 @@ export interface SystemRelationRename {
 	target: string;
 }
 
+/** One metavariable the statement template introduces — `Γ : context`. The sort
+ * names one of the *target's* sorts, since that is the grammar the template is
+ * read against. Not a rename of anything: a sequent's antecedent has no
+ * counterpart in the Hilbert formula being wrapped. */
+export interface SystemRelationExtra {
+	name: string;
+	sort: string;
+}
+
 export interface SystemRelationObligationInput {
 	source_label: string;
 	/** A rule of this system, or a theorem it has proved — one or the other. */
@@ -319,8 +328,14 @@ export interface SystemRelationCreate {
 	source_system_id: string;
 	kind?: RelationKind;
 	status?: RelationStatus;
+	/** How this system restates a transferred theorem when it states a different
+	 * *kind* of thing than the source does — `'G ⊢ {wff}'`, whose one
+	 * brace-marked hole names the sort the transferred statement is read at
+	 * here. Absent between two systems that agree what a judgement is. */
+	statement_template?: string | null;
 	sorts?: SystemRelationRename[];
 	symbols?: SystemRelationRename[];
+	extras?: SystemRelationExtra[];
 	obligations?: SystemRelationObligationInput[];
 }
 
@@ -332,8 +347,11 @@ export interface SystemRelationUpdate {
 	status?: RelationStatus;
 	/** Which edge wins a label two of them offer; lower first. */
 	position?: number;
+	/** The empty string clears the wrap; omitting it leaves it alone. */
+	statement_template?: string | null;
 	sorts?: SystemRelationRename[];
 	symbols?: SystemRelationRename[];
+	extras?: SystemRelationExtra[];
 	obligations?: SystemRelationObligationInput[];
 }
 
@@ -345,8 +363,10 @@ export interface SystemRelation {
 	kind: RelationKind;
 	status: RelationStatus;
 	position: number;
+	statement_template: string | null;
 	sorts: SystemRelationRename[];
 	symbols: SystemRelationRename[];
+	extras: SystemRelationExtra[];
 	obligations: SystemRelationObligation[];
 	/** Whether this edge transfers anything today, and which obligations stop it. */
 	resolves: boolean;

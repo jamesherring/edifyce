@@ -845,6 +845,19 @@ class SystemRelationRename(BaseModel):
     target: _Name128
 
 
+class SystemRelationExtra(BaseModel):
+    """One metavariable the statement template introduces — ``Γ : context``.
+
+    ``sort`` names one of the **target's** sorts: the template is read against
+    the grammar of the system gaining the theorems, not the one that proved
+    them. These are not renames of anything — a sequent's antecedent has no
+    counterpart in the Hilbert formula being wrapped.
+    """
+
+    name: _Name128
+    sort: _Name128
+
+
 class SystemRelationObligationIn(BaseModel):
     """One primitive of the source, and what stands in for it here.
 
@@ -874,8 +887,14 @@ class SystemRelationCreate(BaseModel):
     source_system_id: uuid.UUID
     kind: RelationKind = "extension"
     status: RelationStatus = "draft"
+    # How this system restates a transferred theorem, when it states a different
+    # *kind* of thing than the source does: `'G ⊢ {wff}'`, whose one brace-marked
+    # hole names the sort the transferred statement is read at here. Absent for
+    # every edge between two systems that agree about what a judgement is.
+    statement_template: str | None = Field(None, max_length=512)
     sorts: list[SystemRelationRename] = Field(default_factory=list)
     symbols: list[SystemRelationRename] = Field(default_factory=list)
+    extras: list[SystemRelationExtra] = Field(default_factory=list)
     obligations: list[SystemRelationObligationIn] = Field(default_factory=list)
 
 
@@ -891,8 +910,12 @@ class SystemRelationUpdate(BaseModel):
     status: RelationStatus | None = None
     # Which edge wins a label two of them offer; lower first, ties by id.
     position: int | None = Field(None, ge=0)
+    # Cleared by the empty string rather than by `None`, which here means "leave
+    # it alone" as it does for every other field of a partial edit.
+    statement_template: str | None = Field(None, max_length=512)
     sorts: list[SystemRelationRename] | None = None
     symbols: list[SystemRelationRename] | None = None
+    extras: list[SystemRelationExtra] | None = None
     obligations: list[SystemRelationObligationIn] | None = None
 
 
@@ -906,8 +929,10 @@ class SystemRelation(BaseModel):
     kind: RelationKind
     status: RelationStatus
     position: int
+    statement_template: str | None = None
     sorts: list[SystemRelationRename] = Field(default_factory=list)
     symbols: list[SystemRelationRename] = Field(default_factory=list)
+    extras: list[SystemRelationExtra] = Field(default_factory=list)
     obligations: list[SystemRelationObligation] = Field(default_factory=list)
     # Whether this edge currently transfers anything, and why not if it does not.
     # A `draft` edge and one with an outstanding obligation both resolve nothing,

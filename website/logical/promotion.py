@@ -63,7 +63,7 @@ class TheoremSpec:
     matching: str = "structural"
 
 
-def _logical_sorts(system: FormalSystem) -> list[Pattern]:
+def logical_sorts(system: FormalSystem) -> list[Pattern]:
     # The sorts a proof line's formula is actually parsed at: each logical line
     # type's declared formula field (or the whole line pattern, for `formula:
     # self`). Composing a ground statement against *these* - rather than whichever
@@ -98,7 +98,7 @@ def _ground_schema_term(
     #
     # compose_schema_term deliberately declines these (it keys on a metavariable),
     # so promotion composes them here instead. Two differences from that path: the
-    # parse runs only at the system's logical `sorts` (see _logical_sorts), never
+    # parse runs only at the system's logical `sorts` (see logical_sorts), never
     # falling back to the rest of the grammar, and may use the system's *resolved*
     # definitions, which live on the built system's proof context - a
     # promoted theorem is built against an already-compiled system, unlike a rule
@@ -149,7 +149,7 @@ def _theorem_schema(
     # time, what is stored is the term, and a stored one is simply attached. What
     # the branch below then decides is only whether the *pattern* needs replacing,
     # and with a term already in hand it does not.
-    sorts = _logical_sorts(system)
+    sorts = logical_sorts(system)
     pattern = build_schema_pattern(text, context, name, prefer=sorts, cached=cached)
     if (
         matching != "string"
