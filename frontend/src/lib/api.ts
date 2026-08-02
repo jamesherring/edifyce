@@ -289,6 +289,70 @@ export interface FormalSystemUpdate {
 	token_separated?: boolean;
 }
 
+// --- Relations between systems (the general edge) ---------------------------
+
+/** What an edge claims: `extension` contains the source, `interpretation` translates it. */
+export type RelationKind = 'extension' | 'interpretation';
+/** `draft` transfers nothing; `discharged` is what makes a citation resolve. */
+export type RelationStatus = 'draft' | 'discharged';
+
+/** One entry of an edge's sort or symbol map — grammar *names*, since the two
+ * systems' namespaces are separate and there is no id to share. */
+export interface SystemRelationRename {
+	source: string;
+	target: string;
+}
+
+export interface SystemRelationObligationInput {
+	source_label: string;
+	/** A rule of this system, or a theorem it has proved — one or the other. */
+	discharged_by_primitive?: string | null;
+	discharged_by_theorem_id?: string | null;
+	status?: RelationStatus;
+}
+
+export interface SystemRelationObligation extends SystemRelationObligationInput {
+	id: string;
+}
+
+export interface SystemRelationCreate {
+	source_system_id: string;
+	kind?: RelationKind;
+	status?: RelationStatus;
+	sorts?: SystemRelationRename[];
+	symbols?: SystemRelationRename[];
+	obligations?: SystemRelationObligationInput[];
+}
+
+/** A partial edit; a collection given is replaced whole. The source is not
+ * editable — repointing an edge is a different relationship with different
+ * obligations, so delete and create. */
+export interface SystemRelationUpdate {
+	kind?: RelationKind;
+	status?: RelationStatus;
+	/** Which edge wins a label two of them offer; lower first. */
+	position?: number;
+	sorts?: SystemRelationRename[];
+	symbols?: SystemRelationRename[];
+	obligations?: SystemRelationObligationInput[];
+}
+
+export interface SystemRelation {
+	id: string;
+	source_system_id: string;
+	source_system_name: string;
+	target_system_id: string;
+	kind: RelationKind;
+	status: RelationStatus;
+	position: number;
+	sorts: SystemRelationRename[];
+	symbols: SystemRelationRename[];
+	obligations: SystemRelationObligation[];
+	/** Whether this edge transfers anything today, and which obligations stop it. */
+	resolves: boolean;
+	outstanding: string[];
+}
+
 export interface BracketCreate {
 	opening: string;
 	closing: string;
@@ -775,6 +839,30 @@ export const api = {
 				method: 'POST',
 				body: JSON.stringify({ proof_text: proofText })
 			})
+	},
+
+	// --- Relations between systems ------------------------------------------
+
+	/**
+	 * Edges *into* one system — the theorems its proofs may cite from elsewhere.
+	 * The path names the **target**, since that is whose citations widen and
+	 * whose owner may say so; the source need only be visible.
+	 */
+	relations: {
+		list: (systemId: string) =>
+			request<SystemRelation[]>(`/formal-systems/${systemId}/relations`),
+		create: (systemId: string, payload: SystemRelationCreate) =>
+			request<SystemRelation>(`/formal-systems/${systemId}/relations`, {
+				method: 'POST',
+				body: JSON.stringify(payload)
+			}),
+		update: (systemId: string, relationId: string, payload: SystemRelationUpdate) =>
+			request<SystemRelation>(`/formal-systems/${systemId}/relations/${relationId}`, {
+				method: 'PATCH',
+				body: JSON.stringify(payload)
+			}),
+		remove: (systemId: string, relationId: string) =>
+			request<null>(`/formal-systems/${systemId}/relations/${relationId}`, { method: 'DELETE' })
 	},
 
 	// --- Proofs (stored CRUD) -----------------------------------------------

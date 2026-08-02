@@ -26,6 +26,12 @@ class Page(BaseModel, Generic[T]):
 # as MIU). Mirrors RuleRow.matching / InferenceRule.matching.
 RuleMatching = Literal["structural", "string"]
 
+# What an edge between two systems claims, and whether it has earned it.
+# Mirrors app/db/system_relations.py's RELATION_KINDS / RELATION_STATUSES, which
+# are the authority on what each means.
+RelationKind = Literal["extension", "interpretation"]
+RelationStatus = Literal["draft", "discharged"]
+
 # The subproof scope a line type opens: "assumption" (a hypothesis) or
 # "variable" (a fresh variable); None opens no scope. Mirrors LineRow.scope /
 # LineType.scope / declarative LineSpec.scope.
@@ -38,6 +44,8 @@ LineBehaviour = Literal["logical", "comment"]
 # caps below mirror those `String(N)` widths so oversized input is rejected as a
 # 422 rather than reaching the INSERT and erroring on Postgres.
 _Text512 = Annotated[str, Field(max_length=512)]
+# A grammar name or a label, as `String(128)` columns hold them.
+_Name128 = Annotated[str, Field(min_length=1, max_length=128)]
 _Text64 = Annotated[str, Field(min_length=1, max_length=64)]
 
 
@@ -778,6 +786,95 @@ class ProofStructure(BaseModel):
     # served rendering from a silently ignored request. Null when none was asked
     # for; a name the system does not store is a 404 rather than a null.
     notation: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Relations between systems — the general edge (R4 of the relationships roadmap)
+# ---------------------------------------------------------------------------
+
+
+class SystemRelationRename(BaseModel):
+    """One entry of an edge's sort or symbol map: ``source`` is read as ``target``.
+
+    Both are grammar **names**, not ids: the whole point of a map is that the two
+    systems' namespaces are separate, so there is no id to share. Absent entirely
+    for the identity, which is what an edge between systems that agree on their
+    vocabulary carries.
+    """
+
+    source: _Name128
+    target: _Name128
+
+
+class SystemRelationObligationIn(BaseModel):
+    """One primitive of the source, and what stands in for it here.
+
+    Exactly one of the two discharge fields is set — a rule of the target under
+    some label, or a theorem it has proved — and ``status`` says whether the
+    author considers it settled. See `app/db/system_relations.py`.
+    """
+
+    source_label: _Name128
+    discharged_by_primitive: _Name128 | None = None
+    discharged_by_theorem_id: uuid.UUID | None = None
+    status: RelationStatus = "draft"
+
+
+class SystemRelationObligation(SystemRelationObligationIn):
+    id: uuid.UUID
+
+
+class SystemRelationCreate(BaseModel):
+    """A new edge into the system named in the path, which is its **target**.
+
+    The target is the system that gains citable theorems, and its owner is
+    therefore the one who may say so — an edge is a claim about what this
+    system's proofs may rest on.
+    """
+
+    source_system_id: uuid.UUID
+    kind: RelationKind = "extension"
+    status: RelationStatus = "draft"
+    sorts: list[SystemRelationRename] = Field(default_factory=list)
+    symbols: list[SystemRelationRename] = Field(default_factory=list)
+    obligations: list[SystemRelationObligationIn] = Field(default_factory=list)
+
+
+class SystemRelationUpdate(BaseModel):
+    """A partial edit. A collection given is replaced whole, as a rule's is.
+
+    ``source_system_id`` is deliberately absent: repointing an edge is deleting
+    one relationship and asserting another, and the two have different
+    obligations. Delete and create.
+    """
+
+    kind: RelationKind | None = None
+    status: RelationStatus | None = None
+    # Which edge wins a label two of them offer; lower first, ties by id.
+    position: int | None = Field(None, ge=0)
+    sorts: list[SystemRelationRename] | None = None
+    symbols: list[SystemRelationRename] | None = None
+    obligations: list[SystemRelationObligationIn] | None = None
+
+
+class SystemRelation(BaseModel):
+    id: uuid.UUID
+    source_system_id: uuid.UUID
+    # Echoed so a list of edges reads without a lookup per row; a source may be
+    # someone else's published system, whose name is public.
+    source_system_name: str
+    target_system_id: uuid.UUID
+    kind: RelationKind
+    status: RelationStatus
+    position: int
+    sorts: list[SystemRelationRename] = Field(default_factory=list)
+    symbols: list[SystemRelationRename] = Field(default_factory=list)
+    obligations: list[SystemRelationObligation] = Field(default_factory=list)
+    # Whether this edge currently transfers anything, and why not if it does not.
+    # A `draft` edge and one with an outstanding obligation both resolve nothing,
+    # and neither is an error — so this reports rather than refuses.
+    resolves: bool = False
+    outstanding: list[str] = Field(default_factory=list)
 
 
 class ProofCreate(BaseModel):

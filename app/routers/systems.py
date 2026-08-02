@@ -45,6 +45,8 @@ from app.db import (
     system_to_spec,
     term_context,
 )
+from app.db.system_relations import SystemRelationRow
+from app.routers._invalidation import invalidate_library_reach
 from app.routers._common import (
     PageParams,
     lock_system,
@@ -410,6 +412,36 @@ async def _require_inheritable_reference(
             f"An inheritance chain may be at most {MAX_INHERITANCE_DEPTH} systems "
             "deep, and this one already is.",
         )
+
+
+async def _invalidate_relation_targets(
+    session: AsyncSession, system_id: uuid.UUID
+) -> None:
+    """Clear what resolved across the edges this system is the **source** of.
+
+    The libraries that leave with it are its own and its ancestors' — an edge
+    reaches the source's whole chain — which is the same set the relations router
+    hands `invalidate_library_reach` when an edge is written or deleted there.
+
+    Targets are taken in id order so two concurrent deletes touching the same
+    pair of towers acquire their locks the same way round; within one target the
+    order is `citing_systems`' (depth, id), as everywhere else.
+    """
+    targets = sorted(
+        await session.scalars(
+            select(SystemRelationRow.target_system_id).where(
+                SystemRelationRow.source_system_id == system_id
+            )
+        )
+    )
+    if not targets:
+        return
+    system = await load_system(session, system_id)
+    if system is None:
+        return
+    chain = [layer.id for layer in await load_chain(session, system)]
+    for target in targets:
+        await invalidate_library_reach(session, target, chain)
 
 
 async def _chain_depth(session: AsyncSession, system_id: uuid.UUID) -> int:
@@ -827,6 +859,17 @@ async def delete_system(
             + ", ".join(repr(name) for name in dependents)
             + " inherits from it. Delete those first.",
         )
+
+    # An edge *out of* this system goes quietly — `system_relations` cascades on
+    # both ends, because an edge is a statement about two systems and means
+    # nothing without either. What must not go quietly is what resolved through
+    # it: the target's proofs keep `valid`, `result` and their `proof_lines`
+    # while the theorems they cited leave with this system, and a verify trusts a
+    # lemma's stored rows rather than re-checking them. So the verdicts are
+    # cleared first, while the edges are still here to say which systems they
+    # reached (found in review — the delete is the one way an edge disappears
+    # that the relations router never sees).
+    await _invalidate_relation_targets(session, system_id)
 
     # One owner-scoped Core DELETE; the folders/proofs/parts go via their
     # ON DELETE CASCADE foreign keys, so nothing is loaded here.
