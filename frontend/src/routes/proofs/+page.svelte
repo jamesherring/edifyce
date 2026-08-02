@@ -35,9 +35,13 @@
 			meta: { cellClass: 'font-medium' }
 		},
 		{
-			accessorKey: 'description',
+			id: 'about',
 			header: 'Description',
-			cell: ({ getValue }) => (getValue() as string | null) ?? '—',
+			// Title first, description second. On an imported corpus `name` is an
+			// opaque label (`sqrt2irr`) and the title is the only readable thing in
+			// the row; a hand-authored proof usually has the description instead.
+			accessorFn: (row) => row.title ?? row.description ?? '',
+			cell: ({ row }) => row.original.title ?? row.original.description ?? '—',
 			meta: { cellClass: 'hidden max-w-[24rem] truncate text-muted-foreground sm:table-cell' }
 		},
 		{

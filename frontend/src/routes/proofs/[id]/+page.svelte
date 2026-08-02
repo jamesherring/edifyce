@@ -131,6 +131,16 @@
 	// source.
 	const readable = $derived(readProof(structure));
 
+	// The header shows one line under the name, and prefers the title: on an
+	// imported corpus `name` is an opaque label and the title is the only readable
+	// thing there. A proof may carry both, though, so the description gets a place
+	// of its own wherever the header is not already showing it — otherwise setting
+	// a title would make an author's own description vanish from the page.
+	const subtitle = $derived(proof?.title ?? proof?.description ?? undefined);
+	const ownDescription = $derived(
+		proof?.description && proof.description !== subtitle ? proof.description : null
+	);
+
 	async function verify() {
 		if (!proof) return;
 		const seq = ++verifySeq;
@@ -174,7 +184,7 @@
 	{:else}
 		<!-- Name over title, not the other way round: `name` is what a citation
 		     spells, and on an imported corpus the title is a sentence. -->
-		<EntityHeader title={proof.name} subtitle={proof.title ?? proof.description ?? undefined}>
+		<EntityHeader title={proof.name} {subtitle}>
 			{#snippet badges()}
 				<StatusBadge status={proof?.published_at ? 'published' : 'draft'} />
 				<CheckBadge valid={proof?.valid ?? null} />
@@ -259,6 +269,17 @@
 
 			<ProofResults {result} {requestError} idleMessage="Verify the proof to see line-by-line results here." />
 		</div>
+
+		{#if ownDescription}
+			<Card.Root>
+				<Card.Header>
+					<Card.Title>About this proof</Card.Title>
+				</Card.Header>
+				<Card.Content>
+					<p class="whitespace-pre-line text-sm leading-relaxed">{ownDescription}</p>
+				</Card.Content>
+			</Card.Root>
+		{/if}
 
 		{#if proof.documentation && (proof.documentation.text || proof.documentation.attributions.length > 0)}
 			<Card.Root>
