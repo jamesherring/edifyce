@@ -143,6 +143,25 @@ def test_a_hand_authored_proof_has_a_title_it_sets_and_no_corpus_record(client, 
     assert patched.json()["title"] == "Associativity of ∧."
 
 
+def test_every_route_that_returns_a_proof_agrees_about_its_documentation(client, db):
+    # `documentation` must not mean "not asked for" on one route and "none exists"
+    # on another: a client — the editor among them — assigns whichever response it
+    # got straight into its proof state, and cannot tell the two apart.
+    _register_login(client, "ada@example.com")
+    system_id = client.post("/api/formal-systems", json={"name": "Hand authored"}).json()["id"]
+
+    created = client.post(
+        "/api/proofs", json={"name": "assoc", "formal_system_id": system_id}
+    )
+    proof_id = created.json()["id"]
+    patched = client.patch(f"/api/proofs/{proof_id}", json={"title": "A title."})
+    fetched = client.get(f"/api/proofs/{proof_id}")
+
+    for response in (created, patched, fetched):
+        assert "documentation" in response.json(), response.text
+        assert response.json()["documentation"] is None
+
+
 def test_a_title_can_be_cleared(client, db):
     # Null and "" are different answers, and a PATCH must be able to reach the
     # first: an imported title a reader disagrees with should be removable, not

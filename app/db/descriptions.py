@@ -21,8 +21,11 @@ grammar namespace besides), so the key is a key.
 What this is *not* is the proof's own description. ``proofs.title`` and
 ``proofs.description`` are this installation's, editable by whoever owns the
 proof; these rows are the corpus's record of what the file said, and they cover
-labels that are not proofs at all. An import fills both from one parse, and they
-diverge from there.
+labels that are not proofs at all. An import copies the *title* across, since it
+is short and a listing wants it, and leaves ``proofs.description`` alone — a
+corpus comment runs to paragraphs, ``description`` rides on every
+``ProofSummary``, and 47,000 of them do not belong in a list view. The prose is
+read from here, on the single proof, where there is somewhere to put it.
 """
 
 from __future__ import annotations

@@ -27,7 +27,12 @@ from app.db.metamath_store import import_corpus
 from app.db.models import Proof
 from tests.database import enable_foreign_keys
 from website.logical.metamath import parse
-from website.logical.metamath.comments import read_comment
+from website.logical.metamath.comments import (
+    KIND_MAX,
+    WHEN_MAX,
+    WHO_MAX,
+    read_comment,
+)
 
 # One of each kind of documented label, which is the point: `wi` is a syntax `$a`
 # that becomes a production, `df-neg` a definition, `ax-1` a primitive theorem,
@@ -128,7 +133,39 @@ def test_an_imported_proof_carries_the_title_and_keeps_the_label_as_its_name() -
         proof = session.scalars(select(Proof)).one()
         assert (proof.name, proof.slug) == ("id", "id")
         assert proof.title == "Principle of identity."
-        assert proof.description == "Principle of identity."
+
+
+def test_the_corpus_prose_is_not_copied_onto_the_proof() -> None:
+    # `description` rides on every `ProofSummary`, so a corpus comment here would
+    # put a page of text in each row of a 47,000-proof listing. The title is short
+    # and belongs there; the prose is read from `label_descriptions` on the single
+    # proof, where there is somewhere to put it.
+    with database() as session:
+        import_corpus(session, parse(SOURCE), name="t")
+        session.commit()
+
+        assert session.scalars(select(Proof)).one().description is None
+        assert described(session)["id"].text.startswith("Principle of identity.")
+
+
+# A second theorem past the first, so a `limit` has something to cut before.
+TWO_THEOREMS = SOURCE + """
+$( A later theorem, past the horizon a limit of 1 draws. $)
+later $p |- ( ph -> ( ps -> ph ) ) $= ( ax-1 ) ABC $.
+"""
+
+
+def test_a_limited_import_describes_only_what_it_imported() -> None:
+    # The grammar stops at the last walked theorem (`corpus_spec` builds from what
+    # is declared before it), so the descriptions have to stop there too —
+    # otherwise a limited import carries prose about labels its own rows do not
+    # contain, and `described` counts things it never stored.
+    with database() as session:
+        report = import_corpus(session, parse(TWO_THEOREMS), name="t", limit=1)
+        session.commit()
+
+        assert "later" not in described(session)
+        assert report.described == len(described(session))
 
 
 # The same grammar with every comment removed, which is a legitimate `.mm`:
@@ -198,3 +235,24 @@ def test_an_attribution_only_comment_is_still_stored() -> None:
         assert rows["ax-1"].title is None
         assert rows["ax-1"].text == ""
         assert [a.who for a in rows["ax-1"].attributions] == ["NM"]
+
+
+def test_the_recognisers_bounds_match_the_columns_it_is_stored_into() -> None:
+    # `comments.py` bounds each captured part to the width of the column it lands
+    # in, so an over-long capture is refused at the parse rather than truncated —
+    # or, worse, aborting an import at the very end, since `store_descriptions`
+    # writes once outside every per-theorem savepoint. Two files, one fact.
+    columns = LabelAttributionRow.__table__.c
+    assert columns.kind.type.length == KIND_MAX
+    assert columns.who.type.length == WHO_MAX
+    assert columns.dated.type.length == WHEN_MAX
+
+
+def test_a_prose_sentence_too_long_to_be_an_attribution_is_left_as_prose() -> None:
+    # The failure the bounds exist for, and why refusing beats truncating: this
+    # fits the shape — a capitalised phrase, "by", a name, a hyphen — and is a
+    # sentence. Recorded, it would credit someone with something they did not do.
+    long_tail = "x-" + "y" * WHEN_MAX
+    description = read_comment(f"(Explained by someone, {long_tail}.)")
+    assert description.attributions == ()
+    assert description.text.startswith("(Explained by someone,")

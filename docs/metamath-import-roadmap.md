@@ -1437,6 +1437,19 @@ Balancing brackets beats a list of abbreviations and does not go stale.
 the same parse, and it is then editable, which a derived first sentence could
 never be. `name` stays the label — that is what a citation spells and what the
 slug is built from — so identity and sentence never have to displace each other.
+The *prose* is not copied onto the proof: `description` rides on every
+`ProofSummary`, and a corpus comment runs to paragraphs, so 47,000 of them would
+land in a list view. It is read from `label_descriptions` on the single proof.
+
+Two bounds worth recording, both from review. The descriptions stop at the same
+**horizon** the grammar does — `corpus_spec` builds from what is declared before
+the last walked theorem, so a `limit`ed import that described past it would attach
+prose to labels its own rows do not contain. And the attribution recogniser bounds
+each captured part to the width of the column it lands in (`KIND_MAX`, `WHO_MAX`,
+`WHEN_MAX`), so an over-long capture is refused at the parse rather than
+truncated: it is prose that fitted the shape, and recording it would credit
+someone with something they did not do. `set.mm`'s longest are 48 / 53 / 11, so
+all 60,661 still match.
 
 Served on `ProofSummary`/`ProofDetail`, with the corpus's own record (prose plus
 authorship) on the single proof read, and on

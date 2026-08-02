@@ -48,11 +48,22 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+# How long each part of an attribution may be. These are the widths of the
+# columns it is stored into (`app/db/descriptions.py`), restated as part of the
+# *recogniser* rather than enforced as a truncation downstream: an over-long
+# capture is prose that happened to fit the shape, not a genuine attribution, so
+# refusing to recognise it is the honest answer and truncating it would be a
+# quiet lie about who wrote what. `set.mm`'s longest are 48 / 53 / 11, so this
+# admits all 60,661 of them with room to spare.
+KIND_MAX, WHO_MAX, WHEN_MAX = 64, 128, 64
+
 # A kind, a name, and a date-like tail, delimited by the clause's own parentheses.
 # The hyphen is what separates an attribution from a sentence: every date in the
 # corpus has one, and no prose "… by X, Y." does.
 _ATTRIBUTION = re.compile(
-    r"\((?P<kind>[A-Z][A-Za-z ]*?) by (?P<who>[^,()]+?), (?P<when>[^()]*?-[^()]*?)\.?\)"
+    rf"\((?P<kind>[A-Z][A-Za-z ]{{0,{KIND_MAX - 1}}}?) by "
+    rf"(?P<who>[^,()]{{1,{WHO_MAX}}}?), "
+    rf"(?P<when>[^()]{{0,{WHEN_MAX // 2 - 1}}}?-[^()]{{0,{WHEN_MAX // 2 - 1}}}?)\.?\)"
 )
 
 # A blank line, which is a paragraph break rather than wrapping.

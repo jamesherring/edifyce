@@ -160,8 +160,11 @@ Modernised from the original Django app (`website/models.py` on `main`):
   authorship record is asked aggregate questions — set.mm credits 131 people
   across 60,661 clauses — and every field is verbatim (the corpus misspells four
   kinds and malforms 22 dates, so `dated` is a string and `kind` is not an enum).
-  Distinct from `proofs.title`/`proofs.description`, which are the proof's own and
-  editable; an import fills both from one parse and they diverge from there.
+  Distinct from `proofs.title`/`proofs.description`, which are the proof's own
+  and editable. An import copies the *title* across — short, and a listing wants
+  it — and leaves `proofs.description` alone, because `description` rides on every
+  `ProofSummary` and a corpus comment runs to paragraphs. The prose is read from
+  here, on the single proof.
 - **`side_conditions`** — a definition's proviso (`where` clause) stored as the
   kernel's closed side-condition algebra (`side_conditions.py`) rather than an
   opaque string: one row per algebra node (`occurs`/`equal`/`disjoint`/`atom`/

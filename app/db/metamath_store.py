@@ -53,7 +53,7 @@ from app.db.notations_mapping import store_notation
 from app.db.proofs_mapping import store_proof_lines
 from app.db.systems_mapping import spec_to_system
 from website.logical.declarative import build_system, library_digest
-from website.logical.metamath.corpus import corpus_spec, walk
+from website.logical.metamath.corpus import corpus_spec, theorems, walk
 from website.logical.metamath.comments import read_comment
 from website.logical.metamath.display import notation_constructors, unicode_projection
 from website.logical.metamath.typesetting import typesetting_of
@@ -142,11 +142,7 @@ def import_corpus(
     # Read once, up front, and used twice: every documented label gets a row, and
     # a `$p`'s own title comes off the same parse. Metamath documents a statement
     # by the comment before it, so this is the whole of the association.
-    descriptions = {
-        label: read_comment(assertion.comment)
-        for label, assertion in database.assertions.items()
-        if assertion.comment is not None
-    }
+    descriptions = _descriptions_of(database, limit)
 
     for position, checked in enumerate(walk(database, limit, name, library.store)):
         report.checked += 1
@@ -187,6 +183,30 @@ def import_corpus(
     if batch is not None:
         session.commit()
     return report
+
+
+def _descriptions_of(
+    database: Database, limit: int | None
+) -> dict[str, Description]:
+    """Every documented label the imported system actually declares.
+
+    Bounded by the same horizon the grammar is: ``corpus_spec`` builds the system
+    from what is declared *before the last walked theorem*, so a label past that
+    point is not part of this system and describing it would attach prose to
+    something the rows do not contain. A `limit` is how a caller imports a prefix
+    of a corpus, and this has to cut where that cuts.
+
+    Read in file order (``iter_assertions``), because the horizon is a position
+    rather than a set — the same way ``theorems`` finds it.
+    """
+    horizon = theorems(database, limit)[-1].label
+    found: dict[str, Description] = {}
+    for assertion in database.iter_assertions():
+        if assertion.comment is not None:
+            found[assertion.label] = read_comment(assertion.comment)
+        if assertion.label == horizon:
+            break
+    return found
 
 
 def _store_notation(
@@ -347,11 +367,13 @@ def _store(
         # `-_.`) and unique across the database, which is what a slug wants.
         name=checked.label,
         slug=checked.label,
-        # The title and the prose are the proof's own copy, editable by whoever
-        # comes to own it; `label_descriptions` keeps the corpus's record of what
-        # the file said, and covers the labels that are not proofs at all.
+        # The title is the proof's own copy, editable by whoever comes to own it.
+        # The *prose* is not copied: `description` rides on every `ProofSummary`,
+        # so a corpus comment here would put a page of text in each row of a
+        # 47,000-proof listing. `label_descriptions` holds it — read on the single
+        # proof, where there is somewhere to put it, and where it also answers for
+        # the labels that are not proofs at all.
         title=described.title or None if described else None,
-        description=described.text or None if described else None,
         source=checked.source,
         position=position,
         valid=valid,

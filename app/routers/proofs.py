@@ -76,7 +76,6 @@ from app.db import (
     term_context,
     theorem_digest,
 )
-from app.db.descriptions import LabelDescriptionRow
 from app.db.descriptions_mapping import load_description
 from app.db.models import User
 from app.db.notations_mapping import load_notation, render_stored
@@ -121,6 +120,8 @@ from website.logical.promotion import proved_theorem, schematic_theorem
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
+
+    from app.db.descriptions import LabelDescriptionRow
 
     from app.routers.systems import EffectiveSystem
     from website.logical.formal_system import FormalSystem as EngineSystem
@@ -1117,11 +1118,18 @@ def _documentation_out(row: LabelDescriptionRow | None) -> LabelDescription | No
     )
 
 
-def _detail(
-    proof: Proof,
-    viewer: User | None,
-    documentation: LabelDescriptionRow | None = None,
+async def _detail(
+    session: AsyncSession, proof: Proof, viewer: User | None
 ) -> ProofDetail:
+    """The full read of one proof, documentation included.
+
+    Async, and loading rather than taking it, so that *every* route returning a
+    `ProofDetail` says the same thing about the same proof — a create, a patch and
+    a reference edit all serve this model, and a client (the editor among them)
+    assigns whichever it got straight into its state. A default of `None` would
+    make the field mean "not asked for" on three routes and "none exists" on the
+    fourth, which is a distinction no caller can see.
+    """
     return ProofDetail(
         **_summary(proof).model_dump(),
         source=proof.source,
@@ -1129,7 +1137,9 @@ def _detail(
         references=_references_out(proof, viewer),
         referenced_by=_referenced_by_out(proof, viewer),
         theorem=_theorem_out(proof),
-        documentation=_documentation_out(documentation),
+        documentation=_documentation_out(
+            await load_description(session, proof.formal_system_id, proof.name)
+        ),
     )
 
 
@@ -1198,7 +1208,9 @@ async def create_proof(
     await session.commit()
 
     # Reload so server-default timestamps and the owner are eagerly present.
-    return _detail(await _get_owned_or_404(session, proof.id, user.id), user)
+    return await _detail(
+        session, await _get_owned_or_404(session, proof.id, user.id), user
+    )
 
 
 @router.get("/{proof_id}", response_model=ProofDetail)
@@ -1208,14 +1220,9 @@ async def get_proof(
     session: AsyncSession = Depends(get_session),
 ) -> ProofDetail:
     # Published proofs are readable by anyone; drafts only by their owner.
-    proof = await _get_readable_or_404(session, proof_id, user)
-    # Only the single read carries the corpus's record. A list of proofs wants
-    # `title`, which is on the row; the prose and the authorship are a page's worth
-    # of text each, and 47,000 of them do not belong in a listing.
-    documentation = await load_description(
-        session, proof.formal_system_id, proof.name
+    return await _detail(
+        session, await _get_readable_or_404(session, proof_id, user), user
     )
-    return _detail(proof, user, documentation)
 
 
 @router.patch("/{proof_id}", response_model=ProofDetail)
@@ -1278,7 +1285,9 @@ async def update_proof(
         await _require_publishable(session, proof)
 
     await session.commit()
-    return _detail(await _get_owned_or_404(session, proof_id, user.id), user)
+    return await _detail(
+        session, await _get_owned_or_404(session, proof_id, user.id), user
+    )
 
 
 async def _reference_would_cycle(
@@ -1411,7 +1420,9 @@ async def set_proof_references(
     # edit — the reference set is as much a part of the proof as its text.
     await _retire_promotion(session, proof)
     await session.commit()
-    return _detail(await _get_owned_or_404(session, proof_id, user.id), user)
+    return await _detail(
+        session, await _get_owned_or_404(session, proof_id, user.id), user
+    )
 
 
 @router.post(
