@@ -538,3 +538,86 @@ def _drop_production(db_path, system_id: str, name: str) -> None:
             session.commit()
     finally:
         engine.dispose()
+
+
+def test_an_interpretation_cannot_discharge_nothing(db, client):
+    # From review (Codex, P1). `related_layers` asks the *obligations*, not the
+    # author, so an edge claiming to be discharged while naming none of them
+    # discharges the whole of §2 with a status column — and the source's entire
+    # library crosses on it.
+    #
+    # Both ways an edge can arrive in that state: created so, and patched into
+    # it later with the obligations left as they were.
+    owner = _register_login(client, "empty-interpretation@example.com")
+    left = seed(db, propositional_calculus_spec("Left"), owner, None)
+    right = seed(db, propositional_calculus_spec("Right"), owner, None)
+    other = seed(db, propositional_calculus_spec("Other"), owner, None)
+    promote_into(db, left, IDENTITY)
+
+    status_code, body = relate(
+        client, right, left, kind="interpretation", status="discharged",
+    )
+    assert status_code == 422
+    assert "cannot be marked discharged with no obligations" in body["detail"]
+
+    _, edge = relate(client, right, left, kind="interpretation")
+    patched = client.patch(
+        f"/api/formal-systems/{right}/relations/{edge['id']}",
+        json={"status": "discharged"},
+    )
+    assert patched.status_code == 422
+
+    # The accepted half — and the reason this is not a check on `extension`,
+    # whose claim is that every primitive is present here under its own name.
+    # A second source, since the pair above is already related.
+    assert relate(client, right, other, kind="extension", status="discharged")[0] == 201
+
+
+def test_a_source_must_be_published(db, client):
+    # From review (Codex, P1). This first allowed an owned *draft* source,
+    # reasoning that an entry whose system moved under it fails closed on the
+    # next verify. It does — and the proofs that already verified keep `valid`,
+    # `result` and their `proof_lines` meanwhile, which a later verify trusts.
+    # Freezing is what the spine chose for exactly this, so both now say it.
+    owner = _register_login(client, "draft-source@example.com")
+    draft = seed(db, propositional_calculus_spec("Draft"), owner, None,
+                 published=False)
+    target = seed(db, propositional_calculus_spec("Target"), owner, None)
+
+    status_code, body = relate(client, target, draft)
+    assert status_code == 400
+    assert "unpublished draft" in body["detail"]
+
+    published = seed(db, propositional_calculus_spec("Published"), owner, None)
+    assert relate(client, target, published)[0] == 201
+
+
+def test_retiring_a_warrant_invalidates_what_crossed_its_edge(db, client):
+    # From review (Codex, P1). An obligation discharged by a theorem loses it to
+    # `ON DELETE SET NULL` when that theorem retires, which stops the edge
+    # resolving — but the proofs that crossed it cited the *source's* labels, so
+    # the label walk that retires the theorem never reaches them. Another way an
+    # edge stops resolving that the relations router never sees.
+    from tests.test_proof_promotion import IDENTITY_PROOF, promote, proved_and_published
+
+    owner = _register_login(client, "warrant@example.com")
+    left = seed(db, propositional_calculus_spec("Left"), owner, None)
+    right = seed(db, propositional_calculus_spec("Right"), owner, None)
+    promote_into(db, left, IDENTITY)
+
+    warrant = proved_and_published(client, right, IDENTITY_PROOF)
+    assert promote(client, warrant, "stands-in")[0] == 201
+    assert relate(
+        client, right, left, status="discharged",
+        obligations=[{"source_label": "MP",
+                      "discharged_by_theorem_id": _theorem_id(db, "stands-in"),
+                      "status": "discharged"}],
+    )[0] == 201
+
+    proof = _proof(client, right, "(P → P) [id]")
+    assert client.post(f"/api/proofs/{proof}/verify").json()["success"] is True
+
+    assert client.delete(f"/api/proofs/{warrant}/promote").status_code == 204
+
+    assert client.get(f"/api/proofs/{proof}").json()["valid"] is None
+    assert client.post(f"/api/proofs/{proof}/verify").json()["success"] is False

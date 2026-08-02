@@ -14,7 +14,7 @@ citation resolves against the system's own library and then its ancestors'. A
 proof proved here enters that library (§5.3), schematically if its author says
 so; and where the spine cannot reach, an edge does — including between two
 systems that disagree about what to call things (§5.4). See §8's R1–R4 for what
-landed and §9.9–9.21 for what they turned up.
+landed and §9.9–9.22 for what they turned up.
 
 The edge **CRUD** closes it: `app/routers/system_relations.py`, under the
 *target* — the system whose citations an edge widens, and whose owner may
@@ -1004,13 +1004,18 @@ actually reach.
   **published** target refuses an edit to itself and accepts an edge, which is
   the line between a frozen grammar and a library that was never frozen.
 
-From review, four more, each pinned by one test that fails without its guard: a
+From review, seven more, each pinned by one test that fails without its guard: a
 discharge naming a **primitive** the target does not have (paired with `MP`,
 which it does); a collection naming one thing **twice**, on both the create and
 the PATCH; a **stale** map that can still be turned off, paired with re-asserting
 it and being refused; and deleting an edge's **source**, after which the target's
 proof is invalidated *and* re-verifies to a failure — the second assertion being
 what says the cleared verdict was the right answer rather than a cautious one.
+Then, from a second round (§9.22): an **unpublished** source, paired with a
+published one; an `interpretation` marked discharged with **no obligations**,
+both created so and patched into it, paired with the `extension` for which an
+empty list is the ordinary case; and retiring the **theorem an obligation was
+discharged by**, after which what crossed that edge is invalidated.
 
 ---
 
@@ -1202,7 +1207,7 @@ resolves (R4a) rather than one an author can write (R4c).
    requires a complex accepted case per phase, and why the bound-variable tests
    are written in accepted/rejected pairs.
 
-The thirteen below are **findings from the phases that landed**, kept here because
+The fourteen below are **findings from the phases that landed**, kept here because
 each is a live constraint on the work after it rather than a closed question.
 
 9. **The freshness check was position-blind, and a tower is not.** §5.1 predicted
@@ -1675,6 +1680,50 @@ each is a live constraint on the work after it rather than a closed question.
     Stated as a rule, since it is the same shape as §9.19's: **a guard on a
     relationship has to cover every way the relationship can end**, and the ways
     are rarely all in the module that creates it.
+
+22. **The rule from §9.21, applied twice more — and the one claim still left to
+    the author.** A second review round (Codex, on #166) found three things, and
+    two of them are that same rule biting again in places the first round did not
+    reach.
+
+    **A source has to be published.** The CRUD first allowed an owned *draft*
+    source, reasoning that an entry whose system moved under it already fails
+    closed (§9.12). It does — on the *next* verify, while the proofs that already
+    verified keep `valid`, `result` and their `proof_lines`, which a later verify
+    trusts rather than re-checking. So a draft source repointed at another parent,
+    or edited at all, leaves every target holding a verdict nobody would reach
+    today. The alternative was to wire every source mutation into relation
+    invalidation — every part edit, every repoint — and freezing is what the
+    spine already chose for exactly this problem. Both now say one thing: **you
+    may build on a system once it is frozen.**
+
+    **Retiring a warrant is a way an edge stops resolving.** An obligation
+    discharged by a theorem loses it to `ON DELETE SET NULL`, which leaves the
+    obligation naming neither a primitive nor a theorem — outstanding, so the
+    edge resolves nothing. But the proofs that crossed it cited the *source's*
+    labels, not the warrant's, so the label walk that retires the theorem never
+    reaches them (`_invalidation.invalidate_warranted_edges`). Together with
+    §9.21's source-delete, that makes **three** ways an edge stops resolving that
+    the relations router never sees.
+
+    **And the claim left to the author.** An `interpretation` edge marked
+    discharged with *no* obligations discharged the whole of §2 with a status
+    column, and `related_layers` — which asks the obligations rather than the
+    author — let the source's entire library across. That is refused now. What is
+    deliberately **not** checked is whether the list is *complete*: one obligation
+    per primitive of the source, which is what §2 actually asks for.
+
+    Left open on purpose, and the reason is worth recording so it is not
+    re-litigated cheaply. The check itself is easy — the source chain's rules,
+    plus its `primitive=True` promoted theorems. What is not settled is what that
+    would *cost the cases this exists for*: an imported corpus's primitives are
+    its 1,559 `$a` statements, so an interpretation onto `set.mm` would demand
+    1,559 obligations, and §6.3 sketches S2 with nine. Either that sketch is
+    wrong or "primitive" means something narrower than every `$a` — and Track S is
+    where that gets decided, against a real edge rather than in the abstract. An
+    `extension` edge is a separate question again: §5.4 says its obligations are
+    filled in from the spine and never asked of an author, which would make
+    `kind` mechanical rather than asserted.
 
 ---
 

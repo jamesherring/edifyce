@@ -83,6 +83,7 @@ from app.routers._invalidation import (
     clear_verdicts,
     dependent_closure,
     invalidate_citations,
+    invalidate_warranted_edges,
 )
 from app.routers._common import (
     PageParams,
@@ -824,6 +825,15 @@ async def _retire_promotion(session: AsyncSession, proof: Proof) -> None:
     # Before the delete: the query below reads `proof_lines`, and a line citing
     # this entry is found by the label, not by the row.
     await invalidate_citations(session, system_id, label)
+    # And what this entry was *standing in for*. An edge's obligation may be
+    # discharged by a theorem (`system_relations` §5.4), and losing it takes the
+    # edge down with it — `ON DELETE SET NULL` leaves an obligation naming
+    # neither a primitive nor a theorem, which `related_layers` reads as
+    # outstanding. The proofs that resolved *across* that edge cited the source's
+    # labels, not this one, so the walk above never reaches them (found in
+    # review). Every way an edge stops resolving has to clear what resolved
+    # through it, and this is one of them.
+    await invalidate_warranted_edges(session, entry_id)
     # Drop the proof's own pointer first, and through the relationship rather
     # than the column: `proofs.theorem_id` is `ON DELETE SET NULL`, so the
     # database would clear it either way, but the loaded object would keep the

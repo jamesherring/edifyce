@@ -7,9 +7,11 @@ and no use to an author.
 
 **The path names the target.** An edge is `source → target`: theorems proved in
 the source become citable in the target, so it is the target's proofs that gain
-something to rest on and the target's owner who may say so. The source need only
-be *visible* — owned, or published — on exactly the rule inheritance follows,
-since an ownerless imported corpus is the case the whole feature exists for.
+something to rest on and the target's owner who may say so. The source must be
+**visible** — owned or published, since an ownerless imported corpus is the case
+the whole feature exists for — and **published**, which is the rule a parent
+follows and for the same reason: a system whose grammar can still move leaves
+every target holding a verdict nobody would reach today.
 
 **A published target may still be related**, and that is deliberate rather than
 an oversight. Publishing freezes a system's *grammar*, so that proofs checked
@@ -240,7 +242,11 @@ async def _assign(
             )
             for index, entry in enumerate(payload.obligations)
         ]
-        await _require_discharges_the_target_can_honour(session, system_id, edge)
+
+    # Unconditionally, not only when the obligations are what changed: a PATCH
+    # that sets `status` alone is the other way an edge starts claiming to be
+    # discharged, and the rows it would be discharged by are the stored ones.
+    await _require_discharges_the_target_can_honour(session, system_id, edge)
 
     # Only when the map is what is being written. A grammar either side can move
     # after an edge is checked, and an edge that has stopped checking out is
@@ -315,6 +321,23 @@ async def _require_discharges_the_target_can_honour(
     circular in a way nothing here unpicks — edge A discharged by a theorem that
     is only citable because of edge B, and B by one citable because of A.
     """
+    if edge.kind == "interpretation" and edge.status == "discharged" and not edge.obligations:
+        # An interpretation translates the source's vocabulary, so each of its
+        # primitives needs a theorem of this system standing in for it (§2). An
+        # edge claiming to be discharged while naming *nothing* discharges the
+        # whole of that with a status column, and `related_layers` — which asks
+        # the obligations, not the author — sees an empty set and lets the
+        # source's entire library across (found in review).
+        #
+        # What is *not* checked is whether the list is complete: see §9.22 for
+        # what settling that needs.
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "An interpretation edge discharges its source's primitives one by "
+            "one, so it cannot be marked discharged with no obligations at all. "
+            "Name them, or leave the edge a draft.",
+        )
+
     both = [
         obligation.source_label
         for obligation in edge.obligations
@@ -495,11 +518,20 @@ async def _require_relatable_source(
     library is layer zero already), so this refuses the writing of one rather
     than the reading — data that predates this route still loads.
 
-    Publication is deliberately *not* required of the source, unlike a parent's.
-    A parent's grammar is what a descendant is built from, so it has to be
-    frozen; a source's library is only cited, and an entry whose own system has
-    moved under it already fails closed (§9.12 — an inherited entry with no
-    usable cached term is refused rather than re-parsed).
+    And **published**, on the same rule and for the same reason as a parent.
+    This first said publication was *not* required, reasoning that a source's
+    library is only cited and that an entry whose own system moved under it
+    already fails closed (§9.12). That is wrong in the one way that matters, and
+    review found it: failing closed happens on the *next* verify, while the
+    proofs that already verified keep `valid`, `result` and their `proof_lines` —
+    and a verify trusts a lemma's stored rows rather than re-checking them. A
+    draft source repointed at a different parent, or edited at all, leaves every
+    target holding a verdict nobody would reach today.
+
+    The alternative was to wire every source mutation into relation
+    invalidation — every part edit, every repoint. Freezing is what the spine
+    already chose for exactly this problem, and one rule across both is worth
+    more than the extra freedom: **you may build on a system once it is frozen.**
     """
     if source_id == target_id:
         raise HTTPException(
@@ -518,6 +550,12 @@ async def _require_relatable_source(
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             f"source_system_id {source_id} is not a system you can relate to.",
+        )
+    if row.published_at is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"source_system_id {source_id} is an unpublished draft. Publish it "
+            "first: an edge may only reach a library whose system is frozen.",
         )
 
 

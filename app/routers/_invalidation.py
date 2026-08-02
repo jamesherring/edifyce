@@ -25,7 +25,12 @@ from typing import TYPE_CHECKING
 from sqlalchemy import select
 from sqlalchemy import update as sa_update
 
-from app.db import FormalSystem, PromotedTheoremRow, SystemRelationRow
+from app.db import (
+    FormalSystem,
+    PromotedTheoremRow,
+    SystemRelationObligationRow,
+    SystemRelationRow,
+)
 from app.db.models import Proof, ProofReference
 from app.db.proof_lines import ProofLineRow
 from app.db.proofs_mapping import clear_proof_lines
@@ -230,6 +235,67 @@ async def invalidate_library_reach(
     if not citing:
         return
     await clear_verdicts(session, citing + await dependent_closure(session, citing))
+
+
+async def invalidate_warranted_edges(
+    session: AsyncSession, theorem_id: uuid.UUID
+) -> None:
+    """Clear what resolved across every edge ``theorem_id`` was discharging.
+
+    An obligation may be discharged by a theorem the target proved (§5.4), and
+    the FK is ``ON DELETE SET NULL`` — so retiring that theorem leaves an
+    obligation naming neither a primitive nor a theorem, which `related_layers`
+    reads as outstanding, which stops the edge resolving. The proofs that
+    resolved *across* it cited the **source's** labels rather than the warrant's,
+    so the label walk that retires the theorem never reaches them.
+
+    Called from the retirement path rather than from the relations router,
+    because this is a way an edge stops resolving that nothing in that router
+    ever sees — the same shape as deleting an edge's source
+    (`systems.delete_system`).
+
+    Targets in id order, so two retirements touching one pair of towers acquire
+    their locks the same way round.
+    """
+    edges = (
+        await session.execute(
+            select(
+                SystemRelationRow.target_system_id, SystemRelationRow.source_system_id
+            )
+            .join(
+                SystemRelationObligationRow,
+                SystemRelationObligationRow.relation_id == SystemRelationRow.id,
+            )
+            .where(SystemRelationObligationRow.discharged_by_theorem_id == theorem_id)
+            .distinct()
+        )
+    ).all()
+    for target_id, source_id in sorted(edges):
+        await invalidate_library_reach(
+            session, target_id, await _own_chain(session, source_id)
+        )
+
+
+async def _own_chain(
+    session: AsyncSession, system_id: uuid.UUID
+) -> list[uuid.UUID]:
+    # A system and its ancestors, root-last — the libraries an edge from it
+    # reaches. Read here rather than through `systems.load_chain` because that
+    # loads a whole aggregate this needs no part of, and importing it would point
+    # this module at a router.
+    chain: list[uuid.UUID] = []
+    current: uuid.UUID | None = system_id
+    while current is not None and current not in chain and len(chain) <= _MAX_DEPTH:
+        chain.append(current)
+        current = await session.scalar(
+            select(FormalSystem.inherits_from_id).where(FormalSystem.id == current)
+        )
+    return chain
+
+
+# The bound `systems.MAX_INHERITANCE_DEPTH` enforces when a chain is written,
+# restated rather than imported for the reason `_own_chain` gives.
+_MAX_DEPTH = 32
 
 
 async def _lock_all(session: AsyncSession, systems: Sequence[uuid.UUID]) -> None:
