@@ -17,7 +17,11 @@ from website.logical.declarative import Production, SystemSpec, build_system
 from website.logical.formal_system import FormalSystem
 from website.logical.metamath import build_spec, parse
 from website.logical.metamath.definitions import statement_of
-from website.logical.metamath.display import projection_for, unicode_projection
+from website.logical.metamath.display import (
+    notation_report,
+    projection_for,
+    unicode_projection,
+)
 from website.logical.metamath.parser import Database
 from website.logical.metamath.typesetting import Typesetting, typesetting_of
 from website.logical.rendering import render
@@ -152,3 +156,63 @@ def test_a_definitions_own_notation_is_seeded_too() -> None:
         system.build_context, {"S": "⊤", "->": "→"}, definitions=system.definitions
     )
     assert render(term, with_definitions) == "(⊤ → p)"
+
+
+def test_a_notation_report_finds_nothing_wrong_with_the_source_spelling() -> None:
+    # The identity: a grammar's own tokens are distinct by construction, so no two
+    # productions are spelled alike. Everything is "unmapped" because the empty map
+    # spells nothing, which is what unmapped means and why it is only cosmetic.
+    _database, system, _ = built()
+    report = notation_report(system.build_context, {})
+
+    assert report.usable_as_source
+    assert report.collisions == ()
+    assert "e." in report.unmapped
+
+
+def test_a_notation_report_names_the_tokens_it_cannot_spell() -> None:
+    _database, system, _ = built()
+    report = notation_report(system.build_context, {"e.": "∈"})
+
+    assert "e." not in report.unmapped
+    assert "->" in report.unmapped
+
+
+def two_constants(sort_a: str, sort_b: str) -> FormalSystem:
+    """A grammar with two constants, so a notation can be made to confuse them."""
+    return build_system(
+        SystemSpec(
+            name="n",
+            productions=[
+                Production(sort="formula", name="var", regex="[p-r]"),
+                Production(sort=sort_a, name="first", atom_value="ALPHA"),
+                Production(sort=sort_b, name="second", atom_value="BETA"),
+            ],
+            lines=[LineSpec(name="statement", shape="<formula> [<reference>]",
+                            parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,.-]+")],
+                            logical_sort="formula")],
+        )
+    )
+
+
+def test_a_notation_that_spells_two_productions_alike_is_not_a_source() -> None:
+    # The distinction the whole of §4.2 turns on. As a *display* this is cosmetic —
+    # two things look alike and the term underneath is unambiguous. As a *source*
+    # it is a correctness bug, because text no longer determines a term.
+    system = two_constants("formula", "formula")
+    report = notation_report(system.build_context, {"ALPHA": "★", "BETA": "★"})
+
+    assert not report.usable_as_source
+    (collision,) = report.collisions
+    assert collision.sort == "formula"
+    assert collision.spelling == "★"
+    assert collision.productions == ("first", "second")
+
+
+def test_productions_of_different_sorts_may_share_a_spelling() -> None:
+    # Two productions only compete for a parse within one sort, so this is not an
+    # ambiguity and reporting it would bury the real ones.
+    system = two_constants("formula", "other")
+    report = notation_report(system.build_context, {"ALPHA": "★", "BETA": "★"})
+
+    assert report.usable_as_source

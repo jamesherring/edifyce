@@ -31,6 +31,7 @@ slot. That keeps ``( ph -> ps )`` rendering as ``( ph → ps )`` rather than
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ..kernel.constructors import constructor_for
@@ -47,7 +48,7 @@ if TYPE_CHECKING:
 
     from ..build_context import FormalSystemContext
     from ..formal_system import FormalSystem
-    from ..kernel.constructors import Piece
+    from ..kernel.constructors import Constructor, Piece
     from .typesetting import Typesetting
 
 
@@ -63,6 +64,24 @@ def _map_literal(text: str, tokens: Mapping[str, str]) -> str:
     lead = " " if text[:1].isspace() else ""
     trail = " " if text[-1:].isspace() else ""
     return f"{lead}{mapped}{trail}"
+
+
+def _constructors_by_sort(
+    context: FormalSystemContext,
+) -> list[tuple[str, Constructor]]:
+    # Every production with the sort it belongs to. Two productions only compete
+    # for a parse within one sort, so a shared spelling across sorts is not an
+    # ambiguity and must not be reported as one.
+    found: list[tuple[str, Constructor]] = []
+    seen: set[int] = set()
+    for sort, pattern in context.variables.items():
+        if not isinstance(pattern, UnionPattern):
+            continue
+        for member in pattern.patterns:
+            if isinstance(member, (StringPattern, AtomPattern)) and id(member) not in seen:
+                seen.add(id(member))
+                found.append((sort, constructor_for(member)))
+    return found
 
 
 def _productions(context: FormalSystemContext) -> list[Pattern]:
@@ -138,6 +157,94 @@ def projection_for(
         if changed:
             templates[constructor.name] = tuple(pieces)
     return Projection(templates=templates, name=name)
+
+
+@dataclass(frozen=True)
+class Collision:
+    """Two or more productions of one sort that a notation spells the same."""
+
+    sort: str
+    spelling: str
+    productions: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class NotationReport:
+    """What a candidate notation would leave unsaid or say twice.
+
+    §4.4's "report of unmapped tokens and colliding renderings", so re-syncing a
+    notation against a grammar is driven by a list rather than by discovering
+    breakage. Both halves matter for different reasons.
+
+    ``unmapped`` is cosmetic: a token the notation does not spell renders in the
+    source spelling, and the result is mixed but readable and still correct.
+
+    ``collisions`` is not, and which it is depends on what the notation is *for*.
+    As a **display** it is cosmetic too - two things that look alike are a
+    presentation flaw, and the term is unambiguous underneath. As a **source** it
+    is a correctness bug: two productions spelled alike cannot be told apart by a
+    parser, so text no longer determines the term.
+    """
+
+    unmapped: tuple[str, ...] = ()
+    collisions: tuple[Collision, ...] = ()
+
+    @property
+    def usable_as_source(self) -> bool:
+        """Whether text in this notation still determines a term."""
+        return not self.collisions
+
+
+def _spelling(constructor: Constructor, tokens: Mapping[str, str]) -> str | None:
+    # What a production would look like, with slots punched out so that two
+    # productions differing only in slot *names* count as spelled alike - a
+    # parser cannot tell those apart either.
+    if constructor.pieces:
+        return "".join(
+            _map_literal(text, tokens) if kind == "lit" else "\x00"
+            for kind, text in constructor.pieces
+        )
+    if constructor.atom_value is not None:
+        return tokens.get(constructor.atom_value, constructor.atom_value)
+    return None
+
+
+def notation_report(
+    context: FormalSystemContext, tokens: Mapping[str, str]
+) -> NotationReport:
+    """Check ``tokens`` against ``context``'s grammar before adopting it.
+
+    Run this rather than reasoning about the token map: a map may collide heavily
+    at the *token* level and not at all at the production level, because arity and
+    position tell productions apart where a token map cannot. On `set.mm` the
+    `$t` Unicode map shares 50 renderings across 107 tokens, and that comes to
+    **19** colliding spellings over 38 productions - `∪` is three different
+    tokens, but `( A ∪ B )`, `∪ A` and `∪ x ∈ A B` are three different shapes.
+    Its LaTeX map, measured the same way, collides on 8.
+
+    Scoped to the grammar's declared productions, whose sorts are known here. A
+    definition's defined form is notation too, but the kernel definition carries
+    no sort to group it by - and in a Metamath import it is a declared production
+    anyway, since a `$a` spells the form before a `df-` gives it meaning.
+    """
+    by_spelling: dict[tuple[str, str], list[str]] = {}
+    unmapped: set[str] = set()
+    for sort, constructor in _constructors_by_sort(context):
+        for kind, text in constructor.pieces:
+            if kind == "lit":
+                unmapped.update(w for w in text.split() if w not in tokens)
+        if constructor.atom_value is not None and constructor.atom_value not in tokens:
+            unmapped.add(constructor.atom_value)
+        spelling = _spelling(constructor, tokens)
+        if spelling is not None:
+            by_spelling.setdefault((sort, spelling), []).append(constructor.name)
+
+    collisions = tuple(
+        Collision(sort=sort, spelling=spelling, productions=tuple(sorted(names)))
+        for (sort, spelling), names in sorted(by_spelling.items())
+        if len(names) > 1
+    )
+    return NotationReport(unmapped=tuple(sorted(unmapped)), collisions=collisions)
 
 
 def unicode_projection(system: FormalSystem, typesetting: Typesetting) -> Projection:
