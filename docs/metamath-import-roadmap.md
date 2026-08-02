@@ -5,8 +5,8 @@ each against only the notation and theorems preceding it, every proof emitted fr
 its stored compressed proof and checked by Edifyce's own kernel (§1.1). The
 primitive basis is no longer "every logical `$a`": **1,429 of `set.mm`'s 1,559
 import as definitions** rather than axioms, leaving 130 primitive, and every
-theorem still verifies (§5, A4). What remains is a short, enumerated tail — 119
-statements whose root is not a declared definitional equivalence, and 11 others —
+theorem still verifies (§5, A4). What remains is a short, enumerated tail — 118
+statements whose root is not a declared definitional equivalence, and 12 others —
 and every one of them is a statement whose *shape* says it does not define, rather
 than one the representation cannot carry. 126 of the 130 are named `ax-` by
 `set.mm` itself.
@@ -856,12 +856,12 @@ definition, one wrongly read as bound would hide a capture.
 
 | | |
 |---|---|
-| root is not a declared definitional equivalence | 119 |
+| root is not a declared definitional equivalence | 118 |
 | defined side is built from notation already in use | 9 |
 | defined side is a bare metavariable | 2 |
 | defining side introduces a variable nothing binds | 1 |
 
-The composition matters more than the count. **126 of the 131 are named `ax-` by
+The composition matters more than the count. **126 of the 130 are named `ax-` by
 `set.mm` itself**, no assertion named `ax-` is classified as a definition, and no
 remaining axiom is named anything but `ax-` or `df-`. The tail is `set.mm`'s own
 primitive basis — `ax-1`, `ax-mp`, `ax-ext`, `ax-rep`, `ax-sep`, `ax-pow`,
@@ -869,16 +869,32 @@ primitive basis — `ax-1`, `ax-mp`, `ax-ext`, `ax-rep`, `ax-sep`, `ax-pow`,
 Frege and `ax-c*` alternate systems, and the unproved number-theory results used
 as hypotheses (`ax-hgt749`, `ax-ros335`). Admitting any of them would be a defect.
 
-That leaves five `df-` named, and three of those are axioms whatever they are
+That leaves four `df-` named, and three of those are axioms whatever they are
 called: `df-clab`, `df-cleq` and `df-clel` connect class notation to set theory
-and `set.mm`'s own literature treats them as axioms. Of the two that remain:
+and `set.mm`'s own literature treats them as axioms. The fourth is **`df-gmdl`**,
+and it is not ours:
 
-- **`df-gmdl`** is not ours. Its `A. c e. ( mTC ` t ) …` and the `( mUV ` c )`
-  inside a later quantifier's domain are *sibling* conjuncts of a `w3a` — checked
-  by bracket depth, both at depth 2 — so `c` genuinely is free there, and every
-  sibling conjunct writes `( mUV ` t )`. It reads as a typo in a mathbox, and
-  refusing it is right.
-- **`df-bi`** is the bootstrap, and is treated in its own right next.
+- `A. c e. ( mTC ` t ) …` and the two `( mUV ` c )` occurrences are *sibling*
+  conjuncts of a `w3a` — checked by bracket depth, both at depth 2 — so `c`
+  genuinely is free in the second, and nothing binds it.
+- `mUV` is `Slot 7`, a **structure accessor**, while `c` ranges over `( mTC ` t )`,
+  `Slot 4`, the type codes. So it applies a structure accessor to a type code: a
+  category error independent of the scoping.
+- Across the whole of `set.mm`, `mUV` is applied to `t` **fifteen** times and to
+  `c` **twice** — those two. Both sibling conjuncts write `( mUV ` t )`.
+- Nothing uses `mGMdl`. It appears in exactly two places in 51 MB: its syntax
+  axiom `cgmdl` and this definition, both in Mario Carneiro's mathbox. No theorem
+  is ever proved about it, so nothing would exercise the error.
+
+It reads as a typo, and refusing it is right. Worth noting it is not merely
+cosmetic: a definiens with a free variable the definiendum lacks asserts
+`mGMdl = { t | φ(t,c) }` for *every* `c`, forcing `{ t | φ(t,c) } = { t | φ(t,c') }`
+— a substantive claim rather than an abbreviation. Metamath's verifier does not
+catch it because `( mUV ` c )` is perfectly grammatical (Metamath is untyped past
+typecodes, and a setvar is a class); definitional soundness is left to an external
+checker, and no `$j` directive exempts it. Upstream's to fix, not ours.
+
+`df-bi` was the fifth, and is now a definition — treated next.
 
 ### `df-bi`, the one definition that cannot state itself — *done*
 
