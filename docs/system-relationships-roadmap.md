@@ -361,9 +361,11 @@ Today only an import writes `promoted_theorems`. For a person to reuse their own
 PC lemma in ZFC, a proof must be able to *enter* its system's library:
 
 `POST /api/proofs/{id}/promote` → writes a `promoted_theorems` row from the
-proof's conclusion and sets `proofs.theorem_id`. Guards: the proof must be valid,
-warning-free (`_is_usable_lemma`'s test) and owned; re-promoting after an edit
-replaces the row; invalidating the proof retires it.
+proof's conclusion and sets `proofs.theorem_id`. Guards: the proof must be
+**published** and owned — which subsumes valid and warning-free, and is a
+stronger condition than this line first named, for reasons §9.15 gives.
+Re-promoting after an edit replaces the row; anything that stops the proof
+standing retires it, and retiring reaches the proofs that cited it.
 
 The statement is taken from the conclusion line's **stored term**, not its text
 (§3.1/§3.7): the row is already there from the last verification, and it is the
@@ -767,9 +769,16 @@ what the design got wrong on paper; §9.13 a gap it surfaced.
 - **Falling back is a cost, not a difference.** Drop the parent's cached term and
   re-run: the same theorem, the same verdict, one parse more.
 
-#### R3 — promote a proved proof into its library
+#### R3 — promote a proved proof into its library — **done**
 
 **Delivers (a)/(b)** for work a person proves. Ground statements first.
+
+What landed: `POST /proofs/{id}/promote` and its `DELETE`,
+`promotion.proved_theorem` (the engine's answer to "what does this proof
+establish?"), `promoted_theorems.proved_by_id`, and retirement wired into every
+path by which a promoted proof stops standing. §9.15 records the two things the
+design left unsaid — why the gate is *publication* rather than validity, and why
+retiring an entry has to reach the proofs that cited it.
 
 **Tests and verification** — `tests/test_proof_promotion.py`.
 
@@ -782,6 +791,26 @@ what the design got wrong on paper; §9.13 a gap it surfaced.
 - *Pinned:* re-promoting replaces rather than duplicates; `proofs.theorem_id`
   points at the entry; a ground theorem justifies **exactly** its own statement —
   cited at any other instance it is rejected.
+
+All of the above, plus what mutation testing said the first cut was missing.
+Term identity against the `proof_lines` row turned out **not** to discriminate:
+the graph interns by digest, so a statement re-parsed from text lands on the same
+row and the assertion passes either way. What discriminates is R2's own control —
+make composing fatal and promote anyway — so that is what pins §3.1 here, with
+the row assertion kept for what it does say. Likewise the delete path: the entry
+cascades away with the proof whatever the route does, so the test that says the
+route did something is the *citing* proof's verdict being cleared.
+
+Two guards are exercised where they live rather than through the route.
+`proof.has_warnings` has no producer in the engine today — `warning_message` is
+carried by the line, the row and the loader, and nothing sets it — so the warning
+rejection is an engine test plus a forced test of the route's wiring, and says so.
+
+The review round added five, four of them about the same thing: what invalidation
+has to mirror in the resolver, and what it must not over-reach (§9.15). The one
+that most nearly passed anyway is the rule-shadowing case — the first test of it
+had the citing lines resolving to a *different* label, so it agreed with a walk
+that had no shadow check at all.
 
 #### R3a — schematic promotion
 
@@ -1104,6 +1133,94 @@ constraint on the phases after it rather than a closed question.
     the cheaper answer is a process-level memo keyed by the chain's grammar
     digest and the rule's label — the access pattern is one system verified
     repeatedly — which needs no migration and no second invalidation contract.
+
+15. **What promotion is gated on, and what retiring an entry has to reach.**
+    §5.3 named three guards — valid, warning-free, owned — and both halves of
+    that turn out to be incomplete once R2 is in place.
+
+    The gate is **publication**, not validity. R2 makes a system's library
+    resolvable from every descendant, and a descendant may be someone else's — a
+    published parent is exactly the case where it is — so promoting a *draft*
+    proof would hand its statement to strangers by a route that never asks who is
+    reading. Publication is also what keeps the entry stable, since
+    `_require_publishable` re-runs on every source edit and a published proof
+    cannot be edited into not standing. And it costs nothing extra to require:
+    publishing a proof already demands that it verify, so §5.3's guards are
+    implied rather than dropped.
+
+    Conveniently it aligns with §9.11: a citable entry is now exactly as frozen
+    as the ancestor systems that argument depends on.
+
+    **Retirement has to invalidate what cited the entry.** Deleting the row is
+    the easy half — the citing proof then fails its *next* verify. But a proof
+    that already verified keeps `valid`, `result` and its `proof_lines` rows, and
+    a verify now *trusts* a lemma's stored rows rather than re-checking them
+    (`docs/verification-from-rows.md`), so a third proof citing that one would
+    rest on a theorem the database no longer has. Which proofs cited it is
+    answerable from the rows — a promoted theorem resolves to an ephemeral rule
+    carrying its label, and `proof_lines.rule` records it — so this is a query,
+    not a re-parse. It walks descendants and stops at a system declaring the same
+    label itself, following the resolver's own shadowing rule so it invalidates
+    nothing that was never citing the entry.
+
+    This is also the one place a route takes **more than one** system lock, which
+    `_common.lock_system` had been able to say never happens — and getting that
+    order right took two attempts, the second from Codex.
+
+    Sorting the set by id is *not* a global order, because every caller arrives
+    already holding the subtree root's lock: a verify takes it before reading
+    anything, an invalidation before writing. So a sorted set can put a
+    descendant's key ahead of one already held, and two operations at different
+    levels of one tower acquire in opposite orders — Postgres detects the cycle
+    and aborts one. The order that works is **(depth, id)**: a system's depth is a
+    property of the tower rather than of who is asking, so any two operations
+    order any two systems they share identically, and the pre-held key is
+    automatically first, being the unique shallowest member of its own subtree.
+    Inheritance is single-parent, so two subtrees are nested or disjoint and
+    there is no third case.
+
+    The general lesson, worth carrying to any future multi-key caller: a lock
+    order has to account for the keys a caller **already holds**, not just the
+    ones it is about to take.
+
+    Two consequences worth stating. A locally-promoted entry needs a warrant
+    distinguishable from an imported one, which is `promoted_theorems.proved_by_id`
+    — an import leaves it NULL, so a grammar edit that invalidates every proof in
+    a 49,000-theorem corpus withdraws none of its library. And a *retired* entry
+    is gone rather than tombstoned: nothing records that a label used to resolve,
+    so a proof invalidated this way reports an unresolved citation and not the
+    reason. Recoverable from `proof_lines.rule` if it is ever worth saying.
+
+    Review sharpened this into a general statement, which is the form to keep:
+    **what a label resolves to changing at all is the event**, and retirement is
+    only one way it changes. *Promoting* one an ancestor already carries is
+    another — shadowing is legal, R2 resolves nearest-first, so refusing it would
+    contradict that — and it silently redirects every citation at or below the
+    promoting layer. So promotion invalidates the label's citers too, on exactly
+    the same call.
+
+    Three details the first cut got wrong, each worth recording because each is a
+    place the *resolver's* behaviour has to be mirrored rather than approximated:
+
+    - **Shadowing includes rules.** `Proof.get_reference` tries `rule_by_label`
+      before the library, so a descendant declaring an inference rule of that
+      name shadows an ancestor's theorem as thoroughly as a nearer theorem does.
+      A walk that looked only for theorems wiped that subtree's verdicts for an
+      entry it never reached.
+    - **A citer is itself citable.** Clearing the direct citers is half the
+      mechanism: a proof resting on a citer rests on the entry one hop back, and
+      a verify trusts a lemma's stored rows. The invalidation follows the
+      reference graph out from the citers.
+    - **The reference set is part of the proof.** Dropping a lemma reference can
+      leave a promoted entry standing behind a proof that no longer verifies, so
+      it retires on the same rule a source edit does.
+
+    And one that is not about resolution at all: the default label is the proof's
+    *slug*, which is not a label. `slugify` produces anything URL-safe — a leading
+    digit, up to the 256 characters a name may run to — while a label must be
+    citable as `[label]` and must fit `String(128)`. Derived defaults get the same
+    validation an explicit label does, or the two failure modes are a citation
+    that never parses and a Postgres truncation 500.
 
 ---
 

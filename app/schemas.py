@@ -537,6 +537,14 @@ class ReorderRequest(BaseModel):
 # spaces, which the proof-line citation grammar uses as delimiters.
 _ALIAS_PATTERN = r"^[A-Za-z][A-Za-z0-9_-]*$"
 
+# A promoted theorem's label is cited the same way (`[label]`), so it takes the
+# same shape, bounded by what `promoted_theorems.label` stores. Public because
+# the promote route derives a *default* label from the proof's slug and has to
+# hold it to exactly this rule — a slug is URL-safe, which is a wider alphabet
+# and a longer one.
+THEOREM_LABEL_PATTERN = _ALIAS_PATTERN
+THEOREM_LABEL_MAX = 128
+
 
 class ProofReferenceInput(BaseModel):
     """One outgoing reference edge, as submitted: the lemma proof plus the alias
@@ -577,6 +585,37 @@ class ProofReferencesUpdate(BaseModel):
     references: list[ProofReferenceInput] = Field(default_factory=list)
 
 
+class ProofPromotionRequest(BaseModel):
+    """Promote a proved proof into its system's library.
+
+    ``label`` is what a later proof cites the theorem by, so it is constrained
+    exactly as a reference alias is — the citation grammar reads `[label]` and
+    splits on the same delimiters. Omitted, the proof's slug is used.
+    """
+
+    label: str | None = Field(
+        None, min_length=1, max_length=THEOREM_LABEL_MAX, pattern=THEOREM_LABEL_PATTERN
+    )
+
+
+class PromotedTheoremOut(BaseModel):
+    """A library entry, read back.
+
+    ``statement`` is the conclusion's kernel term rendered, not the source line
+    the author typed: promotion takes the term the check ran on, and this is a
+    record of it (see `website.logical.promotion.proved_theorem`).
+    """
+
+    id: uuid.UUID
+    label: str
+    statement: str
+    formal_system_id: uuid.UUID
+    # The proof whose standing warrants the entry — always this proof, for one
+    # promoted through the API. Null would mean an imported entry, which no route
+    # here returns.
+    proved_by_id: uuid.UUID | None = None
+
+
 class ProofSummary(BaseModel):
     id: uuid.UUID
     name: str
@@ -603,6 +642,8 @@ class ProofDetail(ProofSummary):
     # Incoming references (proofs that cite this one as a lemma) — the "used by"
     # direction. Filtered to those the viewer may read.
     referenced_by: list[ProofReferrerOut] = Field(default_factory=list)
+    # The library entry this proof establishes, null until it is promoted.
+    theorem: PromotedTheoremOut | None = None
 
 
 # ---------------------------------------------------------------------------

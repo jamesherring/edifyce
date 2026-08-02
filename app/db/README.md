@@ -128,7 +128,11 @@ Modernised from the original Django app (`website/models.py` on `main`):
   on the same contract as the rule schema terms above. A premise's `label` is how
   the theorem's **own** proof cites it, and the only way to reach it — a bare
   hypothesis citable by anyone would prove anything — with `proofs.theorem_id`
-  saying which proof that is.
+  saying which proof that is. `proved_by_id` points the other way and means
+  something else: which proof's *standing* warrants the entry, set by
+  `POST /proofs/{id}/promote` and left NULL by an import, whose warrant is the
+  corpus. That is what lets an edit retire a locally-proved entry without a
+  grammar change taking a 49,000-theorem import down with it.
 - **`side_conditions`** — a definition's proviso (`where` clause) stored as the
   kernel's closed side-condition algebra (`side_conditions.py`) rather than an
   opaque string: one row per algebra node (`occurs`/`equal`/`disjoint`/`atom`/

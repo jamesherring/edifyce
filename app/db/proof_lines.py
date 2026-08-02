@@ -74,6 +74,12 @@ class ProofLineRow(Base):
         Index("uq_proof_lines_proof_position", "proof_id", "position", unique=True),
         # "Which proofs cite this rule", "which lines failed" — in plain SQL.
         Index("ix_proof_lines_proof_number", "proof_id", "number"),
+        # By rule *across* proofs, which is the direction retirement asks in:
+        # withdrawing a library entry has to find every proof that cited it, and
+        # a citation of a promoted theorem is recorded as its label here (see
+        # `proofs._invalidate_citations`). Also the index behind "which proofs
+        # use this rule" over a whole corpus.
+        Index("ix_proof_lines_rule", "rule"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk_column()

@@ -95,6 +95,7 @@ def store_theorem(
     digest: str | None = None,
     promoted: PromotedTheorem | None = None,
     premise_labels: Sequence[str] = (),
+    proved_by_id: uuid.UUID | None = None,
 ) -> PromotedTheoremRow:
     """Write one promoted theorem's rows and return them (unsaved).
 
@@ -108,6 +109,9 @@ def store_theorem(
     ``premise_labels`` names each premise as the theorem's *own proof* cites it
     (a Metamath ``$e`` label), positionally; see
     :class:`~app.db.promoted_theorems.PromotedTheoremPremiseRow.label`.
+    ``proved_by_id`` is the stored proof this entry's standing rests on — set for
+    a promotion, left NULL by an import; see
+    :class:`~app.db.promoted_theorems.PromotedTheoremRow.proved_by_id`.
     """
     if promoted is not None and digest is None:
         raise ValueError(
@@ -121,6 +125,7 @@ def store_theorem(
         statement=spec.statement,
         primitive=primitive,
         matching=spec.matching,
+        proved_by_id=proved_by_id,
         schema_digest=digest if promoted is not None else None,
         statement_term_id=(
             None if promoted is None
