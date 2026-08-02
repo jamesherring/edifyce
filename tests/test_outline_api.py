@@ -7,6 +7,7 @@ between browsing 47,000 proofs and browsing a book.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncIterator, Iterator
 
 import pytest
@@ -23,7 +24,7 @@ from sqlalchemy.orm import Session
 
 import app.auth.backend as backend
 from app.db.metamath_store import import_corpus
-from app.db.models import Proof
+from app.db.models import Proof, ProofFolder
 from app.db.session import get_session
 from app.main import app
 from tests.database import async_url, create_tables, database_url, enable_foreign_keys
@@ -121,6 +122,38 @@ def test_a_count_omits_proofs_the_reader_cannot_read(client, db):
     assert part["children"][1]["proofs"] == 0
     # The structure is still served — it is the file's, not the proofs'.
     assert identity["name"] == "The identity"
+
+
+def test_another_users_folder_is_not_in_the_tree(client, db):
+    # An imported outline is ownerless — it is the file's structure, and the
+    # system read has already settled whether this viewer may see it. A folder
+    # someone *owns* is theirs. Nothing sets an owner today, which is why the
+    # predicate is here: a later per-user folder must not arrive as a leak.
+    system_id = seed(db)
+    other = _register_login(client, "someone@example.com")
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            session.add(
+                ProofFolder(
+                    formal_system_id=uuid.UUID(system_id),
+                    owner_id=uuid.UUID(other),
+                    name="Private notes",
+                    slug="private-notes",
+                )
+            )
+            session.commit()
+    finally:
+        engine.dispose()
+
+    # Its owner sees it beside the outline...
+    names = [f["name"] for f in client.get(f"/api/formal-systems/{system_id}/folders").json()]
+    assert "Private notes" in names
+
+    # ...and nobody else does, while the outline itself is unaffected.
+    assert client.post("/api/auth/logout").status_code == 204
+    anonymous = client.get(f"/api/formal-systems/{system_id}/folders").json()
+    assert [f["name"] for f in anonymous] == ["LOGIC"]
 
 
 def test_a_system_that_draws_no_outline_serves_an_empty_tree(client, db):

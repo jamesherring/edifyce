@@ -224,14 +224,20 @@ class Database:
         return self._typed_from
 
     @property
-    def comments(self) -> list[str]:
+    def comments(self) -> tuple[str, ...]:
         """Every comment body, in file order — :attr:`commentary` without positions.
 
         What a consumer that only wants to *read* comments wants, and most do:
         the `$t` block is found by scanning bodies, and a statement's description
         comes off the statement. Position matters only to :mod:`~.sections`.
+
+        A **tuple**, not a list, because a property returns a fresh object each
+        call: appending to a list here would silently do nothing, while appending
+        to a tuple raises. `commentary` is the field, and is where a writer
+        belongs — though only :func:`parse` is one, since a database is populated
+        once and read thereafter.
         """
-        return [entry.body for entry in self.commentary]
+        return tuple(entry.body for entry in self.commentary)
 
     def position(self, label: str) -> int:
         """Index of assertion ``label`` in file order."""

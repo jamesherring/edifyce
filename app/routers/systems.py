@@ -782,10 +782,23 @@ async def get_system_folders(
     tree costs a request per expansion for no benefit at that size.
     """
     system = await _get_readable_or_404(session, system_id, user)
+    # A folder with no owner is part of the system itself — an imported outline is
+    # the file's structure, and the read above has already settled whether this
+    # viewer may see the system at all. One that *is* owned belongs to a user, so
+    # it is theirs to see. Nothing sets `owner_id` today (an import leaves it
+    # null, and there is no folder CRUD yet), which is exactly why the predicate
+    # goes in now: a later per-user folder must not arrive as a leak.
+    #
+    # `published_at` is deliberately not part of this. It is unset on every row,
+    # and for an outline it would mean nothing a system's own publication does not
+    # already say.
+    mine = [ProofFolder.owner_id.is_(None)]
+    if user is not None:
+        mine.append(ProofFolder.owner_id == user.id)
     rows = (
         await session.scalars(
             select(ProofFolder)
-            .where(ProofFolder.formal_system_id == system.id)
+            .where(ProofFolder.formal_system_id == system.id, or_(*mine))
             .order_by(ProofFolder.position, ProofFolder.name)
         )
     ).all()
