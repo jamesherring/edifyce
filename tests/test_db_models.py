@@ -33,6 +33,8 @@ def test_expected_tables_present():
         "production_binding_scopes",
         "line_types",
         "line_parts",
+        # How a system's terms may be *read* — one named notation's render steps.
+        "notation_pieces",
         "definitions",
         "definition_bindings",
         "definition_fresh",

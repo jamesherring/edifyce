@@ -42,6 +42,7 @@ from app.db import (
     TermRow,
     spec_to_system,
 )
+from app.db.notations_mapping import store_notation
 from app.db.terms_mapping import prefetch_terms
 from app.db.promoted_theorems import (
     PromotedTheoremBindingRow,
@@ -91,6 +92,7 @@ from tests.database import (
 from tests.zfc_systems import scoped_zfc_spec
 from website.logical.declarative import SystemSpec, build_spec
 from website.logical.formal_system import FormalSystem as EngineFormalSystem
+from website.logical.rendering import Projection
 
 # Auth tables + the system-decomposition tables + the proof tables + the term
 # graph a verified proof's lines are stored into (all SQLite-creatable). The
@@ -1391,7 +1393,9 @@ def test_structure_is_empty_until_the_proof_is_verified(client, db):
     sid = _seed_system(db, uid)
     pid = _create_proof(client, sid, "Unchecked", source=_MP_SRC)
 
-    assert _structure(client, pid) == {"proof_id": pid, "stored": False, "lines": []}
+    assert _structure(client, pid) == {
+        "proof_id": pid, "stored": False, "notation": None, "lines": []
+    }
 
     client.post(f"/api/proofs/{pid}/verify")
     assert _structure(client, pid)["stored"] is True
@@ -1594,6 +1598,88 @@ def test_editing_a_lemma_discards_the_dependents_structure(client, db):
     # with the verdict it was stored alongside.
     assert client.patch(f"/api/proofs/{lemma}", json={"source": VALID_PROOF}).status_code == 200
     assert _structure(client, main)["stored"] is False
+
+
+def _seed_notation(db_path, system_id: str, name: str, templates: dict) -> None:
+    """Give a seeded system one named notation, as an import would."""
+    engine = create_engine(db_path)
+    try:
+        with Session(engine) as session:
+            store_notation(
+                session, uuid.UUID(system_id), Projection(templates=templates, name=name)
+            )
+            session.commit()
+    finally:
+        engine.dispose()
+
+
+# The ZFC fragment writes `x = x`; this reads it as `x ≡ x`. Deliberately not the
+# source spelling, so a rendered line cannot be mistaken for the stored `display`.
+#
+# `implication` is re-spelled as itself rather than left out, because a *stored*
+# notation must name every constructor: a reader has rows and no grammar, so an
+# unnamed one has no source template to fall back to. `total_projection` is what
+# completes a derived notation; here the two productions are written out.
+_EQUIV = {
+    "equality": (("slot", "s"), ("lit", " ≡ "), ("slot", "t")),
+    "implication": (
+        ("lit", "("), ("slot", "p"), ("lit", " → "), ("slot", "q"), ("lit", ")")
+    ),
+}
+
+
+def test_the_system_detail_lists_the_notations_it_stores(client, db):
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+
+    assert client.get(f"/api/formal-systems/{sid}").json()["notations"] == []
+
+    _seed_notation(db, sid, "equiv", _EQUIV)
+    assert client.get(f"/api/formal-systems/{sid}").json()["notations"] == ["equiv"]
+
+
+def test_a_line_reads_in_a_requested_notation(client, db):
+    # The whole point: one checked term, read a second way, with no re-check and
+    # no second copy of the proof.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    _seed_notation(db, sid, "equiv", _EQUIV)
+    pid = _create_proof(client, sid, "Renamed", source=_MP_SRC)
+    client.post(f"/api/proofs/{pid}/verify")
+
+    plain = _structure(client, pid)
+    assert plain["notation"] is None
+    # Asking for none leaves the field empty rather than repeating `display`: the
+    # source spelling is already there, and a null says "not projected".
+    assert [line["rendered"] for line in plain["lines"]] == [None, None, None]
+
+    resp = client.get(f"/api/proofs/{pid}/structure", params={"notation": "equiv"})
+    assert resp.status_code == 200, resp.text
+    read = resp.json()
+    assert read["notation"] == "equiv"
+    assert [line["rendered"] for line in read["lines"]] == [
+        "x ≡ x", "(x ≡ x → x ≡ x)", "x ≡ x"
+    ]
+    # The source is untouched by the reading of it — and note what `rendered` is
+    # *not*: `display` is the whole authored line, citation included, while a
+    # projection renders the line's term, which is the formula alone. A client
+    # showing a notation supplies the citation from `reference`/`rule`.
+    assert [line["display"] for line in read["lines"]] == [
+        "x = x [HYP]", "(x = x → x = x) [HYP]", "x = x [MP]"
+    ]
+
+
+def test_a_notation_the_system_does_not_store_is_a_404(client, db):
+    # Not a silent fall back to the source: that would look like the notation had
+    # no opinion about any line, rather than like a typo in its name.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    pid = _create_proof(client, sid, "Plain", source=_MP_SRC)
+    client.post(f"/api/proofs/{pid}/verify")
+
+    resp = client.get(f"/api/proofs/{pid}/structure", params={"notation": "latex"})
+    assert resp.status_code == 404
+    assert "latex" in resp.json()["detail"]
 
 
 def test_structure_visibility_follows_the_proof(client, db):

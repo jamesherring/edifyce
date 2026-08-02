@@ -141,6 +141,28 @@ def _constructors_by_sort(
     return found
 
 
+def notation_constructors(context: FormalSystemContext) -> list[Constructor]:
+    """Every constructor a stored notation must give a spelling, deduplicated.
+
+    What :func:`~website.logical.rendering.total_projection` completes a derived
+    notation against, before it is stored: a reader has rows and no grammar, so a
+    constructor the notation skips has no source template to fall back to and
+    renders as a hole.
+
+    Deduplicated, unlike :func:`_constructors_by_sort`, which reports a production
+    once per sort it competes in because that is what an *ambiguity* is about. A
+    notation is keyed by constructor name, so the sorts are beside the point.
+    """
+    found: list[Constructor] = []
+    seen: set[str] = set()
+    for _sort, constructor in _constructors_by_sort(context):
+        if constructor.name in seen:
+            continue
+        seen.add(constructor.name)
+        found.append(constructor)
+    return found
+
+
 def _productions(context: FormalSystemContext) -> list[Pattern]:
     # Every production the grammar holds that could carry notation, deduplicated:
     # a production joins its sort's union, and a sort may be included into another,

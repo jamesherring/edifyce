@@ -659,6 +659,55 @@ a template, so a projection reaching only compound productions renders `( √ �
 ∈ RR` — operators re-spelled, constants left in ASCII. Including them took the
 projection from 120 templates to 776.
 
+### 4.3c A notation, stored and served — *done*
+
+§4.3b left the fold parameterised but with nothing to feed it on the read path: a
+`Projection` was derived in memory from a built system, and a reader has a
+database. So a notation is now **persisted with its system** and the whole path
+runs from rows.
+
+`notation_pieces` is one row per render step — `(system, notation, constructor,
+position, kind, text)`. Steps rather than a template *string*, which was the first
+attempt and is not available here: compiling `{A} ∈ {B}` back to steps needs a
+delimiter no notation uses, and set.mm makes braces notation (`{ x | ph }`). The
+rows are the shape `Constructor.pieces` already has, so nothing is compiled in
+either direction.
+
+Three pieces wire it up:
+
+- **`rendering.total_projection`** completes a derived projection to name *every*
+  constructor before it is stored. An in-memory projection names only what it
+  changes, because the term carries its own constructor; a stored one cannot, so
+  anything unnamed would render as a hole. On set.mm the `$t` block seeds **776**
+  templates and completion takes that to **1,796** constructors — **2,605** rows.
+- **`app/db/notations_mapping.py`** stores and loads them, and `render_stored`
+  folds a stored notation over the *row* graph. It is the storage-side twin of
+  `rendering.render`, and the two are pinned against each other on a real system
+  (`tests/test_notations_store.py`) because they are one operation over two shapes
+  and nothing else would catch them drifting. Reading from rows is the point: a
+  display should not cost a system rebuild, which is what a *check* is for.
+- **`import_corpus`** derives and stores the `unicode` notation as the last step
+  of an import, which is the only place it can be derived — it needs the file's
+  `$t` *and* the grammar that file built. A `.mm` with no `$t` stores none, and
+  that is not a failed import.
+
+The API serves it: `GET /proofs/{id}/structure?notation=unicode` renders each
+line's term through the stored notation into `ProofLineOut.rendered`, and
+`FormalSystemDetail.notations` lists the names a system stores. `display` is left
+alone — it is the source the proof was written in. Note what `rendered` is *not*:
+it is the line's **term**, so it carries no citation and no indentation, both of
+which the checker already stored separately; a client puts them back
+(`frontend/src/lib/reading.ts`). A name the system does not store is a 404 rather
+than a silent fall back to the source, which would look like the notation had no
+opinion about any line.
+
+The proof view offers Source alongside each stored notation, and re-reads on a
+verify, since a check rewrites the structure the reading comes from.
+
+What this does not add is *authoring* in a notation — that is §5's Tier B, and it
+is the harder direction: rendering is a fold, and reading back is a parse against
+a grammar the notation does not define.
+
 ### 4.4 Beyond per-token substitution
 
 A per-token map yields token-soup LaTeX (`( \surd \` 2 ) \in \mathbb{R}`). Because

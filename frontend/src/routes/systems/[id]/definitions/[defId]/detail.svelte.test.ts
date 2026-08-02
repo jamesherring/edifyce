@@ -47,7 +47,8 @@ function system(definitions: Definition[]): FormalSystemDetail {
 		lines: [],
 		definitions,
 		axioms: [],
-		rules: []
+		rules: [],
+		notations: []
 	};
 }
 

@@ -42,9 +42,9 @@ from typing import TYPE_CHECKING
 from .kernel.terms import Node, Term
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterable, Mapping
 
-    from .kernel.constructors import Piece
+    from .kernel.constructors import Constructor, Piece
 
 
 @dataclass(frozen=True)
@@ -64,6 +64,30 @@ class Projection:
 
     templates: Mapping[str, tuple[Piece, ...]] = field(default_factory=dict)
     name: str = "source"
+
+
+def total_projection(
+    constructors: Iterable[Constructor], base: Projection, name: str | None = None
+) -> Projection:
+    """``base`` extended to name every constructor, falling back to source steps.
+
+    A projection built for rendering in memory names only what it *changes*, which
+    keeps it small — the term carries its own constructor, so an unnamed one still
+    renders. A projection that is going to be **stored** wants the opposite: a
+    reader has rows and no grammar, so anything the notation does not name has no
+    template to fall back to. Completing it against the constructors makes the
+    stored notation self-contained, and a proof view then costs a query rather
+    than a system rebuild.
+    """
+    templates = dict(base.templates)
+    for constructor in constructors:
+        if constructor.name in templates:
+            continue
+        if constructor.pieces:
+            templates[constructor.name] = constructor.pieces
+        elif constructor.atom_value is not None:
+            templates[constructor.name] = (("lit", constructor.atom_value),)
+    return Projection(templates=templates, name=name or base.name)
 
 
 def render(term: Term, projection: Projection | None = None) -> str:

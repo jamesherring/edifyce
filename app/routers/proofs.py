@@ -45,7 +45,7 @@ from datetime import datetime, timezone
 from graphlib import CycleError
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select, text
 from sqlalchemy import update as sa_update
@@ -77,6 +77,8 @@ from app.db import (
     theorem_digest,
 )
 from app.db.models import User
+from app.db.notations_mapping import load_notation, render_stored
+from app.db.terms_mapping import prefetch_terms
 from app.db.promoted_theorems import PromotedTheoremRow
 from app.db.system_relations import SystemRelationRow
 from app.db.systems import RuleRow
@@ -1602,8 +1604,9 @@ def _term_out(row: ProofLineRow) -> TermSummary | None:
     )
 
 
-def _line_out(row: ProofLineRow) -> ProofLineOut:
+def _line_out(row: ProofLineRow, rendered: str | None = None) -> ProofLineOut:
     return ProofLineOut(
+        rendered=rendered,
         id=row.id,
         position=row.position,
         number=row.number,
@@ -1637,6 +1640,13 @@ def _line_out(row: ProofLineRow) -> ProofLineOut:
 @router.get("/{proof_id}/structure", response_model=ProofStructure)
 async def get_proof_structure(
     proof_id: uuid.UUID,
+    notation: str | None = Query(
+        None,
+        description=(
+            "Read the lines in one of the system's stored notations. Omitted, "
+            "lines carry only the source they were written in."
+        ),
+    ),
     user: User | None = Depends(current_active_user_optional),
     session: AsyncSession = Depends(get_session),
 ) -> ProofStructure:
@@ -1659,10 +1669,36 @@ async def get_proof_structure(
     # No rows means no structure, not "checked and empty": an empty *source*
     # still stores its one blank line. A proof checked before this store existed
     # also lands here, and materialises on its next verify.
+    projection = None
+    if notation is not None:
+        projection = await load_notation(session, proof.formal_system_id, notation)
+        if projection is None:
+            # A name the system does not store is a client error worth reporting:
+            # silently serving the source would look like the notation had no
+            # opinion about any of it.
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"This proof's system has no notation named {notation!r}.",
+            )
+
+    rendered: dict[uuid.UUID, str] = {}
+    if projection is not None and rows:
+        # One sweep for the whole proof's terms, then a fold per line. Rendering
+        # reads rows only — a stored notation names every constructor, so no
+        # system rebuild is needed to show a proof (see `render_stored`).
+        graph = await session.run_sync(
+            lambda sync: prefetch_terms(sync, [r.term_id for r in rows])
+        )
+        for row in rows:
+            shown = render_stored(graph, row.term_id, projection)
+            if shown is not None:
+                rendered[row.id] = shown
+
     return ProofStructure(
         proof_id=proof.id,
         stored=bool(rows),
-        lines=[_line_out(row) for row in rows],
+        notation=notation,
+        lines=[_line_out(row, rendered.get(row.id)) for row in rows],
     )
 
 

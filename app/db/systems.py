@@ -469,3 +469,56 @@ class RuleBindingRow(Base):
 
     rule: Mapped[RuleRow] = relationship(back_populates="bindings")
     symbol: Mapped[SymbolRow] = relationship()
+
+
+class NotationPieceRow(Base):
+    """One render step of one constructor's spelling in one named notation.
+
+    A system's grammar fixes how a term is *written* — `A e. B`, because that is
+    what `set.mm` says — and that spelling is the source: a proof is parsed from
+    it, so changing it changes what parses. How a term is *read* is a separate
+    question, and one a system may answer several ways at once: the same checked
+    term as ASCII, as Unicode, as LaTeX. A notation is a set of substitute
+    templates, stored per system because it is a fact about the grammar, and every
+    proof written against that grammar reads through it.
+
+    Stored as **steps** rather than as a template string, one row each, which is
+    the same shape `Constructor.pieces` holds and the same shape the renderer
+    folds. A string would need a delimiter around its slots, and there is no safe
+    one: `set.mm`'s class abstraction is `{ x | ph }`, so braces are notation, and
+    its tokens between them use most of the punctuation left. Rows sidestep the
+    question, and match how the rest of a system is stored.
+
+    Nothing here reaches the checker. A wrong step renders badly; it cannot make a
+    false proof check, because the term was settled before any of this was read.
+    """
+
+    __tablename__ = "notation_pieces"
+    __table_args__ = (
+        # One step per position per constructor per notation.
+        Index(
+            "uq_notation_pieces_system_notation_constructor_position",
+            "formal_system_id",
+            "notation",
+            "constructor",
+            "position",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk_column()
+    formal_system_id: Mapped[uuid.UUID] = _system_fk()
+    # The notation's name, as a reader selects it: "unicode", "latex".
+    notation: Mapped[str] = mapped_column(String(64))
+    # What this re-spells. A production's name, or a defined form's `sort:form` —
+    # the same key `Constructor.name` carries, since that is what a render looks
+    # notation up by.
+    constructor: Mapped[str] = mapped_column(String(512))
+    position: Mapped[int] = _position()
+    # "lit" for text emitted as-is, "slot" for a child rendered in its place —
+    # the kernel's own two step kinds.
+    kind: Mapped[str] = mapped_column(String(8))
+    # The literal text, or the slot's label.
+    text: Mapped[str] = mapped_column(String(512))
+
+    system: Mapped["FormalSystem"] = relationship(back_populates="notation_pieces")

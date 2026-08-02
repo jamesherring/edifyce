@@ -16,6 +16,7 @@ evolve it.
 | `app/db/models.py` | Account + proof-surface ORM models |
 | `app/db/systems.py` | Normalised formal-system decomposition (grammar/rules/definitions as flat rows) |
 | `app/db/systems_mapping.py` | `spec_to_system` / `system_to_spec` round trip between the declarative `SystemSpec` and the rows, and `effective_spec`, which layers an inheritance chain into one |
+| `app/db/notations_mapping.py` | Store/load a system's named notations, and render a stored term through one from rows alone |
 | `app/db/side_conditions.py` | Definition provisos as the kernel side-condition algebra, stored as rows |
 | `app/db/side_conditions_mapping.py` | Parse/render a `where` proviso ↔ side-condition rows |
 | `app/db/terms.py` | Term graph: kernel-term DAGs as shared `terms` / `term_children` rows |
@@ -133,6 +134,16 @@ Modernised from the original Django app (`website/models.py` on `main`):
   `POST /proofs/{id}/promote` and left NULL by an import, whose warrant is the
   corpus. That is what lets an edit retire a locally-proved entry without a
   grammar change taking a 49,000-theorem import down with it.
+- **`notation_pieces`** — how a system's terms may be *read*, as against the
+  grammar they are written in. One row per render step of one constructor in one
+  named notation (`unicode`, `latex`), the same `("lit", …)` / `("slot", …)` shape
+  `Constructor.pieces` holds — steps rather than a template string, because no
+  delimiter is safe (set.mm makes braces notation). A stored notation names
+  *every* constructor: a reader has rows and no grammar, so anything unnamed has
+  no source template to fall back to. `render_stored` folds it over the term rows,
+  which is why showing a proof in a notation costs a query and not a system
+  rebuild. Derived where the source is — a Metamath import reads the file's `$t`
+  block — never re-derived on the read path.
 - **`side_conditions`** — a definition's proviso (`where` clause) stored as the
   kernel's closed side-condition algebra (`side_conditions.py`) rather than an
   opaque string: one row per algebra node (`occurs`/`equal`/`disjoint`/`atom`/

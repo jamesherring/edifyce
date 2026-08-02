@@ -53,6 +53,7 @@ from app.routers._common import (
     unique_slug,
 )
 from app.db.models import User
+from app.db.notations_mapping import notation_names
 from app.db.side_conditions import SideConditionRow
 from app.db.side_conditions_mapping import (
     definition_provisos_list,
@@ -629,7 +630,9 @@ def _subproof_out(r: RuleRow) -> Subproof | None:
     return Subproof(derive=r.subproof_derive, assume=r.subproof_assume, fresh=r.subproof_fresh)
 
 
-def _detail(system: FormalSystem) -> FormalSystemDetail:
+def _detail(
+    system: FormalSystem, notations: Sequence[str] = ()
+) -> FormalSystemDetail:
     return FormalSystemDetail(
         **_summary(system).model_dump(),
         brackets=[bracket_out(b) for b in system.brackets],
@@ -640,6 +643,10 @@ def _detail(system: FormalSystem) -> FormalSystemDetail:
         definitions=[definition_out(d) for d in system.definitions],
         axioms=[axiom_out(a) for a in system.axioms],
         rules=[rule_out(r) for r in system.rules],
+        # Names only, and passed in rather than read off the relationship: a
+        # notation is thousands of rows and a detail view wants none of them, so
+        # the names come from a distinct query at the callers that serve a reader.
+        notations=list(notations),
     )
 
 
@@ -713,7 +720,8 @@ async def get_system(
     session: AsyncSession = Depends(get_session),
 ) -> FormalSystemDetail:
     # Published systems are readable by anyone; drafts only by their owner.
-    return _detail(await _get_readable_or_404(session, system_id, user))
+    system = await _get_readable_or_404(session, system_id, user)
+    return _detail(system, await notation_names(session, system.id))
 
 
 @router.patch("/{system_id}", response_model=FormalSystemDetail)
