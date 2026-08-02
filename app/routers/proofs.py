@@ -110,7 +110,7 @@ from app.schemas import (
 )
 from website.logical.declarative import build_spec
 from website.logical.graphs import topological_order
-from website.logical.promotion import proved_theorem
+from website.logical.promotion import proved_theorem, schematic_theorem
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -1446,11 +1446,25 @@ async def promote_proof(
         )
 
     try:
-        spec, promoted = proved_theorem(compiled, engine_proof, label)
+        if payload.metavariables:
+            # R3a. The nomination is a claim about every instance, so the engine
+            # re-checks the proof with those leaves held schematic and refuses if
+            # it stops standing — and carries forward the provisos the steps
+            # relied on. Both are its business, not this router's.
+            spec, promoted = schematic_theorem(
+                compiled,
+                engine_proof,
+                label,
+                payload.metavariables,
+                term_context(compiled),
+            )
+        else:
+            spec, promoted = proved_theorem(compiled, engine_proof, label)
     except ValueError as exc:
-        # The engine's own guards — nothing to promote, or a proof that does not
-        # stand. The gates above should have caught the second; the first is
-        # reachable by a proof whose every line is commentary.
+        # The engine's own guards — nothing to promote, a proof that does not
+        # stand, or a nomination the proof does not support. The second should
+        # have been caught above; the first is reachable by a proof whose every
+        # line is commentary.
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
     # Replace rather than accumulate. Retiring first also invalidates whatever

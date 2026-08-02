@@ -23,12 +23,20 @@ from website.logical.build_context import (
     warm_grammar_index,
 )
 from website.logical.formal_system import FormalSystem, Proof, PromotedTheorem
-from website.logical.formal_system.side_condition_syntax import parse_side_condition
+from website.logical.formal_system.side_condition_syntax import (
+    conjuncts,
+    parse_side_condition,
+    render_side_condition,
+)
 from website.logical.kernel import from_match
+from website.logical.kernel.constructors import constructor_for
+from website.logical.kernel.side_conditions import references, restate
+from website.logical.kernel.terms import abstract
 from website.logical.matching import Pattern, StringPattern
 
 if TYPE_CHECKING:
-    from website.logical.kernel.terms import Term
+    from website.logical.kernel.terms import FreeVars, Term
+    from website.logical.matching.context import Context
 
 
 @dataclass(frozen=True)
@@ -308,6 +316,158 @@ def proved_theorem(
     term = conclusion.formula_term
     spec = TheoremSpec(label=label, statement=term.to_string())
     return spec, promote_spec(system, spec, statement_term=term)
+
+
+def schematic_theorem(
+    system: FormalSystem,
+    proof: Proof,
+    label: str,
+    metavariables: Mapping[str, str],
+    context: Context,
+) -> tuple[TheoremSpec, PromotedTheorem]:
+    """The library entry a proof establishes **schematically**, and its warrant.
+
+    :func:`proved_theorem` promotes what a proof concluded, verbatim; this
+    promotes what it concluded *for every instance of the leaves named in*
+    ``metavariables`` — `⊢ (φ → φ)` proved once and cited at every instance
+    rather than at the one the author happened to write.
+
+    That claim needs discharging, not asserting. Nominating a leaf says the proof
+    goes through whatever stands there, so the proof is **re-checked with the
+    nominated leaves replaced by variables throughout** — every line, not just
+    the conclusion — and the entry is written only if it still stands. What comes
+    back is then a proof of the schematic statement, so the theorem is warranted
+    directly rather than by an argument about uniformity.
+
+    The abstraction is :func:`~website.logical.kernel.terms.abstract` over each
+    line's already-checked term: no parse, and the leaves are replaced by *what
+    they denote* rather than by rewriting the source. A leaf the grammar fixes as
+    a constant, or a sort mismatch, then shows up as the abstracted proof failing
+    to check — the guards are the checker's, not a list maintained here.
+
+    **The provisos travel.** A step may have relied on a side condition
+    (`ax-5`'s `not occurs(x, P)`), which held for the concrete leaves and says
+    nothing about an arbitrary instance. Each such condition is restated over the
+    step's own binding — which the abstracted check leaves on
+    :attr:`~website.logical.formal_system.rules.Inference.binding` — and carried
+    into the entry, where a citation re-checks it against its own instantiation.
+    Without this, schematic promotion is exactly the hole an eigenvariable
+    condition escapes through.
+
+    A restated condition mentioning none of the theorem's metavariables is
+    *dropped*, and only that: it is a closed fact about ground terms, already
+    established by the check that just ran, and nothing a citation does can
+    disturb it.
+
+    ``context`` is the one the proof was read in, needed to restate a proviso and
+    to name a sort. Raises :class:`ValueError` if the proof does not stand, if a
+    nominated sort is not a declared pattern, or if the abstracted proof fails.
+    """
+    ground, _promoted = proved_theorem(system, proof, label)
+    sorts = {}
+    for name, sort_name in metavariables.items():
+        pattern = system.build_context.variables.get(sort_name)
+        if not isinstance(pattern, Pattern):
+            raise ValueError(
+                f"Metavariable {name!r} names sort {sort_name!r}, which is not a "
+                "declared pattern of the system."
+            )
+        sorts[name] = constructor_for(pattern)
+
+    abstracted = _abstracted_proof(system, proof, sorts, context)
+    if not abstracted.valid:
+        failed = next(
+            (line for line in abstracted.proof_lines if not line.valid), None
+        )
+        raise ValueError(
+            "The proof does not go through with "
+            + ", ".join(sorted(metavariables))
+            + " held schematic, so it does not prove the general statement"
+            + (
+                f": line {failed.number} — {failed.invalid_message}"
+                if failed is not None and failed.invalid_message
+                else "."
+            )
+        )
+
+    conclusion = abstracted.root_scope.conclusion
+    if conclusion is None or conclusion.formula_term is None:
+        raise ValueError("The abstracted proof has no conclusion to promote.")
+
+    spec = TheoremSpec(
+        label=label,
+        statement=conclusion.formula_term.to_string(),
+        metavariables=dict(metavariables),
+        distinct=_carried_provisos(abstracted, set(metavariables), context, system),
+    )
+    # `ground` is discarded; it was built only to reach `proved_theorem`'s guards
+    # on what a proof establishes at all, which are the same either way.
+    del ground
+    return spec, promote_spec(system, spec, statement_term=conclusion.formula_term)
+
+
+def _abstracted_proof(
+    system: FormalSystem,
+    proof: Proof,
+    sorts: FreeVars,
+    context: Context,
+) -> Proof:
+    # The same proof with each nominated leaf replaced by a variable of its sort,
+    # re-checked. Built as a fresh `Proof` over fresh lines rather than by
+    # mutating the checked one: `check_proof` re-derives numbering, scope and
+    # justification per line, and it must derive them for *this* proof rather
+    # than find the original's answers already sitting there.
+    #
+    # The citation environment is carried over verbatim — a cited lemma or
+    # promoted theorem is not what is being generalised, and re-resolving it here
+    # would be a second library read for no answer.
+    rebuilt = Proof(formal_system=system)
+    rebuilt.reference_context = dict(proof.reference_context)
+    parse_context = copy(context)
+    for line in proof.proof_lines:
+        fresh = rebuilt.add_proof_line(line.text, parse_context)
+        if line.empty:
+            continue
+        fresh.line_type = line.line_type
+        fresh.label = line.label
+        fresh.reference_string = line.reference_string
+        fresh.reference_string_display = line.reference_string_display
+        if line.formula_term is not None:
+            fresh.formula_term = abstract(line.formula_term, sorts)
+    return system.check_proof(rebuilt, parse_context)
+
+
+def _carried_provisos(
+    abstracted: Proof,
+    metavariables: set[str],
+    context: Context,
+    system: FormalSystem,
+) -> tuple[str, ...]:
+    # Every side condition the abstracted proof's steps relied on, restated over
+    # the binding that step made and written as the lines a `TheoremSpec` carries.
+    #
+    # Deduplicated on the rendered line, because one proviso restated from two
+    # applications of the same rule is one obligation, not two.
+    names = {
+        constructor_for(pattern): name
+        for name, pattern in system.build_context.variables.items()
+        if isinstance(pattern, Pattern)
+    }
+    lines: list[str] = []
+    for line in abstracted.proof_lines:
+        inference = line.inference
+        if inference is None or inference.binding is None:
+            continue
+        for condition in inference.inference_rule.side_conditions:
+            for part in conjuncts(restate(condition, inference.binding, context)):
+                if not (references(part) & metavariables):
+                    # Closed under the theorem's metavariables: a fact about
+                    # ground terms, settled by the check that just ran.
+                    continue
+                rendered = render_side_condition(part, names)
+                if rendered not in lines:
+                    lines.append(rendered)
+    return tuple(lines)
 
 
 def promote_spec(

@@ -812,9 +812,14 @@ that most nearly passed anyway is the rule-shadowing case — the first test of 
 had the citing lines resolving to a *different* label, so it agreed with a walk
 that had no shadow check at all.
 
-#### R3a — schematic promotion
+#### R3a — schematic promotion — **done**
 
 **Delivers** `⊢ (φ → φ)` proved once and cited at every instance.
+
+What landed: `metavariables` on the promote request, and
+`promotion.schematic_theorem`. The claim is **discharged rather than asserted** —
+see §9.16 for why that turned out to be the cheap option as well as the sound
+one, and for what the provisos have to do.
 
 **Tests and verification** — same module.
 
@@ -826,6 +831,12 @@ that had no shadow check at all.
   used `x` as an eigenvariable must carry the corresponding proviso into the
   entry, and a citation violating it must be rejected. Without this, schematic
   promotion is the obvious hole through which an eigenvariable condition escapes.
+
+All three, and a fourth the design did not anticipate: a proviso restated over
+leaves the nomination did **not** touch is dropped rather than stored, because it
+is a closed fact the check just established and no citation can vary it. Storing
+it would be an obligation with nothing to discharge it against. Both halves are
+pinned, since either alone passes for a rule that is not running.
 
 #### R4 — `system_relations`
 
@@ -1221,6 +1232,41 @@ constraint on the phases after it rather than a closed question.
     citable as `[label]` and must fit `String(128)`. Derived defaults get the same
     validation an explicit label does, or the two failure modes are a citation
     that never parses and a Postgres truncation 500.
+
+16. **A nomination is a claim, and the checker can settle it.** Schematic
+    promotion looked like it needed a *schematicity analysis* — deciding whether
+    a proof is uniform in a leaf, which is the obligation §1.1 names and which
+    reads as hard. It is not, because the claim has a direct test: abstract the
+    nominated leaves in **every line** and re-check the proof. What comes back is
+    a proof of the schematic statement, so the theorem is warranted rather than
+    argued for, and the guards are the checker's own — a leaf a rule spells
+    literally, or one nominated at the wrong sort, simply stops the step
+    matching. Nothing here maintains a list of what may be generalised.
+
+    The abstraction is `kernel.abstract` over each line's already-checked term,
+    so it is §3's term-level operation and not a source rewrite: the leaves are
+    replaced by *what they denote*.
+
+    **The provisos have to travel, and `restate` already did the hard part.** A
+    step may have relied on a side condition — `ax-5`'s `not occurs(x, P)` — that
+    held for the concrete leaves and says nothing about an arbitrary instance.
+    Each is restated over the binding that step made and carried into the entry,
+    where a citation re-checks it against its own instantiation. The binding is
+    the one thing that had to be added: `Inference` recorded the rule and the
+    lines but discarded the match, so it now keeps it.
+
+    One rule the design did not anticipate: a restated condition mentioning
+    **none** of the theorem's metavariables is dropped. It is a closed fact about
+    ground terms, settled by the check that just ran, and storing it would be an
+    obligation with nothing to discharge it against. The converse trap is nearer
+    than it looks — `not occurs(x, y = y)` with only `x` nominated *does* mention
+    a metavariable and *is* a real constraint on the instance, so "the formula
+    side is ground" is not the test. Both cases are pinned.
+
+    What this does not do is decide uniformity for a proof it *cannot* re-check —
+    an imported theorem with no stored proof, say. There the nomination would
+    still have to be trusted, which is an argument for keeping promotion tied to
+    a proof that stands here.
 
 ---
 

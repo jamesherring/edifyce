@@ -596,6 +596,14 @@ class ProofPromotionRequest(BaseModel):
     label: str | None = Field(
         None, min_length=1, max_length=THEOREM_LABEL_MAX, pattern=THEOREM_LABEL_PATTERN
     )
+    # Which leaves of the conclusion stand for *any* term of a sort, rather than
+    # for themselves: `{"P": "formula"}` turns the proved `(P → P)` into the
+    # theorem `⊢ (φ → φ)`, citable at every instance. Empty promotes the
+    # conclusion verbatim, which is a ground theorem justifying only itself.
+    #
+    # The claim is discharged, not taken: the proof is re-checked with these
+    # leaves held schematic, and refused if it no longer stands.
+    metavariables: dict[str, str] = Field(default_factory=dict)
 
 
 class PromotedTheoremOut(BaseModel):

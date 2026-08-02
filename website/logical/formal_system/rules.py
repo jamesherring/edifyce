@@ -185,6 +185,10 @@ class InferenceRule:
             if not self._side_conditions_hold(binding, context):
                 return False
 
+            # Kept for schematic promotion, which restates these very conditions
+            # over it; see `Inference.binding`.
+            inference.binding = binding
+
         # Otherwise ok
         deduction.inference_rule = self
         deduction.inference = inference
@@ -443,10 +447,16 @@ class InferenceRule:
 class Inference:
     """A successful application of an inference rule, recorded on the deduction.
 
-    Holds the rule and the proof lines it related. The structural match is now a
-    term binding derived in :meth:`InferenceRule.check` (via unification) and is
-    not retained here - the old Match-tree fields and variable-reconciliation
-    walk went away with the string-based condition path.
+    Holds the rule and the proof lines it related, plus the term ``binding`` the
+    match derived - what each of the rule's metavariables stood for on this step.
+
+    The binding is kept because a *schematic promotion* needs it: nominating a
+    leaf of the proof as a metavariable claims the proof goes through for every
+    instance, and that is only true if the provisos the steps relied on travel
+    with the theorem. Restating one out of the step's binding is exactly
+    :func:`~website.logical.kernel.side_conditions.restate`, and this is where
+    the binding to restate over comes from. ``None`` for a string-rewriting step,
+    which binds surface strings rather than terms and carries no kernel proviso.
     """
 
     inference_rule: InferenceRule
@@ -455,3 +465,4 @@ class Inference:
     antecedents: Sequence[ProofLine]
     extra_antecedents: Sequence[ProofLine]
     deduction: ProofLine
+    binding: Binding | None = None
