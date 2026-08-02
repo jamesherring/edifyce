@@ -553,12 +553,22 @@ and `U_`, but `( A ∪ B )`, `∪ A` and `∪ x ∈ A B` are three different sha
 | Unicode (`althtmldef`) | 32 | 64 |
 | LaTeX (`latexdef`) | 19 | 38 |
 
-(An earlier revision of this section said 19 and 8. Both were wrong, in opposite
-directions, and review caught the measurement rather than the conclusion: the walk
-stopped at a sort's own productions and never reached the sub-sorts included into
-it — so `class`'s operators were never compared with the class *variables* — while
-slots were punched out without their sorts, so two templates differing only in what
-sort a slot takes counted as colliding. Fixing both moved the figure up.)
+(An earlier revision said 19 and 8. Both were wrong, in opposite directions, and
+review caught the measurement rather than the conclusion: the walk stopped at a
+sort's own productions and never reached the sub-sorts included into it — so
+`class`'s operators were never compared with the class *variables* — while slots
+were punched out without their sorts, so two templates differing only in what sort
+a slot takes counted as colliding. Fixing both moved the figure up.)
+
+**And the check finds collisions rather than certifying their absence.** Three
+rounds of review each found another way it answered "none" for a grammar that had
+them: a regex leaf a mapped atom now matches, two slots whose sorts differ by name
+but overlap by inclusion, a defined form reachable from a sort that did not declare
+it. All three are fixed and pinned, and none changes `set.mm`'s figures — but the
+pattern is the lesson. Deciding whether a context-free grammar is ambiguous is not
+something a comparison of surface templates can do, so the property is named
+`collision_free` rather than `usable_as_source`, and adopting a notation as a
+source wants a parser run over the corpus as well as a clean report.
 
 `metamath/display.notation_report` is the check, and §4.4's asked-for report: it
 gives the unmapped tokens and the colliding spellings for any candidate notation,
@@ -599,7 +609,7 @@ imported corpus in Unicode*, and nobody authors `set.mm` here - it is imported.
 declares the notation once and no re-spelling, collision list or re-verification
 arises. The imported corpus keeps `set.mm`'s tokens as its source and gains
 Unicode as a *projection*. If re-spelling the import is ever wanted, the report is
-what makes it safe and the 19 pairs are what must be decided first.
+what makes it safe and the 32 pairs are what must be decided first.
 
 ### 4.3b The fold, parameterised — *done*
 
