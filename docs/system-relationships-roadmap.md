@@ -1164,9 +1164,24 @@ constraint on the phases after it rather than a closed question.
     nothing that was never citing the entry.
 
     This is also the one place a route takes **more than one** system lock, which
-    `_common.lock_system` had been able to say never happens. Acquired in id
-    order, since a fixed order is what keeps two retirements over overlapping
-    towers from deadlocking.
+    `_common.lock_system` had been able to say never happens — and getting that
+    order right took two attempts, the second from Codex.
+
+    Sorting the set by id is *not* a global order, because every caller arrives
+    already holding the subtree root's lock: a verify takes it before reading
+    anything, an invalidation before writing. So a sorted set can put a
+    descendant's key ahead of one already held, and two operations at different
+    levels of one tower acquire in opposite orders — Postgres detects the cycle
+    and aborts one. The order that works is **(depth, id)**: a system's depth is a
+    property of the tower rather than of who is asking, so any two operations
+    order any two systems they share identically, and the pre-held key is
+    automatically first, being the unique shallowest member of its own subtree.
+    Inheritance is single-parent, so two subtrees are nested or disjoint and
+    there is no third case.
+
+    The general lesson, worth carrying to any future multi-key caller: a lock
+    order has to account for the keys a caller **already holds**, not just the
+    ones it is about to take.
 
     Two consequences worth stating. A locally-promoted entry needs a warrant
     distinguishable from an imported one, which is `promoted_theorems.proved_by_id`

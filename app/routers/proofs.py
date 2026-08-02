@@ -831,6 +831,10 @@ async def _citing_systems(
     library, so a descendant's rule shadows an ancestor's theorem just as
     thoroughly as a nearer theorem would. Missing that half is the difference
     between invalidating a subtree and invalidating the right one.
+
+    Returned **ancestor-first, and by id within a generation**, which is the
+    order the caller then locks in; see :func:`_invalidate_citations` for why it
+    has to be that and not simply sorted.
     """
     reached = [system_id]
     frontier = [system_id]
@@ -858,11 +862,14 @@ async def _citing_systems(
                 )
             )
         )
-        frontier = [
+        # Sorted, because the query's row order is not defined and the caller
+        # locks in exactly this order — two operations that met a generation in
+        # different orders would be two lock orders.
+        frontier = sorted(
             child
             for child in children
             if child not in shadowing and child not in reached
-        ]
+        )
         reached.extend(frontier)
     return reached
 
@@ -886,13 +893,25 @@ async def _invalidate_citations(
     reference graph out from them, because a citer is itself citable and a proof
     resting on one rests on the entry at one remove.
 
-    Takes the system lock for each system it touches, in id order. Every other
-    caller locks exactly one system and so has no ordering to get wrong; this is
-    the first that spans a chain, and a fixed order is what keeps two of these
-    over overlapping towers from deadlocking.
+    Takes the system lock for every system it touches, and the **order matters**,
+    because this is the first caller to hold more than one. It is *not* sorted by
+    id, which was the first answer here and was wrong: every caller reaches this
+    already holding ``system_id``'s lock — a verify takes it before reading
+    anything, and an invalidation before writing — so sorting by id can put a
+    descendant's key ahead of one already held. Two operations at different
+    levels of one tower then acquire in opposite orders and Postgres aborts one
+    of them (found in review).
+
+    The order is **(depth, id)**, which `_citing_systems` returns: a system's
+    depth in the tower is a property of the tower rather than of who is asking,
+    so any two operations order any two systems they share identically — which is
+    what a global lock order means. And it makes the pre-held key the *first*
+    one, since ``system_id`` is the unique shallowest member of its own subtree.
+    Inheritance is single-parent, so two subtrees are nested or disjoint and
+    there is no third case to worry about.
     """
     systems = await _citing_systems(session, system_id, label)
-    for locked in sorted(systems):
+    for locked in systems:
         await lock_system(session, locked)
 
     citing = list(
@@ -957,6 +976,9 @@ async def _retire_promotion(session: AsyncSession, proof: Proof) -> None:
     ).first()
     if entry is None:
         return
+    # `system_id` is the proof's own system: a proof promotes into the system it
+    # is written in, so this is the same key the caller already locked — which is
+    # what `_invalidate_citations` relies on to be the first lock in its order.
     entry_id, system_id, label = entry
 
     # Before the delete: the query below reads `proof_lines`, and a line citing

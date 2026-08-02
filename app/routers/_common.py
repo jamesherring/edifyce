@@ -185,11 +185,14 @@ async def lock_system(session: AsyncSession, system_id: uuid.UUID) -> None:
     only reference proofs in its own system, so one key covers a whole reference
     closure.
 
-    One caller needs **several** keys: retiring a library entry invalidates the
-    proofs that cited it, and a citation crosses systems (`proofs`'
-    ``_invalidate_citations``). That one acquires in id order, because a fixed
-    order is the only thing standing between two overlapping towers and a
-    deadlock. Any future caller taking more than one key must do the same.
+    One caller needs **several** keys: changing what a label resolves to
+    invalidates the proofs that cited it, and a citation crosses systems
+    (`proofs`' ``_invalidate_citations``). It acquires in **(depth, id)** order —
+    ancestor first — and not simply sorted by id, because it is reached with its
+    subtree's root already locked here, so a sorted order can put a descendant's
+    key ahead of one already held and two operations at different levels of one
+    tower deadlock. Any future caller taking more than one key has to fit the
+    same order, counting the key it already holds.
 
     Postgres only; a no-op on SQLite (the test database, where requests do not
     run concurrently anyway), which is why the routes are covered by asserting

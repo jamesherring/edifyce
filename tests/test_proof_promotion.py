@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import Session
 
 import app.auth.backend as backend
-from app.db import FormalSystem, Proof
+from app.db import FormalSystem, Proof, spec_to_system
 from app.db.promoted_theorems import PromotedTheoremRow
 from app.db.proof_lines import ProofLineRow
 from app.db.session import get_session
@@ -861,6 +861,78 @@ def test_a_theorem_stated_in_an_ancestors_defined_notation_is_citable_above_it(d
 # ---------------------------------------------------------------------------
 # Locking
 # ---------------------------------------------------------------------------
+
+
+def seed_with_id(db_path, spec, owner_id: str, parent_id: str | None, key: str) -> str:
+    """`seed`, with the system's id chosen rather than generated.
+
+    Only the lock-ordering test needs this, and it needs it to be a test rather
+    than a coin flip: both orders it has to tell apart are orders *over ids*, so
+    with generated ids the assertion would agree with the wrong code whenever the
+    ids happened to fall the right way.
+    """
+    engine = create_engine(db_path)
+    try:
+        with Session(engine) as session:
+            system = spec_to_system(spec)
+            system.id = uuid.UUID(key)
+            system.owner_id = uuid.UUID(owner_id)
+            system.inherits_from_id = None if parent_id is None else uuid.UUID(parent_id)
+            system.published_at = datetime.now(timezone.utc)
+            session.add(system)
+            session.commit()
+            return str(system.id)
+    finally:
+        engine.dispose()
+
+
+def test_the_locks_are_taken_ancestor_first_and_the_root_is_first_of_all(db, client, monkeypatch):
+    # Sorting the subtree by id — the first answer here — is not a global lock
+    # order, because every caller arrives already holding the *root's* lock (a
+    # verify takes it before reading anything). A sorted order can put a
+    # descendant ahead of that held key, and two operations at different levels
+    # of one tower then acquire in opposite orders and Postgres aborts one.
+    #
+    # So: (depth, id). Asserted on a tower with a **branch**, since a straight
+    # chain cannot tell depth order from id order, and with ids chosen so that
+    # the two orders disagree in both places they can:
+    #
+    #   * `deep` has the smallest id and the greatest depth, so sorting by id
+    #     alone would lock it first rather than last;
+    #   * `right` is inserted after `left` but sorts before it, so a generation
+    #     left in query order would come out the other way round.
+    import app.routers.proofs as proofs_router
+
+    owner = _register_login(client, "lock-order@example.com")
+    deep_id = "00000000-0000-4000-8000-000000000000"
+    pc_id = "11111111-1111-4111-8111-111111111111"
+    right_id = "22222222-2222-4222-8222-222222222222"
+    left_id = "33333333-3333-4333-8333-333333333333"
+
+    pc = seed_with_id(db, propositional_calculus_spec(), owner, None, pc_id)
+    left = seed_with_id(db, first_order_logic_spec("Left"), owner, pc, left_id)
+    right = seed_with_id(db, first_order_logic_spec("Right"), owner, pc, right_id)
+    deep = seed_with_id(db, zfc_spec(), owner, left, deep_id)
+
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+
+    locked: list[uuid.UUID] = []
+    original = proofs_router.lock_system
+
+    async def record(session, system_id):
+        locked.append(system_id)
+        await original(session, system_id)
+
+    monkeypatch.setattr(proofs_router, "lock_system", record)
+    assert promote(client, proof, "id")[0] == 201
+
+    first_seen: list[uuid.UUID] = []
+    for key in locked:
+        if key not in first_seen:
+            first_seen.append(key)
+    assert first_seen == [
+        uuid.UUID(pc), uuid.UUID(right), uuid.UUID(left), uuid.UUID(deep)
+    ]
 
 
 def test_promotion_and_retirement_take_the_system_lock(db, client, monkeypatch):
