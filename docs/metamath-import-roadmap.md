@@ -1393,6 +1393,64 @@ What remains is memory — 3.6 GB, growing roughly linearly with theorems promot
 and per-theorem cost still rising with grammar size (5 ms early, 60 ms late).
 Neither blocks a bulk import; both would matter for a corpus several times larger.
 
+### 4.5 Descriptions, authorship, and the title Metamath does not declare — *done*
+
+`comments.py` read a `$( … $)` body into prose and attributions and had **zero
+production callers**: parsed, then discarded on every run. It is now stored, and
+that raised the question of where.
+
+**Keyed by `(system, label)`, not by a foreign key into the thing described.** A
+Metamath label lands in one of four places depending on what the importer made of
+its statement — a **production** (a syntax `$a`), a **definition** (`df-un`), a
+**primitive theorem** (`ax-ext`), or a **proof** and its theorem (a `$p`). Four
+description columns would be four migrations and four join paths for one concept.
+`label_descriptions` is one of each, and the label is what a reader cites anyway.
+Attributions hang off it as rows — `set.mm` credits **131 people** across
+**60,661** clauses, and the questions asked of an authorship record are aggregate.
+
+Everything is stored **verbatim**, which is `comments.py`'s reasoning carried into
+the schema: `set.mm` misspells four kinds (`Resised`, `Prove shortened`) and
+malforms 22 dates (`25-Jan-20178`, `XX-May-2017`), so `dated` is a string rather
+than a date and `kind` is not an enum. Normalising either would mean deciding what
+an upstream typo meant.
+
+**Titles.** Metamath declares none — no keyword, no field. What it has is the
+convention that a comment opens with a one-line summary, and over `set.mm` that
+holds well enough to use: a median of **53** characters and 108 at the 90th
+percentile.
+
+```
+sqrt2irr   The square root of 2 is irrational.
+ax-ext     Axiom of extensionality.
+df-un      Define the union of two classes.
+```
+
+So `Description.title` is the first sentence, and the sentence boundary is the
+whole of the work. It ends at the first `.`/`!`/`?` outside a **math span** and
+outside a **parenthetical**, both measured: a `` ` … ` `` span is ASCII Metamath
+and ASCII Metamath is full of stops (`-.`, `e.`, `A.`, `T.`), which cuts 613
+titles to *"If ` ph ` is a wff, so is ` -."*; parentheticals carry the
+abbreviations, costing a further 131 (*"Change the bound variable (i.e."*).
+Balancing brackets beats a list of abbreviations and does not go stale.
+
+`proofs.title` is a **column**, not a derivation: an imported proof fills it from
+the same parse, and it is then editable, which a derived first sentence could
+never be. `name` stays the label — that is what a citation spells and what the
+slug is built from — so identity and sentence never have to displace each other.
+
+Served on `ProofSummary`/`ProofDetail`, with the corpus's own record (prose plus
+authorship) on the single proof read, and on
+`GET /formal-systems/{id}/labels/{label}` for the three kinds of label that have
+no proof at all — which is where the interesting prose lives.
+
+What is deliberately **not** here: `set.mm`'s section outline (21 parts, 163
+sections, 1,115 subsections, 604 subsubsections, marked by `####` / `#*#*` /
+`=-=-` / `-.-.` decoration lines). It maps onto `proof_folders`, which already
+exists as a per-system tree, but it touches the walk and folder placement rather
+than adding rows, and belongs in its own change.
+
+---
+
 ### Tier B — the human-altitude layer
 
 **B1. Tactic / elaboration framework.** A tactic takes a goal + context and **emits

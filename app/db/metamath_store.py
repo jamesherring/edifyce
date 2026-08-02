@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
+from app.db.descriptions_mapping import store_descriptions
 from app.db.models import FormalSystem, Proof
 from app.db.promoted_theorems_mapping import store_theorem, theorem_digest
 from app.db.notations_mapping import store_notation
@@ -53,15 +54,17 @@ from app.db.proofs_mapping import store_proof_lines
 from app.db.systems_mapping import spec_to_system
 from website.logical.declarative import build_system, library_digest
 from website.logical.metamath.corpus import corpus_spec, walk
+from website.logical.metamath.comments import read_comment
 from website.logical.metamath.display import notation_constructors, unicode_projection
 from website.logical.metamath.typesetting import typesetting_of
 from website.logical.rendering import total_projection
 from website.logical.metamath.importer import LibraryEntry
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
     from website.logical.declarative import SystemSpec
+    from website.logical.metamath.comments import Description
     from website.logical.metamath.corpus import CheckedTheorem
     from website.logical.metamath.parser import Database
 
@@ -91,6 +94,10 @@ class ImportReport:
     # Constructors given a spelling in the stored `unicode` notation, or 0 for a
     # database carrying no `$t` block to derive one from.
     notation: int = 0
+    # Labels this run stored a description for. Not the same as `checked`: a `$a`
+    # is documented and never checked, and a comment that is only an attribution
+    # still counts.
+    described: int = 0
     # The citable library this run stored: every assertion the walk promoted,
     # and how many of those are primitives of the imported system.
     # ``theorems_failed`` is counted apart from ``failed`` because it is a
@@ -132,6 +139,14 @@ def import_corpus(
     session.flush()
     report = ImportReport(system_id=system.id)
     library = _Library(session, system, report, library_digest(spec))
+    # Read once, up front, and used twice: every documented label gets a row, and
+    # a `$p`'s own title comes off the same parse. Metamath documents a statement
+    # by the comment before it, so this is the whole of the association.
+    descriptions = {
+        label: read_comment(assertion.comment)
+        for label, assertion in database.assertions.items()
+        if assertion.comment is not None
+    }
 
     for position, checked in enumerate(walk(database, limit, name, library.store)):
         report.checked += 1
@@ -149,7 +164,9 @@ def import_corpus(
             # have been booked as stored.
             try:
                 with session.begin_nested():
-                    stored = _store(session, system, position, checked)
+                    stored = _store(
+                        session, system, position, checked, descriptions
+                    )
             except Exception as exc:  # noqa: BLE001 - reported, not fatal
                 _record_failure(report, checked.label, str(exc))
             else:
@@ -165,6 +182,7 @@ def import_corpus(
             library.rebind(system)
 
     _link_proofs_to_theorems(session, report.system_id, library.ids)
+    report.described = store_descriptions(session, report.system_id, descriptions)
     report.notation = _store_notation(session, database, spec, report.system_id)
     if batch is not None:
         session.commit()
@@ -316,9 +334,11 @@ def _store(
     system: FormalSystem,
     position: int,
     checked: CheckedTheorem,
+    descriptions: Mapping[str, Description],
 ) -> _Stored:
     engine_proof = checked.proof
     valid = bool(engine_proof.valid)
+    described = descriptions.get(checked.label)
 
     proof = Proof(
         formal_system_id=system.id,
@@ -327,6 +347,11 @@ def _store(
         # `-_.`) and unique across the database, which is what a slug wants.
         name=checked.label,
         slug=checked.label,
+        # The title and the prose are the proof's own copy, editable by whoever
+        # comes to own it; `label_descriptions` keeps the corpus's record of what
+        # the file said, and covers the labels that are not proofs at all.
+        title=described.title or None if described else None,
+        description=described.text or None if described else None,
         source=checked.source,
         position=position,
         valid=valid,

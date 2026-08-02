@@ -172,7 +172,9 @@
 	{:else if loading || !proof}
 		<LoadingSpinner message="Loading proof…" />
 	{:else}
-		<EntityHeader title={proof.name} subtitle={proof.description ?? undefined}>
+		<!-- Name over title, not the other way round: `name` is what a citation
+		     spells, and on an imported corpus the title is a sentence. -->
+		<EntityHeader title={proof.name} subtitle={proof.title ?? proof.description ?? undefined}>
 			{#snippet badges()}
 				<StatusBadge status={proof?.published_at ? 'published' : 'draft'} />
 				<CheckBadge valid={proof?.valid ?? null} />
@@ -257,6 +259,34 @@
 
 			<ProofResults {result} {requestError} idleMessage="Verify the proof to see line-by-line results here." />
 		</div>
+
+		{#if proof.documentation && (proof.documentation.text || proof.documentation.attributions.length > 0)}
+			<Card.Root>
+				<Card.Header>
+					<Card.Title>Description</Card.Title>
+					<Card.Description>
+						What {systemName ?? 'this system'} records about
+						<code class="rounded bg-muted px-1 py-0.5 text-xs">{proof.documentation.label}</code>.
+					</Card.Description>
+				</Card.Header>
+				<Card.Content class="flex flex-col gap-4">
+					{#if proof.documentation.text}
+						<!-- Paragraphs survive storage as blank lines, which is how a
+						     comment marks them; `whitespace-pre-line` is what shows them. -->
+						<p class="whitespace-pre-line text-sm leading-relaxed">{proof.documentation.text}</p>
+					{/if}
+					{#if proof.documentation.attributions.length > 0}
+						<ul class="flex flex-col gap-1 border-t pt-3">
+							{#each proof.documentation.attributions as credit, i (i)}
+								<li class="text-xs text-muted-foreground">
+									<span class="font-medium">{credit.kind}</span> by {credit.who}, {credit.dated}
+								</li>
+							{/each}
+						</ul>
+					{/if}
+				</Card.Content>
+			</Card.Root>
+		{/if}
 
 		{#if proof.references.length > 0 || proof.referenced_by.length > 0}
 			<div class="grid gap-6 lg:grid-cols-2">

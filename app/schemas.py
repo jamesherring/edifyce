@@ -651,10 +651,44 @@ class PromotedTheoremOut(BaseModel):
     proved_by_id: uuid.UUID | None = None
 
 
+class Attribution(BaseModel):
+    """One ``(Contributed by NM, 5-Apr-1994.)`` clause, as its three parts.
+
+    Every field verbatim. ``kind`` is an open set — the corpus spells four of them
+    wrong and a later revision may add more — and ``dated`` is a string rather
+    than a date, because 22 of set.mm's are malformed (``25-Jan-20178``). Both are
+    the storage layer's reasoning surfaced unchanged: normalising would mean
+    deciding what an upstream typo meant.
+    """
+
+    kind: str
+    who: str
+    dated: str
+
+
+class LabelDescription(BaseModel):
+    """What a system says about one of the labels it names.
+
+    Covers every kind of label alike — a production, a definition, a primitive
+    theorem, a proof — because that is how it is stored. ``title`` is the prose's
+    first sentence, which is a title in all but name: Metamath declares none.
+    """
+
+    label: str
+    title: str | None = None
+    text: str = ""
+    attributions: list[Attribution] = Field(default_factory=list)
+
+
 class ProofSummary(BaseModel):
     id: uuid.UUID
     name: str
     slug: str
+    # A human sentence beside `name`, which is the proof's identity. They coincide
+    # for a hand-authored proof and part ways on an import, where `name` is the
+    # label a citation must spell (`sqrt2irr`) and this is what the file's comment
+    # opens with.
+    title: str | None = None
     description: str | None = None
     formal_system_id: uuid.UUID
     folder_id: uuid.UUID | None = None
@@ -679,6 +713,11 @@ class ProofDetail(ProofSummary):
     referenced_by: list[ProofReferrerOut] = Field(default_factory=list)
     # The library entry this proof establishes, null until it is promoted.
     theorem: PromotedTheoremOut | None = None
+    # What the *system* records about this proof's label — the corpus's own
+    # documentation, authorship included, as against `title`/`description`, which
+    # are the proof's and are editable. Null when the system describes no such
+    # label, which is every hand-authored proof.
+    documentation: LabelDescription | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -784,12 +823,17 @@ class ProofCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=256)
     # The system this proof is written against; must be owned by the caller.
     formal_system_id: uuid.UUID
+    # Optional, and normally left unset when authoring: `name` is already the
+    # human one. It earns its keep where identity and sentence differ, which an
+    # import is and a hand-authored proof usually is not.
+    title: str | None = None
     description: str | None = None
     source: str = ""
 
 
 class ProofUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=256)
+    title: str | None = None
     description: str | None = None
     source: str | None = None
     # True sets published_at to now, False clears it. Absent leaves it unchanged.

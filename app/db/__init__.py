@@ -15,6 +15,13 @@ from app.db.models import (
     Theorem,
     User,
 )
+from app.db.descriptions import LabelAttributionRow, LabelDescriptionRow
+from app.db.descriptions_mapping import (
+    contributions,
+    load_description,
+    load_descriptions,
+    store_descriptions,
+)
 from app.db.metamath_store import ImportReport, import_corpus
 from app.db.proof_lines import ProofLineAntecedentRow, ProofLineRow
 from app.db.promoted_theorems import (
@@ -132,6 +139,13 @@ __all__ = [
     "RuleRow",
     "SideConditionRow",
     "SymbolRow",
+    # What a system says about its labels (app/db/descriptions.py).
+    "LabelAttributionRow",
+    "LabelDescriptionRow",
+    "contributions",
+    "load_description",
+    "load_descriptions",
+    "store_descriptions",
     # The citable library (app/db/promoted_theorems.py).
     "PromotedTheoremBindingRow",
     "PromotedTheoremPremiseRow",

@@ -24,6 +24,7 @@ function summary(id: string, name: string, published = false): ProofSummary {
 		id,
 		name,
 		slug: name.toLowerCase(),
+		title: null,
 		description: null,
 		formal_system_id: 'sys1',
 		folder_id: null,
@@ -42,7 +43,8 @@ function detail(references: ProofDetail['references'] = []): ProofDetail {
 		result: null,
 		references,
 		referenced_by: [],
-		theorem: null
+		theorem: null,
+		documentation: null
 	};
 }
 

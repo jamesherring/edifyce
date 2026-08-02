@@ -52,6 +52,7 @@ from app.routers._common import (
     paginate_summaries,
     unique_slug,
 )
+from app.db.descriptions_mapping import load_description
 from app.db.models import User
 from app.db.notations_mapping import notation_names
 from app.db.side_conditions import SideConditionRow
@@ -73,6 +74,7 @@ from app.db.systems import (
     SymbolRow,
 )
 from app.schemas import (
+    Attribution,
     Axiom,
     DefinitionBinder,
     DefinitionBinders,
@@ -84,6 +86,7 @@ from app.schemas import (
     FormalSystemSummary,
     FormalSystemUpdate,
     Justification,
+    LabelDescription,
     LinePart,
     LineType,
     Page,
@@ -727,6 +730,39 @@ async def get_system(
     # Published systems are readable by anyone; drafts only by their owner.
     system = await _get_readable_or_404(session, system_id, user)
     return _detail(system, await notation_names(session, system.id))
+
+
+@router.get("/{system_id}/labels/{label}", response_model=LabelDescription)
+async def get_label_description(
+    system_id: uuid.UUID,
+    label: str,
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> LabelDescription:
+    """What this system records about one of the labels it names.
+
+    One route for every kind of label, because that is how it is stored: a
+    production, a definition, a primitive theorem and a proof are four row types
+    and one concept, and the label is what all four carry. A proof's own
+    documentation also rides along on ``GET /proofs/{id}``; this is how the other
+    three are reached, and they are where the interesting prose lives —
+    ``df-un``, ``ax-ext`` and the rest are `$a`s and have no proof at all.
+    """
+    system = await _get_readable_or_404(session, system_id, user)
+    row = await load_description(session, system.id, label)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"This system records nothing about {label!r}.",
+        )
+    return LabelDescription(
+        label=row.label,
+        title=row.title,
+        text=row.text,
+        attributions=[
+            Attribution(kind=a.kind, who=a.who, dated=a.dated) for a in row.attributions
+        ],
+    )
 
 
 @router.patch("/{system_id}", response_model=FormalSystemDetail)

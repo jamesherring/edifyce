@@ -76,6 +76,8 @@ from app.db import (
     term_context,
     theorem_digest,
 )
+from app.db.descriptions import LabelDescriptionRow
+from app.db.descriptions_mapping import load_description
 from app.db.models import User
 from app.db.notations_mapping import load_notation, render_stored
 from app.db.terms_mapping import prefetch_terms
@@ -92,6 +94,8 @@ from app.routers._common import (
 from app.routers.systems import load_effective, load_system
 from website.logical.formal_system.proof import Proof as EngineProof
 from app.schemas import (
+    Attribution,
+    LabelDescription,
     Page,
     ProofCreate,
     ProofDetail,
@@ -1026,6 +1030,7 @@ def _summary(proof: Proof) -> ProofSummary:
         id=proof.id,
         name=proof.name,
         slug=proof.slug,
+        title=proof.title,
         description=proof.description,
         formal_system_id=proof.formal_system_id,
         folder_id=proof.folder_id,
@@ -1093,7 +1098,30 @@ def _theorem_out(proof: Proof) -> PromotedTheoremOut | None:
     )
 
 
-def _detail(proof: Proof, viewer: User | None) -> ProofDetail:
+def _documentation_out(row: LabelDescriptionRow | None) -> LabelDescription | None:
+    """The system's record for a proof's label, or None if it keeps none.
+
+    None for every hand-authored proof, which is the common case: a system
+    describes the labels it was *imported* with, and a proof created through the
+    API carries its own title and description instead.
+    """
+    if row is None:
+        return None
+    return LabelDescription(
+        label=row.label,
+        title=row.title,
+        text=row.text,
+        attributions=[
+            Attribution(kind=a.kind, who=a.who, dated=a.dated) for a in row.attributions
+        ],
+    )
+
+
+def _detail(
+    proof: Proof,
+    viewer: User | None,
+    documentation: LabelDescriptionRow | None = None,
+) -> ProofDetail:
     return ProofDetail(
         **_summary(proof).model_dump(),
         source=proof.source,
@@ -1101,6 +1129,7 @@ def _detail(proof: Proof, viewer: User | None) -> ProofDetail:
         references=_references_out(proof, viewer),
         referenced_by=_referenced_by_out(proof, viewer),
         theorem=_theorem_out(proof),
+        documentation=_documentation_out(documentation),
     )
 
 
@@ -1161,6 +1190,7 @@ async def create_proof(
         formal_system_id=payload.formal_system_id,
         name=payload.name,
         slug=await _unique_slug(session, user.id, payload.formal_system_id, payload.name),
+        title=payload.title,
         description=payload.description,
         source=payload.source,
     )
@@ -1178,7 +1208,14 @@ async def get_proof(
     session: AsyncSession = Depends(get_session),
 ) -> ProofDetail:
     # Published proofs are readable by anyone; drafts only by their owner.
-    return _detail(await _get_readable_or_404(session, proof_id, user), user)
+    proof = await _get_readable_or_404(session, proof_id, user)
+    # Only the single read carries the corpus's record. A list of proofs wants
+    # `title`, which is on the row; the prose and the authorship are a page's worth
+    # of text each, and 47,000 of them do not belong in a listing.
+    documentation = await load_description(
+        session, proof.formal_system_id, proof.name
+    )
+    return _detail(proof, user, documentation)
 
 
 @router.patch("/{proof_id}", response_model=ProofDetail)
@@ -1196,6 +1233,8 @@ async def update_proof(
         proof.slug = await _unique_slug(
             session, user.id, proof.formal_system_id, changes["name"], exclude_id=proof.id
         )
+    if "title" in changes:
+        proof.title = changes["title"]
     if "description" in changes:
         proof.description = changes["description"]
     source_changed = "source" in changes and changes["source"] is not None

@@ -35,6 +35,9 @@ def test_expected_tables_present():
         "line_parts",
         # How a system's terms may be *read* — one named notation's render steps.
         "notation_pieces",
+        # What a system says about the labels it names, and who wrote them.
+        "label_descriptions",
+        "label_attributions",
         "definitions",
         "definition_bindings",
         "definition_fresh",

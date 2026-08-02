@@ -41,6 +41,7 @@ from app.db.promoted_theorems import (
     PromotedTheoremPremiseRow,
     PromotedTheoremRow,
 )
+from app.db.descriptions import LabelAttributionRow, LabelDescriptionRow
 from app.db.proof_lines import ProofLineAntecedentRow, ProofLineRow
 from app.db.side_conditions import SideConditionRow
 from app.db.systems import (
@@ -94,7 +95,7 @@ _TABLES = [
         ProductionBindingScopeRow, LineRow, LinePartRow, DefinitionRow,
         DefinitionBindingRow, DefinitionFreshRow, AxiomRow, AxiomBindingRow,
         RuleRow, RuleAntecedentRow, RuleBindingRow, SideConditionRow,
-        NotationPieceRow,
+        NotationPieceRow, LabelDescriptionRow, LabelAttributionRow,
         ProofFolder, Proof, Theorem, TermRow, TermChildRow,
         ProofLineRow, ProofLineAntecedentRow,
         PromotedTheoremRow, PromotedTheoremPremiseRow, PromotedTheoremBindingRow,

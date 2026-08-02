@@ -380,6 +380,11 @@ export interface ProofSummary {
 	id: string;
 	name: string;
 	slug: string;
+	/** A human sentence beside `name`, which is the proof's identity. The two
+	 * coincide for a hand-authored proof and part ways on an import, where `name`
+	 * is the Metamath label a citation must spell (`sqrt2irr`) and this is what the
+	 * file's comment opens with. */
+	title: string | null;
 	description: string | null;
 	formal_system_id: string;
 	folder_id: string | null;
@@ -443,6 +448,30 @@ export interface ProofDetail extends ProofSummary {
 	referenced_by: ProofReferrer[];
 	/** The library entry this proof establishes, null until it is promoted. */
 	theorem: PromotedTheorem | null;
+	/** What the *system* records about this proof's label — the corpus's own
+	 * documentation, authorship included, as against `title`/`description`, which
+	 * are the proof's and are editable. Null for every hand-authored proof. */
+	documentation: LabelDescription | null;
+}
+
+/** One `(Contributed by NM, 5-Apr-1994.)` clause, as its three parts. Every field
+ * verbatim: `kind` is an open set and `dated` is a string, because the corpus
+ * misspells four kinds and malforms 22 dates, and normalising either would mean
+ * deciding what an upstream typo meant. */
+export interface Attribution {
+	kind: string;
+	who: string;
+	dated: string;
+}
+
+/** What a system says about one of the labels it names — a production, a
+ * definition, a primitive theorem or a proof alike. `title` is the prose's first
+ * sentence, which is a title in all but name: Metamath declares none. */
+export interface LabelDescription {
+	label: string;
+	title: string | null;
+	text: string;
+	attributions: Attribution[];
 }
 
 // The stored structure of a checked proof — mirrors the ProofStructure models in
@@ -526,12 +555,15 @@ export interface ProofStructure {
 export interface ProofCreate {
 	name: string;
 	formal_system_id: string;
+	title?: string | null;
 	description?: string | null;
 	source?: string;
 }
 
 export interface ProofUpdate {
 	name?: string;
+	/** null clears it; omitted leaves it unchanged. */
+	title?: string | null;
 	description?: string | null;
 	source?: string;
 	/** true → publish (public), false → unpublish (draft), omitted → unchanged. */
@@ -774,7 +806,14 @@ export const api = {
 			request<VerifyResponse>(`/formal-systems/${id}/verify`, {
 				method: 'POST',
 				body: JSON.stringify({ proof_text: proofText })
-			})
+			}),
+		/** What this system records about one of the labels it names — a production,
+		 * a definition, a primitive theorem or a proof alike, since that is how it is
+		 * stored. 404s for a label it describes nothing about. */
+		label: (id: string, label: string) =>
+			request<LabelDescription>(
+				`/formal-systems/${id}/labels/${encodeURIComponent(label)}`
+			)
 	},
 
 	// --- Proofs (stored CRUD) -----------------------------------------------

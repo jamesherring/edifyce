@@ -89,6 +89,60 @@ class Description:
         """
         return tuple(a.who for a in self.attributions if a.kind == "Contributed")
 
+    @property
+    def title(self) -> str:
+        """The first sentence, which is a statement's title in all but name.
+
+        Metamath declares no title. What it has is the convention that a comment
+        opens with a one-line summary - *"The square root of 2 is irrational."*,
+        *"Define the union of two classes."* - and over `set.mm` that convention
+        holds well enough to use: a median of 53 characters and 107 at the 90th
+        percentile, which is a title rather than a paragraph.
+
+        Derived rather than stored because it is a *reading* of the prose, and the
+        prose is what the file wrote. A consumer wanting something else is free to
+        take the first paragraph, or the label.
+
+        The sentence ends at the first ``.``/``!``/``?`` that is outside a math
+        span and outside a parenthetical, and both exclusions are measured rather
+        than guessed.
+
+        A `` ` … ` `` span is ASCII Metamath, and ASCII Metamath is full of stops -
+        ``-.``, ``e.``, ``A.``, ``T.``. Splitting through one cuts 613 of `set.mm`'s
+        titles mid-span, leaving *"If ` ph ` is a wff, so is ` -."*. A doubled
+        backtick is Metamath's escape for a literal one and does not open a span.
+
+        A parenthetical carries the abbreviations - *"the bound variable (i.e. the
+        substituted one)"* - and stopping inside one costs a further 131 titles.
+        Balancing brackets is cheaper than a list of abbreviations and does not go
+        stale. It lengthens the tail (the longest runs to 707 characters against
+        438 without), which is the right way round: a long title is readable and a
+        truncated one is not.
+        """
+        inside = False
+        depth = 0
+        index = 0
+        while index < len(self.text):
+            char = self.text[index]
+            if char == "`":
+                if self.text[index + 1: index + 2] == "`":
+                    index += 2  # An escaped backtick; the span is unaffected.
+                    continue
+                inside = not inside
+                index += 1
+                continue
+            if not inside and char == "(":
+                depth += 1
+            elif not inside and char == ")" and depth:
+                # `and depth` so a stray closer - prose does have them - cannot
+                # drive the count negative and suppress every stop after it.
+                depth -= 1
+            elif not inside and depth == 0 and char in ".!?":
+                if index + 1 == len(self.text) or self.text[index + 1].isspace():
+                    return self.text[: index + 1]
+            index += 1
+        return self.text
+
 
 def read_comment(raw: str) -> Description:
     """Split a raw ``$( … $)`` body into its prose and its attributions."""

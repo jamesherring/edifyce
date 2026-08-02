@@ -138,3 +138,51 @@ def test_a_comment_with_no_attribution_is_all_prose() -> None:
 
     assert description.attributions == ()
     assert description.text == "Just prose, hard-wrapped."
+
+
+# ---------------------------------------------------------------------------
+# The first sentence, which is a title in all but name
+# ---------------------------------------------------------------------------
+
+
+def test_the_first_sentence_is_the_title() -> None:
+    assert read_comment(
+        "The square root of 2 is irrational.  A classic.  (Contributed by NM, 1-Jan-1990.)"
+    ).title == "The square root of 2 is irrational."
+
+
+def test_a_stop_inside_a_math_span_does_not_end_the_sentence() -> None:
+    # The whole difficulty: a ` ... ` span is ASCII Metamath, and ASCII Metamath
+    # is full of stops. Splitting through one cuts 613 of set.mm's titles.
+    assert read_comment("If ` ph ` is a wff, so is ` -. ph ` here.  More.").title == (
+        "If ` ph ` is a wff, so is ` -. ph ` here."
+    )
+
+
+def test_a_doubled_backtick_is_a_literal_and_opens_no_span() -> None:
+    # Metamath's escape for a backtick. Reading it as an opener would swallow the
+    # rest of the comment into a span that never closes.
+    assert read_comment("A `` mark. Then more.").title == "A `` mark."
+
+
+def test_a_stop_inside_a_parenthetical_does_not_end_the_sentence() -> None:
+    # Where the abbreviations live, and cheaper to balance than to enumerate.
+    assert read_comment("Change the bound variable (i.e. the substituted one).  Next.").title == (
+        "Change the bound variable (i.e. the substituted one)."
+    )
+
+
+def test_a_stray_closing_bracket_does_not_suppress_every_later_stop() -> None:
+    # Prose has unmatched closers. Letting the depth go negative would make every
+    # stop after one look like it was inside a parenthetical, and the title would
+    # run to the end of the comment.
+    assert read_comment("A closer) here.  And more.").title == "A closer) here."
+
+
+def test_a_comment_with_no_sentence_end_is_its_own_title() -> None:
+    assert read_comment("No full stop at all").title == "No full stop at all"
+
+
+def test_an_attribution_only_comment_has_no_title() -> None:
+    # The attributions come out of the prose, so there is nothing left to open.
+    assert read_comment("(Contributed by NM, 5-Aug-1993.)").title == ""

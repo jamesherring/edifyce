@@ -52,6 +52,7 @@ from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, uuid_pk_colum
 if TYPE_CHECKING:
     from app.db.promoted_theorems import PromotedTheoremRow
     from app.db.proof_lines import ProofLineRow
+    from app.db.descriptions import LabelDescriptionRow
     from app.db.systems import NotationPieceRow
     from app.db.terms import TermRow
 
@@ -167,6 +168,12 @@ class FormalSystem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     notation_pieces: Mapped[list["NotationPieceRow"]] = relationship(
         back_populates="system", cascade="all, delete-orphan",
         order_by="NotationPieceRow.position",
+    )
+    # What this system says about the labels it names — prose and authorship, for
+    # productions, definitions, theorems and proofs alike (app/db/descriptions.py).
+    label_descriptions: Mapped[list["LabelDescriptionRow"]] = relationship(
+        back_populates="system", cascade="all, delete-orphan",
+        order_by="LabelDescriptionRow.label",
     )
     proofs: Mapped[list["Proof"]] = relationship(
         back_populates="formal_system", cascade="all, delete-orphan"
@@ -284,6 +291,12 @@ class Proof(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     name: Mapped[str] = mapped_column(String(256))
     slug: Mapped[str] = mapped_column(String(256), index=True)
+    # A human sentence for the proof, beside `name`, which is its identity. The
+    # two coincide for a hand-authored proof and part ways on an import, where
+    # `name` is the Metamath label a citation must spell (`sqrt2irr`) and the
+    # title is what the file's comment opens with ("The square root of 2 is
+    # irrational."). Unbounded: `set.mm`'s longest runs to 438 characters.
+    title: Mapped[str | None] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
     # The proof source text; verified against the system by the engine.
     source: Mapped[str] = mapped_column(Text, server_default="")
