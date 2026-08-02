@@ -1,9 +1,10 @@
 # Relationships between formal systems: analysis and roadmap
 
 **Status:** **Track R is delivered and complete** — R1, R2, R3, R3a, both halves
-of R4, and the edge CRUD an author reaches them through. Tracks S (sequents) and
-D (the layered importer) are still design; S1 and D1 depend on nothing and can
-start whenever.
+of R4, and the edge CRUD an author reaches them through. **Track S has started:**
+S1 is done and S3 is substantially answered by its measurements; S2 is next and
+needs R4, which it now has. Track D (the layered importer) is still design; D1
+depends on nothing and can start whenever.
 
 `formal_systems.inherits_from_id` used to be validated on write and read by
 nothing — `app/routers/systems.py` said so in as many words ("inheritance is not
@@ -22,6 +23,13 @@ therefore say so. It is where §9.17 said a rename's check belongs, and §9.21
 records what taking that escape settled, including the one thing it could not:
 the resolution-time check stays, because either system may be a draft whose
 grammar moves after an edge is written.
+
+**(c) is delivered too**, and it cost the engine nothing: a sequent calculus is
+an ordinary `SystemSpec` (`tests/sequent_system.py`), its contexts are terms of
+an ordinary sort, and its eigenvariable condition is an ordinary proviso the
+kernel's `occurs` decides. §8's S1 records the two things that turned out not to
+be expressible and why each refusal is sound; §9.23 records what they have in
+common.
 
 Goal: express and store the relationships between formal systems well enough that
 
@@ -1021,38 +1029,88 @@ discharged by**, after which what crossed that edge is invalidated.
 
 ### Track S — sequents
 
-#### S1 — a sequent FOL as a system
+#### S1 — a sequent FOL as a system — **done**
 
 **Delivers (c)**, standalone. No engine change expected — if one *is* needed,
-that is the finding.
+that is the finding. **None was.** `tests/sequent_system.py` is an ordinary
+`SystemSpec` built by `build_spec`, every proof in
+`tests/test_sequent_calculus.py` is checked by the ordinary checker, and nothing
+under `website/logical/` was touched. §6.2's grammar is declared as written, down
+to the sort inclusion; the two-sorted formula language is `wff`/`ind` with `=`,
+`¬`, `→` and `∀` (whose production declares `scopes_over={"x": ["p"]}`), and the
+line type reads a whole `sequent`.
 
 **Tests and verification** — `tests/sequent_system.py`,
 `tests/test_sequent_calculus.py`.
 
-*Valid, and must be accepted:*
+*Valid, and accepted:*
 - `⊢ (A → A)` by identity + →R.
-- The deduction theorem both ways on a three-assumption context.
-- Weakening, exchange, contraction and cut, each in a proof that needs it.
-- **∀R with an eigenvariable:** `Γ ⊢ φ[y/x]` ⟹ `Γ ⊢ ∀x φ` accepted when `Γ` is
-  empty, and when `Γ` is `(z ∈ z)` — a non-empty context not mentioning `y`.
+- The deduction theorem on a three-assumption context, and its converse derived
+  from →L and exchange rather than declared — which is why the calculus needs no
+  rule for it.
+- Weakening, exchange, contraction and cut, each in a proof that needs it. Cut
+  is written twice: once through the cut, and once cut-free, so the test shows
+  the rule is exercised rather than merely available.
+- **∀R with an eigenvariable:** accepted when `Γ` is empty, and when `Γ` is
+  `c = c` — a non-empty context not mentioning `a`.
 
-*Invalid, and must be refused:*
-- **∀R when the eigenvariable is not fresh:** the same proof with
-  `Γ = (y ∈ y)` → rejected. This is the phase's central test: it is only
-  expressible because the context is a term the kernel's `occurs` can see into
-  (§3.4), and a string-backed context would pass it by accident or fail it by
-  accident.
-- **→R does not reach past the rightmost assumption:** from `Γ, A, B ⊢ C`,
-  concluding `Γ, A ⊢ (B → C)` is accepted and `Γ, B ⊢ (A → C)` is rejected —
-  exchange must be cited.
-- **∀L instantiated with a term that would capture** → rejected.
+*Invalid, and refused, each with the refusal it means asserted (§9.19's rule):*
+- **∀R when the eigenvariable is not fresh:** `a = a ⊢ ∀a a = a` → refused with
+  `∀R does not apply`. The phase's central test, and it differs from the second
+  accepted case above only in which variable the context is about. It is
+  expressible only because the context is a term the kernel's `occurs` descends
+  (§3.4).
+- **→R does not reach past the rightmost assumption:** from `P, Q, R ⊢ R`,
+  `P, Q ⊢ (R → R)` is accepted and `P, R ⊢ (Q → R)` is rejected — exchange must
+  be cited, and the third proof that cites it is written out as the price.
 - Contraction applied to two assumptions that are *not* equal → rejected.
 
 *Pinned properties:*
-- A context is matched structurally: two contexts equal up to rendering but
-  differing in nesting are not interchangeable, asserted on the term.
-- `benchmarks/bench_matching` baseline taken **before** the sequent grammar is
-  added and compared after (feeds S3).
+- A context is matched structurally, asserted **on the term**: `A , B , C` is a
+  `cons` whose right child is the literal `C`, and `∅ , A` and `A` are different
+  terms — so a rule matched against one does not apply to the other.
+- `benchmarks/bench_matching` grew `sequent-context-{2,4,6,8}`, the recursive
+  left-nested grammar rather than the single-formula antecedent the existing
+  `sequent-*` scenarios read, and `tests/test_matching_stress.py` grew a
+  parse-count assertion over it. Both feed S3, which they substantially answer —
+  see below.
+
+**Two expressibility findings**, both recorded against the tests that pin them,
+and both about what an author can *say* rather than what the checker will
+believe. Each refuses more than a textbook calculus would, so each is sound.
+
+- **The eigenvariable condition is stricter than the textbook one.**
+  `∅ , ∀a a = a ⊢ ∀a a = a` is derivable in LK — the condition is that `a` is not
+  *free* in the context, and here every occurrence is bound by the assumption's
+  own quantifier — and Edifyce refuses it. `Occurs` is syntactic by design and
+  says so in as many words: a condition needing binder scoping "depends on the
+  object logic or on proof state and is intentionally not expressible here"
+  (`kernel/side_conditions.py`). So the available proviso is a sound
+  over-approximation of the one the calculus wants, in the same way Metamath's
+  `$d` is. What it costs an author is generalising over a variable the context
+  mentions *anywhere*, however bound; what it never costs is a wrong verdict.
+  Pinned in `test_a_bound_occurrence_blocks_generalisation_too`.
+- **∀L can only instantiate the bound variable with itself.** The bullet this
+  section used to carry — "∀L instantiated with a term that would capture →
+  rejected" — supposes a ∀L that *instantiates*, and no rule schema can be one: a
+  schema is matched by unification, and `P[t/x]` is not something a pattern can
+  say. The ∀L that is expressible is `Γ, P ⊢ C` ⟹ `Γ, ∀x P ⊢ C`, sound for every
+  `P`, `x` and `t`, and there is therefore no capture to reject — which is why no
+  test asserts one. Instantiating with an arbitrary term needs either a
+  substitution operator in the schema language or ∀L stated as a *definition*,
+  and neither is S1's — the second is the scope-aware definitional step
+  `docs/scope-aware-definitional-steps.md` blocks. Pinned as behaviour in
+  `test_universal_left_instantiates_the_binder_with_itself`.
+
+A third, smaller one, worth recording because it shaped the fixture: a calculus
+with `id` as its only axiom cannot supply a **non-vacuous** ∀R premise, because
+`id` puts its formula into the context by construction, so every sequent it
+proves mentions in `Γ` whatever it proves. The eigenvariable condition then holds
+vacuously or fails trivially and the central test tests nothing. The fixture
+therefore declares one axiom *of the object theory* — `refl`, `Γ ⊢ a = a` — which
+is what makes `∅ ⊢ ∀a a = a` provable and `a = a ⊢ ∀a a = a` refusable for the
+right reason. The general shape: **a proviso about the context is only tested by
+a calculus that can prove something the context does not already contain.**
 
 #### S2 — the interpretation edge Hilbert → sequent
 
@@ -1074,14 +1132,51 @@ that is the finding.
   the sequent constructor at its root and the source theorem's term as a subterm,
   asserted structurally.
 
-#### S3 — benchmark the recursive context grammar
+#### S3 — benchmark the recursive context grammar — **substantially answered by S1**
 
 **Delivers** evidence for or against S4. Left-nested list parsing is the risk.
 
-**Tests and verification:** `benchmarks/bench_matching --compare` against the S1
-baseline, plus a stress case in `tests/test_matching_stress.py` — a
-twelve-assumption context, timed, so a regression is a test failure rather than a
-slow suite.
+**Tests and verification:** `benchmarks/bench_matching --only sequent-context`
+(scenarios at 2/4/6/8 assumptions, added in S1), plus
+`test_a_left_nested_context_costs_one_parse_per_assumption` in
+`tests/test_matching_stress.py` — a parse *count* rather than a wall-clock
+budget, parametrised at 4/8/12/16, so a regression is a test failure and not a
+slow suite on a slow machine.
+
+What the measurement says, on `Γ ⊢ p` with `Γ` an `n`-assumption left-nested
+context (best-of, one machine, quote the ratios and not the microseconds):
+
+| assumptions | with a fresh parse memo | with the memo off |
+|---|---|---|
+| 4 | 69 µs | 183 µs |
+| 8 | 150 µs | 2.4 ms |
+| 12 | 266 µs | 40 ms |
+| 16 | 416 µs | 755 ms |
+| 20 | 607 µs | 18 s |
+
+**The memo is the whole story, and `LineType.parse_line` gives every proof line a
+fresh one.** Without it the recursive context is exponential — roughly ×4 per two
+assumptions, and a 24-assumption context took ≈4.8 minutes to parse once. With
+it, cost grows smoothly and at low polynomial degree: doubling the assumptions
+rather less than triples the time, and a 32-assumption context parses in under
+2 ms. So a real proof gets the left-hand column, and no realistic sequent proof
+is anywhere near the cliff.
+
+That removes **performance** as the argument for S4. What is left of the case for
+an AC matcher is *ergonomic* — §6.2's "if it proves intolerable in use" — and S1
+shows what that costs concretely: reaching an assumption that is not rightmost
+takes an explicitly cited exchange, which
+`test_implication_right_reaches_only_the_rightmost_assumption` writes out in
+full. That is a judgement about authoring, to be made against real proofs, and it
+is no longer a judgement about the matching layer. **S4 stays conditional, on a
+different condition.**
+
+The other thing the measurement pins is what the memo is *for*, which the
+existing `-nomemo` scenarios only hinted at: a grammar whose sort recurses into
+itself on the left of an ambiguous separator re-reads the same prefix once per
+candidate split, and the memo is what collapses that. Any future change that
+narrows where a memo is installed — a new parse entry point, say — should be read
+against this table first.
 
 #### S4 — *conditional on S3* — an AC matcher for contexts
 
@@ -1724,6 +1819,31 @@ each is a live constraint on the work after it rather than a closed question.
     `extension` edge is a separate question again: §5.4 says its obligations are
     filled in from the spine and never asked of an author, which would make
     `kind` mechanical rather than asserted.
+
+23. **A "no engine change expected" that held, and what it cost instead.** S1 is
+    the first phase whose plan predicted no engine change *and* said that needing
+    one would be the finding. None was needed: a sequent calculus is a
+    `SystemSpec`, and §6.2's grammar was declared as written. But the phase found
+    two things all the same, and they are the same shape as each other — **the
+    limits showed up in the schema language, not in the checker.**
+
+    The eigenvariable proviso is stricter than LK's (bound occurrences count,
+    because `Occurs` is syntactic), and ∀L cannot instantiate with a term
+    (because a schema is matched by unification and has no substitution
+    operator). S1 records both in full. What is worth keeping at this level is
+    the pattern: when an expressive limit is reached, the question to ask is
+    *which* language ran out — the kernel's judgements, the grammar, or the
+    schema — because they fail differently and only one of them is a soundness
+    surface. Both of these bottom out in the schema language, both refuse a
+    superset of what a textbook calculus refuses, and neither can produce a wrong
+    verdict; a limit in the kernel's judgements would have had to be argued about
+    rather than merely documented.
+
+    The practical consequence for S2: §6.3's sketch discharges `ax-4`…`ax-7` and
+    `ax-gen` by sequent proofs, and `ax-gen`'s discharge will meet the stricter
+    proviso head-on. Whether the over-approximation is *tolerable there* — rather
+    than merely sound — is the first thing S2 finds out, and it is a better test
+    of it than anything S1 could stage.
 
 ---
 

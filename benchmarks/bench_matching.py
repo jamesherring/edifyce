@@ -174,6 +174,19 @@ def _sequent(depth: int) -> Scenario:
     return Scenario(name=f"sequent-{depth}", setup=setup, iterations=50, tags=("sequent",))
 
 
+def _sequent_context(assumptions: int) -> Scenario:
+    def setup():
+        line, _ = grammars.sequent_context()
+        return line, f"{grammars.assumptions(assumptions)} ⊢ p", _context()
+
+    return Scenario(
+        name=f"sequent-context-{assumptions}",
+        setup=setup,
+        iterations=20,
+        tags=("sequent",),
+    )
+
+
 def _metavariables(count: int) -> Scenario:
     def setup():
         formula = grammars.propositional()
@@ -226,6 +239,12 @@ SCENARIOS: list[Scenario] = [
     # A line whose one literal occurs many times in the string being read.
     _sequent(4),
     _sequent(8),
+    # And the *context* grammar S1 declares: a left-nested list, where every
+    # comma is a candidate split. What S3 decides against (roadmap §6.2).
+    _sequent_context(2),
+    _sequent_context(4),
+    _sequent_context(6),
+    _sequent_context(8),
     # The one shape where a constant spelled with a bracket has to be stepped
     # over; every other scenario leaves that path idle.
     _opaque("plain", "( A B RR )"),

@@ -172,6 +172,45 @@ def sequent(separators: int = 1) -> tuple[StringPattern, UnionPattern]:
     return line, formula
 
 
+def sequent_context() -> tuple[StringPattern, UnionPattern]:
+    """``Γ ⊢ φ`` where ``Γ`` is a **recursive left-nested list** of formulas.
+
+    The grammar S1 actually declares (`tests/sequent_system.py`), rather than the
+    single-formula antecedent :func:`sequent` reads. The difference is the whole
+    of S3's question: a context sort is ``∅ | wff | context , wff``, so a comma
+    is a candidate split at *every* occurrence and the sort recurses into itself
+    on the left — which is the shape the matching layer is slowest on, and the
+    reason the roadmap made an AC matcher conditional on measuring first.
+
+    Returns the sequent line and the context sort it is built over.
+    """
+    formula = propositional()
+
+    # The same table object as the formula sort's, not an equal one: the split
+    # prune compares these by identity (see the note on BRACKETS above), so a
+    # distinct dict here would time a path no built system takes.
+    context = UnionPattern(name="context", patterns=[], respect_brackets=BRACKETS)
+    cons = StringPattern(name="cons", pattern="g , a", respect_brackets=BRACKETS)
+    cons.add_variables({"g": context, "a": formula})
+    # The inclusion is what lets a one-formula context be written as itself, and
+    # it is also what makes every comma ambiguous until the parse commits.
+    context.add_pattern(AtomPattern(name="empty", value="∅"))
+    context.add_pattern(formula)
+    context.add_pattern(cons)
+
+    line = StringPattern(name="sequent", pattern="g ⊢ p", respect_brackets=BRACKETS)
+    line.add_variables({"g": context, "p": formula})
+    return line, context
+
+
+def assumptions(count: int, atom: str = "p") -> str:
+    """``∅ , p , p , …`` — a context of ``count`` assumptions, left-nested."""
+    text = "∅"
+    for _ in range(count):
+        text = f"{text} , {atom}"
+    return text
+
+
 def nest(depth: int, connective: str = "→", atom: str = "p") -> str:
     """A right-nested formula of the given depth: ``(p → (p → (p → p)))``."""
     text = atom
