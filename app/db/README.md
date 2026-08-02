@@ -149,7 +149,11 @@ Modernised from the original Django app (`website/models.py` on `main`):
   no source template to fall back to. `render_stored` folds it over the term rows,
   which is why showing a proof in a notation costs a query and not a system
   rebuild. Derived where the source is — a Metamath import reads the file's `$t`
-  block — never re-derived on the read path. **Read** through the inheritance
+  block, one notation per map it declares, so `set.mm` arrives with both a
+  `unicode` and a `latex` reading — never re-derived on the read path. A derived
+  notation is *faithful*: it re-spells a production's tokens and leaves its shape
+  alone. Where that reads badly a curated override replaces the whole template
+  (`setmm.DISPLAY_OVERRIDES`, driven by `scripts/notation_report.py`). **Read** through the inheritance
   chain (a child inherits its ancestors' notations and overrides them per
   constructor, as its grammar layers on theirs); **stored** against the one system
   it was derived for.

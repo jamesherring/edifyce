@@ -19,6 +19,8 @@ from website.logical.metamath import build_spec, parse
 from website.logical.metamath.definitions import statement_of
 from website.logical.metamath.display import (
     notation_report,
+    verbatim,
+    with_overrides,
     projection_for,
     unicode_projection,
 )
@@ -379,3 +381,65 @@ def test_a_defined_form_competes_in_every_sort_that_includes_its_own() -> None:
     (collision,) = report.collisions
     assert collision.sort == "class"
     assert collision.productions == ("cconst", "setvar:S")
+
+
+# ---------------------------------------------------------------------------
+# Overrides: the editorial half of a notation (roadmap §4.4)
+# ---------------------------------------------------------------------------
+
+
+def test_an_override_replaces_a_derived_template_outright() -> None:
+    # A hand-written template is a whole spelling. Blending it with the derived
+    # one would produce something nobody wrote.
+    _database, system, _typesetting = built()
+    derived = projection_for(system.build_context, {"e.": "\\in"}, name="latex")
+    assert derived.templates["wcel"] == (
+        ("slot", "A"), ("lit", " \\in "), ("slot", "B")
+    )
+
+    overridden = with_overrides(
+        derived, {"wcel": (("lit", "\\in("), ("slot", "A"), ("lit", ","),
+                           ("slot", "B"), ("lit", ")"))}
+    )
+    assert overridden.templates["wcel"][0] == ("lit", "\\in(")
+    assert overridden.name == "latex"
+
+
+def test_an_override_may_name_a_production_the_map_left_alone() -> None:
+    # The common case, and the reason overrides exist at all: a production every
+    # token of which maps to itself is *skipped* by the derivation, so it never
+    # appears in the derived templates — and it is exactly the one needing help.
+    _database, system, _typesetting = built()
+    derived = projection_for(system.build_context, {}, name="latex")
+    assert "wcel" not in derived.templates
+
+    overridden = with_overrides(derived, {"wcel": (("lit", "!"),)})
+    assert overridden.templates["wcel"] == (("lit", "!"),)
+
+
+def test_overriding_nothing_leaves_the_projection_alone() -> None:
+    _database, system, _typesetting = built()
+    derived = projection_for(system.build_context, {"e.": "\\in"}, name="latex")
+    assert with_overrides(derived, {}).templates == derived.templates
+
+
+def test_verbatim_names_the_compound_productions_left_as_source() -> None:
+    # §4.4's report at the level that matters. A token map covering every token
+    # can still leave a *production* in ASCII, when each of its tokens maps to
+    # itself — set.mm's `( F ` A )` is the case, and its backtick sets as a quote.
+    _database, system, _typesetting = built()
+    derived = projection_for(system.build_context, {"e.": "\\in"}, name="latex")
+
+    left = {c.name for c in verbatim(system.build_context, derived)}
+    assert "wcel" not in left  # re-spelled, so not on the list
+    assert "wi" in left  # `( ph -> ps )`: nothing in it was mapped
+
+
+def test_verbatim_reports_no_atoms() -> None:
+    # An atom the map leaves alone is a token that renders as itself, which is a
+    # judgement the file already made. A *production* left alone is a shape nobody
+    # has looked at, and that is the list an author wants.
+    _database, system, _typesetting = built()
+    derived = projection_for(system.build_context, {}, name="latex")
+
+    assert all(c.pieces for c in verbatim(system.build_context, derived))

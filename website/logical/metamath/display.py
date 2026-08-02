@@ -18,9 +18,11 @@ were never in the token map to begin with.
 What this does *not* do is invent a better notation than the source has. It is a
 faithful re-spelling: ``( sqrt \\` 2 )`` maps to ``( √ \\` 2 )``, not to ``√2``,
 because the parentheses and the application backtick are in the production and
-`set.mm` renders them. Getting ``\\sqrt{2}`` means *overriding* that production's
-template, which the roadmap's §4.4 describes and this deliberately leaves to a
-caller: seeding from the file is automatic and safe, and overriding is editorial.
+`set.mm` renders them. Getting a better spelling means *overriding* that
+production's template — :func:`with_overrides`, from a curated table
+(`setmm.DISPLAY_OVERRIDES`), because seeding from the file is automatic and safe
+while overriding is a decision. :func:`verbatim` is the list those decisions are
+made from.
 
 Spacing comes from the source template, not the map. A `$t` rendering carries its
 own padding (``' &isin; '``), which is HTML's business; here the template already
@@ -197,6 +199,55 @@ def _productions(context: FormalSystemContext) -> list[Pattern]:
             if isinstance(member, (StringPattern, AtomPattern)):
                 seen.setdefault(id(member), member)
     return list(seen.values())
+
+
+def with_overrides(
+    projection: Projection, overrides: Mapping[str, tuple[Piece, ...]]
+) -> Projection:
+    """``projection`` with these constructors re-spelled by hand.
+
+    The editorial half of a notation. Seeding from a `$t` map is *faithful* — it
+    re-spells the tokens a production is made of and leaves its shape alone, so
+    ``( sqrt ` 2 )`` becomes ``( \\surd ` 2 )`` and never ``\\sqrt{2}``. Getting the
+    second wants a decision about that production, which no map can supply.
+
+    An override is keyed by constructor name and wins outright over whatever was
+    derived, which is what makes it an override rather than a merge: a
+    hand-written template is a whole spelling, and blending it with the derived
+    one would produce something nobody wrote.
+
+    Overriding a constructor the projection does not name is not an error — the
+    common case is exactly that, a production the token map left in the source
+    spelling because none of its tokens changed (see :func:`verbatim`).
+    """
+    return Projection(
+        templates={**projection.templates, **overrides}, name=projection.name
+    )
+
+
+def verbatim(
+    context: FormalSystemContext,
+    projection: Projection,
+    definitions: Iterable[KernelDefinition] = (),
+) -> list[Constructor]:
+    """Compound productions ``projection`` leaves spelled as the source spells them.
+
+    §4.4's report, at the level that turns out to matter. The *token* level says
+    almost nothing about a published corpus — `set.mm`'s ``latexdef`` covers all
+    1,794 of its tokens, so :class:`NotationReport`'s ``unmapped`` is empty — while
+    11 compound productions still come out in ASCII, because every token in them
+    maps to itself. ``( F ` A )`` is one, and its backtick sets as a left quote:
+    36% of `set.mm`'s statements contain one.
+
+    Compound only. An atom the map leaves alone is a token that renders as itself,
+    which is a judgement the file already made; a *production* left alone is a
+    shape nobody has looked at, and that is the list an author wants.
+    """
+    return [
+        constructor
+        for constructor in notation_constructors(context, definitions)
+        if constructor.pieces and constructor.name not in projection.templates
+    ]
 
 
 def projection_for(
@@ -458,6 +509,10 @@ def unicode_projection(system: FormalSystem, typesetting: Typesetting) -> Projec
     dropping the markup is a policy rather than a conversion). Takes the whole
     system because a projection needs both halves of its notation - the grammar's
     productions and the definitions' defined forms.
+
+    The one-map form, for a caller that wants only this reading. An import takes
+    the general path instead, because it derives every map the file declares and
+    applies the editorial overrides to each (`app.db.metamath_store`).
     """
     return projection_for(
         system.build_context,

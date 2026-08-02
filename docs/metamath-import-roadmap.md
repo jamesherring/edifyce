@@ -723,14 +723,61 @@ What this does not add is *authoring* in a notation — that is §5's Tier B, an
 is the harder direction: rendering is a fold, and reading back is a parse against
 a grammar the notation does not define.
 
-### 4.4 Beyond per-token substitution
+### 4.4 Beyond per-token substitution — *done*
 
-A per-token map yields token-soup LaTeX (`( \surd \` 2 ) \in \mathbb{R}`). Because
-Edifyce has the parse tree, each production can instead carry its own display
-template:
+A per-token map yields token-soup LaTeX. Because Edifyce has the parse tree, a
+production can instead carry its own display template, and an **override** is a
+hand-written one that wins over whatever the map derived
+(`display.with_overrides`).
 
-| production | source template | display template |
-|---|---|---|
+**Where the report pointed.** `notation_report`'s token level says almost nothing
+about a published corpus: `set.mm`'s `latexdef` covers all 1,794 of its tokens, so
+`unmapped` is **empty**. What matters is the *production* level, and that is new —
+`display.verbatim` lists the compound productions a notation leaves spelled as the
+source spells them, because every token in them maps to itself. There were **11**,
+of which most are right as they are (`A = B`, `A R B`, `( A F B )` need no help).
+Three were not, and `setmm.DISPLAY_OVERRIDES` is that list curated:
+
+| production | source | override | why |
+|---|---|---|---|
+| `cfv` | `( F ` A )` | `{F}\left({A}\right)` | TeX sets the backtick as an opening quote; **36%** of statements contain one |
+| `cdc` | `; A B` | `{A}{B}` | a decimal numeral built digit by digit — `;` is the constructor, not a character to print |
+| `cab` | `\{ x \| ph \}` | `\left\{{x} \mid {ph}\right\}` | `\mid` is the relation TeX provides for this; braces grow with the body |
+
+Measured on `set.mm`:
+
+```
+sqrt2irr  ( \surd ` 2 ) \notin \mathbb{Q}
+       →  \surd\left(2\right) \notin \mathbb{Q}
+abscl     ( A \in \mathbb{C} → ( \operatorname{abs} ` A ) \in \mathbb{R} )
+       →  ( A \in \mathbb{C} → \operatorname{abs}\left(A\right) \in \mathbb{R} )
+```
+
+**Both maps are now stored.** An import derives a notation per `$t` map the file
+declares, so `set.mm` arrives with `unicode` *and* `latex`, and the proof view's
+selector picks the second up with no frontend change — it lists whatever the
+system stores. The `unicode` notation deliberately carries no overrides: `( 𝐹 ‘ 𝐴 )`
+is how `set.mm` itself writes application, and a Unicode reading exists to be
+faithful.
+
+**What a per-production override cannot do**, and the roadmap's own third example
+was the case: `( sqrt ` 2 )` is `cfv` applied to the constant `csqrt` — two
+productions — so no template for either turns it into `\sqrt{2}`, and the best a
+per-production override reaches is `\surd\left(2\right)`. Likewise `\frac{A}{B}`,
+since `set.mm` builds division as the generic `co` applied to `cdiv`. Both want
+matching a *subtree* rather than a constructor, which is a different mechanism and
+is not built.
+
+The 19 remaining collisions are all a constant against a class *variable* of the
+same spelling (`+` is both `caddc` and a variable named `.+`). As a display that is
+cosmetic — `set.mm`'s own HTML tells them apart by colour, which `as_text` drops by
+policy — and as a *source* it would be a correctness bug, which is why §4.2a
+refused Unicode-as-source.
+
+`scripts/notation_report.py` prints all three lists for a file, so the table stays
+driven by a list rather than by discovering breakage.
+
+---|---|---|
 | `wcel` | `A ∈ B` | `{A} \in {B}` |
 | `cfv` | `( F \` A )` | `{F}\left({A}\right)` |
 | `csqrt` + `cfv` | `( √ \` A )` | `\sqrt{A}` |

@@ -1,7 +1,7 @@
 """Declarations about `set.mm` specifically — data, not engine behaviour.
 
-Two things an import needs that a ``.mm`` file does not say, and that no property
-of a statement's shape settles. Both are therefore *declared* per database and
+Three things an import needs that a ``.mm`` file does not say, and that no
+property of a statement's shape settles. Both are therefore *declared* per database and
 default to nothing, so an import that names neither behaves exactly as one did
 before either existed; this module is where `set.mm`'s answers live so they are
 written once rather than in each caller.
@@ -122,4 +122,54 @@ BINDERS: dict[str, dict[str, list[str]]] = {
     "cprod": {"k": ["B"]},                      # prod_ k e. A B
     "citg": {"x": ["B"]},                       # S. A B _d x
     "wdisj": {"x": ["B"]},                      # Disj_ x e. A B
+}
+
+
+# How a handful of productions should *read* in a notation, where the faithful
+# re-spelling reads badly.
+#
+# A `$t` map is per token, so deriving a notation from one re-spells the tokens a
+# production is made of and leaves its shape alone. That is right nearly
+# everywhere and wrong in a few places, and the few are not a matter of taste:
+# every token in `( F ` A )` maps to *itself* under `latexdef`, so function
+# application comes out of a LaTeX notation in raw ASCII with its backtick set as
+# a left quote. 36% of `set.mm`'s statements contain one.
+#
+# So this is the list `display.verbatim` produces, curated. Of the 11 compound
+# productions `latexdef` leaves in the source spelling, most are right as they
+# are — `A = B`, `A R B`, `( A F B )` need no help — and these are the ones that
+# do. Keyed by notation, because an override is a decision about one reading: the
+# `unicode` notation deliberately has none, since `( 𝐹 ‘ 𝐴 )` is how `set.mm`
+# itself writes application and a Unicode reading exists to be faithful.
+#
+# What this shape *cannot* express is an override spanning two productions.
+# `( sqrt ` 2 )` is `cfv` applied to the constant `csqrt`, so no per-production
+# template turns it into ``\\sqrt{2}`` — that needs matching a subtree, which is a
+# different mechanism (see the roadmap's §4.4).
+DISPLAY_OVERRIDES: dict[str, dict[str, tuple[tuple[str, str], ...]]] = {
+    "latex": {
+        # Function application. The defect, not a preference: `` ` `` maps to
+        # itself, so this renders as `( f ` x )` and TeX sets the backtick as an
+        # opening quote. `\left(\right)` so the brackets grow with the argument.
+        "cfv": (
+            ("slot", "F"),
+            ("lit", r"\left("),
+            ("slot", "A"),
+            ("lit", r"\right)"),
+        ),
+        # A decimal numeral, built digit by digit: `;` is the constructor, not a
+        # character to print, and `; 1 2` is the number 12. Juxtaposition is both
+        # the correct reading and the shorter one.
+        "cdc": (("slot", "A"), ("slot", "B")),
+        # Class abstraction. `|` sets as an ordinary bar with no spacing; `\mid`
+        # is the relation TeX provides for exactly this, and the braces have to
+        # grow with the body.
+        "cab": (
+            ("lit", r"\left\{"),
+            ("slot", "x"),
+            ("lit", r" \mid "),
+            ("slot", "ph"),
+            ("lit", r"\right\}"),
+        ),
+    },
 }
