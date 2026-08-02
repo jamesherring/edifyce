@@ -34,6 +34,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..kernel.constructors import constructor_for
+from ..kernel.definitions import Definition as KernelDefinition
+from ..kernel.terms import Node
 from ..matching.patterns import AtomPattern, Pattern, StringPattern, UnionPattern
 from ..rendering import Projection
 from .typesetting import as_text
@@ -41,7 +43,10 @@ from .typesetting import as_text
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from collections.abc import Iterable
+
     from ..build_context import FormalSystemContext
+    from ..formal_system import FormalSystem
     from ..kernel.constructors import Piece
     from .typesetting import Typesetting
 
@@ -82,6 +87,7 @@ def projection_for(
     context: FormalSystemContext,
     tokens: Mapping[str, str],
     name: str = "unicode",
+    definitions: Iterable[KernelDefinition] = (),
 ) -> Projection:
     """A :class:`~website.logical.rendering.Projection` re-spelling ``context``'s
     productions through a ``$t`` token map.
@@ -90,12 +96,27 @@ def projection_for(
     ``{t: as_text(v) for t, v in typesetting.unicode.items()}``, since a `$t` value
     is markup rather than text.
 
+    ``definitions`` are the system's registered definitions, whose *defined* forms
+    are notation too. A definition may be the only thing making a form grammatical
+    - nothing requires a production to declare it first - and such a form is not a
+    member of any sort's union, so walking the grammar alone misses it and the
+    notation it introduces renders in the source spelling while everything around
+    it changes. Pass ``system.definitions``.
+
     A production none of whose tokens are mapped is left out rather than given an
     identical template, so the projection stays the size of what it changes.
     """
     templates: dict[str, tuple[Piece, ...]] = {}
-    for production in _productions(context):
-        constructor = constructor_for(production)
+    constructors = [constructor_for(p) for p in _productions(context)]
+    # A defined form's constructor is reached through the definition rather than
+    # the grammar: `constructor_for` takes a `Pattern`, and a `DefinedNotation` is
+    # not one, but the kernel definition already holds the projected term.
+    constructors += [
+        definition.higher.constructor
+        for definition in definitions
+        if isinstance(definition.higher, Node)
+    ]
+    for constructor in constructors:
         pieces: list[Piece] = []
         changed = False
         if constructor.pieces:
@@ -119,17 +140,18 @@ def projection_for(
     return Projection(templates=templates, name=name)
 
 
-def unicode_projection(
-    context: FormalSystemContext, typesetting: Typesetting
-) -> Projection:
+def unicode_projection(system: FormalSystem, typesetting: Typesetting) -> Projection:
     """The projection `set.mm`'s ``althtmldef`` map describes, as text.
 
     The convenience form of :func:`projection_for`: `$t` values are HTML, so they
     go through :func:`~.typesetting.as_text` first (see that function on why
-    dropping the markup is a policy rather than a conversion).
+    dropping the markup is a policy rather than a conversion). Takes the whole
+    system because a projection needs both halves of its notation - the grammar's
+    productions and the definitions' defined forms.
     """
     return projection_for(
-        context,
+        system.build_context,
         {token: as_text(value) for token, value in typesetting.unicode.items()},
         name="unicode",
+        definitions=system.definitions,
     )

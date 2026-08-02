@@ -12,11 +12,14 @@ import pytest
 
 pytest.importorskip("regex")
 
-from website.logical.declarative import build_system
+from website.logical.declarative import Definition, LinePart, LineSpec
+from website.logical.declarative import Production, SystemSpec, build_system
+from website.logical.formal_system import FormalSystem
 from website.logical.metamath import build_spec, parse
 from website.logical.metamath.definitions import statement_of
 from website.logical.metamath.display import projection_for, unicode_projection
-from website.logical.metamath.typesetting import typesetting_of
+from website.logical.metamath.parser import Database
+from website.logical.metamath.typesetting import Typesetting, typesetting_of
 from website.logical.rendering import render
 
 SOURCE = r"""
@@ -43,7 +46,7 @@ ax-1 $a |- ( ph -> ( ps -> ph ) ) $.
 """
 
 
-def built():
+def built() -> tuple[Database, FormalSystem, Typesetting | None]:
     database = parse(SOURCE)
     system = build_system(build_spec(database, name="t"))
     typesetting = typesetting_of(database.comments)
@@ -52,7 +55,7 @@ def built():
 
 def test_the_projection_respells_a_statement() -> None:
     database, system, typesetting = built()
-    projection = unicode_projection(system.build_context, typesetting)
+    projection = unicode_projection(system, typesetting)
 
     term = statement_of(database.assertions["ax-1"], system)
 
@@ -78,7 +81,7 @@ def test_spacing_comes_from_the_source_template_not_the_map() -> None:
     # mapped token is trimmed into the slot — otherwise every operator would
     # render double-spaced.
     database, system, typesetting = built()
-    projection = unicode_projection(system.build_context, typesetting)
+    projection = unicode_projection(system, typesetting)
 
     assert projection.templates["wi"] == (
         ("lit", "( "), ("slot", "ph"), ("lit", " → "), ("slot", "ps"), ("lit", " )")
@@ -90,7 +93,7 @@ def test_a_production_with_no_mapped_token_is_left_out() -> None:
     # one for a database that declares more notation than it renders — costs
     # nothing per unmapped production.
     database, system, typesetting = built()
-    projection = unicode_projection(system.build_context, typesetting)
+    projection = unicode_projection(system, typesetting)
 
     assert "cv" not in projection.templates
     assert {"wi", "wcel", "wal", "cr"} <= set(projection.templates)
@@ -98,7 +101,7 @@ def test_a_production_with_no_mapped_token_is_left_out() -> None:
 
 def test_an_atom_is_respelled_from_its_own_token() -> None:
     database, system, typesetting = built()
-    projection = unicode_projection(system.build_context, typesetting)
+    projection = unicode_projection(system, typesetting)
 
     assert projection.templates["cr"] == (("lit", "ℝ"),)
 
@@ -113,3 +116,39 @@ def test_a_plain_token_map_needs_no_typesetting_block() -> None:
     assert projection.templates["wi"] == (
         ("lit", "( "), ("slot", "ph"), ("lit", " ⊃ "), ("slot", "ps"), ("lit", " )")
     )
+
+
+def test_a_definitions_own_notation_is_seeded_too() -> None:
+    """A definition may be the only thing making a form grammatical.
+
+    Such a form joins no sort's union, so a projection built from the grammar
+    alone leaves it in the source spelling while everything around it changes —
+    `(S -> p)` rendering as `(S → p)`. The defined forms come from the system's
+    definitions, which is why `projection_for` takes them.
+    """
+    system = build_system(
+        SystemSpec(
+            name="pc",
+            productions=[
+                Production(sort="formula", name="var", regex="[p-r]"),
+                Production(sort="formula", name="implication", template="(A -> B)",
+                           bindings=[("A", "formula"), ("B", "formula")]),
+                Production(sort="formula", name="falsum", atom_value="F",
+                           denotes_constant=True),
+            ],
+            definitions=[Definition(sort="formula", name="d", higher="S",
+                                    lower="(F -> F)", bindings=[])],
+            lines=[LineSpec(name="statement", shape="<formula> [<reference>]",
+                            parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,.-]+")],
+                            logical_sort="formula")],
+        )
+    )
+    term = system.parse("(S -> p) [x]\n").proof_lines[0].formula_term
+
+    without = projection_for(system.build_context, {"S": "⊤", "->": "→"})
+    assert render(term, without) == "(S → p)"
+
+    with_definitions = projection_for(
+        system.build_context, {"S": "⊤", "->": "→"}, definitions=system.definitions
+    )
+    assert render(term, with_definitions) == "(⊤ → p)"

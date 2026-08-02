@@ -17,12 +17,20 @@ import pytest
 
 pytest.importorskip("regex")
 
-from website.logical.declarative import Production, SystemSpec, build_system
-from website.logical.declarative import LinePart, LineSpec
+from website.logical.declarative import (
+    Definition,
+    LinePart,
+    LineSpec,
+    Production,
+    SystemSpec,
+    build_system,
+)
+from website.logical.formal_system import FormalSystem
+from website.logical.kernel.terms import Term
 from website.logical.rendering import Projection, render
 
 
-def system():
+def system() -> FormalSystem:
     return build_system(
         SystemSpec(
             name="pc",
@@ -54,7 +62,7 @@ def system():
     )
 
 
-def term_for(text: str):
+def term_for(text: str) -> Term:
     return system().parse(f"{text} [x]\n").proof_lines[0].formula_term
 
 
@@ -126,3 +134,63 @@ def test_rendering_is_recursive_through_nesting() -> None:
     )
 
     assert render(term, unicode) == "((p → q) → ¬(r → p))"
+
+
+def definition_system() -> FormalSystem:
+    """A system where a *definition* is the only thing making `S` grammatical.
+
+    Nothing requires a production to declare a defined form first, and such a form
+    joins no sort's union — so a projection built by walking the grammar alone
+    cannot see it.
+    """
+    return build_system(
+        SystemSpec(
+            name="pc",
+            productions=[
+                Production(sort="formula", name="var", regex="[p-r]"),
+                Production(
+                    sort="formula",
+                    name="implication",
+                    template="(A -> B)",
+                    bindings=[("A", "formula"), ("B", "formula")],
+                ),
+                Production(
+                    sort="formula",
+                    name="falsum",
+                    atom_value="F",
+                    denotes_constant=True,
+                ),
+            ],
+            definitions=[
+                Definition(
+                    sort="formula", name="d", higher="S", lower="(F -> F)", bindings=[]
+                )
+            ],
+            lines=[
+                LineSpec(
+                    name="statement",
+                    shape="<formula> [<reference>]",
+                    parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,.-]+")],
+                    logical_sort="formula",
+                )
+            ],
+        )
+    )
+
+
+def test_a_defined_form_is_a_production_a_projection_can_name() -> None:
+    # Its constructor is named for the sort and the form (`formula:S`), and is
+    # reached through the kernel definition rather than the grammar — a
+    # `DefinedNotation` is not a `Pattern`, so `constructor_for` does not take one.
+    system = definition_system()
+    term = system.parse("(S -> p) [x]\n").proof_lines[0].formula_term
+    projected = Projection(
+        templates={
+            "formula:S": (("lit", "⊤"),),
+            "implication": (("lit", "("), ("slot", "A"), ("lit", " → "),
+                            ("slot", "B"), ("lit", ")")),
+        }
+    )
+
+    assert term.to_string() == "(S -> p)"
+    assert render(term, projected) == "(⊤ → p)"
