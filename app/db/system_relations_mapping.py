@@ -29,7 +29,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import FormalSystem
@@ -100,11 +100,25 @@ def _edges_with_outstanding_obligations(
     # An edge is only as discharged as its obligations. Read separately from the
     # edge's own `status` so a stale column fails closed: the rule §2 states is
     # about the primitives, and this is the query that asks the primitives.
+    #
+    # Outstanding two ways, and the second is the one a status column cannot
+    # see. An obligation discharged by a *theorem* loses it to `ON DELETE SET
+    # NULL` when that theorem is retired, and nothing writes back to the
+    # obligation's own status — so an obligation naming neither a primitive nor a
+    # theorem is outstanding whatever it says about itself. (Found in review:
+    # this module's model already claimed a NULL "leaves the obligation
+    # undischarged", and only the column was doing that, not the query.)
     return set(
         session.scalars(
             select(SystemRelationObligationRow.relation_id).where(
                 SystemRelationObligationRow.relation_id.in_(edge_ids),
-                SystemRelationObligationRow.status.notin_(_TRANSFERS),
+                or_(
+                    SystemRelationObligationRow.status.notin_(_TRANSFERS),
+                    and_(
+                        SystemRelationObligationRow.discharged_by_primitive.is_(None),
+                        SystemRelationObligationRow.discharged_by_theorem_id.is_(None),
+                    ),
+                ),
             )
         )
     )

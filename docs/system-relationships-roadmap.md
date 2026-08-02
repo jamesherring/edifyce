@@ -872,6 +872,18 @@ Three things R4a settled that the design left open:
   is below the source; and an edge onto an *ancestor* reaches the descendant,
   since the ancestor's library is already citable there. Anything else would make
   an edge's reach depend on which layer of a tower it was attached to.
+- **Reach and invalidation are one question asked twice** (Codex, on #162).
+  Widening where a citation may resolve without widening `_citing_systems` left a
+  sibling target holding `valid`, `result` and its `proof_lines` after the
+  theorem they rested on was retired — and a verify trusts a lemma's stored rows,
+  so a third proof would have rested on it too. The walk now follows discharged
+  edges as well as the spine. §9.15's rule generalises: *any* new way for a label
+  to resolve is a new way for a verdict to go stale.
+- **A discharge can vanish without saying so.** An obligation discharged by a
+  theorem loses it to `ON DELETE SET NULL` when that theorem is retired, and
+  nothing writes back to the obligation's status — so an obligation naming
+  neither a primitive nor a theorem is outstanding whatever its status says. The
+  model already claimed this; only the column was doing it, not the query.
 
 **Tests and verification** — `tests/test_system_relations.py`.
 

@@ -363,3 +363,121 @@ def test_the_promoted_fixture_says_what_these_tests_assume(db, client):
         engine.dispose()
 
     assert verify_proof(client, db, left, "(P → P) [id]")["success"] is True
+
+
+# ---------------------------------------------------------------------------
+# Both P1s from review: what a discharge is, and what invalidation must reach
+# ---------------------------------------------------------------------------
+
+
+def test_an_obligation_whose_theorem_vanished_is_outstanding(db, client):
+    # Found in review (Codex). An obligation discharged by a *theorem* loses it
+    # to `ON DELETE SET NULL` when that theorem is retired, and nothing writes
+    # back to the obligation's own status — so the cached `discharged` outlives
+    # the warrant. This module's own model already claimed a NULL "leaves the
+    # obligation undischarged"; only the column was doing that, not the query.
+    left, right = two_systems(db, client, "vanished@example.com")
+    promote_into(db, left, IDENTITY)
+    promote_into(db, right, _renamed(IDENTITY, "stands-in"))
+    edge = relate(db, left, right, obligations=[])
+
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            warrant = session.scalar(
+                select(PromotedTheoremRow).where(
+                    PromotedTheoremRow.label == "stands-in"
+                )
+            )
+            session.add(
+                SystemRelationObligationRow(
+                    relation_id=uuid.UUID(edge),
+                    source_label="MP",
+                    discharged_by_theorem_id=warrant.id,
+                    status="discharged",
+                )
+            )
+            session.commit()
+    finally:
+        engine.dispose()
+
+    # Discharged by a standing theorem: the edge transfers.
+    assert verify_proof(client, db, right, "(P → P) [id]")["success"] is True
+
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            # What retiring the theorem leaves behind: the FK nulled, the
+            # obligation's own status untouched.
+            obligation = session.scalar(select(SystemRelationObligationRow))
+            obligation.discharged_by_theorem_id = None
+            session.commit()
+            assert obligation.status == "discharged"
+    finally:
+        engine.dispose()
+
+    assert verify_proof(client, db, right, "(P → P) [id]")["success"] is False
+
+
+def test_retiring_a_theorem_invalidates_a_proof_that_cited_it_across_an_edge(db, client):
+    # Found in review (Codex). R4a widened where a citation may resolve without
+    # widening what invalidation reaches, so a *sibling* target kept `valid`,
+    # `result` and its `proof_lines` after the theorem it rested on was gone —
+    # and a verify trusts a lemma's stored rows, so a third proof would rest on
+    # it too. Reach and invalidation are one question asked twice.
+    owner = _register_login(client, "edge-invalidation@example.com")
+    left = seed(db, propositional_calculus_spec("Left"), owner, None)
+    right = seed(db, propositional_calculus_spec("Right"), owner, None)
+
+    # A promoted proof, so retiring it goes through the route that invalidates.
+    proof = _proved_and_promoted(client, left, "id")
+    relate(db, left, right)
+
+    citing = _make(client, right, "(P → P) [id]")
+    assert _verify(client, citing)["success"] is True
+
+    assert client.delete(f"/api/proofs/{proof}/promote").status_code == 204
+
+    assert client.get(f"/api/proofs/{citing}").json()["valid"] is None
+
+
+def test_retiring_leaves_an_unrelated_system_alone(db, client):
+    # The other half: a walk that invalidated every system would pass the test
+    # above for the wrong reason. With no edge, nothing is disturbed.
+    owner = _register_login(client, "no-edge@example.com")
+    left = seed(db, propositional_calculus_spec("Left"), owner, None)
+    right = seed(db, propositional_calculus_spec("Right"), owner, None)
+
+    proof = _proved_and_promoted(client, left, "id")
+    bystander = _make(client, right, "(P → (P → P)) [ax-1]")
+    assert _verify(client, bystander)["success"] is True
+
+    assert client.delete(f"/api/proofs/{proof}/promote").status_code == 204
+
+    assert client.get(f"/api/proofs/{bystander}").json()["valid"] is True
+
+
+def _make(client, system_id: str, source: str) -> str:
+    from tests.test_proof_promotion import make_proof
+
+    return make_proof(client, system_id, source)
+
+
+def _verify(client, proof_id: str) -> dict:
+    from tests.test_proof_promotion import verify
+
+    return verify(client, proof_id)
+
+
+def _proved_and_promoted(client, system_id: str, label: str) -> str:
+    """A real promoted proof in ``system_id`` — the route retirement runs from."""
+    from tests.test_proof_promotion import (
+        IDENTITY_PROOF,
+        proved_and_published,
+        promote,
+    )
+
+    proof = proved_and_published(client, system_id, IDENTITY_PROOF)
+    status, body = promote(client, proof, label)
+    assert status == 201, body
+    return proof
