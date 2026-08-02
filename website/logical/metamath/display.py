@@ -109,11 +109,11 @@ def projection_for(
         elif constructor.atom_value is not None:
             # An atom is its own token - `RR`, `ph`, `0` - and carries no template,
             # so its rendering *is* the mapped value.
-            mapped = tokens.get(constructor.atom_value)
-            if mapped is None:
+            rendering = tokens.get(constructor.atom_value)
+            if rendering is None:
                 continue
-            changed = mapped != constructor.atom_value
-            pieces.append(("lit", mapped))
+            changed = rendering != constructor.atom_value
+            pieces.append(("lit", rendering))
         if changed:
             templates[constructor.name] = tuple(pieces)
     return Projection(templates=templates, name=name)
