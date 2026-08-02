@@ -38,7 +38,13 @@ the two leaf regexes do it.
 
 from __future__ import annotations
 
-from website.logical.declarative import LinePart, LineSpec, Production, SystemSpec
+from website.logical.declarative import (
+    LinePart,
+    LineSpec,
+    Production,
+    Rule,
+    SystemSpec,
+)
 
 from tests.spec_helpers import (
     atom_const_prod,
@@ -71,18 +77,22 @@ def propositional_variable_prod() -> Production:
     return regex_prod("formula", "prop_var", "[A-Z][A-Z0-9]*")
 
 
-def statement_line() -> LineSpec:
+def statement_line(sort: str = "formula") -> LineSpec:
     """``<formula> [<reference>]`` — as ``spec_helpers``', but hyphens allowed.
 
     The labels here are Metamath's shape (``ax-1``, ``df-an``), and the shared
     helper's reference regex stops at alphanumerics, so a citation of one would
     not parse at all.
+
+    ``sort`` names the logical sort, and appears in the shape as well — a line
+    reads its formula *at* a sort, so a system that calls it something else says
+    so twice. Only the renamed systems below pass anything but the default.
     """
     return LineSpec(
         name="statement",
-        shape="<formula> [<reference>]",
+        shape=f"<{sort}> [<reference>]",
         parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,.-]+")],
-        logical_sort="formula",
+        logical_sort=sort,
     )
 
 
@@ -268,6 +278,180 @@ def zfc_spec(name: str = ZFC) -> SystemSpec:
 def tower() -> list[SystemSpec]:
     """The three layers, root first — the argument :func:`layered_spec` takes."""
     return [propositional_calculus_spec(), first_order_logic_spec(), zfc_spec()]
+
+
+# --- the same system under other names (R4b) -------------------------------
+
+
+def _wff_rules() -> list[Rule]:
+    # The propositional layer's four primitives, over the sort the renamed
+    # systems call `wff`. The *labels* are unchanged: a rename is about the
+    # grammar, and an edge's obligations are what pair a source primitive with a
+    # target one.
+    return [
+        rule("ax-1", "simplification", [], "(P → (Q → P))",
+             [("P", "wff"), ("Q", "wff")]),
+        rule("ax-2", "distribution", [], "((P → (Q → R)) → ((P → Q) → (P → R)))",
+             [("P", "wff"), ("Q", "wff"), ("R", "wff")]),
+        rule("ax-3", "transposition", [], "((¬P → ¬Q) → (Q → P))",
+             [("P", "wff"), ("Q", "wff")]),
+        rule("MP", "modus ponens", ["P", "(P → Q)"], "Q",
+             [("P", "wff"), ("Q", "wff")]),
+    ]
+
+
+def renamed_propositional_calculus_spec(name: str = "Renamed") -> SystemSpec:
+    """:func:`propositional_calculus_spec` with every name changed and nothing else.
+
+    The sort is ``wff`` rather than ``formula`` and the productions are ``imp``,
+    ``neg``, ``conj``, ``wff_var``; the **notation is identical**, so the two
+    systems write `(P → P)` the same way and disagree only about what to call the
+    production that spells it. That is the point of the fixture: a transferred
+    term is rebuilt over *this* system's constructors by name, so without a map
+    the citation cannot resolve at all, and with one nothing else has to change.
+
+    A rename is what an edge between two independently-built systems needs, and
+    the pair PC/PC-under-other-names isolates it — the alternative, two systems
+    that also differ in what they can say, would leave a refusal ambiguous
+    between the rename and the difference.
+    """
+    return SystemSpec(
+        name=name,
+        brackets=brackets(),
+        productions=[
+            regex_prod("wff", "wff_var", "[A-Z][A-Z0-9]*"),
+            template_prod("wff", "neg", "¬p", [("p", "wff")]),
+            template_prod("wff", "imp", "(p → q)", [("p", "wff"), ("q", "wff")]),
+            template_prod("wff", "conj", "(p ∧ q)", [("p", "wff"), ("q", "wff")]),
+        ],
+        lines=[statement_line("wff")],
+        rules=_wff_rules(),
+        definitions=[
+            defn("wff", "conj", "(P ∧ Q)", "¬(P → ¬Q)",
+                 [("P", "wff"), ("Q", "wff")], label="df-an")
+        ],
+    )
+
+
+def respelled_propositional_calculus_spec(name: str = "Respelled") -> SystemSpec:
+    """:func:`renamed_propositional_calculus_spec`, and the *notation* moves too.
+
+    ``→`` is ``⊃`` here and ``¬`` is ``~``. A map renames productions, and a
+    production carries its template, so a transferred statement is written in
+    whatever the target spells it — which is the visible half of an
+    interpretation edge and the reason a transferred entry's text is re-rendered
+    from its term rather than carried over.
+    """
+    spec = renamed_propositional_calculus_spec(name)
+    spec.productions = [
+        template_prod("wff", "neg", "~p", [("p", "wff")])
+        if prod.name == "neg"
+        else template_prod("wff", "imp", "(p ⊃ q)", [("p", "wff"), ("q", "wff")])
+        if prod.name == "imp"
+        else prod
+        for prod in spec.productions
+    ]
+    spec.rules = [
+        rule("ax-1", "simplification", [], "(P ⊃ (Q ⊃ P))",
+             [("P", "wff"), ("Q", "wff")]),
+        rule("MP", "modus ponens", ["P", "(P ⊃ Q)"], "Q",
+             [("P", "wff"), ("Q", "wff")]),
+    ]
+    spec.definitions = [
+        defn("wff", "conj", "(P ∧ Q)", "~(P ⊃ ~Q)",
+             [("P", "wff"), ("Q", "wff")], label="df-an")
+    ]
+    return spec
+
+
+def narrowed_propositional_calculus_spec(name: str = "Narrowed") -> SystemSpec:
+    """:func:`renamed_propositional_calculus_spec` with ``conj`` outside ``wff``.
+
+    Everything the map names is *present*, so a check that asked "does the target
+    declare something called ``conj``?" would pass this — and the transferred
+    theorem would then be a claim about a sort that does not contain the
+    conjunctions it quantifies over. What refuses it is
+    :attr:`Constructor.admits`: the source's ``formula`` admits its conjunction
+    and the target's ``wff`` does not admit the image, so the map narrows (§3.2).
+
+    ``conj`` is parked in a sort of its own rather than deleted, because deleting
+    it would be refused one step earlier — as an image the target's grammar does
+    not declare — and that is a different check.
+    """
+    return SystemSpec(
+        name=name,
+        brackets=brackets(),
+        productions=[
+            regex_prod("wff", "wff_var", "[A-Z][A-Z0-9]*"),
+            template_prod("wff", "neg", "¬p", [("p", "wff")]),
+            template_prod("wff", "imp", "(p → q)", [("p", "wff"), ("q", "wff")]),
+            # Grammatical, and *not* a `wff`.
+            template_prod("aside", "conj", "(p ∧ q)", [("p", "wff"), ("q", "wff")]),
+        ],
+        lines=[statement_line("wff")],
+        rules=_wff_rules(),
+    )
+
+
+def renamed_first_order_spec(name: str = "Renamed FOL") -> SystemSpec:
+    """The whole PC ⊂ FOL tower's *grammar*, flat, under other names.
+
+    The target of the binder case. It declares an image for every production the
+    tower's ``formula`` and ``term`` admit — which the sort map's check demands,
+    and which is why ``exists`` is here although nothing below cites it — with
+    ``all`` carrying the same ``scopes_over`` its counterpart does. It declares no
+    rules at all: what it is for is *citing* theorems proved elsewhere, and a
+    system whose every step is a citation makes it unambiguous which mechanism a
+    passing proof exercised.
+    """
+    return SystemSpec(
+        name=name,
+        brackets=brackets(),
+        productions=[
+            regex_prod("wff", "wff_var", "[A-Z][A-Z0-9]*"),
+            template_prod("wff", "neg", "¬p", [("p", "wff")]),
+            template_prod("wff", "imp", "(p → q)", [("p", "wff"), ("q", "wff")]),
+            template_prod("wff", "conj", "(p ∧ q)", [("p", "wff"), ("q", "wff")]),
+            regex_prod("ind", "ind_var", "[a-z][a-z0-9]*"),
+            template_prod("wff", "eq", "s = t", [("s", "ind"), ("t", "ind")]),
+            template_prod("wff", "mem", "s ∈ t", [("s", "ind"), ("t", "ind")]),
+            template_prod("wff", "all", "∀x p", [("x", "ind"), ("p", "wff")],
+                          scopes_over={"x": ["p"]}),
+            template_prod("wff", "exists", "∃x p", [("x", "ind"), ("p", "wff")],
+                          scopes_over={"x": ["p"]}),
+        ],
+        lines=[statement_line("wff")],
+    )
+
+
+# The map from the PC ⊂ FOL tower's names to `renamed_first_order_spec`'s.
+FOL_RENAME = {
+    "sorts": {"formula": "wff", "term": "ind"},
+    "symbols": {
+        "prop_var": "wff_var",
+        "negation": "neg",
+        "implication": "imp",
+        "conjunction": "conj",
+        "variable": "ind_var",
+        "equality": "eq",
+        "membership": "mem",
+        "universal": "all",
+        "existential": "exists",
+    },
+}
+
+
+# The map from `propositional_calculus_spec`'s names to the renamed layer's.
+# Partial on purpose where it can be: only names that actually differ are here.
+PC_RENAME = {
+    "sorts": {"formula": "wff"},
+    "symbols": {
+        "prop_var": "wff_var",
+        "negation": "neg",
+        "implication": "imp",
+        "conjunction": "conj",
+    },
+}
 
 
 # --- pieces the rejection tests need ---------------------------------------

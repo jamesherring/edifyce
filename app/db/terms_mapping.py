@@ -34,6 +34,7 @@ from app.db.terms import (
 )
 from website.logical.kernel import Bound, Node, Term, Var, constructor_for, intern
 from website.logical.matching import Pattern, UnionPattern
+from website.logical.translation import IDENTITY, Translation
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -390,7 +391,11 @@ class TermGraph:
         self._children = children
         # Shared across every root, so a subterm two statements have in common is
         # rebuilt once. Interning means that is the usual case, not the exception.
-        self._memo: dict[uuid.UUID, Term] = {}
+        # Keyed by the translation too, because one graph is read for a whole
+        # chain and two of its layers can rename the same row differently (see
+        # `Translation.key`, whose identity value is empty — an unrenamed chain
+        # memoises exactly as it did before).
+        self._memo: dict[tuple[str, uuid.UUID], Term] = {}
         # Name -> grammar pattern, built once on first use. A stored constructor
         # cannot be resolved through `context.variables` alone (see `_grammar_of`),
         # and the alternative — searching the sort unions per node — is O(grammar)
@@ -407,7 +412,12 @@ class TermGraph:
         """Every row id in the graph — the roots and everything below them."""
         return set(self._rows)
 
-    def term(self, term_id: uuid.UUID | None, context: Context) -> Term | None:
+    def term(
+        self,
+        term_id: uuid.UUID | None,
+        context: Context,
+        translation: Translation = IDENTITY,
+    ) -> Term | None:
         """Rebuild the term rooted at ``term_id``, or ``None`` if it is not here.
 
         ``None`` back is not an error: a nullable term reference means "nothing
@@ -422,14 +432,22 @@ class TermGraph:
         corruption, not something to paper over, and the digest guards above this
         are what decide whether a term is current.
 
-        One graph is meant for one context — the memo is keyed by row id alone,
-        and the grammar index (:meth:`_grammar_of`) is built from the first
-        context handed in — which holds for every caller, since a build's
-        contexts are copies sharing one ``variables``.
+        ``translation`` renames each stored name before it is looked up, which is
+        the whole of a term-level constructor remap: a theorem proved in a system
+        that calls the sort ``prop`` rebuilds here over *this* system's ``wff``,
+        against its constructors and its slot sorts (R4b of
+        docs/system-relationships-roadmap.md). Absent, nothing is renamed and
+        this is the read it always was.
+
+        One graph is meant for one context — the grammar index
+        (:meth:`_grammar_of`) is built from the first context handed in — which
+        holds for every caller, since a build's contexts are copies sharing one
+        ``variables``. Several *translations* of that one context are fine, and
+        the memo distinguishes them.
         """
         if term_id is None or term_id not in self._rows:
             return None
-        return intern(self._build(term_id, context))
+        return intern(self._build(term_id, context, translation))
 
     def _grammar_of(self, context: Context) -> dict[str, Pattern]:
         """``name -> grammar pattern`` for ``context``, built once per graph.
@@ -468,7 +486,9 @@ class TermGraph:
             self._grammar = grammar
         return self._grammar
 
-    def _constructor(self, name: str, context: Context) -> Constructor:
+    def _constructor(
+        self, name: str, context: Context, translation: Translation
+    ) -> Constructor:
         """The constructor a stored ``name`` denotes: a production, or a notation.
 
         One lookup covers both because a notation's name carries a ``:``, which a
@@ -478,6 +498,7 @@ class TermGraph:
         Grammar first, then the registered notations, then the build namespace for
         a top-level sort — which is the one grammar pattern no union contains.
         """
+        name = translation.name(name)
         pattern = self._grammar_of(context).get(name)
         if pattern is None:
             pattern = next(
@@ -492,7 +513,9 @@ class TermGraph:
             )
         return constructor_for(pattern)
 
-    def _sort(self, name: str, context: Context) -> Constructor:
+    def _sort(
+        self, name: str, context: Context, translation: Translation
+    ) -> Constructor:
         """The constructor a stored *sort* name denotes.
 
         Narrower than :meth:`_constructor`: a sort is always a declared union of
@@ -501,36 +524,44 @@ class TermGraph:
         for. Same order and the same reason — a sort name is as shadowable as a
         production's.
         """
+        name = translation.name(name)
         pattern = self._grammar_of(context).get(name) or _in_namespace(name, context)
         if pattern is None:
             raise LookupError(f"No sort named {name!r} in context")
         return constructor_for(pattern)
 
-    def _build(self, term_id: uuid.UUID, context: Context) -> Term:
-        cached = self._memo.get(term_id)
+    def _build(
+        self, term_id: uuid.UUID, context: Context, translation: Translation
+    ) -> Term:
+        memo_key = (translation.key, term_id)
+        cached = self._memo.get(memo_key)
         if cached is not None:
             return cached
 
         row = self._rows[term_id]
         term: Term
         if row.kind == TERM_KIND_VAR:
-            term = Var(row.var_name, self._sort(row.sort, context))
+            term = Var(row.var_name, self._sort(row.sort, context, translation))
         elif row.kind == TERM_KIND_BOUND:
-            term = Bound(row.bound_index, self._sort(row.sort, context))
+            term = Bound(row.bound_index, self._sort(row.sort, context, translation))
         elif row.kind == TERM_KIND_NODE:
             term = Node(
-                constructor=self._constructor(row.constructor, context),
+                constructor=self._constructor(row.constructor, context, translation),
                 children={
-                    slot: self._build(child, context)
+                    slot: self._build(child, context, translation)
                     for slot, child in self._children.get(term_id, ())
                 },
                 literal=row.literal,
-                sort=self._sort(row.sort, context) if row.sort is not None else None,
+                sort=(
+                    self._sort(row.sort, context, translation)
+                    if row.sort is not None
+                    else None
+                ),
             )
         else:
             raise ValueError(f"Unknown term row kind: {row.kind!r}")
 
-        self._memo[term_id] = term
+        self._memo[memo_key] = term
         return term
 
 

@@ -24,6 +24,7 @@ from app.db.promoted_theorems import (
 )
 from app.db.promoted_theorems_mapping import (
     LibraryChain,
+    LibraryLayer,
     PendingLibrary,
     cited_labels,
     load_theorems,
@@ -137,6 +138,7 @@ __all__ = [
     "PendingLibrary",
     "cited_labels",
     "LibraryChain",
+    "LibraryLayer",
     "load_theorems",
     "read_library",
     "store_theorem",

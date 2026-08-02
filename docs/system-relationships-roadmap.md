@@ -1,13 +1,23 @@
 # Relationships between formal systems: analysis and roadmap
 
-**Status:** **R1 and R2 delivered**; the rest is design. `formal_systems.inherits_from_id`
-used to be validated on write and read by nothing — `app/routers/systems.py` said
-so in as many words ("inheritance is not resolved yet … deferred to the
-inheritance phase"). It now means what §5.1 says it means: a child's effective
-system is its ancestors' parts followed by its own, and every path that builds a
-system builds the chain, and §5.2 as well: a citation resolves against the
-system's own library and then its ancestors'. See §8's R1/R2 for what landed and
-§9.9–9.14 for what they turned up.
+**Status:** **Track R is delivered** — R1, R2, R3, R3a and both halves of R4.
+Tracks S (sequents) and D (the layered importer) are still design; S1 and D1
+depend on nothing and can start whenever.
+
+`formal_systems.inherits_from_id` used to be validated on write and read by
+nothing — `app/routers/systems.py` said so in as many words ("inheritance is not
+resolved yet … deferred to the inheritance phase"). It now means what §5.1 says
+it means: a child's effective system is its ancestors' parts followed by its
+own, and every path that builds a system builds the chain, and §5.2 as well: a
+citation resolves against the system's own library and then its ancestors'. A
+proof proved here enters that library (§5.3), schematically if its author says
+so; and where the spine cannot reach, an edge does — including between two
+systems that disagree about what to call things (§5.4). See §8's R1–R4 for what
+landed and §9.9–9.18 for what they turned up.
+
+What is left on Track R is the edge **CRUD**: every edge above is written
+straight to its rows, because no route creates one yet. That is also where a
+rename's check belongs in the end (§9.17).
 
 Goal: express and store the relationships between formal systems well enough that
 
@@ -849,14 +859,16 @@ tested against the systems that break it, and this suite already had them.
 **Delivers** multiple parents, sort renames, translations.
 
 Split in two, because the halves are independently testable and the second is
-where §3.2 has teeth. **R4a — what an edge resolves — is done**: the four tables
-of §5.4, and `related_layers` turning the edges into a `LibraryChain`'s extra
-layers. **R4b** is the rename: the sort/symbol maps applied as a term-level
-constructor remap, with the narrowing refusal coming from `Constructor.admits`
-rather than a name comparison. R4a's edges are all identity on names, which is
-exactly what a second parent is.
+where §3.2 has teeth. **Both are done.** **R4a — what an edge resolves**: the
+four tables of §5.4, and `related_layers` turning the edges into a
+`LibraryChain`'s extra layers, all identity on names, which is exactly what a
+second parent is. **R4b — the rename**: `website/logical/translation.py`, a
+`Translation` applied as a term-level constructor remap inside
+`TermGraph.term`, with the narrowing refusal coming from `Constructor.admits`
+rather than a name comparison. §9.17 records where that check runs and what it
+costs; §9.18 what a rename turned out to have to carry besides the term.
 
-Three things R4a settled that the design left open:
+What R4a settled that the design left open:
 
 - **Ordering puts the spine first.** Relation layers are appended *after* the
   inheritance chain, so a label the tower already answers keeps its answer and an
@@ -885,9 +897,12 @@ Three things R4a settled that the design left open:
   neither a primitive nor a theorem is outstanding whatever its status says. The
   model already claimed this; only the column was doing it, not the query.
 
-**Tests and verification** — `tests/test_system_relations.py`.
+**Tests and verification** — `tests/test_system_relations.py` for what an edge
+resolves, `tests/test_translation.py` for what a map has to earn. The split is
+the same one the code makes: a map is a question about two grammars and needs no
+row to ask it.
 
-- *Valid:* an `interpretation` edge with a sort **rename** (`prop → wff`)
+- *Valid:* an `interpretation` edge with a sort **rename** (`formula → wff`)
   transfers a theorem; a system with two parents resolves labels from both.
 - *Invalid:* transfer across a `draft` edge; transfer across an edge with an
   undischarged obligation; a sort map that **narrows** (the target's constructor
@@ -896,6 +911,43 @@ Three things R4a settled that the design left open:
 - *Pinned:* an `extension` edge auto-discharges from the spine and never asks an
   author for an obligation; discharging the last obligation flips `status` and
   is what makes a previously-failing citation succeed (the same proof, re-run).
+
+The rename's own four-part shape (§8.0), since it is a soundness guard and its
+failure mode is over-refusal:
+
+- *The worked example* is the propositional layer **under other names** —
+  identical notation, every production renamed — because a pair that also
+  differed in what it could *say* would leave every refusal ambiguous between
+  the rename and the difference. The map is applied to an edge that already
+  exists, so the map is the only thing that changes between the two halves.
+- *Valid, and the complex case:* a theorem whose statement **binds** (`(P → ∀x P)`
+  with `not occurs(x, P)`) transferred through a nine-production map, and cited
+  at an instance the proviso admits. The binder is what an over-eager guard
+  refuses, since `scopes_over` is compared and a quantifier is the only
+  production that has any. Plus a proviso carrying a **sort argument**
+  (`disjoint(x, y, term)`), whose sort the target calls something else.
+- *Rejected, each paired with the instance that must be accepted:* the same
+  binder theorem cited where the proviso fails; the same `$d` theorem cited at
+  equal variables; the narrowing map, against the identical map onto a target
+  whose sort does admit the branch.
+- *The negative control* is the edge **without** its map: the same two systems,
+  the same theorem, the same proof, and the citation does not resolve at all —
+  which is what says the map is doing the work rather than the edge.
+- *Pinned:* the transferred statement's term has the **target's** constructor at
+  its root and its metavariable at the target's sort, asserted structurally; a
+  rename **composes nothing** (§3.1 across an edge, pinned the way R2 pinned it
+  across the spine — by making composing fatal); a rename that moves the
+  *notation* renders the entry in the target's spelling.
+
+One lesson from writing them, since it cost a false pass and would cost another:
+**a refusal has to be asserted with its reason**. The first version of the
+bound-variable rejection was refused because the line did not *parse* — a
+formula this suite's grammar cannot spell — and it agreed with a transfer that
+had dropped the proviso entirely. The three refusals in this area look identical
+from a boolean and say quite different things: `does not apply` (resolved, and
+the instance was refused), `Invalid reference` (the edge contributed no layer),
+and a whole-verify error (a term that could not be rebuilt). Every rejection
+above now names which one it means.
 
 ---
 
@@ -1084,8 +1136,8 @@ S1 and D1 depend on nothing and can start immediately.
    requires a complex accepted case per phase, and why the bound-variable tests
    are written in accepted/rejected pairs.
 
-The six below are **findings from R1 and R2**, kept here because each is a live
-constraint on the phases after it rather than a closed question.
+The ten below are **findings from the phases that landed**, kept here because
+each is a live constraint on the work after it rather than a closed question.
 
 9. **The freshness check was position-blind, and a tower is not.** §5.1 predicted
    `_require_a_fresh_defined_form` getting *stricter* under inheritance, which it
@@ -1347,6 +1399,80 @@ constraint on the phases after it rather than a closed question.
     an imported theorem with no stored proof, say. There the nomination would
     still have to be trusted, which is an argument for keeping promotion tied to
     a proof that stands here.
+
+17. **A rename is checked where the check can be made, not where it belongs.**
+    §3.2 says a sort map is validated by projecting *both* grammars, and that is
+    the whole difficulty: `Constructor.admits` exists only once a system is
+    built, so the check needs the source built as well as the target. It
+    therefore runs on the citation path (`related_layers`), where the source is
+    a row and the target is a spec, and it builds both.
+
+    Two things keep that honest. It runs **only for an edge that declares a
+    map** — an edge with empty sort and symbol tables is the identity, has
+    nothing to check, and costs exactly what it did before R4b, which is
+    nothing. And it is the *conservative* placement: a stale check cannot
+    outlive a grammar edit, because there is no stored verdict to go stale.
+
+    Where it belongs is the edge's **write**: a map is a claim about two
+    published grammars, neither of which moves, so checking it once as the edge
+    is stored would be both cheaper and better-reported — an author would get
+    `translation_errors`' actual messages rather than a citation that does not
+    resolve. That waits on the edge CRUD, which is the piece of R4 still open.
+
+    One asymmetry is deliberate. `_citing_systems` — the invalidation walk R4a's
+    review added — follows a discharged edge **without** consulting its map, so
+    an edge whose rename does not check out still counts as a way a label could
+    reach. That over-reaches by exactly the proofs that were never resolving
+    across it, which is the direction that is safe: R4a's rule is that reach and
+    invalidation must agree, and they agree here in the only sense that matters —
+    invalidation may reach further than resolution, never less.
+
+    What is deliberately **not** checked is an edge whose map is empty. Two
+    unrelated systems that happen to agree on their names transfer on the
+    author's say-so, gated by the obligations and nothing else — which is R4a's
+    shipped semantics rather than something R4b changed. Checking it would put
+    a source build on every verify of every system with any edge at all, and the
+    hazard it would catch (two systems whose `wff` differs) is the same one the
+    obligations are there to carry.
+
+18. **A rename has to carry three things besides the term, and only two of them
+    are load-bearing.** The remap itself is a substitution in front of a name
+    lookup (`TermGraph.term`), and it took one line. What took the thought is
+    everything a `TheoremSpec` says in *names* rather than in structure.
+
+    A **metavariable's sort** and a **proviso's sort argument** are both fatal
+    if missed, and fail in opposite directions. The first raises immediately —
+    promotion looks the sort name up in the target's grammar and finds nothing —
+    so it cannot be got wrong quietly. The second is worse: a proviso whose sort
+    argument does not resolve refuses *every* instance, so a suite of rejection
+    tests passes with the mapping missing entirely, and only the accepted half
+    of a pair catches it. That is §3.5 ("map the sort argument, leave the
+    algebra untouched") turning out to have a sharp edge.
+
+    The **statement's text** is the third, and it is hygiene rather than
+    soundness: a transferred entry's string is re-rendered from its translated
+    term, so it reads in the notation of the system it is cited in. A structural
+    check would not have noticed a stale one — the term is what unifies — which
+    is exactly why it is asserted directly rather than left to a proof standing.
+
+    Three things a rename may **not** move, and the line between them is worth
+    keeping: a production's `kind` and its `scopes_over` are refused because they
+    decide what a term *is* and what binds in it, and its `slots` because a
+    stored term keys its children by slot name and §5.4's tables carry no slot
+    map. The first two are soundness; the third is a restriction on what an
+    author may write, and would be lifted by a slot map rather than argued away.
+
+    What is deliberately **not** compared is an atom's *value*. Renaming the
+    source's `⊥` onto a target constant spelled something else is not a mistake —
+    it is what an interpretation *is*, and §2's obligations are what make it
+    sound. Structure is the map's business; meaning is the obligations'.
+
+    One shape is refused outright: a **string-rewriting** theorem cannot cross a
+    rename. It is checked against surface text, so what it says is a fact about
+    the symbols its own system spells, and a rename is free to spell them
+    differently here. Nothing in the two grammars settles whether the rewriting
+    agrees — the same refusal, for the same reason, that `schematic_theorem`
+    makes for a string step (§9.16).
 
 ---
 
