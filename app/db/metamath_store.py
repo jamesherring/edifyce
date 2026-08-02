@@ -50,12 +50,14 @@ from app.db.descriptions_mapping import store_descriptions
 from app.db.models import FormalSystem, Proof
 from app.db.promoted_theorems_mapping import store_theorem, theorem_digest
 from app.db.notations_mapping import store_notation
+from app.db.outline_mapping import store_outline
 from app.db.proofs_mapping import store_proof_lines
 from app.db.systems_mapping import spec_to_system
 from website.logical.declarative import build_system, library_digest
 from website.logical.metamath.corpus import corpus_spec, theorems, walk
 from website.logical.metamath.comments import read_comment
 from website.logical.metamath.display import notation_constructors, unicode_projection
+from website.logical.metamath.sections import outline
 from website.logical.metamath.typesetting import typesetting_of
 from website.logical.rendering import total_projection
 from website.logical.metamath.importer import LibraryEntry
@@ -98,6 +100,9 @@ class ImportReport:
     # is documented and never checked, and a comment that is only an attribution
     # still counts.
     described: int = 0
+    # Folders made from the file's section headers, or 0 for a `.mm` that draws
+    # no outline — which is most of them outside a published corpus.
+    sections: int = 0
     # The citable library this run stored: every assertion the walk promoted,
     # and how many of those are primitives of the imported system.
     # ``theorems_failed`` is counted apart from ``failed`` because it is a
@@ -143,6 +148,14 @@ def import_corpus(
     # a `$p`'s own title comes off the same parse. Metamath documents a statement
     # by the comment before it, so this is the whole of the association.
     descriptions = _descriptions_of(database, limit)
+    # Before the walk, because a proof is filed as it is stored and the folder has
+    # to exist by then. Bounded by the same horizon as everything else: a section
+    # opening past the last walked theorem covers nothing this import contains.
+    horizon = database.position(theorems(database, limit)[-1].label)
+    folders = store_outline(
+        session, system.id, [s for s in outline(database) if s.at <= horizon]
+    )
+    report.sections = len(folders)
 
     for position, checked in enumerate(walk(database, limit, name, library.store)):
         report.checked += 1
@@ -161,7 +174,12 @@ def import_corpus(
             try:
                 with session.begin_nested():
                     stored = _store(
-                        session, system, position, checked, descriptions
+                        session,
+                        system,
+                        position,
+                        checked,
+                        descriptions,
+                        folders.folder_for(database.position(checked.label)),
                     )
             except Exception as exc:  # noqa: BLE001 - reported, not fatal
                 _record_failure(report, checked.label, str(exc))
@@ -355,6 +373,7 @@ def _store(
     position: int,
     checked: CheckedTheorem,
     descriptions: Mapping[str, Description],
+    folder_id: uuid.UUID | None,
 ) -> _Stored:
     engine_proof = checked.proof
     valid = bool(engine_proof.valid)
@@ -374,6 +393,8 @@ def _store(
         # proof, where there is somewhere to put it, and where it also answers for
         # the labels that are not proofs at all.
         title=described.title or None if described else None,
+        # Where the file filed it: the deepest section header before it.
+        folder_id=folder_id,
         source=checked.source,
         position=position,
         valid=valid,

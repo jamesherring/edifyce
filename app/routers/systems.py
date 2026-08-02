@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -55,7 +55,7 @@ from app.routers._common import (
     unique_slug,
 )
 from app.db.descriptions_mapping import load_description
-from app.db.models import User
+from app.db.models import Proof, ProofFolder, User
 from app.db.notations_mapping import notation_names
 from app.db.side_conditions import SideConditionRow
 from app.db.side_conditions_mapping import (
@@ -87,6 +87,7 @@ from app.schemas import (
     FormalSystemDetail,
     FormalSystemSummary,
     FormalSystemUpdate,
+    Folder,
     Justification,
     LabelDescription,
     LinePart,
@@ -764,6 +765,61 @@ async def get_system(
     # Published systems are readable by anyone; drafts only by their owner.
     system = await _get_readable_or_404(session, system_id, user)
     return _detail(system, await notation_names(session, system.id))
+
+
+@router.get("/{system_id}/folders", response_model=list[Folder])
+async def get_system_folders(
+    system_id: uuid.UUID,
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> list[Folder]:
+    """This system's folder tree, roots first.
+
+    For an imported corpus this is the outline its `.mm` file draws with section
+    headers — the structure its authors gave it, and the difference between
+    browsing 47,000 proofs and browsing a book. Whole rather than a level at a
+    time: `set.mm`'s is 1,903 nodes, which is one small response, and paging a
+    tree costs a request per expansion for no benefit at that size.
+    """
+    system = await _get_readable_or_404(session, system_id, user)
+    rows = (
+        await session.scalars(
+            select(ProofFolder)
+            .where(ProofFolder.formal_system_id == system.id)
+            .order_by(ProofFolder.position, ProofFolder.name)
+        )
+    ).all()
+    # How many proofs sit *directly* in each folder. One grouped query rather than
+    # one per node, and directly rather than cumulatively — see `Folder.proofs`.
+    counts = dict(
+        (
+            await session.execute(
+                select(Proof.folder_id, func.count())
+                .where(Proof.formal_system_id == system.id, Proof.folder_id.is_not(None))
+                .group_by(Proof.folder_id)
+            )
+        ).all()
+    )
+
+    nodes = {
+        row.id: Folder(
+            id=row.id,
+            name=row.name,
+            slug=row.slug,
+            description=row.description,
+            position=row.position,
+            proofs=counts.get(row.id, 0),
+        )
+        for row in rows
+    }
+    roots: list[Folder] = []
+    for row in rows:
+        # A parent outside this system's rows cannot happen (the FK is scoped by
+        # the same system) but a row whose parent was deleted under us reads as a
+        # root rather than vanishing.
+        parent = nodes.get(row.parent_id) if row.parent_id is not None else None
+        (parent.children if parent is not None else roots).append(nodes[row.id])
+    return roots
 
 
 @router.get("/{system_id}/labels/{label}", response_model=LabelDescription)

@@ -10,10 +10,12 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Alert from '$lib/components/ui/alert';
 	import SystemParts from './SystemParts.svelte';
+	import OutlineTree from '$lib/components/OutlineTree.svelte';
 	import { auth } from '$lib/auth.svelte';
 	import {
 		api,
 		ApiError,
+		type Folder,
 		type FormalSystemDetail,
 		type SystemValidation
 	} from '$lib/api';
@@ -31,6 +33,11 @@
 	let validation = $state<SystemValidation | null>(null);
 	let validating = $state(false);
 
+	// The system's folder tree. For an imported corpus this is the outline its
+	// `.mm` file draws with section headers; a hand-authored system has none, and
+	// the card simply does not appear.
+	let outline = $state<Folder[]>([]);
+
 	// Bumped on every load so late responses from a previous id (system or
 	// validation) are dropped instead of overwriting the current one.
 	let requestSeq = 0;
@@ -40,6 +47,7 @@
 		loading = true;
 		error = null;
 		validation = null;
+		outline = [];
 		let detail: FormalSystemDetail;
 		try {
 			detail = await api.systems.get(id);
@@ -59,6 +67,18 @@
 		system = detail;
 		loading = false;
 		runValidation(id, seq);
+		void loadOutline(id, seq);
+	}
+
+	async function loadOutline(id: string, seq: number) {
+		try {
+			const folders = await api.systems.folders(id);
+			if (seq === requestSeq) outline = folders;
+		} catch {
+			// Best-effort: a system with no outline and a system whose outline could
+			// not be read both show no card, and neither is worth an error banner
+			// over the system itself.
+		}
 	}
 
 	async function runValidation(id: string, seq: number) {
@@ -175,6 +195,17 @@
 					</Alert.Description>
 				</Alert.Root>
 			{/if}
+		{/if}
+
+		{#if outline.length > 0}
+			<SectionCard title="Outline">
+				<p class="mb-3 text-sm text-muted-foreground">
+					How this system's proofs are filed. An imported corpus takes this from the
+					section headers its source draws; the number beside a folder is the proofs
+					it holds directly.
+				</p>
+				<OutlineTree folders={outline} open />
+			</SectionCard>
 		{/if}
 
 		<SystemParts {system} />

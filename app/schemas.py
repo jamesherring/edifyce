@@ -916,6 +916,31 @@ class SystemRelation(BaseModel):
     outstanding: list[str] = Field(default_factory=list)
 
 
+class Folder(BaseModel):
+    """One node of a system's folder tree, with everything under it.
+
+    An imported corpus fills this from the section headers its `.mm` file draws
+    (`####` part, `#*#*` section, `=-=-` subsection, `-.-.` subsubsection): the
+    depth *is* the nesting, so the level is not a field — it is where the node
+    sits. `description` is the prose a header carries after its title.
+
+    ``proofs`` counts what sits directly in this folder, not in the whole subtree:
+    a corpus's part-level node holds nothing itself and thousands beneath it, and
+    reporting the subtree total would make every ancestor look equally full.
+    """
+
+    id: uuid.UUID
+    name: str
+    slug: str
+    description: str | None = None
+    position: int
+    proofs: int = 0
+    children: list["Folder"] = Field(default_factory=list)
+
+
+Folder.model_rebuild()
+
+
 class ProofCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=256)
     # The system this proof is written against; must be owned by the caller.

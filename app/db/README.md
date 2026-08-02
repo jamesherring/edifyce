@@ -18,6 +18,8 @@ evolve it.
 | `app/db/systems_mapping.py` | `spec_to_system` / `system_to_spec` round trip between the declarative `SystemSpec` and the rows, and `effective_spec`, which layers an inheritance chain into one |
 | `app/db/descriptions.py` | What a system says about the labels it names: prose, titles, and authorship |
 | `app/db/descriptions_mapping.py` | Store/load a label's description and its `(Contributed by …)` clauses |
+| `app/db/outline_mapping.py` | A `.mm` file's section outline, stored as the folder tree it already is |
+| `app/db/slugs.py` | `slugify` / `unique_slug` — here rather than in a router, since an import needs them too |
 | `app/db/notations_mapping.py` | Store/load a system's named notations, and render a stored term through one from rows alone |
 | `app/db/side_conditions.py` | Definition provisos as the kernel side-condition algebra, stored as rows |
 | `app/db/side_conditions_mapping.py` | Parse/render a `where` proviso ↔ side-condition rows |
@@ -177,7 +179,16 @@ Modernised from the original Django app (`website/models.py` on `main`):
   and renders it back (the grammar mirrors the engine's `side_condition_syntax`,
   cross-checked by a test so the two can't drift).
 - **`proof_folders`** / **`proofs`** — the folder/proof tree, scoped to a system.
-  Ordering is a plain `position`; publishing is a `published_at` timestamp. (The
+  Ordering is a plain `position`; publishing is a `published_at` timestamp. A
+  Metamath import fills the folders from the **section outline** its file draws
+  with comments (`app/db/outline_mapping.py`): `####` part, `#*#*` section,
+  `=-=-` subsection, `-.-.` subsubsection, 1,903 of them on set.mm, nested by a
+  stack and each proof filed under the deepest section covering it. The tree
+  needed no new table — a per-system tree with a parent, a name and an ordering
+  is exactly what an outline is — only a `description`, for the prose 308 of
+  set.mm's headers carry after their title. A folder's `ON DELETE CASCADE` takes
+  its children; a proof's `folder_id` is `ON DELETE SET NULL`, so losing an
+  outline never costs a proof. (The
   old app modelled both through a separate `FolderEntry`/`OrderedModel`; this
   flattens that indirection.)
 - **`proof_references`** — the directed proof-to-proof dependency graph (an

@@ -616,6 +616,25 @@ export interface ProofStructure {
 	lines: ProofStructureLine[];
 }
 
+/** One node of a system's folder tree, with everything under it.
+ *
+ * An imported corpus fills this from the section headers its `.mm` file draws
+ * (`####` part, `#*#*` section, `=-=-` subsection, `-.-.` subsubsection): the
+ * depth *is* the nesting, so there is no level field — it is where the node sits.
+ * `description` is the prose a header carries after its title.
+ *
+ * `proofs` counts what sits directly in this folder, not in the whole subtree: a
+ * corpus's part-level node holds nothing itself and thousands beneath it. */
+export interface Folder {
+	id: string;
+	name: string;
+	slug: string;
+	description: string | null;
+	position: number;
+	proofs: number;
+	children: Folder[];
+}
+
 export interface ProofCreate {
 	name: string;
 	formal_system_id: string;
@@ -871,6 +890,10 @@ export const api = {
 				method: 'POST',
 				body: JSON.stringify({ proof_text: proofText })
 			}),
+		/** This system's folder tree, roots first — for an imported corpus, the
+		 * outline its `.mm` file draws with section headers. Whole, not a level at a
+		 * time: set.mm's is 1,903 nodes, one small response. */
+		folders: (id: string) => request<Folder[]>(`/formal-systems/${id}/folders`),
 		/** What this system records about one of the labels it names — a production,
 		 * a definition, a primitive theorem or a proof alike, since that is how it is
 		 * stored. 404s for a label it describes nothing about. */

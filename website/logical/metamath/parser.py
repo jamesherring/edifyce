@@ -36,6 +36,7 @@ parse time rather than rediscovered later.
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
@@ -123,6 +124,25 @@ class Assertion:
         return tuple(h for h in self.mandatory if h.floating)
 
 
+@dataclass(frozen=True)
+class Commentary:
+    """One ``$( … $)`` comment, and where in the file it sits.
+
+    ``at`` is an index into :attr:`Database.order`: how many assertions were
+    declared before this comment, and so the position of the first assertion it
+    precedes. A comment after the last assertion has ``at == len(order)``.
+
+    Metamath says what a comment is *about* by position and nothing else — the
+    description of a statement is the comment before it — so a reader that wants
+    to interpret a comment against the file's structure needs the position too.
+    :mod:`~.sections` is the one that does: a header comment marks where a section
+    begins, and "where" is exactly this.
+    """
+
+    body: str
+    at: int
+
+
 @dataclass
 class Database:
     """The parsed contents of a Metamath file."""
@@ -134,10 +154,11 @@ class Database:
     # Assertion labels in file order - the order an import must follow, since a
     # theorem may only cite what precedes it.
     order: list[str] = field(default_factory=list)
-    # Every `$( … $)` comment, in file order, including those attached to a
-    # statement. The unattached ones are what carry a file's front matter and its
-    # `$t` typesetting block (:mod:`~.typesetting`).
-    comments: list[str] = field(default_factory=list)
+    # Every `$( … $)` comment, in file order and with its position, including
+    # those attached to a statement. The unattached ones are what carry a file's
+    # front matter, its `$t` typesetting block (:mod:`~.typesetting`) and its
+    # section headers (:mod:`~.sections`).
+    commentary: list[Commentary] = field(default_factory=list)
     # Views derived from the fields above, built on first use. `parse` populates
     # a database and hands it over; nothing mutates one afterwards, so these stay
     # valid for its lifetime. They are cached because an import asks for them per
@@ -202,6 +223,16 @@ class Database:
             self._typed_from = first
         return self._typed_from
 
+    @property
+    def comments(self) -> list[str]:
+        """Every comment body, in file order — :attr:`commentary` without positions.
+
+        What a consumer that only wants to *read* comments wants, and most do:
+        the `$t` block is found by scanning bodies, and a statement's description
+        comes off the statement. Position matters only to :mod:`~.sections`.
+        """
+        return [entry.body for entry in self.commentary]
+
     def position(self, label: str) -> int:
         """Index of assertion ``label`` in file order."""
         if self._positions is None:
@@ -262,10 +293,14 @@ def parse(text: str) -> Database:
     """
     tokens, comments = _tokenise(text)
     database = Database()
-    database.comments = [body for _index, body in comments]
     # The comment a statement is documented by is the nearest one before it, so a
     # later comment at the same token index wins.
     preceding = {index: body for index, body in comments}
+    # The token index each assertion's label sits at, parallel to `order`. Kept so
+    # a comment can be placed among the assertions once both are read (see the
+    # `commentary` assembly at the end): both lists come out sorted by token
+    # index, so the placement is a merge rather than a search.
+    label_indices: list[int] = []
     scopes: list[_Scope] = [_Scope()]
     position = 0
 
@@ -350,6 +385,7 @@ def parse(text: str) -> Database:
                 comment=preceding.get(label_index),
             )
             database.order.append(label)
+            label_indices.append(label_index)
             continue
 
         raise MetamathError(f"{label}: unknown statement keyword {keyword!r}.")
@@ -357,6 +393,10 @@ def parse(text: str) -> Database:
     if len(scopes) != 1:
         raise MetamathError("Unbalanced ${ (scope left open at end of file).")
 
+    database.commentary = [
+        Commentary(body=body, at=bisect_left(label_indices, token_index))
+        for token_index, body in comments
+    ]
     return database
 
 
