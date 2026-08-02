@@ -8,8 +8,14 @@ module reads it.
 Two things come out. The **description** is prose, and is left close to verbatim:
 Metamath comments carry their own light markup (``~ label`` cross-references,
 `` ` math ` `` spans, ``[Author]`` bibliography keys) which a renderer will want
-and a reader should not destroy. Only whitespace is normalised, because a comment
-is hard-wrapped in the file and the wrapping is not content.
+and a reader should not destroy.
+
+Whitespace is normalised, because a comment is hard-wrapped in the file and the
+wrapping is not content - but a **blank line is**, being how a comment marks a
+paragraph. 470 of `set.mm`'s assertion comments have one, `df-sb`'s among them, and
+flattening those turns a structured explanation into a run-on blob with the breaks
+unrecoverable. So paragraphs survive as ``\n\n`` and only the wrapping inside them
+goes.
 
 The **attributions** are the `(Contributed by …)` clauses. `set.mm` carries 60,826
 of them across 55,742 comments, and they are the file's authorship record.
@@ -49,6 +55,9 @@ _ATTRIBUTION = re.compile(
     r"\((?P<kind>[A-Z][A-Za-z ]*?) by (?P<who>[^,()]+?), (?P<when>[^()]*?-[^()]*?)\.?\)"
 )
 
+# A blank line, which is a paragraph break rather than wrapping.
+_PARAGRAPH = re.compile(r"\n[ \t]*\n")
+
 
 @dataclass(frozen=True)
 class Attribution:
@@ -83,10 +92,17 @@ class Description:
 
 def read_comment(raw: str) -> Description:
     """Split a raw ``$( … $)`` body into its prose and its attributions."""
-    normalised = " ".join(raw.split())
-    attributions = tuple(
-        Attribution(kind=m["kind"], who=m["who"], when=m["when"])
-        for m in _ATTRIBUTION.finditer(normalised)
-    )
-    text = " ".join(_ATTRIBUTION.sub(" ", normalised).split())
-    return Description(text=text, attributions=attributions)
+    attributions: list[Attribution] = []
+    paragraphs: list[str] = []
+    for part in _PARAGRAPH.split(raw):
+        # Unwrap first: an attribution is hard-wrapped like everything else, and
+        # 20,875 of set.mm's are split across a line break mid-clause.
+        flat = " ".join(part.split())
+        attributions.extend(
+            Attribution(kind=m["kind"], who=m["who"], when=m["when"])
+            for m in _ATTRIBUTION.finditer(flat)
+        )
+        prose = " ".join(_ATTRIBUTION.sub(" ", flat).split())
+        if prose:
+            paragraphs.append(prose)
+    return Description(text="\n\n".join(paragraphs), attributions=tuple(attributions))

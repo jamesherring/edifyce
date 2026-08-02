@@ -108,6 +108,31 @@ def test_prose_that_reads_like_an_attribution_is_not_one() -> None:
     assert "This can be seen by" in description.text
 
 
+def test_a_blank_line_is_a_paragraph_break_and_survives() -> None:
+    # Hard wrapping is not content and goes; a blank line *is* content, being how a
+    # Metamath comment marks a paragraph. 470 of set.mm's assertion comments have
+    # one — `df-sb`'s explanation is nine paragraphs — and flattening them leaves a
+    # run-on blob with the structure unrecoverable.
+    description = read_comment(
+        """ First paragraph, which the file
+            wraps across lines.
+
+            Second paragraph.
+            (Contributed by NM, 5-Aug-1993.) """
+    )
+
+    assert description.text == (
+        "First paragraph, which the file wraps across lines.\n\nSecond paragraph."
+    )
+    assert description.contributors == ("NM",)
+
+
+def test_a_paragraph_that_is_only_an_attribution_leaves_no_empty_gap() -> None:
+    description = read_comment("The prose.\n\n(Contributed by NM, 5-Aug-1993.)")
+
+    assert description.text == "The prose."
+
+
 def test_a_comment_with_no_attribution_is_all_prose() -> None:
     description = read_comment("  Just   prose,\n   hard-wrapped.  ")
 
