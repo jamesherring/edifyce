@@ -80,6 +80,34 @@ def balanced(depth, connective="→", atom="p"):
     return f"({half} {connective} {half})"
 
 
+def sequent_context() -> tuple[StringPattern, UnionPattern]:
+    """``Γ ⊢ φ`` over a **left-nested** context list, as S1's system declares it.
+
+    ``context ::= ∅ | wff | context , wff`` — recursive on the left, so the sort
+    re-enters itself at every comma. Returns the line and the context sort.
+    """
+    formula = propositional()
+
+    context = UnionPattern(name="context", patterns=[], respect_brackets=BRACKETS)
+    cons = StringPattern(name="cons", pattern="g , a", respect_brackets=BRACKETS)
+    cons.add_variables({"g": context, "a": formula})
+    context.add_pattern(AtomPattern(name="empty", value="∅"))
+    context.add_pattern(formula)
+    context.add_pattern(cons)
+
+    line = StringPattern(name="sequent", pattern="g ⊢ p", respect_brackets=BRACKETS)
+    line.add_variables({"g": context, "p": formula})
+    return line, context
+
+
+def assumptions_text(count: int, atom: str = "p") -> str:
+    """``∅ , p , p , …`` — a context of ``count`` assumptions."""
+    text = "∅"
+    for _ in range(count):
+        text = f"{text} , {atom}"
+    return text
+
+
 @pytest.fixture
 def context():
     return Context()
@@ -452,3 +480,37 @@ def test_many_metavariables_do_not_change_what_parses(context):
     assert template.match("(m7 → m199)", crowded) is not None
     assert template.match("((p → q) → m0)", crowded) is not None
     assert template.match("(m200 → p)", crowded) is None
+
+
+@pytest.mark.parametrize("assumptions", [4, 8, 12, 16])
+def test_a_left_nested_context_costs_one_parse_per_assumption(
+    assumptions: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # S1's grammar, and the property that makes it usable at all. A sequent's
+    # context is `∅ | wff | context , wff` — recursive on the *left*, so every
+    # comma in the string is a candidate split and the sort re-enters itself at
+    # each one. The roadmap made an AC matcher (S4) conditional on measuring
+    # this, because a left-nested list is the shape this layer is slowest on.
+    #
+    # Measured: with the memo a context of *n* assumptions costs ~n parses; a
+    # timing run without one goes 41 µs → 2.5 ms → 0.7 s → 4.8 min at 2, 8, 16
+    # and 24 assumptions, which is ×4 per two assumptions. So the memo is not an
+    # optimisation here, it is what makes the grammar viable — and
+    # `LineType.parse_line` gives every proof line a fresh one, which is why a
+    # real proof gets the linear column.
+    #
+    # Counted rather than timed, as the nesting case above is: a count says
+    # which property regressed and holds on a loaded machine.
+    line, _ = sequent_context()
+    text = f"{assumptions_text(assumptions)} ⊢ p"
+
+    context = Context()
+    context.parse_memo = {}
+
+    counted = count_parses(monkeypatch)
+
+    assert line.match(text, context) is not None
+
+    # Two sorts per assumption and a little slack — what matters is that it does
+    # not scale with the *number of ways* the commas could be cut up.
+    assert counted["n"] <= 2 * assumptions + 8

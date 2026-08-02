@@ -41,6 +41,13 @@ Each one isolates a cost that behaves differently as something grows:
   not separated at all. Both maximise the number of candidate splits.
 - **`sequent-N`** — a line type over formulas, so the split search runs over
   whole formulas rather than over atoms.
+- **`sequent-context-N`** — the sequent grammar Track S actually declares
+  (`tests/sequent_system.py`), whose antecedent is a **left-recursive list**:
+  `context ::= ∅ | wff | context , wff`, so the sort re-enters itself at every
+  comma and each one is a candidate split. The `-nomemo` pair is the point of
+  the family — memoised the read is linear in the assumptions, and without it
+  exponential, which is why `LineType.parse_line` installing a fresh memo per
+  line is load-bearing rather than tidy.
 - **`metavars-N`** — a rule schema's metavariables, consulted at every position
   the search considers a slot. Answers "does declaring more of them cost?"
 - **`reject-*`** — failure. A rejection is generally dearer than an acceptance,

@@ -174,6 +174,20 @@ def _sequent(depth: int) -> Scenario:
     return Scenario(name=f"sequent-{depth}", setup=setup, iterations=50, tags=("sequent",))
 
 
+def _sequent_context(assumptions: int, memo: bool = True) -> Scenario:
+    def setup():
+        line, _ = grammars.sequent_context()
+        return line, f"{grammars.assumptions(assumptions)} ⊢ p", _context()
+
+    return Scenario(
+        name=f"sequent-context-{assumptions}" + ("" if memo else "-nomemo"),
+        setup=setup,
+        iterations=20 if memo else 5,
+        memo=memo,
+        tags=("sequent",),
+    )
+
+
 def _metavariables(count: int) -> Scenario:
     def setup():
         formula = grammars.propositional()
@@ -226,6 +240,21 @@ SCENARIOS: list[Scenario] = [
     # A line whose one literal occurs many times in the string being read.
     _sequent(4),
     _sequent(8),
+    # And the *context* grammar S1 declares: a left-nested list, where every
+    # comma is a candidate split. What S3 decides against (roadmap §6.2).
+    _sequent_context(2),
+    _sequent_context(4),
+    _sequent_context(6),
+    _sequent_context(8),
+    # The same reads without the memo, which is the column S3's conclusion rests
+    # on: the left-recursive sort re-reads its prefix once per candidate split,
+    # so this is exponential where the one above is linear. Stopped at 16, which
+    # is already ~0.7 s — 20 assumptions is 18 s and 24 is minutes, and a
+    # scenario that has to be declared with a budget to be survivable is better
+    # stated in the roadmap's table than run on every `--compare`.
+    _sequent_context(8, memo=False),
+    _sequent_context(12, memo=False),
+    _sequent_context(16, memo=False),
     # The one shape where a constant spelled with a bracket has to be stepped
     # over; every other scenario leaves that path idle.
     _opaque("plain", "( A B RR )"),
