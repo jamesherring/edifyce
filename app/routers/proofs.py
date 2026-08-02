@@ -36,6 +36,7 @@ that would break it is rejected.
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections import defaultdict
 from copy import copy
@@ -77,6 +78,7 @@ from app.db import (
 )
 from app.db.models import User
 from app.db.promoted_theorems import PromotedTheoremRow
+from app.db.systems import RuleRow
 from app.routers._common import (
     PageParams,
     lock_system,
@@ -101,6 +103,8 @@ from app.schemas import (
     ProofUpdate,
     PromotedTheoremOut,
     SystemOwner,
+    THEOREM_LABEL_MAX,
+    THEOREM_LABEL_PATTERN,
     TermSummary,
     VerifyProofResponse,
 )
@@ -684,8 +688,26 @@ async def _invalidate_dependents(
     verify in flight is reading exactly these rows.
     """
     await lock_system(session, system_id)
-    dependents: set[uuid.UUID] = set()
-    frontier = [proof_id]
+    dependents = await _dependent_closure(session, [proof_id])
+    if dependents:
+        await _clear_verdicts(session, dependents)
+
+
+async def _dependent_closure(
+    session: AsyncSession, proof_ids: Sequence[uuid.UUID]
+) -> list[uuid.UUID]:
+    """Every proof that transitively references one of ``proof_ids``, excluding
+    the roots themselves.
+
+    Shared by the two things that invalidate: a lemma changing under its
+    dependents, and a library entry being withdrawn from under the proofs that
+    cited it. The second reaches here because a citer is itself citable — a
+    proof that rests on the citer would otherwise keep a verdict that rests, one
+    hop further back, on a theorem that is gone.
+    """
+    roots = set(proof_ids)
+    reached: set[uuid.UUID] = set()
+    frontier = list(proof_ids)
     while frontier:
         rows = (
             await session.scalars(
@@ -694,14 +716,26 @@ async def _invalidate_dependents(
                 )
             )
         ).all()
-        frontier = [pid for pid in rows if pid not in dependents]
-        dependents.update(frontier)
-    if dependents:
-        ids = list(dependents)
-        await session.execute(
-            sa_update(Proof).where(Proof.id.in_(ids)).values(valid=None, result=None)
-        )
-        await session.run_sync(lambda sync: clear_proof_lines(sync, ids))
+        frontier = [pid for pid in rows if pid not in reached]
+        reached.update(frontier)
+    return [pid for pid in reached if pid not in roots]
+
+
+async def _clear_verdicts(
+    session: AsyncSession, proof_ids: Sequence[uuid.UUID]
+) -> None:
+    """Drop the cached verdict and the stored structure of each proof.
+
+    The pair is one artefact of one check (`_discard_check`), so they go
+    together wherever a check stops meaning anything.
+    """
+    ids = list(proof_ids)
+    if not ids:
+        return
+    await session.execute(
+        sa_update(Proof).where(Proof.id.in_(ids)).values(valid=None, result=None)
+    )
+    await session.run_sync(lambda sync: clear_proof_lines(sync, ids))
 
 
 async def _has_published_dependents(session: AsyncSession, proof_id: uuid.UUID) -> bool:
@@ -787,11 +821,16 @@ async def _citing_systems(
     resolves against a system's own library and then its ancestors' (`R2`), so a
     descendant's proof can rest on an entry stored here.
 
-    The walk stops at a system that declares ``label`` **itself**: its own entry
-    is nearer, so `LibraryChain` resolves the label there and neither it nor
-    anything below it was ever citing ours. Following the same shadowing rule the
-    resolver does is what keeps this from invalidating proofs that never depended
-    on the entry being retired.
+    The walk stops at a system that claims ``label`` **itself**: what it declares
+    is nearer, so neither it nor anything below it was ever reaching ours.
+    Following the resolver's own shadowing rule is what keeps this from
+    invalidating proofs that never depended on the entry in question.
+
+    Claiming it means *either* a library entry of that label or an **inference
+    rule** of it — `Proof.get_reference` tries `rule_by_label` before the
+    library, so a descendant's rule shadows an ancestor's theorem just as
+    thoroughly as a nearer theorem would. Missing that half is the difference
+    between invalidating a subtree and invalidating the right one.
     """
     reached = [system_id]
     frontier = [system_id]
@@ -812,6 +851,12 @@ async def _citing_systems(
                     PromotedTheoremRow.label == label,
                 )
             )
+        ) | set(
+            await session.scalars(
+                select(RuleRow.system_id).where(
+                    RuleRow.system_id.in_(children), RuleRow.label == label
+                )
+            )
         )
         frontier = [
             child
@@ -825,17 +870,25 @@ async def _citing_systems(
 async def _invalidate_citations(
     session: AsyncSession, system_id: uuid.UUID, label: str
 ) -> None:
-    """Invalidate every proof that cited the entry ``label`` names, so retiring it
-    cannot leave a standing verdict resting on a theorem that is gone.
+    """Invalidate every proof whose verdict rests on what ``label`` resolved to
+    in ``system_id``, so changing what it names cannot leave a standing verdict
+    behind it.
+
+    Both directions need this, and for one reason. **Retiring** an entry makes
+    the label resolve to nothing; **promoting** one makes it resolve to something
+    nearer than it did. Either way a proof that already verified against the old
+    answer is now recording a check nobody would reach today.
 
     Which proofs cited it is a question the stored structure answers: a citation
     of a promoted theorem resolves to an ephemeral rule carrying the theorem's
     label, and `proof_lines.rule` records the rule that justified each line. So
-    this reads the rows rather than re-parsing any source.
+    this reads the rows rather than re-parsing any source — and then follows the
+    reference graph out from them, because a citer is itself citable and a proof
+    resting on one rests on the entry at one remove.
 
     Takes the system lock for each system it touches, in id order. Every other
     caller locks exactly one system and so has no ordering to get wrong; this is
-    the first that spans a chain, and a fixed order is what keeps two retirements
+    the first that spans a chain, and a fixed order is what keeps two of these
     over overlapping towers from deadlocking.
     """
     systems = await _citing_systems(session, system_id, label)
@@ -855,10 +908,31 @@ async def _invalidate_citations(
     )
     if not citing:
         return
-    await session.execute(
-        sa_update(Proof).where(Proof.id.in_(citing)).values(valid=None, result=None)
+    # A dependent lives in the same system as the proof it cites, and that system
+    # is one of the ones just locked — so the closure needs no further locking.
+    await _clear_verdicts(session, citing + await _dependent_closure(session, citing))
+
+
+def _label_from_slug(proof: Proof) -> str:
+    """The default promotion label: the proof's slug, if it can be a label.
+
+    A slug is not a label. `slugify` produces anything URL-safe — a leading
+    digit, up to the 256 characters a name may run to — while a label has to be
+    citable (`[label]`, which is why `ProofPromotionRequest` constrains an
+    explicit one to `_ALIAS_PATTERN`) and has to fit a `String(128)` column.
+    Validated rather than trusted: unchecked, the two ways a slug can fail are a
+    citation that never parses and, on Postgres, a string-truncation 500.
+    """
+    slug = proof.slug
+    if len(slug) <= THEOREM_LABEL_MAX and re.match(THEOREM_LABEL_PATTERN, slug):
+        return slug
+    raise HTTPException(
+        status.HTTP_400_BAD_REQUEST,
+        f"This proof's slug {slug!r} cannot be a theorem label — a label is "
+        "cited as `[label]`, so it must start with a letter, use only letters, "
+        f"digits, `-` and `_`, and be at most {THEOREM_LABEL_MAX} characters. "
+        "Pass one.",
     )
-    await session.run_sync(lambda sync: clear_proof_lines(sync, citing))
 
 
 async def _retire_promotion(session: AsyncSession, proof: Proof) -> None:
@@ -1252,6 +1326,11 @@ async def set_proof_references(
     # dependent's are stale.
     await _discard_check(session, proof)
     await _invalidate_dependents(session, proof.id, proof.formal_system_id)
+    # Including anything this proof established: what it proves depends on the
+    # lemmas it may cite, so dropping a reference can leave a promoted entry
+    # standing behind a proof that no longer verifies. Same rule as a source
+    # edit — the reference set is as much a part of the proof as its text.
+    await _retire_promotion(session, proof)
     await session.commit()
     return _detail(await _get_owned_or_404(session, proof_id, user.id), user)
 
@@ -1310,7 +1389,7 @@ async def promote_proof(
             ],
         )
 
-    label = payload.label or proof.slug
+    label = payload.label or _label_from_slug(proof)
     # Reused rather than re-derived: the verify above resolved the chain and
     # built it, and doing either again is the duplicate work R2's review
     # measured. Both are non-null exactly when `engine_proof` is.
@@ -1358,6 +1437,12 @@ async def promote_proof(
     await _retire_promotion(session, proof)
 
     system_id = system.id
+    # And whatever cited this *label*, which is not the same set: shadowing is
+    # legal (R2 resolves nearest-first), so promoting a label an ancestor already
+    # carries is allowed — and silently changes what every proof here and below
+    # was citing. A verdict recorded against the ancestor's entry has to go for
+    # the same reason a retirement's does.
+    await _invalidate_citations(session, system_id, label)
     digest = theorem_digest(effective.library.digest(system_id), spec)
     symbols = {symbol.name: symbol for symbol in system.symbols}
     position = await session.scalar(

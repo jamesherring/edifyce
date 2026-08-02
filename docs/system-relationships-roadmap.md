@@ -806,6 +806,12 @@ Two guards are exercised where they live rather than through the route.
 carried by the line, the row and the loader, and nothing sets it — so the warning
 rejection is an engine test plus a forced test of the route's wiring, and says so.
 
+The review round added five, four of them about the same thing: what invalidation
+has to mirror in the resolver, and what it must not over-reach (§9.15). The one
+that most nearly passed anyway is the rule-shadowing case — the first test of it
+had the citing lines resolving to a *different* label, so it agreed with a walk
+that had no shadow check at all.
+
 #### R3a — schematic promotion
 
 **Delivers** `⊢ (φ → φ)` proved once and cited at every instance.
@@ -1169,6 +1175,37 @@ constraint on the phases after it rather than a closed question.
     is gone rather than tombstoned: nothing records that a label used to resolve,
     so a proof invalidated this way reports an unresolved citation and not the
     reason. Recoverable from `proof_lines.rule` if it is ever worth saying.
+
+    Review sharpened this into a general statement, which is the form to keep:
+    **what a label resolves to changing at all is the event**, and retirement is
+    only one way it changes. *Promoting* one an ancestor already carries is
+    another — shadowing is legal, R2 resolves nearest-first, so refusing it would
+    contradict that — and it silently redirects every citation at or below the
+    promoting layer. So promotion invalidates the label's citers too, on exactly
+    the same call.
+
+    Three details the first cut got wrong, each worth recording because each is a
+    place the *resolver's* behaviour has to be mirrored rather than approximated:
+
+    - **Shadowing includes rules.** `Proof.get_reference` tries `rule_by_label`
+      before the library, so a descendant declaring an inference rule of that
+      name shadows an ancestor's theorem as thoroughly as a nearer theorem does.
+      A walk that looked only for theorems wiped that subtree's verdicts for an
+      entry it never reached.
+    - **A citer is itself citable.** Clearing the direct citers is half the
+      mechanism: a proof resting on a citer rests on the entry one hop back, and
+      a verify trusts a lemma's stored rows. The invalidation follows the
+      reference graph out from the citers.
+    - **The reference set is part of the proof.** Dropping a lemma reference can
+      leave a promoted entry standing behind a proof that no longer verifies, so
+      it retires on the same rule a source edit does.
+
+    And one that is not about resolution at all: the default label is the proof's
+    *slug*, which is not a label. `slugify` produces anything URL-safe — a leading
+    digit, up to the 256 characters a name may run to — while a label must be
+    citable as `[label]` and must fit `String(128)`. Derived defaults get the same
+    validation an explicit label does, or the two failure modes are a citation
+    that never parses and a Postgres truncation 500.
 
 ---
 

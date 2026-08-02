@@ -537,6 +537,14 @@ class ReorderRequest(BaseModel):
 # spaces, which the proof-line citation grammar uses as delimiters.
 _ALIAS_PATTERN = r"^[A-Za-z][A-Za-z0-9_-]*$"
 
+# A promoted theorem's label is cited the same way (`[label]`), so it takes the
+# same shape, bounded by what `promoted_theorems.label` stores. Public because
+# the promote route derives a *default* label from the proof's slug and has to
+# hold it to exactly this rule — a slug is URL-safe, which is a wider alphabet
+# and a longer one.
+THEOREM_LABEL_PATTERN = _ALIAS_PATTERN
+THEOREM_LABEL_MAX = 128
+
 
 class ProofReferenceInput(BaseModel):
     """One outgoing reference edge, as submitted: the lemma proof plus the alias
@@ -585,7 +593,9 @@ class ProofPromotionRequest(BaseModel):
     splits on the same delimiters. Omitted, the proof's slug is used.
     """
 
-    label: str | None = Field(None, min_length=1, max_length=128, pattern=_ALIAS_PATTERN)
+    label: str | None = Field(
+        None, min_length=1, max_length=THEOREM_LABEL_MAX, pattern=THEOREM_LABEL_PATTERN
+    )
 
 
 class PromotedTheoremOut(BaseModel):

@@ -40,8 +40,14 @@ from app.db.proof_lines import ProofLineRow
 from app.db.session import get_session
 from app.main import app
 from tests.database import async_url, create_tables, database_url, enable_foreign_keys
+from tests.layered_systems import (
+    first_order_logic_spec,
+    propositional_calculus_spec,
+    zfc_spec,
+)
+from tests.spec_helpers import rule
 from tests.test_proofs_api import _TABLES
-from tests.test_system_inheritance import seed_tower
+from tests.test_system_inheritance import seed, seed_tower
 from tests.test_systems_api import _register_login
 
 
@@ -416,6 +422,40 @@ def test_a_label_an_import_already_carries_is_refused(db, client):
     assert status == 409, body
 
 
+def test_the_default_label_is_the_slug_when_the_slug_can_be_one(db, client):
+    pc, _fol, _zfc = tower(db, client, "default-label@example.com")
+    proof = make_proof(client, pc, IDENTITY_PROOF, name="Identity Law")
+    publish(client, proof)
+
+    status, entry = promote(client, proof)
+    assert status == 201, entry
+    assert entry["label"] == "identity-law"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        # `slugify` keeps a leading digit; a label must start with a letter, or
+        # the citation grammar never reads it as one.
+        "2 plus 2",
+        # And a slug may run to the 256 characters a name may, while
+        # `promoted_theorems.label` is `String(128)` — on Postgres that is a
+        # truncation error, which is a 500 rather than an answer.
+        "l" + "o" * 200 + "ng",
+    ],
+)
+def test_a_slug_that_cannot_be_a_label_asks_for_one(db, client, name):
+    pc, _fol, _zfc = tower(db, client, f"badslug-{abs(hash(name))}@example.com")
+    proof = make_proof(client, pc, IDENTITY_PROOF, name=name)
+    publish(client, proof)
+
+    status, body = promote(client, proof)
+    assert status == 400, body
+    assert "label" in str(body).lower()
+    # An explicit label is still fine — the slug is a default, not a constraint.
+    assert promote(client, proof, "id")[0] == 201
+
+
 def test_a_proof_in_someone_elses_system_is_not_promotable(db, client):
     # 404 rather than 403, as everywhere else in this router: another owner's
     # proof id must not be confirmable.
@@ -519,6 +559,67 @@ def test_retiring_invalidates_the_verdicts_that_rested_on_the_entry(db, client):
         engine.dispose()
 
 
+def test_retiring_reaches_a_proof_that_cited_the_citer(db, client):
+    # One hop further out, and the reason §9.15 gives for doing this at all: a
+    # verify trusts a lemma's stored rows rather than re-checking it, so a proof
+    # resting on a citer rests on the entry at one remove. Clearing only the
+    # direct citer leaves exactly the stale verdict the mechanism exists to
+    # prevent.
+    pc, _fol, zfc = tower(db, client, "transitive@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id")[0] == 201
+
+    lemma = make_proof(client, zfc, "(P → P) [id]")
+    # The lemma's line 1 feeds modus ponens here, so `downstream` rests on it —
+    # and through it on the promoted entry.
+    downstream = make_proof(
+        client,
+        zfc,
+        "((P → P) → (x = y → (P → P))) [ax-1]\n"
+        "(x = y → (P → P)) [MP, lem.1, 1]",
+    )
+    assert client.put(
+        f"/api/proofs/{downstream}/references",
+        json={"references": [{"referenced_proof_id": lemma, "alias": "lem"}]},
+    ).status_code == 200
+    assert verify(client, lemma)["success"] is True
+    assert verify(client, downstream)["success"] is True
+
+    assert client.delete(f"/api/proofs/{proof}/promote").status_code == 204
+
+    assert client.get(f"/api/proofs/{lemma}").json()["valid"] is None
+    assert client.get(f"/api/proofs/{downstream}").json()["valid"] is None
+
+
+def test_a_descendants_rule_of_the_same_label_shadows_and_survives(db, client):
+    # The other half of shadowing, and the one easy to miss: `get_reference`
+    # tries `rule_by_label` *before* the library, so a descendant declaring an
+    # inference rule named `id` shadows an ancestor's theorem of that name just
+    # as a nearer theorem would. A walk that only looked for theorems would wipe
+    # that subtree's verdicts for an entry it never reached.
+    owner = _register_login(client, "rule-shadow@example.com")
+    pc = seed(db, propositional_calculus_spec(), owner, None, published=True)
+    fol = seed(db, first_order_logic_spec(), owner, pc, published=True)
+    top = zfc_spec()
+    # ZFC's *own* `id`, as a rule rather than a theorem — declared here, so it is
+    # this layer's row that the walk has to notice.
+    top.rules.append(rule("id", "identity", [], "(P → P)", [("P", "formula")]))
+    zfc = seed(db, top, owner, fol, published=True)
+
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id")[0] == 201
+
+    # Justified by ZFC's rule, never by PC's entry — `rule` on the stored line
+    # says `id` either way, which is why the walk and not the query has to tell
+    # them apart.
+    citing = make_proof(client, zfc, "(P → P) [id]")
+    assert verify(client, citing)["success"] is True
+
+    assert client.delete(f"/api/proofs/{proof}/promote").status_code == 204
+
+    assert client.get(f"/api/proofs/{citing}").json()["valid"] is True
+
+
 def test_retiring_leaves_a_proof_that_never_cited_the_entry_alone(db, client):
     # The other half: a sweep that invalidated every proof in the tower would
     # pass the test above for the wrong reason. A ZFC proof citing nothing keeps
@@ -554,6 +655,56 @@ def test_a_descendants_own_entry_of_the_same_label_shadows_and_survives(db, clie
 
     assert client.get(f"/api/proofs/{citing}").json()["valid"] is True
     assert check_in(client, zfc, "(P → P) [id]")["success"] is True
+
+
+def test_changing_the_proofs_references_retires_the_entry(db, client):
+    # What a proof establishes depends on the lemmas it may cite, so dropping a
+    # reference can leave the entry standing behind a proof that no longer
+    # verifies — the same hazard as a source edit, by a different route.
+    pc, _fol, _zfc = tower(db, client, "refs@example.com")
+    lemma = proved_and_published(client, pc, "(P → (P → P)) [ax-1]")
+    citer = make_proof(
+        client,
+        pc,
+        "((P → (P → P)) → (Q → (P → (P → P)))) [ax-1]\n"
+        "(Q → (P → (P → P))) [MP, lem.1, 1]",
+    )
+    assert client.put(
+        f"/api/proofs/{citer}/references",
+        json={"references": [{"referenced_proof_id": lemma, "alias": "lem"}]},
+    ).status_code == 200
+    publish(client, citer)
+    assert promote(client, citer, "cited")[0] == 201
+
+    emptied = client.put(f"/api/proofs/{citer}/references", json={"references": []})
+    assert emptied.status_code == 200, emptied.text
+    assert emptied.json()["theorem"] is None
+
+    # And the proof really has stopped standing, so the entry would have been
+    # asserting something nothing here proves.
+    assert verify(client, citer)["success"] is False
+
+
+def test_promoting_a_label_an_ancestor_carries_invalidates_what_cited_it(db, client):
+    # Shadowing is legal — R2 resolves nearest-first, and refusing this would
+    # contradict that — but it silently changes what every proof at or below the
+    # promoting layer was citing. A verdict recorded against the ancestor's entry
+    # has to go for the same reason a retirement's does.
+    pc, _fol, zfc = tower(db, client, "shadow-promote@example.com")
+    lower = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, lower, "id")[0] == 201
+
+    citing = make_proof(client, zfc, "(P → P) [id]")
+    assert verify(client, citing)["success"] is True
+
+    # ZFC promotes its own `id`, concluding something else entirely.
+    nearer = proved_and_published(client, zfc, PARTIAL_PROOF)
+    assert promote(client, nearer, "id")[0] == 201
+
+    assert client.get(f"/api/proofs/{citing}").json()["valid"] is None
+    # And on re-verification the citation now means the nearer entry, which does
+    # not justify this line.
+    assert verify(client, citing)["success"] is False
 
 
 def test_retiring_a_proof_that_promoted_nothing_is_a_no_op(db, client):
