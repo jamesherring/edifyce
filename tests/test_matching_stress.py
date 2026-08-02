@@ -80,7 +80,7 @@ def balanced(depth, connective="→", atom="p"):
     return f"({half} {connective} {half})"
 
 
-def sequent_context():
+def sequent_context() -> tuple[StringPattern, UnionPattern]:
     """``Γ ⊢ φ`` over a **left-nested** context list, as S1's system declares it.
 
     ``context ::= ∅ | wff | context , wff`` — recursive on the left, so the sort
@@ -100,7 +100,7 @@ def sequent_context():
     return line, context
 
 
-def assumptions_text(count, atom="p"):
+def assumptions_text(count: int, atom: str = "p") -> str:
     """``∅ , p , p , …`` — a context of ``count`` assumptions."""
     text = "∅"
     for _ in range(count):
@@ -483,7 +483,9 @@ def test_many_metavariables_do_not_change_what_parses(context):
 
 
 @pytest.mark.parametrize("assumptions", [4, 8, 12, 16])
-def test_a_left_nested_context_costs_one_parse_per_assumption(assumptions, monkeypatch):
+def test_a_left_nested_context_costs_one_parse_per_assumption(
+    assumptions: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # S1's grammar, and the property that makes it usable at all. A sequent's
     # context is `∅ | wff | context , wff` — recursive on the *left*, so every
     # comma in the string is a candidate split and the sort re-enters itself at

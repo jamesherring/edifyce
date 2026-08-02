@@ -33,6 +33,7 @@ below, which is the discipline that would have caught this one.
 from __future__ import annotations
 
 from copy import copy
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -45,20 +46,24 @@ from website.logical.matching import UnionPattern
 
 from tests.sequent_system import sequent_spec
 
+if TYPE_CHECKING:
+    from website.logical.formal_system import FormalSystem
+    from website.logical.kernel.terms import Term
+
 
 @pytest.fixture(scope="module")
-def system():
+def system() -> FormalSystem:
     built = build_spec(sequent_spec())
     assert "errors" not in built, built["errors"]
     return built["system"]
 
 
-def stands(system, source: str) -> bool:
+def stands(system: FormalSystem, source: str) -> bool:
     """Whether ``source`` checks, as a whole proof."""
     return bool(system.parse(source).valid)
 
 
-def why(system, source: str) -> str:
+def why(system: FormalSystem, source: str) -> str:
     """Every reason a line of ``source`` did not check, for a refusal's message."""
     proof = system.parse(source)
     return " | ".join(
@@ -68,7 +73,7 @@ def why(system, source: str) -> str:
     )
 
 
-def test_the_system_is_the_one_these_tests_assume(system):
+def test_the_system_is_the_one_these_tests_assume(system: FormalSystem) -> None:
     # A guard on the fixture rather than on the code: every refusal below would
     # pass just as well against a system that declared none of these rules, or
     # whose grammar could not state a sequent at all.
@@ -84,7 +89,7 @@ def test_the_system_is_the_one_these_tests_assume(system):
 # ---------------------------------------------------------------------------
 
 
-def test_the_identity_yields_an_implication(system):
+def test_the_identity_yields_an_implication(system: FormalSystem) -> None:
     # `⊢ (A → A)` from identity and →R — the smallest thing a sequent calculus
     # has to be able to do, and the one Edifyce could not state before, because
     # a natural-deduction assumption context is a property of the *proof* and
@@ -92,7 +97,7 @@ def test_the_identity_yields_an_implication(system):
     assert stands(system, "∅ , A ⊢ A [id]\n∅ ⊢ (A → A) [→R, 1]")
 
 
-def test_the_deduction_theorem_on_a_three_assumption_context(system):
+def test_the_deduction_theorem_on_a_three_assumption_context(system: FormalSystem) -> None:
     # →R with a context under it: `Γ, A ⊢ B` gives `Γ ⊢ (A → B)` for a Γ that is
     # itself two assumptions. Nothing about the rule mentions how long Γ is —
     # it is one metavariable, and unification splits the rightmost assumption off
@@ -100,7 +105,7 @@ def test_the_deduction_theorem_on_a_three_assumption_context(system):
     assert stands(system, "P , Q , R ⊢ R [id]\nP , Q ⊢ (R → R) [→R, 1]")
 
 
-def test_the_converse_direction(system):
+def test_the_converse_direction(system: FormalSystem) -> None:
     # The other way: from `Γ ⊢ (A → B)` to `Γ, A ⊢ B`, which is modus ponens
     # written as a sequent. Derived rather than declared — →L and exchange are
     # what it takes, and that it *is* derivable is why the calculus needs no rule
@@ -119,7 +124,7 @@ def test_the_converse_direction(system):
 # ---------------------------------------------------------------------------
 
 
-def test_weakening_and_exchange(system):
+def test_weakening_and_exchange(system: FormalSystem) -> None:
     # A list is not a set, so an assumption arrives at the right-hand end and
     # has to be walked to where a rule wants it. Both cited by hand, which is
     # honest sequent calculus and is what S3 measures the cost of.
@@ -131,7 +136,7 @@ def test_weakening_and_exchange(system):
     )
 
 
-def test_contraction(system):
+def test_contraction(system: FormalSystem) -> None:
     assert stands(
         system,
         "∅ , A ⊢ A [id]\n"
@@ -140,7 +145,7 @@ def test_contraction(system):
     )
 
 
-def test_cut(system):
+def test_cut(system: FormalSystem) -> None:
     # `⊢ (B → a = a)` through a cut on `a = a`. The same sequent has a cut-free
     # derivation — weaken `refl` and apply →R — which is Gentzen's theorem
     # rather than a defect of the fixture; both are written here because the
@@ -161,7 +166,7 @@ def test_cut(system):
     )
 
 
-def test_negation_refutes_only_what_yields_falsity(system):
+def test_negation_refutes_only_what_yields_falsity(system: FormalSystem) -> None:
     # ¬R is single-succedent, so it needs `⊥`: with one formula on the right,
     # "assuming A proves *something*" is not a refutation of A. Written with an
     # unconstrained metavariable where `⊥` stands — `G , A ⊢ B` ⟹ `G ⊢ ¬A`, the
@@ -187,7 +192,7 @@ def test_negation_refutes_only_what_yields_falsity(system):
 # ---------------------------------------------------------------------------
 
 
-def test_generalisation_over_a_context_that_does_not_mention_the_variable(system):
+def test_generalisation_over_a_context_that_does_not_mention_the_variable(system: FormalSystem) -> None:
     # ∀R's proviso is `not occurs(x, G)`, and `G` is a **term** — so this is the
     # kernel's ordinary `Occurs` descending an ordinary sort. Nothing about
     # sequents reaches the checker.
@@ -198,7 +203,7 @@ def test_generalisation_over_a_context_that_does_not_mention_the_variable(system
     assert stands(system, "c = c ⊢ a = a [refl]\nc = c ⊢ ∀a a = a [∀R, 1]")
 
 
-def test_generalisation_over_a_context_that_does_mention_it(system):
+def test_generalisation_over_a_context_that_does_mention_it(system: FormalSystem) -> None:
     # And the refusal, which is the phase's central test: one line differs from
     # the accepted pair above — the context is about `a` rather than `c` — and
     # the derivation stops. `a = a ⊢ ∀a a = a` is exactly the false step a
@@ -212,7 +217,7 @@ def test_generalisation_over_a_context_that_does_mention_it(system):
     assert "∀R does not apply" in why(system, source)
 
 
-def test_a_bound_occurrence_blocks_generalisation_too(system):
+def test_a_bound_occurrence_blocks_generalisation_too(system: FormalSystem) -> None:
     # **A finding, pinned as behaviour rather than asserted as right.**
     #
     # `∅ , ∀a a = a ⊢ ∀a a = a` is derivable in a textbook calculus: the
@@ -239,7 +244,7 @@ def test_a_bound_occurrence_blocks_generalisation_too(system):
     )
 
 
-def test_universal_left_instantiates_the_binder_with_itself(system):
+def test_universal_left_instantiates_the_binder_with_itself(system: FormalSystem) -> None:
     # **The other finding.** §8's S1 asks for "∀L instantiated with a term that
     # would capture → rejected", which supposes a ∀L that instantiates. A rule
     # schema has no substitution operator — it is matched by unification, and
@@ -258,7 +263,7 @@ def test_universal_left_instantiates_the_binder_with_itself(system):
 # ---------------------------------------------------------------------------
 
 
-def test_a_context_is_a_left_nested_list(system):
+def test_a_context_is_a_left_nested_list(system: FormalSystem) -> None:
     # §8.0's rule that a claim about terms is asserted about terms. `A , B , C`
     # is `((A , B) , C)` and can be nothing else: the right of a comma is a
     # formula, so no other nesting is even grammatical — which is what makes
@@ -269,7 +274,7 @@ def test_a_context_is_a_left_nested_list(system):
     assert context.children["g"].constructor.name == "cons"
 
 
-def test_the_empty_context_extended_is_not_a_bare_formula(system):
+def test_the_empty_context_extended_is_not_a_bare_formula(system: FormalSystem) -> None:
     # The encoding's honest cost, and the reason a proof cannot drift between
     # the two spellings: `∅ , A` and `A` mean the same context and are different
     # terms, so a rule matched against one does not apply to the other.
@@ -278,21 +283,26 @@ def test_the_empty_context_extended_is_not_a_bare_formula(system):
     assert not stands(system, "∅ , A ⊢ A [id]\nA ⊢ (A → A) [→R, 1]")
 
 
-def test_implication_right_reaches_only_the_rightmost_assumption(system):
+def test_implication_right_reaches_only_the_rightmost_assumption(system: FormalSystem) -> None:
     # From `P, Q, R ⊢ R`, →R discharges `R` and not `Q`. The accepted half is
     # `test_the_deduction_theorem_on_a_three_assumption_context`; this is its
-    # pair, and the third proof is the price — exchange, cited by hand, is what
-    # reaches an assumption that is not on the end.
+    # pair, and the second proof is the price — the *same* target sequent, and
+    # what it takes to reach it is exchange, cited by hand.
+    #
+    # The two halves must end on the same line for that to be the claim: a
+    # second proof reaching some *other* conclusion would show only that some
+    # longer derivation exists, not that exchange is what the rejected step was
+    # missing.
     assert not stands(system, "P , Q , R ⊢ R [id]\nP , R ⊢ (Q → R) [→R, 1]")
     assert stands(
         system,
         "P , Q , R ⊢ R [id]\n"
-        "P , Q , R , Q ⊢ R [WL, 1]\n"
-        "P , Q , R ⊢ (Q → R) [→R, 2]",
+        "P , R , Q ⊢ R [XL, 1]\n"
+        "P , R ⊢ (Q → R) [→R, 2]",
     )
 
 
-def test_contraction_needs_two_of_the_same(system):
+def test_contraction_needs_two_of_the_same(system: FormalSystem) -> None:
     # CL is `G , A , A ⊢ C`, so two *different* assumptions do not contract —
     # asserted against the accepted case above, which differs only in that.
     assert not stands(system, "P , A , B ⊢ B [id]\nP , A ⊢ B [CL, 1]")
@@ -304,7 +314,9 @@ def test_contraction_needs_two_of_the_same(system):
 
 
 @pytest.mark.parametrize("assumptions", [4, 8, 12])
-def test_a_proof_line_reads_its_context_once_per_assumption(system, assumptions, monkeypatch):
+def test_a_proof_line_reads_its_context_once_per_assumption(
+    system: FormalSystem, assumptions: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # S3's answer, asserted where the claim actually lives.
     #
     # A context is `∅ | wff | context , wff` — recursive on the *left*, so every
@@ -341,7 +353,7 @@ def test_a_proof_line_reads_its_context_once_per_assumption(system, assumptions,
     assert counted["n"] <= 4 * assumptions + 20
 
 
-def _term(system, text: str):
+def _term(system: FormalSystem, text: str) -> Term:
     """The kernel term ``text`` parses to at the ``context`` sort."""
     matched = system.build_context.variables["context"].match(text, copy(system.context))
     assert matched is not None, f"{text!r} does not parse as a context"

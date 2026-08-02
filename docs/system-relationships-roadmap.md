@@ -1062,8 +1062,11 @@ line type reads a whole `sequent`.
   expressible only because the context is a term the kernel's `occurs` descends
   (§3.4).
 - **→R does not reach past the rightmost assumption:** from `P, Q, R ⊢ R`,
-  `P, Q ⊢ (R → R)` is accepted and `P, R ⊢ (Q → R)` is rejected — exchange must
-  be cited, and the third proof that cites it is written out as the price.
+  `P, Q ⊢ (R → R)` is accepted and `P, R ⊢ (Q → R)` is rejected. The price is
+  then written out — the *same* target sequent, reached by citing exchange
+  first. Both halves have to end on the same line for that to be the claim; a
+  derivation reaching some other conclusion would show only that a longer proof
+  exists, not that exchange is what the rejected step was missing.
 - Contraction applied to two assumptions that are *not* equal → rejected.
 - **¬R refutes only what yields falsity:** `∅ ⊢ ¬a = a` from `∅ , a = a ⊢ a = a`
   → rejected. See below — this pins a rule the fixture first got wrong.
