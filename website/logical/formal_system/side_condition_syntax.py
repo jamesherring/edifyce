@@ -265,7 +265,18 @@ def render_side_condition(condition: SideCondition, sorts: Mapping[Constructor, 
     as "this theorem has no proviso".
     """
     if isinstance(condition, Not):
-        return f"not {render_side_condition(condition.inner, sorts)}"
+        inner = condition.inner
+        if isinstance(inner, (Not, Or, And)):
+            # `not` binds one predicate: the parser reads a leading `not` after
+            # splitting on top-level `or`, so `not (a or b)` would come back as
+            # `(not a) or b` and `not not a` as a parse error. Refused rather
+            # than rendered wrong — a proviso that reparses to something else is
+            # worse than one that will not render.
+            raise ValueError(
+                "A negated `not`/`or`/`and` has no single-line rendering: the "
+                "surface syntax negates one predicate."
+            )
+        return f"not {render_side_condition(inner, sorts)}"
     if isinstance(condition, Or):
         return " or ".join(render_side_condition(p, sorts) for p in condition.parts)
     if isinstance(condition, And):

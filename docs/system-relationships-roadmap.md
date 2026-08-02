@@ -838,6 +838,12 @@ is a closed fact the check just established and no citation can vary it. Storing
 it would be an obligation with nothing to discharge it against. Both halves are
 pinned, since either alone passes for a rule that is not running.
 
+Plus the four refusals of §9.16, each with a mutation that makes its test fail.
+Two of them the review found by *running* the change against fixtures already in
+the suite — `tests/miu_system.py` and the scoped ZFC of `tests/zfc_systems.py` —
+which is the lesson: a soundness guard written against one worked example is
+tested against the systems that break it, and this suite already had them.
+
 #### R4 — `system_relations`
 
 **Delivers** multiple parents, sort renames, translations.
@@ -1262,6 +1268,29 @@ constraint on the phases after it rather than a closed question.
     than it looks — `not occurs(x, y = y)` with only `x` nominated *does* mention
     a metavariable and *is* a real constraint on the instance, so "the formula
     side is ground" is not the test. Both cases are pinned.
+
+    **Three shapes are refused rather than generalised**, all found in review,
+    and all the same failure: re-checking the abstracted proof *passes without
+    having tested anything*, so accepting would mint a theorem on no evidence.
+
+    - A **string-rewriting** step matches surface text, and a variable renders as
+      its own name — so the abstracted proof is character-for-character the one
+      already checked. Left to the check, MIU's `MII` promotes to a theorem whose
+      whole statement is one metavariable, justifying `MU`, `MIU`, anything.
+    - An **axiom-behaviour line** is granted by matching its own shape; `execute`
+      short-circuits on it, so an abstracted term is never held to the axiom's
+      schema and a leaf the axiom spells could be generalised away unnoticed.
+    - An **eigenvariable subproof** is the sharper half of the hole R3a set out to
+      close. `ax-5`'s proviso is a `SideCondition` and travels; a *discharge*
+      rule's freshness is `Subproof.eigenvariable_is_fresh`, and a discharge
+      builds no `Inference` — so there is no binding to restate and nothing to
+      carry. Refused until there is, which is the one piece of R3a still open.
+
+    A fourth refusal is about the *carrying* rather than the abstraction: a
+    citation binds only the metavariables its statement mentions, so a proviso
+    naming anything else could never be discharged — it would raise inside every
+    citation and read as "this theorem does not apply". Refused at promotion
+    instead of stored uncitable.
 
     What this does not do is decide uniformity for a proof it *cannot* re-check —
     an imported theorem with no stored proof, say. There the nomination would

@@ -43,6 +43,7 @@ from tests.database import async_url, create_tables, database_url, enable_foreig
 from tests.layered_systems import (
     first_order_logic_spec,
     propositional_calculus_spec,
+    propositional_variable_prod,
     zfc_spec,
 )
 from tests.spec_helpers import atom_const_prod, rule
@@ -1249,3 +1250,137 @@ def test_a_schematic_promotion_composes_the_conclusion_from_the_abstracted_term(
     # The statement is schematic: its term has `P` free, where the ground
     # promotion's had nothing free at all.
     assert set(theorem.deduction.schema_term.free_vars()) == {"P"}
+
+
+# ---------------------------------------------------------------------------
+# The shapes a nomination cannot be settled for — refused, not generalised
+# ---------------------------------------------------------------------------
+
+
+def engine_promote(spec, source, metavariables, label="T"):
+    """Build, check, and promote schematically — outside the API, for a system
+    the tower does not have."""
+    from website.logical.declarative import build_spec
+    from website.logical.promotion import schematic_theorem
+
+    built = build_spec(spec)
+    assert "errors" not in built, built["errors"]
+    system = built["system"]
+    proof, context = system.read_proof(source)
+    system.check_proof(proof, context)
+    assert proof.valid is True, [
+        (line.number, line.invalid_message)
+        for line in proof.proof_lines
+        if not line.valid
+    ]
+    return system, schematic_theorem(system, proof, label, metavariables, context)
+
+
+def test_a_string_rewriting_step_cannot_be_generalised(db, client):
+    # Found in review. A string step matches surface *text*, and a variable
+    # renders as its own name — so the abstracted proof is character-for-character
+    # the proof that was already checked, and re-checking it discharges nothing.
+    # Left to the check, MIU's `MII` would promote to a theorem whose whole
+    # statement is one metavariable, justifying `MU`, `MIU`, anything.
+    from tests.miu_system import miu_spec
+
+    with pytest.raises(ValueError, match="string-rewriting"):
+        engine_promote(miu_spec(), "MI\nMII [R2, 1]", {"MII": "miustr"})
+
+
+def test_a_string_rewriting_proof_still_promotes_verbatim(db, client):
+    # The refusal is of the *nomination*, not of the system: a ground promotion
+    # in MIU is sound (with nothing to bind, unification of two ground terms is
+    # equality) and must still work.
+    from tests.miu_system import miu_spec
+
+    system, (spec, _theorem) = engine_promote(miu_spec(), "MI\nMII [R2, 1]", {})
+    assert spec.statement == "MII"
+    del system
+
+
+def test_an_axiom_line_cannot_have_its_own_leaves_generalised():
+    # Found in review. An axiom-behaviour line is granted by matching its shape,
+    # not by a step that gets re-checked — `execute` short-circuits on it — so an
+    # abstracted term is never held to the axiom's schema, and a leaf the axiom
+    # spells could be generalised away with nothing noticing.
+    #
+    # ZFC's `ax-ext` is that line: it holds by fiat, and its `z` is the concrete
+    # bound variable the axiom itself writes.
+    from website.logical.declarative import layered_spec
+
+    tower_spec = layered_spec(
+        [propositional_calculus_spec(), first_order_logic_spec(), zfc_spec()]
+    )
+    source = "(∀z ((z ∈ x → z ∈ y) ∧ (z ∈ y → z ∈ x)) → x = y)"
+    with pytest.raises(ValueError, match="axiom"):
+        engine_promote(tower_spec, source, {"z": "term"})
+
+
+def test_an_eigenvariable_subproof_is_refused_rather_than_generalised():
+    # Found in review, and the sharper half of the hole R3a set out to close.
+    # `ax-5`'s proviso is a `SideCondition` and travels; a *discharge* rule's
+    # eigenvariable freshness is `Subproof.eigenvariable_is_fresh`, and a
+    # discharge builds no `Inference`, so there is no binding to restate and
+    # nothing to carry. Refused until there is.
+    from tests.zfc_systems import scoped_zfc_spec
+
+    with pytest.raises(ValueError, match="eigenvariable"):
+        engine_promote(
+            scoped_zfc_spec(),
+            "let x\n"
+            "    assume x ∈ c\n"
+            "        x ∈ c [R, 2]\n"
+            "    (x ∈ c → x ∈ c) [CP, 2]\n"
+            "∀x (x ∈ c → x ∈ c) [UG, 1]",
+            {"c": "setvar"},
+        )
+
+
+def test_a_proviso_the_statement_cannot_bind_is_refused():
+    # Found in review. A citation binds only the metavariables its statement
+    # mentions, so a carried proviso naming anything else could never be
+    # discharged — it would raise inside every citation and read as "this theorem
+    # does not apply", for every instance. Refused at promotion rather than
+    # stored uncitable.
+    #
+    # Reached by nominating a leaf that `ax-5`'s proviso constrains but the
+    # conclusion has dropped: `x` survives only inside the discarded left-hand
+    # side of the final implication.
+    from website.logical.declarative import layered_spec
+
+    tower_spec = layered_spec([propositional_calculus_spec(), first_order_logic_spec()])
+    source = (
+        "(y = y → ∀x y = y) [ax-5]\n"
+        "((y = y → ∀x y = y) → (Q → Q)) [drop]\n"
+        "(Q → Q) [MP, 1, 2]"
+    )
+    # `drop` is not a rule of the tower, so build one that discards its premise.
+    tower_spec.rules.append(
+        rule(
+            "drop",
+            "weakening",
+            [],
+            "((y = y → ∀x y = y) → (Q → Q))",
+            [("Q", "formula"), ("x", "term"), ("y", "term")],
+        )
+    )
+    with pytest.raises(ValueError, match="no citation could discharge it"):
+        engine_promote(tower_spec, source, {"x": "term", "Q": "formula"})
+
+
+def test_a_negated_disjunction_has_no_rendering_rather_than_a_wrong_one():
+    # Found in review. `not` binds one predicate: the parser splits on top-level
+    # `or` and then reads a leading `not`, so `not (a or b)` would come back as
+    # `(not a) or b` — a different proviso — and `not not a` would not parse at
+    # all. Refused rather than rendered into something that reparses wrong.
+    from website.logical.formal_system.side_condition_syntax import (
+        render_side_condition,
+    )
+    from website.logical.kernel import Not, Occurs, Or
+
+    assert render_side_condition(Not(Occurs("x", "P")), {}) == "not occurs(x, P)"
+    with pytest.raises(ValueError, match="single-line"):
+        render_side_condition(Not(Or((Occurs("x", "P"), Occurs("y", "Q")))), {})
+    with pytest.raises(ValueError, match="single-line"):
+        render_side_condition(Not(Not(Occurs("x", "P"))), {})

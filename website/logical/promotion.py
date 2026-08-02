@@ -343,7 +343,7 @@ def schematic_theorem(
     line's already-checked term: no parse, and the leaves are replaced by *what
     they denote* rather than by rewriting the source. A leaf the grammar fixes as
     a constant, or a sort mismatch, then shows up as the abstracted proof failing
-    to check — the guards are the checker's, not a list maintained here.
+    to check — those guards are the checker's, not a list maintained here.
 
     **The provisos travel.** A step may have relied on a side condition
     (`ax-5`'s `not occurs(x, P)`), which held for the concrete leaves and says
@@ -354,17 +354,23 @@ def schematic_theorem(
     Without this, schematic promotion is exactly the hole an eigenvariable
     condition escapes through.
 
-    A restated condition mentioning none of the theorem's metavariables is
-    *dropped*, and only that: it is a closed fact about ground terms, already
-    established by the check that just ran, and nothing a citation does can
-    disturb it.
+    Three shapes of proof are **refused** rather than generalised, each because
+    the re-check above cannot discharge the claim for it (see
+    :func:`_unsupported_for_abstraction`). They are refusals, not gaps: a
+    nomination this cannot settle must not become a theorem.
 
     ``context`` is the one the proof was read in, needed to restate a proviso and
     to name a sort. Raises :class:`ValueError` if the proof does not stand, if a
-    nominated sort is not a declared pattern, or if the abstracted proof fails.
+    nominated sort is not a declared pattern, if the proof is of a shape this
+    cannot settle, or if the abstracted proof fails.
     """
-    ground, _promoted = proved_theorem(system, proof, label)
-    sorts = {}
+    if system.build_context is None:
+        raise ValueError(
+            "Cannot promote a theorem against a system with no build context."
+        )
+    _require_a_standing_proof(proof)
+
+    sorts: FreeVars = {}
     for name, sort_name in metavariables.items():
         pattern = system.build_context.variables.get(sort_name)
         if not isinstance(pattern, Pattern):
@@ -373,6 +379,10 @@ def schematic_theorem(
                 "declared pattern of the system."
             )
         sorts[name] = constructor_for(pattern)
+
+    refusal = _unsupported_for_abstraction(proof, sorts)
+    if refusal is not None:
+        raise ValueError(refusal)
 
     abstracted = _abstracted_proof(system, proof, sorts, context)
     if not abstracted.valid:
@@ -390,20 +400,96 @@ def schematic_theorem(
             )
         )
 
-    conclusion = abstracted.root_scope.conclusion
+    conclusion = None if abstracted.root_scope is None else abstracted.root_scope.conclusion
     if conclusion is None or conclusion.formula_term is None:
-        raise ValueError("The abstracted proof has no conclusion to promote.")
+        raise ValueError(
+            "The abstracted proof has no formula-bearing conclusion at its root "
+            "scope, so there is nothing to promote."
+        )
 
+    statement = conclusion.formula_term
     spec = TheoremSpec(
         label=label,
-        statement=conclusion.formula_term.to_string(),
+        statement=statement.to_string(),
         metavariables=dict(metavariables),
-        distinct=_carried_provisos(abstracted, set(metavariables), context, system),
+        distinct=_carried_provisos(
+            abstracted, set(statement.free_vars()), set(metavariables), context, system
+        ),
     )
-    # `ground` is discarded; it was built only to reach `proved_theorem`'s guards
-    # on what a proof establishes at all, which are the same either way.
-    del ground
-    return spec, promote_spec(system, spec, statement_term=conclusion.formula_term)
+    return spec, promote_spec(system, spec, statement_term=statement)
+
+
+def _require_a_standing_proof(proof: Proof) -> None:
+    # The same two guards `proved_theorem` opens with, shared rather than reached
+    # by promoting the ground theorem first and discarding it: that path also
+    # composes a schema pattern and parses the ground statement against the
+    # grammar, which is work thrown away — and which can fail with "does not
+    # parse at any logical sort" for a promotion that would otherwise succeed.
+    if not proof.valid:
+        raise ValueError("A proof that does not stand establishes no theorem.")
+    if proof.has_warnings:
+        raise ValueError(
+            "A proof carrying a warning establishes no theorem: the warning is "
+            "unresolved doubt about whether it stands."
+        )
+
+
+def _unsupported_for_abstraction(proof: Proof, sorts: FreeVars) -> str | None:
+    # The shapes whose claim the re-check cannot settle, as the reason to refuse.
+    #
+    # Each is a case where re-checking the abstracted proof *passes* without
+    # having tested anything, so accepting it would mint a theorem on no
+    # evidence. Refused here rather than left to the check, precisely because the
+    # check is what does not notice.
+    #
+    # Nothing to refuse when nothing is nominated: an empty abstraction is the
+    # verbatim promotion, whose soundness is `proved_theorem`'s and does not
+    # depend on any of this.
+    if not sorts:
+        return None
+    for line in proof.proof_lines:
+        rule = line.inference_rule
+        if rule is not None and rule.matching == "string":
+            # A string-rewriting step matches surface *strings*, and a variable
+            # renders as its own name — so the abstracted proof is the same
+            # strings and re-checking it discharges nothing. (The theorem would
+            # also have to carry `matching="string"` to be checked the way it was
+            # proved; both are why this is a refusal rather than a default.)
+            return (
+                f"Line {line.number} is justified by the string-rewriting rule "
+                f"{rule.label!r}. A string step matches surface text, so holding "
+                "a leaf schematic does not change what is checked and proves "
+                "nothing about other instances."
+            )
+
+        if line.is_axiom and line.formula_term is not None:
+            # An axiom-behaviour line is valid by fiat: `execute` grants it
+            # without re-matching, so an abstracted term is never held to the
+            # axiom's own schema and a leaf the axiom spells could be
+            # generalised away unchecked.
+            if abstract(line.formula_term, sorts) is not line.formula_term:
+                return (
+                    f"Line {line.number} is an axiom, granted by matching its own "
+                    "shape rather than by a step that can be re-checked, and the "
+                    "nomination changes it. Its leaves cannot be generalised."
+                )
+
+    scope = proof.root_scope
+    stack = list(scope.children) if scope is not None else []
+    while stack:
+        subproof = stack.pop()
+        stack.extend(subproof.children)
+        if subproof.kind == "variable":
+            # An eigenvariable's freshness is `Subproof.eigenvariable_is_fresh`,
+            # not a `SideCondition`, and a discharge builds no `Inference` — so
+            # there is no binding to restate and nothing to carry. The freshness
+            # that held for the concrete variable says nothing about an instance.
+            return (
+                "This proof introduces an eigenvariable, whose freshness is "
+                "checked against the concrete variable and cannot yet be carried "
+                "into a schematic theorem. Promote it verbatim instead."
+            )
+    return None
 
 
 def _abstracted_proof(
@@ -439,6 +525,7 @@ def _abstracted_proof(
 
 def _carried_provisos(
     abstracted: Proof,
+    bindable: set[str],
     metavariables: set[str],
     context: Context,
     system: FormalSystem,
@@ -460,10 +547,27 @@ def _carried_provisos(
             continue
         for condition in inference.inference_rule.side_conditions:
             for part in conjuncts(restate(condition, inference.binding, context)):
-                if not (references(part) & metavariables):
+                referenced = references(part)
+                if not (referenced & metavariables):
                     # Closed under the theorem's metavariables: a fact about
                     # ground terms, settled by the check that just ran.
                     continue
+                if not referenced <= bindable:
+                    # A citation binds only what its statement mentions, so a
+                    # proviso naming anything else could never be checked — it
+                    # would raise inside the citation and read as "this theorem
+                    # does not apply", for every instance. Refuse the nomination
+                    # rather than store an entry nothing can cite.
+                    raise ValueError(
+                        "Holding "
+                        + ", ".join(sorted(metavariables))
+                        + " schematic leaves the proviso "
+                        + repr(render_side_condition(part, names))
+                        + " over "
+                        + ", ".join(sorted(referenced - bindable))
+                        + ", which the theorem's statement does not mention, so "
+                        "no citation could discharge it."
+                    )
                 rendered = render_side_condition(part, names)
                 if rendered not in lines:
                     lines.append(rendered)
