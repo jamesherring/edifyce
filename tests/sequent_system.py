@@ -59,6 +59,10 @@ def sequent_spec(name: str = "Sequent calculus") -> SystemSpec:
         productions=[
             # --- the formula language ---------------------------------------
             regex_prod("wff", "wff_var", "[A-Z][A-Z0-9]*"),
+            # Falsity, and a *constant* of the object language: it names one
+            # fixed thing. It is here because a single-succedent ¬R needs
+            # somewhere for the refutation to land — see the rule.
+            atom_const_prod("wff", "falsum", "⊥", denotes_constant=True),
             regex_prod("ind", "ind_var", "[a-z][a-z0-9]*"),
             template_prod("wff", "equality", "s = t", [("s", "ind"), ("t", "ind")]),
             template_prod("wff", "negation", "¬p", [("p", "wff")]),
@@ -122,8 +126,16 @@ def sequent_spec(name: str = "Sequent calculus") -> SystemSpec:
             rule("→L", "implication left", ["G ⊢ A", "G , B ⊢ C"],
                  "G , (A → B) ⊢ C",
                  [("G", "context"), ("A", "wff"), ("B", "wff"), ("C", "wff")]),
-            rule("¬R", "negation right", ["G , A ⊢ B"], "G ⊢ ¬A",
-                 [("G", "context"), ("A", "wff"), ("B", "wff")]),
+            # Negation, single-succedent, which is why it needs `⊥`: with only
+            # one formula on the right, "assuming A proves something" is not a
+            # refutation of A — the something has to be *falsity*. Put an
+            # unconstrained metavariable where `⊥` stands and ¬R proves `⊢ ¬A`
+            # for every A, which is how this rule was first written; the
+            # negation test refuses exactly that reading.
+            rule("¬L", "negation left", ["G ⊢ A"], "G , ¬A ⊢ ⊥",
+                 [("G", "context"), ("A", "wff")]),
+            rule("¬R", "negation right", ["G , A ⊢ ⊥"], "G ⊢ ¬A",
+                 [("G", "context"), ("A", "wff")]),
 
             # ∀R, and its eigenvariable condition — the phase's central case.
             # `x` may be generalised only where the context does not depend on

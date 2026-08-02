@@ -17,16 +17,31 @@ Two things it *did* find, both recorded against the tests that pin them:
 
 Both are sound — each refuses more than a textbook calculus would — and both are
 about what an author can *say*, not about what the checker will believe.
+
+A third thing it found is about *these tests* rather than about the engine, and
+it is why `test_negation_refutes_only_what_yields_falsity` exists. ¬R was first
+written as →R with the conclusion changed — `Γ, A ⊢ B ⟹ Γ ⊢ ¬A`, with `B`
+unconstrained — which refutes every formula and makes the calculus below
+inconsistent. Nothing failed, because no proof here cited ¬R and the fixture
+guard only checked the label existed. Edifyce checks proofs against whatever
+system it is handed and has no opinion about whether a declared rule is sound;
+the whole burden is the author's, and **a rule no proof cites has discharged
+none of it.** All twelve of the fixture's rules are cited by an accepted proof
+below, which is the discipline that would have caught this one.
 """
 
 from __future__ import annotations
+
+from copy import copy
 
 import pytest
 
 pytest.importorskip("regex")
 
 from website.logical.declarative import build_spec
+from website.logical.kernel import from_match
 from website.logical.kernel.terms import Node
+from website.logical.matching import UnionPattern
 
 from tests.sequent_system import sequent_spec
 
@@ -58,7 +73,7 @@ def test_the_system_is_the_one_these_tests_assume(system):
     # pass just as well against a system that declared none of these rules, or
     # whose grammar could not state a sequent at all.
     assert {rule.label for rule in system.inference_rules} == {
-        "id", "refl", "WL", "XL", "CL", "cut", "→R", "→L", "¬R", "∀R", "∀L",
+        "id", "refl", "WL", "XL", "CL", "cut", "→R", "→L", "¬L", "¬R", "∀R", "∀L",
     }
     assert stands(system, "∅ , A ⊢ A [id]")
     assert not stands(system, "∅ , A ⊢ B [id]")
@@ -144,6 +159,27 @@ def test_cut(system):
         "∅ , B ⊢ a = a [WL, 1]\n"
         "∅ ⊢ (B → a = a) [→R, 2]",
     )
+
+
+def test_negation_refutes_only_what_yields_falsity(system):
+    # ¬R is single-succedent, so it needs `⊥`: with one formula on the right,
+    # "assuming A proves *something*" is not a refutation of A. Written with an
+    # unconstrained metavariable where `⊥` stands — `G , A ⊢ B` ⟹ `G ⊢ ¬A`, the
+    # shape →R has and the shape this rule first had — every formula is
+    # refutable and the calculus proves both `⊢ a = a` and `⊢ ¬a = a`.
+    #
+    # The pair is the test: `∅ , A ⊢ ¬¬A` goes through, and the derivation that
+    # the unsound reading would license does not.
+    assert stands(
+        system,
+        "∅ , A ⊢ A [id]\n"
+        "∅ , A , ¬A ⊢ ⊥ [¬L, 1]\n"
+        "∅ , A ⊢ ¬¬A [¬R, 2]",
+    )
+
+    inconsistent = "∅ , a = a ⊢ a = a [id]\n∅ ⊢ ¬a = a [¬R, 1]"
+    assert not stands(system, inconsistent)
+    assert "¬R does not apply" in why(system, inconsistent)
 
 
 # ---------------------------------------------------------------------------
@@ -262,12 +298,51 @@ def test_contraction_needs_two_of_the_same(system):
     assert not stands(system, "P , A , B ⊢ B [id]\nP , A ⊢ B [CL, 1]")
 
 
+# ---------------------------------------------------------------------------
+# What makes the grammar viable at all
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("assumptions", [4, 8, 12])
+def test_a_proof_line_reads_its_context_once_per_assumption(system, assumptions, monkeypatch):
+    # S3's answer, asserted where the claim actually lives.
+    #
+    # A context is `∅ | wff | context , wff` — recursive on the *left*, so every
+    # comma is a candidate split and the sort re-enters itself at each one.
+    # Read without memoisation that is exponential: `benchmarks/bench_matching
+    # --only sequent-context` times a bare pattern match at 0.2 ms, 2.4 ms,
+    # 40 ms and 18 s for 4, 8, 12 and 20 assumptions. What makes it linear
+    # instead is that `LineType.parse_line` gives every line a fresh
+    # `parse_memo`, and *that* is the load-bearing fact — the roadmap closes S3
+    # on it.
+    #
+    # `tests/test_matching_stress.py` pins the same bound on a bare pattern, but
+    # it installs the memo itself, so it holds whatever `parse_line` does. This
+    # goes through the real path: a whole proof, checked by the system, with
+    # nothing but `parse_line` to supply the memo. Counted rather than timed, so
+    # it says which property regressed and holds on a loaded machine.
+    counted = {"n": 0}
+    original = UnionPattern._match
+
+    def counting(self, *args, **kwargs):
+        counted["n"] += 1
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(UnionPattern, "_match", counting)
+
+    context = " , ".join(["∅", *["A"] * assumptions])
+    assert stands(system, f"{context} ⊢ A [id]")
+
+    # Two sorts per assumption and change — linear, with room for the fixed cost
+    # of the line type and the rule's own schemas. What it rules out is scaling
+    # with the number of *ways* the commas could be cut up: at twelve
+    # assumptions the memoless read is already four orders of magnitude over
+    # this.
+    assert counted["n"] <= 4 * assumptions + 20
+
+
 def _term(system, text: str):
     """The kernel term ``text`` parses to at the ``context`` sort."""
-    from copy import copy
-
-    from website.logical.kernel import from_match
-
     matched = system.build_context.variables["context"].match(text, copy(system.context))
     assert matched is not None, f"{text!r} does not parse as a context"
     return from_match(matched)

@@ -1053,6 +1053,7 @@ line type reads a whole `sequent`.
   the rule is exercised rather than merely available.
 - **∀R with an eigenvariable:** accepted when `Γ` is empty, and when `Γ` is
   `c = c` — a non-empty context not mentioning `a`.
+- `∅ , A ⊢ ¬¬A` through ¬L and ¬R.
 
 *Invalid, and refused, each with the refusal it means asserted (§9.19's rule):*
 - **∀R when the eigenvariable is not fresh:** `a = a ⊢ ∀a a = a` → refused with
@@ -1064,6 +1065,8 @@ line type reads a whole `sequent`.
   `P, Q ⊢ (R → R)` is accepted and `P, R ⊢ (Q → R)` is rejected — exchange must
   be cited, and the third proof that cites it is written out as the price.
 - Contraction applied to two assumptions that are *not* equal → rejected.
+- **¬R refutes only what yields falsity:** `∅ ⊢ ¬a = a` from `∅ , a = a ⊢ a = a`
+  → rejected. See below — this pins a rule the fixture first got wrong.
 
 *Pinned properties:*
 - A context is matched structurally, asserted **on the term**: `A , B , C` is a
@@ -1102,7 +1105,26 @@ believe. Each refuses more than a textbook calculus would, so each is sound.
   `docs/scope-aware-definitional-steps.md` blocks. Pinned as behaviour in
   `test_universal_left_instantiates_the_binder_with_itself`.
 
-A third, smaller one, worth recording because it shaped the fixture: a calculus
+**And one the review caught, which is the phase's sharpest methodological
+lesson.** ¬R was first written as `Γ, A ⊢ B ⟹ Γ ⊢ ¬A` — →R with the conclusion
+changed. `B` is unconstrained, so *every* formula was refutable and the fixture
+calculus proved both `⊢ a = a` and `⊢ ¬a = a`. Nothing failed: no test cited ¬R,
+and the rule-set guard only checked the label existed. The fix is the ordinary
+single-succedent rule, which is why the grammar now declares `⊥`: with one
+formula on the right, "assuming A proves *something*" is not a refutation of A —
+the something has to be falsity. ¬L (`Γ ⊢ A ⟹ Γ, ¬A ⊢ ⊥`) comes with it, so the
+pair is exercised by a proof rather than merely declared.
+
+The lesson generalises past this fixture: **an unsound rule in a system is
+invisible to every test that does not cite it**, and a guard that enumerates
+*labels* is not a guard on what those labels mean. Edifyce checks proofs against
+whatever system it is handed, and that is the point — the trusted core has no
+opinion about whether a declared rule is sound. Which means the burden falls
+entirely on the author, and a rule with no proof citing it has had no burden
+discharged at all. Every rule a system declares should appear in some accepted
+proof and, where it has a sound-but-weaker neighbour, in a refused one.
+
+A third finding, smaller, worth recording because it shaped the fixture: a calculus
 with `id` as its only axiom cannot supply a **non-vacuous** ∀R premise, because
 `id` puts its formula into the context by construction, so every sequent it
 proves mentions in `Γ` whatever it proves. The eigenvariable condition then holds
@@ -1136,12 +1158,23 @@ a calculus that can prove something the context does not already contain.**
 
 **Delivers** evidence for or against S4. Left-nested list parsing is the risk.
 
-**Tests and verification:** `benchmarks/bench_matching --only sequent-context`
-(scenarios at 2/4/6/8 assumptions, added in S1), plus
-`test_a_left_nested_context_costs_one_parse_per_assumption` in
-`tests/test_matching_stress.py` — a parse *count* rather than a wall-clock
-budget, parametrised at 4/8/12/16, so a regression is a test failure and not a
-slow suite on a slow machine.
+**Tests and verification:** `benchmarks/bench_matching --only sequent-context` —
+scenarios at 2/4/6/8 assumptions and the `-nomemo` pair at 8/12/16, so both
+columns of the table below are reproducible rather than only the one the
+conclusion is comfortable with. Then two parse *counts* rather than wall-clock
+budgets, so a regression is a test failure and not a slow suite on a slow
+machine, and it says which property moved:
+
+- `test_a_left_nested_context_costs_one_parse_per_assumption`
+  (`tests/test_matching_stress.py`) bounds a bare pattern match at 4/8/12/16
+  assumptions. It installs the memo itself, so it pins the *matching layer's*
+  behaviour given one.
+- `test_a_proof_line_reads_its_context_once_per_assumption`
+  (`tests/test_sequent_calculus.py`) checks a whole proof through the real
+  system, with nothing but `LineType.parse_line` to supply the memo. That is
+  what actually carries the conclusion, and the first test does not imply it:
+  with `parse_line`'s memo removed the whole suite stayed green while a
+  twelve-assumption line went from 26 sort-parses to 8,193.
 
 What the measurement says, on `Γ ⊢ p` with `Γ` an `n`-assumption left-nested
 context (best-of, one machine, quote the ratios and not the microseconds):
@@ -1176,7 +1209,8 @@ existing `-nomemo` scenarios only hinted at: a grammar whose sort recurses into
 itself on the left of an ambiguous separator re-reads the same prefix once per
 candidate split, and the memo is what collapses that. Any future change that
 narrows where a memo is installed — a new parse entry point, say — should be read
-against this table first.
+against this table first, and the second of the two counts above is what will
+notice.
 
 #### S4 — *conditional on S3* — an AC matcher for contexts
 
