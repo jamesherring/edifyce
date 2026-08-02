@@ -54,6 +54,7 @@ from .formal_system import (
 )
 from .formal_system.definitions import (
     DefinitionError,
+    ParsedForms,
     build_kernel_definition,
     denotes_a_constant,
 )
@@ -670,11 +671,11 @@ def build_system(
     the ``{"errors": [...]}`` contract.
 
     ``schema_terms`` supplies previously-composed rule-schema terms so the build
-    need not re-parse the templates (see :func:`schema_digests`), and
-    ``definition_terms`` does the same for each definition's two surface forms
-    (see :func:`definition_digest`). Both are *projections* of the spec, never
-    part of it: passing none, or one that answers for no slot, builds exactly the
-    same system by the longer route.
+    need not re-parse the templates (see :func:`schema_digests`);
+    ``definition_terms`` does the same for each definition's two surface forms and
+    each declared binder's default (see :func:`definition_digest`). Both are
+    *projections* of the spec, never part of it: passing none, or one that answers
+    for no slot, builds exactly the same system by the longer route.
     """
     # A string-rewriting rule is justified by associative matching over surface
     # strings, with no term binding to evaluate side-conditions against; refuse
@@ -1592,14 +1593,30 @@ class _FormCache:
     def absent(cls) -> _FormCache:
         return cls(index=0, source=None, system=None)
 
-    def read(self, slot: str, context: Context) -> Term | None:
+    def read(self, slot: str, context: Context, ordinal: int = 0) -> Term | None:
         if self.source is None:
             return None
-        return self.source(DefinitionSlot(self.index, slot), context)
+        return self.source(DefinitionSlot(self.index, slot, ordinal), context)
 
-    def write(self, higher: Term, lower: Term) -> None:
+    def binder_defaults(
+        self, names: Sequence[str], context: Context
+    ) -> dict[str, Term]:
+        """The stored default for each declared binder, by name, skipping misses.
+
+        Keyed by *position* in the `fresh` list on the way in and by name on the
+        way out, because those are the two things each end already has: a slot
+        carries no names, and `parse_definition` takes a name-keyed mapping.
+        """
+        found = {}
+        for ordinal, name in enumerate(names):
+            stored = self.read("fresh", context, ordinal)
+            if stored is not None:
+                found[name] = stored
+        return found
+
+    def write(self, parsed: ParsedForms) -> None:
         if self.system is not None:
-            self.system.definition_forms[self.index] = (higher, lower)
+            self.system.definition_forms[self.index] = parsed
 
 
 def _finalise_definition(
@@ -1769,6 +1786,12 @@ def _register_notated_definition(
             # which a stored `higher` term can resolve at all.
             higher_term=forms.read("higher", system.context),
             lower_term=forms.read("lower", system.context),
+            # A binder's default is parsed against the binder's own sort, not the
+            # definition's, so it would resolve earlier than the forms do — asked
+            # here anyway, to keep one read point and one digest.
+            binder_defaults=forms.binder_defaults(
+                [name for name, _sort in defn.fresh], system.context
+            ),
             record=forms.write,
         )
     except DefinitionError as exc:

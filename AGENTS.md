@@ -65,11 +65,26 @@ Text-to-structure that is *supposed* to stay: `matching/patterns.py`, `Match`, a
 explicit string rewriting. They are the parser and the semi-Thue semantics, not a
 second proof checker.
 
-Two smaller derivations still run at build time, both bounded and neither on the
-kernel's path: a declared `fresh` binder's `default` is its bare name parsed
-against its own sort, and a definition's provisos are parsed from their surface
-lines into the kernel side-condition algebra. Either could be persisted the same
-way if a profile ever asks for it.
+One of the two smaller derivations that used to sit beside them is stored too: a
+declared `fresh` binder's `default` — the leaf its name denotes, which an unfold
+falls back to when it chooses none — is a term on `definition_fresh`, under the
+same digest as the forms, and stored before binding on the same rule the forms
+follow (**store what the parse produced, not what the build did with it**).
+
+The other stays a parse, and the reason is worth recording so it is not
+re-attempted the obvious way. A proviso argument that is not a declared
+metavariable is a term expression parsed against the grammar (`equal(t, ∅)`) —
+but **the matcher resolves the owner's metavariables itself**, so the same text
+parses to different terms for different owners: `¬q` is `negation(Var(q))` for a
+rule that declares `q` and `negation(atomic(prop(q)))` for one that does not.
+Both are correct, for their owner. So a cache keyed by the argument's text is
+unsound, and one keyed by owner *and* text needs a per-owner key reconstructed
+identically at both ends — a lot of index coupling for a derivation no `$d` ever
+produces (the whole `set.mm` corpus stores none). Left as a parse deliberately.
+
+What is left besides it is grammar, not structure — layering, non-circularity,
+and the notation template — plus `matching/patterns.py` and explicit string
+rewriting, which are meant to stay.
 
 ### Constants vs variables of the object language
 

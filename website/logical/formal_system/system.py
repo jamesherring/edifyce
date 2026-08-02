@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
     from ..declarative import _SchemaScan
     from ..kernel.terms import Term
+    from .definitions import ParsedForms
     from .rules import InferenceRule
 
 
@@ -74,18 +75,20 @@ class FormalSystem:
         self.definition_layering: list[bool] = []
 
         # Per declared definition that registered one, keyed by the same spec
-        # position `definition_layering` uses: the two forms as parsed and
-        # abstracted, *before* any binder was placed. Build output, not part of
-        # the system — nothing here reads it. It exists so a persistence layer can
-        # store what this build derived and hand it back to the next one (see
-        # app/db/definition_terms.py).
+        # position `definition_layering` uses: everything the build derived from
+        # text — the two forms as parsed and abstracted, *before* any binder was
+        # placed, and the leaf each declared binder's name denotes. Build output,
+        # not part of the system — nothing here reads it. It exists so a
+        # persistence layer can store what this build derived and hand it back to
+        # the next one (see app/db/definition_terms.py).
         #
         # Pre-binding is the only cut that round-trips. `bind_scoped` places one
         # binder per *ground leaf* sitting in a binder slot, so a form that has
         # already been through it offers nothing to bind and would come back with
         # no binders at all — a definition silently stripped of its freshness
         # provisos. The stored term therefore stops where the parse does.
-        self.definition_forms: dict[int, tuple[Term, Term]] = {}
+        self.definition_forms: dict[int, ParsedForms] = {}
+
 
         # What the system's primitive statements are stated over, on demand —
         # what a definition's freshness check reads (see

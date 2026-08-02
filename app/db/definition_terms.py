@@ -117,6 +117,12 @@ def load_definition_terms(
         ):
             if term_id is not None:
                 ids[DefinitionSlot(offset + index, slot)] = term_id
+        # A declared binder's default, keyed by its position in `fresh` — the
+        # ordinal the build counts by, since a slot carries no names. Read in
+        # `position` order for the same reason the definitions are.
+        for ordinal, binder in enumerate(row.fresh):
+            if binder.term_id is not None:
+                ids[DefinitionSlot(offset + index, "fresh", ordinal)] = binder.term_id
 
     if not ids:
         return DefinitionTermCache(digest, {}, TermGraph({}, {}))
@@ -156,12 +162,20 @@ def store_definition_terms(
     """
     written = 0
     for index, row in enumerate(system.definitions):
-        forms = built.definition_forms.get(offset + index)
-        if forms is None or _is_current(row, cache.digest):
+        parsed = built.definition_forms.get(offset + index)
+        if parsed is None or _is_current(row, cache.digest):
             continue
-        higher, lower = forms
-        row.higher_term_id = _term_id(session, system, higher)
-        row.lower_term_id = _term_id(session, system, lower)
+        row.higher_term_id = _term_id(session, system, parsed.higher)
+        row.lower_term_id = _term_id(session, system, parsed.lower)
+        # By name: `fresh` rows and the build's binders agree on the declared
+        # name, and a binder the build inferred from the grammar has no row and no
+        # default to store. A row this leaves NULL is therefore not a hole — see
+        # `_is_current`.
+        for binder in row.fresh:
+            default = parsed.binder_defaults.get(binder.var)
+            binder.term_id = (
+                None if default is None else _term_id(session, system, default)
+            )
         row.term_digest = cache.digest
         written += 1
     return written
@@ -178,11 +192,24 @@ def _is_current(row: DefinitionRow, digest: str) -> bool:
     Both ids, because a registered definition always derives *both* forms: unlike
     a rule's schema slot, where a NULL is the ordinary way to record a slot that
     resolved to a declared grammar pattern, a NULL here can only be a hole.
+
+    And every binder row's ``term_id``, for the same reason. A ``definition_fresh``
+    row exists only for a binder the author *declared*, and a declared binder
+    always has a default — so a NULL there is a hole too. What is *not* a hole is
+    a definition with no `fresh` rows at all, which is what a binder the grammar
+    places (``scopes_over``) leaves behind: the check is vacuous for it, so a
+    scoped definition is not rewritten on every verify.
+
+    Getting that distinction wrong is what the upgrade path would have exposed:
+    the migration adds `term_id` as NULL to rows that already carry a matching
+    digest and both form ids, so a check that skipped on those two alone would
+    never fill it, and every verify would reparse the default forever.
     """
     return (
         row.term_digest == digest
         and row.higher_term_id is not None
         and row.lower_term_id is not None
+        and all(binder.term_id is not None for binder in row.fresh)
     )
 
 

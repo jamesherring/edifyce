@@ -124,8 +124,13 @@ class DefinitionSlot:
     """
 
     definition: int
-    # "higher" (the defined form) or "lower" (the defining form).
+    # "higher" (the defined form), "lower" (the defining form), or "fresh" — the
+    # leaf a declared binder's name denotes, one per binder.
     slot: str
+    # A declared binder's position in the definition's `fresh` list; 0 for the two
+    # single-valued form slots. Positional for the same reason the definition
+    # index is, and matching how `SchemaSlot` keys a rule's antecedents.
+    ordinal: int = 0
 
 
 # Supplies the stored term for a definition form, given the parsing context its
@@ -326,9 +331,9 @@ def revariabilise(term: Term, metavariables: dict[str, Constructor]) -> Term:
 def combine_side_conditions(
     where_strings: list, context: FormalSystemContext
 ) -> SideCondition | None:
-    # Parse a definition's `where` provisos into a single kernel side-condition
-    # (their conjunction), or None when there are none. Each line uses the same
-    # closed vocabulary as a rule's side_conditions (see side_condition_syntax).
+    # Parse a definition's provisos into a single kernel side-condition (their
+    # conjunction), or None when there are none. Each line uses the same closed
+    # vocabulary as a rule's side_conditions (see side_condition_syntax).
     if not where_strings:
         return None
     conditions = [parse_side_condition(text, context) for text in where_strings]

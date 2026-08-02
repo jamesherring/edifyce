@@ -79,6 +79,7 @@ slots on productions could check (see AGENTS.md).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ..kernel import Definition, introduced_leaves, unbound_parameters
@@ -95,6 +96,27 @@ if TYPE_CHECKING:
     from ..matching.context import Context
     from ..matching.definitions import DefinedNotation
     from ..matching.patterns import Pattern
+
+
+@dataclass(frozen=True)
+class ParsedForms:
+    """What building a definition derived from text, for a caller that stores it.
+
+    The three things :func:`parse_definition` reads the grammar for: the two
+    surface forms, and the leaf each *declared* binder's name denotes. All are
+    taken before any binder is placed — see :func:`parse_definition` for why that
+    is the only pair worth storing, and why the same applies to the defaults,
+    which are read off the grammar rather than off the form.
+
+    ``binder_defaults`` is keyed by the binder's declared name and is empty for a
+    definition whose binders the grammar places (``scopes_over``): an inferred
+    binder's default is a leaf already sitting in the parsed defining form, so it
+    costs no parse and there is nothing to store.
+    """
+
+    higher: Term
+    lower: Term
+    binder_defaults: dict[str, Term]
 
 
 class DefinitionError(Exception):
@@ -146,7 +168,8 @@ def parse_definition(
     label: str | None = None,
     higher_term: Term | None = None,
     lower_term: Term | None = None,
-    record: Callable[[Term, Term], None] | None = None,
+    binder_defaults: dict[str, Term] | None = None,
+    record: Callable[[ParsedForms], None] | None = None,
 ) -> Definition:
     """Build a kernel :class:`~website.logical.kernel.definitions.Definition` by
     parsing its two surface forms.
@@ -185,11 +208,16 @@ def parse_definition(
     placement and admissibility checks below run on a supplied term exactly as on
     a parsed one, so a stored term buys no leniency.
 
-    ``record`` is handed the pair actually used, whether parsed here or supplied
-    — the write half of that cache. It is called *before* any binder is placed,
-    which is the only pair worth storing: :func:`bind_scoped` binds ground leaves
-    sitting in binder slots, so a form that has already been through it has none
-    left to offer and would rebuild with no binders at all.
+    ``binder_defaults`` does the same for the leaf each *declared* binder's name
+    denotes, keyed by that name — the third grammar read this function makes, and
+    the last one. A name it does not answer for is parsed as before.
+
+    ``record`` is handed a :class:`ParsedForms` of everything actually used,
+    whether parsed here or supplied — the write half of that cache. It is called
+    *before* any binder is placed, which is the only pair worth storing:
+    :func:`bind_scoped` binds ground leaves sitting in binder slots, so a form
+    that has already been through it has none left to offer and would rebuild with
+    no binders at all.
 
     This lives here, not on ``Definition``, because it is the one thing a
     definition needed the *grammar* for. The kernel checks a step against terms;
@@ -209,25 +237,41 @@ def parse_definition(
 
     higher_term = schema(higher) if higher_term is None else higher_term
     lower_term = schema(lower) if lower_term is None else lower_term
-    if record is not None:
-        record(higher_term, lower_term)
 
-    # Each declared binder carries the leaf its name denotes. Parsing that name
-    # here is what lets an unfold fall back to it without re-reading a string: a
-    # name that is not of its own sort is the author's error, and is refused at
-    # build rather than silently failing every unfold later.
+    # Each declared binder carries the leaf its name denotes. Deciding that is
+    # what lets an unfold fall back to it without re-reading a string: a name that
+    # is not of its own sort is the author's error, and is refused at build rather
+    # than silently failing every unfold later. A stored default skips the parse
+    # and not the refusal — a name that no longer parses at its sort has no stored
+    # term either, because the digest that guards it covers the grammar.
+    supplied = binder_defaults or {}
+
+    def default_for(name: str, binder_sort: Pattern) -> Term:
+        stored = supplied.get(name)
+        if stored is not None:
+            return stored
+        # Against the *binder's* sort, not the definition's: `z` is a `setvar`,
+        # and it is the sort it ranges over that says what may name it.
+        return parse(binder_sort, name, "Declared bound variable")
+
     declared = [
         FreshBinder(
             name=name,
             sort=constructor_for(binder_sort),
-            # Against the *binder's* sort, not the definition's: `z` is a
-            # `setvar`, and it is the sort it ranges over that says what may
-            # name it.
-            default=parse(binder_sort, name, "Declared bound variable"),
+            default=default_for(name, binder_sort),
             declared=True,
         )
         for name, binder_sort in (fresh or {}).items()
     ]
+
+    if record is not None:
+        record(
+            ParsedForms(
+                higher=higher_term,
+                lower=lower_term,
+                binder_defaults={binder.name: binder.default for binder in declared},
+            )
+        )
 
     # Taken before anything is bound: once a declared name becomes a `Bound` the
     # grammar's view of it is gone, and this is the only thing that still wants it.
@@ -344,7 +388,8 @@ def build_kernel_definition(
     label: str | None = None,
     higher_term: Term | None = None,
     lower_term: Term | None = None,
-    record: Callable[[Term, Term], None] | None = None,
+    binder_defaults: dict[str, Term] | None = None,
+    record: Callable[[ParsedForms], None] | None = None,
 ) -> Definition:
     """The kernel definition that unfolds ``notation`` to ``lower``.
 
@@ -359,9 +404,9 @@ def build_kernel_definition(
     parse at all — and, for a stored ``higher_term``, what lets its constructor
     resolve.
 
-    ``higher_term`` / ``lower_term`` / ``record`` are passed through to
-    :func:`parse_definition`; see there for what supplying one does and does not
-    skip, and what ``record`` is handed.
+    ``higher_term`` / ``lower_term`` / ``binder_defaults`` / ``record`` are passed
+    through to :func:`parse_definition`; see there for what supplying one does and
+    does not skip, and what ``record`` is handed.
 
     Raises :class:`DefinitionError` when the pair cannot be expressed as a kernel
     definition — because a form does not parse, or because the defining form
@@ -392,6 +437,7 @@ def build_kernel_definition(
             label=label,
             higher_term=higher_term,
             lower_term=lower_term,
+            binder_defaults=binder_defaults,
             record=record,
         )
     except Exception as exc:

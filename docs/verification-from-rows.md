@@ -1,6 +1,6 @@
 # Design: verification from rows, not from text
 
-**Status:** P1–P6 and P2a shipped · **Prerequisite work:** merged (the term
+**Status:** P1–P7 and P2a shipped · **Prerequisite work:** merged (the term
 graph, `proof_lines`, the kernel-takes-terms change #121, and the Metamath
 corpus import #124)
 
@@ -51,7 +51,7 @@ checking does.
 ## 2. What is stored, and what is thrown away
 
 This table is what the phases below work through; **used** is the state after
-P1–P6.
+P1–P7.
 
 | Verification needs | Stored | Used |
 |---|---|---|
@@ -63,6 +63,8 @@ P1–P6.
 | Scope tree (for discharge) | yes — `proof_lines.opens_scope` / `scope_id` | no — *re-derived*, deliberately |
 | Rule schema terms | yes — `rules.deduction_term_id` etc. → `terms` | **yes** (P3), when `rules.schema_digest` still matches |
 | Definition higher/lower forms | yes — `definitions.higher_term_id` / `lower_term_id` → `terms` | **yes** (P6), when `definitions.term_digest` still matches |
+| A declared binder's `default` | yes — `definition_fresh.term_id` → `terms` | **yes** (P7), under the definition's own digest |
+| A proviso's term arguments | **no** | parsed at build; a text-keyed cache is unsound (P7) |
 | A line's flat string (string-rewriting) | no — *derived* | **yes** (P5), rendered from the term rather than stored |
 | Promoted theorems | yes — `promoted_theorems` → `terms` | **yes** (P4), resolved by label per citation |
 
@@ -830,9 +832,8 @@ inert when stale; a cache of its output is a second implementation.
 still matches both forms against the grammar to decide layering and
 non-circularity, and still registers the defined form as notation — see §2 on why
 those are grammar questions rather than structure. Two smaller derivations also
-remain, both bounded: a declared binder's `default` (its bare name, parsed against
-its own sort) and a definition's provisos (surface lines into the side-condition
-algebra).
+remained at the time: a declared binder's `default` and a proviso's term
+arguments. Both are P7.
 
 **A shadowed grammar name, found in review, and older than this phase.**
 `ctx.variables` is one namespace: lines, line parts, axioms and the system are
@@ -865,6 +866,65 @@ goes through — to raise, and requiring a warm build to succeed anyway
 produces a definition set structurally identical to a cold build's. Agreement
 alone would not have shown this: a build that consulted the cache and discarded
 its answer would pass every other test in the file.
+
+### P7. A binder's default — *done*; a proviso's term arguments — *not done, and why*
+
+P6 named two grammar reads it left behind, both bounded. One is stored. The other
+turned out not to be storable the way the first six were, which is the more
+useful half of this phase to have written down.
+
+**A declared binder's `default`.** A binder is stored abstractly as a `Bound` and
+so has no name; `default` is the leaf it falls back to when an unfold chooses
+none, derived by parsing the declared name against the *binder's own* sort.
+`definition_fresh.term_id` now holds it, under the parent definition's
+`term_digest` — the same guard, because `definition_digest` already covers the
+grammar and every definition's `fresh` clause.
+
+Its NULL is deliberately **not** treated as a hole (contrast the two form terms,
+where it is). A definition whose binders the grammar places declares no `fresh`
+at all, and one that does declare them still leaves a NULL for any binder the
+build *inferred* — so a NULL there is the ordinary case, and requiring one would
+rewrite every scoped definition on every verify.
+
+**A proviso's term arguments — attempted, and reverted.** A predicate argument
+that is not a declared metavariable is a term expression parsed against the
+grammar (`equal(t, ∅)`), and it looked like the same shape as everything above:
+store the raw parse, key it by the argument's text, guard it with the definition
+block's digest, reapply the owner's abstraction on the way out. That design is
+**unsound**, and the reason is worth keeping.
+
+The abstraction is not all that depends on the owner. **The matcher resolves a
+declared metavariable itself**, so the same text parses to a different *shape*
+depending on who wrote it:
+
+```
+¬q   with q declared →  negation(Var(q))
+¬q   with q undeclared →  negation(atomic(prop(q)))
+```
+
+Both are correct for their owner, and two ordinary rules can differ that way over
+identical text. Parsing with the metavariables out of scope does not rescue it:
+`abstract` then lifts the innermost leaf, giving `negation(atomic(Var(q)))` —
+a third answer, equal to neither. And clearing them can lose the parse outright,
+since an argument may *need* a metavariable to be spellable at all (`P(phi)`
+where no production spells `phi`).
+
+What is left is a cache keyed by owner *and* text, with the key reconstructed
+identically by the build and by the store — across rules, definitions and the
+inheritance offset. That is real index coupling in soundness-adjacent code, for a
+derivation the corpus never produces: a Metamath `$d` names variables, so all
+47,546 theorems store none, and the repository's only instance is one synthetic
+fixture. Not worth it; the parse stays.
+
+The general lesson generalises the one P6 recorded. *Store what the parse
+produced, not what the build did with it* — **provided the parse is a function of
+the grammar alone.** Where the owner reaches into the parse itself, there is no
+system-wide parse to store.
+
+**Measure (for the half that shipped):** poisoning `from_match`, the one call
+every term a definition derives goes through — both forms and each declared
+binder's default — and requiring a warm build to succeed anyway. It does, with
+zero calls.
 
 ---
 

@@ -108,6 +108,12 @@ Modernised from the original Django app (`website/models.py` on `main`):
   **before binder placement**: `bind_scoped` binds ground leaves sitting in binder
   slots, so storing the finished `Definition.lower` would rebuild with no binders
   at all and quietly drop the definition's capture-avoidance proviso.
+  `definition_fresh.term_id` rides the same digest, holding the leaf a declared
+  binder's name denotes — the fallback an unfold uses when it names no binder. A
+  row exists only for a *declared* binder and a declared binder always has a
+  default, so a NULL there **is** a hole and the currentness check says so; what
+  is not a hole is a definition with no `fresh` rows at all, which is what a
+  binder the grammar places leaves behind.
 - **`promoted_theorems`, `promoted_theorem_premises`,
   `promoted_theorem_bindings`** — a system's **citable library**
   (`promoted_theorems.py`): results it has proved, or imported from a corpus, and
