@@ -16,6 +16,8 @@ evolve it.
 | `app/db/models.py` | Account + proof-surface ORM models |
 | `app/db/systems.py` | Normalised formal-system decomposition (grammar/rules/definitions as flat rows) |
 | `app/db/systems_mapping.py` | `spec_to_system` / `system_to_spec` round trip between the declarative `SystemSpec` and the rows, and `effective_spec`, which layers an inheritance chain into one |
+| `app/db/descriptions.py` | What a system says about the labels it names: prose, titles, and authorship |
+| `app/db/descriptions_mapping.py` | Store/load a label's description and its `(Contributed by …)` clauses |
 | `app/db/notations_mapping.py` | Store/load a system's named notations, and render a stored term through one from rows alone |
 | `app/db/side_conditions.py` | Definition provisos as the kernel side-condition algebra, stored as rows |
 | `app/db/side_conditions_mapping.py` | Parse/render a `where` proviso ↔ side-condition rows |
@@ -149,6 +151,22 @@ Modernised from the original Django app (`website/models.py` on `main`):
   chain (a child inherits its ancestors' notations and overrides them per
   constructor, as its grammar layers on theirs); **stored** against the one system
   it was derived for.
+- **`label_descriptions`** / **`label_attributions`** — what a system records
+  about the labels it names. Keyed by `(system, label)` rather than by an FK into
+  the thing described, because one label lands in one of four row types depending
+  on what the importer made of its statement — a production (a syntax `$a`), a
+  definition (`df-un`), a primitive theorem (`ax-ext`), or a proof and its theorem
+  (a `$p`). Four description columns would be four migrations for one concept.
+  `title` is the prose's first sentence, which is a title in all but name:
+  Metamath declares none. Attributions are rows, not a string, because an
+  authorship record is asked aggregate questions — set.mm credits 131 people
+  across 60,661 clauses — and every field is verbatim (the corpus misspells four
+  kinds and malforms 22 dates, so `dated` is a string and `kind` is not an enum).
+  Distinct from `proofs.title`/`proofs.description`, which are the proof's own
+  and editable. An import copies the *title* across — short, and a listing wants
+  it — and leaves `proofs.description` alone, because `description` rides on every
+  `ProofSummary` and a corpus comment runs to paragraphs. The prose is read from
+  here, on the single proof.
 - **`side_conditions`** — a definition's proviso (`where` clause) stored as the
   kernel's closed side-condition algebra (`side_conditions.py`) rather than an
   opaque string: one row per algebra node (`occurs`/`equal`/`disjoint`/`atom`/

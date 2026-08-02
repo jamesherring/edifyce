@@ -52,6 +52,7 @@ from app.db.promoted_theorems_mapping import LibraryChain, read_theorems
 from app.db import metamath_store
 from app.db.metamath_store import import_corpus
 from app.db.models import FormalSystem, Proof
+from app.db.descriptions import LabelAttributionRow, LabelDescriptionRow
 from app.db.proof_lines import ProofLineAntecedentRow, ProofLineRow
 from app.db.systems import (
     AxiomBindingRow,
@@ -142,6 +143,8 @@ _TABLES = [
         Proof, ProofLineRow, ProofLineAntecedentRow, TermRow, TermChildRow,
         # The citable library an import now writes alongside the proofs.
         PromotedTheoremRow, PromotedTheoremPremiseRow, PromotedTheoremBindingRow,
+        # And what the file says about each label it names.
+        LabelDescriptionRow, LabelAttributionRow,
     )
 ]
 

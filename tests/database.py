@@ -82,9 +82,11 @@ def _always() -> list[Table]:
     minimum a system needs, exactly as `terms` and `promoted_theorems` already
     are. `notation_pieces` joins them for the same reason on the read side: a
     system's detail reports which notations it stores, so every read of one
-    queries the table whether the test has heard of notations or not. Added here
-    rather than to each module's own list because "what a system minimally needs"
-    is one fact, and ten copies of it drift.
+    queries the table whether the test has heard of notations or not. So do
+    `label_descriptions` / `label_attributions`, which a single proof read
+    consults for the corpus's record of that proof's label. Added here rather than
+    to each module's own list because "what a system minimally needs" is one fact,
+    and ten copies of it drift.
     """
     from app.db.system_relations import (
         SystemRelationObligationRow,
@@ -92,6 +94,7 @@ def _always() -> list[Table]:
         SystemRelationSortRow,
         SystemRelationSymbolRow,
     )
+    from app.db.descriptions import LabelAttributionRow, LabelDescriptionRow
     from app.db.systems import NotationPieceRow
 
     return [
@@ -100,6 +103,8 @@ def _always() -> list[Table]:
         SystemRelationSymbolRow.__table__,
         SystemRelationObligationRow.__table__,
         NotationPieceRow.__table__,
+        LabelDescriptionRow.__table__,
+        LabelAttributionRow.__table__,
     ]
 
 
