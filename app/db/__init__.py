@@ -83,6 +83,7 @@ from app.db.system_relations import (
     SystemRelationSortRow,
     SystemRelationSymbolRow,
 )
+from app.db.system_relations_mapping import related_layers
 from app.db.terms import TermChildRow, TermRow
 from app.db.terms_mapping import (
     TermGraph,
@@ -149,6 +150,7 @@ __all__ = [
     "SystemRelationRow",
     "SystemRelationSortRow",
     "SystemRelationSymbolRow",
+    "related_layers",
     "effective_spec",
     "effective_library",
     "inherited_definition_count",
