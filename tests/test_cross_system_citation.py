@@ -160,13 +160,7 @@ def resolve(db_path, system_id: str, labels: list[str], before=None) -> dict:
 
 
 def verify_proof(client, db_path, system_id: str, source: str) -> dict:
-    """Check ``source`` in ``system_id`` through the stored-proof route.
-
-    Not `POST /formal-systems/{id}/verify`, which builds the system and parses
-    the text but resolves no library at all — so a citation of a *theorem* never
-    resolves there, inherited or not. That is a gap of its own and older than
-    inheritance; see the roadmap's R2 note.
-    """
+    """Check ``source`` in ``system_id`` through the stored-proof route."""
     created = client.post(
         "/api/proofs",
         json={"name": f"check-{uuid.uuid4().hex[:8]}", "formal_system_id": system_id,
@@ -460,3 +454,63 @@ def test_a_system_with_no_ancestors_resolves_exactly_as_before(db, client):
 
     assert set(resolve(db, alone, ["id"])) == {"id"}
     assert resolve(db, alone, ["no-such-label"]) == {}
+
+
+# ---------------------------------------------------------------------------
+# The scratchpad route resolves the library too
+# ---------------------------------------------------------------------------
+
+
+def scratchpad(client, system_id: str, source: str) -> dict:
+    """`POST /formal-systems/{id}/verify` — a proof checked without being stored."""
+    response = client.post(
+        f"/api/formal-systems/{system_id}/verify", json={"proof_text": source}
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_the_scratchpad_resolves_a_theorem_of_this_system(db, client):
+    # It did not, until this route was read beside the stored-proof one: a
+    # citation of a *theorem* resolved to nothing, which is survivable for a
+    # system whose primitives are all rules and useless for an imported corpus,
+    # where every logical statement is a promoted theorem rather than a rule.
+    owner = _register_login(client, "scratch@example.com")
+    alone = seed(db, propositional_calculus_spec(), owner, published=False)
+    promote_into(db, alone, IDENTITY)
+
+    checked = scratchpad(client, alone, "(A → A) [id]")
+    assert checked["success"] is True, checked["errors"]
+
+
+def test_the_scratchpad_resolves_an_inherited_theorem(db, client):
+    owner = _register_login(client, "scratch-up@example.com")
+    pc, _fol, zfc = seed_tower(db, owner)
+    promote_into(db, pc, IDENTITY)
+
+    checked = scratchpad(client, zfc, "(∀x x ∈ y → ∀x x ∈ y) [id]")
+    assert checked["success"] is True, checked["errors"]
+
+
+def test_the_scratchpad_still_refuses_what_the_library_does_not_justify(db, client):
+    # The negative control: resolving the library must not make the route accept
+    # a step the theorem does not license. `id` justifies `(P → P)` and nothing
+    # else, and a label with no entry stays unresolved.
+    owner = _register_login(client, "scratch-bad@example.com")
+    pc, _fol, zfc = seed_tower(db, owner)
+    promote_into(db, pc, IDENTITY)
+
+    assert not scratchpad(client, zfc, "(A → B) [id]")["success"]
+    assert not scratchpad(client, zfc, "(A → A) [no-such-theorem]")["success"]
+
+
+def test_the_scratchpad_still_reports_a_system_that_does_not_build(db, client):
+    owner = _register_login(client, "scratch-draft@example.com")
+    pc = seed(db, propositional_calculus_spec(), owner, published=False)
+    child = seed(db, first_order_logic_spec(), owner, pc, published=False)
+
+    response = client.post(
+        f"/api/formal-systems/{child}/verify", json={"proof_text": "(A → A) [ax-1]"}
+    )
+    assert response.status_code == 400
+    assert any("not published" in error for error in response.json()["detail"])

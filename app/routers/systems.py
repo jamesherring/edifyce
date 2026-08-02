@@ -34,11 +34,14 @@ from app.db import (
     Base,
     FormalSystem,
     LibraryChain,
+    cited_labels,
     discard_system_checks,
     effective_library,
     get_session,
     inherited_rule_count,
+    load_theorems,
     system_to_spec,
+    term_context,
 )
 from app.routers._common import (
     PageParams,
@@ -888,10 +891,21 @@ async def verify_proof(
 ) -> VerifyProofResponse:
     """Check a proof against a stored system, assembled server-side from rows.
 
-    Replaces the raw-source verify: the client sends only the proof text and the
-    system id, never a serialised copy of the system itself. Readable systems are published ones
-    (any viewer) or the owner's own drafts. Built against the system's whole
-    inheritance chain, as everything else that builds one is.
+    The scratchpad behind `/systems/{id}/verify`: a proof typed against a stored
+    system and checked without being stored itself. The client sends only the
+    proof text and the system id, never a serialised copy of the system. Readable
+    systems are published ones (any viewer) or the owner's own drafts. Built
+    against the system's whole inheritance chain, as everything else that builds
+    one is.
+
+    It resolves the **library** too, which it did not until this route was read
+    beside `POST /proofs/{id}/verify`. Without it a citation of a *theorem*
+    resolved to nothing here — survivable for a system whose primitives are all
+    rules, and useless for an imported corpus, where every logical statement is a
+    promoted theorem rather than a rule. What it does not resolve is a cited
+    *proof*: a scratchpad proof is stored nowhere, so it has no
+    `proof_references` and establishes no library entry of its own
+    (`hypotheses_of`).
     """
     system = await _get_readable_or_404(session, system_id, user)
 
@@ -909,7 +923,23 @@ async def verify_proof(
     # systems (e.g. a line type whose context edit targets a missing key);
     # return a structured error rather than letting it escape as a 500.
     try:
-        proof = compiled.parse(payload.proof_text)
+        # `read` then `check`, rather than `parse`, so the library can be
+        # resolved between them: what a proof cites is knowable from its own
+        # lines, and a system's library is unbounded so only those labels are
+        # promoted (P4). Exactly the pair `parse` is, split for that reason —
+        # the same shape `_verify_with_references` takes for a proof with no
+        # stored rows.
+        proof, context = compiled.read_proof(payload.proof_text)
+        library = effective.library
+        labels = cited_labels(line.reference_string for line in proof.proof_lines)
+        promoted = await session.run_sync(
+            lambda sync: load_theorems(
+                sync, library, labels, compiled, term_context(compiled)
+            )
+        )
+        for theorem in promoted.values():
+            compiled.promote(theorem)
+        compiled.check_proof(proof, context)
     except Exception as e:
         return VerifyProofResponse(success=False, errors=[str(e)])
 

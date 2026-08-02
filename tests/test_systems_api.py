@@ -502,7 +502,9 @@ def test_verify_checker_exception_returns_structured_error(client, db, monkeypat
     import app.routers.systems as systems_router
 
     class ExplodingSystem:
-        def parse(self, text):
+        # The route reads the lines, resolves the library, then checks — so the
+        # raise belongs where a parse-time failure actually arises.
+        def read_proof(self, text):
             raise Exception("Can't find 'bad' in proof context.")
 
     owner_id = _register_login(client, "ada@example.com")

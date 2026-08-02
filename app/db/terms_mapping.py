@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from copy import copy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -40,6 +41,7 @@ if TYPE_CHECKING:
 
     from app.db.models import FormalSystem
     from website.logical.kernel.constructors import Constructor
+    from website.logical.formal_system import FormalSystem as EngineSystem
     from website.logical.matching.context import Context
 
     # Decides whether a leaf is a renameable free variable, and if so its
@@ -535,6 +537,20 @@ def _sweep_statement() -> Select:
 
 
 _SWEEP = _sweep_statement()
+
+
+def term_context(system: EngineSystem) -> Context:
+    """The context a *stored* term is rebuilt against, for a compiled system.
+
+    The proof context (which carries the defined notations) plus the build
+    context's productions, which is what :meth:`TermGraph.term` resolves a
+    constructor name in. Lives here rather than in a router because every caller
+    of :func:`prefetch_terms` needs exactly this and there is only one right
+    answer.
+    """
+    context = copy(system.context)
+    context.variables.update(system.build_context.variables)
+    return context
 
 
 def prefetch_terms(session: Session, root_ids: Sequence[uuid.UUID]) -> TermGraph:

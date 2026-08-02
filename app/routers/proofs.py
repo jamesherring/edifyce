@@ -69,6 +69,7 @@ from app.db import (
     read_library,
     store_proof_lines,
     store_schema_terms,
+    term_context,
 )
 from app.db.models import User
 from app.routers._common import (
@@ -382,7 +383,7 @@ async def _verify_with_references(
     # Dependency order still matters, but only for *seeding*: a citation may
     # reach through a lemma into its own lemma, so a lemma's references must be
     # resolved before anything cites it.
-    context = _term_context(compiled_system)
+    context = term_context(compiled_system)
     lemma_ids = [pid for pid in order if pid != proof.id]
     # The whole closure in one go: reading a proof back is latency, not work, so
     # batching is what makes it cheaper than re-parsing (see load_proof_lines).
@@ -530,15 +531,6 @@ async def _verify_with_references(
         # is how the snapshot names the proof they belong to.
         cited_proofs=[(engine, pid) for pid, engine in compiled.items()],
     )
-
-
-def _term_context(system: EngineSystem) -> Context:
-    # The context stored terms are rebuilt against: the proof context (which
-    # carries the defined notations) plus the build context's productions, which
-    # is what `TermGraph.term` resolves a constructor name in.
-    context = copy(system.context)
-    context.variables.update(system.build_context.variables)
-    return context
 
 
 def _unusable_errors(

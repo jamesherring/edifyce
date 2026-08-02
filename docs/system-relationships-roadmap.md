@@ -1054,24 +1054,46 @@ constraint on the phases after it rather than a closed question.
     gives up is transferring an entry stored without terms; getting that back
     means composing the statement against the *ancestor's* built system and
     re-interning the result, which is the cached path computed on demand.
-13. **The raw-text verify route resolves no library at all.**
-    `POST /formal-systems/{id}/verify` builds the system and parses the text,
-    but never calls `load_theorems` — so a citation of a *theorem* does not
-    resolve there, inherited or not. Older than inheritance and untouched by it;
-    surfaced because the natural way to test a cross-layer citation is that
-    route, and it fails for a reason that has nothing to do with the chain. It
-    wants either the library resolution the stored-proof path does, or a
-    docstring saying it is a grammar check and not a proof check.
-14. **The schema-term cache is per system, and a chain has several.** A rule's
-    composed term is a function of the whole chain's grammar, but `rules` carries
-    one `schema_digest` column, so an ancestor's row cannot cache what its
-    template composes to in a descendant. R1 caches a system's **own** rules only
-    (the `offset` in `app/db/schema_terms.py`), which is correct and leaves a
-    child recomposing its inherited rules on every verify. Fine at the tower's
-    scale and *not* fine for a layered set.mm, where the propositional layer holds
-    the rules and everything above it inherits them. The fix is a row per (rule,
-    digest) rather than a column — a table, and one D3 should be measured against
-    before it is built.
+13. ~~**The raw-text verify route resolves no library at all.**~~ **Closed.**
+    `POST /formal-systems/{id}/verify` built the system and parsed the text but
+    never resolved a citation, so a *theorem* resolved to nothing there. It is
+    not a grammar check — it is the scratchpad behind `/systems/{id}/verify`,
+    where a proof is typed against a stored system and checked without being
+    stored. Survivable for a system whose primitives are all rules; useless for
+    an imported corpus, where every logical statement is a promoted theorem
+    rather than a rule, and pointed for a layered system, whose whole purpose is
+    citing an ancestor's theorems. It now reads, resolves and checks — the same
+    three steps `parse` is, split so the library fits between them. What it still
+    does not resolve is a cited *proof*: a scratchpad proof is stored nowhere, so
+    it has no references and establishes no library entry of its own.
+14. **The schema-term cache is per system, and a chain has several — and it
+    costs less than this entry first claimed.** A rule's composed term is a
+    function of the whole chain's grammar, but `rules` carries one
+    `schema_digest` column, so an ancestor's row cannot cache what its template
+    composes to in a descendant. A system caches its own rules only (the
+    `offset` in `app/db/schema_terms.py`), which leaves a child recomposing its
+    inherited ones on every verify.
+
+    This entry originally said that was "*not* fine for a layered set.mm, where
+    the propositional layer holds the rules". That is **wrong**, and worth
+    correcting rather than deleting: `metamath.importer.build_spec` constructs a
+    `SystemSpec` with no `rules` and no `axioms` at all — every logical `$a` and
+    `$p` becomes a *promoted theorem*, because building 1,559 axioms eagerly is
+    what the metamath roadmap measured as not scaling. So a layered `set.mm`
+    inherits **no** rules and recomposes nothing. The case named as the danger is
+    the case that costs zero.
+
+    What it does cost, measured on the three-layer tower: 7.3 ms to build with
+    its 7 rules against 3.2 ms with them removed, so ~0.6 ms per rule at that
+    grammar size, rising with the grammar as any parse does (0.4 ms at 18
+    productions, 1.1 ms at 309). A deep hand-authored tower — say 30 inherited
+    rules at ZFC scale — is therefore tens of milliseconds per verify, next to
+    `load_effective`'s own ~24 ms. Real, and not a table's worth.
+
+    So: **do not build the row-per-(rule, digest) table.** If it ever does bite,
+    the cheaper answer is a process-level memo keyed by the chain's grammar
+    digest and the rule's label — the access pattern is one system verified
+    repeatedly — which needs no migration and no second invalidation contract.
 
 ---
 
