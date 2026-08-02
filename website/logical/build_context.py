@@ -20,10 +20,7 @@ from copy import copy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from website.logical.formal_system.side_condition_syntax import (
-    ProvisoTerms,
-    parse_side_condition,
-)
+from website.logical.formal_system.side_condition_syntax import parse_side_condition
 from website.logical.kernel import And, Node, Var, from_match, intern
 from website.logical.kernel.constructors import project_sorts
 from website.logical.matching import AtomPattern, Pattern, StringPattern, UnionPattern
@@ -332,15 +329,12 @@ def revariabilise(term: Term, metavariables: dict[str, Constructor]) -> Term:
 
 
 def combine_side_conditions(
-    where_strings: list,
-    context: FormalSystemContext,
-    terms: ProvisoTerms | None = None,
+    where_strings: list, context: FormalSystemContext
 ) -> SideCondition | None:
     # Parse a definition's provisos into a single kernel side-condition (their
     # conjunction), or None when there are none. Each line uses the same closed
-    # vocabulary as a rule's side_conditions (see side_condition_syntax); `terms`
-    # is the term-argument cache, both halves.
+    # vocabulary as a rule's side_conditions (see side_condition_syntax).
     if not where_strings:
         return None
-    conditions = [parse_side_condition(text, context, terms) for text in where_strings]
+    conditions = [parse_side_condition(text, context) for text in where_strings]
     return conditions[0] if len(conditions) == 1 else And(tuple(conditions))

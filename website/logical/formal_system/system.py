@@ -9,7 +9,6 @@ from ..kernel.definitions import Definition as KernelDefinition
 from ..kernel.terms import from_match
 from ..matching import Context, Match, Pattern, StringPattern, UnionPattern
 from .promotion import PromotedTheorem
-from .side_condition_syntax import ProvisoTerms
 from .proof import Proof, ProofLine
 
 if TYPE_CHECKING:
@@ -90,13 +89,6 @@ class FormalSystem:
         # provisos. The stored term therefore stops where the parse does.
         self.definition_forms: dict[int, ParsedForms] = {}
 
-        # The term-argument cache for this system's provisos, both halves: what a
-        # previous build parsed (seeded before the build) and what this one had to
-        # parse itself (read afterwards, to store). Keyed by the argument's text
-        # and holding the term *before* abstraction, so one map serves every rule
-        # and definition rather than one per owner — see
-        # `side_condition_syntax.ProvisoTerms`.
-        self.proviso_terms: ProvisoTerms = ProvisoTerms()
 
         # What the system's primitive statements are stated over, on demand —
         # what a definition's freshness check reads (see

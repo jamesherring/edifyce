@@ -58,7 +58,7 @@ from .formal_system.definitions import (
     build_kernel_definition,
     denotes_a_constant,
 )
-from .formal_system.side_condition_syntax import ProvisoTerms, parse_side_condition
+from .formal_system.side_condition_syntax import parse_side_condition
 from .kernel import And, match, references, restate
 from .kernel.constructors import constructor_for, project_grammar
 from .kernel.terms import Node, from_match
@@ -663,7 +663,6 @@ def build_system(
     spec: SystemSpec,
     schema_terms: SchemaTermSource | None = None,
     definition_terms: DefinitionTermSource | None = None,
-    proviso_terms: ProvisoTerms | None = None,
 ) -> FormalSystem:
     """Build a :class:`FormalSystem` directly from a :class:`SystemSpec`.
 
@@ -674,14 +673,9 @@ def build_system(
     ``schema_terms`` supplies previously-composed rule-schema terms so the build
     need not re-parse the templates (see :func:`schema_digests`);
     ``definition_terms`` does the same for each definition's two surface forms and
-    each declared binder's default (see :func:`definition_digest`); and
-    ``proviso_terms`` does it for the term arguments of any proviso, rule's or
-    definition's alike (see :class:`ProvisoTerms`). All three are *projections* of
-    the spec, never part of it: passing none, or one that answers for no slot,
-    builds exactly the same system by the longer route.
-
-    ``proviso_terms`` is the one that is also an *output*: the build records what
-    it parsed into the same object, which is where a persistence layer reads it.
+    each declared binder's default (see :func:`definition_digest`). Both are
+    *projections* of the spec, never part of it: passing none, or one that answers
+    for no slot, builds exactly the same system by the longer route.
     """
     # A string-rewriting rule is justified by associative matching over surface
     # strings, with no term binding to evaluate side-conditions against; refuse
@@ -706,10 +700,6 @@ def build_system(
     name = _identifier(spec.name) or "System"
     ctx = FormalSystemContext()
     system = FormalSystem(name=name)
-    # Seeded before anything parses a proviso (steps 8 and 9), and read back after
-    # the build for whatever this one had to parse itself.
-    if proviso_terms is not None:
-        system.proviso_terms = proviso_terms
     ctx.variables[name] = system
 
     brackets = _bracket_map(spec)
@@ -935,7 +925,7 @@ def build_system(
             **rule_context.string_variables, **(inference_rule.variables or {})
         }
         inference_rule.side_conditions.extend(
-            parse_side_condition(line, rule_context, system.proviso_terms)
+            parse_side_condition(line, rule_context)
             for line in inference_rule.pending_side_conditions
         )
         inference_rule.pending_side_conditions = []
@@ -1517,7 +1507,6 @@ def _definition_condition(
     ctx: FormalSystemContext,
     context_copy: Context,
     inherited: list[SideCondition],
-    terms: ProvisoTerms | None,
 ) -> SideCondition | None:
     # The definition's own `where` provisos, parsed with its parameters *and* its
     # binders in scope, conjoined with whatever its justification's theorem holds
@@ -1532,7 +1521,7 @@ def _definition_condition(
         **_binder_patterns(built, ctx),
         **context_copy.string_variables,
     }
-    own = combine_side_conditions(where_strings, proviso_context, terms)
+    own = combine_side_conditions(where_strings, proviso_context)
 
     parts = (*(() if own is None else (own,)), *inherited)
     if not parts:
@@ -1811,8 +1800,7 @@ def _register_notated_definition(
     kernel_definition = replace(
         kernel_definition,
         condition=_definition_condition(
-            defn, kernel_definition, ctx, context_copy, inherited,
-            system.proviso_terms,
+            defn, kernel_definition, ctx, context_copy, inherited
         ),
     )
     _check_condition_is_checkable(defn, kernel_definition)
@@ -2075,7 +2063,6 @@ def build_spec(
     *,
     schema_terms: SchemaTermSource | None = None,
     definition_terms: DefinitionTermSource | None = None,
-    proviso_terms: ProvisoTerms | None = None,
 ) -> dict:
     """Build a ``FormalSystem`` from a :class:`SystemSpec`.
 
@@ -2097,11 +2084,7 @@ def build_spec(
     read as a term cache.
     """
     try:
-        return {
-            "system": build_system(
-                spec, schema_terms, definition_terms, proviso_terms
-            )
-        }
+        return {"system": build_system(spec, schema_terms, definition_terms)}
     except DeclarativeError as exc:
         return {"errors": [str(exc)]}
     except Exception as exc:  # noqa: BLE001

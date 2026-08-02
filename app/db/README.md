@@ -24,7 +24,6 @@ evolve it.
 | `app/db/promoted_theorems_mapping.py` | `store_theorem` / `load_theorems`: the library round trip |
 | `app/db/schema_terms.py` | `store_schema_terms` / `load_schema_terms`: a rule's schema templates as composed kernel terms, so a build need not re-parse them |
 | `app/db/definition_terms.py` | `store_definition_terms` / `load_definition_terms`: the same for a definition's two surface forms |
-| `app/db/proviso_terms.py` | `store_proviso_terms` / `load_proviso_terms`: the same for a proviso's *term arguments* — the one thing a proviso reads the grammar for |
 | `app/db/proof_lines.py` | Proof structure: a checked proof's lines + the justification edges between them |
 | `app/db/proofs_mapping.py` | `store_proof_lines`: project a checked engine `Proof` into those rows |
 | `app/db/metamath_store.py` | `import_corpus`: walk a Metamath `.mm` database and store the system, its proofs, and their line graphs |
@@ -110,18 +109,11 @@ Modernised from the original Django app (`website/models.py` on `main`):
   slots, so storing the finished `Definition.lower` would rebuild with no binders
   at all and quietly drop the definition's capture-avoidance proviso.
   `definition_fresh.term_id` rides the same digest, holding the leaf a declared
-  binder's name denotes — the fallback an unfold uses when it names no binder. Its
-  NULL is *not* a hole: a binder the grammar places is never declared, so most
-  definitions legitimately have none.
-
-  `side_conditions` carries the last one (`proviso_terms.py`): a predicate
-  argument that is not a declared metavariable is a term expression parsed against
-  the grammar, and `left_term_id` / `right_term_id` hold it under a per-row
-  `term_digest`. That digest is the **definition block's**, not the owner's — a
-  rule's proviso may name defined notation (`equal(t, ∅)`), which `schema_digest`
-  does not cover. And the term stored is the raw parse, before the owner's
-  metavariables become `Var`s, so one cache keyed by argument text serves every
-  rule and definition at once.
+  binder's name denotes — the fallback an unfold uses when it names no binder. A
+  row exists only for a *declared* binder and a declared binder always has a
+  default, so a NULL there **is** a hole and the currentness check says so; what
+  is not a hole is a definition with no `fresh` rows at all, which is what a
+  binder the grammar places leaves behind.
 - **`promoted_theorems`, `promoted_theorem_premises`,
   `promoted_theorem_bindings`** — a system's **citable library**
   (`promoted_theorems.py`): results it has proved, or imported from a corpus, and

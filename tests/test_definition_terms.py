@@ -30,6 +30,7 @@ pytest.importorskip("sqlalchemy")
 
 from sqlalchemy import create_engine, select
 from sqlalchemy import delete as sa_delete
+from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
 from app.db import Base, spec_to_system
@@ -313,6 +314,33 @@ def test_a_declared_binders_default_round_trips(engine: Engine) -> None:
         d for d in build_spec(subset_spec())["system"].definitions if d.label == "dfsub"
     )
     assert digest_term(fresh.default) == digest_term(cold.fresh[0].default)
+
+
+def test_a_binder_default_missing_under_a_matching_digest_is_backfilled(
+    engine: Engine,
+) -> None:
+    # The upgrade path, and the reason a `fresh` row's NULL counts as a hole. The
+    # migration adds `term_id` to rows that already carry a matching digest and
+    # both form ids, so a currentness check reading only those two would skip the
+    # write forever and reparse the default on every verify for the life of the
+    # system.
+    _store(engine, subset_spec())
+    with Session(engine) as session:
+        session.execute(sa_update(DefinitionFreshRow).values(term_id=None))
+        session.commit()
+
+    with Session(engine) as session:
+        row = session.scalars(select(FormalSystem)).one()
+        spec_now = system_to_spec(row)
+        cache = load_definition_terms(session, row, spec_now)
+        assert len(cache) == 4, "the two forms of each definition, and no binder"
+        built = build_spec(spec_now, definition_terms=cache)["system"]
+        assert store_definition_terms(session, row, built, cache) == 1
+        session.commit()
+
+    # Healed, and settled: the next build is served all five and writes nothing.
+    _warm, served = _rebuild(engine)
+    assert served == 5
 
 
 def test_an_inferred_binder_stores_no_default_and_is_not_a_hole(engine: Engine) -> None:

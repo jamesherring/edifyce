@@ -193,16 +193,23 @@ def _is_current(row: DefinitionRow, digest: str) -> bool:
     a rule's schema slot, where a NULL is the ordinary way to record a slot that
     resolved to a declared grammar pattern, a NULL here can only be a hole.
 
-    A binder row's ``term_id`` is deliberately *not* checked. A definition whose
-    binders the grammar places (``scopes_over``) declares no `fresh` at all, and
-    one that does declare them still leaves a NULL for any binder the build
-    inferred rather than read — so a NULL there is the ordinary case, not a hole,
-    and requiring one would rewrite every such definition on every verify.
+    And every binder row's ``term_id``, for the same reason. A ``definition_fresh``
+    row exists only for a binder the author *declared*, and a declared binder
+    always has a default — so a NULL there is a hole too. What is *not* a hole is
+    a definition with no `fresh` rows at all, which is what a binder the grammar
+    places (``scopes_over``) leaves behind: the check is vacuous for it, so a
+    scoped definition is not rewritten on every verify.
+
+    Getting that distinction wrong is what the upgrade path would have exposed:
+    the migration adds `term_id` as NULL to rows that already carry a matching
+    digest and both form ids, so a check that skipped on those two alone would
+    never fill it, and every verify would reparse the default forever.
     """
     return (
         row.term_digest == digest
         and row.higher_term_id is not None
         and row.lower_term_id is not None
+        and all(binder.term_id is not None for binder in row.fresh)
     )
 
 

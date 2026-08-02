@@ -64,7 +64,7 @@ P1–P7.
 | Rule schema terms | yes — `rules.deduction_term_id` etc. → `terms` | **yes** (P3), when `rules.schema_digest` still matches |
 | Definition higher/lower forms | yes — `definitions.higher_term_id` / `lower_term_id` → `terms` | **yes** (P6), when `definitions.term_digest` still matches |
 | A declared binder's `default` | yes — `definition_fresh.term_id` → `terms` | **yes** (P7), under the definition's own digest |
-| A proviso's term arguments | yes — `side_conditions.left_term_id` / `right_term_id` → `terms` | **yes** (P7), when `side_conditions.term_digest` still matches |
+| A proviso's term arguments | **no** | parsed at build; a text-keyed cache is unsound (P7) |
 | A line's flat string (string-rewriting) | no — *derived* | **yes** (P5), rendered from the term rather than stored |
 | Promoted theorems | yes — `promoted_theorems` → `terms` | **yes** (P4), resolved by label per citation |
 
@@ -867,10 +867,11 @@ produces a definition set structurally identical to a cold build's. Agreement
 alone would not have shown this: a build that consulted the cache and discarded
 its answer would pass every other test in the file.
 
-### P7. The last two derivations — *done*
+### P7. A binder's default — *done*; a proviso's term arguments — *not done, and why*
 
-P6 named two grammar reads it left behind, both bounded. Neither is large; taking
-them is what lets the claim be stated without a qualifier.
+P6 named two grammar reads it left behind, both bounded. One is stored. The other
+turned out not to be storable the way the first six were, which is the more
+useful half of this phase to have written down.
 
 **A declared binder's `default`.** A binder is stored abstractly as a `Bound` and
 so has no name; `default` is the leaf it falls back to when an unfold chooses
@@ -885,40 +886,45 @@ at all, and one that does declare them still leaves a NULL for any binder the
 build *inferred* — so a NULL there is the ordinary case, and requiring one would
 rewrite every scoped definition on every verify.
 
-**A proviso's term arguments.** A predicate argument that is not a declared
-metavariable is a term expression parsed against the grammar (`equal(t, ∅)`), and
-it is the only thing a proviso reads the grammar for: the predicate vocabulary is
-closed, a metavariable stays a bare name, and a sort is a symbol FK.
-`side_conditions.left_term_id` / `right_term_id` hold it
-(`app/db/proviso_terms.py`).
+**A proviso's term arguments — attempted, and reverted.** A predicate argument
+that is not a declared metavariable is a term expression parsed against the
+grammar (`equal(t, ∅)`), and it looked like the same shape as everything above:
+store the raw parse, key it by the argument's text, guard it with the definition
+block's digest, reapply the owner's abstraction on the way out. That design is
+**unsound**, and the reason is worth keeping.
 
-Two things fell out of this one that were not obvious from P6.
+The abstraction is not all that depends on the owner. **The matcher resolves a
+declared metavariable itself**, so the same text parses to a different *shape*
+depending on who wrote it:
 
-*The digest could not be the owner's.* A rule's proviso may name defined notation
-— `equal(t, ∅)` where `∅` is a definition — so `rules.schema_digest`, which
-covers the grammar and the rule's own templates but not the definitions, would
-have believed a stale term after a definition edit. The guard is the definition
-block's digest, per row, and therefore uniform across all three owners.
+```
+¬q   with q declared →  negation(Var(q))
+¬q   with q undeclared →  negation(atomic(prop(q)))
+```
 
-*Storing before abstraction collapsed the design.* The obvious store is the term
-`_arg` returns, which has had the owner's metavariables lifted to `Var`s. That
-makes the term the *owner's*, needing a per-owner key and a per-owner guard.
-Splitting the parse from the abstraction — the parse depends only on the grammar,
-the abstraction only on the owner — leaves one cache keyed by argument text
-alone, shared by every rule and definition in the system, with abstraction
-reapplied per owner for free. Same rule P6 arrived at from the other direction:
-store what the parse produced, not what the build did with it.
+Both are correct for their owner, and two ordinary rules can differ that way over
+identical text. Parsing with the metavariables out of scope does not rescue it:
+`abstract` then lifts the innermost leaf, giving `negation(atomic(Var(q)))` —
+a third answer, equal to neither. And clearing them can lose the parse outright,
+since an argument may *need* a metavariable to be spellable at all (`P(phi)`
+where no production spells `phi`).
 
-**What the digest is actually for, here.** Keying by text makes most staleness
-self-guarding: change the argument and the lookup misses by key. The digest earns
-its place in one case — the text staying put while what it parses *to* moves. The
-test is exactly that (`∅` stops being defined notation and becomes an ordinary
-production), and it fails without the digest, where the two edit-the-text tests
-it replaced passed either way.
+What is left is a cache keyed by owner *and* text, with the key reconstructed
+identically by the build and by the store — across rules, definitions and the
+inheritance offset. That is real index coupling in soundness-adjacent code, for a
+derivation the corpus never produces: a Metamath `$d` names variables, so all
+47,546 theorems store none, and the repository's only instance is one synthetic
+fixture. Not worth it; the parse stays.
 
-**Measure:** poisoning `_parse_term`, the only place a proviso reads the grammar,
-and requiring a warm build to succeed anyway — plus the verdict itself, since a
-wrongly-served term shows up as a proof that should not check.
+The general lesson generalises the one P6 recorded. *Store what the parse
+produced, not what the build did with it* — **provided the parse is a function of
+the grammar alone.** Where the owner reaches into the parse itself, there is no
+system-wide parse to store.
+
+**Measure (for the half that shipped):** poisoning `from_match`, the one call
+every term a definition derives goes through — both forms and each declared
+binder's default — and requiring a warm build to succeed anyway. It does, with
+zero calls.
 
 ---
 

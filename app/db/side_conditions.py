@@ -130,24 +130,6 @@ class SideConditionRow(Base):
     right_name: Mapped[str | None] = mapped_column(String(512))
     left_is_term: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     right_is_term: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
-    # The parsed form of a *term* argument, so a build need not parse it again —
-    # the one thing a proviso reads the grammar for (the predicate vocabulary is
-    # closed, a metavariable stays a bare name, and a sort is a symbol FK). NULL
-    # on every metavariable argument, which is nearly all of them.
-    #
-    # The term stored is the raw parse, *before* the owner's metavariables are
-    # lifted to `Var`s: that step depends on the owner, while the parse depends
-    # only on the grammar and the notations in scope. So one digest guards every
-    # owner's arguments alike, and it is the definition block's
-    # (`declarative.definition_digest`) — a term argument may use defined notation
-    # (`equal(t, ∅)`), which is why a rule's `schema_digest` could not serve.
-    term_digest: Mapped[str | None] = mapped_column(String(64))
-    left_term_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("terms.id", ondelete="SET NULL"), index=True, nullable=True
-    )
-    right_term_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("terms.id", ondelete="SET NULL"), index=True, nullable=True
-    )
     # The optional sort of a disjoint/atom predicate — a reference into the
     # symbol namespace (same symbols the grammar is built from), not a name.
     sort_symbol_id: Mapped[uuid.UUID | None] = mapped_column(
