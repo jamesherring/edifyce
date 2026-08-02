@@ -128,7 +128,7 @@ from ..kernel.definitions import bind_scoped
 from ..kernel.terms import Node
 from ..promotion import promote_from_source
 from . import compressed
-from .importer import _distinct_provisos, _proviso_safe_names
+from .importer import _distinct_provisos, _proviso_safe_names, import_proof
 from .parser import MetamathError
 
 if TYPE_CHECKING:
@@ -376,6 +376,22 @@ def _restatement(
         # checking the table admits a restatement derived from something else
         # entirely, which is the whole of what this check exists to catch.
         return f"is declared restated by '{label}', whose proof does not cite it"
+    try:
+        import_proof(database, label)
+    except MetamathError as exc:
+        # The derivation must actually reach the statement being read. Without
+        # this, a `$p` whose proof decodes and cites the assertion but derives
+        # something else is taken at its declared word, and the definition is
+        # registered at the assertion's position - while the walk only rejects the
+        # restatement later, or never, if `limit` stops first. Nothing retracts a
+        # definition, so the check has to happen before it is used.
+        #
+        # `import_proof` runs Metamath's own stack machine over the *database*, so
+        # it needs no library and works at any position. What it settles is that
+        # the derivation is well-formed and concludes what is declared; that the
+        # theorems it cites are themselves proved is the walk's business, and the
+        # walk does check them.
+        return f"is declared restated by '{label}', whose proof does not derive it: {exc}"
     term = statement_of(restating, system)
     if term is None:
         return f"is declared restated by '{label}', whose statement does not parse"

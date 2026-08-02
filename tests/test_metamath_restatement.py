@@ -169,6 +169,38 @@ def test_a_d_the_restatement_does_not_carry_is_refused() -> None:
     assert "does not carry its $d (ph/ps)" in classified.reason
 
 
+def test_a_restatement_whose_proof_does_not_derive_it_is_refused() -> None:
+    # Citing the assertion is not enough: the derivation has to actually reach the
+    # statement being read off. Without this a `$p` that decodes and cites, but
+    # derives something else, is taken at its declared word — and the definition is
+    # registered at the *assertion's* position, while the walk only rejects the
+    # restatement later, or never, if `limit` stops first. Nothing retracts a
+    # definition, so the check belongs before it is used.
+    #
+    # `import_proof` settles this against the database alone, which is what makes
+    # it possible at all: `dfbi1` cites `impbi`, `con3rr3` and `mt3`, every one
+    # proved *after* `df-bi`, so a check needing them to be in the library would
+    # refuse the very case this mechanism exists for.
+    bogus = BOOTSTRAP.replace(
+        "$= ( df-new ax-restate ) ABABCD $.", "$= ( df-new ax-restate ) ABABCDC $."
+    )
+    verdicts: list[Classified] = []
+    checked = list(
+        walk(
+            parse(bogus),
+            equivalences=EQUIVALENCES,
+            classified=verdicts.append,
+            restatements=RESTATED,
+        )
+    )
+    classified = {v.label: v for v in verdicts}["df-new"]
+
+    # The fixture's point is that the walk *would* have caught it — later.
+    assert not any(c.verified for c in checked)
+    assert not classified.is_definition
+    assert "whose proof does not derive it" in classified.reason
+
+
 def test_a_syntax_proof_restates_nothing() -> None:
     # A `$p` under a syntax typecode asserts well-formedness, not truth.
     syntax = BOOTSTRAP.replace(

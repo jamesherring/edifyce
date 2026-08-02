@@ -975,7 +975,19 @@ things, and the last carries the weight:
   and `R` — deciding that is the semantic reading being avoided. What is checkable
   is that the restatement was *derived from* the assertion, which makes it a
   consequence of the axiom being reclassified rather than an unrelated equivalence
-  pointed at it.
+  pointed at it;
+- and **its proof must actually derive it**. Citing is not enough: a `$p` that
+  decodes and cites but concludes something else would otherwise be taken at its
+  declared word, and the definition registered at the *assertion's* position while
+  the walk rejects the restatement only later — or never, if `limit` stops first.
+  Nothing retracts a definition, so this has to happen before it is used.
+
+  That check is possible only because `import_proof` runs Metamath's own stack
+  machine over the **database**: `dfbi1` cites `impbi`, `con3rr3` and `mt3`, every
+  one proved *after* `df-bi`, so anything requiring them to be in the library would
+  refuse the case this exists for. What it settles is that the derivation is
+  well-formed and reaches the declared statement; that the theorems it cites are
+  themselves proved is the walk's business, and the walk checks them.
 
 That last check is read off the proof's **decoded steps**, and the distinction is
 not pedantic. A compressed proof carries a label *table* listing what it may cite
