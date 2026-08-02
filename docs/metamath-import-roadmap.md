@@ -6,9 +6,10 @@ its stored compressed proof and checked by Edifyce's own kernel (§1.1). The
 primitive basis is no longer "every logical `$a`": **1,428 of `set.mm`'s 1,559
 import as definitions** rather than axioms, leaving 131 primitive, and every
 theorem still verifies (§5, A4). What remains is a short, enumerated tail — 119
-statements whose root is not a declared definitional equivalence, and 13 others —
+statements whose root is not a declared definitional equivalence, and 12 others —
 and every one of them is a statement whose *shape* says it does not define, rather
-than one the representation cannot carry.
+than one the representation cannot carry. 126 of the 131 are named `ax-` by
+`set.mm` itself.
 
 Goal: import Metamath's `set.mm` while keeping **full verifiability** and **full
 generality** (Edifyce stays a general proof assistant — any formal system, not a
@@ -557,7 +558,9 @@ The classifier and its wiring are both in place — 1,428 of set.mm's 1,559 logi
 `$a` register as definitions and 131 stay primitive. The rationale below is kept
 as the record of why the split is worth having, and the figures inside it are
 *staged*: each states the corpus result as of the step it describes, so 1,335 /
-224 appears below as the state after binding slots and before the `$d` split.
+224 appears below as the state after binding slots and before the `$d` split, and
+1,427 / 132 as the state after that split and before the `cmpo` scope fix. Only
+the figures here and in the two tables above are the current result.
 
 Metamath does not distinguish a definition from an axiom: both are `$a`, `df-` is
 a convention its verifier never reads, and soundness of the definitional ones is
@@ -978,12 +981,11 @@ each unfold to whatever leaf the binder takes there. Before, the condition was
 checked before the binders were resolved, so `z` in a proviso could only mean the
 literal token `z`.
 
-Of the 131 that remain: 119 root is not a declared equivalence (`df-bi`
-among them — it defines `↔` and so cannot use it, root `-.`), 9 defined side
-already in use (`df-clab`/`df-cleq`/`df-clel`, the axioms connecting class
-notation to set theory), 2 a defining side introducing a variable nothing binds,
-2 a bare metavariable. No assertion Metamath names `ax-` is classified as a
-definition.
+What is left primitive is enumerated once, under "What is left primitive, and why
+almost none of it is ours" above — deliberately not repeated here, because a
+second copy is a second thing to update and the first time these numbers moved
+only one of the two copies did. The short of it: 126 of the 131 are `set.mm`'s
+own `ax-`, and no assertion Metamath names `ax-` is classified as a definition.
 
 None of the three tests is load-bearing alone, and the set is not trusted to be
 complete. Test 1 admits an implication, since `( ph -> ps )` has a
