@@ -114,6 +114,13 @@ async def main() -> int:
     print(f"  rejected  {report.rejected}")
     print(f"  failed    {report.failed}")
     print(f"  lines     {report.lines} ({report.formulas} carrying a formula)")
+    print(f"  theorems  {report.theorems} ({report.primitives} primitive)")
+    # What the run derived beside the proofs. Reported because a zero here is the
+    # only sign that a file carried no `$t`, no comments or no section headers —
+    # each of which is legitimate, and each of which silently costs a feature.
+    print(f"  described {report.described}")
+    print(f"  notation  {report.notation}")
+    print(f"  sections  {report.sections}")
     for label, error in report.failures:
         print(f"    ! {label}: {error}")
     return 0

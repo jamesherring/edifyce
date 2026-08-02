@@ -58,8 +58,12 @@ from __future__ import annotations
 import html
 import re
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from .parser import MetamathError
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 # An HTML tag in a `$t` value. Only `<SPAN>`/`<FONT>`-style presentation appears
 # there, so dropping tags leaves the text they wrap - see `as_text`.
@@ -221,7 +225,7 @@ def parse_typesetting(block: str) -> Typesetting:
         typesetting.map_for(directive)[values[0]] = values[1]
 
 
-def typesetting_of(comments: list[str]) -> Typesetting | None:
+def typesetting_of(comments: Sequence[str]) -> Typesetting | None:
     """The typesetting declared by whichever comment is the ``$t`` block, if any.
 
     A `.mm` file may have none - the block is optional, and a database written for

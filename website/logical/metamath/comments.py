@@ -155,6 +155,19 @@ class Description:
         return self.text
 
 
+def unwrap(text: str) -> str:
+    """Prose with the file's hard wrapping gone and its paragraph breaks kept.
+
+    A `.mm` comment is wrapped to a column and the wrapping is not content — but a
+    blank line **is**, being the only way a comment marks a paragraph. Flattening
+    both turns a structured explanation into a run-on blob with the breaks
+    unrecoverable, which is why :func:`read_comment` has always kept them and why
+    :mod:`~.sections` reads a section's introduction through here too.
+    """
+    paragraphs = (" ".join(part.split()) for part in _PARAGRAPH.split(text))
+    return "\n\n".join(part for part in paragraphs if part)
+
+
 def read_comment(raw: str) -> Description:
     """Split a raw ``$( … $)`` body into its prose and its attributions."""
     attributions: list[Attribution] = []

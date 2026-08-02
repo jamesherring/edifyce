@@ -7,7 +7,6 @@ that needs to query a table passes a predicate in (see :func:`unique_slug`).
 
 from __future__ import annotations
 
-import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -16,6 +15,7 @@ from fastapi import Query
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import selectinload
 
+from app.db.slugs import slugify
 from app.schemas import Page
 
 if TYPE_CHECKING:
@@ -137,11 +137,6 @@ async def paginate_summaries(
         limit=params.limit,
         offset=params.offset,
     )
-
-
-def slugify(name: str, fallback: str) -> str:
-    """A URL-safe slug from a display name, falling back when it empties out."""
-    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or fallback
 
 
 async def unique_slug(

@@ -233,6 +233,11 @@ class ProofFolder(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     name: Mapped[str] = mapped_column(String(256))
     slug: Mapped[str] = mapped_column(String(256), index=True)
+    # What the folder is *about*. An imported corpus fills it from the prose a
+    # section header carries after its title — 308 of set.mm's do, and the
+    # part-level ones run to hundreds of lines, so it is unbounded like every
+    # other body of prose here.
+    description: Mapped[str | None] = mapped_column(Text)
     position: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

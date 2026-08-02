@@ -1456,11 +1456,59 @@ authorship) on the single proof read, and on
 `GET /formal-systems/{id}/labels/{label}` for the three kinds of label that have
 no proof at all — which is where the interesting prose lives.
 
-What is deliberately **not** here: `set.mm`'s section outline (21 parts, 163
-sections, 1,115 subsections, 604 subsubsections, marked by `####` / `#*#*` /
-`=-=-` / `-.-.` decoration lines). It maps onto `proof_folders`, which already
-exists as a per-system tree, but it touches the walk and folder placement rather
-than adding rows, and belongs in its own change.
+What was deliberately not here — `set.mm`'s section outline — is §4.6 below.
+
+---
+
+### 4.6 The outline a file draws with comments — *done*
+
+Metamath declares no sections either. The convention is a comment of the shape
+rule / title / rule, and **which punctuation drew the rule is the depth**:
+
+======  ==============  =====  ============================================
+Rule    Level           Count  Example title
+======  ==============  =====  ============================================
+`####`    part             21  CLASSICAL FIRST-ORDER LOGIC WITH EQUALITY
+`#*#*`    section         163  Pre-logic
+`=-=-`    subsection    1,115  Inferences for assisting proof development
+`-.-.`    subsubsection   604  Universal quantifier for use by df-tru
+======  ==============  =====  ============================================
+
+**No new table.** `proof_folders` is already a per-system tree with a parent, a
+name and an ordering, which is what an outline is — so the schema cost is one
+`description` column, for the prose 308 headers carry after their title (the
+part-level ones run to hundreds of lines; one is 525). A header closes every open
+section at its level or deeper, so the nesting is a stack, and each proof is filed
+under the **deepest** section covering it. On set.mm: 1,903 folders, 21 roots, and
+every one of the 50,550 assertions covered.
+
+**Recognition is tight, because the alternative is reading prose as structure.** A
+rule line must begin with the four-character motif *and* contain nothing but that
+motif's characters. Charset alone will not do — a line of bare hyphens is a subset
+of both `=-=-` and `-.-.`, and confusing them silently reshuffles the tree.
+
+**Position came from the parser.** A comment previously reached a reader as a bare
+string, and a header means nothing without knowing where it sits. `Commentary`
+now carries `at`, an index into `Database.order`: how many assertions precede the
+comment. It is computed by bisecting the label positions after the parse rather
+than threaded through it, and `Database.comments` stays as a property, so every
+existing reader is untouched. The parser still recognises nothing — a header is a
+comment convention, and `sections.py` interprets it, exactly as `comments.py`
+interprets a description.
+
+Two things are worth stating because they are easy to get wrong. Placement takes
+a position in `Database.order`, **not** a walk index: a section covers statements,
+and the walk visits only the provable ones — a whole subsection may be nothing but
+syntax axioms. And two headers may share an `at` (a part followed immediately by a
+section, with no statement between), so a folder is keyed by its section's index
+and not by that position; a dict keyed on it would keep only the deeper of the
+pair.
+
+Served whole at `GET /formal-systems/{id}/folders` — 1,903 nodes is one small
+response, and paging a tree costs a request per expansion for no benefit at that
+size — with a per-folder count of the proofs sitting *directly* in it, since a
+part-level node holds nothing itself and a subtree total would make every ancestor
+look equally full. The system page renders it as a collapsible tree.
 
 ---
 

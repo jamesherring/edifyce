@@ -23,6 +23,8 @@ from app.db.descriptions_mapping import (
     store_descriptions,
 )
 from app.db.metamath_store import ImportReport, import_corpus
+from app.db.outline_mapping import StoredOutline, store_outline
+from app.db.slugs import slugify, unique_slug
 from app.db.proof_lines import ProofLineAntecedentRow, ProofLineRow
 from app.db.promoted_theorems import (
     PromotedTheoremBindingRow,
@@ -193,4 +195,9 @@ __all__ = [
     # Metamath corpus import (app/db/metamath_store.py).
     "ImportReport",
     "import_corpus",
+    # The section outline as the folder tree (app/db/outline_mapping.py).
+    "StoredOutline",
+    "store_outline",
+    "slugify",
+    "unique_slug",
 ]
