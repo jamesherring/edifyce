@@ -13,7 +13,7 @@ citation resolves against the system's own library and then its ancestors'. A
 proof proved here enters that library (§5.3), schematically if its author says
 so; and where the spine cannot reach, an edge does — including between two
 systems that disagree about what to call things (§5.4). See §8's R1–R4 for what
-landed and §9.9–9.18 for what they turned up.
+landed and §9.9–9.19 for what they turned up.
 
 What is left on Track R is the edge **CRUD**: every edge above is written
 straight to its rows, because no route creates one yet. That is also where a
@@ -929,7 +929,12 @@ failure mode is over-refusal:
 - *Rejected, each paired with the instance that must be accepted:* the same
   binder theorem cited where the proviso fails; the same `$d` theorem cited at
   equal variables; the narrowing map, against the identical map onto a target
-  whose sort does admit the branch.
+  whose sort does admit the branch. And, from review (§9.19): a production the
+  map leaves unmapped whose two spellings differ, against the same pair with the
+  correspondence declared; a map collapsing two source names onto one; a
+  definition the target spells differently, against the one it states alike; a
+  proviso over a term expression, against the same theorem's proviso over a
+  metavariable.
 - *The negative control* is the edge **without** its map: the same two systems,
   the same theorem, the same proof, and the citation does not resolve at all —
   which is what says the map is doing the work rather than the edge.
@@ -1136,7 +1141,7 @@ S1 and D1 depend on nothing and can start immediately.
    requires a complex accepted case per phase, and why the bound-variable tests
    are written in accepted/rejected pairs.
 
-The ten below are **findings from the phases that landed**, kept here because
+The eleven below are **findings from the phases that landed**, kept here because
 each is a live constraint on the work after it rather than a closed question.
 
 9. **The freshness check was position-blind, and a tower is not.** §5.1 predicted
@@ -1473,6 +1478,42 @@ each is a live constraint on the work after it rather than a closed question.
     differently here. Nothing in the two grammars settles whether the rewriting
     agrees — the same refusal, for the same reason, that `schematic_theorem`
     makes for a string step (§9.16).
+
+19. **A map is not the set of names it mentions.** Four findings from review, and
+    they are one: `translation_errors` validated the entries of the two tables,
+    while `Translation.name` is applied to *every* name a stored term carries.
+    The gap is the names nobody wrote down, and it is not a small one.
+
+    Two of the four were **unsound transfers**, both silent. A production the two
+    grammars share by name was never checked at all, so a target that kept the
+    name `implication` and spelled it `(p ∨ q)` took a theorem proved as
+    `(P → P)` and justified `(P ∨ P)` with it. And the map was not required to be
+    **injective** — the unique index behind it is on the source side only — so
+    sending both `implication` and `conjunction` to `conj` made a theorem about
+    either justify a statement about the other.
+
+    The other two **failed closed but in the wrong place**, aborting a verify
+    with a message about something else. A defined form's constructor is named
+    `<sort>:<template>`, which neither table can hold (a definition declares no
+    symbol), so it was read whole, missed, and raised out of the term rebuild —
+    against a target stating the very same definition. And a proviso argument
+    that is not a metavariable is a *term expression* in the source's notation
+    (AGENTS.md's one remaining parse), which reached `parse_side_condition` and
+    failed as a syntax error.
+
+    The fix is one shape for all four: **walk the source's whole grammar**, give
+    every name an image, and hold an *unmapped* pair to being the same production
+    down to its template — mapping a name to itself being how an author says they
+    do correspond. A defined form's sort half is translated and its template is
+    not, so a definition the two systems state alike crosses; one they spell
+    differently is refused at the edge rather than when something cites it. The
+    proviso stays a refusal, because translating that argument would mean
+    re-rendering a parse this layer never made.
+
+    The lesson generalises past this module: **whenever a substitution is applied
+    more widely than it is declared, the check belongs on the application and not
+    on the declaration.** The three checks R4b shipped with all read the two
+    tables, which is why all three passed each of these.
 
 ---
 

@@ -29,8 +29,9 @@ from tests.layered_systems import (
     renamed_first_order_spec,
     renamed_propositional_calculus_spec,
     statement_line,
+    with_defined_disjunction,
 )
-from tests.spec_helpers import brackets, regex_prod, template_prod
+from tests.spec_helpers import brackets, defn, regex_prod, template_prod
 from website.logical.declarative import SystemSpec
 
 
@@ -76,6 +77,80 @@ def test_an_unmapped_name_passes_through():
     # lets an edge state only the names that actually differ.
     assert PC_MAP.name("implication") == "imp"
     assert PC_MAP.name("something-neither-system-has") == "something-neither-system-has"
+
+
+def test_a_defined_form_is_renamed_by_its_sort():
+    # A definition declares no symbol, so neither table can name its notation —
+    # but its constructor is called `<sort>:<template>` and reaches every stored
+    # term built through it. The sort half is translated and the template is not,
+    # which is what makes a definition the two systems state alike resolve
+    # through a sort rename.
+    assert PC_MAP.name("formula:(P ∨ Q)") == "wff:(P ∨ Q)"
+    # Not a defined form, and not something to take apart on a stray colon.
+    assert PC_MAP.name("nothing:like:it") == "nothing:like:it"
+
+
+def test_a_definition_the_target_does_not_state_is_refused():
+    # And the case the renaming cannot reach: a target that spells the *defined
+    # form* differently. Nothing in the two tables can say the two correspond, so
+    # the edge is refused here rather than left to fail when a theorem happens to
+    # mention it — which is where it failed before, mid-verify and unreadably.
+    source = built(with_defined_disjunction(propositional_calculus_spec()))
+    stated = built(with_defined_disjunction(
+        renamed_propositional_calculus_spec(), "wff"
+    ))
+    assert translation_errors(source, stated, PC_MAP) == []
+
+    otherwise = renamed_propositional_calculus_spec("Otherwise")
+    otherwise.definitions = list(otherwise.definitions) + [
+        defn("wff", "disj", "(P | Q)", "(¬P → Q)", [("P", "wff"), ("Q", "wff")],
+             label="df-or")
+    ]
+    errors = translation_errors(source, built(otherwise), PC_MAP)
+
+    assert len(errors) == 1
+    assert "'formula:(P ∨ Q)'" in errors[0] and "'wff:(P ∨ Q)'" in errors[0]
+
+
+def test_an_unmapped_production_must_be_the_same_production():
+    # The gap a map's own entries cannot show: `Translation.name` is applied to
+    # every name a stored term carries, so a name the map says nothing about is
+    # still *translated* — to itself. If the two systems spell that name
+    # differently, a theorem proved about one connective is read as being about
+    # another, and the author never said so.
+    #
+    # Paired with the accepted case, which is the same two grammars and one more
+    # map entry: saying it explicitly is how an author declares exactly this.
+    diverging = renamed_propositional_calculus_spec("Diverging")
+    diverging.productions = [
+        template_prod("wff", "implication", "(p ∨ q)", [("p", "wff"), ("q", "wff")])
+        if prod.name == "imp"
+        else prod
+        for prod in diverging.productions
+    ]
+    diverging.rules = []
+    diverging.definitions = []
+    target = built(diverging)
+    partial = {name: image for name, image in PC_MAP.symbols.items()
+               if name != "implication"}
+
+    errors = translation_errors(pc(), target, Translation(PC_MAP.sorts, partial))
+    assert any("different productions that share a name" in error for error in errors)
+
+    declared = Translation(PC_MAP.sorts, {**partial, "implication": "implication"})
+    assert translation_errors(pc(), target, declared) == []
+
+
+def test_two_source_names_may_not_become_one():
+    # The map's unique index is on the source side only, so nothing below this
+    # stops two of the source's productions collapsing onto one of the target's —
+    # under which a theorem about `→` justifies a statement about `∧`.
+    collapsed = Translation(PC_MAP.sorts, {**PC_MAP.symbols, "implication": "conj"})
+    errors = translation_errors(pc(), renamed(), collapsed)
+
+    assert any("cannot become one" in error for error in errors)
+    assert any("'conjunction'" in error and "'implication'" in error
+               for error in errors)
 
 
 def test_a_rename_over_a_binder_is_accepted():

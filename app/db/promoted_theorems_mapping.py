@@ -482,6 +482,31 @@ def _require_a_citable_entry(
             "it a different meaning from the one it was proved with. Re-verify "
             "the system that owns it."
         )
+    if not layer.translation.identity:
+        # A proviso argument that is not one of the theorem's metavariables is a
+        # *term expression* parsed against the grammar (`equal(t, ∅)`, AGENTS.md
+        # on where text still becomes structure) — and it is text in the source's
+        # notation, which a rename is free to spell differently here. Translating
+        # it would mean re-rendering a parse this layer never made, so the entry
+        # is refused instead. A metavariable name is not renamed by anything and
+        # travels as it is.
+        named = {var for var, _sort in entry.metavariables}
+        foreign = sorted(
+            {
+                argument
+                for proviso in entry.provisos
+                for argument in (proviso.left_name, proviso.right_name)
+                if argument is not None and argument not in named
+            }
+        )
+        if foreign:
+            raise LookupError(
+                f"Theorem {entry.label!r} carries a proviso over "
+                + ", ".join(repr(argument) for argument in foreign)
+                + ", which is written in the notation of the system that proved "
+                "it rather than in a metavariable. It cannot be cited across a "
+                "rename."
+            )
     if not layer.translation.identity and entry.matching == "string":
         # A string-rewriting theorem is checked against surface *text*, so what
         # it says is a fact about the symbols its own system spells — and a

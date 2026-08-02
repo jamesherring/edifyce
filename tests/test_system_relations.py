@@ -18,6 +18,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from copy import copy
+from dataclasses import replace
 
 import pytest
 
@@ -57,7 +58,9 @@ from tests.layered_systems import (
     renamed_first_order_spec,
     renamed_propositional_calculus_spec,
     respelled_propositional_calculus_spec,
+    with_defined_disjunction,
 )
+from tests.spec_helpers import hyp_rule
 from website.logical.declarative import build_spec
 from website.logical.promotion import TheoremSpec
 from tests.test_cross_system_citation import (
@@ -66,6 +69,7 @@ from tests.test_cross_system_citation import (
     promote_into,
     verify_proof,
 )
+from tests.test_proof_promotion import promote, proved_and_published
 from tests.test_proofs_api import _TABLES
 from tests.test_system_inheritance import seed
 from tests.test_systems_api import _register_login
@@ -443,6 +447,67 @@ def _why(response: dict) -> str:
             ],
         ]
     )
+
+
+def test_a_defined_form_crosses_a_rename(db, client):
+    # From review. A term built through a *definition* names the notation rather
+    # than a production — `formula:(P ∨ Q)` — and neither map table can hold that
+    # name, since a definition declares no symbol. Reading it whole left the sort
+    # untranslated, so a theorem mentioning defined notation aborted the verify
+    # against a target that states the very same definition.
+    #
+    # Reached through the promotion route rather than the import one, because
+    # that is where such a term comes from: a schematic statement composed from
+    # text has no definitions in scope and stores no term at all, while a proved
+    # proof's conclusion is a parsed line and carries the notation it was written
+    # with.
+    owner = _register_login(client, "defined-rename@example.com")
+    source_spec = with_defined_disjunction(propositional_calculus_spec("Source"))
+    source_spec.rules = list(source_spec.rules) + [hyp_rule()]
+    source = seed(db, source_spec, owner, None)
+    target = seed(
+        db,
+        with_defined_disjunction(renamed_propositional_calculus_spec("Target"), "wff"),
+        owner,
+        None,
+    )
+
+    proof = proved_and_published(client, source, "(A ∨ A) [HYP]")
+    assert promote(client, proof, "oraa")[0] == 201
+    _rename(db, relate(db, source, target), **PC_RENAME)
+
+    assert verify_proof(client, db, target, "(A ∨ A) [oraa]")["success"] is True
+
+
+def test_a_proviso_over_a_term_expression_cannot_cross_a_rename(db, client):
+    # From review. A proviso argument that is not a metavariable is a term
+    # expression parsed against the grammar, so it is text in the *source's*
+    # notation — and this target spells `→` as `⊃`. Before, it reached
+    # `parse_side_condition` and failed the whole verify with a message about
+    # side-condition syntax; now it is refused for the reason it is refused for.
+    #
+    # Paired with the same theorem over a metavariable, which is what says the
+    # refusal is about the argument rather than about provisos crossing at all —
+    # the binder and `$d` tests above rest on their doing so.
+    owner = _register_login(client, "proviso-text@example.com")
+    source = seed(db, propositional_calculus_spec("Source"), owner, None)
+    target = seed(db, respelled_propositional_calculus_spec("Target"), owner, None)
+    promote_into(db, source, replace(
+        IDENTITY, label="ne", distinct=("not equal(P, (A → A))",)
+    ))
+    promote_into(db, source, TheoremSpec(
+        label="nq",
+        statement="(P → Q)",
+        metavariables={"P": "formula", "Q": "formula"},
+        distinct=("not equal(P, Q)",),
+    ))
+    _rename(db, relate(db, source, target), **PC_RENAME)
+
+    refused = verify_proof(client, db, target, "(P ⊃ P) [ne]")
+    assert refused["success"] is False
+    assert "written in the notation of the system that proved it" in _why(refused)
+
+    assert verify_proof(client, db, target, "(A ⊃ B) [nq]")["success"] is True
 
 
 def test_a_rename_may_move_the_notation_too(db, client):

@@ -30,6 +30,23 @@ a branch whose image the target's sort does not admit — and one whose image is
 not there at all. Both fail closed: an edge whose translation does not check out
 resolves nothing, on the same rule as an edge with an outstanding obligation.
 
+**It is checked over the source's grammar, not over the map.** The tables say
+what an author wrote down; :meth:`Translation.name` is applied to every name a
+stored term carries, which is a much larger set, and the difference is exactly
+the names nobody said anything about. So the whole source grammar is walked,
+every name must have an image here, and an **unmapped** name — one the map leaves
+to land on its own spelling — has to be the *same production* on both sides,
+template and all. Two systems that both say `implication` and disagree about what
+it spells are two productions sharing a name, and reading a theorem from one as a
+theorem about the other is the silent version of the failure this module exists
+to prevent. Mapping a name to itself is how an author declares that they do mean
+those two to correspond.
+
+Two more follow from the same walk. Two source names may not become **one**
+target name, since a collapse makes a theorem about either justify a statement
+about the other; and a **definition**'s notation is held to the same totality as
+a production's, since a term built through one carries its name too.
+
 Three things a rename may **not** change, and one of them is not obvious. A
 production's ``kind`` and its ``scopes_over`` are what decide how a term is built
 and what binds in it; renaming across a difference in either would give the
@@ -66,6 +83,11 @@ if TYPE_CHECKING:
     from website.logical.formal_system import FormalSystem
     from website.logical.kernel.constructors import Constructor
 
+# What separates a defined form's sort from its template in the constructor name
+# `DefinedNotation` gives it. A declared production's name can never contain it,
+# which is what lets one lookup serve both namespaces (see `TermGraph._constructor`).
+NOTATION_SEPARATOR = ":"
+
 
 @dataclass(frozen=True)
 class Translation:
@@ -96,12 +118,28 @@ class Translation:
 
         Unmapped names pass through, so a partial map is the identity on
         everything it does not mention. That is what lets an edge state only the
-        names that actually differ.
+        names that actually differ — and :func:`translation_errors` is what makes
+        the silence safe, by holding an unmapped name to being the *same*
+        production on both sides rather than merely a name both spell.
+
+        A **defined form** is named ``<sort>:<template>``
+        (:class:`~website.logical.matching.definitions.DefinedNotation`), which
+        neither table can hold: a definition declares no symbol row. Its sort
+        half is translated and its template left alone, so a definition the two
+        systems state alike resolves through a sort rename — and one they spell
+        differently is refused by :func:`translation_errors` rather than left to
+        fail when something cites it.
         """
         renamed = self.symbols.get(stored)
         if renamed is not None:
             return renamed
-        return self.sorts.get(stored, stored)
+        direct = self.sorts.get(stored)
+        if direct is not None:
+            return direct
+        sort, separator, template = stored.partition(NOTATION_SEPARATOR)
+        if separator and sort in self.sorts:
+            return f"{self.sorts[sort]}{separator}{template}"
+        return stored
 
     @property
     def key(self) -> str:
@@ -134,6 +172,20 @@ def translation_errors(
     is refusing, because a rename's failures are otherwise unreadable: the whole
     difficulty is that two names denote the same thing, or fail to.
 
+    Checked over the **source's whole grammar**, not over the map's entries.
+    :meth:`Translation.name` is applied to every name a stored term carries, so a
+    check that read only the two tables would validate a fraction of what the
+    translation actually does — and the names it skipped are exactly the ones the
+    author said nothing about, which is where a silent divergence lives.
+
+    So every production and sort of the source is required to have an image here,
+    and the two are held to corresponding. What that means depends on whether the
+    author said so: a **mapped** name is a declared correspondence, so its image
+    may be spelled differently (that is the interpretation), while an **unmapped**
+    one is only a name both systems happen to use, and must be the same
+    production down to its template. Mapping a name to itself is how an author
+    declares the first about a name the second would refuse.
+
     The sort half is §3.2, and is the reason this function takes built systems
     rather than specs: a sort's branches are :attr:`Constructor.admits`, which
     only exists once the grammar has been projected.
@@ -143,61 +195,123 @@ def translation_errors(
 
     source_grammar = _grammar(source)
     target_grammar = _grammar(target)
-    errors: list[str] = []
+    declared = set(translation.sorts) | set(translation.symbols)
+    errors = [
+        f"The map renames {name!r}, which the source system's grammar does not "
+        "declare."
+        for name in sorted(declared - set(source_grammar))
+    ]
+    errors.extend(_collision_errors(source_grammar, translation))
 
-    for original, renamed in sorted(translation.symbols.items()):
-        pair, missing = _mapped(source_grammar, target_grammar, original, renamed)
-        errors.extend(missing)
-        if pair is not None:
-            errors.extend(_shape_errors(original, renamed, *pair))
-
-    for original, renamed in sorted(translation.sorts.items()):
-        pair, missing = _mapped(source_grammar, target_grammar, original, renamed)
-        errors.extend(missing)
-        if pair is None:
-            continue
-        from_sort, to_sort = pair
-        admitted = {constructor.name for constructor in to_sort.admits}
-        for branch in sorted(from_sort.admits, key=lambda c: c.name):
-            image = translation.name(branch.name)
-            if image in admitted:
-                continue
+    for original in sorted(source_grammar):
+        renamed = translation.name(original)
+        to_pattern = target_grammar.get(renamed)
+        if to_pattern is None:
             errors.append(
-                f"Sort {original!r} admits {branch.name!r}, whose image "
-                f"{image!r} the target's {renamed!r} does not admit, so the map "
-                "narrows: a statement the source could make would not be a "
-                "statement of the target."
+                f"The source's {original!r} is read here as {renamed!r}, which "
+                "the target system's grammar does not declare."
             )
+            continue
+        errors.extend(
+            _correspondence_errors(
+                original,
+                renamed,
+                constructor_for(source_grammar[original]),
+                constructor_for(to_pattern),
+                translation,
+                declared=original in declared,
+            )
+        )
 
+    return errors + _notation_errors(source, target, translation)
+
+
+def _collision_errors(
+    source_grammar: Mapping[str, Pattern], translation: Translation
+) -> list[str]:
+    # Two of the source's names may not become one of the target's. The unique
+    # index behind the map is on the *source* side only, so nothing else stops it,
+    # and a collapse makes two of the source's connectives one of the target's —
+    # under which a theorem about one justifies a statement about the other.
+    #
+    # This is a restriction on what an author may state rather than a soundness
+    # argument: an interpretation that genuinely identifies two primitives is
+    # sound when its obligations discharge, and would want a way to say so. It is
+    # refused because nothing in this codebase can tell that apart from a
+    # mis-stated map, and the two names are always available to say it another
+    # way. Read over the whole grammar, since an unmapped name lands on its own
+    # spelling and can collide with a mapped one just as easily.
+    taken: dict[str, str] = {}
+    errors: list[str] = []
+    for original in sorted(source_grammar):
+        renamed = translation.name(original)
+        held = taken.setdefault(renamed, original)
+        if held != original:
+            errors.append(
+                f"The map reads both {held!r} and {original!r} as {renamed!r}. "
+                "Two of the source's productions cannot become one of the "
+                "target's: a theorem about either would then justify a statement "
+                "about the other."
+            )
     return errors
 
 
-def _mapped(
-    source_grammar: Mapping[str, Pattern],
-    target_grammar: Mapping[str, Pattern],
+def _correspondence_errors(
     original: str,
     renamed: str,
-) -> tuple[tuple[Constructor, Constructor] | None, list[str]]:
-    # Both ends of one map entry, projected — and the reasons there is no such
-    # pair. A name absent from either grammar is a mis-stated edge rather than a
-    # narrowing, and saying *which side* is missing is the whole of the
-    # diagnosis, so both are reported rather than the first.
-    from_pattern = source_grammar.get(original)
-    to_pattern = target_grammar.get(renamed)
-    errors: list[str] = []
-    if from_pattern is None:
+    from_constructor: Constructor,
+    to_constructor: Constructor,
+    translation: Translation,
+    declared: bool,
+) -> list[str]:
+    # Everything asked of one source name and its image: that they are the same
+    # shape of production, that an unmapped pair really is one production under
+    # one name, and — for a sort — that the target's admits what the source's did.
+    errors = _shape_errors(original, renamed, from_constructor, to_constructor)
+    if not declared and from_constructor.signature != to_constructor.signature:
         errors.append(
-            f"The map renames {original!r}, which the source system's grammar "
-            "does not declare."
+            f"{original!r} is spelled {from_constructor.signature[-1]!r} in the "
+            f"source and {to_constructor.signature[-1]!r} here, and the map does "
+            "not mention it — so the two are different productions that share a "
+            "name. Map it explicitly if they are meant to correspond."
         )
-    if to_pattern is None:
+
+    admitted = {constructor.name for constructor in to_constructor.admits}
+    for branch in sorted(from_constructor.admits, key=lambda c: c.name):
+        image = translation.name(branch.name)
+        if image in admitted:
+            continue
         errors.append(
-            f"The map sends {original!r} to {renamed!r}, which the target "
-            "system's grammar does not declare."
+            f"Sort {original!r} admits {branch.name!r}, whose image "
+            f"{image!r} the target's {renamed!r} does not admit, so the map "
+            "narrows: a statement the source could make would not be a "
+            "statement of the target."
         )
-    if from_pattern is None or to_pattern is None:
-        return None, errors
-    return (constructor_for(from_pattern), constructor_for(to_pattern)), errors
+    return errors
+
+
+def _notation_errors(
+    source: FormalSystem, target: FormalSystem, translation: Translation
+) -> list[str]:
+    # A defined form is a production of the grammar too — `x ⊆ y` builds a formula
+    # exactly as `(p → q)` does — but it is nobody's union member and holds no
+    # symbol row, so `_grammar` cannot see it and neither table can name it. Its
+    # constructor name still reaches a stored term, so the same totality is asked
+    # of it here: every notation the source's definitions introduce must have an
+    # image among the target's.
+    #
+    # Only the *defined* form is compared. What the two systems define it to mean
+    # is their own business, on the same ground as an atom's value: reinterpreting
+    # a symbol is what an interpretation does, and §2's obligations are what carry
+    # it.
+    available = {notation.template.name for notation in target.context.definitions}
+    return [
+        f"The source's definition of {notation.template.name!r} is read here as "
+        f"{translation.name(notation.template.name)!r}, which this system defines "
+        "no notation for."
+        for notation in source.context.definitions
+        if translation.name(notation.template.name) not in available
+    ]
 
 
 def _shape_errors(

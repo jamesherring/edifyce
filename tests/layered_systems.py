@@ -333,6 +333,22 @@ def renamed_propositional_calculus_spec(name: str = "Renamed") -> SystemSpec:
     )
 
 
+def with_defined_disjunction(spec: SystemSpec, sort: str = "formula") -> SystemSpec:
+    """Add ``(P ∨ Q) ≝ (¬P → Q)`` — notation **no production spells**.
+
+    The ``∧`` above is declared *and* defined, so the parser reaches it as a
+    production and a term built through it carries that production's name. This
+    one is defined only, so a term built through it carries the *notation's*
+    name — ``<sort>:(P ∨ Q)``, which is the one kind of constructor name a rename
+    has to reach inside rather than look up whole (R4b).
+    """
+    spec.definitions = list(spec.definitions) + [
+        defn(sort, "disj", "(P ∨ Q)", "(¬P → Q)",
+             [("P", sort), ("Q", sort)], label="df-or")
+    ]
+    return spec
+
+
 def respelled_propositional_calculus_spec(name: str = "Respelled") -> SystemSpec:
     """:func:`renamed_propositional_calculus_spec`, and the *notation* moves too.
 
