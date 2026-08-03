@@ -11,7 +11,11 @@ things, in the order they are worth acting on:
 spells them. The list that matters, and the one a per-production override answers
 (`setmm.DISPLAY_OVERRIDES`). A token map covering every token can still leave a
 *production* in ASCII, because each of its tokens maps to itself: `set.mm`'s
-``( F ` A )`` is exactly that, and TeX sets its backtick as an opening quote.
+``( F ` A )`` is exactly that, and TeX sets its backtick as an opening quote. A
+production listed here may instead be right as it is and want a *shape* answered
+— ``( A F B )`` reads correctly, and what wants saying is that a particular `F` in
+it means division (`setmm.DISPLAY_RULES`); the header counts the rules this
+grammar can take.
 
 **unmapped** — tokens the map does not spell. Cosmetic: the token renders as
 itself and the result is mixed but readable.
@@ -38,12 +42,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from website.logical.declarative import build_system  # noqa: E402
 from website.logical.metamath import build_spec, parse  # noqa: E402
 from website.logical.metamath.display import (  # noqa: E402
+    applicable_rules,
+    notation_constructors,
     notation_report,
     projection_for,
     verbatim,
     with_overrides,
+    with_rules,
 )
-from website.logical.metamath.setmm import DISPLAY_OVERRIDES  # noqa: E402
+from website.logical.metamath.setmm import (  # noqa: E402
+    DISPLAY_OVERRIDES,
+    DISPLAY_RULES,
+)
 from website.logical.metamath.typesetting import as_text, typesetting_of  # noqa: E402
 
 if TYPE_CHECKING:
@@ -68,7 +78,10 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument(
         "--raw",
         action="store_true",
-        help="report the map as declared, before this repo's curated overrides",
+        help=(
+            "report the map as declared, before this repo's curated overrides "
+            "and rules"
+        ),
     )
     parser.add_argument(
         "--limit", type=int, default=40, help="how many entries to list per section"
@@ -113,6 +126,13 @@ def main() -> int:
     )
     overrides = {} if arguments.raw else DISPLAY_OVERRIDES.get(arguments.notation, {})
     projection = with_overrides(projection, overrides)
+    constructors = notation_constructors(system.build_context, system.definitions)
+    rules = (
+        []
+        if arguments.raw
+        else applicable_rules(DISPLAY_RULES.get(arguments.notation, ()), constructors)
+    )
+    projection = with_rules(projection, rules)
     # Against the projection actually being adopted, not the raw map: an override
     # replaces a template wholesale, so a collision one introduces is invisible to
     # a token-level check — and that is the only kind curating this table can
@@ -129,6 +149,9 @@ def main() -> int:
     print(f"  productions spelt {len(projection.templates)}")
     if overrides:
         print(f"  overrides applied {len(overrides)} ({', '.join(sorted(overrides))})")
+    if rules:
+        named = ', '.join(sorted(rule.name for rule in rules))
+        print(f"  rules applied     {len(rules)} ({named})")
 
     left = verbatim(system.build_context, projection, system.definitions)
     print(f"\n  verbatim — {len(left)} compound productions left as the source spells them")

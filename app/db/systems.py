@@ -522,3 +522,109 @@ class NotationPieceRow(Base):
     text: Mapped[str] = mapped_column(String(512))
 
     system: Mapped["FormalSystem"] = relationship(back_populates="notation_pieces")
+
+
+def _notation_rule_fk() -> Mapped[uuid.UUID]:
+    return mapped_column(
+        ForeignKey("notation_rules.id", ondelete="CASCADE"), index=True
+    )
+
+
+class NotationRuleRow(Base):
+    """One shape-matched spelling in one named notation.
+
+    :class:`NotationPieceRow` re-spells a production, which reaches everything a
+    per-token map derives and stops exactly where the interesting symbol is an
+    *operand*: `set.mm` writes ``( sqrt ` 2 )`` as generic application holding the
+    constant `csqrt`, and ``( A / B )`` as a generic binary operation holding
+    `cdiv`, so no template for either production says `\\sqrt{2}` or `\\frac{A}{B}`.
+    A rule is the shape written down — this row is its root production, its pins
+    are :class:`NotationRulePinRow` and its template is
+    :class:`NotationRulePieceRow`.
+
+    Three tables rather than one with a discriminator, because the three carry
+    genuinely different columns: a pin is a path and a required production, a step
+    is an ordered kind and text. Encoding either into the other's columns is the
+    kind of thing that reads fine and is unpicked by hand later.
+
+    Nothing here reaches the checker, as with the pieces: a wrong rule renders
+    badly and cannot make a false proof check.
+    """
+
+    __tablename__ = "notation_rules"
+    __table_args__ = (
+        # A rule's name is what a child system overrides it by, so it identifies
+        # the rule within its notation.
+        Index(
+            "uq_notation_rules_system_notation_name",
+            "formal_system_id",
+            "notation",
+            "name",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk_column()
+    formal_system_id: Mapped[uuid.UUID] = _system_fk()
+    notation: Mapped[str] = mapped_column(String(64))
+    # The rule's own name — "sqrt", "fraction". A curator's handle, and the key a
+    # nearer layer replaces it by; nothing dispatches on it.
+    name: Mapped[str] = mapped_column(String(128))
+    # The production at the root of the shape, by `Constructor.name`.
+    constructor: Mapped[str] = mapped_column(String(512), index=True)
+    position: Mapped[int] = _position()
+
+    system: Mapped["FormalSystem"] = relationship(back_populates="notation_rules")
+    pins: Mapped[list["NotationRulePinRow"]] = relationship(
+        back_populates="rule",
+        cascade="all, delete-orphan",
+        order_by="NotationRulePinRow.slot",
+    )
+    pieces: Mapped[list["NotationRulePieceRow"]] = relationship(
+        back_populates="rule",
+        cascade="all, delete-orphan",
+        order_by="NotationRulePieceRow.position",
+    )
+
+
+class NotationRulePinRow(Base):
+    """What a rule requires at one slot path, for it to apply."""
+
+    __tablename__ = "notation_rule_pins"
+    __table_args__ = (
+        Index("uq_notation_rule_pins_rule_slot", "rule_id", "slot", unique=True),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk_column()
+    rule_id: Mapped[uuid.UUID] = _notation_rule_fk()
+    # A dotted path of slot labels from the root — "F", or "F.G" for a grandchild.
+    # Metamath slot labels are variable names, so the dot is free.
+    slot: Mapped[str] = mapped_column(String(512))
+    # The production that must sit there, by `Constructor.name`.
+    constructor: Mapped[str] = mapped_column(String(512))
+
+    rule: Mapped[NotationRuleRow] = relationship(back_populates="pins")
+
+
+class NotationRulePieceRow(Base):
+    """One render step of a rule's template.
+
+    The same two kinds :class:`NotationPieceRow` carries, except that a "slot"'s
+    text is a *path* rather than a bare label — which is what lets a rule name a
+    grandchild the root's own template cannot reach.
+    """
+
+    __tablename__ = "notation_rule_pieces"
+    __table_args__ = (
+        Index(
+            "uq_notation_rule_pieces_rule_position", "rule_id", "position", unique=True
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk_column()
+    rule_id: Mapped[uuid.UUID] = _notation_rule_fk()
+    position: Mapped[int] = _position()
+    kind: Mapped[str] = mapped_column(String(8))
+    text: Mapped[str] = mapped_column(String(512))
+
+    rule: Mapped[NotationRuleRow] = relationship(back_populates="pieces")

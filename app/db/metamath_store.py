@@ -58,9 +58,11 @@ from website.logical.metamath.corpus import corpus_spec, theorems, walk
 from website.logical.metamath.comments import read_comment
 from website.logical.metamath.display import (
     applicable,
+    applicable_rules,
     notation_constructors,
     projection_for,
     with_overrides,
+    with_rules,
 )
 from website.logical.metamath.sections import outline
 from website.logical.metamath.typesetting import as_text, typesetting_of
@@ -68,13 +70,14 @@ from website.logical.rendering import total_projection
 from website.logical.metamath.importer import LibraryEntry
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Mapping, Sequence
 
     from website.logical.declarative import SystemSpec
     from website.logical.metamath.comments import Description
     from website.logical.metamath.corpus import CheckedTheorem
     from website.logical.kernel.constructors import Piece
     from website.logical.metamath.parser import Database
+    from website.logical.rendering import Rule
 
 # Kept short deliberately: the report is a summary, and a run where thousands
 # fail should be diagnosed from the corpus, not from a list carried in memory.
@@ -130,6 +133,7 @@ def import_corpus(
     batch: int | None = None,
     progress: Callable[[ImportReport, CheckedTheorem], None] | None = None,
     overrides: Mapping[str, Mapping[str, tuple[Piece, ...]]] | None = None,
+    rules: Mapping[str, Sequence[Rule]] | None = None,
 ) -> ImportReport:
     """Import ``database``'s first ``limit`` theorems into ``session``.
 
@@ -141,11 +145,15 @@ def import_corpus(
     after each theorem with the running report.
 
     ``overrides`` re-spells named productions in a named notation by hand, where
-    the faithful re-spelling reads badly. Defaulted to nothing and passed in, like
-    the binder table `corpus_spec` takes: a curated table is a fact about one
-    library (`setmm.DISPLAY_OVERRIDES` is `set.mm`'s), and this module imports any
-    `.mm`. `display.applicable` drops one this grammar cannot use, so handing over
-    the wrong library's table costs nothing rather than storing nonsense.
+    the faithful re-spelling reads badly, and ``rules`` does the same for the
+    spellings that span two productions — `( sqrt ` A )` as `\\sqrt{A}`, which is
+    `cfv` applied to a constant and so reachable by no per-production template.
+    Both are defaulted to nothing and passed in, like the binder table
+    `corpus_spec` takes: a curated table is a fact about one library
+    (`setmm.DISPLAY_OVERRIDES` and `setmm.DISPLAY_RULES` are `set.mm`'s), and this
+    module imports any `.mm`. `display.applicable` and `display.applicable_rules`
+    drop what this grammar cannot use, so handing over the wrong library's tables
+    costs nothing rather than storing nonsense.
 
     The system is created ownerless; see this module's docstring for why.
     """
@@ -213,7 +221,7 @@ def import_corpus(
     _link_proofs_to_theorems(session, report.system_id, library.ids)
     report.described = store_descriptions(session, report.system_id, descriptions)
     report.notation = _store_notation(
-        session, database, spec, report.system_id, overrides or {}
+        session, database, spec, report.system_id, overrides or {}, rules or {}
     )
     if batch is not None:
         session.commit()
@@ -250,6 +258,7 @@ def _store_notation(
     spec: SystemSpec,
     system_id: uuid.UUID,
     overrides: Mapping[str, Mapping[str, tuple[Piece, ...]]],
+    rules: Mapping[str, Sequence[Rule]],
 ) -> int:
     """Store every notation this file describes, returning how many templates.
 
@@ -263,7 +272,8 @@ def _store_notation(
     ``overrides`` is the editorial layer, by notation name then constructor
     (`setmm.DISPLAY_OVERRIDES`): a token map re-spells a production's tokens and
     leaves its shape alone, which is right nearly everywhere and wrong in the few
-    places a hand-written template fixes.
+    places a hand-written template fixes. ``rules`` is the same layer for what a
+    per-production template cannot say at all (`setmm.DISPLAY_RULES`).
     """
     typesetting = typesetting_of(database.comments)
     if typesetting is None:
@@ -293,17 +303,24 @@ def _store_notation(
     for name, tokens in declared.items():
         if not tokens:
             continue
-        spellings = with_overrides(
-            projection_for(
-                engine.build_context, tokens, name=name, definitions=engine.definitions
+        spellings = with_rules(
+            with_overrides(
+                projection_for(
+                    engine.build_context,
+                    tokens,
+                    name=name,
+                    definitions=engine.definitions,
+                ),
+                applicable(overrides.get(name, {}), constructors),
             ),
-            applicable(overrides.get(name, {}), constructors),
+            applicable_rules(rules.get(name, ()), constructors),
         )
-        if not spellings.templates:
-            # Declared, but about tokens this grammar's productions never use.
-            # Storing the completion anyway would advertise a notation that
-            # re-spells nothing — every constructor at its source template, which
-            # is what a reader already gets by asking for no notation at all.
+        if not (spellings.templates or spellings.rules):
+            # Declared, but about tokens this grammar's productions never use, and
+            # with no rule applying either. Storing the completion anyway would
+            # advertise a notation that re-spells nothing — every constructor at
+            # its source template, which is what a reader already gets by asking
+            # for no notation at all.
             continue
         stored += store_notation(
             session, system_id, total_projection(constructors, spellings)
