@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.db.metamath_store import ImportReport, import_corpus  # noqa: E402
 from app.db.session import get_engine, get_sessionmaker  # noqa: E402
 from website.logical.metamath import CheckedTheorem, parse  # noqa: E402
+from website.logical.metamath.setmm import DISPLAY_OVERRIDES  # noqa: E402
 
 
 def _positive(value: str) -> int:
@@ -49,6 +50,15 @@ def _arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--quiet", action="store_true", help="suppress the per-theorem progress line"
+    )
+    parser.add_argument(
+        "--setmm-overrides",
+        action="store_true",
+        help=(
+            "apply the curated set.mm per-production display overrides "
+            "(setmm.DISPLAY_OVERRIDES). Off by default: a Metamath label is local "
+            "to its library, so the table means what it says only for set.mm"
+        ),
     )
     return parser.parse_args()
 
@@ -101,6 +111,11 @@ async def main() -> int:
                 name=arguments.name,
                 batch=arguments.batch,
                 progress=progress,
+                # Opt-in, because a Metamath label is local to its library: a
+                # foreign `cfv` matching set.mm's name and slots would still be
+                # rendered by set.mm's judgement about what `cfv` means.
+                # `display.applicable` stops the mess, not the presumption.
+                overrides=DISPLAY_OVERRIDES if arguments.setmm_overrides else None,
             )
         )
     await get_engine().dispose()

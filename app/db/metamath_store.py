@@ -56,9 +56,14 @@ from app.db.systems_mapping import spec_to_system
 from website.logical.declarative import build_system, library_digest
 from website.logical.metamath.corpus import corpus_spec, theorems, walk
 from website.logical.metamath.comments import read_comment
-from website.logical.metamath.display import notation_constructors, unicode_projection
+from website.logical.metamath.display import (
+    applicable,
+    notation_constructors,
+    projection_for,
+    with_overrides,
+)
 from website.logical.metamath.sections import outline
-from website.logical.metamath.typesetting import typesetting_of
+from website.logical.metamath.typesetting import as_text, typesetting_of
 from website.logical.rendering import total_projection
 from website.logical.metamath.importer import LibraryEntry
 
@@ -68,6 +73,7 @@ if TYPE_CHECKING:
     from website.logical.declarative import SystemSpec
     from website.logical.metamath.comments import Description
     from website.logical.metamath.corpus import CheckedTheorem
+    from website.logical.kernel.constructors import Piece
     from website.logical.metamath.parser import Database
 
 # Kept short deliberately: the report is a summary, and a run where thousands
@@ -93,8 +99,9 @@ class ImportReport:
     failed: int = 0
     lines: int = 0
     formulas: int = 0
-    # Constructors given a spelling in the stored `unicode` notation, or 0 for a
-    # database carrying no `$t` block to derive one from.
+    # Constructors given a spelling across every stored notation, or 0 for a
+    # database carrying no `$t` block to derive one from. A file declaring both
+    # `althtmldef` and `latexdef` stores two notations and counts both.
     notation: int = 0
     # Labels this run stored a description for. Not the same as `checked`: a `$a`
     # is documented and never checked, and a comment that is only an attribution
@@ -122,6 +129,7 @@ def import_corpus(
     name: str = "Metamath",
     batch: int | None = None,
     progress: Callable[[ImportReport, CheckedTheorem], None] | None = None,
+    overrides: Mapping[str, Mapping[str, tuple[Piece, ...]]] | None = None,
 ) -> ImportReport:
     """Import ``database``'s first ``limit`` theorems into ``session``.
 
@@ -131,6 +139,13 @@ def import_corpus(
     many theorems, which is what keeps a whole-corpus run's memory flat and its
     per-proof cost from growing with the transaction. ``progress`` is called
     after each theorem with the running report.
+
+    ``overrides`` re-spells named productions in a named notation by hand, where
+    the faithful re-spelling reads badly. Defaulted to nothing and passed in, like
+    the binder table `corpus_spec` takes: a curated table is a fact about one
+    library (`setmm.DISPLAY_OVERRIDES` is `set.mm`'s), and this module imports any
+    `.mm`. `display.applicable` drops one this grammar cannot use, so handing over
+    the wrong library's table costs nothing rather than storing nonsense.
 
     The system is created ownerless; see this module's docstring for why.
     """
@@ -197,7 +212,9 @@ def import_corpus(
 
     _link_proofs_to_theorems(session, report.system_id, library.ids)
     report.described = store_descriptions(session, report.system_id, descriptions)
-    report.notation = _store_notation(session, database, spec, report.system_id)
+    report.notation = _store_notation(
+        session, database, spec, report.system_id, overrides or {}
+    )
     if batch is not None:
         session.commit()
     return report
@@ -228,36 +245,70 @@ def _descriptions_of(
 
 
 def _store_notation(
-    session: Session, database: Database, spec: SystemSpec, system_id: uuid.UUID
+    session: Session,
+    database: Database,
+    spec: SystemSpec,
+    system_id: uuid.UUID,
+    overrides: Mapping[str, Mapping[str, tuple[Piece, ...]]],
 ) -> int:
-    # The motivating case for notations, and the reason they are stored at all: a
-    # `.mm` file carries its own readable spellings in a `$t` block, and without
-    # somewhere to put them an imported corpus can only ever be read as ASCII.
-    #
-    # Derived here because deriving needs what only an import has - the file's
-    # `$t` and the grammar the file built. A reader has rows.
+    """Store every notation this file describes, returning how many templates.
+
+    The motivating case for notations, and the reason they are stored at all: a
+    `.mm` file carries its own readable spellings in a `$t` block, and without
+    somewhere to put them an imported corpus can only ever be read as ASCII.
+
+    Derived here because deriving needs what only an import has — the file's `$t`
+    and the grammar the file built. A reader has rows.
+
+    ``overrides`` is the editorial layer, by notation name then constructor
+    (`setmm.DISPLAY_OVERRIDES`): a token map re-spells a production's tokens and
+    leaves its shape alone, which is right nearly everywhere and wrong in the few
+    places a hand-written template fixes.
+    """
     typesetting = typesetting_of(database.comments)
-    if typesetting is None or not typesetting.unicode:
-        # A `$t` block need not declare `althtmldef` at all - it may carry only
-        # `latexdef`/`htmldef`, or nothing but site configuration - and a block
-        # that declares no Unicode is as good as no block. Checked before the
-        # build, which is the expensive half.
+    if typesetting is None:
+        return 0
+
+    # A `$t` block need not declare a map this reads. `htmldef` is deliberately not
+    # among them: it is HTML built for `set.mm`'s own site, and `as_text` of it
+    # gives back roughly what `althtmldef` already does, so a third near-duplicate
+    # notation would cost rows and say nothing new.
+    declared = {
+        "unicode": {
+            token: as_text(value) for token, value in typesetting.unicode.items()
+        },
+        "latex": dict(typesetting.latex),
+    }
+    if not any(declared.values()):
+        # Checked before the build, which is the expensive half: a block carrying
+        # only `htmldef`, or nothing but site configuration, must not pay for a
+        # whole-corpus compile to store nothing.
         return 0
 
     engine = build_system(spec)
-    spellings = unicode_projection(engine, typesetting)
-    if not spellings.templates:
-        # Declared, but about tokens this grammar's productions never use. Storing
-        # the completion anyway would advertise a `unicode` notation that re-spells
-        # nothing - every constructor at its source template, which is what a
-        # reader already gets by asking for no notation at all.
-        return 0
-
-    projection = total_projection(
-        notation_constructors(engine.build_context, engine.definitions),
-        spellings,
-    )
-    return store_notation(session, system_id, projection)
+    constructors = notation_constructors(engine.build_context, engine.definitions)
+    stored = 0
+    # `unicode` first, since it is the one a reader is offered by default. The two
+    # are independent: a file declaring only `latexdef` gets only a `latex` one.
+    for name, tokens in declared.items():
+        if not tokens:
+            continue
+        spellings = with_overrides(
+            projection_for(
+                engine.build_context, tokens, name=name, definitions=engine.definitions
+            ),
+            applicable(overrides.get(name, {}), constructors),
+        )
+        if not spellings.templates:
+            # Declared, but about tokens this grammar's productions never use.
+            # Storing the completion anyway would advertise a notation that
+            # re-spells nothing — every constructor at its source template, which
+            # is what a reader already gets by asking for no notation at all.
+            continue
+        stored += store_notation(
+            session, system_id, total_projection(constructors, spellings)
+        )
+    return stored
 
 
 def _link_proofs_to_theorems(

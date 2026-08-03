@@ -96,19 +96,33 @@ def test_a_database_with_no_typesetting_stores_none() -> None:
         assert session.scalars(select(NotationPieceRow)).all() == []
 
 
-def test_a_typesetting_block_that_declares_no_unicode_stores_none() -> None:
-    # A `$t` block need not carry `althtmldef`: `set.mm` declares three maps over
-    # the same tokens, and a file may declare only the LaTeX and HTML ones, or
-    # nothing but site configuration. Completing an empty projection would store a
-    # `unicode` notation spelling every constructor exactly as the source does —
-    # advertising a reading that is the one a reader gets by asking for none.
+def test_each_map_a_block_declares_becomes_its_own_notation() -> None:
+    # A `$t` block need not carry every map: `set.mm` declares all three over the
+    # same tokens, and a file may declare only one. Each is independent, so a file
+    # that declares only `latexdef` gets a `latex` reading and no `unicode` one.
     latex_only = SOURCE.replace("althtmldef", "latexdef")
     with database() as session:
         report = import_corpus(session, parse(latex_only), name="t")
         session.commit()
 
-        assert report.notation == 0
-        assert session.scalars(select(NotationPieceRow)).all() == []
+        assert report.notation > 0
+        found = session.scalars(select(NotationPieceRow.notation).distinct()).all()
+        assert list(found) == ["latex"]
+
+
+def test_a_block_declaring_both_maps_stores_both_readings() -> None:
+    # The set.mm case: one file, two readings of the same terms, neither costing
+    # a second copy of a term.
+    both = SOURCE.replace(
+        """  althtmldef "e." as ' &isin; ';""",
+        """  althtmldef "e." as ' &isin; ';\n  latexdef "e." as "\\in";""",
+    )
+    with database() as session:
+        import_corpus(session, parse(both), name="t")
+        session.commit()
+
+        found = session.scalars(select(NotationPieceRow.notation).distinct()).all()
+        assert sorted(found) == ["latex", "unicode"]
 
 
 def test_a_typesetting_block_about_other_tokens_stores_none() -> None:
