@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 # The script lives under `scripts/`, so the repo root is not on the path when it
 # is run directly (`python scripts/notation_report.py`).
@@ -44,6 +45,9 @@ from website.logical.metamath.display import (  # noqa: E402
 )
 from website.logical.metamath.setmm import DISPLAY_OVERRIDES  # noqa: E402
 from website.logical.metamath.typesetting import as_text, typesetting_of  # noqa: E402
+
+if TYPE_CHECKING:
+    from website.logical.kernel.constructors import Constructor
 
 # Which `$t` directive each notation is derived from, and whether its values are
 # markup. Both HTML directives are — `htmldef` is entities and `<SPAN>` wrappers
@@ -72,7 +76,7 @@ def _arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _template(constructor) -> str:  # noqa: ANN001 - a kernel Constructor
+def _template(constructor: Constructor) -> str:
     """A production's source spelling, slots braced, for reading in a terminal."""
     return "".join(
         text if kind == "lit" else "{" + text + "}" for kind, text in constructor.pieces
@@ -81,7 +85,9 @@ def _template(constructor) -> str:  # noqa: ANN001 - a kernel Constructor
 
 def main() -> int:
     arguments = _arguments()
-    database = parse(arguments.source.read_text())
+    # `.mm` is UTF-8 (set.mm's comments and `$t` block are not ASCII); reading it
+    # under the platform locale fails outright wherever that is not UTF-8.
+    database = parse(arguments.source.read_text(encoding="utf-8"))
     typesetting = typesetting_of(database.comments)
     if typesetting is None:
         print(f"{arguments.source}: no $t block, so no notation to report on.")
@@ -107,7 +113,16 @@ def main() -> int:
     )
     overrides = {} if arguments.raw else DISPLAY_OVERRIDES.get(arguments.notation, {})
     projection = with_overrides(projection, overrides)
-    report = notation_report(system.build_context, tokens, system.context.definitions)
+    # Against the projection actually being adopted, not the raw map: an override
+    # replaces a template wholesale, so a collision one introduces is invisible to
+    # a token-level check — and that is the only kind curating this table can
+    # create.
+    report = notation_report(
+        system.build_context,
+        tokens,
+        system.context.definitions,
+        templates=projection.templates,
+    )
 
     print(f"{arguments.source} — {arguments.notation}")
     print(f"  tokens declared   {len(tokens)}")

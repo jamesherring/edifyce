@@ -52,11 +52,12 @@ def _arguments() -> argparse.Namespace:
         "--quiet", action="store_true", help="suppress the per-theorem progress line"
     )
     parser.add_argument(
-        "--no-overrides",
+        "--setmm-overrides",
         action="store_true",
         help=(
-            "skip the curated per-production display overrides, storing each "
-            "notation exactly as the file's $t map derives it"
+            "apply the curated set.mm per-production display overrides "
+            "(setmm.DISPLAY_OVERRIDES). Off by default: a Metamath label is local "
+            "to its library, so the table means what it says only for set.mm"
         ),
     )
     return parser.parse_args()
@@ -110,11 +111,11 @@ async def main() -> int:
                 name=arguments.name,
                 batch=arguments.batch,
                 progress=progress,
-                # `set.mm`'s table, and this script imports any `.mm` — but an
-                # override naming a constructor this grammar lacks, or slots it
-                # does not take, is dropped rather than stored (`display.applicable`),
-                # so handing it over costs a file that is not `set.mm` nothing.
-                overrides=None if arguments.no_overrides else DISPLAY_OVERRIDES,
+                # Opt-in, because a Metamath label is local to its library: a
+                # foreign `cfv` matching set.mm's name and slots would still be
+                # rendered by set.mm's judgement about what `cfv` means.
+                # `display.applicable` stops the mess, not the presumption.
+                overrides=DISPLAY_OVERRIDES if arguments.setmm_overrides else None,
             )
         )
     await get_engine().dispose()

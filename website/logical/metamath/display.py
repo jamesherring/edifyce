@@ -237,18 +237,24 @@ def applicable(
     so `{F}\\left({A}\\right)` over a two-slot ``cfv`` spelled `f`/`x` would put a
     literal ``F`` on the page.
 
-    So an override survives only if the grammar has that constructor and it takes
-    every slot the override names. Refusing beats rendering nonsense, and it is
-    what lets a caller hand the table to any import without checking first.
+    So an override survives only if the grammar has that constructor and their
+    slots match **exactly** — same names, no more and no fewer. A subset is not
+    enough: a foreign ``cfv`` taking `F`, `A` *and* `B` would pass a
+    names-it-mentions test while silently dropping `B` from every rendering, which
+    is a term shown as something it is not. Refusing beats both that and rendering
+    a bare slot label, and it is what lets a caller hand the table to any import
+    without checking the grammar first.
+
+    Matching names and arity is still not proof of matching *meaning* — a Metamath
+    label is local to its library — so a caller applying another library's table
+    is making a judgement. It is just no longer making a silent mess.
     """
     known = {constructor.name: constructor for constructor in constructors}
     return {
         name: pieces
         for name, pieces in overrides.items()
         if (constructor := known.get(name)) is not None
-        and all(
-            text in constructor.slots for kind, text in pieces if kind == "slot"
-        )
+        and {text for kind, text in pieces if kind == "slot"} == set(constructor.slots)
     }
 
 
@@ -382,33 +388,61 @@ class NotationReport:
         return not self.collisions
 
 
-def _skeleton(constructor: Constructor, tokens: Mapping[str, str]) -> str | None:
+def _spelling(
+    constructor: Constructor,
+    tokens: Mapping[str, str],
+    templates: Mapping[str, tuple[Piece, ...]],
+) -> tuple[Piece, ...]:
+    # How this notation actually renders the constructor. An *overridden* template
+    # is already in the notation's own alphabet and must not be token-mapped again;
+    # a source one is what the map re-spells. Getting this the wrong way round
+    # would hide exactly the collisions an override introduces, which is the only
+    # kind a curator can create.
+    override = templates.get(constructor.name)
+    if override is not None:
+        return override
+    if constructor.pieces:
+        return tuple(
+            ("lit", _map_literal(text, tokens)) if kind == "lit" else (kind, text)
+            for kind, text in constructor.pieces
+        )
+    if constructor.atom_value is not None:
+        return (("lit", tokens.get(constructor.atom_value, constructor.atom_value)),)
+    return ()
+
+
+def _skeleton(
+    constructor: Constructor,
+    tokens: Mapping[str, str],
+    templates: Mapping[str, tuple[Piece, ...]] = {},
+) -> str | None:
     # The literal shape, with every slot anonymous. Slot names are private to a
     # production, so two templates differing only in what they call a slot are
     # indistinguishable to a parser; whether their *sorts* keep them apart is a
     # separate question, asked per candidate pair by `_slots_overlap`.
-    if constructor.pieces:
-        return "".join(
-            _map_literal(text, tokens) if kind == "lit" else "\x00"
-            for kind, text in constructor.pieces
-        )
-    if constructor.atom_value is not None:
-        return tokens.get(constructor.atom_value, constructor.atom_value)
-    return None
+    pieces = _spelling(constructor, tokens, templates)
+    if not pieces:
+        return None
+    return "".join(text if kind == "lit" else "\x00" for kind, text in pieces)
 
 
-def _shown(constructor: Constructor, tokens: Mapping[str, str]) -> str:
+def _shown(
+    constructor: Constructor,
+    tokens: Mapping[str, str],
+    templates: Mapping[str, tuple[Piece, ...]] = {},
+) -> str:
     # The same shape, printable: each slot as the sort it takes. A collision is a
     # user-facing record, so it must survive a terminal and a text column.
-    if not constructor.pieces:
-        return _skeleton(constructor, tokens) or constructor.name
+    pieces = _spelling(constructor, tokens, templates)
+    if not any(kind == "slot" for kind, _text in pieces):
+        return "".join(text for _kind, text in pieces) or constructor.name
     return "".join(
-        _map_literal(text, tokens)
+        text
         if kind == "lit"
         else f"<{constructor.slot_sorts[text].name}>"
         if text in constructor.slot_sorts
         else "<?>"
-        for kind, text in constructor.pieces
+        for kind, text in pieces
     )
 
 
@@ -452,6 +486,7 @@ def notation_report(
     context: FormalSystemContext,
     tokens: Mapping[str, str],
     notations: Iterable[DefinedNotation] = (),
+    templates: Mapping[str, tuple[Piece, ...]] | None = None,
 ) -> NotationReport:
     """Check ``tokens`` against ``context``'s grammar before adopting it.
 
@@ -470,8 +505,16 @@ def notation_report(
     meaning; in a hand-authored system a definition may be the only thing that
     spells it.
 
+    ``templates`` is the projection actually being adopted, when it differs from
+    what ``tokens`` derives — pass ``projection.templates`` after applying
+    overrides. Without it this reports the *derived* notation, and an override is
+    invisible: it replaces a template wholesale, so a collision one introduces is
+    the only kind a curator can create and exactly the kind a token-level check
+    cannot see.
+
     See :class:`NotationReport` on what an empty result does not establish.
     """
+    spellings = {} if templates is None else templates
     reachable = _reachable_sorts(context)
     placed: list[tuple[str, Constructor]] = list(_constructors_by_sort(context))
     # A defined form is reachable from every sort that includes the one it builds,
@@ -495,7 +538,7 @@ def notation_report(
         if constructor.kind == "regex":
             regexes.setdefault(sort, []).append(constructor)
             continue
-        skeleton = _skeleton(constructor, tokens)
+        skeleton = _skeleton(constructor, tokens, spellings)
         if skeleton is not None:
             grouped.setdefault((sort, skeleton), []).append(constructor)
 
@@ -510,7 +553,7 @@ def notation_report(
                     clashing.update((left.name, right.name))
         # A regex leaf of the sort accepts a language rather than a spelling, so
         # ask it directly whether it would also match what this one now spells.
-        literal = _skeleton(constructors[0], tokens)
+        literal = _skeleton(constructors[0], tokens, spellings)
         if literal is not None and "\x00" not in literal:
             for leaf in regexes.get(sort, ()):
                 if _matches_regex(leaf, literal):
@@ -519,7 +562,7 @@ def notation_report(
             collisions.append(
                 Collision(
                     sort=sort,
-                    spelling=_shown(constructors[0], tokens),
+                    spelling=_shown(constructors[0], tokens, spellings),
                     productions=tuple(sorted(clashing)),
                 )
             )

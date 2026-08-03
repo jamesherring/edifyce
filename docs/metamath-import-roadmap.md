@@ -775,11 +775,18 @@ policy — and as a *source* it would be a correctness bug, which is why §4.2a
 refused Unicode-as-source.
 
 `scripts/notation_report.py` prints all three lists for a file, so the table stays
-driven by a list rather than by discovering breakage. `set.mm`'s own table is
-*passed to* the import rather than reached for by it (`import_corpus(overrides=…)`,
-as `corpus_spec` already takes the binder table), and an override naming a
-constructor a grammar lacks — or slots it does not take — is dropped rather than
-stored, so handing it to another library costs nothing.
+driven by a list rather than by discovering breakage — and it reports collisions
+against the notation *as overridden*, since an override replaces a template
+wholesale and a collision one introduces is the only kind curating can create.
+
+`set.mm`'s own table is *passed to* the import rather than reached for by it
+(`import_corpus(overrides=…)`, as `corpus_spec` already takes the binder table),
+and the CLI opts in (`--setmm-overrides`) rather than out. An override is dropped
+unless the grammar has that constructor with **exactly** its slots: a Metamath
+label is local to its library, and a foreign `cfv` taking one slot more would
+otherwise render with that slot silently omitted — a term shown as something it is
+not. Matching name and arity is still not proof of matching meaning, which is why
+the opt-in is explicit.
 
 ---
 

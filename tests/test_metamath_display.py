@@ -455,8 +455,11 @@ def test_an_override_for_a_constructor_the_grammar_lacks_is_dropped() -> None:
     _database, system, _typesetting = built()
     constructors = notation_constructors(system.build_context, system.definitions)
 
-    assert applicable({"cfv": (("slot", "F"),)}, constructors) == {}
-    assert "wcel" in applicable({"wcel": (("lit", "!"),)}, constructors)
+    assert applicable({"cfv": (("slot", "F"), ("slot", "A"))}, constructors) == {}
+    kept = applicable(
+        {"wcel": (("slot", "A"), ("lit", " ! "), ("slot", "B"))}, constructors
+    )
+    assert "wcel" in kept
 
 
 def test_an_override_naming_a_slot_the_constructor_lacks_is_dropped() -> None:
@@ -471,6 +474,18 @@ def test_an_override_naming_a_slot_the_constructor_lacks_is_dropped() -> None:
     assert applicable({"wcel": (("slot", "F"), ("slot", "A"))}, constructors) == {}
 
 
+def test_an_override_that_drops_a_slot_is_dropped() -> None:
+    # Naming a *subset* is not enough. A foreign `cfv` taking `F`, `A` and `B`
+    # would pass a mentions-only test while silently omitting `B` from every
+    # rendering — a term shown as something it is not, which is worse than a
+    # visible slot label.
+    _database, system, _typesetting = built()
+    constructors = notation_constructors(system.build_context, system.definitions)
+
+    assert applicable({"wcel": (("slot", "A"),)}, constructors) == {}
+    assert applicable({"wcel": (("lit", "always"),)}, constructors) == {}
+
+
 def test_the_curated_setmm_table_matches_the_slots_it_names() -> None:
     # The table is written against `set.mm`'s constructors, and a slot renamed
     # upstream would render its own label rather than the subterm. Nothing else
@@ -480,3 +495,45 @@ def test_the_curated_setmm_table_matches_the_slots_it_names() -> None:
         for name, pieces in overrides.items():
             assert pieces, name
             assert any(kind == "slot" for kind, _text in pieces) or name == "cdc", name
+
+
+# Two connectives of the same shape and the same slot sorts, so a spelling that
+# made them alike would be a real ambiguity rather than one the sorts settle.
+TWO_CONNECTIVES = r"""
+$c |- wff ( ) -> /\\ $.
+$v ph ps $.
+wph $f wff ph $.
+wps $f wff ps $.
+wi $a wff ( ph -> ps ) $.
+wa $a wff ( ph /\\ ps ) $.
+"""
+
+
+def test_a_collision_an_override_introduces_is_reported() -> None:
+    # The only kind of collision curating the table can create, and the one a
+    # token-level check cannot see: an override replaces a template wholesale, so
+    # nothing about the token map changes when two productions start reading
+    # alike.
+    system = build_system(build_spec(parse(TWO_CONNECTIVES), name="t"))
+    tokens = {"->": "\\to", "/\\": "\\wedge"}
+    derived = projection_for(system.build_context, tokens, name="latex")
+    assert not notation_report(
+        system.build_context, tokens, templates=derived.templates
+    ).collisions
+
+    clash = with_overrides(derived, {"wa": derived.templates["wi"]})
+    report = notation_report(system.build_context, tokens, templates=clash.templates)
+    assert [set(c.productions) for c in report.collisions] == [{"wa", "wi"}]
+
+    # And the token-level view still sees nothing, which is the whole point.
+    assert not notation_report(system.build_context, tokens).collisions
+
+
+def test_the_report_without_templates_reads_the_derived_notation() -> None:
+    # The default, and what every existing caller means: no override has been
+    # applied, so the map is the notation.
+    _database, system, _typesetting = built()
+    tokens = {"e.": "\\in"}
+    assert notation_report(system.build_context, tokens).collisions == (
+        notation_report(system.build_context, tokens, templates={}).collisions
+    )
