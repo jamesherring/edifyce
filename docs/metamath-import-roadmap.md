@@ -775,17 +775,11 @@ policy — and as a *source* it would be a correctness bug, which is why §4.2a
 refused Unicode-as-source.
 
 `scripts/notation_report.py` prints all three lists for a file, so the table stays
-driven by a list rather than by discovering breakage.
-
----|---|---|
-| `wcel` | `A ∈ B` | `{A} \in {B}` |
-| `cfv` | `( F \` A )` | `{F}\left({A}\right)` |
-| `csqrt` + `cfv` | `( √ \` A )` | `\sqrt{A}` |
-
-giving `\sqrt{2} \in \mathbb{R}` rather than soup. The `$t` map seeds most of it
-automatically; overrides are applied per production where the naive rendering is
-poor. Ship a report of unmapped tokens and colliding renderings so re-syncing is
-driven by a list rather than by discovering breakage.
+driven by a list rather than by discovering breakage. `set.mm`'s own table is
+*passed to* the import rather than reached for by it (`import_corpus(overrides=…)`,
+as `corpus_spec` already takes the binder table), and an override naming a
+constructor a grammar lacks — or slots it does not take — is dropped rather than
+stored, so handing it to another library costs nothing.
 
 ---
 

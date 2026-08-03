@@ -46,9 +46,10 @@ from website.logical.metamath.setmm import DISPLAY_OVERRIDES  # noqa: E402
 from website.logical.metamath.typesetting import as_text, typesetting_of  # noqa: E402
 
 # Which `$t` directive each notation is derived from, and whether its values are
-# markup. `althtmldef` is HTML that *renders as* Unicode, so it goes through
-# `as_text`; `latexdef` is already text.
-_MAPS = {"unicode": ("unicode", True), "latex": ("latex", False), "html": ("html", False)}
+# markup. Both HTML directives are — `htmldef` is entities and `<SPAN>` wrappers
+# just as `althtmldef` is, and reading either verbatim would report `A &isin; B`
+# as the spelling — so both go through `as_text`. `latexdef` is already text.
+_MAPS = {"unicode": ("unicode", True), "latex": ("latex", False), "html": ("html", True)}
 
 
 def _arguments() -> argparse.Namespace:

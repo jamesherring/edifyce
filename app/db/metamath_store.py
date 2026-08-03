@@ -57,12 +57,12 @@ from website.logical.declarative import build_system, library_digest
 from website.logical.metamath.corpus import corpus_spec, theorems, walk
 from website.logical.metamath.comments import read_comment
 from website.logical.metamath.display import (
+    applicable,
     notation_constructors,
     projection_for,
     with_overrides,
 )
 from website.logical.metamath.sections import outline
-from website.logical.metamath.setmm import DISPLAY_OVERRIDES
 from website.logical.metamath.typesetting import as_text, typesetting_of
 from website.logical.rendering import total_projection
 from website.logical.metamath.importer import LibraryEntry
@@ -129,6 +129,7 @@ def import_corpus(
     name: str = "Metamath",
     batch: int | None = None,
     progress: Callable[[ImportReport, CheckedTheorem], None] | None = None,
+    overrides: Mapping[str, Mapping[str, tuple[Piece, ...]]] | None = None,
 ) -> ImportReport:
     """Import ``database``'s first ``limit`` theorems into ``session``.
 
@@ -138,6 +139,13 @@ def import_corpus(
     many theorems, which is what keeps a whole-corpus run's memory flat and its
     per-proof cost from growing with the transaction. ``progress`` is called
     after each theorem with the running report.
+
+    ``overrides`` re-spells named productions in a named notation by hand, where
+    the faithful re-spelling reads badly. Defaulted to nothing and passed in, like
+    the binder table `corpus_spec` takes: a curated table is a fact about one
+    library (`setmm.DISPLAY_OVERRIDES` is `set.mm`'s), and this module imports any
+    `.mm`. `display.applicable` drops one this grammar cannot use, so handing over
+    the wrong library's table costs nothing rather than storing nonsense.
 
     The system is created ownerless; see this module's docstring for why.
     """
@@ -205,7 +213,7 @@ def import_corpus(
     _link_proofs_to_theorems(session, report.system_id, library.ids)
     report.described = store_descriptions(session, report.system_id, descriptions)
     report.notation = _store_notation(
-        session, database, spec, report.system_id, DISPLAY_OVERRIDES
+        session, database, spec, report.system_id, overrides or {}
     )
     if batch is not None:
         session.commit()
@@ -261,26 +269,35 @@ def _store_notation(
     if typesetting is None:
         return 0
 
+    # A `$t` block need not declare a map this reads. `htmldef` is deliberately not
+    # among them: it is HTML built for `set.mm`'s own site, and `as_text` of it
+    # gives back roughly what `althtmldef` already does, so a third near-duplicate
+    # notation would cost rows and say nothing new.
+    declared = {
+        "unicode": {
+            token: as_text(value) for token, value in typesetting.unicode.items()
+        },
+        "latex": dict(typesetting.latex),
+    }
+    if not any(declared.values()):
+        # Checked before the build, which is the expensive half: a block carrying
+        # only `htmldef`, or nothing but site configuration, must not pay for a
+        # whole-corpus compile to store nothing.
+        return 0
+
     engine = build_system(spec)
     constructors = notation_constructors(engine.build_context, engine.definitions)
     stored = 0
-    # `unicode` first, since it is the one a reader is offered by default. Each is
-    # independent: a `$t` may declare any of the three maps and a file that
-    # declares only one gets only one.
-    for name, tokens in (
-        ("unicode", {token: as_text(value) for token, value in typesetting.unicode.items()}),
-        ("latex", dict(typesetting.latex)),
-    ):
+    # `unicode` first, since it is the one a reader is offered by default. The two
+    # are independent: a file declaring only `latexdef` gets only a `latex` one.
+    for name, tokens in declared.items():
         if not tokens:
-            # A `$t` block need not declare every map — it may carry only
-            # `latexdef`, or nothing but site configuration — and one that declares
-            # nothing for this reading is as good as no block at all.
             continue
         spellings = with_overrides(
             projection_for(
                 engine.build_context, tokens, name=name, definitions=engine.definitions
             ),
-            overrides.get(name, {}),
+            applicable(overrides.get(name, {}), constructors),
         )
         if not spellings.templates:
             # Declared, but about tokens this grammar's productions never use.

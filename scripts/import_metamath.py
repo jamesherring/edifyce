@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.db.metamath_store import ImportReport, import_corpus  # noqa: E402
 from app.db.session import get_engine, get_sessionmaker  # noqa: E402
 from website.logical.metamath import CheckedTheorem, parse  # noqa: E402
+from website.logical.metamath.setmm import DISPLAY_OVERRIDES  # noqa: E402
 
 
 def _positive(value: str) -> int:
@@ -49,6 +50,14 @@ def _arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--quiet", action="store_true", help="suppress the per-theorem progress line"
+    )
+    parser.add_argument(
+        "--no-overrides",
+        action="store_true",
+        help=(
+            "skip the curated per-production display overrides, storing each "
+            "notation exactly as the file's $t map derives it"
+        ),
     )
     return parser.parse_args()
 
@@ -101,6 +110,11 @@ async def main() -> int:
                 name=arguments.name,
                 batch=arguments.batch,
                 progress=progress,
+                # `set.mm`'s table, and this script imports any `.mm` — but an
+                # override naming a constructor this grammar lacks, or slots it
+                # does not take, is dropped rather than stored (`display.applicable`),
+                # so handing it over costs a file that is not `set.mm` nothing.
+                overrides=None if arguments.no_overrides else DISPLAY_OVERRIDES,
             )
         )
     await get_engine().dispose()

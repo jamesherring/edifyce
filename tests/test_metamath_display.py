@@ -18,6 +18,8 @@ from website.logical.formal_system import FormalSystem
 from website.logical.metamath import build_spec, parse
 from website.logical.metamath.definitions import statement_of
 from website.logical.metamath.display import (
+    applicable,
+    notation_constructors,
     notation_report,
     verbatim,
     with_overrides,
@@ -25,6 +27,7 @@ from website.logical.metamath.display import (
     unicode_projection,
 )
 from website.logical.metamath.parser import Database
+from website.logical.metamath.setmm import DISPLAY_OVERRIDES
 from website.logical.metamath.typesetting import Typesetting, typesetting_of
 from website.logical.rendering import render
 
@@ -443,3 +446,37 @@ def test_verbatim_reports_no_atoms() -> None:
     derived = projection_for(system.build_context, {}, name="latex")
 
     assert all(c.pieces for c in verbatim(system.build_context, derived))
+
+
+def test_an_override_for_a_constructor_the_grammar_lacks_is_dropped() -> None:
+    # A curated table is a fact about one library. Applied to a different `.mm`
+    # the same names may simply be absent, and storing a template for a
+    # constructor nothing builds would be storing nonsense.
+    _database, system, _typesetting = built()
+    constructors = notation_constructors(system.build_context, system.definitions)
+
+    assert applicable({"cfv": (("slot", "F"),)}, constructors) == {}
+    assert "wcel" in applicable({"wcel": (("lit", "!"),)}, constructors)
+
+
+def test_an_override_naming_a_slot_the_constructor_lacks_is_dropped() -> None:
+    # The sharper half. `render` emits the slot *label* when a template names one
+    # the term does not carry, so a `{F}\left({A}\right)` applied to a two-slot
+    # production spelled `f`/`x` would put a literal `F` on the page. Refusing
+    # beats rendering nonsense.
+    _database, system, _typesetting = built()
+    constructors = notation_constructors(system.build_context, system.definitions)
+
+    assert applicable({"wcel": (("slot", "A"), ("slot", "B"))}, constructors)
+    assert applicable({"wcel": (("slot", "F"), ("slot", "A"))}, constructors) == {}
+
+
+def test_the_curated_setmm_table_matches_the_slots_it_names() -> None:
+    # The table is written against `set.mm`'s constructors, and a slot renamed
+    # upstream would render its own label rather than the subterm. Nothing else
+    # would notice, so this does.
+    for notation, overrides in DISPLAY_OVERRIDES.items():
+        assert notation in {"unicode", "latex"}, notation
+        for name, pieces in overrides.items():
+            assert pieces, name
+            assert any(kind == "slot" for kind, _text in pieces) or name == "cdc", name

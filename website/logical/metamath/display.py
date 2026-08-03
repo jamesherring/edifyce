@@ -225,6 +225,33 @@ def with_overrides(
     )
 
 
+def applicable(
+    overrides: Mapping[str, tuple[Piece, ...]], constructors: Iterable[Constructor]
+) -> dict[str, tuple[Piece, ...]]:
+    """Those of ``overrides`` this grammar can actually use.
+
+    An override is keyed by constructor *name*, and a curated table is a fact
+    about one library (`setmm.DISPLAY_OVERRIDES` is `set.mm`'s). Applied to a
+    different `.mm` the same names may be absent, or present with different slots
+    — and a template naming a slot its term does not carry renders the *label*,
+    so `{F}\\left({A}\\right)` over a two-slot ``cfv`` spelled `f`/`x` would put a
+    literal ``F`` on the page.
+
+    So an override survives only if the grammar has that constructor and it takes
+    every slot the override names. Refusing beats rendering nonsense, and it is
+    what lets a caller hand the table to any import without checking first.
+    """
+    known = {constructor.name: constructor for constructor in constructors}
+    return {
+        name: pieces
+        for name, pieces in overrides.items()
+        if (constructor := known.get(name)) is not None
+        and all(
+            text in constructor.slots for kind, text in pieces if kind == "slot"
+        )
+    }
+
+
 def verbatim(
     context: FormalSystemContext,
     projection: Projection,
