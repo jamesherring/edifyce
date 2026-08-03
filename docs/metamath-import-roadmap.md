@@ -790,6 +790,14 @@ own template cannot name. That is what buys generality without a tree: matching
 walks paths rather than recursing over a pattern, and one flat table stores them.
 Depth beyond one is unexercised by the corpus and costs nothing to allow.
 
+Only a *rule*'s steps are paths, which is not a detail: a template's are slot
+labels, and a Metamath slot label may contain a dot. `set.mm` names class
+variables `.+`, `.x.` and `.0.`, and `seq M ( .+ , F )` is a production whose slot
+is one of them, so splitting every step on a dot renders `seq M ( .+ , F )` — the
+label where the operand belongs, across thousands of statements. Within a rule the
+same labels stay addressable because a whole label that *is* a child wins over
+reading it as a path.
+
 `setmm.DISPLAY_RULES` is `set.mm`'s six, chosen where the mathematical notation is
 genuinely two-dimensional or fenced and the linear form is a transcription of it:
 
@@ -799,7 +807,7 @@ genuinely two-dimensional or fenced and the linear form is a transcription of it
 | `absolute-value` | ``( abs ` A )`` | `\operatorname{abs}\left(A\right)` | `\left\lvert A\right\rvert` |
 | `factorial` | ``( ! ` A )`` | `{!}\left(A\right)` | `A!` |
 | `fraction` | `( A / B )` | `( A / B )` | `\frac{A}{B}` |
-| `power` | `( A ^ B )` | `( A \uparrow B )` | `A^{B}` |
+| `power` | `( A ^ B )` | `( A \uparrow B )` | `{A}^{B}` |
 | `binomial` | `( N _C K )` | `( N \mathbin{\operatorname{C}} K )` | `\binom{N}{K}` |
 
 `+`, `x.` and the rest read correctly as `( A + B )` and are left alone. Measured

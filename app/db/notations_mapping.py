@@ -86,6 +86,11 @@ def store_notation(
         )
     ).all():
         session.delete(stale)
+    # Flushed before the replacements are added, not left to the next flush:
+    # SQLAlchemy orders INSERTs before DELETEs within a mapper, so re-storing a
+    # notation would insert a rule whose name the row being deleted still holds
+    # and trip `uq_notation_rules_system_notation_name`.
+    session.flush()
     rows = [
         NotationPieceRow(
             formal_system_id=system_id,
@@ -313,6 +318,11 @@ def _descend_row(graph: TermGraph, term_id: uuid.UUID, path: str) -> uuid.UUID |
     # path is a miss rather than this node, so a template cannot recurse on itself.
     if not path:
         return None
+    # A whole label that *is* a child wins over reading it as a path, as in the
+    # engine's own `_descend`: set.mm names class variables `.+` and `.0.`.
+    children = dict(graph.children_of(term_id))
+    if path in children:
+        return children[path]
     found = term_id
     for step in path.split(PATH):
         child = dict(graph.children_of(found)).get(step)
@@ -381,14 +391,12 @@ def _render_row(
         if kind == "lit":
             out.append(text)
             continue
-        # A path rather than a bare label, so a rule can name a grandchild. Every
-        # step of an ordinary template is a one-step path, and that case stays the
-        # dict lookup it always was — this fold runs over every line of every
-        # proof shown.
+        # Only a *rule*'s steps are paths. A template's are slot labels, and a
+        # label may itself contain a dot — set.mm names class variables `.+` and
+        # `.0.` — so reading one as a path would descend into nothing and print
+        # the label where the operand belongs.
         child = (
-            _descend_row(graph, term_id, text)
-            if PATH in text
-            else children.get(text)
+            _descend_row(graph, term_id, text) if rule is not None else children.get(text)
         )
         out.append(
             _render_row(graph, child, templates, rules, seen | {term_id})

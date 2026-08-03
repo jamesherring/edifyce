@@ -308,7 +308,7 @@ def applicable_rules(
     kept: list[Rule] = []
     for rule in rules:
         root = known.get(rule.constructor)
-        if root is None or rule.slots != frozenset(root.slots):
+        if root is None or rule.roots(root.slots) != frozenset(root.slots):
             continue
         if any(required not in known for required in rule.pins.values()):
             continue

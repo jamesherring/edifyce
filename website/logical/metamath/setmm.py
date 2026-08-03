@@ -244,13 +244,19 @@ DISPLAY_RULES: dict[str, tuple[Rule, ...]] = {
         ),
         # `( A ^ B )`, where `^` maps to `\uparrow` — Knuth's arrow, which is a
         # different operation. Superscripting is the notation.
+        #
+        # The base is braced as well as the exponent, which is not decoration:
+        # `expmul` is `( A ^ ( M x. N ) ) = ( ( A ^ M ) ^ N )`, and an unbraced
+        # base makes the right-hand side `A^{M}^{N}` — a double superscript TeX
+        # refuses to set.
         Rule(
             name="power",
             constructor="co",
             pins={"F": "cexp"},
             pieces=(
+                ("lit", "{"),
                 ("slot", "A"),
-                ("lit", "^{"),
+                ("lit", "}^{"),
                 ("slot", "B"),
                 ("lit", "}"),
             ),

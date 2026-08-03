@@ -472,3 +472,96 @@ def test_a_child_system_inherits_and_may_replace_a_rule() -> None:
         assert by_name["other"] == other
 
     run(work)
+
+
+# A slot label with a dot in it, which is not exotic: `set.mm` names class
+# variables `.+`, `.x.`, `.0.`, and `seq M ( .+ , F )` is a production whose slot
+# is one of them. A rule's steps are paths and a template's are labels, so reading
+# every step as a path would print `.+` where the operand belongs.
+DOTTED = r"""
+$( $t
+  latexdef "e." as "\in";
+  latexdef "seq" as "\mathrm{seq}";
+  latexdef "RR" as "\mathbb{R}";
+$)
+$c |- wff class ( ) , seq e. RR $.
+$v A B .+ F $.
+cA $f class A $.
+cB $f class B $.
+cpl $f class .+ $.
+cF $f class F $.
+cr $a class RR $.
+cseq $a class seq A ( .+ , F ) $.
+wcel $a wff A e. B $.
+ax-q $a |- seq RR ( RR , RR ) e. RR $.
+th $p |- seq RR ( RR , RR ) e. RR $= ( ax-q ) A $.
+"""
+
+
+def test_a_dotted_slot_label_is_a_label_and_not_a_path() -> None:
+    parsed = parse(DOTTED)
+    engine = build_system(build_spec(parsed, name="t"))
+    constructors = notation_constructors(engine.build_context, engine.definitions)
+    projection = total_projection(
+        constructors,
+        projection_for(
+            engine.build_context,
+            dict(typesetting_of(parsed.comments).latex),
+            name="latex",
+            definitions=engine.definitions,
+        ),
+    )
+
+    with database() as session:
+        import_corpus(session, parsed, name="t")
+        session.commit()
+
+        rows = session.scalars(
+            select(ProofLineRow).where(ProofLineRow.term_id.is_not(None))
+        ).all()
+        graph = prefetch_terms(session, [r.term_id for r in rows])
+        term = statement_of(parsed.assertions["ax-q"], engine)
+        shown = render(term, projection)
+
+        # The `.+` slot renders its operand, not its own name.
+        assert ".+" not in shown, shown
+        assert shown == (
+            r"\mathrm{seq} \mathbb{R} ( \mathbb{R} , \mathbb{R} ) \in \mathbb{R}"
+        )
+        assert render_stored(graph, rows[0].term_id, projection) == shown
+
+
+def test_a_rule_may_pin_and_render_a_dotted_slot_label() -> None:
+    # The other half: within a rule the steps *are* paths, and a whole label that
+    # is a child wins over splitting it — otherwise a rule could never address one
+    # of `set.mm`'s dotted variables.
+    parsed = parse(DOTTED)
+    engine = build_system(build_spec(parsed, name="t"))
+    rule = Rule(
+        name="fold",
+        constructor="cseq",
+        pins={".+": "cr"},
+        pieces=(("lit", "fold("), ("slot", "A"), ("lit", ", "), ("slot", "F"),
+                ("lit", ")")),
+    )
+    constructors = notation_constructors(engine.build_context, engine.definitions)
+
+    assert applicable_rules([rule], constructors) == [rule]
+    term = statement_of(parsed.assertions["ax-q"], engine)
+    assert render(term, Projection(name="x", rules=(rule,))) == "fold(RR, RR) e. RR"
+
+
+def test_a_notation_can_be_stored_twice() -> None:
+    # Re-deriving a notation is ordinary — an import re-run, an override edited —
+    # and the rules are keyed by name, so the stale rows have to be gone before
+    # their replacements are inserted rather than in the same flush.
+    with database() as session:
+        report = import_corpus(session, parse(APPLICATION), name="t")
+        for _ in range(2):
+            store_notation(
+                session, report.system_id, Projection(name="latex", rules=(SQRT,))
+            )
+            session.commit()
+
+        stored = session.scalars(select(NotationRuleRow)).all()
+        assert [r.name for r in stored] == ["sqrt"]

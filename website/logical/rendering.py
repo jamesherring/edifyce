@@ -54,14 +54,19 @@ from typing import TYPE_CHECKING
 from .kernel.terms import Node, Term
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Mapping
+    from collections.abc import Callable, Collection, Iterable, Mapping
 
     from .kernel.constructors import Constructor, Piece
 
 # What separates the steps of a slot path in a :class:`Rule`. A path names a
-# child of a child (``"F.G"``), and a Metamath slot label is a variable name, so
-# a dot is free. Nothing in a template's own ``("slot", label)`` steps uses one,
-# which is why a rule's pieces and a production's can share a shape.
+# child of a child (``"F.G"``), which is how a rule reaches past the production at
+# its root.
+#
+# Only a rule's steps are paths. A *template*'s are slot labels and are never
+# split, because a Metamath slot label may itself contain a dot — `set.mm` names
+# class variables `.+` and `.0.`, and `seq M ( .+ , F )` is a production whose slot
+# is one. Within a rule the same labels stay reachable by the whole-label-first
+# rule in :func:`_descend`.
 PATH = "."
 
 
@@ -98,19 +103,28 @@ class Rule:
     pieces: tuple[Piece, ...] = ()
     name: str = ""
 
-    @property
-    def slots(self) -> frozenset[str]:
-        """The root slots this rule accounts for - pinned or rendered.
+    def roots(self, slots: Collection[str]) -> frozenset[str]:
+        """Which of ``slots`` this rule accounts for - pinned or rendered.
 
-        The first step of every path it mentions. A slot missing from this is one
-        the rule would silently drop, which is a term shown as something it is
-        not; :func:`~website.logical.metamath.display.applicable_rules` refuses a
-        rule on those grounds.
+        The first step of every path it mentions, resolved the way :func:`render`
+        resolves one: a path whose *whole* text is a slot of the root is that slot,
+        since a Metamath slot label may contain a dot (`set.mm` names class
+        variables `.+` and `.0.`); anything else is read as a path and its first
+        step is what it touches.
+
+        A slot of the root missing from this is one the rule would silently drop,
+        which is a term shown as something it is not;
+        :func:`~website.logical.metamath.display.applicable_rules` refuses a rule
+        on those grounds.
         """
         paths = chain(
             self.pins, (text for kind, text in self.pieces if kind == "slot")
         )
-        return frozenset(path.split(PATH)[0] for path in paths if path)
+        return frozenset(
+            path if path in slots else path.split(PATH)[0]
+            for path in paths
+            if path
+        )
 
 
 def rules_by_constructor(rules: Iterable[Rule]) -> dict[str, tuple[Rule, ...]]:
@@ -215,6 +229,12 @@ def _descend(term: Node, path: str) -> Term | None:
     # recurse on itself, so it is a miss rather than a fixed point.
     if not path:
         return None
+    # A whole label that *is* a child wins over reading it as a path. Metamath
+    # slot labels are variable names and set.mm has several with a dot in them
+    # (`.+`, `.0.`), so a rule addressing one directly must not be split.
+    direct = term.children.get(path)
+    if direct is not None:
+        return direct
     found: Term = term
     for step in path.split(PATH):
         if not isinstance(found, Node):
@@ -256,7 +276,7 @@ def _render(
     # own template renders this shape badly, so consulting the template after
     # matching would undo the point. Its pinned children are consumed rather than
     # rendered - `( sqrt ` 2 )` becomes `\sqrt{2}` with no `sqrt` left in it.
-    rule = _matching_rule(term, rules)
+    rule = _matching_rule(term, rules) if rules else None
     pieces = rule.pieces if rule is not None else templates.get(term.constructor.name)
     if pieces is None:
         # Mirrors `Node.to_string`. An atom carries its own text and has no
@@ -275,9 +295,11 @@ def _render(
         if kind == "lit":
             out.append(text)
             continue
-        # A path, so a rule can name a grandchild; an ordinary template's every
-        # step is one label, and that stays the dict lookup it always was.
-        child = _descend(term, text) if PATH in text else term.children.get(text)
+        # Only a *rule*'s steps are paths. A template's are slot labels, and a
+        # label may itself contain a dot — set.mm names class variables `.+` and
+        # `.0.` — so reading one as a path would descend into nothing and print
+        # the label where the operand belongs.
+        child = _descend(term, text) if rule is not None else term.children.get(text)
         # A slot with no child means the template names something this term does
         # not carry - a projection written against a different production. Emit
         # the label, as `to_string` does, rather than raising in a renderer.
