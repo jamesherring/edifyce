@@ -14,6 +14,7 @@ import pytest
 pytest.importorskip("regex")
 
 from website.logical.metamath import parse
+from website.logical.metamath.corpus import theorems
 from website.logical.metamath.sections import (
     Layer,
     Layering,
@@ -320,3 +321,70 @@ def test_two_layers_may_open_at_one_position_and_the_later_wins() -> None:
     layering = Layering(sections, (logic, theory))
     assert layering.starts == [("Logic", 0), ("Set theory", 0)]
     assert layering.covering(0) == "Set theory"
+
+
+# A layer plan over a file that has *proved* statements as well as axioms, so
+# the two units a boundary can be quoted in come apart.
+MIXED = f"""
+$c |- wff ( ) -> A. $.
+$v ph ps x $.
+wph $f wff ph $.
+wps $f wff ps $.
+vx $f class x $.
+$( {SECTION}
+   Pre-logic
+   {SECTION} $)
+wi $a wff ( ph -> ps ) $.
+ax-1 $a |- ( ph -> ( ps -> ph ) ) $.
+pc-one $p |- ( ph -> ( ps -> ph ) ) $= ( wi ) A $.
+pc-two $p |- ( ph -> ( ps -> ph ) ) $= ( wi ) A $.
+$( {SECTION}
+   Predicate calculus with equality:  Tarski's system S2
+   {SECTION} $)
+wal $a wff A. x ph $.
+fol-one $p |- ( ph -> ( ps -> ph ) ) $= ( wi ) A $.
+$( {SECTION}
+   ZF Set Theory - start with the Axiom of Extensionality
+   {SECTION} $)
+ax-ext $a |- ( ph -> ( ps -> ph ) ) $.
+zf-one $p |- ( ph -> ( ps -> ph ) ) $= ( wi ) A $.
+"""
+
+
+def test_a_layer_boundary_is_two_different_numbers_in_two_units() -> None:
+    # **From review.** D1's table indexes `Database.order`, which holds every
+    # `$a` and `$p`; a walk's `limit` counts what `corpus.theorems` yields, which
+    # is provable `$p` alone. So a layer boundary is one number as a position and
+    # a *smaller* one as a theorem ordinal, and the milestone figure was first
+    # recorded in the wrong unit — passing it as a `limit` would have overshot by
+    # the axioms in between.
+    #
+    # Asserted on a fixture rather than on `set.mm`'s own figures, which move:
+    # what has to hold is that the two units differ, and differ by exactly the
+    # assertions a walk does not check.
+    database = parse(MIXED)
+    layering = Layering(outline(database), LAYERS)
+    position = {label: index for index, label in enumerate(database.order)}
+
+    # As a position: every `$a` and `$p` before ZF opens.
+    boundary = next(
+        index
+        for index in range(len(database.order))
+        if layering.covering(index) == "ZF set theory"
+    )
+
+    # As a theorem ordinal: only the proved ones, 1-based, as `limit` counts.
+    walked = theorems(database)
+    ordinal = next(
+        number
+        for number, assertion in enumerate(walked, start=1)
+        if layering.covering(position[assertion.label]) == "ZF set theory"
+    )
+
+    assert [assertion.label for assertion in walked] == [
+        "pc-one", "pc-two", "fol-one", "zf-one"
+    ]
+    assert boundary == 6 and ordinal == 4
+    # The gap is the axioms and syntax the walk skips — here `wi`, `ax-1` and
+    # `wal`, which is exactly why one number cannot stand in for the other.
+    assert boundary - (ordinal - 1) == 3

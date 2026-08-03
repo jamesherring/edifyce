@@ -192,19 +192,30 @@ DISPLAY_OVERRIDES: dict[str, dict[str, tuple[tuple[str, str], ...]]] = {
 # rather than as constants, and the boundaries as what the plan below actually
 # selects:
 #
-#     layer                  assertions   opens at   $a |-  (its primitives)
-#     Propositional calculus      1,808          0      17
-#     First-order logic             926      1,808      16
-#     ZF set theory              47,891      2,734   1,528
-#     ------------------------------------------------------
-#     total                      50,625                1,561
+#     layer                  assertions   opens at   $a |-   theorems
+#     Propositional calculus      1,808          0      17      1,773
+#     First-order logic             926      1,808      16        902
+#     ZF set theory              47,891      2,734   1,528     44,942
+#     -----------------------------------------------------------------
+#     total                      50,625                1,561    47,617
+#
+# **Two units, and they are not interchangeable** (found in review). The first
+# three columns index `Database.order`, which holds every `$a` and `$p`; the last
+# counts what `corpus.theorems` yields, which is provable `$p` alone — no syntax
+# axioms, no logical `$a`, and not the syntax-typecoded `$p` set.mm's `bj-0` is.
+# A `walk`'s `limit` is in **theorem** units, so a slice size taken from the
+# `opens at` column would be the wrong horizon by the number of axioms below it.
 #
 # Three consequences worth keeping beside the table, since each answers a
 # question the roadmap left open.
 #
 # **The first 1,000 theorems are 100% propositional.** §7.1 predicted this and it
 # holds exactly, so a 1,000-theorem slice exercises the partition and no transfer
-# whatsoever. The smallest slice populating all three layers is **N = 2,735**.
+# whatsoever — and it holds in both units, since propositional calculus has 1,773
+# theorems. The smallest slice populating all three layers is **N = 2,676
+# theorems**, which is the unit `walk(database, limit)` takes; the same boundary
+# is position 2,734 in `Database.order`, and passing *that* as a limit would
+# overshoot by the 59 axioms between them.
 #
 # **The partition holds at the grammar level**: no `|-` statement anywhere in the
 # file uses a constant first declared in a *later* layer. That is what D3 needs

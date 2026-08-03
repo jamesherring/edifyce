@@ -611,8 +611,9 @@ theorems, so the first 1,000 would land wholly inside the PC layer. Measured: PC
 runs to **1,808**, and the first 1,000 are **100% propositional**. That slice
 therefore exercises the *partition* and no *transfer* whatsoever, and proves
 nothing about (a) or (b) — so it stays as the fast regression and the milestone
-slice is **N = 2,735**, the first position at which all three layers are
-populated. See §8's D1 for the rest of the measurement.
+slice is **N = 2,676 theorems**, the smallest slice at which all three layers are
+populated, in the units `walk(database, limit)` takes. See §8's D1 for the rest
+of the measurement, and for why the unit matters.
 
 ### 7.2 The walk, layered
 
@@ -1495,8 +1496,17 @@ re-run the measurement rather than trusting a year-old total.
 **§7.1's prediction holds exactly.** The first 1,000 theorems are **100%
 propositional** — so that slice exercises the partition and *no transfer
 whatsoever*, and would prove nothing about (a) or (b). The smallest slice
-populating all three layers is **N = 2,735**, which is the milestone figure §7.1
+populating all three layers is **N = 2,676**, which is the milestone figure §7.1
 said should replace a guess.
+
+**And the unit is part of the figure** (found in review). The table above indexes
+`Database.order`, which holds every `$a` and `$p`; a walk's `limit` counts what
+`corpus.theorems` yields, which is provable `$p` alone — 47,617 of the 50,625, so
+1,773 / 902 / 44,942 per layer. The ZF boundary is position **2,734** in one unit
+and theorem **2,676** in the other, and passing the first where the second is
+meant would overshoot the milestone by the 59 axioms between them. The 1,000
+prediction survives in both units, since propositional calculus has 1,773
+theorems; N does not.
 
 **The partition holds at the grammar level**, checked rather than assumed: no
 `|-` statement anywhere in the file uses a constant first declared in a *later*
@@ -1526,7 +1536,14 @@ variant `.mm` may stop before ZFC. What *is* refused is a plan whose layers open
 out of file order, because that is a plan about a different file and every
 position it then reports would be silently wrong.
 
-*From review*, one worth carrying: that order check first compared each layer's
+*From review*, two worth carrying. The milestone figure **was in the wrong
+unit** — 2,735 is a position in `Database.order`, and a walk's `limit` counts
+theorems, so the planned D4/D5 experiment would have run a horizon 59 axioms too
+wide. The numbers are the deliverable here, and a number whose unit is not stated
+is not a measurement; both are now given, with the gap between them named.
+`test_a_layer_boundary_is_two_different_numbers_in_two_units` is the guard.
+
+And that order check first compared each layer's
 **position**, and two headers may share one — a part followed straight away by a
 section, with no statement between, which is how `set.mm` opens every one of its
 21 parts. So a reversed plan naming both passed the check and then attributed
