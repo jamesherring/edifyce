@@ -20,6 +20,8 @@ logical sort, on a grammar the Metamath importer built.
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 import pytest
 
 pytest.importorskip("regex")
@@ -35,6 +37,7 @@ from tests.layered_systems import (
 )
 from tests.sequent_tower import (
     CITATION,
+    first_order_sequent_rules,
     propositional_sequent_rules,
     sequent_core,
     sequent_layer_spec,
@@ -132,7 +135,9 @@ def test_a_library_theorem_of_the_parent_lifts_too(tower):
     # citable on a formula line here and `lift` carries it across.
     #
     # Promoted onto a copy, so the module fixture is not mutated by a test.
-    system = build_spec(layered_spec(sequent_tower_specs()))["system"]
+    built = build_spec(layered_spec(sequent_tower_specs()))
+    assert "errors" not in built, built["errors"]
+    system = built["system"]
     system.promote(promote_spec(system, TheoremSpec(
         label="id-law", statement="(P → P)", metavariables={"P": "formula"}
     )))
@@ -260,10 +265,12 @@ def test_an_imported_theorem_lifts_into_a_sequent():
     # This is the whole of what S2's edge bought, obtained from the spine at the
     # cost of one declared rule and no obligations at all.
     database = parse(SQRT2RE_FRAGMENT)
-    system = build_spec(layered_spec([
+    built = build_spec(layered_spec([
         importer.build_spec(database, name="Imported"),
         sequent_core(name="Sequent over the import", formula="wff"),
-    ]))["system"]
+    ]))
+    assert "errors" not in built, built["errors"]
+    system = built["system"]
     system.promote(promote_spec(
         system, TheoremSpec(label="2re", statement="2 e. RR")
     ))
@@ -276,23 +283,62 @@ def test_an_imported_theorem_lifts_into_a_sequent():
     )
 
 
+def test_the_turnstile_is_a_knob_and_not_a_decoration():
+    # **From review.** `turnstile=` reached the `sequent-turnstile` production and
+    # `lift` and nothing else: every structural rule spelled `⊢` directly, so
+    # `sequent_core(turnstile="|-")` built cleanly and left `id`, `WL`, `XL`,
+    # `CL` and `cut` dead — the worst shape a parameter can have, since the build
+    # reports nothing and only a proof finds out.
+    #
+    # It exists because a parent may already spell `⊢`; `formula=` alone is not
+    # enough to sit on an arbitrary grammar. Pinned by *using* it, which is the
+    # only assertion that would have failed before.
+    core = sequent_core(name="Alternative turnstile", turnstile="⟹")
+    core.rules.extend(propositional_sequent_rules(turnstile="⟹"))
+
+    built = build_spec(layered_spec([propositional_calculus_spec(), core]))
+    assert "errors" not in built, built["errors"]
+    system = built["system"]
+
+    assert stands(system, "∅ , A ⟹ A [id]\n∅ ⟹ (A → A) [→R, 1]")
+    assert stands(system, "(P → (Q → P)) [ax-1]\n∅ ⟹ (P → (Q → P)) [lift, 1]")
+    # And the old spelling is now simply not grammar here.
+    assert not stands(system, "∅ , A ⊢ A [id]")
+
+
 def test_the_core_names_nothing_of_its_parent_but_the_logical_sort():
     # Why the layer above could be reused verbatim, asserted rather than
-    # asserted-by-anecdote: `sequent_core`'s productions and rules mention the
-    # parent's *sort* and no production of it. That is what makes the split in
-    # `sequent_tower` real — the logical rules (→R, →L, ∀R) do spell connectives
-    # and are therefore written per parent.
+    # asserted-by-anecdote. Two halves, and the review that caught this had only
+    # the first: the productions *and* the rules have to be checked, or a rule
+    # smuggling a connective in would leave the claim false and every test here
+    # still green.
     core = sequent_core(formula="wff")
-    mentioned = {
+
+    sorts = {
         sort
         for production in core.productions
         for _slot, sort in (production.bindings or [])
     }
-    mentioned |= {production.sort for production in core.productions}
-    assert mentioned == {"context", "sequent", "wff"}
+    sorts |= {production.sort for production in core.productions}
+    assert sorts == {"context", "sequent", "wff"}
 
-    # And the contrast: a logical rule names a connective, so it cannot be.
-    assert any("→" in rule.deduction for rule in propositional_sequent_rules())
+    # Every token of every core schema is either one of this layer's own three
+    # (`∅`, `,`, `⊢`) or one of the rule's declared metavariables. Written over
+    # tokens rather than as a search for `→`, so it refuses a connective the test
+    # was not told to look for — which is the failure mode, since the parent is
+    # exactly the thing this module does not get to know about.
+    for declared in core.rules:
+        names = {name for name, _sort in declared.bindings}
+        for schema in [declared.deduction, *declared.antecedents]:
+            assert set(schema.split()) <= names | {"∅", ",", "⊢"}, schema
+
+    # And the contrast, which is what makes the split a split: *every* logical
+    # rule spells a connective, so none of them could have been in the core.
+    logical = propositional_sequent_rules() + first_order_sequent_rules()
+    assert all(
+        any(token in declared.deduction for token in ("→", "∀"))
+        for declared in logical
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +346,7 @@ def test_the_core_names_nothing_of_its_parent_but_the_logical_sort():
 # ---------------------------------------------------------------------------
 
 
-def test_a_layer_may_not_reuse_its_parent_s_line_part_name(tower):
+def test_a_layer_may_not_reuse_its_parent_s_line_part_name():
     # **The wart this arrangement has to work around**, pinned so that the
     # workaround is not mistaken for a preference. `layered_spec` claims a line
     # *part*'s name once across a chain, so a child adding a line type cannot
@@ -310,8 +356,6 @@ def test_a_layer_may_not_reuse_its_parent_s_line_part_name(tower):
     # Within a *single* spec two line types may share a part name freely, and the
     # accepted half here is that same arrangement flattened: it is the
     # inconsistency that makes this a wart rather than a rule (§9.25).
-    from copy import deepcopy
-
     clashing = sequent_layer_spec()
     clashing.lines[0].shape = "<sequent> [<reference>]"
     clashing.lines[0].parts[0].name = "reference"

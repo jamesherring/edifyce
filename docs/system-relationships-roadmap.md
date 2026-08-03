@@ -1433,6 +1433,17 @@ notation and `occurs` descends across the layer boundary, which is what §5.1's
 "one flat grammar" means in practice; and an imported theorem promoted the way a
 walk promotes it lifts into a sequent.
 
+*From review*, two of which are worth carrying past this phase. The
+`turnstile=` parameter reached the turnstile production and `lift` and nothing
+else — every structural rule spelled `⊢` directly, so an alternative token built
+cleanly and left `id`, `WL`, `XL`, `CL` and `cut` silently dead. **The worst
+shape a parameter can have is one whose misuse the build accepts**, and the fix
+is not the threading but the test that *uses* the knob. And the test asserting
+what the core mentions inspected its productions and not its rules, so a rule
+smuggling a connective in would have left the claim false with everything green;
+it now checks every schema's tokens against the layer's own three, which refuses
+a connective nobody thought to look for.
+
 It also answers S1's third finding — that `id` alone cannot supply a *non-vacuous*
 ∀R premise, so S1 had to declare an axiom of the object theory to test the
 proviso at all. Here the **parent** supplies it: `lift` brings in a Hilbert

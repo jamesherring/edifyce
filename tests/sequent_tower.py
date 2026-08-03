@@ -91,6 +91,13 @@ def sequent_core(
     Hilbert tower, this repository's or an imported one's, and `formula="wff"` is
     the whole of what an import needs to change.
 
+    ``formula``, ``empty`` and ``turnstile`` are the three things a parent can
+    disagree about, and all three reach every rule: an imported corpus names its
+    logical sort ``wff``, and a grammar that already spells ``⊢`` would need
+    another token. The comma is *not* a knob — `sequent-cons` and the structural
+    rules spell it directly — so a parent whose notation includes a bare comma is
+    the one case this layer cannot sit on unmodified.
+
     ``lift`` is what replaces S2's statement template. A theorem of the parent is
     already citable here, on a *parent* line, because the child's library is its
     ancestors' (§5.2) — so the only thing missing is a step from `φ` to `∅ ⊢ φ`,
@@ -128,15 +135,18 @@ def sequent_core(
             )
         ],
         rules=[
-            rule("id", "identity", [], "G , A ⊢ A",
+            rule("id", "identity", [], f"G , A {turnstile} A",
                  [("G", "context"), ("A", formula)]),
-            rule("WL", "weakening", ["G ⊢ C"], "G , A ⊢ C",
+            rule("WL", "weakening", [f"G {turnstile} C"], f"G , A {turnstile} C",
                  [("G", "context"), ("A", formula), ("C", formula)]),
-            rule("XL", "exchange", ["G , A , B ⊢ C"], "G , B , A ⊢ C",
+            rule("XL", "exchange", [f"G , A , B {turnstile} C"],
+                 f"G , B , A {turnstile} C",
                  [("G", "context"), ("A", formula), ("B", formula), ("C", formula)]),
-            rule("CL", "contraction", ["G , A , A ⊢ C"], "G , A ⊢ C",
+            rule("CL", "contraction", [f"G , A , A {turnstile} C"],
+                 f"G , A {turnstile} C",
                  [("G", "context"), ("A", formula), ("C", formula)]),
-            rule("cut", "cut", ["G ⊢ A", "G , A ⊢ C"], "G ⊢ C",
+            rule("cut", "cut", [f"G {turnstile} A", f"G , A {turnstile} C"],
+                 f"G {turnstile} C",
                  [("G", "context"), ("A", formula), ("C", formula)]),
             # The bridge, and the whole of what an edge's template and
             # obligations were doing — see this function's note.
@@ -146,7 +156,9 @@ def sequent_core(
     )
 
 
-def propositional_sequent_rules(formula: str = "formula") -> list[Rule]:
+def propositional_sequent_rules(
+    formula: str = "formula", turnstile: str = "⊢"
+) -> list[Rule]:
     """→R and →L, which spell a connective and are therefore parent-specific.
 
     Written against *this* repository's `(A → B)`. Over an imported corpus the
@@ -154,15 +166,18 @@ def propositional_sequent_rules(formula: str = "formula") -> list[Rule]:
     layer changes — which is the split :func:`sequent_core` exists to make.
     """
     return [
-        rule("→R", "implication right", ["G , A ⊢ B"], "G ⊢ (A → B)",
+        rule("→R", "implication right", [f"G , A {turnstile} B"],
+             f"G {turnstile} (A → B)",
              [("G", "context"), ("A", formula), ("B", formula)]),
-        rule("→L", "implication left", ["G ⊢ A", "G , B ⊢ C"], "G , (A → B) ⊢ C",
+        rule("→L", "implication left",
+             [f"G {turnstile} A", f"G , B {turnstile} C"],
+             f"G , (A → B) {turnstile} C",
              [("G", "context"), ("A", formula), ("B", formula), ("C", formula)]),
     ]
 
 
 def first_order_sequent_rules(
-    formula: str = "formula", variable: str = "term"
+    formula: str = "formula", variable: str = "term", turnstile: str = "⊢"
 ) -> list[Rule]:
     """∀R with its eigenvariable condition, and ∀L.
 
@@ -174,10 +189,11 @@ def first_order_sequent_rules(
     layer never declared.
     """
     return [
-        rule("∀R", "universal right", ["G ⊢ P"], "G ⊢ ∀x P",
+        rule("∀R", "universal right", [f"G {turnstile} P"], f"G {turnstile} ∀x P",
              [("G", "context"), ("P", formula), ("x", variable)],
              side_conditions=["not occurs(x, G)"]),
-        rule("∀L", "universal left", ["G , P ⊢ C"], "G , ∀x P ⊢ C",
+        rule("∀L", "universal left", [f"G , P {turnstile} C"],
+             f"G , ∀x P {turnstile} C",
              [("G", "context"), ("P", formula), ("C", formula), ("x", variable)]),
     ]
 
