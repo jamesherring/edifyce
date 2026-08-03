@@ -185,13 +185,19 @@ DISPLAY_OVERRIDES: dict[str, dict[str, tuple[tuple[str, str], ...]]] = {
 # from there to wherever the next one starts; a layer whose section is absent
 # (a fragment, a variant) simply holds nothing.
 #
-# Measured on the 50,625-assertion file, and the numbers are what settle §7.1's
-# open questions:
+# Measured on a snapshot of 50,625 assertions, and the numbers are what settle
+# §7.1's open questions. `set.mm` grows — earlier figures elsewhere in this
+# repository were taken at 50,550 assertions and 1,559 logical `$a`, against
+# 50,625 and 1,561 here — so treat the counts as the shape of the partition
+# rather than as constants, and the boundaries as what the plan below actually
+# selects:
 #
 #     layer                  assertions   opens at   $a |-  (its primitives)
 #     Propositional calculus      1,808          0      17
 #     First-order logic             926      1,808      16
 #     ZF set theory              47,891      2,734   1,528
+#     ------------------------------------------------------
+#     total                      50,625                1,561
 #
 # Three consequences worth keeping beside the table, since each answers a
 # question the roadmap left open.

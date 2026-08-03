@@ -599,8 +599,9 @@ from section prefix to layer, not engine behaviour:
 | ZF set theory | `ZF Set Theory…` | 47,891 |
 
 **Confirmed against the file** (D1), and shipped as `setmm.LAYERS`. The reading
-above was right about the shape and the boundaries are where it guessed: PC runs
-to position 1,808 and FOL to 2,734, out of 50,625.
+above was right about the shape and the boundaries are where it guessed:
+propositional calculus occupies positions 0–1,807, first-order logic 1,808–2,733,
+and ZF everything from 2,734 to the end of a 50,625-assertion snapshot.
 
 The plan says where a theorem *should* go; §3.3 says how to check that it does.
 
@@ -1479,7 +1480,11 @@ to hold it is a paragraph nobody re-runs.
 
 **Tests and verification** — `tests/test_metamath_sections.py` (the plan, on a
 fixture shaped like the file), and the measurement below, taken against the real
-`set.mm` at 50,625 assertions.
+`set.mm` at a 50,625-assertion snapshot. The file grows: earlier figures in this
+repository were taken at 50,550 assertions and 1,559 logical `$a`, and the same
+counts read 50,625 and 1,561 today. What that moves is the last digit of each
+row, not the partition — so read the table for the shape and the boundaries, and
+re-run the measurement rather than trusting a year-old total.
 
 | layer | assertions | opens at | `$a |-` (its primitives) |
 |---|---|---|---|
@@ -1507,7 +1512,8 @@ the spine root) stays unbuilt, which is what it wanted.
 
 **And one consequence nobody was looking for, which reaches back into Track S.**
 §9.24 left obligation-completeness open because an interpretation onto `set.mm`
-would owe an obligation per primitive, and the corpus has **1,561** of them.
+would owe an obligation per primitive, and the corpus has **1,561** of them (the
+1,559 this note quotes elsewhere, on an older snapshot).
 Per *layer* it owes 17 (propositional) or 33 (cumulative through FOL). So
 **layering is what makes the completeness check affordable** — and the layers a
 sequent interpretation actually targets are exactly the two small ones. The
@@ -1519,6 +1525,16 @@ and `EQUIVALENCES` — a file that opens no layer of it simply has none, since a
 variant `.mm` may stop before ZFC. What *is* refused is a plan whose layers open
 out of file order, because that is a plan about a different file and every
 position it then reports would be silently wrong.
+
+*From review*, one worth carrying: that order check first compared each layer's
+**position**, and two headers may share one — a part followed straight away by a
+section, with no statement between, which is how `set.mm` opens every one of its
+21 parts. So a reversed plan naming both passed the check and then attributed
+the whole file to the wrong layer. Order is compared on the *section* now, and
+sharing a position stays legal with the later layer winning it, on the same
+nearest-wins rule the rest of the spine follows. The general shape is one this
+note keeps meeting: **a guard that compares derived values instead of the thing
+being ordered is a guard with a tie it does not see.**
 
 #### D2/D3 — the layer plan and one spec per layer
 
@@ -2123,11 +2139,12 @@ each is a live constraint on the work after it rather than a closed question.
     per primitive of the source, which is what §2 actually asks for.
 
     **D1 has since changed the arithmetic**, and it is worth reading §8's D1
-    before re-opening this. The 1,559 figure is the *corpus's*; per layer the
-    primitives are 17 (propositional) and 16 (first-order), because `set.mm`'s
-    1,528 remaining `$a |-` are all ZF and below. So an interpretation onto the
-    layers a sequent calculus actually targets owes 17 or 33 obligations, not
-    1,559 — which is entirely writable, and removes the objection this paragraph
+    before re-opening this. The figure this paragraph rests on — 1,559, or 1,561
+    on the snapshot D1 measured — is the *whole corpus's*. Per layer the
+    primitives are 17 (propositional) and 16 (first-order), because the
+    remaining 1,528 are all ZF and below. So an interpretation onto the layers a
+    sequent calculus actually targets owes 17 or 33 obligations rather than
+    1,561, which is entirely writable and removes the objection this paragraph
     was built on.
 
     Left open on purpose, and the reason is worth recording so it is not

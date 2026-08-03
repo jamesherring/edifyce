@@ -15,12 +15,15 @@ pytest.importorskip("regex")
 
 from website.logical.metamath import parse
 from website.logical.metamath.sections import (
+    Layer,
+    Layering,
     Placement,
     Section,
     outline,
     read_header,
     tree,
 )
+from website.logical.metamath.setmm import LAYERS
 
 PART = "#" * 40
 SECTION = "#*" * 20
@@ -227,9 +230,6 @@ def test_a_plan_partitions_the_file_into_contiguous_layers() -> None:
     # against. Every statement falls in exactly one layer, the layers open in the
     # plan's order, and a *subsection* inside a layer does not open a new one —
     # which is the case that matters, since `set.mm` draws 1,115 of them.
-    from website.logical.metamath.sections import Layering
-    from website.logical.metamath.setmm import LAYERS
-
     database = parse(LAYERED)
     layering = Layering(outline(database), LAYERS)
 
@@ -257,8 +257,6 @@ def test_the_shipped_plan_is_the_one_set_mm_draws() -> None:
     # `setmm.LAYERS` was taken through exactly these — so a prefix edited to
     # something the file does not draw would silently produce a layer that holds
     # nothing, and every number in that table would stop being about this plan.
-    from website.logical.metamath.setmm import LAYERS
-
     assert [(layer.name, layer.starts_with) for layer in LAYERS] == [
         ("Propositional calculus", "Pre-logic"),
         ("First-order logic", "Predicate calculus with equality"),
@@ -270,9 +268,6 @@ def test_a_layer_the_file_does_not_open_simply_holds_nothing() -> None:
     # A fragment, or a variant that stops before ZFC. Not an error: the plan is
     # offered to whatever file is being read, and `BINDERS` takes the same line
     # for a label a variant lacks.
-    from website.logical.metamath.sections import Layering
-    from website.logical.metamath.setmm import LAYERS
-
     trimmed = LAYERED[: LAYERED.index("$( " + SECTION + "\n   Predicate")]
     layering = Layering(outline(parse(trimmed)), LAYERS)
 
@@ -283,8 +278,6 @@ def test_a_layer_the_file_does_not_open_simply_holds_nothing() -> None:
 def test_a_plan_whose_layers_open_out_of_order_is_refused() -> None:
     # The one thing that *is* an error, because it is a plan about a different
     # file: every position it reported afterwards would be wrong, and silently.
-    from website.logical.metamath.sections import Layer, Layering
-
     reversed_plan = (
         Layer(name="Set theory", starts_with="ZF Set Theory"),
         Layer(name="Logic", starts_with="Pre-logic"),
@@ -296,11 +289,34 @@ def test_a_plan_whose_layers_open_out_of_order_is_refused() -> None:
 def test_a_statement_before_the_first_layer_falls_outside_them() -> None:
     # The same answer `Placement` gives for a statement before every header, and
     # for the same reason: a file may open with declarations nobody sectioned.
-    from website.logical.metamath.sections import Layer, Layering
-
     layering = Layering(
         outline(parse(LAYERED)),
         (Layer(name="Late", starts_with="ZF Set Theory"),),
     )
     assert layering.covering(0) is None
     assert layering.covering(6) == "Late"
+
+
+def test_two_layers_may_open_at_one_position_and_the_later_wins() -> None:
+    # **From review.** The out-of-order guard first compared each layer's
+    # *position*, and two headers may share one — a part followed straight away
+    # by a section, with no statement between, which is how `set.mm` opens every
+    # part. So a reversed plan naming both passed the check and then attributed
+    # the whole file to the wrong layer. Order is compared on the section now.
+    #
+    # The pair: the reversed plan is refused, and the forward one is not — since
+    # sharing a position is legal and the later layer wins it, on the same
+    # nearest-wins rule the rest of the spine follows.
+    sections = [
+        Section(level=2, title="Pre-logic", text="", at=0),
+        Section(level=2, title="ZF Set Theory", text="", at=0),
+    ]
+    logic = Layer(name="Logic", starts_with="Pre-logic")
+    theory = Layer(name="Set theory", starts_with="ZF Set")
+
+    with pytest.raises(ValueError, match="must open in that order"):
+        Layering(sections, (theory, logic))
+
+    layering = Layering(sections, (logic, theory))
+    assert layering.starts == [("Logic", 0), ("Set theory", 0)]
+    assert layering.covering(0) == "Set theory"
