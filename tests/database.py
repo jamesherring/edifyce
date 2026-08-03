@@ -96,7 +96,12 @@ def _always() -> list[Table]:
         SystemRelationSymbolRow,
     )
     from app.db.descriptions import LabelAttributionRow, LabelDescriptionRow
-    from app.db.systems import NotationPieceRow
+    from app.db.systems import (
+        NotationPieceRow,
+        NotationRulePieceRow,
+        NotationRulePinRow,
+        NotationRuleRow,
+    )
 
     return [
         SystemRelationRow.__table__,
@@ -105,6 +110,9 @@ def _always() -> list[Table]:
         SystemRelationExtraRow.__table__,
         SystemRelationObligationRow.__table__,
         NotationPieceRow.__table__,
+        NotationRuleRow.__table__,
+        NotationRulePinRow.__table__,
+        NotationRulePieceRow.__table__,
         LabelDescriptionRow.__table__,
         LabelAttributionRow.__table__,
     ]

@@ -11,26 +11,50 @@ engine's own fold must agree, since they are the same operation over two shapes.
 
 from __future__ import annotations
 
+import asyncio
+import uuid
+from typing import Awaitable, Callable, TypeVar
+
 import pytest
 
 pytest.importorskip("regex")
 pytest.importorskip("sqlalchemy")
+pytest.importorskip("aiosqlite")
 
 from sqlalchemy import create_engine, select
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
 
 from app.db import Base
 from app.db.metamath_store import import_corpus
-from app.db.notations_mapping import render_stored, store_notation
+from app.db.models import FormalSystem
+from app.db.notations_mapping import (
+    load_notation,
+    notation_names,
+    render_stored,
+    store_notation,
+)
 from app.db.proof_lines import ProofLineRow
-from app.db.systems import NotationPieceRow
+from app.db.systems import (
+    NotationPieceRow,
+    NotationRulePieceRow,
+    NotationRulePinRow,
+    NotationRuleRow,
+)
 from app.db.terms_mapping import prefetch_terms
 from website.logical.declarative import build_system
 from website.logical.metamath import build_spec, parse
 from website.logical.metamath.definitions import statement_of
-from website.logical.metamath.display import notation_constructors, unicode_projection
+from website.logical.metamath.display import (
+    applicable_rules,
+    notation_constructors,
+    projection_for,
+    unicode_projection,
+    with_rules,
+)
 from website.logical.metamath.typesetting import typesetting_of
-from website.logical.rendering import Projection, render, total_projection
+from website.logical.rendering import Projection, Rule, render, total_projection
 
 # A `.mm` carrying its own readable spellings, which is the case notations exist
 # for: without somewhere to put a `$t` block, an imported corpus reads as ASCII
@@ -59,10 +83,35 @@ id $p |- ( ph -> ( ps -> ph ) ) $= ( ax-1 ) ABC $.
 """
 
 
+T = TypeVar("T")
+
+
 def database() -> Session:
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
     return Session(engine)
+
+
+def run(work: Callable[[AsyncSession], Awaitable[T]]) -> T:
+    """``work`` against an async session, for the halves of this module that are.
+
+    Storing a notation is synchronous because the one thing that derives one is an
+    import; reading it is async, beside the API that does the reading. So a test
+    covering both ends needs both, and the shared in-memory database is what
+    `StaticPool` is for.
+    """
+
+    async def go() -> T:
+        engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
+        try:
+            async with engine.begin() as connection:
+                await connection.run_sync(Base.metadata.create_all)
+            async with AsyncSession(engine) as session:
+                return await work(session)
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(go())
 
 
 def test_an_import_stores_the_files_own_notation() -> None:
@@ -232,3 +281,194 @@ def test_the_stored_fold_agrees_with_the_engines_own() -> None:
         assert render_stored(graph, rows[0].term_id, projection) == (
             "( ph → ( ps → ph ) )"
         )
+
+
+# A `.mm` that applies things generically, which is the shape a rule exists for:
+# `( F ` A )` is one production whatever `F` is, so `sqrt` is an *operand* and no
+# template for `cfv` or for `csqrt` says `\sqrt{A}`.
+APPLICATION = r"""
+$( $t
+  latexdef "e." as "\in";
+  latexdef "sqrt" as "\surd";
+  latexdef "RR" as "\mathbb{R}";
+$)
+$c |- wff class ( ) ` e. sqrt RR $.
+$v A B F $.
+cA $f class A $.
+cB $f class B $.
+cF $f class F $.
+csqrt $a class sqrt $.
+cr $a class RR $.
+cfv $a class ( F ` A ) $.
+wcel $a wff A e. B $.
+ax-s $a |- ( sqrt ` A ) e. RR $.
+th $p |- ( sqrt ` A ) e. RR $= ( ax-s ) AB $.
+"""
+
+SQRT = Rule(
+    name="sqrt",
+    constructor="cfv",
+    pins={"F": "csqrt"},
+    pieces=(("lit", r"\sqrt{"), ("slot", "A"), ("lit", "}")),
+)
+
+
+def test_a_rule_survives_the_round_trip() -> None:
+    async def work(session: AsyncSession) -> None:
+        report = await session.run_sync(
+            lambda sync: import_corpus(sync, parse(APPLICATION), name="t")
+        )
+        await session.run_sync(
+            lambda sync: store_notation(
+                sync, report.system_id, Projection(name="latex", rules=(SQRT,))
+            )
+        )
+        await session.commit()
+
+        loaded = await load_notation(session, report.system_id, "latex")
+        assert loaded is not None
+        assert loaded.rules == (SQRT,)
+
+    run(work)
+
+
+def test_a_notation_of_rules_alone_is_still_a_notation() -> None:
+    # Nothing requires both halves. A projection that re-spells no production by
+    # name but matches a shape is a reading a system offers, so it must be listed
+    # and must load.
+    async def work(session: AsyncSession) -> None:
+        report = await session.run_sync(
+            lambda sync: import_corpus(sync, parse(APPLICATION), name="t")
+        )
+        await session.run_sync(
+            lambda sync: store_notation(
+                sync, report.system_id, Projection(name="shapes", rules=(SQRT,))
+            )
+        )
+        await session.commit()
+
+        assert "shapes" in await notation_names(session, report.system_id)
+        assert await load_notation(session, report.system_id, "shapes") is not None
+
+    run(work)
+
+
+def test_storing_a_notation_replaces_its_rules_too() -> None:
+    # Same reason the pieces are replaced: a notation is derived wholesale, so a
+    # re-derivation that dropped a rule must drop its rows rather than leave the
+    # old shape matching for ever.
+    with database() as session:
+        report = import_corpus(session, parse(APPLICATION), name="t")
+        store_notation(
+            session, report.system_id, Projection(name="latex", rules=(SQRT,))
+        )
+        session.commit()
+        store_notation(session, report.system_id, Projection(name="latex"))
+        session.commit()
+
+        assert session.scalars(select(NotationRuleRow)).all() == []
+        assert session.scalars(select(NotationRulePinRow)).all() == []
+        assert session.scalars(select(NotationRulePieceRow)).all() == []
+
+
+def test_the_stored_fold_applies_rules_as_the_engines_own_does() -> None:
+    """The load-bearing agreement, extended to rules.
+
+    A rule matches a *shape*, and the two folds walk different shapes — kernel
+    terms one side, rows the other. Nothing but this checks that they agree about
+    what matching means.
+    """
+    parsed = parse(APPLICATION)
+    engine = build_system(build_spec(parsed, name="t"))
+    constructors = notation_constructors(engine.build_context, engine.definitions)
+    projection = total_projection(
+        constructors,
+        with_rules(
+            projection_for(
+                engine.build_context,
+                dict(typesetting_of(parsed.comments).latex),
+                name="latex",
+                definitions=engine.definitions,
+            ),
+            applicable_rules([SQRT], constructors),
+        ),
+    )
+
+    with database() as session:
+        import_corpus(session, parsed, name="t")
+        session.commit()
+
+        rows = session.scalars(
+            select(ProofLineRow).where(ProofLineRow.term_id.is_not(None))
+        ).all()
+        assert rows, "the fixture's proof should store at least one formula"
+        graph = prefetch_terms(session, [r.term_id for r in rows])
+        term = statement_of(parsed.assertions["ax-s"], engine)
+
+        for row in rows:
+            assert render_stored(graph, row.term_id, projection) == render(
+                term, projection
+            )
+        # And the rule genuinely fired: no `\surd` survives, which is the thing no
+        # per-production template can arrange.
+        assert render_stored(graph, rows[0].term_id, projection) == (
+            r"\sqrt{A} \in \mathbb{R}"
+        )
+
+
+def test_an_import_stores_the_rules_it_is_given() -> None:
+    # Passed in rather than reached for, like the overrides: a curated table is a
+    # fact about one library, and this importer imports any `.mm`.
+    with database() as session:
+        import_corpus(session, parse(APPLICATION), name="t", rules={"latex": [SQRT]})
+        session.commit()
+
+        stored = session.scalars(select(NotationRuleRow)).all()
+        assert [(r.notation, r.name, r.constructor) for r in stored] == [
+            ("latex", "sqrt", "cfv")
+        ]
+        assert [(p.slot, p.constructor) for p in stored[0].pins] == [("F", "csqrt")]
+
+
+def test_a_child_system_inherits_and_may_replace_a_rule() -> None:
+    # Layered as the templates are, and by rule *name*: a child re-stating "sqrt"
+    # wins, and anything it did not mention keeps the ancestor's shape.
+    other = Rule(
+        name="other",
+        constructor="cfv",
+        pins={"F": "cr"},
+        pieces=(("lit", "R("), ("slot", "A"), ("lit", ")")),
+    )
+    replacement = Rule(
+        name="sqrt",
+        constructor="cfv",
+        pins={"F": "csqrt"},
+        pieces=(("lit", "ROOT "), ("slot", "A")),
+    )
+
+    def store(sync: Session) -> tuple[uuid.UUID, uuid.UUID]:
+        report = import_corpus(sync, parse(APPLICATION), name="t")
+        store_notation(
+            sync, report.system_id, Projection(name="latex", rules=(SQRT, other))
+        )
+        child = FormalSystem(
+            name="child", slug="child", inherits_from_id=report.system_id
+        )
+        sync.add(child)
+        sync.flush()
+        store_notation(
+            sync, child.id, Projection(name="latex", rules=(replacement,))
+        )
+        return report.system_id, child.id
+
+    async def work(session: AsyncSession) -> None:
+        _parent, child_id = await session.run_sync(store)
+        await session.commit()
+
+        loaded = await load_notation(session, child_id, "latex")
+        assert loaded is not None
+        by_name = {rule.name: rule for rule in loaded.rules}
+        assert by_name["sqrt"] == replacement
+        assert by_name["other"] == other
+
+    run(work)

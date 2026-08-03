@@ -19,17 +19,19 @@ from website.logical.metamath import build_spec, parse
 from website.logical.metamath.definitions import statement_of
 from website.logical.metamath.display import (
     applicable,
+    applicable_rules,
     notation_constructors,
     notation_report,
     verbatim,
     with_overrides,
+    with_rules,
     projection_for,
     unicode_projection,
 )
 from website.logical.metamath.parser import Database
-from website.logical.metamath.setmm import DISPLAY_OVERRIDES
+from website.logical.metamath.setmm import DISPLAY_OVERRIDES, DISPLAY_RULES
 from website.logical.metamath.typesetting import Typesetting, typesetting_of
-from website.logical.rendering import render
+from website.logical.rendering import Projection, Rule, render
 
 SOURCE = r"""
 $( $t
@@ -537,3 +539,116 @@ def test_the_report_without_templates_reads_the_derived_notation() -> None:
     assert notation_report(system.build_context, tokens).collisions == (
         notation_report(system.build_context, tokens, templates={}).collisions
     )
+
+
+# A grammar that applies things generically, as `set.mm` does: `( F ` A )` is one
+# production whatever `F` is, so the symbol a reader thinks of as the operator is
+# an operand sitting in a slot.
+APPLICATION = r"""
+$c |- wff class ( ) ` e. sqrt RR $.
+$v A B F $.
+cA $f class A $.
+cB $f class B $.
+cF $f class F $.
+csqrt $a class sqrt $.
+cr $a class RR $.
+cfv $a class ( F ` A ) $.
+wcel $a wff A e. B $.
+"""
+
+
+def applying() -> tuple[FormalSystem, list]:
+    system = build_system(build_spec(parse(APPLICATION), name="t"))
+    return system, notation_constructors(system.build_context, system.definitions)
+
+
+def test_a_rule_the_grammar_can_use_is_kept() -> None:
+    system, constructors = applying()
+    rule = Rule(
+        name="sqrt",
+        constructor="cfv",
+        pins={"F": "csqrt"},
+        pieces=(("lit", r"\sqrt{"), ("slot", "A"), ("lit", "}")),
+    )
+
+    assert applicable_rules([rule], constructors) == [rule]
+
+
+def test_a_rule_rooted_at_a_constructor_the_grammar_lacks_is_dropped() -> None:
+    _system, constructors = applying()
+    rule = Rule(
+        name="fraction",
+        constructor="co",
+        pins={"F": "cdiv"},
+        pieces=(("slot", "A"), ("lit", "/"), ("slot", "B")),
+    )
+
+    assert applicable_rules([rule], constructors) == []
+
+
+def test_a_rule_that_leaves_a_slot_out_is_dropped() -> None:
+    # The same hazard `applicable` refuses for an override, and sharper here: a
+    # rule *consumes* what it pins, so a slot neither pinned nor rendered vanishes
+    # from the page with nothing to show it ever existed.
+    _system, constructors = applying()
+    silent = Rule(
+        name="half", constructor="cfv", pins={"F": "csqrt"}, pieces=(("lit", "root"),)
+    )
+
+    assert applicable_rules([silent], constructors) == []
+
+
+def test_a_rule_naming_a_slot_the_root_lacks_is_dropped() -> None:
+    _system, constructors = applying()
+    wrong = Rule(
+        name="wrong",
+        constructor="cfv",
+        pins={"F": "csqrt"},
+        pieces=(("slot", "A"), ("slot", "B")),
+    )
+
+    assert applicable_rules([wrong], constructors) == []
+
+
+def test_a_rule_pinning_a_production_the_grammar_lacks_is_dropped() -> None:
+    # Dead rather than dangerous — a pin that can never hold never fires — but
+    # silently dead, which is exactly what a table carried between libraries would
+    # be. Refusing says so.
+    _system, constructors = applying()
+    absent = Rule(
+        name="abs",
+        constructor="cfv",
+        pins={"F": "cabs"},
+        pieces=(("lit", "|"), ("slot", "A"), ("lit", "|")),
+    )
+
+    assert applicable_rules([absent], constructors) == []
+
+
+def test_with_rules_adds_rather_than_replaces() -> None:
+    # Unlike an override, which is keyed by name and wins outright: several rules
+    # legitimately share a root, since fixing a different operand in the same
+    # applicator is the whole idiom.
+    first = Rule(name="a", constructor="cfv", pieces=(("slot", "F"),))
+    second = Rule(name="b", constructor="cfv", pieces=(("slot", "A"),))
+
+    projection = with_rules(with_rules(Projection(name="x"), [first]), [second])
+
+    assert projection.rules == (first, second)
+    assert projection.name == "x"
+
+
+def test_the_curated_setmm_rules_are_shaped_for_setmm() -> None:
+    # As with the overrides: the table is written against `set.mm`'s constructors,
+    # and nothing else would notice a slot renamed upstream.
+    for notation, rules in DISPLAY_RULES.items():
+        assert notation in {"unicode", "latex"}, notation
+        for rule in rules:
+            assert rule.name, rule
+            assert rule.constructor in {"cfv", "co"}, rule.name
+            assert rule.pins, rule.name
+            # Every slot of the root accounted for, which is what
+            # `applicable_rules` checks against a real grammar.
+            assert rule.slots == ({"F", "A"} if rule.constructor == "cfv"
+                                  else {"F", "A", "B"}), rule.name
+    assert len({rule.name for rules in DISPLAY_RULES.values() for rule in rules}) == 6

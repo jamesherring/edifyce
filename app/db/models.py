@@ -53,7 +53,7 @@ if TYPE_CHECKING:
     from app.db.promoted_theorems import PromotedTheoremRow
     from app.db.proof_lines import ProofLineRow
     from app.db.descriptions import LabelDescriptionRow
-    from app.db.systems import NotationPieceRow
+    from app.db.systems import NotationPieceRow, NotationRuleRow
     from app.db.terms import TermRow
 
 # JSONB on Postgres (the real deployment), generic JSON elsewhere so a SQLite
@@ -168,6 +168,12 @@ class FormalSystem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     notation_pieces: Mapped[list["NotationPieceRow"]] = relationship(
         back_populates="system", cascade="all, delete-orphan",
         order_by="NotationPieceRow.position",
+    )
+    # The other half of a notation: spellings matched by *shape* rather than by
+    # production name, which is what reaches `( sqrt ` 2 )` as `\sqrt{2}`.
+    notation_rules: Mapped[list["NotationRuleRow"]] = relationship(
+        back_populates="system", cascade="all, delete-orphan",
+        order_by="NotationRuleRow.position",
     )
     # What this system says about the labels it names — prose and authorship, for
     # productions, definitions, theorems and proofs alike (app/db/descriptions.py).

@@ -1,10 +1,10 @@
 """Declarations about `set.mm` specifically — data, not engine behaviour.
 
-Three things an import needs that a ``.mm`` file does not say, and that no
-property of a statement's shape settles. Both are therefore *declared* per database and
-default to nothing, so an import that names neither behaves exactly as one did
-before either existed; this module is where `set.mm`'s answers live so they are
-written once rather than in each caller.
+Things an import needs that a ``.mm`` file does not say, and that no property of a
+statement's shape settles. Each is therefore *declared* per database and defaults
+to nothing, so an import naming none behaves exactly as one did before any of them
+existed; this module is where `set.mm`'s answers live so they are written once
+rather than in each caller.
 
 Keeping them out of the engine is the point. Edifyce checks any formal system, and
 a table naming `wal` and `wceq` is a fact about one library — the same reason the
@@ -12,6 +12,8 @@ grammar itself is built from the file rather than hard-wired.
 """
 
 from __future__ import annotations
+
+from ..rendering import Rule
 
 # The productions that mean *definitional equivalence*, so a logical `$a` stated
 # over one can be imported as a definition (see :mod:`~.definitions`). Arity and
@@ -142,10 +144,9 @@ BINDERS: dict[str, dict[str, list[str]]] = {
 # `unicode` notation deliberately has none, since `( 𝐹 ‘ 𝐴 )` is how `set.mm`
 # itself writes application and a Unicode reading exists to be faithful.
 #
-# What this shape *cannot* express is an override spanning two productions.
-# `( sqrt ` 2 )` is `cfv` applied to the constant `csqrt`, so no per-production
-# template turns it into ``\\sqrt{2}`` — that needs matching a subtree, which is a
-# different mechanism (see the roadmap's §4.4).
+# What this shape cannot express is a spelling that spans two productions —
+# `( sqrt ` 2 )` is `cfv` applied to the constant `csqrt` — which is what
+# `DISPLAY_RULES` below is for.
 DISPLAY_OVERRIDES: dict[str, dict[str, tuple[tuple[str, str], ...]]] = {
     "latex": {
         # Function application. The defect, not a preference: `` ` `` maps to
@@ -172,4 +173,101 @@ DISPLAY_OVERRIDES: dict[str, dict[str, tuple[tuple[str, str], ...]]] = {
             ("lit", r"\right\}"),
         ),
     },
+}
+
+
+# The spellings that span two productions, where a per-production template cannot
+# reach.
+#
+# `set.mm` writes function application and binary operation *generically*: `( F `
+# A )` is one production (`cfv`) whatever `F` is, and `( A F B )` is one
+# production (`co`). So the symbol a reader thinks of as the operator — `sqrt`,
+# `/`, `^` — is an **operand**, a nullary class constant sitting in a slot, and
+# re-spelling either production says nothing about it. `( sqrt ` 2 )` comes out of
+# `DISPLAY_OVERRIDES` as `\surd\left(2\right)`; only matching the pair says
+# `\sqrt{2}`.
+#
+# A `rendering.Rule` is that pair written down: the production at the root, what
+# must sit at a slot for it to apply, and the template to use when it does. The
+# pinned operand is *consumed* — there is no `\surd` left in `\sqrt{2}` — which is
+# exactly why this cannot be a template for either production alone.
+#
+# Six, chosen because in each the mathematical notation is genuinely
+# two-dimensional or fenced and the linear form is a transcription of it rather
+# than the thing. `+`, `x.` and the rest read correctly as `( A + B )` and are
+# left alone. As with `DISPLAY_OVERRIDES` this is `latex` only: the `unicode`
+# reading exists to be faithful to how `set.mm` itself writes things.
+DISPLAY_RULES: dict[str, tuple[Rule, ...]] = {
+    "latex": (
+        # `( sqrt ` A )`, where `sqrt` maps to `\surd` — the symbol, not the
+        # radical, because `\sqrt` in TeX takes its argument under the vinculum
+        # and a token map has no argument to give it.
+        Rule(
+            name="sqrt",
+            constructor="cfv",
+            pins={"F": "csqrt"},
+            pieces=(("lit", r"\sqrt{"), ("slot", "A"), ("lit", "}")),
+        ),
+        # `( abs ` A )`. `\operatorname{abs}` is a faithful reading of the token
+        # and nobody writes it; the bars are the notation.
+        Rule(
+            name="absolute-value",
+            constructor="cfv",
+            pins={"F": "cabs"},
+            pieces=(
+                ("lit", r"\left\lvert "),
+                ("slot", "A"),
+                ("lit", r"\right\rvert"),
+            ),
+        ),
+        # `( ! ` A )`. Postfix, which no prefix application template can be.
+        Rule(
+            name="factorial",
+            constructor="cfv",
+            pins={"F": "cfa"},
+            pieces=(("slot", "A"), ("lit", "!")),
+        ),
+        # `( A / B )`. The argument for a rule here is weaker than for `\sqrt` —
+        # `A / B` is readable — but a corpus of real analysis is mostly quotients
+        # and `\frac` is what they are written as.
+        Rule(
+            name="fraction",
+            constructor="co",
+            pins={"F": "cdiv"},
+            pieces=(
+                ("lit", r"\frac{"),
+                ("slot", "A"),
+                ("lit", "}{"),
+                ("slot", "B"),
+                ("lit", "}"),
+            ),
+        ),
+        # `( A ^ B )`, where `^` maps to `\uparrow` — Knuth's arrow, which is a
+        # different operation. Superscripting is the notation.
+        Rule(
+            name="power",
+            constructor="co",
+            pins={"F": "cexp"},
+            pieces=(
+                ("slot", "A"),
+                ("lit", "^{"),
+                ("slot", "B"),
+                ("lit", "}"),
+            ),
+        ),
+        # `( N _C K )`, the binomial coefficient. `\mathbin{\operatorname{C}}` is
+        # what the token map gives, and it is infix where the notation is stacked.
+        Rule(
+            name="binomial",
+            constructor="co",
+            pins={"F": "cbc"},
+            pieces=(
+                ("lit", r"\binom{"),
+                ("slot", "A"),
+                ("lit", "}{"),
+                ("slot", "B"),
+                ("lit", "}"),
+            ),
+        ),
+    ),
 }

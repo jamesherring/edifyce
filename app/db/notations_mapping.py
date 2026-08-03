@@ -1,7 +1,8 @@
 """Storing and loading a system's named notations.
 
 A :class:`~website.logical.rendering.Projection` is the engine's view — a map from
-constructor name to render steps. This is the same thing as rows, so a notation
+constructor name to render steps, plus the :class:`~website.logical.rendering.Rule`
+spellings matched by *shape*. Both are the same thing as rows, so a notation
 persists with its system and every reader of every proof written against that
 system can ask for it.
 
@@ -13,8 +14,8 @@ Nothing here re-derives.
 Reading is **layered**, as the system is. A system inheriting from another is
 built from its ancestors' parts in front of its own, so their constructors are its
 constructors and their spellings are readings of it; a child's own rows win per
-constructor. Storing is not layered — a notation is stored against the one system
-it was derived for.
+constructor, and per rule *name*. Storing is not layered — a notation is stored
+against the one system it was derived for.
 """
 
 from __future__ import annotations
@@ -22,10 +23,22 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from sqlalchemy import delete, select
+from sqlalchemy.orm import selectinload
 
 from app.db.models import FormalSystem
-from app.db.systems import NotationPieceRow
-from website.logical.rendering import Projection
+from app.db.systems import (
+    NotationPieceRow,
+    NotationRulePieceRow,
+    NotationRulePinRow,
+    NotationRuleRow,
+)
+from website.logical.rendering import (
+    PATH,
+    Projection,
+    Rule,
+    matches,
+    rules_by_constructor,
+)
 
 if TYPE_CHECKING:
     import uuid
@@ -45,6 +58,9 @@ def store_notation(
 ) -> int:
     """Replace ``system_id``'s notation named by ``projection``, returning its size.
 
+    Size is the templates, which is what a caller reports: the rules are curated
+    and single figures beside them.
+
     Synchronous, because the one thing that derives a notation is an import, and
     an import is synchronous - deriving needs the source a system was built from,
     which a reader does not have. Reading is async, beside the API that does it.
@@ -60,6 +76,16 @@ def store_notation(
             NotationPieceRow.notation == projection.name,
         )
     )
+    # The pins and pieces go with it, by cascade — this is the only delete that
+    # names the rules, so the ORM has to see the rows rather than issue a bare
+    # DELETE, which would leave the children behind.
+    for stale in session.scalars(
+        select(NotationRuleRow).where(
+            NotationRuleRow.formal_system_id == system_id,
+            NotationRuleRow.notation == projection.name,
+        )
+    ).all():
+        session.delete(stale)
     rows = [
         NotationPieceRow(
             formal_system_id=system_id,
@@ -73,6 +99,28 @@ def store_notation(
         for position, (kind, text) in enumerate(pieces)
     ]
     session.add_all(rows)
+    session.add_all(
+        NotationRuleRow(
+            formal_system_id=system_id,
+            notation=projection.name,
+            # An unnamed rule still needs a key, since a name is what a nearer
+            # layer replaces one by. Its position is stable for a given
+            # derivation, which is the most a rule that declined to name itself
+            # can ask for.
+            name=rule.name or f"rule-{position}",
+            constructor=rule.constructor,
+            position=position,
+            pins=[
+                NotationRulePinRow(slot=slot, constructor=required)
+                for slot, required in rule.pins.items()
+            ],
+            pieces=[
+                NotationRulePieceRow(position=at, kind=kind, text=text)
+                for at, (kind, text) in enumerate(rule.pieces)
+            ],
+        )
+        for position, rule in enumerate(projection.rules)
+    )
     return len(projection.templates)
 
 
@@ -122,17 +170,20 @@ async def notation_names(session: AsyncSession, system_id: uuid.UUID) -> list[st
     not among them: it is the grammar, not a notation, and is what a reader gets
     by asking for none.
     """
-    found = await session.scalars(
+    layers = await notation_layers(session, system_id)
+    pieces = await session.scalars(
         select(NotationPieceRow.notation)
-        .where(
-            NotationPieceRow.formal_system_id.in_(
-                await notation_layers(session, system_id)
-            )
-        )
+        .where(NotationPieceRow.formal_system_id.in_(layers))
         .distinct()
-        .order_by(NotationPieceRow.notation)
     )
-    return list(found)
+    # A notation is normally both halves, but nothing requires it: a projection of
+    # rules alone re-spells nothing by name and is still a reading a system offers.
+    rules = await session.scalars(
+        select(NotationRuleRow.notation)
+        .where(NotationRuleRow.formal_system_id.in_(layers))
+        .distinct()
+    )
+    return sorted(set(pieces) | set(rules))
 
 
 async def load_notation(
@@ -162,7 +213,8 @@ async def load_notation(
             .order_by(NotationPieceRow.constructor, NotationPieceRow.position)
         )
     ).all()
-    if not rows:
+    rules = await _load_rules(session, layers, notation)
+    if not rows and not rules:
         return None
 
     depth = {layer: index for index, layer in enumerate(layers)}
@@ -181,7 +233,48 @@ async def load_notation(
     return Projection(
         templates={name: tuple(pieces) for name, pieces in templates.items()},
         name=notation,
+        rules=rules,
     )
+
+
+async def _load_rules(
+    session: AsyncSession, layers: list[uuid.UUID], notation: str
+) -> tuple[Rule, ...]:
+    # Layered by rule *name*, as the templates are by constructor name: a child
+    # naming "sqrt" replaces the ancestor's "sqrt" and leaves its other rules
+    # standing. Replacing per *root constructor* instead would be wrong — several
+    # rules legitimately share a root, since fixing a different operator in the
+    # same applicator is the whole idiom.
+    found = (
+        await session.scalars(
+            select(NotationRuleRow)
+            .where(
+                NotationRuleRow.formal_system_id.in_(layers),
+                NotationRuleRow.notation == notation,
+            )
+            .options(
+                selectinload(NotationRuleRow.pins),
+                selectinload(NotationRuleRow.pieces),
+            )
+            .order_by(NotationRuleRow.position, NotationRuleRow.name)
+        )
+    ).all()
+    depth = {layer: index for index, layer in enumerate(layers)}
+    nearest: dict[str, tuple[int, Rule]] = {}
+    for row in found:
+        at = depth[row.formal_system_id]
+        if row.name in nearest and nearest[row.name][0] > at:
+            continue
+        nearest[row.name] = (
+            at,
+            Rule(
+                constructor=row.constructor,
+                pins={pin.slot: pin.constructor for pin in row.pins},
+                pieces=tuple((piece.kind, piece.text) for piece in row.pieces),
+                name=row.name,
+            ),
+        )
+    return tuple(rule for _at, rule in nearest.values())
 
 
 def render_stored(
@@ -206,13 +299,53 @@ def render_stored(
     """
     if term_id is None:
         return None
-    return _render_row(graph, term_id, projection.templates, set())
+    return _render_row(
+        graph,
+        term_id,
+        projection.templates,
+        rules_by_constructor(projection.rules),
+        set(),
+    )
+
+
+def _descend_row(graph: TermGraph, term_id: uuid.UUID, path: str) -> uuid.UUID | None:
+    # `rendering._descend` over rows, and deliberately the same shape: the empty
+    # path is a miss rather than this node, so a template cannot recurse on itself.
+    if not path:
+        return None
+    found = term_id
+    for step in path.split(PATH):
+        child = dict(graph.children_of(found)).get(step)
+        if child is None:
+            return None
+        found = child
+    return found
+
+
+def _matching_rule(
+    graph: TermGraph,
+    term_id: uuid.UUID,
+    constructor: str,
+    rules: Mapping[str, tuple[Rule, ...]],
+) -> Rule | None:
+    def constructor_at(path: str) -> str | None:
+        found = _descend_row(graph, term_id, path)
+        if found is None:
+            return None
+        row = graph.node(found)
+        return None if row is None else row.constructor
+
+    for rule in rules.get(constructor, ()):
+        if matches(rule, constructor_at):
+            return rule
+    return None
 
 
 def _render_row(
     graph: TermGraph,
     term_id: uuid.UUID,
     templates: Mapping[str, tuple[Piece, ...]],
+    rules: Mapping[str, tuple[Rule, ...]],
     seen: set[uuid.UUID],
 ) -> str:
     row = graph.node(term_id)
@@ -222,7 +355,12 @@ def _render_row(
         # terminate. Guard the path, not the visit.
         return ""
     children = dict(graph.children_of(term_id))
-    pieces = templates.get(row.constructor or "")
+    # Tried before the per-constructor template and winning outright, as the
+    # engine's own fold does — the two are one operation over two shapes.
+    rule = (
+        _matching_rule(graph, term_id, row.constructor or "", rules) if rules else None
+    )
+    pieces = rule.pieces if rule is not None else templates.get(row.constructor or "")
     if pieces is None:
         if row.literal is not None:
             return row.literal
@@ -234,16 +372,26 @@ def _render_row(
             # instantiates every bound variable before anyone reads the result.
             return f"⟨{row.bound_index}⟩"
         if len(children) == 1:
-            return _render_row(graph, next(iter(children.values())), templates, seen | {term_id})
+            return _render_row(
+                graph, next(iter(children.values())), templates, rules, seen | {term_id}
+            )
         return ""
     out: list[str] = []
     for kind, text in pieces:
         if kind == "lit":
             out.append(text)
             continue
-        child = children.get(text)
+        # A path rather than a bare label, so a rule can name a grandchild. Every
+        # step of an ordinary template is a one-step path, and that case stays the
+        # dict lookup it always was — this fold runs over every line of every
+        # proof shown.
+        child = (
+            _descend_row(graph, term_id, text)
+            if PATH in text
+            else children.get(text)
+        )
         out.append(
-            _render_row(graph, child, templates, seen | {term_id})
+            _render_row(graph, child, templates, rules, seen | {term_id})
             if child is not None
             else text
         )

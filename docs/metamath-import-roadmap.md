@@ -765,8 +765,90 @@ was the case: `( sqrt ` 2 )` is `cfv` applied to the constant `csqrt` — two
 productions — so no template for either turns it into `\sqrt{2}`, and the best a
 per-production override reaches is `\surd\left(2\right)`. Likewise `\frac{A}{B}`,
 since `set.mm` builds division as the generic `co` applied to `cdiv`. Both want
-matching a *subtree* rather than a constructor, which is a different mechanism and
-is not built.
+matching a *shape* rather than a constructor, which is §4.4b.
+
+### 4.4b Matching a shape — *done*
+
+The cases §4.4 could not reach share one form, and it is `set.mm`'s central idiom
+rather than a curiosity: application and binary operation are **generic**. `( F `
+A )` is one production whatever `F` is (`cfv`), and `( A F B )` is one production
+whatever `F` is (`co`), so the symbol a reader thinks of as the operator — `sqrt`,
+`/`, `^`, `_C` — is an *operand*, a nullary class constant sitting in a slot.
+Re-spelling either production says nothing about it.
+
+`rendering.Rule` is that pair written down: the production at the root, what must
+sit at given slot paths for it to apply (`{"F": "csqrt"}`), and the template to
+use when it does. It is tried before the per-constructor template and wins
+outright, and the pinned operand is **consumed** — there is no `\surd` left in
+`\sqrt{2}` — which is precisely why it cannot be a template for either production
+alone. A `Projection` now carries both halves: `templates` keyed by name, which is
+what a `$t` map derives and is thousands of entries, and `rules` keyed by shape,
+which is curated and single figures.
+
+A slot is a **path** (`"F"`, `"A.F"`), so a rule can reach a grandchild the root's
+own template cannot name. That is what buys generality without a tree: matching
+walks paths rather than recursing over a pattern, and one flat table stores them.
+Depth beyond one is unexercised by the corpus and costs nothing to allow.
+
+`setmm.DISPLAY_RULES` is `set.mm`'s six, chosen where the mathematical notation is
+genuinely two-dimensional or fenced and the linear form is a transcription of it:
+
+| rule | source | before (§4.4) | after |
+|---|---|---|---|
+| `sqrt` | ``( sqrt ` A )`` | `\surd\left(A\right)` | `\sqrt{A}` |
+| `absolute-value` | ``( abs ` A )`` | `\operatorname{abs}\left(A\right)` | `\left\lvert A\right\rvert` |
+| `factorial` | ``( ! ` A )`` | `{!}\left(A\right)` | `A!` |
+| `fraction` | `( A / B )` | `( A / B )` | `\frac{A}{B}` |
+| `power` | `( A ^ B )` | `( A \uparrow B )` | `A^{B}` |
+| `binomial` | `( N _C K )` | `( N \mathbin{\operatorname{C}} K )` | `\binom{N}{K}` |
+
+`+`, `x.` and the rest read correctly as `( A + B )` and are left alone. Measured
+over `set.mm`'s 50,421 parsed statements the six change **3,297** of them:
+
+```
+sqrt2irr  \surd\left(2\right) \notin \mathbb{Q}
+       →  \sqrt{2} \notin \mathbb{Q}
+bcval     ( N \mathbin{\operatorname{C}} K ) = \mathrm{if} ( … , ( {!}\left(N\right)
+            / ( {!}\left(( N - K )\right) \cdot {!}\left(K\right) ) ) , 0 )
+       →  \binom{N}{K} = \mathrm{if} ( … , \frac{N!}{( ( N - K )! \cdot K! )} , 0 )
+sqrtdiv   \surd\left(( A / B )\right) = ( \surd\left(A\right) / \surd\left(B\right) )
+       →  \sqrt{\frac{A}{B}} = \frac{\sqrt{A}}{\sqrt{B}}
+```
+
+**Stored, so the read path has them.** Three tables — `notation_rules` (root,
+name, order), `notation_rule_pins` (path, required production) and
+`notation_rule_pieces` (the template steps) — rather than one with a
+discriminator, because a pin and a step carry genuinely different columns and
+encoding either into the other's is unpicked by hand later. `render_stored` walks
+them over the row graph exactly as `rendering.render` walks kernel terms, and
+`rendering.matches` is the one piece both folds share, so they cannot disagree
+about what matching *means*; `tests/test_notations_store.py` pins the two answers
+against each other on a real grammar as it already did for the templates.
+
+Reading is layered like everything else, and by rule **name** — a child re-stating
+`sqrt` replaces it and keeps the ancestor's other rules. Not by root constructor,
+which would be wrong: several rules legitimately share a root, since fixing a
+different operand in the same applicator is the whole idiom. Where two rules could
+both match, the one with more pins wins whatever order they were written in, so a
+table cannot be broken by appending to it.
+
+`display.applicable_rules` refuses a rule this grammar cannot use, as
+`display.applicable` does for an override and on a sharper version of the same
+ground: a rule *consumes* what it pins, so a root slot neither pinned nor rendered
+would vanish from the page with nothing to show it existed. It must therefore
+account for **every** slot of its root, and its pins must name productions the
+grammar has — a pin that can never hold is dead rather than dangerous, but
+silently dead, which is what a table carried to another library would be.
+
+The API and the frontend need no change: rules ride in on the stored projection
+that `GET /proofs/{id}/structure?notation=…` already loads.
+
+What this still does not check is a **collision a rule introduces**.
+`notation_report` compares surface templates per production and a rule is not one;
+two rules spelling the same shape alike, or a rule colliding with a template,
+would not be reported. As a display that is the cosmetic case the report's own
+docstring already disclaims, and as a *source* it joins the 19 constant/variable
+pairs §4.2a refused Unicode-as-source over.
 
 The 19 remaining collisions are all a constant against a class *variable* of the
 same spelling (`+` is both `caddc` and a variable named `.+`). As a display that is
