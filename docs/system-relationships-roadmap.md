@@ -4,8 +4,17 @@
 of R4, and the edge CRUD an author reaches them through. **Track S is delivered
 too**, bar the conditional S4: S1 declares a sequent calculus and needed no
 engine change, S2 adds the statement template and carries a Hilbert library
-across into it, and S3 is answered by S1's measurements. Track D (the layered
+across into it, S2a puts a sequent calculus on top of a tower — including an
+imported one — and S3 is answered by S1's measurements. Track D (the layered
 importer) is still design; D1 depends on nothing and can start whenever.
+
+One correction this note owes its reader, since §6.3 and §8's S2 both imply
+otherwise: **an edge and a layer are not two ways to do the same thing.** An edge
+relates systems built independently and costs a total rename, a template and an
+obligation per source primitive; a layer is what a sequent calculus built *over*
+an existing system is, and costs one declared rule. Only the second reaches
+`set.mm`, because a total rename over 1,441 productions is not something an
+author writes. §8's S2a is the finding and carries the comparison.
 
 `formal_systems.inherits_from_id` used to be validated on write and read by
 nothing — `app/routers/systems.py` said so in as many words ("inheritance is not
@@ -1359,6 +1368,87 @@ narrows where a memo is installed — a new parse entry point, say — should be
 against this table first, and the second of the two counts above is what will
 notice.
 
+#### S2a — the sequent tower, and the arrangement `set.mm` forces — **done**
+
+**Delivers** a sequent calculus as a **layer of a tower** rather than a system
+beside one, and with it the answer to whether Track S's architecture reaches an
+imported corpus. Not in the original plan: it exists because the question "what
+would a sequent PC/FOL/ZFC look like" turned out to have a different answer from
+the one S1 and S2 imply.
+
+**Tests and verification** — `tests/sequent_tower.py`,
+`tests/test_sequent_tower.py`.
+
+**The finding: for a sequent calculus over a system that already exists, the
+spine does what S2's edge does and asks for none of what the edge asks for.** No
+rename, because the child's `formula` *is* the parent's rows. No template,
+because the child can state a parent line itself — a line type is inherited like
+everything else, so a child of a Hilbert system has *both* line types and can
+write `φ` as well as `Γ ⊢ φ`. No obligations, because the parent's rules are the
+child's. What replaces all three is one declared rule:
+
+```
+lift    antecedent:  P          (read at the parent's logical sort)
+        deduction:   ∅ ⊢ P
+```
+
+— the interpretation stated as a primitive of the combined system instead of as a
+claim about two of them, and sound for exactly the reason §9.24's closed template
+is. `lift` concludes `∅ ⊢ P` and never `Γ ⊢ P`, which is that finding restated as
+a rule: a schema is read for *all* instances of its metavariables, so lifting
+onto an arbitrary context would claim the uniformity only weakening earns.
+
+**Why this matters rather than being a second way to do the same thing.** An
+edge between siblings requires the sequent system to *have* the grammar it
+reasons about. `set.mm` declares 1,441 productions, and `translation_errors`
+holds a rename to **totality** — every name of the source's grammar must have an
+image — so the sibling arrangement demands either 1,441 redeclarations or a
+1,441-entry map, neither of which an author writes. A child declares four
+productions and inherits the rest.
+`test_a_sequent_layer_sits_on_an_imported_grammar` is the same layer, unmodified
+except for the name of its parent's logical sort, on a grammar
+`metamath.importer.build_spec` produced from a `.mm` file.
+
+So the two arrangements are **not** alternatives, and the roadmap should not have
+implied they were:
+
+| | an edge (S2) | a layer (S2a) |
+|---|---|---|
+| when | the two systems were built independently; neither contains the other | the sequent calculus is being built *over* a system that already exists |
+| costs | a rename (total), a template, one obligation per source primitive | one declared rule |
+| reaches `set.mm` | no — the rename cannot be written | yes |
+
+**What is parent-agnostic, and it is more than expected.** `sequent_core` — the
+context sort, the turnstile, `id`/`WL`/`XL`/`CL`, `cut` and `lift` — names its
+parent's *logical sort* and no production of it, so it sits unchanged on this
+repository's `formula` tower and on an imported `wff` one. Only the logical rules
+(→R, →L, ∀R) spell connectives and are written per parent. Stated as a rule:
+**the part of a sequent calculus that does not mention a connective is the part
+that transfers to any parent**, and it is the majority of the machinery.
+
+*Pinned, besides the above:* both calculi check in one system and neither leaks
+into the other (a Hilbert axiom does not justify a sequent line, and the lift is
+therefore not optional); the eigenvariable proviso is asked about **inherited**
+notation and `occurs` descends across the layer boundary, which is what §5.1's
+"one flat grammar" means in practice; and an imported theorem promoted the way a
+walk promotes it lifts into a sequent.
+
+*From review*, two of which are worth carrying past this phase. The
+`turnstile=` parameter reached the turnstile production and `lift` and nothing
+else — every structural rule spelled `⊢` directly, so an alternative token built
+cleanly and left `id`, `WL`, `XL`, `CL` and `cut` silently dead. **The worst
+shape a parameter can have is one whose misuse the build accepts**, and the fix
+is not the threading but the test that *uses* the knob. And the test asserting
+what the core mentions inspected its productions and not its rules, so a rule
+smuggling a connective in would have left the claim false with everything green;
+it now checks every schema's tokens against the layer's own three, which refuses
+a connective nobody thought to look for.
+
+It also answers S1's third finding — that `id` alone cannot supply a *non-vacuous*
+∀R premise, so S1 had to declare an axiom of the object theory to test the
+proviso at all. Here the **parent** supplies it: `lift` brings in a Hilbert
+theorem about `x` that the context does not contain. The bridge does real work.
+
 #### S4 — *conditional on S3* — an AC matcher for contexts
 
 **Delivers** sequents without structural bookkeeping.
@@ -2077,6 +2167,39 @@ each is a live constraint on the work after it rather than a closed question.
     is therefore carried *declaratively* and composed at promotion time, and the
     check that it composes at all belongs on the write, where it has a request to
     report to.
+
+25. **A line part's name is claimed chain-wide, and nothing about the grammar
+    requires it.** The one thing that had to be worked around to put a sequent
+    calculus on top of an imported corpus, and it is a wart rather than a rule.
+
+    `layered_spec` claims a **line part**'s name into the same namespace as
+    productions and line types, so a child adding a line type cannot call its
+    citation field `reference` — which is what every Hilbert layer here calls
+    theirs and, more to the point, what
+    `metamath.importer.build_spec` calls the imported one's. Within a *single*
+    spec two line types may share a part name freely: that builds, and both line
+    types work. `test_a_layer_may_not_reuse_its_parent_s_line_part_name` asserts
+    both halves, which is what makes the inconsistency the finding rather than
+    the refusal.
+
+    The check is doing something real, but not this. A shape resolves `<name>`
+    against sorts *and* parts, so a part sharing a **production**'s name is
+    genuinely ambiguous and must be refused. Two parts of two different line
+    types are not: they are resolved within their own shape, which is why the
+    flat case works. The narrower rule — a part may not collide with a
+    production or sort, but parts do not collide with each other — is what the
+    build already implements and what the chain check should match.
+
+    Not changed here, deliberately. `layered_spec` is on the path of every build
+    in the codebase, the workaround is a naming convention (`citation`), and the
+    change belongs with a phase that has a reason to touch that function rather
+    than bolted onto one that merely tripped over it. Recorded so the convention
+    is not mistaken for a preference.
+
+    The neighbouring constraint is a genuine rule and needs no fix: a layer may
+    not reuse a **production name** either, so a sequent layer over `set.mm` must
+    avoid 1,441 labels. `sequent_core` prefixes its own (`sequent-cons`,
+    `sequent-turnstile`), which is the discipline any layer over a corpus wants.
 
 ---
 
