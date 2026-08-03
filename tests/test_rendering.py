@@ -27,7 +27,14 @@ from website.logical.declarative import (
 )
 from website.logical.formal_system import FormalSystem
 from website.logical.kernel.terms import Term
-from website.logical.rendering import Projection, render
+from website.logical.metamath.display import notation_constructors
+from website.logical.rendering import (
+    Projection,
+    Rule,
+    longest_label,
+    render,
+    total_projection,
+)
 
 
 def system() -> FormalSystem:
@@ -194,3 +201,204 @@ def test_a_defined_form_is_a_production_a_projection_can_name() -> None:
 
     assert term.to_string() == "(S -> p)"
     assert render(term, projected) == "(⊤ → p)"
+
+
+def application_system() -> FormalSystem:
+    """A grammar that applies things *generically*, as `set.mm` does.
+
+    `( F @ A )` is one production whatever `F` is, and `( A F B )` is one
+    production whatever `F` is — so the symbol a reader thinks of as the operator
+    is an operand, sitting in a slot, and no template for either production says
+    anything about it. That is the shape a rule exists for.
+    """
+    return build_system(
+        SystemSpec(
+            name="app",
+            productions=[
+                Production(sort="term", name="var", regex="[a-c]"),
+                Production(
+                    sort="term", name="root", atom_value="sqrt", denotes_constant=True
+                ),
+                Production(
+                    sort="term", name="over", atom_value="div", denotes_constant=True
+                ),
+                Production(
+                    sort="term",
+                    name="apply",
+                    template="(F @ A)",
+                    bindings=[("F", "term"), ("A", "term")],
+                ),
+                Production(
+                    sort="term",
+                    name="binop",
+                    template="(A F B)",
+                    bindings=[("A", "term"), ("F", "term"), ("B", "term")],
+                ),
+            ],
+            lines=[
+                LineSpec(
+                    name="statement",
+                    shape="<term> [<reference>]",
+                    parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,.-]+")],
+                    logical_sort="term",
+                )
+            ],
+        )
+    )
+
+
+def applied(text: str) -> Term:
+    return application_system().parse(f"{text} [x]\n").proof_lines[0].formula_term
+
+
+SQRT = Rule(
+    name="sqrt",
+    constructor="apply",
+    pins={"F": "root"},
+    pieces=(("lit", "√{"), ("slot", "A"), ("lit", "}")),
+)
+FRACTION = Rule(
+    name="fraction",
+    constructor="binop",
+    pins={"F": "over"},
+    pieces=(("lit", "frac{"), ("slot", "A"), ("lit", "}{"), ("slot", "B"), ("lit", "}")),
+)
+
+
+def test_a_rule_consumes_the_operand_it_pins() -> None:
+    # The whole point, and what no per-production template can do: `sqrt` is an
+    # *argument* of the application, and there is none of it left in the result.
+    term = applied("(sqrt @ b)")
+
+    assert term.to_string() == "(sqrt @ b)"
+    assert render(term, Projection(rules=(SQRT,))) == "√{b}"
+
+
+def test_a_rule_whose_pin_does_not_hold_leaves_the_term_alone() -> None:
+    term = applied("(a @ b)")
+
+    assert render(term, Projection(rules=(SQRT,))) == "(a @ b)"
+
+
+def test_a_rule_reaches_an_operand_of_a_three_slot_production() -> None:
+    term = applied("(a div b)")
+
+    assert render(term, Projection(rules=(FRACTION,))) == "frac{a}{b}"
+
+
+def test_a_rule_wins_over_the_template_for_its_root() -> None:
+    # A rule is written *because* the root's own spelling reads badly here, so
+    # consulting the template after matching would undo the point.
+    term = applied("(sqrt @ b)")
+    both = Projection(
+        templates={"apply": (("slot", "F"), ("lit", "("), ("slot", "A"), ("lit", ")"))},
+        rules=(SQRT,),
+    )
+
+    assert render(term, both) == "√{b}"
+    # …and the template still governs an application the rule does not match.
+    assert render(applied("(a @ b)"), both) == "a(b)"
+
+
+def test_rendering_recurses_into_a_rule_s_captured_slots() -> None:
+    term = applied("(sqrt @ (a div b))")
+
+    assert render(term, Projection(rules=(SQRT, FRACTION))) == "√{frac{a}{b}}"
+
+
+def test_the_most_specific_rule_matches_whatever_order_it_is_given_in() -> None:
+    # Two rules with the same root: pins decide, not declaration order, so a table
+    # cannot be broken by appending to it.
+    catch_all = Rule(
+        name="any",
+        constructor="apply",
+        pieces=(("slot", "F"), ("lit", "·"), ("slot", "A")),
+    )
+    term = applied("(sqrt @ b)")
+
+    assert render(term, Projection(rules=(catch_all, SQRT))) == "√{b}"
+    assert render(term, Projection(rules=(SQRT, catch_all))) == "√{b}"
+    assert render(applied("(a @ b)"), Projection(rules=(catch_all,))) == "a·b"
+
+
+def test_a_rule_may_name_a_grandchild_by_path() -> None:
+    # A path is what lets a rule say something the root's own template cannot:
+    # `A.A` is the argument of the *inner* application.
+    unwrap = Rule(
+        name="double-root",
+        constructor="apply",
+        pins={"F": "root", "A.F": "root"},
+        pieces=(("lit", "√√{"), ("slot", "A.A"), ("lit", "}")),
+    )
+    term = applied("(sqrt @ (sqrt @ b))")
+
+    assert render(term, Projection(rules=(unwrap, SQRT))) == "√√{b}"
+    # One level of nesting only — the inner rule takes over below it.
+    assert render(applied("(sqrt @ b)"), Projection(rules=(unwrap, SQRT))) == "√{b}"
+
+
+def test_a_rule_alone_is_enough_for_a_projection_to_have_an_opinion() -> None:
+    # `render` short-circuits to `to_string` for a projection that says nothing,
+    # and a projection of rules alone says something.
+    term = applied("(sqrt @ b)")
+
+    assert render(term, Projection(rules=(SQRT,))) != term.to_string()
+
+
+def test_total_projection_carries_the_rules_through() -> None:
+    # Completion is about giving a *stored* notation a template for every
+    # constructor; it has nothing to say about rules, and must not drop them.
+    engine = application_system()
+    completed = total_projection(
+        notation_constructors(engine.build_context), Projection(rules=(SQRT,)), "latex"
+    )
+
+    assert completed.rules == (SQRT,)
+    assert completed.name == "latex"
+    assert "apply" in completed.templates
+
+
+def test_a_path_resolves_a_dotted_label_at_any_depth() -> None:
+    # A slot label may itself contain the separator (`set.mm` names class variables
+    # `.+`, `.0.`), so a path is not simply split on every dot: the longest join
+    # that names a child is the label, at each level rather than only at the root.
+    steps = ["A", "", "+"]
+
+    assert longest_label(steps, {"A"}.__contains__) == 1
+    assert longest_label(["", "+"], {".+"}.__contains__) == 2
+    assert longest_label(["F", "G"], {"F"}.__contains__) == 1
+    assert longest_label(["X"], {"F"}.__contains__) == 0
+    # Longest first, so a child genuinely called `A.B` beats descending into `A`.
+    assert longest_label(["A", "B"], {"A", "A.B"}.__contains__) == 2
+
+
+def test_a_rule_accounts_for_a_dotted_root_slot_it_descends_through() -> None:
+    # `Rule.roots` resolves the same way, or a rule reaching into a dotted slot
+    # would look as though it accounted for no slot at all and be refused.
+    rule = Rule(
+        constructor="c",
+        pins={".+.F": "x"},
+        pieces=(("slot", "A"),),
+    )
+
+    assert rule.roots({".+", "A"}) == {".+", "A"}
+
+
+def test_a_self_nesting_rule_composes_at_every_depth() -> None:
+    # The shape `setmm.DISPLAY_RULES` uses for factorial, where the general
+    # spelling is ambiguous under its own nesting: a second rule with one more pin
+    # is tried first, and fences the *whole* operand rather than reaching past it,
+    # so applying it again brackets its own output.
+    plain = Rule(
+        name="post", constructor="apply", pins={"F": "root"},
+        pieces=(("slot", "A"), ("lit", "!")),
+    )
+    nested = Rule(
+        name="post-of-post", constructor="apply", pins={"F": "root", "A.F": "root"},
+        pieces=(("lit", "("), ("slot", "A"), ("lit", ")!")),
+    )
+    projection = Projection(rules=(plain, nested))
+
+    assert render(applied("(sqrt @ b)"), projection) == "b!"
+    assert render(applied("(sqrt @ (sqrt @ b))"), projection) == "(b!)!"
+    assert render(applied("(sqrt @ (sqrt @ (sqrt @ b)))"), projection) == "((b!)!)!"

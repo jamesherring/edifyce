@@ -157,6 +157,20 @@ Modernised from the original Django app (`website/models.py` on `main`):
   chain (a child inherits its ancestors' notations and overrides them per
   constructor, as its grammar layers on theirs); **stored** against the one system
   it was derived for.
+- **`notation_rules`** / **`notation_rule_pins`** / **`notation_rule_pieces`** —
+  the other half of a notation: a spelling matched by *shape* rather than by
+  constructor name. `set.mm` applies things generically — ``( F ` A )`` is one
+  production whatever `F` is — so the symbol a reader thinks of as the operator is
+  an *operand*, and no per-constructor template turns ``( sqrt ` 2 )`` into
+  `\sqrt{2}`. A rule is the root production, what must sit at given slot paths
+  (`notation_rule_pins`, `F` → `csqrt`) and the template to use when it does
+  (`notation_rule_pieces`). Tried before the template and winning outright, with
+  the pinned operand consumed. Three tables rather than one with a discriminator,
+  because a pin and a render step carry different columns. **Read** through the
+  inheritance chain and replaced per rule *name* — several rules legitimately
+  share a root, so replacing per constructor would be wrong. Curated
+  (`setmm.DISPLAY_RULES`), never derived from a token map, which has no way to say
+  any of this.
 - **`label_descriptions`** / **`label_attributions`** — what a system records
   about the labels it names. Keyed by `(system, label)` rather than by an FK into
   the thing described, because one label lands in one of four row types depending

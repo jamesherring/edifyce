@@ -48,7 +48,7 @@ from ..matching.patterns import (
     StringPattern,
     UnionPattern,
 )
-from ..rendering import Projection
+from ..rendering import Projection, Rule
 from .typesetting import as_text
 
 if TYPE_CHECKING:
@@ -221,7 +221,9 @@ def with_overrides(
     spelling because none of its tokens changed (see :func:`verbatim`).
     """
     return Projection(
-        templates={**projection.templates, **overrides}, name=projection.name
+        templates={**projection.templates, **overrides},
+        name=projection.name,
+        rules=projection.rules,
     )
 
 
@@ -256,6 +258,62 @@ def applicable(
         if (constructor := known.get(name)) is not None
         and {text for kind, text in pieces if kind == "slot"} == set(constructor.slots)
     }
+
+
+def with_rules(projection: Projection, rules: Iterable[Rule]) -> Projection:
+    """``projection`` with these shape-matched spellings added.
+
+    :func:`with_overrides`' companion for what a per-production template cannot
+    say. A rule matches a production *together with* what sits at given slots, so
+    it reaches the spellings where the interesting symbol is an operand — `set.mm`
+    writes ``( sqrt ` 2 )`` as generic application holding the constant `csqrt`,
+    and no template for `cfv` or for `csqrt` turns that into ``\\sqrt{2}``.
+
+    Added rather than replacing, unlike an override: rules are keyed by shape and
+    a projection may hold several with the same root, since fixing a different
+    operator in the same applicator is the whole idiom.
+    """
+    return Projection(
+        templates=projection.templates,
+        name=projection.name,
+        rules=projection.rules + tuple(rules),
+    )
+
+
+def applicable_rules(
+    rules: Iterable[Rule], constructors: Iterable[Constructor]
+) -> list[Rule]:
+    """Those of ``rules`` this grammar can actually use.
+
+    :func:`applicable`'s counterpart, and it refuses on the same grounds, because
+    a rule can go wrong in the same way and one more. Its root must be a
+    production this grammar has, and its slots must cover that production's
+    **exactly** — a rule quietly leaving a slot out renders a term as something it
+    is not, and that is the failure mode a curated table carried between libraries
+    produces. A rule mentioning a slot the root does not have is refused for the
+    same reason in reverse: the slot would render as its own label.
+
+    The extra check is the pins. A pin naming a production the grammar does not
+    have can never match, so the rule is dead weight rather than a hazard — but it
+    is *silently* dead, which is worse than refused when a table is being carried
+    to a `.mm` whose labels happen to differ. Only the first step of a pin's path
+    is checked against the root, since resolving a deeper one needs the sort of
+    the slot it descends into and there is nothing in the corpus that wants it.
+
+    As with :func:`applicable`, matching names and arity is not proof of matching
+    *meaning* — a Metamath label is local to its library — so a caller applying
+    another library's table is still making a judgement.
+    """
+    known = {constructor.name: constructor for constructor in constructors}
+    kept: list[Rule] = []
+    for rule in rules:
+        root = known.get(rule.constructor)
+        if root is None or rule.roots(root.slots) != frozenset(root.slots):
+            continue
+        if any(required not in known for required in rule.pins.values()):
+            continue
+        kept.append(rule)
+    return kept
 
 
 def verbatim(

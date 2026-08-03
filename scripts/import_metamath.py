@@ -28,7 +28,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.db.metamath_store import ImportReport, import_corpus  # noqa: E402
 from app.db.session import get_engine, get_sessionmaker  # noqa: E402
 from website.logical.metamath import CheckedTheorem, parse  # noqa: E402
-from website.logical.metamath.setmm import DISPLAY_OVERRIDES  # noqa: E402
+from website.logical.metamath.setmm import (  # noqa: E402
+    DISPLAY_OVERRIDES,
+    DISPLAY_RULES,
+)
 
 
 def _positive(value: str) -> int:
@@ -55,9 +58,9 @@ def _arguments() -> argparse.Namespace:
         "--setmm-overrides",
         action="store_true",
         help=(
-            "apply the curated set.mm per-production display overrides "
-            "(setmm.DISPLAY_OVERRIDES). Off by default: a Metamath label is local "
-            "to its library, so the table means what it says only for set.mm"
+            "apply the curated set.mm display tables (setmm.DISPLAY_OVERRIDES and "
+            "setmm.DISPLAY_RULES). Off by default: a Metamath label is local to "
+            "its library, so the tables mean what they say only for set.mm"
         ),
     )
     return parser.parse_args()
@@ -116,6 +119,7 @@ async def main() -> int:
                 # rendered by set.mm's judgement about what `cfv` means.
                 # `display.applicable` stops the mess, not the presumption.
                 overrides=DISPLAY_OVERRIDES if arguments.setmm_overrides else None,
+                rules=DISPLAY_RULES if arguments.setmm_overrides else None,
             )
         )
     await get_engine().dispose()
