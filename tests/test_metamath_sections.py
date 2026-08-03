@@ -14,13 +14,17 @@ import pytest
 pytest.importorskip("regex")
 
 from website.logical.metamath import parse
+from website.logical.metamath.corpus import theorems
 from website.logical.metamath.sections import (
+    Layer,
+    Layering,
     Placement,
     Section,
     outline,
     read_header,
     tree,
 )
+from website.logical.metamath.setmm import LAYERS
 
 PART = "#" * 40
 SECTION = "#*" * 20
@@ -184,3 +188,203 @@ def test_the_prose_keeps_its_paragraphs_and_loses_its_wrapping() -> None:
     assert text == (
         "A first paragraph that the file wrapped across two lines.\n\nAnd a second one."
     )
+
+
+# ---------------------------------------------------------------------------
+# The layer plan (D1/D2)
+# ---------------------------------------------------------------------------
+
+LAYERED = f"""
+$c |- wff class ( ) -> A. e. $.
+$v ph ps x A $.
+wph $f wff ph $.
+wps $f wff ps $.
+vx $f class x $.
+cA $f class A $.
+$( {SECTION}
+   Pre-logic
+   {SECTION} $)
+wi $a wff ( ph -> ps ) $.
+$( {SECTION}
+   Propositional calculus
+   {SECTION} $)
+ax-1 $a |- ( ph -> ( ps -> ph ) ) $.
+$( {SUBSECTION}
+   A subsection inside the first layer
+   {SUBSECTION} $)
+pc-thm $a |- ( ph -> ph ) $.
+$( {SECTION}
+   Predicate calculus with equality:  Tarski's system S2
+   {SECTION} $)
+wal $a wff A. x ph $.
+ax-4 $a |- ( A. x ph -> ph ) $.
+$( {SECTION}
+   ZF Set Theory - start with the Axiom of Extensionality
+   {SECTION} $)
+wcel $a wff A e. A $.
+ax-ext $a |- A e. A $.
+"""
+
+
+def test_a_plan_partitions_the_file_into_contiguous_layers() -> None:
+    # §7.1's mechanism, on a fixture shaped like the file it was measured
+    # against. Every statement falls in exactly one layer, the layers open in the
+    # plan's order, and a *subsection* inside a layer does not open a new one —
+    # which is the case that matters, since `set.mm` draws 1,115 of them.
+    database = parse(LAYERED)
+    layering = Layering(outline(database), LAYERS)
+
+    assert layering.starts == [
+        ("Propositional calculus", 0),
+        ("First-order logic", 3),
+        ("ZF set theory", 5),
+    ]
+    assert [
+        layering.covering(position) for position in range(len(database.order))
+    ] == [
+        "Propositional calculus",   # wi
+        "Propositional calculus",   # ax-1
+        "Propositional calculus",   # pc-thm, under a subsection
+        "First-order logic",        # wal
+        "First-order logic",        # ax-4
+        "ZF set theory",            # wcel
+        "ZF set theory",            # ax-ext
+    ]
+
+
+def test_the_shipped_plan_is_the_one_set_mm_draws() -> None:
+    # A guard on the data rather than on the code. The prefixes below are what
+    # `set.mm`'s own section titles begin with, and the measurement recorded in
+    # `setmm.LAYERS` was taken through exactly these — so a prefix edited to
+    # something the file does not draw would silently produce a layer that holds
+    # nothing, and every number in that table would stop being about this plan.
+    assert [(layer.name, layer.starts_with) for layer in LAYERS] == [
+        ("Propositional calculus", "Pre-logic"),
+        ("First-order logic", "Predicate calculus with equality"),
+        ("ZF set theory", "ZF Set Theory"),
+    ]
+
+
+def test_a_layer_the_file_does_not_open_simply_holds_nothing() -> None:
+    # A fragment, or a variant that stops before ZFC. Not an error: the plan is
+    # offered to whatever file is being read, and `BINDERS` takes the same line
+    # for a label a variant lacks.
+    trimmed = LAYERED[: LAYERED.index("$( " + SECTION + "\n   Predicate")]
+    layering = Layering(outline(parse(trimmed)), LAYERS)
+
+    assert layering.starts == [("Propositional calculus", 0)]
+    assert layering.covering(2) == "Propositional calculus"
+
+
+def test_a_plan_whose_layers_open_out_of_order_is_refused() -> None:
+    # The one thing that *is* an error, because it is a plan about a different
+    # file: every position it reported afterwards would be wrong, and silently.
+    reversed_plan = (
+        Layer(name="Set theory", starts_with="ZF Set Theory"),
+        Layer(name="Logic", starts_with="Pre-logic"),
+    )
+    with pytest.raises(ValueError, match="must open in that order"):
+        Layering(outline(parse(LAYERED)), reversed_plan)
+
+
+def test_a_statement_before_the_first_layer_falls_outside_them() -> None:
+    # The same answer `Placement` gives for a statement before every header, and
+    # for the same reason: a file may open with declarations nobody sectioned.
+    layering = Layering(
+        outline(parse(LAYERED)),
+        (Layer(name="Late", starts_with="ZF Set Theory"),),
+    )
+    assert layering.covering(0) is None
+    assert layering.covering(6) == "Late"
+
+
+def test_two_layers_may_open_at_one_position_and_the_later_wins() -> None:
+    # **From review.** The out-of-order guard first compared each layer's
+    # *position*, and two headers may share one — a part followed straight away
+    # by a section, with no statement between, which is how `set.mm` opens every
+    # part. So a reversed plan naming both passed the check and then attributed
+    # the whole file to the wrong layer. Order is compared on the section now.
+    #
+    # The pair: the reversed plan is refused, and the forward one is not — since
+    # sharing a position is legal and the later layer wins it, on the same
+    # nearest-wins rule the rest of the spine follows.
+    sections = [
+        Section(level=2, title="Pre-logic", text="", at=0),
+        Section(level=2, title="ZF Set Theory", text="", at=0),
+    ]
+    logic = Layer(name="Logic", starts_with="Pre-logic")
+    theory = Layer(name="Set theory", starts_with="ZF Set")
+
+    with pytest.raises(ValueError, match="must open in that order"):
+        Layering(sections, (theory, logic))
+
+    layering = Layering(sections, (logic, theory))
+    assert layering.starts == [("Logic", 0), ("Set theory", 0)]
+    assert layering.covering(0) == "Set theory"
+
+
+# A layer plan over a file that has *proved* statements as well as axioms, so
+# the two units a boundary can be quoted in come apart.
+MIXED = f"""
+$c |- wff ( ) -> A. $.
+$v ph ps x $.
+wph $f wff ph $.
+wps $f wff ps $.
+vx $f class x $.
+$( {SECTION}
+   Pre-logic
+   {SECTION} $)
+wi $a wff ( ph -> ps ) $.
+ax-1 $a |- ( ph -> ( ps -> ph ) ) $.
+pc-one $p |- ( ph -> ( ps -> ph ) ) $= ( wi ) A $.
+pc-two $p |- ( ph -> ( ps -> ph ) ) $= ( wi ) A $.
+$( {SECTION}
+   Predicate calculus with equality:  Tarski's system S2
+   {SECTION} $)
+wal $a wff A. x ph $.
+fol-one $p |- ( ph -> ( ps -> ph ) ) $= ( wi ) A $.
+$( {SECTION}
+   ZF Set Theory - start with the Axiom of Extensionality
+   {SECTION} $)
+ax-ext $a |- ( ph -> ( ps -> ph ) ) $.
+zf-one $p |- ( ph -> ( ps -> ph ) ) $= ( wi ) A $.
+"""
+
+
+def test_a_layer_boundary_is_two_different_numbers_in_two_units() -> None:
+    # **From review.** D1's table indexes `Database.order`, which holds every
+    # `$a` and `$p`; a walk's `limit` counts what `corpus.theorems` yields, which
+    # is provable `$p` alone. So a layer boundary is one number as a position and
+    # a *smaller* one as a theorem ordinal, and the milestone figure was first
+    # recorded in the wrong unit — passing it as a `limit` would have overshot by
+    # the axioms in between.
+    #
+    # Asserted on a fixture rather than on `set.mm`'s own figures, which move:
+    # what has to hold is that the two units differ, and differ by exactly the
+    # assertions a walk does not check.
+    database = parse(MIXED)
+    layering = Layering(outline(database), LAYERS)
+    position = {label: index for index, label in enumerate(database.order)}
+
+    # As a position: every `$a` and `$p` before ZF opens.
+    boundary = next(
+        index
+        for index in range(len(database.order))
+        if layering.covering(index) == "ZF set theory"
+    )
+
+    # As a theorem ordinal: only the proved ones, 1-based, as `limit` counts.
+    walked = theorems(database)
+    ordinal = next(
+        number
+        for number, assertion in enumerate(walked, start=1)
+        if layering.covering(position[assertion.label]) == "ZF set theory"
+    )
+
+    assert [assertion.label for assertion in walked] == [
+        "pc-one", "pc-two", "fol-one", "zf-one"
+    ]
+    assert boundary == 6 and ordinal == 4
+    # The gap is the axioms and syntax the walk skips — here `wi`, `ax-1` and
+    # `wal`, which is exactly why one number cannot stand in for the other.
+    assert boundary - (ordinal - 1) == 3

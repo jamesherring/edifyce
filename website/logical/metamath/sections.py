@@ -211,3 +211,82 @@ class Placement:
         """
         index = bisect_right(self._starts, at)
         return index - 1 if index else None
+
+
+@dataclass(frozen=True)
+class Layer:
+    """One layer of the spine an import splits a corpus into.
+
+    ``starts_with`` is a **prefix of a section's title**, and the layer runs from
+    that section to wherever the next layer starts. Contiguity is not a
+    simplification: a `.mm` file is topologically ordered, so a layer that is a
+    contiguous range of file positions cannot cite a later one, which is D5's
+    first invariant obtained by construction rather than by checking (§7.2).
+
+    A prefix rather than the whole title because `set.mm`'s run long and carry
+    their own punctuation — "Predicate calculus with equality:  Tarski's system
+    S2 (1 rule, 6 schemes)", double space and all — and a plan that had to
+    reproduce one exactly would break on a reformatting that changed nothing.
+    """
+
+    name: str
+    starts_with: str
+
+
+class Layering:
+    """Which layer of a plan covers a given statement.
+
+    The same shape as :class:`Placement` and for the same reason — the question
+    is asked once per statement — but over a handful of boundaries rather than
+    every section.
+
+    A plan whose layers do not all match is **not** an error here: a `.mm` file
+    may be a fragment, or a variant that stops before ZFC, and a layer with no
+    section to open it simply has no statements. What is refused is a plan whose
+    layers match *out of order*, since that is a plan describing a different file
+    and every position it then reports would be wrong.
+
+    Order is compared on the **section**, not on its position in the file, and
+    the difference is not pedantic (found in review): two headers may share an
+    ``at`` — a part followed straight away by a section, with no statement
+    between, which is exactly how `set.mm` opens each of its parts — so a
+    reversed plan naming both would pass an ``at``-based check and then attribute
+    the whole file to the wrong layer. Two layers *may* still open at the same
+    position, and the later one wins it, which is the same nearest-wins rule the
+    rest of the spine follows.
+    """
+
+    def __init__(self, sections: Sequence[Section], plan: Sequence[Layer]) -> None:
+        self._names: list[str] = []
+        self._starts: list[int] = []
+        opened = -1
+        for layer in plan:
+            index = next(
+                (
+                    position
+                    for position, section in enumerate(sections)
+                    if section.title.startswith(layer.starts_with)
+                ),
+                None,
+            )
+            if index is None:
+                continue
+            if index < opened:
+                raise ValueError(
+                    f"Layer {layer.name!r} opens at section {index}, before "
+                    f"{self._names[-1]!r} at section {opened}. A layer plan is "
+                    "the spine's order, so its layers must open in that order."
+                )
+            opened = index
+            self._names.append(layer.name)
+            self._starts.append(sections[index].at)
+
+    @property
+    def starts(self) -> list[tuple[str, int]]:
+        """Each layer that matched, and the position it opens at."""
+        return list(zip(self._names, self._starts))
+
+    def covering(self, at: int) -> str | None:
+        """The layer covering position ``at``, or None if it precedes them all."""
+        index = bisect_right(self._starts, at)
+        return self._names[index - 1] if index else None

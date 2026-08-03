@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from ..rendering import Rule
 
+from .sections import Layer
+
 # The productions that mean *definitional equivalence*, so a logical `$a` stated
 # over one can be imported as a definition (see :mod:`~.definitions`). Arity and
 # slot sorts do not distinguish `↔` from `→`, and reading a one-way implication as
@@ -296,3 +298,67 @@ DISPLAY_RULES: dict[str, tuple[Rule, ...]] = {
         ),
     ),
 }
+
+
+# Where `set.mm` stops being one theory and starts being the next — the spine an
+# import splits it into, root first (docs/system-relationships-roadmap.md §7.1).
+#
+# Data about one library, like the tables above, and derived from the file rather
+# than assumed. Each entry names a **section title prefix**, and the layer runs
+# from there to wherever the next one starts; a layer whose section is absent
+# (a fragment, a variant) simply holds nothing.
+#
+# Measured on a snapshot of 50,625 assertions, and the numbers are what settle
+# §7.1's open questions. `set.mm` grows — earlier figures elsewhere in this
+# repository were taken at 50,550 assertions and 1,559 logical `$a`, against
+# 50,625 and 1,561 here — so treat the counts as the shape of the partition
+# rather than as constants, and the boundaries as what the plan below actually
+# selects:
+#
+#     layer                  assertions   opens at   $a |-   theorems
+#     Propositional calculus      1,808          0      17      1,773
+#     First-order logic             926      1,808      16        902
+#     ZF set theory              47,891      2,734   1,528     44,942
+#     -----------------------------------------------------------------
+#     total                      50,625                1,561    47,617
+#
+# **Two units, and they are not interchangeable** (found in review). The first
+# three columns index `Database.order`, which holds every `$a` and `$p`; the last
+# counts what `corpus.theorems` yields, which is provable `$p` alone — no syntax
+# axioms, no logical `$a`, and not the syntax-typecoded `$p` set.mm's `bj-0` is.
+# A `walk`'s `limit` is in **theorem** units, so a slice size taken from the
+# `opens at` column would be the wrong horizon by the number of axioms below it.
+#
+# Three consequences worth keeping beside the table, since each answers a
+# question the roadmap left open.
+#
+# **The first 1,000 theorems are 100% propositional.** §7.1 predicted this and it
+# holds exactly, so a 1,000-theorem slice exercises the partition and no transfer
+# whatsoever — and it holds in both units, since propositional calculus has 1,773
+# theorems. The smallest slice populating all three layers is **N = 2,676
+# theorems**, which is the unit `walk(database, limit)` takes; the same boundary
+# is position 2,734 in `Database.order`, and passing *that* as a limit would
+# overshoot by the 59 axioms between them.
+#
+# **The partition holds at the grammar level**: no `|-` statement anywhere in the
+# file uses a constant first declared in a *later* layer. That is what D3 needs
+# in order to build one spec per layer, and it is checked rather than assumed.
+#
+# **A layer's primitives are writable in a way the corpus's are not.** §9.24 left
+# obligation-completeness open because an interpretation onto `set.mm` would owe
+# 1,561 obligations. Onto the *propositional* layer it owes 17, and onto FOL 33
+# cumulative — so layering is what makes the completeness check affordable for
+# the layers a sequent interpretation actually targets.
+#
+# `ZF` is where the third layer opens; `ZFC` and `TG` are separate parts of the
+# file and could be split further, which the plan deliberately does not do — one
+# boundary per question the relationships work actually asks (§2's (a) and (b)),
+# and a finer spine is a change to this tuple and nothing else.
+LAYERS: tuple[Layer, ...] = (
+    Layer(name="Propositional calculus", starts_with="Pre-logic"),
+    Layer(
+        name="First-order logic",
+        starts_with="Predicate calculus with equality",
+    ),
+    Layer(name="ZF set theory", starts_with="ZF Set Theory"),
+)
