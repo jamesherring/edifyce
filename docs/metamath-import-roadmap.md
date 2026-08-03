@@ -823,7 +823,10 @@ encoding either into the other's is unpicked by hand later. `render_stored` walk
 them over the row graph exactly as `rendering.render` walks kernel terms, and
 `rendering.matches` is the one piece both folds share, so they cannot disagree
 about what matching *means*; `tests/test_notations_store.py` pins the two answers
-against each other on a real grammar as it already did for the templates.
+against each other on a real grammar as it already did for the templates. Checked
+on `set.mm` itself as well — its 1,796-template `latex` notation stored, loaded
+back, and folded over stored terms, agreeing with the engine's own fold on each of
+`sqrt2irr`, `sqrtdiv`, `bcval`, `absval2`, `binom` and `facnn` (one per rule).
 
 Reading is layered like everything else, and by rule **name** — a child re-stating
 `sqrt` replaces it and keeps the ancestor's other rules. Not by root constructor,
