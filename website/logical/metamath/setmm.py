@@ -13,6 +13,8 @@ grammar itself is built from the file rather than hard-wired.
 
 from __future__ import annotations
 
+from .sections import Layer
+
 # The productions that mean *definitional equivalence*, so a logical `$a` stated
 # over one can be imported as a definition (see :mod:`~.definitions`). Arity and
 # slot sorts do not distinguish `↔` from `→`, and reading a one-way implication as
@@ -173,3 +175,50 @@ DISPLAY_OVERRIDES: dict[str, dict[str, tuple[tuple[str, str], ...]]] = {
         ),
     },
 }
+
+
+# Where `set.mm` stops being one theory and starts being the next — the spine an
+# import splits it into, root first (docs/system-relationships-roadmap.md §7.1).
+#
+# Data about one library, like the tables above, and derived from the file rather
+# than assumed. Each entry names a **section title prefix**, and the layer runs
+# from there to wherever the next one starts; a layer whose section is absent
+# (a fragment, a variant) simply holds nothing.
+#
+# Measured on the 50,625-assertion file, and the numbers are what settle §7.1's
+# open questions:
+#
+#     layer                  assertions   opens at   $a |-  (its primitives)
+#     Propositional calculus      1,808          0      17
+#     First-order logic             926      1,808      16
+#     ZF set theory              47,891      2,734   1,528
+#
+# Three consequences worth keeping beside the table, since each answers a
+# question the roadmap left open.
+#
+# **The first 1,000 theorems are 100% propositional.** §7.1 predicted this and it
+# holds exactly, so a 1,000-theorem slice exercises the partition and no transfer
+# whatsoever. The smallest slice populating all three layers is **N = 2,735**.
+#
+# **The partition holds at the grammar level**: no `|-` statement anywhere in the
+# file uses a constant first declared in a *later* layer. That is what D3 needs
+# in order to build one spec per layer, and it is checked rather than assumed.
+#
+# **A layer's primitives are writable in a way the corpus's are not.** §9.24 left
+# obligation-completeness open because an interpretation onto `set.mm` would owe
+# 1,561 obligations. Onto the *propositional* layer it owes 17, and onto FOL 33
+# cumulative — so layering is what makes the completeness check affordable for
+# the layers a sequent interpretation actually targets.
+#
+# `ZF` is where the third layer opens; `ZFC` and `TG` are separate parts of the
+# file and could be split further, which the plan deliberately does not do — one
+# boundary per question the relationships work actually asks (§2's (a) and (b)),
+# and a finer spine is a change to this tuple and nothing else.
+LAYERS: tuple[Layer, ...] = (
+    Layer(name="Propositional calculus", starts_with="Pre-logic"),
+    Layer(
+        name="First-order logic",
+        starts_with="Predicate calculus with equality",
+    ),
+    Layer(name="ZF set theory", starts_with="ZF Set Theory"),
+)

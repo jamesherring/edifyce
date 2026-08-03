@@ -211,3 +211,71 @@ class Placement:
         """
         index = bisect_right(self._starts, at)
         return index - 1 if index else None
+
+
+@dataclass(frozen=True)
+class Layer:
+    """One layer of the spine an import splits a corpus into.
+
+    ``starts_with`` is a **prefix of a section's title**, and the layer runs from
+    that section to wherever the next layer starts. Contiguity is not a
+    simplification: a `.mm` file is topologically ordered, so a layer that is a
+    contiguous range of file positions cannot cite a later one, which is D5's
+    first invariant obtained by construction rather than by checking (§7.2).
+
+    A prefix rather than the whole title because `set.mm`'s run long and carry
+    their own punctuation — "Predicate calculus with equality:  Tarski's system
+    S2 (1 rule, 6 schemes)", double space and all — and a plan that had to
+    reproduce one exactly would break on a reformatting that changed nothing.
+    """
+
+    name: str
+    starts_with: str
+
+
+class Layering:
+    """Which layer of a plan covers a given statement.
+
+    The same shape as :class:`Placement` and for the same reason — the question
+    is asked once per statement, and `set.mm` has 50,625 of them — but over a
+    handful of boundaries rather than 1,903 sections.
+
+    A plan whose layers do not all match is **not** an error here: a `.mm` file
+    may be a fragment, or a variant that stops before ZFC, and a layer with no
+    section to open it simply has no statements. What is refused is a plan whose
+    layers match *out of order*, since that is a plan describing a different file
+    and every position it then reports would be wrong.
+    """
+
+    def __init__(self, sections: Sequence[Section], plan: Sequence[Layer]) -> None:
+        self._names: list[str] = []
+        self._starts: list[int] = []
+        for layer in plan:
+            at = next(
+                (
+                    section.at
+                    for section in sections
+                    if section.title.startswith(layer.starts_with)
+                ),
+                None,
+            )
+            if at is None:
+                continue
+            if self._starts and at < self._starts[-1]:
+                raise ValueError(
+                    f"Layer {layer.name!r} starts at position {at}, before "
+                    f"{self._names[-1]!r} at {self._starts[-1]}. A layer plan is "
+                    "the spine's order, so its layers must open in that order."
+                )
+            self._names.append(layer.name)
+            self._starts.append(at)
+
+    @property
+    def starts(self) -> list[tuple[str, int]]:
+        """Each layer that matched, and the position it opens at."""
+        return list(zip(self._names, self._starts))
+
+    def covering(self, at: int) -> str | None:
+        """The layer covering position ``at``, or None if it precedes them all."""
+        index = bisect_right(self._starts, at)
+        return self._names[index - 1] if index else None

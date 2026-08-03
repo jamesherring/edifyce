@@ -5,8 +5,10 @@ of R4, and the edge CRUD an author reaches them through. **Track S is delivered
 too**, bar the conditional S4: S1 declares a sequent calculus and needed no
 engine change, S2 adds the statement template and carries a Hilbert library
 across into it, S2a puts a sequent calculus on top of a tower — including an
-imported one — and S3 is answered by S1's measurements. Track D (the layered
-importer) is still design; D1 depends on nothing and can start whenever.
+imported one — and S3 is answered by S1's measurements. **Track D has started:**
+D1 is done — the outline is kept, the partition is measured against the real
+`set.mm`, and `setmm.LAYERS` carries the plan those numbers justify. D2/D3
+onward are still design.
 
 One correction this note owes its reader, since §6.3 and §8's S2 both imply
 otherwise: **an edge and a layer are not two ways to do the same thing.** An edge
@@ -582,31 +584,34 @@ mistaken for an omission.
 ### 7.1 The partition, and what has to be measured first
 
 `set.mm` carries its own outline in header comments (`$( #*#*# … $)` for a
-section, `####` for a part), and `parser._strip_comments` currently discards
-them. They are the only statement in the file of where propositional calculus
-ends, so step one is to keep them.
+section, `####` for a part), and the parser used to discard them. They are the
+only statement in the file of where propositional calculus ends, so step one was
+to keep them — which `metamath/sections.py` now does, reading all 1,903.
 
 The layer plan is then **data about one library**, and belongs in
 `website/logical/metamath/setmm.py` beside `BINDERS` and `EQUIVALENCES` — a map
 from section prefix to layer, not engine behaviour:
 
-| layer | `set.mm` outline (to be confirmed against the file) |
-|---|---|
-| Propositional calculus | Part 1 §§1.1–1.3 (pre-logic, propositional calculus, other axiomatisations) |
-| First-order logic | Part 1 §§1.4–1.7 (predicate calculus, with and without distinct variables, existential uniqueness) |
-| ZFC | Part 2 onward (ZF set theory) |
+| layer | opens at the section titled | assertions |
+|---|---|---|
+| Propositional calculus | `Pre-logic` | 1,808 |
+| First-order logic | `Predicate calculus with equality…` | 926 |
+| ZF set theory | `ZF Set Theory…` | 47,891 |
+
+**Confirmed against the file** (D1), and shipped as `setmm.LAYERS`. The reading
+above was right about the shape and the boundaries are where it guessed: PC runs
+to position 1,808 and FOL to 2,734, out of 50,625.
 
 The plan says where a theorem *should* go; §3.3 says how to check that it does.
 
-**A prediction that must be checked before the milestone is set.** On the
-author's reading of `set.mm`'s ordering, propositional calculus runs to roughly
-1,500 theorems — so **the first 1,000 are likely to land wholly inside the PC
-layer**. If so, that slice exercises the *partition* and exercises no *transfer*
-whatsoever, and it proves nothing about (a) or (b). Step D1 is therefore to
-measure, and the milestone slice is "the first N theorems such that all three
-layers are populated" — the first 1,000 kept as the fast regression, the wider
-slice as the one that demonstrates the feature. Guessing N here would be
-guessing; the walk already reports positions and the answer is one run away.
+**A prediction that had to be checked before the milestone was set — and it
+held.** The reading was that propositional calculus runs to roughly 1,500
+theorems, so the first 1,000 would land wholly inside the PC layer. Measured: PC
+runs to **1,808**, and the first 1,000 are **100% propositional**. That slice
+therefore exercises the *partition* and no *transfer* whatsoever, and proves
+nothing about (a) or (b) — so it stays as the fast regression and the milestone
+slice is **N = 2,735**, the first position at which all three layers are
+populated. See §8's D1 for the rest of the measurement.
 
 ### 7.2 The walk, layered
 
@@ -645,12 +650,13 @@ and refuses forward citations. Layering coarsens that:
 - **The term graph fragments.** Today "the corpus lands in one term graph, so a
   subterm shared by two theorems is one row" (metamath roadmap §1.3). Three
   systems means three graphs, and a formula appearing in two layers gets two
-  rows. The duplication is bounded by the *cross-layer* sharing, which for
-  `set.mm` should be small — a ZFC theorem's statement is rarely a PC
-  theorem's — but it should be measured in D1 rather than assumed. If it turns
-  out to matter, the escape is to key terms by the **spine root** rather than the
-  owning system, resolving constructors in the deepest layer; that is a real
-  change to the interning contract and should not be made speculatively.
+  rows. **Measured in D1, and it is small:** of 43,889 distinct `|-` statements,
+  43,647 are in one layer, 236 in two and 6 in all three — 0.55% duplication.
+  So the escape (keying terms by the **spine root** rather than the owning
+  system, resolving constructors in the deepest layer) stays unbuilt, which is a
+  real change to the interning contract and was never to be made speculatively.
+  What is *not* measured is subterm sharing below the statement, which is
+  necessarily higher; if the row count ever surprises, that is where to look.
 - **A rebuild cost per layer.** Each layer builds its own `FormalSystem`, and the
   child's build reads the ancestors' parts. Three builds instead of one. Against
   a 24-minute whole-corpus walk this is noise, but the child's build is
@@ -1462,20 +1468,57 @@ with a context large enough that a naive AC search would not terminate.
 
 ### Track D — the importer
 
-#### D1 — keep the outline; measure
+#### D1 — keep the outline; measure — **done**
 
-**Tests and verification** — `tests/test_metamath_layers.py` (parser half) plus
-a reported measurement.
+The parser half landed separately, in the Metamath track: `metamath/sections.py`
+reads the 1,903 headers `set.mm` draws and `Placement.covering` answers which
+section covers a statement. What was left was **the measurement**, which §7.1
+said was one run away and which is what this phase actually delivers — plus
+`setmm.LAYERS`, the plan the numbers justify, since a measurement with nothing
+to hold it is a paragraph nobody re-runs.
 
-- *Valid:* section headers parse out of a fixture `.mm` with nested part /
-  section / subsection markers, and every assertion gets a section path.
-- *Invalid:* a malformed header does not silently swallow the following
-  statements; a `$( … $)` that only *looks* like a header stays a comment.
-- *Pinned:* the outline is additive — every existing metamath test passes
-  unchanged, and an import naming no layer plan produces byte-identical results
-  to today's.
-- *Measured and reported:* where the first 1,000 theorems land (§7.1), and the
-  cross-layer term-sharing figure that decides §7.3's first bullet.
+**Tests and verification** — `tests/test_metamath_sections.py` (the plan, on a
+fixture shaped like the file), and the measurement below, taken against the real
+`set.mm` at 50,625 assertions.
+
+| layer | assertions | opens at | `$a |-` (its primitives) |
+|---|---|---|---|
+| Propositional calculus | 1,808 | 0 | 17 |
+| First-order logic | 926 | 1,808 | 16 |
+| ZF set theory | 47,891 | 2,734 | 1,528 |
+
+**§7.1's prediction holds exactly.** The first 1,000 theorems are **100%
+propositional** — so that slice exercises the partition and *no transfer
+whatsoever*, and would prove nothing about (a) or (b). The smallest slice
+populating all three layers is **N = 2,735**, which is the milestone figure §7.1
+said should replace a guess.
+
+**The partition holds at the grammar level**, checked rather than assumed: no
+`|-` statement anywhere in the file uses a constant first declared in a *later*
+layer. That is precisely what D3 needs in order to build one spec per layer, and
+it is now a fact about the file rather than a hope. (The syntax constants split
+18 / 8 / 1,401 across the three layers.)
+
+**§7.3's first bullet is answered, and the news is good.** Of 43,889 distinct
+`|-` statements, **43,647 appear in exactly one layer**, 236 in two and 6 in all
+three — 0.55% cross-layer duplication at statement level. So fragmenting the term
+graph across three systems costs very little, and §7.3's escape (keying terms by
+the spine root) stays unbuilt, which is what it wanted.
+
+**And one consequence nobody was looking for, which reaches back into Track S.**
+§9.24 left obligation-completeness open because an interpretation onto `set.mm`
+would owe an obligation per primitive, and the corpus has **1,561** of them.
+Per *layer* it owes 17 (propositional) or 33 (cumulative through FOL). So
+**layering is what makes the completeness check affordable** — and the layers a
+sequent interpretation actually targets are exactly the two small ones. The
+question §9.22 deferred to Track D turns out to have been waiting on this
+measurement rather than on a design decision.
+
+*Pinned:* the plan is data (`setmm.LAYERS`), on the same contract as `BINDERS`
+and `EQUIVALENCES` — a file that opens no layer of it simply has none, since a
+variant `.mm` may stop before ZFC. What *is* refused is a plan whose layers open
+out of file order, because that is a plan about a different file and every
+position it then reports would be silently wrong.
 
 #### D2/D3 — the layer plan and one spec per layer
 
@@ -2078,6 +2121,14 @@ each is a live constraint on the work after it rather than a closed question.
     author — let the source's entire library across. That is refused now. What is
     deliberately **not** checked is whether the list is *complete*: one obligation
     per primitive of the source, which is what §2 actually asks for.
+
+    **D1 has since changed the arithmetic**, and it is worth reading §8's D1
+    before re-opening this. The 1,559 figure is the *corpus's*; per layer the
+    primitives are 17 (propositional) and 16 (first-order), because `set.mm`'s
+    1,528 remaining `$a |-` are all ZF and below. So an interpretation onto the
+    layers a sequent calculus actually targets owes 17 or 33 obligations, not
+    1,559 — which is entirely writable, and removes the objection this paragraph
+    was built on.
 
     Left open on purpose, and the reason is worth recording so it is not
     re-litigated cheaply. The check itself is easy — the source chain's rules,
