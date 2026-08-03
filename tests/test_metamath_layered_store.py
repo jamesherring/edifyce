@@ -44,6 +44,7 @@ from app.db.systems import (
 )
 from website.logical.metamath import parse
 from website.logical.metamath.corpus import corpus_specs
+from website.logical.metamath.sections import Layer
 from website.logical.metamath.setmm import LAYERS
 
 from tests.test_metamath_layered_specs import CORPUS
@@ -311,6 +312,30 @@ def test_a_checkpoint_leaves_the_library_writing_through_a_live_session(
     assert (report.theorems_failed, report.failures) == (0, [])
     assert report.theorems == 6
     assert all(proof.theorem_id is not None for proof in session.scalars(select(Proof)))
+
+
+def test_a_plan_whose_layers_share_a_name_still_files_each_proof_in_its_own(
+    session, database
+) -> None:
+    # The store-side consequence of the `corpus_layers` fix (found in review).
+    # A `Layer`'s name is a display name and nothing prohibits two of them being
+    # the same; pairing the boundaries back with their positions by name kept
+    # only the last, so `corpus_specs` emitted three layers and every one but the
+    # last filed its theorems in the **root** — under a grammar that does not
+    # declare their notation, which a row-based reload then cannot rebuild.
+    plan = tuple(Layer(name="Logic", starts_with=layer.starts_with) for layer in LAYERS)
+
+    import_corpus(session, database, name="Corpus", plan=plan)
+
+    spine = systems(session)
+    assert [system.name for system in spine] == ["Logic", "Logic", "Logic"]
+    filed = {
+        proof.name: spine.index(
+            next(s for s in spine if s.id == proof.formal_system_id)
+        )
+        for proof in session.scalars(select(Proof))
+    }
+    assert filed == {"pc-thm": 0, "fol-thm": 1, "zf-thm": 2}
 
 
 # ---------------------------------------------------------------------------

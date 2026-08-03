@@ -1687,6 +1687,17 @@ this cost the entire promoted-theorem library of every corpus import, plan or no
 plan. A rebind has to mutate in place. The existing batched test filed proofs
 correctly throughout and never looked at the library, which is why it passed.
 
+*And one in the derivation both halves read.* `corpus_layers` paired the
+boundaries back with their opening positions through a dict keyed on the layer's
+**name** — and a `Layer`'s name is a display name that nothing prohibits two
+layers from sharing. A plan calling three layers `Logic` therefore kept one
+position, and while `corpus_specs` still emitted all three systems, every layer
+but the last routed its theorems into the *root*: filed under a grammar that does
+not declare their notation, which a row-based reload cannot rebuild. The
+boundaries already carried the positions by occurrence, so they are read off
+them (`_Boundary`) rather than re-derived — which is what "one function rather
+than two" was supposed to mean in the first place.
+
 *Still to do here:* the invalid case the original plan named
 — a plan assigning a production to a layer *after* a theorem that uses it. D1
 established that `set.mm` presents no such case (no `|-` statement uses a

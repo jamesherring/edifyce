@@ -26,7 +26,7 @@ pytest.importorskip("regex")
 from website.logical.declarative import build_spec as build_system_spec
 from website.logical.declarative import layered_spec
 from website.logical.metamath import parse
-from website.logical.metamath.corpus import corpus_spec, corpus_specs
+from website.logical.metamath.corpus import corpus_layers, corpus_spec, corpus_specs
 from website.logical.metamath.sections import Layer
 from website.logical.metamath.setmm import LAYERS
 
@@ -393,3 +393,29 @@ def test_the_root_takes_its_line_type_from_the_horizon() -> None:
     # line type alone rather than collapsing the layers.
     assert "tf" in names(split[0]) and "tf" not in names(split[1])
     assert "wi" in names(split[1]) and "wi" not in names(split[0])
+
+
+def test_two_layers_may_share_a_name_and_still_open_where_they_open() -> None:
+    # **From review.** `Layer` does not prohibit two layers being called the same
+    # thing, and `corpus_layers` used to pair the boundaries back with their
+    # positions through a dict keyed on the *name* — which keeps only the last of
+    # them. `corpus_specs` still emitted all three, so `import_corpus` got three
+    # systems and three copies of one position, and every layer but the last
+    # routed its theorems into the root: a first-order proof filed under a
+    # grammar that does not declare its notation.
+    #
+    # Not a fixture quirk. A plan is authored by hand, and two layers of a long
+    # corpus sharing a display name is an ordinary thing to write.
+    database = parse(CORPUS)
+    plan = tuple(
+        Layer(name="Logic", starts_with=layer.starts_with) for layer in LAYERS
+    )
+
+    layers = corpus_layers(database, plan=plan)
+
+    assert [name for name, _at in layers] == ["Logic", "Logic", "Logic"]
+    opens = [at for _name, at in layers]
+    assert opens == sorted(opens) and len(set(opens)) == 3
+    # And they are the same positions the distinct-name plan reports, since a
+    # layer opens where its section is regardless of what it is called.
+    assert opens == [at for _name, at in corpus_layers(database, plan=LAYERS)]
