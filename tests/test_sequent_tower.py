@@ -21,6 +21,7 @@ logical sort, on a grammar the Metamath importer built.
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -45,19 +46,22 @@ from tests.sequent_tower import (
 )
 from tests.test_metamath_import import SQRT2RE_FRAGMENT
 
+if TYPE_CHECKING:
+    from website.logical.formal_system import FormalSystem
+
 
 @pytest.fixture(scope="module")
-def tower():
+def tower() -> FormalSystem:
     built = build_spec(layered_spec(sequent_tower_specs()))
     assert "errors" not in built, built["errors"]
     return built["system"]
 
 
-def stands(system, source: str) -> bool:
+def stands(system: FormalSystem, source: str) -> bool:
     return bool(system.parse(source).valid)
 
 
-def why(system, source: str) -> str:
+def why(system: FormalSystem, source: str) -> str:
     proof = system.parse(source)
     return " | ".join(
         f"{line.number}: {line.invalid_message}"
@@ -66,7 +70,7 @@ def why(system, source: str) -> str:
     )
 
 
-def test_the_tower_is_the_one_these_tests_assume(tower):
+def test_the_tower_is_the_one_these_tests_assume(tower: FormalSystem) -> None:
     # A guard on the fixture, as S1's is: every refusal below would pass just as
     # well against a system that had none of this. Both line types are present —
     # which is the arrangement, not an accident — and the rules are the union of
@@ -89,7 +93,7 @@ def test_the_tower_is_the_one_these_tests_assume(tower):
 # ---------------------------------------------------------------------------
 
 
-def test_the_parent_s_own_lines_still_check_here(tower):
+def test_the_parent_s_own_lines_still_check_here(tower: FormalSystem) -> None:
     # The child did not take anything away. A Hilbert proof written against PC
     # and FOL checks in the sequent layer unchanged, because a line type is
     # inherited like everything else — which is what makes this arrangement
@@ -103,7 +107,7 @@ def test_the_parent_s_own_lines_still_check_here(tower):
     )
 
 
-def test_a_sequent_proof_checks_over_the_inherited_grammar(tower):
+def test_a_sequent_proof_checks_over_the_inherited_grammar(tower: FormalSystem) -> None:
     # And the child's own lines. `(A → A)` is spelled by *PC's* `implication`
     # production, and the context sort admits it because the layer declared
     # `context ::= … | formula`, naming a sort it inherited rather than one it
@@ -111,7 +115,7 @@ def test_a_sequent_proof_checks_over_the_inherited_grammar(tower):
     assert stands(tower, "∅ , A ⊢ A [id]\n∅ ⊢ (A → A) [→R, 1]")
 
 
-def test_lifting_is_what_the_edge_s_template_was_doing(tower):
+def test_lifting_is_what_the_edge_s_template_was_doing(tower: FormalSystem) -> None:
     # **The headline.** A Hilbert theorem proved by the parent's rules, lifted
     # into a sequent, then used as a sequent. Three lines, and the middle one is
     # the whole of what S2 needed a statement template, an extras table and four
@@ -128,7 +132,7 @@ def test_lifting_is_what_the_edge_s_template_was_doing(tower):
     )
 
 
-def test_a_library_theorem_of_the_parent_lifts_too(tower):
+def test_a_library_theorem_of_the_parent_lifts_too(tower: FormalSystem) -> None:
     # The same path for a *promoted* theorem rather than a primitive, which is
     # what an imported corpus contributes: `set.mm`'s 49,000 entries are library,
     # not rules. A child's library is its ancestors' (§5.2), so the entry is
@@ -150,7 +154,7 @@ def test_a_library_theorem_of_the_parent_lifts_too(tower):
     )
 
 
-def test_lift_reaches_the_empty_context_and_no_other(tower):
+def test_lift_reaches_the_empty_context_and_no_other(tower: FormalSystem) -> None:
     # `lift` concludes `∅ ⊢ P`, never `Γ ⊢ P`, and the difference is §9.24's
     # finding restated as a rule rather than as a template: a schema is read for
     # *all* instances of its metavariables, so a lift onto an arbitrary context
@@ -165,7 +169,7 @@ def test_lift_reaches_the_empty_context_and_no_other(tower):
     assert "lift does not apply" in why(tower, source)
 
 
-def test_a_hilbert_axiom_does_not_justify_a_sequent_line(tower):
+def test_a_hilbert_axiom_does_not_justify_a_sequent_line(tower: FormalSystem) -> None:
     # The two calculi do not leak into each other. `ax-5` concludes a *formula*,
     # so it justifies a formula line and not a sequent one — the lift is not
     # optional, and a system where it were would be one where `⊢` meant nothing.
@@ -181,7 +185,7 @@ def test_a_hilbert_axiom_does_not_justify_a_sequent_line(tower):
 # ---------------------------------------------------------------------------
 
 
-def test_generalisation_over_a_context_that_mentions_the_variable(tower):
+def test_generalisation_over_a_context_that_mentions_the_variable(tower: FormalSystem) -> None:
     # S1's central case, one layer up. What is new is that the proviso is asked
     # about notation the sequent layer never declared: `x` is FOL's `term`, the
     # formula is FOL's `equality`, and the context is this layer's — so `occurs`
@@ -223,7 +227,7 @@ def test_generalisation_over_a_context_that_mentions_the_variable(tower):
 # ---------------------------------------------------------------------------
 
 
-def test_a_sequent_layer_sits_on_an_imported_grammar():
+def test_a_sequent_layer_sits_on_an_imported_grammar() -> None:
     # **The architecture check.** The same `sequent_core`, unmodified except for
     # the name of its parent's logical sort, on a grammar the Metamath importer
     # built from a `.mm` file. That is the arrangement `set.mm` forces and the
@@ -257,7 +261,7 @@ def test_a_sequent_layer_sits_on_an_imported_grammar():
     )
 
 
-def test_an_imported_theorem_lifts_into_a_sequent():
+def test_an_imported_theorem_lifts_into_a_sequent() -> None:
     # And the bridge, over imported notation. The importer's assertions land in
     # the *library* rather than among the rules, so this promotes one the way a
     # walk does and cites it on a `wff` line — then lifts it.
@@ -283,7 +287,7 @@ def test_an_imported_theorem_lifts_into_a_sequent():
     )
 
 
-def test_the_turnstile_is_a_knob_and_not_a_decoration():
+def test_the_turnstile_is_a_knob_and_not_a_decoration() -> None:
     # **From review.** `turnstile=` reached the `sequent-turnstile` production and
     # `lift` and nothing else: every structural rule spelled `⊢` directly, so
     # `sequent_core(turnstile="|-")` built cleanly and left `id`, `WL`, `XL`,
@@ -306,7 +310,7 @@ def test_the_turnstile_is_a_knob_and_not_a_decoration():
     assert not stands(system, "∅ , A ⊢ A [id]")
 
 
-def test_the_core_names_nothing_of_its_parent_but_the_logical_sort():
+def test_the_core_names_nothing_of_its_parent_but_the_logical_sort() -> None:
     # Why the layer above could be reused verbatim, asserted rather than
     # asserted-by-anecdote. Two halves, and the review that caught this had only
     # the first: the productions *and* the rules have to be checked, or a rule
@@ -346,7 +350,7 @@ def test_the_core_names_nothing_of_its_parent_but_the_logical_sort():
 # ---------------------------------------------------------------------------
 
 
-def test_a_layer_may_not_reuse_its_parent_s_line_part_name():
+def test_a_layer_may_not_reuse_its_parent_s_line_part_name() -> None:
     # **The wart this arrangement has to work around**, pinned so that the
     # workaround is not mistaken for a preference. `layered_spec` claims a line
     # *part*'s name once across a chain, so a child adding a line type cannot
