@@ -228,6 +228,35 @@ def corpus_specs(
     return specs
 
 
+def corpus_layers(
+    database: Database,
+    limit: int | None = None,
+    *,
+    plan: Sequence[Layer] = (),
+) -> list[tuple[str, int]]:
+    """Each layer :func:`corpus_specs` emits, and the position it opens at.
+
+    The same list, in the same order, decided the same way — which is the point
+    of it being one function rather than two. A caller storing a corpus needs to
+    know *which* layer a given assertion belongs to, and re-deriving the
+    boundaries from the plan could disagree with the specs that were built: a
+    plan layer the file does not open is not among them, and neither is one the
+    walk never reaches or one that shares its start with the next.
+
+    Positions index :attr:`Database.order`. An empty plan gives one layer opening
+    at zero, which is what an unlayered import is.
+    """
+    walked = theorems(database, limit)
+    if not walked:
+        raise MetamathError("Database declares no provable statements to walk.")
+    boundaries = _layer_boundaries(database, plan, walked[-1].label)
+    if len(boundaries) < 2:
+        return [(boundaries[0][0] if boundaries else "Metamath", 0)]
+    starts = Layering(outline(database), plan).starts
+    opens = {name: at for name, at in starts}
+    return [(name, opens[name]) for name, _stop in boundaries]
+
+
 def _variable_scope(database: Database, stop: str, horizon: str) -> str:
     # Where a layer's *variable* leaves stop, which is not where its notation
     # does (found in review).

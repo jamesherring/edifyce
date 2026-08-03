@@ -40,7 +40,9 @@ through ``AsyncSession.run_sync`` (see ``scripts/import_metamath.py``).
 from __future__ import annotations
 
 import uuid
+from bisect import bisect_right
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import update as sa_update
@@ -53,8 +55,14 @@ from app.db.notations_mapping import store_notation
 from app.db.outline_mapping import store_outline
 from app.db.proofs_mapping import store_proof_lines
 from app.db.systems_mapping import spec_to_system
-from website.logical.declarative import build_system, library_digest
-from website.logical.metamath.corpus import corpus_spec, theorems, walk
+from website.logical.declarative import build_system, layered_spec, library_digest
+from website.logical.metamath.corpus import (
+    corpus_layers,
+    corpus_spec,
+    corpus_specs,
+    theorems,
+    walk,
+)
 from website.logical.metamath.comments import read_comment
 from website.logical.metamath.display import (
     applicable,
@@ -73,6 +81,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
     from website.logical.declarative import SystemSpec
+    from website.logical.metamath.sections import Layer
     from website.logical.metamath.comments import Description
     from website.logical.metamath.corpus import CheckedTheorem
     from website.logical.kernel.constructors import Piece
@@ -95,7 +104,14 @@ class ImportReport:
     be written — so there is nothing to store for it.
     """
 
+    # The system this import is *of*: the deepest layer, which is the one a
+    # citation resolves from since its chain reaches everything above it. For an
+    # unlayered import — the default — it is the only system there is, which is
+    # what keeps every existing caller reading the same field.
     system_id: uuid.UUID
+    # Every layer, root first, for a caller that wants the spine rather than the
+    # leaf. One entry when no plan was given.
+    system_ids: list[uuid.UUID] = field(default_factory=list)
     checked: int = 0
     verified: int = 0
     rejected: int = 0
@@ -134,6 +150,8 @@ def import_corpus(
     progress: Callable[[ImportReport, CheckedTheorem], None] | None = None,
     overrides: Mapping[str, Mapping[str, tuple[Piece, ...]]] | None = None,
     rules: Mapping[str, Sequence[Rule]] | None = None,
+    *,
+    plan: Sequence[Layer] = (),
 ) -> ImportReport:
     """Import ``database``'s first ``limit`` theorems into ``session``.
 
@@ -155,6 +173,13 @@ def import_corpus(
     drop what this grammar cannot use, so handing over the wrong library's tables
     costs nothing rather than storing nonsense.
 
+    ``plan`` splits the corpus into a **spine of systems** rather than one
+    (D3, §7.2): `corpus_specs` says what each layer declares, `layered_systems`
+    makes the rows, and each theorem is stored against the layer its own section
+    falls in. A citation then resolves through the spine (§5.2), so the emitted
+    proof sources do not change — which is the whole of "preserving references".
+    Empty by default, which is exactly today's single system.
+
     The system is created ownerless; see this module's docstring for why.
     """
     if batch is not None and batch < 1:
@@ -162,11 +187,17 @@ def import_corpus(
 
     # Raises for a `limit` below 1 (`corpus.theorems`) before anything is written.
     spec = corpus_spec(database, limit, name)
-    system = spec_to_system(spec)
-    session.add(system)
-    session.flush()
-    report = ImportReport(system_id=system.id)
-    library = _Library(session, system, report, library_digest(spec))
+    specs = corpus_specs(database, limit, name, plan=plan)
+    spine = layered_systems(session, specs)
+    # The **deepest** layer is the system this import is "of": it is the one a
+    # citation resolves from, since its chain reaches every layer above it, and
+    # for an unlayered import it is the only one there is.
+    system = spine[-1]
+    report = ImportReport(
+        system_id=system.id, system_ids=[layer.id for layer in spine]
+    )
+    layers = _Layers(session, database, spine, specs, report, limit, plan)
+    library = layers.library
     # Read once, up front, and used twice: every documented label gets a row, and
     # a `$p`'s own title comes off the same parse. Metamath documents a statement
     # by the comment before it, so this is the whole of the association.
@@ -181,6 +212,7 @@ def import_corpus(
     report.sections = len(folders)
 
     for position, checked in enumerate(walk(database, limit, name, library.store)):
+        owner = layers.owning(checked.label)
         report.checked += 1
         if checked.proof is None:
             _record_failure(report, checked.label, checked.error or "")
@@ -198,7 +230,7 @@ def import_corpus(
                 with session.begin_nested():
                     stored = _store(
                         session,
-                        system,
+                        owner,
                         position,
                         checked,
                         descriptions,
@@ -215,8 +247,9 @@ def import_corpus(
         if progress is not None:
             progress(report, checked)
         if batch is not None and report.checked % batch == 0:
-            system = _checkpoint(session, report)
-            library.rebind(system)
+            _checkpoint(session, report)
+            layers.rebind()
+            system = layers.deepest
 
     _link_proofs_to_theorems(session, report.system_id, library.ids)
     report.described = store_descriptions(session, report.system_id, descriptions)
@@ -226,6 +259,53 @@ def import_corpus(
     if batch is not None:
         session.commit()
     return report
+
+
+def layered_systems(
+    session: Session, specs: Sequence[SystemSpec]
+) -> list[FormalSystem]:
+    """One ``formal_systems`` row per layer, wired into a spine, root first.
+
+    D3's store half (docs/system-relationships-roadmap.md §7.2). `corpus_specs`
+    says what each layer declares; this is where those become rows a citation can
+    resolve through — each layer inheriting the one before it, so a theorem
+    proved in propositional calculus is citable in a first-order proof by §5.2
+    and nothing else has to be said.
+
+    **A layer is published exactly when something inherits from it**, which is
+    the rule §5.1 already states — a parent must be frozen before a child builds
+    on it — rather than a new one. Two consequences worth being explicit about.
+
+    It happens at creation rather than "on completion" as §7.2 sketched, because
+    completion is too late: a child's terms are interned against its own chain
+    from the first theorem stored, so the chain has to exist and be readable
+    before the walk reaches the child at all. Nothing is lost by publishing
+    early, since an imported layer's grammar is fixed by the file the moment it
+    is written — there is no draft period during which it could still move, which
+    is the thing the flag protects against.
+
+    And the **deepest layer stays unpublished**, because nothing inherits from
+    it. That is not a special case bolted on: it is what makes an unlayered
+    import — one system, no children — behave exactly as it did before this
+    existed, which `test_an_import_is_ownerless_so_no_verify_can_overwrite_it`
+    pins.
+
+    Ownerless, like the single-system import and for the reason this module's
+    docstring gives: nobody owns the corpus.
+    """
+    published = datetime.now(tz=UTC)
+    spine: list[FormalSystem] = []
+    for index, spec in enumerate(specs):
+        system = spec_to_system(spec)
+        system.inherits_from_id = spine[-1].id if spine else None
+        if index + 1 < len(specs):
+            system.published_at = published
+        session.add(system)
+        # Per layer rather than once at the end: the next layer needs this one's
+        # id to inherit from, which only exists after a flush.
+        session.flush()
+        spine.append(system)
+    return spine
 
 
 def _descriptions_of(
@@ -347,6 +427,116 @@ def _link_proofs_to_theorems(
             .where(Proof.formal_system_id == system_id, Proof.name == name)
             .values(theorem_id=theorem_id)
         )
+
+
+class _Layers:
+    """The spine, and which of its systems each assertion belongs to.
+
+    A layered import writes into several systems rather than one, and the two
+    things that have to follow the split are the **library** (a promoted theorem
+    belongs to the layer that declared it) and the **digest** each layer's terms
+    are guarded by — which for a layer of a chain is its *effective* digest, its
+    ancestors' parts in front of its own, exactly as `LibraryChain` expects
+    (§3.1). A single `library_digest(spec)` would be right for the root and wrong
+    for everything below it.
+
+    For an unlayered import this is one system and one library, and every lookup
+    below is a constant.
+    """
+
+    def __init__(
+        self,
+        session: Session,
+        database: Database,
+        spine: Sequence[FormalSystem],
+        specs: Sequence[SystemSpec],
+        report: ImportReport,
+        limit: int | None,
+        plan: Sequence[Layer],
+    ) -> None:
+        self._session = session
+        self._report = report
+        self._ids = [system.id for system in spine]
+        # Each layer's *effective* digest: its own spec layered onto its
+        # ancestors', which is what guards the terms it interns.
+        self._digests = [
+            library_digest(layered_spec(list(specs[: index + 1])))
+            for index in range(len(specs))
+        ]
+        self._of_label = _layer_of_label(
+            database, [at for _name, at in corpus_layers(database, limit, plan=plan)]
+        )
+        self.rebind(spine)
+
+    def rebind(self, spine: Sequence[FormalSystem] | None = None) -> None:
+        """Re-attach after a checkpoint emptied the identity map."""
+        self._spine = list(spine) if spine is not None else [
+            self._session.get(FormalSystem, layer) for layer in self._ids
+        ]
+        self._libraries = [
+            _Library(self._session, system, self._report, digest)
+            for system, digest in zip(self._spine, self._digests)
+        ]
+        # One entry point for the walk, which knows nothing about layers: it
+        # hands over a promoted assertion and this routes it.
+        self.library = _Routed(self._libraries, self._of_label)
+
+    @property
+    def deepest(self) -> FormalSystem:
+        return self._spine[-1]
+
+    def owning(self, label: str) -> FormalSystem:
+        """The system ``label``'s own section puts it in."""
+        return self._spine[self._of_label(label)]
+
+
+class _Routed:
+    """A `_Library` face for the walk, dispatching on the assertion's layer.
+
+    The walk is handed one ``store`` callable and must stay unaware that there is
+    more than one system to store into — layering is a fact about how a corpus is
+    filed, not about how it is checked, and `corpus.walk` checks it exactly as it
+    did before (§7.2's "the emitted proof text does not change").
+    """
+
+    def __init__(
+        self, libraries: Sequence[_Library], of_label: Callable[[str], int]
+    ) -> None:
+        self._libraries = list(libraries)
+        self._of_label = of_label
+
+    @property
+    def ids(self) -> dict[str, uuid.UUID]:
+        """Every label stored, across every layer, as `_link_proofs_to_theorems`
+        wants it: a proof is linked to its theorem by id, and which layer either
+        sits in is not something that query needs to know."""
+        found: dict[str, uuid.UUID] = {}
+        for library in self._libraries:
+            found.update(library.ids)
+        return found
+
+    def store(self, entry: LibraryEntry) -> None:
+        self._libraries[self._of_label(entry.spec.label)].store(entry)
+
+
+def _layer_of_label(
+    database: Database, opens: Sequence[int]
+) -> Callable[[str], int]:
+    # Which layer a label falls in, as an index into the spine.
+    #
+    # ``opens`` is `corpus.corpus_layers`' — the same list that decided which
+    # specs exist, rather than the boundaries re-derived here. Re-deriving them
+    # could disagree with the rows actually created: a plan layer the file does
+    # not open is not among them, and neither is one the walk never reaches or
+    # one sharing its start with the next.
+    if len(opens) == 1:
+        return lambda _label: 0
+    starts = list(opens)
+
+    def index(label: str) -> int:
+        return max(bisect_right(starts, database.position(label)) - 1, 0)
+
+    return index
 
 
 class _Library:

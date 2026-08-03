@@ -35,7 +35,9 @@ SECTION = "#*" * 20
 SUBSECTION = "=-" * 20
 
 # Three layers, in `set.mm`'s own section titles so the shipped plan selects
-# them. Each declares notation of its own and proves something with it.
+# them. Each declares notation of its own and proves something with it — and the
+# proofs are **compressed**, which is the only form the importer reads, so this
+# fixture is one a store test can walk as well as a spec test can slice.
 CORPUS = f"""
 $c |- wff class ( ) -> A. e. $.
 $v ph ps x A $.
@@ -58,14 +60,14 @@ ax-1 $a |- ( ph -> ( ps -> ph ) ) $.
 $( {SUBSECTION}
    A subsection, which must not open a layer
    {SUBSECTION} $)
-pc-thm $p |- ( ph -> ( ps -> ph ) ) $= wph wps ax-1 $.
+pc-thm $p |- ( ph -> ( ps -> ph ) ) $= ( ax-1 ) ABC $.
 
 $( {SECTION}
    Predicate calculus with equality:  Tarski's system S2
    {SECTION} $)
 wal $a wff A. x ph $.
 ax-4 $a |- ( A. x ph -> ph ) $.
-fol-thm $p |- ( A. x ph -> ph ) $= vx wph ax-4 $.
+fol-thm $p |- ( A. x ph -> ph ) $= ( ax-4 ) ABC $.
 
 $( {PART}
    SET THEORY
@@ -75,7 +77,7 @@ $( {SECTION}
    {SECTION} $)
 wcel $a wff A e. A $.
 ax-ext $a |- ( A e. A -> A e. A ) $.
-zf-thm $p |- ( A e. A -> A e. A ) $= cA ax-ext $.
+zf-thm $p |- ( A e. A -> A e. A ) $= ( ax-ext ) AB $.
 """
 
 
@@ -249,7 +251,7 @@ def test_a_layer_with_theorems_but_no_notation_is_still_a_layer() -> None:
     source = CORPUS.replace(
         "wcel $a wff A e. A $.\nax-ext $a |- ( A e. A -> A e. A ) $.",
         "ax-ext $a |- ( ph -> ph ) $.",
-    ).replace("zf-thm $p |- ( A e. A -> A e. A ) $= cA ax-ext $.",
+    ).replace("zf-thm $p |- ( A e. A -> A e. A ) $= ( ax-ext ) AB $.",
               "zf-thm $p |- ( ph -> ph ) $= wph ax-ext $.")
     database = parse(source)
     split = corpus_specs(database, plan=LAYERS)
@@ -346,13 +348,13 @@ $( {SECTION}
    Pre-logic
    {SECTION} $)
 tf $a term f a $.
-t-thm $p |- f a $= va tf $.
+t-thm $p |- f a $= ( tf ) AB $.
 $( {SECTION}
    Predicate calculus with equality:  Tarski's system S2
    {SECTION} $)
 wph $f wff ph $.
 wi $a wff ( ph -> ph ) $.
-w-thm $p |- ( ph -> ph ) $= wph wi $.
+w-thm $p |- ( ph -> ph ) $= ( wi ) AB $.
 """
 
 
