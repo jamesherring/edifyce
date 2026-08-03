@@ -340,6 +340,17 @@ DISPLAY_RULES: dict[str, tuple[Rule, ...]] = {
 # is position 2,734 in `Database.order`, and passing *that* as a limit would
 # overshoot by the 59 axioms between them.
 #
+# **And a second milestone, five theorems later, which D3 is what makes visible.**
+# At 2,676 all three layers hold *theorems*, but the third declares no notation:
+# `set.mm` opens ZF with `ax-ext` and then `axexte`/`axextg`/`axextb`/`axextmo`/
+# `nulmo` before its first new syntax axiom, `cab`. So the ZF layer's grammar is
+# empty until **2,681**, and a slice meant to exercise one spec *per layer* — as
+# opposed to one spine per layer — wants that one. Both are real milestones and
+# they answer different questions:
+#
+#     2,676   every layer holds theorems         (the spine is exercised)
+#     2,681   every layer declares notation      (the split is exercised)
+#
 # **The partition holds at the grammar level**: no `|-` statement anywhere in the
 # file uses a constant first declared in a *later* layer. That is what D3 needs
 # in order to build one spec per layer, and it is checked rather than assumed.

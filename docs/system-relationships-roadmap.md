@@ -6,9 +6,11 @@ too**, bar the conditional S4: S1 declares a sequent calculus and needed no
 engine change, S2 adds the statement template and carries a Hilbert library
 across into it, S2a puts a sequent calculus on top of a tower — including an
 imported one — and S3 is answered by S1's measurements. **Track D has started:**
-D1 is done — the outline is kept, the partition is measured against the real
-`set.mm`, and `setmm.LAYERS` carries the plan those numbers justify. D2/D3
-onward are still design.
+D1 and D2 are done — the outline is kept, the partition is measured against the
+real `set.mm`, and `setmm.LAYERS` carries the plan those numbers justify — and
+D3's **spec** half is built: `corpus_specs` returns one `SystemSpec` per layer,
+and layering them back declares exactly what the unlayered spec declared. D3's
+store half and D4 onward are still design.
 
 One correction this note owes its reader, since §6.3 and §8's S2 both imply
 otherwise: **an edge and a layer are not two ways to do the same thing.** An edge
@@ -1508,6 +1510,14 @@ meant would overshoot the milestone by the 59 axioms between them. The 1,000
 prediction survives in both units, since propositional calculus has 1,773
 theorems; N does not.
 
+**A second milestone, which D3 is what made visible.** At 2,676 all three layers
+hold theorems, but the third declares no *notation*: `set.mm` opens ZF with
+`ax-ext` and five theorems (`axexte`, `axextg`, `axextb`, `axextmo`, `nulmo`)
+before its first new syntax axiom, `cab`. So a ZF spec built at N holds no
+productions at all, and a slice meant to exercise one spec **per layer** — rather
+than one spine across layers — wants **2,681**. Both are real and they answer
+different questions: 2,676 says the spine is exercised, 2,681 says the split is.
+
 **The partition holds at the grammar level**, checked rather than assumed: no
 `|-` statement anywhere in the file uses a constant first declared in a *later*
 layer. That is precisely what D3 needs in order to build one spec per layer, and
@@ -1553,15 +1563,73 @@ nearest-wins rule the rest of the spine follows. The general shape is one this
 note keeps meeting: **a guard that compares derived values instead of the thing
 being ordered is a guard with a tie it does not see.**
 
-#### D2/D3 — the layer plan and one spec per layer
+#### D2/D3 — the layer plan and one spec per layer — **the spec half done**
 
-- *Valid:* the three specs build, and each layer's spec contains only the
-  productions its sections declared.
-- *Invalid:* a plan assigning a production to a layer *after* a theorem that
-  uses it → refused with the theorem named.
-- *Pinned:* `setmm.LAYERS` empty ⇒ exactly today's single-system behaviour, which
-  is the same discipline `BINDERS` follows and the same test shape
-  (`test_the_set_mm_table_is_well_formed`).
+D2 landed with D1: `setmm.LAYERS` is the plan, justified by the measurement
+rather than asserted. D3's **spec** half is `corpus_specs(database, limit, plan)`
+in `metamath/corpus.py` — one `SystemSpec` per layer, root first. The **store**
+half (`import_corpus` creating a `formal_systems` row per layer and wiring the
+spine) is not built.
+
+**Tests and verification** — `tests/test_metamath_layered_specs.py`, on a fixture
+shaped like the file, plus a run against the real `set.mm` at the milestone
+slice.
+
+*The contract, and it is the whole phase:* layering the pieces back declares
+exactly what the unlayered spec declares — `layered_spec(corpus_specs(…))`
+against `corpus_spec(…)`, same names and the notation in the same order. The
+partition moves where a production is *stored*; it moves nothing about what the
+grammar is. Verified on `set.mm` at N: 48 productions either way, 34 / 14 / 0
+across the layers, and 34 / 14 / 1 at 2,681 where ZF's notation begins.
+
+*Pinned:* the layers are **deltas after the first** — only the root carries the
+line type and the brackets, because `layered_spec` refuses a redeclared name
+across a chain and that is the shape `tests/layered_systems.py` writes by hand.
+An empty plan, or one the file opens no layer of, is exactly today's single spec,
+which is the discipline `BINDERS` and `EQUIVALENCES` already follow. A limit
+short of a layer drops it; a layer with theorems and **no notation** is kept,
+since dropping it would put its theorems in the layer below, which is the one
+thing the partition exists to prevent.
+
+*One thing the split found that the measurement could not.* Splitting per layer
+made a second milestone visible: at N = 2,676 every layer holds theorems, but ZF
+declares no notation until 2,681, because the file opens it with `ax-ext` and
+five theorems before `cab`. §8's D1 carries both figures and what each answers.
+
+*From review*, and the first was wrong on the real file rather than only in
+principle. `build_spec` reads `before` **exclusively** and `variable_scope`
+**inclusively** — deliberately, so an ordered walk's leaves do not lag behind the
+theorem being checked — and passing one label as both makes the windows differ by
+an assertion. At a *boundary* that assertion is the next layer's first, so a
+`$f` typed there was declared by the layer below: **five of `set.mm`'s
+productions were in the wrong layer**, which is the one thing the partition
+exists to prevent. The fixture could not catch it, since its own variables all
+sit in the preamble.
+
+And the contract had a second hole, in the one field only the root carries.
+`_logical_sort` reads the sort a `|-` statement is written in off the productions
+it can see, so a root built at the *first boundary* can settle on a different
+sort from the one the whole file settles on — a corpus whose `wff` typecode
+arrives in a later layer gives the chain a line type reading at some earlier
+fallback, and the layered grammar then parses proof statements differently from
+the unlayered one. The root's productions stay boundary-scoped; its **line type
+is the horizon's**, because there is nowhere else for it to live. `set.mm` is not
+shaped this way — `wi` is in its first section — so this needed a fixture of its
+own, which is the second time in this phase that the file being well behaved hid
+a hole in the general case.
+
+Three more: two plan layers sharing a start emitted a wholly empty layer (a part
+header and its section share a position — how the file opens each of its 21
+parts); the single-reached-layer fallback stored it under the *corpus's* name, so
+the same slice came back as "Metamath" at `limit=1` and "Propositional calculus"
+at `limit=2`; and `plan` had taken the third positional slot `corpus_spec` gives
+to `name`, so the obvious call died inside `Layering`.
+
+*Still to do here:* the store half, and the invalid case the original plan named
+— a plan assigning a production to a layer *after* a theorem that uses it. D1
+established that `set.mm` presents no such case (no `|-` statement uses a
+constant first declared later), so the check has nothing to catch on this file
+and belongs with whatever first reads a plan it did not measure.
 
 #### D4/D5 — store per layer; the invariants
 
