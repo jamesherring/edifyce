@@ -126,9 +126,7 @@ def rules_by_constructor(rules: Iterable[Rule]) -> dict[str, tuple[Rule, ...]]:
     for rule in rules:
         grouped.setdefault(rule.constructor, []).append(rule)
     return {
-        constructor: tuple(
-            sorted(found, key=lambda rule: -len(rule.pins))
-        )
+        constructor: tuple(sorted(found, key=lambda rule: -len(rule.pins)))
         for constructor, found in grouped.items()
     }
 
