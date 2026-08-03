@@ -38,7 +38,16 @@ SUBSECTION = "=-" * 20
 # them. Each declares notation of its own and proves something with it — and the
 # proofs are **compressed**, which is the only form the importer reads, so this
 # fixture is one a store test can walk as well as a spec test can slice.
+#
+# The `$t` block spells a token from each of the three layers, which is what lets
+# a store test say where a *notation* lands: it is one declaration about the
+# whole file, so unlike a proof it does not follow the split.
 CORPUS = f"""
+$( $t
+    althtmldef "->" as ' &rarr; ';
+    althtmldef "A." as '&forall;';
+    althtmldef "e." as ' &isin; ';
+$)
 $c |- wff class ( ) -> A. e. $.
 $v ph ps x A $.
 wph $f wff ph $.

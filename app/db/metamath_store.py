@@ -58,7 +58,6 @@ from app.db.systems_mapping import spec_to_system
 from website.logical.declarative import build_system, layered_spec, library_digest
 from website.logical.metamath.corpus import (
     corpus_layers,
-    corpus_spec,
     corpus_specs,
     theorems,
     walk,
@@ -81,7 +80,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
     from website.logical.declarative import SystemSpec
-    from website.logical.metamath.sections import Layer
+    from website.logical.metamath.sections import Layer, Section
     from website.logical.metamath.comments import Description
     from website.logical.metamath.corpus import CheckedTheorem
     from website.logical.kernel.constructors import Piece
@@ -186,8 +185,12 @@ def import_corpus(
         raise ValueError(f"batch must be at least 1 if given, not {batch}.")
 
     # Raises for a `limit` below 1 (`corpus.theorems`) before anything is written.
-    spec = corpus_spec(database, limit, name)
     specs = corpus_specs(database, limit, name, plan=plan)
+    # The whole corpus's grammar, which is what a notation is derived against —
+    # rebuilt from the layers rather than by a second `corpus_spec`, since
+    # `build_spec` is the expensive half of an import and `corpus_specs`
+    # guarantees the two declare the same thing.
+    spec = specs[0] if len(specs) == 1 else layered_spec(list(specs))
     spine = layered_systems(session, specs)
     # The **deepest** layer is the system this import is "of": it is the one a
     # citation resolves from, since its chain reaches every layer above it, and
@@ -196,8 +199,6 @@ def import_corpus(
     report = ImportReport(
         system_id=system.id, system_ids=[layer.id for layer in spine]
     )
-    layers = _Layers(session, database, spine, specs, report, limit, plan)
-    library = layers.library
     # Read once, up front, and used twice: every documented label gets a row, and
     # a `$p`'s own title comes off the same parse. Metamath documents a statement
     # by the comment before it, so this is the whole of the association.
@@ -206,10 +207,18 @@ def import_corpus(
     # to exist by then. Bounded by the same horizon as everything else: a section
     # opening past the last walked theorem covers nothing this import contains.
     horizon = database.position(theorems(database, limit)[-1].label)
-    folders = store_outline(
-        session, system.id, [s for s in outline(database) if s.at <= horizon]
+    layers = _Layers(
+        session,
+        database,
+        spine,
+        specs,
+        report,
+        sections=[s for s in outline(database) if s.at <= horizon],
+        limit=limit,
+        plan=plan,
     )
-    report.sections = len(folders)
+    library = layers.library
+    report.sections = layers.sections
 
     for position, checked in enumerate(walk(database, limit, name, library.store)):
         owner = layers.owning(checked.label)
@@ -234,7 +243,7 @@ def import_corpus(
                         position,
                         checked,
                         descriptions,
-                        folders.folder_for(database.position(checked.label)),
+                        layers.folder_for(checked.label),
                     )
             except Exception as exc:  # noqa: BLE001 - reported, not fatal
                 _record_failure(report, checked.label, str(exc))
@@ -247,14 +256,18 @@ def import_corpus(
         if progress is not None:
             progress(report, checked)
         if batch is not None and report.checked % batch == 0:
-            _checkpoint(session, report)
+            _checkpoint(session)
             layers.rebind()
-            system = layers.deepest
 
-    _link_proofs_to_theorems(session, report.system_id, library.ids)
-    report.described = store_descriptions(session, report.system_id, descriptions)
+    _link_proofs_to_theorems(session, report.system_ids, library.ids)
+    report.described = layers.describe(descriptions)
+    # On the **root**, not the leaf: a `$t` block is one declaration about the
+    # whole file rather than something each layer has its own of, and a notation
+    # is read root-first up the chain (`notations_mapping.notation_layers`), so
+    # the root is the one place every layer of the spine can see it from. For an
+    # unlayered import the root *is* the leaf, so nothing moves.
     report.notation = _store_notation(
-        session, database, spec, report.system_id, overrides or {}, rules or {}
+        session, database, spec, report.system_ids[0], overrides or {}, rules or {}
     )
     if batch is not None:
         session.commit()
@@ -409,7 +422,7 @@ def _store_notation(
 
 
 def _link_proofs_to_theorems(
-    session: Session, system_id: uuid.UUID, ids: dict[str, uuid.UUID]
+    session: Session, system_ids: Sequence[uuid.UUID], ids: dict[str, uuid.UUID]
 ) -> None:
     """Point each proof at the library entry it establishes.
 
@@ -418,13 +431,22 @@ def _link_proofs_to_theorems(
     justifying itself, so the row a proof would point at does not exist yet when
     the proof is written. The name is the join: an import creates both from one
     Metamath ``$p``, so ``proofs.name`` is the theorem's label by construction.
+
+    Scoped to the **whole spine**, not the deepest layer: a layered import files
+    each proof against the layer its own section falls in, so a filter naming one
+    system would link that layer's proofs and leave every other layer's
+    ``theorem_id`` null (found in review). One system for an unlayered import,
+    where this is the filter it always was.
     """
     if not ids:
         return
     for name, theorem_id in ids.items():
         session.execute(
             sa_update(Proof)
-            .where(Proof.formal_system_id == system_id, Proof.name == name)
+            .where(
+                Proof.formal_system_id.in_(system_ids),
+                Proof.name == name,
+            )
             .values(theorem_id=theorem_id)
         )
 
@@ -432,13 +454,22 @@ def _link_proofs_to_theorems(
 class _Layers:
     """The spine, and which of its systems each assertion belongs to.
 
-    A layered import writes into several systems rather than one, and the two
-    things that have to follow the split are the **library** (a promoted theorem
-    belongs to the layer that declared it) and the **digest** each layer's terms
-    are guarded by — which for a layer of a chain is its *effective* digest, its
-    ancestors' parts in front of its own, exactly as `LibraryChain` expects
-    (§3.1). A single `library_digest(spec)` would be right for the root and wrong
-    for everything below it.
+    A layered import writes into several systems rather than one, and everything
+    a read path reaches *by system id* has to follow the split — otherwise a
+    proof filed against its own layer loses whatever stayed on the leaf. That is
+    the **library** (a promoted theorem belongs to the layer that declared it),
+    the **outline** (`GET /formal-systems/{id}/folders` is system-scoped, both
+    for the folders and for the per-folder proof counts) and the
+    **descriptions** (`load_description` looks a label up under one system and
+    walks no chain). Each is partitioned here, by the same boundaries that
+    decided which specs exist.
+
+    So is the **digest** each layer's terms are guarded by — which for a layer of
+    a chain is its *effective* digest, its ancestors' parts in front of its own,
+    exactly as `LibraryChain` expects (§3.1). A single `library_digest(spec)`
+    would be right for the root and wrong for everything below it.
+
+    Notation is the exception, and stays on the root: see `import_corpus`.
 
     For an unlayered import this is one system and one library, and every lookup
     below is a constant.
@@ -451,43 +482,85 @@ class _Layers:
         spine: Sequence[FormalSystem],
         specs: Sequence[SystemSpec],
         report: ImportReport,
+        *,
+        sections: Sequence[Section],
         limit: int | None,
         plan: Sequence[Layer],
     ) -> None:
         self._session = session
-        self._report = report
+        self._database = database
+        self._spine = list(spine)
         self._ids = [system.id for system in spine]
+        opens = [at for _name, at in corpus_layers(database, limit, plan=plan)]
+        self._of_label = _layer_of_label(database, opens)
+        self._of_position = _layer_of_position(opens)
         # Each layer's *effective* digest: its own spec layered onto its
         # ancestors', which is what guards the terms it interns.
-        self._digests = [
+        digests = [
             library_digest(layered_spec(list(specs[: index + 1])))
             for index in range(len(specs))
         ]
-        self._of_label = _layer_of_label(
-            database, [at for _name, at in corpus_layers(database, limit, plan=plan)]
-        )
-        self.rebind(spine)
-
-    def rebind(self, spine: Sequence[FormalSystem] | None = None) -> None:
-        """Re-attach after a checkpoint emptied the identity map."""
-        self._spine = list(spine) if spine is not None else [
-            self._session.get(FormalSystem, layer) for layer in self._ids
-        ]
         self._libraries = [
-            _Library(self._session, system, self._report, digest)
-            for system, digest in zip(self._spine, self._digests)
+            _Library(session, system, report, digest)
+            for system, digest in zip(spine, digests)
         ]
         # One entry point for the walk, which knows nothing about layers: it
-        # hands over a promoted assertion and this routes it.
+        # hands over a promoted assertion and this routes it. Built **once** and
+        # rebound in place — the walk is handed `library.store` before the first
+        # checkpoint, so a rebind that replaced this object would leave the walk
+        # writing through a detached one for the rest of the run (found in
+        # review), and would drop the label→id map besides.
         self.library = _Routed(self._libraries, self._of_label)
+        # Each layer's own share of the file's section headers, so a layer lists
+        # the sections it covers and a proof's folder sits in the proof's own
+        # system. A layer opens *at* a header, so its first section is the root
+        # of its own tree.
+        self._folders = [
+            store_outline(
+                session,
+                system.id,
+                [s for s in sections if self._of_position(s.at) == index],
+            )
+            for index, system in enumerate(spine)
+        ]
+
+    def rebind(self) -> None:
+        """Re-attach after a checkpoint emptied the identity map.
+
+        In place, for both the spine and every library on it: the objects are
+        already referenced elsewhere — `walk` holds the routed `store`, and the
+        libraries hold the ids `_link_proofs_to_theorems` needs — so replacing
+        them would orphan exactly what the run is accumulating.
+        """
+        self._spine = [
+            self._session.get(FormalSystem, layer) for layer in self._ids
+        ]
+        for library, system in zip(self._libraries, self._spine):
+            library.rebind(system)
 
     @property
-    def deepest(self) -> FormalSystem:
-        return self._spine[-1]
+    def sections(self) -> int:
+        """Folders stored, across every layer."""
+        return sum(len(stored) for stored in self._folders)
 
     def owning(self, label: str) -> FormalSystem:
         """The system ``label``'s own section puts it in."""
         return self._spine[self._of_label(label)]
+
+    def folder_for(self, label: str) -> uuid.UUID | None:
+        """The folder ``label`` is filed in, within its own layer's outline."""
+        index = self._of_label(label)
+        return self._folders[index].folder_for(self._database.position(label))
+
+    def describe(self, descriptions: Mapping[str, Description]) -> int:
+        """Store each label's prose against the layer that declares it."""
+        split: list[dict[str, Description]] = [{} for _ in self._ids]
+        for label, description in descriptions.items():
+            split[self._of_label(label)][label] = description
+        return sum(
+            store_descriptions(self._session, system_id, share)
+            for system_id, share in zip(self._ids, split)
+        )
 
 
 class _Routed:
@@ -519,10 +592,9 @@ class _Routed:
         self._libraries[self._of_label(entry.spec.label)].store(entry)
 
 
-def _layer_of_label(
-    database: Database, opens: Sequence[int]
-) -> Callable[[str], int]:
-    # Which layer a label falls in, as an index into the spine.
+def _layer_of_position(opens: Sequence[int]) -> Callable[[int], int]:
+    # Which layer a position in ``Database.order`` falls in, as an index into the
+    # spine.
     #
     # ``opens`` is `corpus.corpus_layers`' — the same list that decided which
     # specs exist, rather than the boundaries re-derived here. Re-deriving them
@@ -530,13 +602,21 @@ def _layer_of_label(
     # not open is not among them, and neither is one the walk never reaches or
     # one sharing its start with the next.
     if len(opens) == 1:
-        return lambda _label: 0
+        return lambda _at: 0
     starts = list(opens)
+    return lambda at: max(bisect_right(starts, at) - 1, 0)
 
-    def index(label: str) -> int:
-        return max(bisect_right(starts, database.position(label)) - 1, 0)
 
-    return index
+def _layer_of_label(
+    database: Database, opens: Sequence[int]
+) -> Callable[[str], int]:
+    # The same question asked of a label rather than a position. Separate because
+    # a *section* header has a position and no label, and the outline is
+    # partitioned by the same boundaries the assertions are.
+    of_position = _layer_of_position(opens)
+    if len(opens) == 1:
+        return lambda _label: 0
+    return lambda label: of_position(database.position(label))
 
 
 class _Library:
@@ -603,17 +683,17 @@ def _record_failure(report: ImportReport, label: str, message: str) -> None:
         report.failures.append((label, message))
 
 
-def _checkpoint(session: Session, report: ImportReport) -> FormalSystem:
+def _checkpoint(session: Session) -> None:
     """Commit what is held and start again from an empty identity map.
 
     The map holds every line and term row written so far and nothing downstream
     reads them back, so dropping it is what keeps a long run's memory flat — and
-    keeps the per-proof flush from scanning an ever-growing set. The system is
-    re-attached because ``store_term`` interns against it.
+    keeps the per-proof flush from scanning an ever-growing set. Re-attaching the
+    systems is `_Layers.rebind`'s job, because ``store_term`` interns against
+    them and there may be more than one.
     """
     session.commit()
     session.expunge_all()
-    return session.get(FormalSystem, report.system_id)
 
 
 @dataclass(frozen=True)

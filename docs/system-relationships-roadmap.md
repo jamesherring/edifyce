@@ -1657,6 +1657,36 @@ invariant will take. A batched run files every theorem in the same layer as an
 unbatched one, which is the case a checkpoint could break: it empties the
 identity map and re-attaches the system, and a spine has several to re-attach.
 
+*From review, and the general rule it produced.* The store half's mistakes were
+all one mistake: **everything a read path reaches by system id has to follow the
+split**, and the first cut moved only the proofs and the library. So
+`_link_proofs_to_theorems` still filtered on the deepest layer, and linked that
+layer's proofs while leaving every other layer's `theorem_id` null; the outline
+was stored whole against the leaf, so each ancestor listed no folders while the
+leaf reported nought proofs in each of its own (the folder route is
+system-scoped at both ends); and the descriptions went to the leaf, which
+`load_description` — deliberately unlayered, since a child cannot describe a
+label it does not declare — could then never find for an ancestor's proof. Each
+now partitions by the boundaries that decided which specs exist.
+
+**Notation is the one exception, and it goes on the root.** A `$t` block is a
+single declaration about the whole file rather than something each layer has its
+own of, and a notation is read *root-first up the chain*
+(`notations_mapping.notation_layers`), so the root is the one place every layer
+can see it from. On the leaf it would be invisible to all of its ancestors —
+which, for an imported corpus, is every notation there is.
+
+*And one regression on the path that was already shipping.* Rebinding after a
+checkpoint by **rebuilding** the routing object reattaches nothing the walk can
+see: `walk` is handed one `store` callable before the first checkpoint and holds
+it for the whole run, so every later assertion was written through a
+`FormalSystem` that `expunge_all` had detached — and the label→id map went with
+it, leaving the proofs unlinked besides. A real import is batched
+(`scripts/import_metamath.py` defaults to `--batch 50`) and **unlayered**, so
+this cost the entire promoted-theorem library of every corpus import, plan or no
+plan. A rebind has to mutate in place. The existing batched test filed proofs
+correctly throughout and never looked at the library, which is why it passed.
+
 *Still to do here:* the invalid case the original plan named
 — a plan assigning a production to a layer *after* a theorem that uses it. D1
 established that `set.mm` presents no such case (no `|-` statement uses a
