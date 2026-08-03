@@ -288,7 +288,7 @@ def _composition_sorts(
     # is read at matters: a template that parses at several sorts composes to a
     # different term at each, and only one of them is the sort a proof line's
     # formula is actually parsed at. Callers that know it (promotion does - see
-    # _logical_sorts) pass it, so the answer no longer depends on where in the
+    # logical_sorts) pass it, so the answer no longer depends on where in the
     # grammar's declaration order the right sort happens to sit. It is also the
     # faster order where the two differ: the logical sort matches nearly every
     # time, and the sorts otherwise tried first are large unions whose failing

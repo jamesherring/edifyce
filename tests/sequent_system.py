@@ -51,6 +51,78 @@ def sequent_line() -> LineSpec:
     )
 
 
+def wff_productions() -> list[Production]:
+    """The formula language, shared by the two systems below.
+
+    Shared rather than written twice, and that is what makes S2's tests about
+    S2. An interpretation edge can carry a rename *and* a wrap, and the two are
+    independent — R4b is what happens when the systems disagree about a name,
+    S2 is what happens when they disagree about what a **judgement** is. Giving
+    both systems the same `wff` leaves only the second difference, so a test that
+    fails here has failed at the wrap.
+    """
+    return [
+        regex_prod("wff", "wff_var", "[A-Z][A-Z0-9]*"),
+        # Falsity, and a *constant* of the object language: it names one
+        # fixed thing. It is here because a single-succedent ¬R needs
+        # somewhere for the refutation to land — see the rule.
+        atom_const_prod("wff", "falsum", "⊥", denotes_constant=True),
+        regex_prod("ind", "ind_var", "[a-z][a-z0-9]*"),
+        template_prod("wff", "equality", "s = t", [("s", "ind"), ("t", "ind")]),
+        template_prod("wff", "negation", "¬p", [("p", "wff")]),
+        template_prod("wff", "implication", "(p → q)", [("p", "wff"), ("q", "wff")]),
+        template_prod(
+            "wff", "universal", "∀x p", [("x", "ind"), ("p", "wff")],
+            scopes_over={"x": ["p"]},
+        ),
+    ]
+
+
+def hilbert_spec(name: str = "Hilbert calculus", generalisation: bool = False) -> SystemSpec:
+    """The same formula language, stated the *other* way: a theorem is a formula.
+
+    S2's source. It has no context, no turnstile, and no way to say what it
+    assumes — a Hilbert proof's every line is a theorem outright, which is §6.1's
+    reason the deduction theorem is not expressible in one. So an edge from here
+    into `sequent_spec` cannot be a rename: the two grammars agree about `wff`
+    completely and disagree about what a *statement* is, which is the difference
+    a statement template exists for and the only difference here.
+
+    ``generalisation`` adds `ax-gen`, the rule whose wrap is the phase's finding.
+    Off by default, because an edge out of a system that has it cannot discharge
+    its obligations — see §9.24 and
+    `test_generalisation_cannot_be_discharged_uniformly_in_the_context`.
+    """
+    rules = [
+        rule("ax-1", "simplification", [], "(P → (Q → P))",
+             [("P", "wff"), ("Q", "wff")]),
+        rule("ax-2", "distribution", [],
+             "((P → (Q → R)) → ((P → Q) → (P → R)))",
+             [("P", "wff"), ("Q", "wff"), ("R", "wff")]),
+        rule("ax-3", "transposition", [], "((¬P → ¬Q) → (Q → P))",
+             [("P", "wff"), ("Q", "wff")]),
+        rule("MP", "modus ponens", ["P", "(P → Q)"], "Q",
+             [("P", "wff"), ("Q", "wff")]),
+    ]
+    if generalisation:
+        rules.append(
+            rule("ax-gen", "generalisation", ["P"], "∀x P",
+                 [("P", "wff"), ("x", "ind")])
+        )
+    return SystemSpec(
+        name=name,
+        brackets=brackets(),
+        productions=wff_productions(),
+        lines=[LineSpec(
+            name="statement",
+            shape="<wff> [<reference>]",
+            parts=[LinePart(name="reference", regex="[^\\[\\]]+")],
+            logical_sort="wff",
+        )],
+        rules=rules,
+    )
+
+
 def sequent_spec(name: str = "Sequent calculus") -> SystemSpec:
     """LK for a first-order fragment: →, ¬, ∀ over a two-sorted grammar."""
     return SystemSpec(
@@ -58,21 +130,9 @@ def sequent_spec(name: str = "Sequent calculus") -> SystemSpec:
         brackets=brackets(),
         productions=[
             # --- the formula language ---------------------------------------
-            regex_prod("wff", "wff_var", "[A-Z][A-Z0-9]*"),
-            # Falsity, and a *constant* of the object language: it names one
-            # fixed thing. It is here because a single-succedent ¬R needs
-            # somewhere for the refutation to land — see the rule.
-            atom_const_prod("wff", "falsum", "⊥", denotes_constant=True),
-            regex_prod("ind", "ind_var", "[a-z][a-z0-9]*"),
-            template_prod("wff", "equality", "s = t", [("s", "ind"), ("t", "ind")]),
-            template_prod("wff", "negation", "¬p", [("p", "wff")]),
-            template_prod(
-                "wff", "implication", "(p → q)", [("p", "wff"), ("q", "wff")]
-            ),
-            template_prod(
-                "wff", "universal", "∀x p", [("x", "ind"), ("p", "wff")],
-                scopes_over={"x": ["p"]},
-            ),
+            # Shared with `hilbert_spec` above, which is what leaves S2's edge
+            # with nothing to rename and only a judgement shape to translate.
+            *wff_productions(),
             # --- the context ------------------------------------------------
             # `∅` is the empty context, and it is a *constant* of the object
             # language: it names one fixed thing rather than standing for a

@@ -621,3 +621,149 @@ def test_retiring_a_warrant_invalidates_what_crossed_its_edge(db, client):
 
     assert client.get(f"/api/proofs/{proof}").json()["valid"] is None
     assert client.post(f"/api/proofs/{proof}/verify").json()["success"] is False
+
+
+# ---------------------------------------------------------------------------
+# The statement template (S2)
+# ---------------------------------------------------------------------------
+
+
+def test_a_template_that_will_not_compose_is_refused_at_the_write(db, client):
+    # §9.17's rule applied to the other thing an edge carries. A wrap is a claim
+    # about *one* grammar — this system's — so unlike a rename it needs no second
+    # system to check, and an author gets `template_errors`' own words rather
+    # than a citation that mysteriously does not resolve.
+    #
+    # Paired with the template that does compose, against the same target: one
+    # sort name differs between the two calls.
+    from tests.sequent_system import hilbert_spec, sequent_spec
+
+    owner = _register_login(client, "template-write@example.com")
+    source = seed(db, hilbert_spec(), owner, None)
+    target = seed(db, sequent_spec(), owner, None)
+
+    wrap = {"statement_template": "G ⊢ {wff}",
+            "extras": [{"name": "G", "sort": "context"}]}
+    assert relate(client, target, source, kind="interpretation", **wrap)[0] == 201
+
+    second = seed(db, sequent_spec("Second"), owner, None)
+    status_code, body = relate(
+        client, second, source, kind="interpretation",
+        statement_template="G ⊢ {formula}",
+        extras=[{"name": "G", "sort": "context"}],
+    )
+    assert status_code == 422
+    assert "'formula'" in body["detail"] and "does not declare" in body["detail"]
+
+
+def test_template_metavariables_need_a_template_to_appear_in(db, client):
+    # Extras with no template are a statement about nothing — the wrap is what
+    # introduces them, so declaring one without the other is a half-written edge
+    # that would silently transfer unwrapped theorems.
+    from tests.sequent_system import hilbert_spec, sequent_spec
+
+    owner = _register_login(client, "orphan-extras@example.com")
+    source = seed(db, hilbert_spec(), owner, None)
+    target = seed(db, sequent_spec(), owner, None)
+
+    status_code, body = relate(
+        client, target, source, kind="interpretation",
+        extras=[{"name": "G", "sort": "context"}],
+    )
+    assert status_code == 422
+    assert "no statement template" in body["detail"]
+
+
+def test_a_template_can_be_turned_off_after_the_grammar_moves(db, client):
+    # §9.21's rule, for the wrap: a check runs on *what is being written*, so an
+    # edge whose template has stopped composing can still be edited — including
+    # the edit that turns it off, which is the one its author needs. Paired with
+    # re-asserting the template, which is refused.
+    from tests.sequent_system import hilbert_spec, sequent_spec
+
+    owner = _register_login(client, "template-off@example.com")
+    source = seed(db, hilbert_spec(), owner, None)
+    target = seed(db, sequent_spec(), owner, None)
+    created = relate(
+        client, target, source, kind="interpretation",
+        statement_template="G ⊢ {wff}", extras=[{"name": "G", "sort": "context"}],
+    )
+    assert created[0] == 201
+    edge = created[1]["id"]
+
+    # Clearing the template alone, without also naming `extras` — which is what
+    # an author would actually send, and what review found 422ing because the
+    # orphaned extras rows survived the clear (they are now cleared with it).
+    turned_off = client.patch(
+        f"/api/formal-systems/{target}/relations/{edge}",
+        json={"statement_template": ""},
+    )
+    assert turned_off.status_code == 200, turned_off.text
+    assert turned_off.json()["statement_template"] is None
+    assert turned_off.json()["extras"] == []
+
+    refused = client.patch(
+        f"/api/formal-systems/{target}/relations/{edge}",
+        json={"statement_template": "G ⊢ {formula}",
+              "extras": [{"name": "G", "sort": "context"}]},
+    )
+    assert refused.status_code == 422
+
+
+def test_an_edge_round_trips_its_template(db, client):
+    # The wrap is on the read model too, so an author can see what an edge does
+    # without reading the rows.
+    from tests.sequent_system import hilbert_spec, sequent_spec
+
+    owner = _register_login(client, "template-read@example.com")
+    source = seed(db, hilbert_spec(), owner, None)
+    target = seed(db, sequent_spec(), owner, None)
+    assert relate(
+        client, target, source, kind="interpretation",
+        statement_template="G ⊢ {wff}", extras=[{"name": "G", "sort": "context"}],
+    )[0] == 201
+
+    listed = client.get(f"/api/formal-systems/{target}/relations").json()
+    assert [edge["statement_template"] for edge in listed] == ["G ⊢ {wff}"]
+    assert listed[0]["extras"] == [{"name": "G", "sort": "context"}]
+
+
+def test_an_extension_may_not_restate_what_it_transfers(db, client):
+    # **From review (Codex, P1), and it was a hole rather than a wrinkle.**
+    # §5.4 defines an extension as the degenerate edge — the target contains the
+    # source, so every primitive is present under its own label and the
+    # obligations are filled in from the spine. A template contradicts that
+    # outright: it says the two do not even state the same kind of thing.
+    #
+    # Left unchecked, the empty-obligations refusal is scoped to
+    # `interpretation` and `related_layers` never reads `kind` at all — so a
+    # discharged `extension` carrying a template wrapped every source theorem
+    # into this system's shape with no primitive image established anywhere. The
+    # whole of §2, skipped by setting one column.
+    #
+    # Three assertions: refused on create, refused on a PATCH that changes the
+    # kind under an existing template, and accepted as the interpretation it
+    # actually is.
+    from tests.sequent_system import hilbert_spec, sequent_spec
+
+    owner = _register_login(client, "extension-wrap@example.com")
+    source = seed(db, hilbert_spec(), owner, None)
+    target = seed(db, sequent_spec(), owner, None)
+    wrap = {"statement_template": "G ⊢ {wff}",
+            "extras": [{"name": "G", "sort": "context"}]}
+
+    status_code, body = relate(
+        client, target, source, kind="extension", status="discharged", **wrap
+    )
+    assert status_code == 422
+    assert "extension edge transfers theorems as they are" in body["detail"]
+
+    created = relate(client, target, source, kind="interpretation", **wrap)
+    assert created[0] == 201
+    edge = created[1]["id"]
+
+    demoted = client.patch(
+        f"/api/formal-systems/{target}/relations/{edge}",
+        json={"kind": "extension"},
+    )
+    assert demoted.status_code == 422, demoted.text

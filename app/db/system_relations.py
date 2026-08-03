@@ -93,6 +93,13 @@ class SystemRelationRow(Base):
     kind: Mapped[str] = mapped_column(String(16), server_default=text("'extension'"))
     status: Mapped[str] = mapped_column(String(16), server_default=text("'draft'"))
     position: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    # How the target restates a transferred theorem, when it states a different
+    # *kind* of thing than the source does — `'G ⊢ {wff}'` for a Hilbert system
+    # read into a sequent one (§5.4, §6.3). NULL is no wrap, which is what every
+    # edge between two systems that agree about what a judgement is carries, and
+    # what an `extension` edge carries always. Applied as a term construction:
+    # see `website/logical/wrapping.py`.
+    statement_template: Mapped[str | None] = mapped_column(String(512))
 
     source_system: Mapped[FormalSystem] = relationship(
         foreign_keys=[source_system_id]
@@ -109,6 +116,11 @@ class SystemRelationRow(Base):
         back_populates="relation",
         cascade="all, delete-orphan",
         order_by="SystemRelationSymbolRow.position",
+    )
+    extras: Mapped[list[SystemRelationExtraRow]] = relationship(
+        back_populates="relation",
+        cascade="all, delete-orphan",
+        order_by="SystemRelationExtraRow.position",
     )
     obligations: Mapped[list[SystemRelationObligationRow]] = relationship(
         back_populates="relation",
@@ -165,6 +177,39 @@ class SystemRelationSymbolRow(Base):
     target_symbol: Mapped[str] = mapped_column(String(128))
 
     relation: Mapped[SystemRelationRow] = relationship(back_populates="symbols")
+
+
+class SystemRelationExtraRow(Base):
+    """One metavariable the statement template introduces — ``Γ : context``.
+
+    A template says the target states a *different kind of thing* than the
+    source, and the difference is usually something the source theorem never
+    mentioned: a sequent's antecedent has no counterpart in a Hilbert formula.
+    So these are not renames of anything. Each becomes a metavariable of every
+    theorem that crosses the edge, which is what lets a citation instantiate `Γ`
+    to whatever context the citing line happens to have.
+
+    ``sort`` names one of the **target's** sorts, since that is the grammar the
+    template is read against — after the edge's rename, not before it.
+    """
+
+    __tablename__ = "system_relation_extras"
+    __table_args__ = (
+        Index(
+            "uq_system_relation_extras_name",
+            "relation_id",
+            "name",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk_column()
+    relation_id: Mapped[uuid.UUID] = _relation_fk()
+    position: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    name: Mapped[str] = mapped_column(String(128))
+    sort: Mapped[str] = mapped_column(String(128))
+
+    relation: Mapped[SystemRelationRow] = relationship(back_populates="extras")
 
 
 class SystemRelationObligationRow(Base):

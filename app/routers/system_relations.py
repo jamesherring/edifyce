@@ -46,6 +46,7 @@ from app.auth import current_active_user
 from app.db import (
     FormalSystem,
     PromotedTheoremRow,
+    SystemRelationExtraRow,
     SystemRelationObligationRow,
     SystemRelationRow,
     SystemRelationSortRow,
@@ -66,6 +67,7 @@ from app.routers.systems import (
 from app.schemas import (
     SystemRelation,
     SystemRelationCreate,
+    SystemRelationExtra,
     SystemRelationObligation,
     SystemRelationRename,
     SystemRelationUpdate,
@@ -73,15 +75,17 @@ from app.schemas import (
 from website.logical.declarative import DeclarativeError, build_spec
 from website.logical.formal_system import FormalSystem as EngineSystem
 from website.logical.translation import Translation, translation_errors
+from website.logical.wrapping import StatementTemplate, template_errors
 
 router = APIRouter(prefix="/formal-systems/{system_id}/relations", tags=["formal-systems"])
 
 
-# The three child collections every read and every write touches. Async has no
+# The four child collections every read and every write touches. Async has no
 # lazy load, so each has to be asked for.
 _EDGE_LOADS = (
     selectinload(SystemRelationRow.sorts),
     selectinload(SystemRelationRow.symbols),
+    selectinload(SystemRelationRow.extras),
     selectinload(SystemRelationRow.obligations),
     selectinload(SystemRelationRow.source_system),
 )
@@ -125,6 +129,7 @@ async def create_relation(
         target_system_id=system_id,
         kind=payload.kind,
         status=payload.status,
+        statement_template=payload.statement_template or None,
         position=await _next_position(session, system_id),
     )
     await _assign(session, edge, system_id, payload.model_dump(exclude_unset=True), payload)
@@ -165,6 +170,19 @@ async def update_relation(
         edge.status = payload.status
     if payload.position is not None:
         edge.position = payload.position
+    if payload.statement_template is not None:
+        # The empty string clears it; `None` means "leave it alone", as it does
+        # for every other field of a partial edit.
+        edge.statement_template = payload.statement_template or None
+        if edge.statement_template is None and payload.extras is None:
+            # Clearing the wrap clears what it introduced. The extras exist only
+            # to appear in a template — `_require_a_composable_template` refuses
+            # them without one — so leaving them behind would make the edit that
+            # turns an edge off the one edit it refuses, which is precisely the
+            # edit its author needs (§9.21, found in review). An explicit
+            # `extras` in the same PATCH wins, and is then refused for saying
+            # both things at once.
+            await _clear(session, edge.extras)
     await _assign(session, edge, system_id, changes, payload)
 
     # Whatever changed, it changed what this edge resolves: `status` is the gate,
@@ -230,6 +248,12 @@ async def _assign(
             )
             for index, entry in enumerate(payload.symbols)
         ]
+    if "extras" in changes and payload.extras is not None:
+        await _clear(session, edge.extras)
+        edge.extras = [
+            SystemRelationExtraRow(position=index, name=entry.name, sort=entry.sort)
+            for index, entry in enumerate(payload.extras)
+        ]
     if "obligations" in changes and payload.obligations is not None:
         await _clear(session, edge.obligations)
         edge.obligations = [
@@ -246,6 +270,7 @@ async def _assign(
     # Unconditionally, not only when the obligations are what changed: a PATCH
     # that sets `status` alone is the other way an edge starts claiming to be
     # discharged, and the rows it would be discharged by are the stored ones.
+    _require_the_kind_and_the_wrap_agree(edge)
     await _require_discharges_the_target_can_honour(session, system_id, edge)
 
     # Only when the map is what is being written. A grammar either side can move
@@ -255,6 +280,11 @@ async def _assign(
     # unable to say so. The resolution-time check is what keeps that safe (§9.21).
     if "sorts" in changes or "symbols" in changes:
         await _require_a_checkable_map(session, edge)
+
+    # Same rule, for the same reason: checked when the wrap is what is being
+    # written, never on a PATCH that only turns the edge off.
+    if "statement_template" in changes or "extras" in changes:
+        await _require_a_composable_template(session, edge)
 
 
 def _require_distinct_names(
@@ -274,6 +304,7 @@ def _require_distinct_names(
     for field, names in (
         ("sorts", [entry.source for entry in payload.sorts or []]),
         ("symbols", [entry.source for entry in payload.symbols or []]),
+        ("extras", [entry.name for entry in payload.extras or []]),
         ("obligations", [entry.source_label for entry in payload.obligations or []]),
     ):
         repeated = sorted({name for name in names if names.count(name) > 1})
@@ -296,6 +327,38 @@ async def _clear(session: AsyncSession, collection: list) -> None:
     if collection:
         collection.clear()
         await session.flush()
+
+
+def _require_the_kind_and_the_wrap_agree(edge: SystemRelationRow) -> None:
+    """An `extension` may not restate what it transfers (Codex, on #171).
+
+    §5.4 defines an extension as the degenerate edge: the target's language
+    contains the source's and every source primitive is a primitive here under
+    the same label, which is why its obligations are filled in from the spine and
+    never asked of an author. A **template** contradicts that outright — it says
+    the target does not even state the same *kind* of thing — so an extension
+    carrying one is not a description of anything.
+
+    Left unchecked it was a hole rather than a wrinkle, and the shape is §9.21's:
+    the empty-obligations refusal below is scoped to `interpretation`, and
+    `related_layers` reads the obligations and the template and never the kind.
+    So a discharged `extension` with a template and no obligations wrapped every
+    source theorem into this system's shape without a single primitive image
+    established — the whole of §2, skipped by setting one column.
+
+    Unconditional, so it catches a PATCH that changes `kind` as well as one that
+    writes the template; and it passes for an edge whose template is being
+    cleared, which is the edit that has to keep working (§9.21).
+    """
+    if edge.kind == "extension" and edge.statement_template:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "An extension edge transfers theorems as they are: the target's "
+            "language contains the source's, so there is nothing to restate. A "
+            "statement template says the two state different kinds of thing, "
+            "which is an interpretation, and an interpretation discharges its "
+            "source's primitives one by one.",
+        )
 
 
 async def _require_discharges_the_target_can_honour(
@@ -445,6 +508,50 @@ async def _require_a_checkable_map(
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "This map does not read the source's language into this system's. "
+            + " ".join(errors),
+        )
+
+
+async def _require_a_composable_template(
+    session: AsyncSession, edge: SystemRelationRow
+) -> None:
+    """Refuse a wrap that will not compose a statement of *this* system (S2).
+
+    The same split `_require_a_checkable_map` is one half of, for the other thing
+    an edge can carry. A template is read against the **target** alone — it says
+    what shape this system states things in, and nothing about the source — so
+    unlike a rename it needs one grammar rather than two.
+
+    And, as with a rename, this does not replace the check `related_layers` makes
+    on every verify: the target may be a draft whose grammar moves after the edge
+    is written. It replaces the silence.
+    """
+    template = StatementTemplate(
+        text=edge.statement_template or "",
+        extras={row.name: row.sort for row in edge.extras},
+    )
+    if template.identity:
+        if edge.extras:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "This edge declares template metavariables ("
+                + ", ".join(repr(row.name) for row in edge.extras)
+                + ") and no statement template for them to appear in.",
+            )
+        return
+
+    target, unbuildable = await _build_effective(session, edge.target_system_id)
+    if unbuildable is not None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "This template cannot be checked until the system builds: " + unbuildable,
+        )
+
+    errors = template_errors(target, template)
+    if errors:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "This statement template does not restate a theorem in this system. "
             + " ".join(errors),
         )
 
@@ -599,6 +706,7 @@ def _serialise(edge: SystemRelationRow) -> SystemRelation:
         kind=edge.kind,
         status=edge.status,
         position=edge.position,
+        statement_template=edge.statement_template,
         sorts=[
             SystemRelationRename(source=row.source_sort, target=row.target_sort)
             for row in edge.sorts
@@ -606,6 +714,9 @@ def _serialise(edge: SystemRelationRow) -> SystemRelation:
         symbols=[
             SystemRelationRename(source=row.source_symbol, target=row.target_symbol)
             for row in edge.symbols
+        ],
+        extras=[
+            SystemRelationExtra(name=row.name, sort=row.sort) for row in edge.extras
         ],
         obligations=[
             SystemRelationObligation(

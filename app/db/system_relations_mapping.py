@@ -50,6 +50,7 @@ from app.db.system_relations import (
 from app.db.systems_mapping import system_to_spec
 from website.logical.declarative import build_spec, layered_spec, library_digest
 from website.logical.translation import Translation, translation_errors
+from website.logical.wrapping import StatementTemplate
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -107,15 +108,24 @@ def related_layers(
     layers: list[LibraryLayer] = []
     seen = set(reachable)
     transferring = [
-        (edge, _translation(edge)) for edge in edges if edge.id not in outstanding
+        (edge, _translation(edge), _template(edge))
+        for edge in edges
+        if edge.id not in outstanding
     ]
-    # Built once, and only if some edge renames — see this function's note.
+    # Built once, and only if some edge renames — see this function's note. A
+    # *template* needs no build here, and deliberately: it is carried
+    # declaratively and composed at promotion, against the system the promotion
+    # is using. A term built against any other instance of the same grammar
+    # cannot unify with one built against that one, because sort admission
+    # compares constructors by **identity** (`Constructor.admits`) and a build
+    # projects its own. So the wrap is the citing system's to compose, exactly as
+    # a stored term is the citing system's to rebuild (§3.1).
     target = (
         _built(spec)
-        if any(not translation.identity for _edge, translation in transferring)
+        if any(not translation.identity for _edge, translation, _t in transferring)
         else None
     )
-    for edge, translation in transferring:
+    for edge, translation, template in transferring:
         source = _source_layers(session, edge.source_system_id)
         if not translation.identity and not _translates(
             source.system, target, translation
@@ -125,7 +135,7 @@ def related_layers(
             if system_id in seen:
                 continue
             seen.add(system_id)
-            layers.append(LibraryLayer(system_id, digest, translation))
+            layers.append(LibraryLayer(system_id, digest, translation, template))
     return layers
 
 
@@ -139,6 +149,19 @@ def _translation(edge: SystemRelationRow) -> Translation:
     return Translation(
         sorts={row.source_sort: row.target_sort for row in edge.sorts},
         symbols={row.source_symbol: row.target_symbol for row in edge.symbols},
+    )
+
+
+def _template(edge: SystemRelationRow) -> StatementTemplate:
+    """The edge's wrap, as the shape a transferred statement is restated in.
+
+    A NULL template is no wrap, which is what every edge between two systems that
+    agree about what a judgement is carries — so the ordinary edge builds nothing
+    and composes nothing, on the same contract the empty rename tables have.
+    """
+    return StatementTemplate(
+        text=edge.statement_template or "",
+        extras={row.name: row.sort for row in edge.extras},
     )
 
 

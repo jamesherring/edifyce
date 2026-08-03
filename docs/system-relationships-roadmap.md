@@ -1,10 +1,11 @@
 # Relationships between formal systems: analysis and roadmap
 
 **Status:** **Track R is delivered and complete** — R1, R2, R3, R3a, both halves
-of R4, and the edge CRUD an author reaches them through. **Track S has started:**
-S1 is done and S3 is substantially answered by its measurements; S2 is next and
-needs R4, which it now has. Track D (the layered importer) is still design; D1
-depends on nothing and can start whenever.
+of R4, and the edge CRUD an author reaches them through. **Track S is delivered
+too**, bar the conditional S4: S1 declares a sequent calculus and needed no
+engine change, S2 adds the statement template and carries a Hilbert library
+across into it, and S3 is answered by S1's measurements. Track D (the layered
+importer) is still design; D1 depends on nothing and can start whenever.
 
 `formal_systems.inherits_from_id` used to be validated on write and read by
 nothing — `app/routers/systems.py` said so in as many words ("inheritance is not
@@ -30,6 +31,14 @@ an ordinary sort, and its eigenvariable condition is an ordinary proviso the
 kernel's `occurs` decides. §8's S1 records the two things that turned out not to
 be expressible and why each refusal is sound; §9.23 records what they have in
 common.
+
+And the two mechanisms **compose**: S2's `statement_template` is the last piece
+of §5.4, so a theorem proved in a Hilbert system is citable inside a sequent
+proof, wrapped as `Γ ⊢ φ` by a term construction rather than a string. What that
+turned up is the sharpest thing in this note: an obligation has to hold
+*uniformly in what the template introduces*, which `ax-gen` cannot — so the edge
+that carries a first-order library is the **closed** one, and the shape of the
+sound translation turned out to be forced by what the edge could check (§9.24).
 
 Goal: express and store the relationships between formal systems well enough that
 
@@ -532,6 +541,14 @@ one of `set.mm`'s theorems becomes citable inside a sequent proof**, wrapped as
 `Γ ⊢ φ`, with the same lazy by-label resolution as §5.2 and one extra step: the
 statement's term is composed through the template before it is promoted — a term
 construction, not a string substitution.
+
+> **S2 corrects the sketch above in one place, and it is the phase's finding.**
+> `ax-gen` is *not* dischargeable under a template that introduces `Γ`: its image
+> is ∀R without ∀R's proviso, and an obligation has to hold uniformly in what the
+> template introduces. The edge that carries a Hilbert FOL is therefore the
+> **closed** one, `∅ ⊢ {0}` with no extras, under which `ax-gen` discharges
+> outright and reaching a non-empty context is a cited weakening. See §8's S2 and
+> §9.24.
 
 This is the payoff for building the general edge rather than only the spine, and
 it is the concrete sense in which the brief's "two relationships of different
@@ -1137,25 +1154,152 @@ is what makes `∅ ⊢ ∀a a = a` provable and `a = a ⊢ ∀a a = a` refusable
 right reason. The general shape: **a proviso about the context is only tested by
 a calculus that can prove something the context does not already contain.**
 
-#### S2 — the interpretation edge Hilbert → sequent
+#### S2 — the interpretation edge Hilbert → sequent — **done**
 
-**Delivers** `set.mm`'s library citable inside sequent proofs. Requires R4.
+**Delivers** a Hilbert library citable inside sequent proofs, wrapped. Required
+R4, which it now has.
 
-**Tests and verification** — same module.
+What landed: the **statement template** of §5.4, which was the one piece of that
+section still unbuilt. `system_relations.statement_template` and
+`system_relation_extras` are the rows; `website/logical/wrapping.py` is the
+engine half — a template is target notation with the extras as ordinary
+metavariables and **one hole** spelled `{<sort>}` (`G ⊢ {wff}`, extras
+`G : context`), parsed at the target's *logical* sorts so a wrapped statement is
+something a proof line here could say. Applying it is one `Term.substitute`, and
+the route checks it at the write on §9.17's rule.
 
-- *Valid:* each of `ax-1`, `ax-2`, `ax-3`, `ax-mp`, `ax-gen` discharged by an
-  actual sequent proof; then a Hilbert theorem cited inside a sequent proof,
-  wrapped as `Γ ⊢ φ`, with `Γ` instantiated non-trivially.
-- *Invalid:* the same citation with one obligation withdrawn → refused. Run as
-  a *pair* with the valid case, so the test shows the obligation is what carries
-  the weight.
-- **Bound variables:** transfer `ax-5` (with its `$d`) and cite the wrapped form
-  where `Γ` mentions the constrained variable → rejected. This is the case where
-  the template introduces a metavariable (`Γ`) the source theorem never had, and
-  it is where a naive wrap would lose the proviso.
-- *Pinned:* the wrap is a term construction — the transferred schema's term has
-  the sequent constructor at its root and the source theorem's term as a subterm,
-  asserted structurally.
+Three things about where it is built are worth carrying forward.
+
+- **The wrap composes a term, and never renders a string.** §6.3 asked for that
+  and `test_the_wrap_is_a_term_construction` asserts it on the object: the
+  source's own term is a *subterm* of the wrapped one, the same object, under
+  the target's `turnstile`. Rendering `Γ ⊢ ` + the statement and re-parsing would
+  agree only where the two grammars agree, which is exactly what an edge may not
+  assume (the `bj-0` hazard, metamath roadmap §1.4).
+- **The template is carried declaratively and composed at promotion**, not built
+  in `related_layers` beside the rename's check. That was the first attempt and
+  it produced a schema that unified with nothing: sort admission compares
+  constructors by **identity** (`Constructor.admits`), so a wrap composed against
+  another build of the same grammar is a wrap against different objects. §9.24
+  records the general rule, which is not confined to templates.
+- **The two systems in the fixture share their whole formula language**
+  (`tests/sequent_system.py`'s `wff_productions`), so the edge renames nothing.
+  A rename and a wrap are independent, and a test that carried both would not say
+  which half it was testing.
+
+**Tests and verification** — `tests/test_sequent_interpretation.py`, plus four in
+`tests/test_system_relations_api.py` for the write.
+
+- *Valid:* a Hilbert theorem cited inside a sequent proof, wrapped as `Γ ⊢ φ`,
+  with `Γ` instantiated non-trivially — at `∅`, at a formula, at a
+  two-assumption list. Each of `ax-1`, `ax-3`'s shape and `MP` discharged by an
+  actual sequent derivation, written out.
+- *Invalid, each paired with its accepted twin:* the same citation with one
+  obligation withdrawn; the same edge with no template (a `wff` arrives as a
+  `wff`, and no line here is one); a template naming a sort this system does not
+  declare; and the source theorem's own schematicity, `(A → B)` refused where
+  `(¬A → ¬A)` stands.
+- *Pinned:* the wrap is a term construction, asserted structurally; a wrapped
+  entry re-renders in **this** system's notation; a template that will not
+  compose is refused at the write with `template_errors`' own words, and can
+  still be turned *off* after the grammar moves (§9.21's rule, for the wrap).
+
+**The finding, and it is the one S1 predicted.** §6.3 sketched this edge with
+`ax-gen` among the obligations, and `ax-gen` is the one obligation this
+mechanism cannot discharge under a `Γ`-introducing template. An interpretation
+is sound because each source primitive's *image* is derivable — and the image
+has to be derivable **uniformly in whatever the template introduces**, since `Γ`
+is a metavariable of every transferred theorem and a citation instantiates it
+freely. `ax-gen`'s image is `Γ ⊢ P ⟹ Γ ⊢ ∀x P`, which is ∀R with its proviso
+deleted: derivable exactly when `x` does not occur in `Γ`, and so not uniformly.
+`test_generalisation_cannot_be_discharged_uniformly_in_the_context` is that, as
+a pair — the step stands over a context about some other variable and fails over
+one about `a`, and a discharge is a claim about *all* Γ.
+
+**And the constructive half, which is why S2 is not blocked by it.** Uniformity
+is demanded only because the template introduces something. A template with **no
+extras** — `∅ ⊢ {wff}` — demands nothing, and `ax-gen`'s image is then
+`∅ ⊢ P ⟹ ∅ ⊢ ∀x P`, which ∀R discharges outright because `occurs(x, ∅)` is
+false. So the whole of a Hilbert FOL crosses, at the empty context, and reaching
+a non-empty one is a cited **weakening** — the author's step rather than
+something the edge claims on their behalf.
+`test_a_closed_template_is_what_a_source_with_generalisation_needs` pins all
+three of those.
+
+That is the same trade §6.2 named for the calculus itself, arriving one level
+up: **what a list rather than a set costs inside a sequent proof, a closed
+template costs across an edge into one.** Both are one cited structural step,
+and both are honest.
+
+**From review**, four, and the first two are the same mistake in two places —
+*a guard scoped to what an author declared rather than to what the code touches*,
+which is §9.19's rule biting for the third time.
+
+- **The capture guard read the wrong set.** It compared the template's extras
+  against the theorem's declared **metavariables**, and promotion re-reads a
+  statement's text with whatever metavariables it is given — so a name that was
+  a *ground leaf* of the source theorem was silently rebound. A theorem
+  `(P → G)` about a `wff` constant `G`, wrapped under `G : context`, became a
+  schema whose `G`s were the antecedent; and a proviso `not occurs(P, G)` came
+  out constraining the context it was never proved about, which is the half that
+  changes what the theorem *claims* rather than only what it matches. The guard
+  now reads the leaves of the terms being wrapped, literals included, plus the
+  proviso arguments — every place a name can appear in what crosses.
+- **A string-matched theorem could cross a wrap.** The refusal was written for a
+  rename and not extended. It is worse across a wrap: string matching reads
+  `formula_string` and never `schema_term`, so the composed wrap is built and
+  thrown away, leaving exactly the surface-string substitution §6.3 exists to
+  refuse. One refusal now covers both, because both end with a theorem checked
+  against symbols it was not proved over.
+- **A hole was "anything in braces"**, which cannot survive contact with the
+  corpus this feature is for: `set.mm` spells set-builder `{ x | ph }`, so a
+  template mentioning one read as a template with a spurious hole. A hole is a
+  **declared sort name** in braces; braced text naming no sort is the system's
+  own notation, and the error message now says so.
+- **And §9.21's rule again**, in the place it was written to protect: clearing a
+  template with `{"statement_template": ""}` alone was refused, because the
+  extras rows survived the clear and extras without a template are refused.
+  Clearing the wrap now clears what it introduced. The comment promising that
+  the check never fires on the edit that turns an edge off was there before the
+  code did it.
+
+A second round found three more (Codex, on #171), and the first is the sharpest
+thing S2 turned up about the *kernel* rather than about edges.
+
+- **`substitute` places whatever it is given, and two sorts can be
+  indistinguishable structurally.** Declare `[A-Z][A-Z0-9]*` in both `ind` and
+  `wff` and the two constructors share a `signature`, so their nodes compare
+  `equal` — verified directly before fixing. `sort_admits` is the only thing that
+  separates them, and unify calls it when *binding a variable*, not for a subterm
+  something else put there. So a wrap that did not check built a term the grammar
+  does not generate, and it would then justify a line at the hole's sort. The
+  hole now refuses a term its sort does not admit. Worth generalising: **a term
+  assembled outside the matcher has had no sort check at all**, and the kernel's
+  are positioned for terms that arrive from a parse or a binding.
+- **A term-expression proviso could cross a wrap.** Refused across a rename since
+  R4b, and the reason generalises with a twist: a rename may spell the
+  expression's symbols differently, while a wrap leaves the spelling alone and
+  changes what the re-parse *means* — promotion re-reads it with the extras now
+  in scope, so a ground leaf inside `¬G` becomes the edge's `G`. Inventorying the
+  leaves would mean parsing the expression here, which AGENTS.md records as the
+  owner's parse and not cacheable; refusing costs nothing a real corpus produces,
+  since `set.mm` stores no such argument at all.
+- **An `extension` could carry a template**, and that was a hole rather than a
+  wrinkle. §5.4 defines an extension as the degenerate edge — the target contains
+  the source, every primitive present under its own label, obligations filled in
+  from the spine and never asked of an author. A template says the two do not
+  state the same kind of thing, which is the opposite. And because the
+  empty-obligations refusal is scoped to `interpretation` while `related_layers`
+  never reads `kind` at all, a discharged `extension` with a template wrapped
+  every source theorem with no primitive image established anywhere: **the whole
+  of §2, skipped by setting one column.** The refusal is unconditional, so it
+  catches the PATCH that changes `kind` under an existing template as well as the
+  create.
+
+The three together restate §9.19 once more, and it is now the note's most
+frequently relearned lesson: **a guard written for one way of reaching a place
+does not cover the others**, and the ways multiply every time an edge learns to
+carry something new.
 
 #### S3 — benchmark the recursive context grammar — **substantially answered by S1**
 
@@ -1881,6 +2025,58 @@ each is a live constraint on the work after it rather than a closed question.
     proviso head-on. Whether the over-approximation is *tolerable there* — rather
     than merely sound — is the first thing S2 finds out, and it is a better test
     of it than anything S1 could stage.
+
+24. **A substitution has to hold uniformly in whatever it introduces — and a
+    term composed against another build unifies with nothing.** Two findings
+    from S2, and the first is the phase's content while the second is a rule
+    about this codebase that reaches well past templates.
+
+    **Uniformity.** §2's obligations say each source primitive has an image the
+    target can derive. A *template* adds something §2 never contemplated: a
+    metavariable the source theorem never had, universally quantified in every
+    theorem that crosses. So the image must be derivable **for every value of
+    it**, and that is a strictly stronger demand than "derivable". `ax-gen`
+    passes the weak reading and fails the strong one — `Γ ⊢ P ⟹ Γ ⊢ ∀x P` is ∀R
+    with the eigenvariable condition deleted — which is why §6.3's sketch of nine
+    obligations was wrong about one of them.
+
+    Stated generally: **an obligation is a claim about all instantiations of the
+    template's extras, not about one.** The escape is to introduce nothing —
+    a closed template — and then what the extras would have bought is bought
+    instead by a structural step the author cites. That is not a workaround; it
+    is the standard Hilbert-to-sequent argument (replay at the empty context,
+    weaken at the end) arriving in the only form this mechanism can express.
+    Which is itself worth noting: the *shape* of the sound translation was forced
+    by what the edge could and could not check, and it turned out to be the
+    textbook one.
+
+    **What is deliberately still not checked** is whether an interpretation's
+    obligations are **complete** — §9.22 left that to Track S to decide against a
+    real edge, and this is the real edge. The evidence is now sharp and points
+    one way: omit `ax-gen` from the Γ-template edge's obligations and it resolves,
+    transferring every FOL theorem into a shape no discharge justifies. For an
+    `interpretation`, completeness is not tidiness — **it is the whole of what
+    makes the edge sound**, because the obligations are the only place the
+    soundness argument lives. What has not changed is §9.22's cost: an imported
+    corpus's primitives are its 1,559 `$a` statements, so requiring one
+    obligation each would make an interpretation onto `set.mm` unwritable by
+    hand. So the decision is between narrowing what "primitive" means and
+    generating the obligations rather than asking for them, and it is a decision
+    about the *importer* as much as about the edge — which puts it with Track D
+    rather than here. Recorded, with the evidence it was waiting for.
+
+    **Constructor identity.** The template was first built where the rename is
+    checked, in `related_layers`, against the system that function builds to
+    check maps. Every wrapped theorem then unified with nothing, silently: sort
+    admission compares constructors **by identity** (`Constructor.admits`, and
+    `tests/test_pattern_canonicity.py` holds the invariant), so a term built
+    against one build of a grammar is unusable against another build of the same
+    grammar. The rule, which is the same one §3.1 states for stored terms and is
+    easy to rediscover the hard way: **a term is only ever composed against the
+    system it will be checked in.** Anything an edge contributes to a promotion
+    is therefore carried *declaratively* and composed at promotion time, and the
+    check that it composes at all belongs on the write, where it has a request to
+    report to.
 
 ---
 

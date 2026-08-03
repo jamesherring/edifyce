@@ -89,6 +89,7 @@ def _always() -> list[Table]:
     and ten copies of it drift.
     """
     from app.db.system_relations import (
+        SystemRelationExtraRow,
         SystemRelationObligationRow,
         SystemRelationRow,
         SystemRelationSortRow,
@@ -101,6 +102,7 @@ def _always() -> list[Table]:
         SystemRelationRow.__table__,
         SystemRelationSortRow.__table__,
         SystemRelationSymbolRow.__table__,
+        SystemRelationExtraRow.__table__,
         SystemRelationObligationRow.__table__,
         NotationPieceRow.__table__,
         LabelDescriptionRow.__table__,

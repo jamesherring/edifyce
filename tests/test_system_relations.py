@@ -37,6 +37,7 @@ from app.db import (
     FormalSystem,
     LibraryChain,
     PromotedTheoremRow,
+    SystemRelationExtraRow,
     SystemRelationObligationRow,
     SystemRelationRow,
     SystemRelationSortRow,
@@ -109,13 +110,19 @@ def relate(
     obligations: list[tuple[str, str | None]] | None = None,
     sorts: dict[str, str] | None = None,
     symbols: dict[str, str] | None = None,
+    template: str | None = None,
+    extras: dict[str, str] | None = None,
 ) -> str:
     """Store one edge, with an obligation per named source primitive.
 
     Written straight to the rows: the edge CRUD is R4's third piece, and what
     this module is about is what an edge *resolves*.
 
-    ``sorts`` and ``symbols`` are the rename (R4b), absent for the identity.
+    ``sorts`` and ``symbols`` are the rename (R4b), absent for the identity;
+    ``template`` and ``extras`` the wrap (S2), absent when the two systems state
+    the same kind of thing. `tests/test_sequent_interpretation.py` is what uses
+    the second pair, and takes this function rather than writing a third copy of
+    the edge-seeding boilerplate.
     """
     engine = create_engine(db_path)
     try:
@@ -125,7 +132,12 @@ def relate(
                 target_system_id=uuid.UUID(target),
                 kind=kind,
                 status=status,
+                statement_template=template,
             )
+            for index, (name, sort) in enumerate((extras or {}).items()):
+                edge.extras.append(
+                    SystemRelationExtraRow(position=index, name=name, sort=sort)
+                )
             for index, (original, renamed) in enumerate((sorts or {}).items()):
                 edge.sorts.append(
                     SystemRelationSortRow(
