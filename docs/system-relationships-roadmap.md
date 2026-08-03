@@ -1606,6 +1606,18 @@ productions were in the wrong layer**, which is the one thing the partition
 exists to prevent. The fixture could not catch it, since its own variables all
 sit in the preamble.
 
+And the contract had a second hole, in the one field only the root carries.
+`_logical_sort` reads the sort a `|-` statement is written in off the productions
+it can see, so a root built at the *first boundary* can settle on a different
+sort from the one the whole file settles on — a corpus whose `wff` typecode
+arrives in a later layer gives the chain a line type reading at some earlier
+fallback, and the layered grammar then parses proof statements differently from
+the unlayered one. The root's productions stay boundary-scoped; its **line type
+is the horizon's**, because there is nowhere else for it to live. `set.mm` is not
+shaped this way — `wi` is in its first section — so this needed a fixture of its
+own, which is the second time in this phase that the file being well behaved hid
+a hole in the general case.
+
 Three more: two plan layers sharing a start emitted a wholly empty layer (a part
 header and its section share a position — how the file opens each of its 21
 parts); the single-reached-layer fallback stored it under the *corpus's* name, so

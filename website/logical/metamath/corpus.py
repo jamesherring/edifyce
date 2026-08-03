@@ -35,7 +35,7 @@ name that sort is reported rather than checked, which is the same refusal
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from ..declarative import (
@@ -181,31 +181,50 @@ def corpus_specs(
         # review).
         return [corpus_spec(database, limit, boundaries[0][0], binders)]
 
-    specs: list[SystemSpec] = []
-    seen: set[tuple[str, str]] = set()
-    for index, (layer, stop) in enumerate(boundaries):
-        whole = build_spec(
+    # Every layer's grammar, cumulative — `build_spec` reads from the start of the
+    # file up to `before`, so each of these covers its predecessors too and the
+    # per-layer share is the difference. The last is therefore the *horizon-wide*
+    # spec, which is what `corpus_spec` would have returned.
+    cumulative = [
+        build_spec(
             database,
             layer,
             before=stop,
             variable_scope=_variable_scope(database, stop, horizon),
             binders=binders,
         )
+        for layer, stop in boundaries
+    ]
+
+    specs: list[SystemSpec] = []
+    seen: set[tuple[str, str]] = set()
+    for index, whole in enumerate(cumulative):
         fresh = [
             production
             for production in whole.productions
             if _production_key(production) not in seen
         ]
         seen.update(_production_key(production) for production in whole.productions)
-        specs.append(
-            whole
-            if index == 0
+        if index:
             # A delta: the line type, the brackets and the token-separation
             # promise all belong to the root, which every later layer inherits.
             # Restating them would be a redeclaration, and `layered_spec` refuses
             # one (§9.25 for the one namespace where that bites hardest).
-            else SystemSpec(name=layer, productions=fresh)
-        )
+            specs.append(SystemSpec(name=boundaries[index][0], productions=fresh))
+            continue
+        # The root's productions are its own, but its **line type is the
+        # horizon's** (found in review). `_logical_sort` reads the sort a `|-`
+        # statement is written in off the productions it can see, so a root built
+        # at the first boundary can pick a different sort from the one the whole
+        # file settles on — a corpus whose `wff` typecode arrives in a later layer
+        # would give the chain a line type reading at some earlier fallback, and
+        # the layered grammar would then parse proof statements differently from
+        # the unlayered one. That is the contract, not a detail of it.
+        #
+        # Only the root carries a line type, so this is the one place the horizon
+        # has to reach back into: the productions stay boundary-scoped, which is
+        # what the partition is for.
+        specs.append(replace(whole, lines=cumulative[-1].lines))
     return specs
 
 

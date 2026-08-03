@@ -332,3 +332,53 @@ def test_the_third_positional_argument_is_the_name_as_it_is_next_door() -> None:
 
     assert corpus_specs(database, None, "MySystem")[0].name == "MySystem"
     assert corpus_spec(database, None, "MySystem").name == "MySystem"
+
+
+# A corpus whose logical sort only becomes nameable in the *second* layer: the
+# first declares `term` notation, and the `wff` typecode arrives with the
+# quantifier layer. `set.mm` is not shaped this way — `wi` is in its first
+# section — which is why this needs a fixture of its own.
+LATE_LOGICAL_SORT = f"""
+$c |- term wff ( ) -> f $.
+$v a ph $.
+va $f term a $.
+$( {SECTION}
+   Pre-logic
+   {SECTION} $)
+tf $a term f a $.
+t-thm $p |- f a $= va tf $.
+$( {SECTION}
+   Predicate calculus with equality:  Tarski's system S2
+   {SECTION} $)
+wph $f wff ph $.
+wi $a wff ( ph -> ph ) $.
+w-thm $p |- ( ph -> ph ) $= wph wi $.
+"""
+
+
+def test_the_root_takes_its_line_type_from_the_horizon() -> None:
+    # **From review.** `_logical_sort` reads the sort a `|-` statement is written
+    # in off the productions it can see, and only the root carries a line type.
+    # So a root built at the *first boundary* could settle on a different sort
+    # from the one the whole file settles on — here `term`, because `wff` is not
+    # nameable until the second layer — and the chain would then parse proof
+    # statements differently from the unlayered grammar.
+    #
+    # That is the contract itself, not a detail of it. The root's *productions*
+    # stay boundary-scoped, which is what the partition is for; its line type is
+    # the horizon's, because there is nowhere else for it to live.
+    database = parse(LATE_LOGICAL_SORT)
+    plan = (
+        Layer(name="One", starts_with="Pre-logic"),
+        Layer(name="Two", starts_with="Predicate calculus with equality"),
+    )
+
+    whole = corpus_spec(database)
+    split = corpus_specs(database, plan=plan)
+
+    assert whole.lines[0].logical_sort == "wff"
+    assert layered_spec(split).lines[0].logical_sort == "wff"
+    # And the productions are still split, which is what says the fix reached the
+    # line type alone rather than collapsing the layers.
+    assert "tf" in names(split[0]) and "tf" not in names(split[1])
+    assert "wi" in names(split[1]) and "wi" not in names(split[0])
