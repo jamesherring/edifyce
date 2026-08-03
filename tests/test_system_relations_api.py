@@ -691,12 +691,16 @@ def test_a_template_can_be_turned_off_after_the_grammar_moves(db, client):
     assert created[0] == 201
     edge = created[1]["id"]
 
+    # Clearing the template alone, without also naming `extras` — which is what
+    # an author would actually send, and what review found 422ing because the
+    # orphaned extras rows survived the clear (they are now cleared with it).
     turned_off = client.patch(
         f"/api/formal-systems/{target}/relations/{edge}",
-        json={"statement_template": "", "extras": []},
+        json={"statement_template": ""},
     )
     assert turned_off.status_code == 200, turned_off.text
     assert turned_off.json()["statement_template"] is None
+    assert turned_off.json()["extras"] == []
 
     refused = client.patch(
         f"/api/formal-systems/{target}/relations/{edge}",

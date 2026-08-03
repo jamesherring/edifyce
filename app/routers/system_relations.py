@@ -174,6 +174,15 @@ async def update_relation(
         # The empty string clears it; `None` means "leave it alone", as it does
         # for every other field of a partial edit.
         edge.statement_template = payload.statement_template or None
+        if edge.statement_template is None and payload.extras is None:
+            # Clearing the wrap clears what it introduced. The extras exist only
+            # to appear in a template — `_require_a_composable_template` refuses
+            # them without one — so leaving them behind would make the edit that
+            # turns an edge off the one edit it refuses, which is precisely the
+            # edit its author needs (§9.21, found in review). An explicit
+            # `extras` in the same PATCH wins, and is then refused for saying
+            # both things at once.
+            await _clear(session, edge.extras)
     await _assign(session, edge, system_id, changes, payload)
 
     # Whatever changed, it changed what this edge resolves: `status` is the gate,

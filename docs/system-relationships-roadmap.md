@@ -1231,6 +1231,38 @@ up: **what a list rather than a set costs inside a sequent proof, a closed
 template costs across an edge into one.** Both are one cited structural step,
 and both are honest.
 
+**From review**, four, and the first two are the same mistake in two places —
+*a guard scoped to what an author declared rather than to what the code touches*,
+which is §9.19's rule biting for the third time.
+
+- **The capture guard read the wrong set.** It compared the template's extras
+  against the theorem's declared **metavariables**, and promotion re-reads a
+  statement's text with whatever metavariables it is given — so a name that was
+  a *ground leaf* of the source theorem was silently rebound. A theorem
+  `(P → G)` about a `wff` constant `G`, wrapped under `G : context`, became a
+  schema whose `G`s were the antecedent; and a proviso `not occurs(P, G)` came
+  out constraining the context it was never proved about, which is the half that
+  changes what the theorem *claims* rather than only what it matches. The guard
+  now reads the leaves of the terms being wrapped, literals included, plus the
+  proviso arguments — every place a name can appear in what crosses.
+- **A string-matched theorem could cross a wrap.** The refusal was written for a
+  rename and not extended. It is worse across a wrap: string matching reads
+  `formula_string` and never `schema_term`, so the composed wrap is built and
+  thrown away, leaving exactly the surface-string substitution §6.3 exists to
+  refuse. One refusal now covers both, because both end with a theorem checked
+  against symbols it was not proved over.
+- **A hole was "anything in braces"**, which cannot survive contact with the
+  corpus this feature is for: `set.mm` spells set-builder `{ x | ph }`, so a
+  template mentioning one read as a template with a spurious hole. A hole is a
+  **declared sort name** in braces; braced text naming no sort is the system's
+  own notation, and the error message now says so.
+- **And §9.21's rule again**, in the place it was written to protect: clearing a
+  template with `{"statement_template": ""}` alone was refused, because the
+  extras rows survived the clear and extras without a template are refused.
+  Clearing the wrap now clears what it introduced. The comment promising that
+  the check never fires on the edit that turns an edge off was there before the
+  code did it.
+
 #### S3 — benchmark the recursive context grammar — **substantially answered by S1**
 
 **Delivers** evidence for or against S4. Left-nested list parsing is the risk.

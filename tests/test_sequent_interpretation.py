@@ -182,6 +182,25 @@ def test_a_template_that_does_not_compose_is_refused_with_a_reason():
     assert template_errors(target, StatementTemplate(WRAP, EXTRAS)) == []
 
 
+def test_braces_the_grammar_spells_are_notation_and_not_a_hole():
+    # **From review.** A hole was first "anything in braces", which cannot be
+    # right in a project whose flagship import spells set-builder as `{ x | ph }`
+    # — a template stating one would read as a template with a spurious hole. A
+    # hole is a **sort name** in braces, and `x | ph` is not one.
+    #
+    # The pair: `{wff}` is a hole here because `wff` is a sort, and `{formula}`
+    # is not because nothing declares `formula`. The second is then a template
+    # with no hole at all, and says so along with why.
+    target = build_spec(sequent_spec())["system"]
+    assert build_template(target, StatementTemplate(WRAP, EXTRAS)) is not None
+
+    reason = " ".join(
+        template_errors(target, StatementTemplate("G ⊢ {formula}", EXTRAS))
+    )
+    assert "no hole" in reason
+    assert "'formula'" in reason and "does not declare" in reason
+
+
 # ---------------------------------------------------------------------------
 # The edge, end to end
 # ---------------------------------------------------------------------------
@@ -368,6 +387,68 @@ def test_a_closed_template_is_what_a_source_with_generalisation_needs(db, client
         "∅ ⊢ (P → P) [id-law]",
         "∅ , A ⊢ (P → P) [WL, 1]",
     ]))["success"] is True
+
+
+def test_an_extra_that_collides_with_a_name_the_theorem_uses_is_refused(db, client):
+    # **From review.** The capture guard first compared the extras against the
+    # theorem's declared *metavariables*, which is not the set that matters.
+    # Promotion re-reads a statement's text with whatever metavariables it is
+    # given, so a name that was a **ground leaf** of the source theorem is
+    # silently rebound by the wrap: `(P → G)` proved about a `wff` constant `G`
+    # becomes, under a template introducing `G : context`, a schema whose `G`s
+    # are the antecedent.
+    #
+    # A proviso is the sharper half — it changes what the theorem *constrains*
+    # rather than only what it matches — so `not occurs(P, G)` would come out
+    # constraining the context it was never proved about.
+    #
+    # Paired with the same theorem under a template whose extra does not collide,
+    # which must still cross.
+    owner = _register_login(client, "capture@example.com")
+    source = seed(db, hilbert_spec(), owner, None)
+    collides = seed(db, sequent_spec("Collides"), owner, None)
+    apart = seed(db, sequent_spec("Apart"), owner, None)
+    promote_into(db, source, TheoremSpec(
+        label="mentions-g", statement="(P → G)", metavariables={"P": "wff"}
+    ))
+    interpret(db, source, collides)
+    # The same edge, the same theorem, one difference: the extra is spelled `D`,
+    # which the theorem does not mention.
+    interpret(db, source, apart, template="D ⊢ {wff}", extras={"D": "context"})
+
+    refused = verify_proof(client, db, collides, "∅ ⊢ (P → G) [mentions-g]")
+    assert refused["success"] is False
+    # Which refusal, not merely that there was one (§8.0, and S1's own lesson):
+    # a capture that was not caught would fail this proof too, by the wrapped
+    # schema simply not applying.
+    assert "would capture" in " ".join(refused["errors"])
+
+    assert verify_proof(
+        client, db, apart, "∅ ⊢ (P → G) [mentions-g]"
+    )["success"] is True
+
+
+def test_a_string_matched_theorem_cannot_cross_a_wrap(db, client):
+    # **From review.** A string-rewriting theorem is checked against surface
+    # text and never reads `schema_term`, so a wrap composed for it would be
+    # built and then thrown away — leaving exactly the surface-string
+    # substitution §6.3 says must never happen. Refused, on the same ground the
+    # rename already refused it.
+    #
+    # Paired with the structurally-matched twin, which crosses.
+    source, target = two_systems(db, client, "string-wrap@example.com")
+    promote_into(db, source, TheoremSpec(
+        label="rewritten", statement="(P → P)", metavariables={"P": "wff"},
+        matching="string",
+    ))
+    promote_into(db, source, IDENTITY_LAW)
+    interpret(db, source, target)
+
+    refused = verify_proof(client, db, target, "∅ ⊢ (P → P) [rewritten]")
+    assert refused["success"] is False
+    assert "string rewriting" in " ".join(refused["errors"])
+
+    assert verify_proof(client, db, target, "∅ ⊢ (P → P) [id-law]")["success"] is True
 
 
 def test_a_theorem_wrapped_here_reads_in_this_system_s_notation(db, client):

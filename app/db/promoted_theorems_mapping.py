@@ -42,6 +42,7 @@ from app.db.side_conditions import SideConditionRow
 from app.db.side_conditions_mapping import build_theorem_side_conditions, proviso_lines
 from app.db.systems import SymbolRow
 from app.db.terms_mapping import prefetch_terms, store_term
+from website.logical.kernel.terms import Node
 from website.logical.matching import StringPattern
 from website.logical.promotion import TheoremSpec, promote_spec
 from website.logical.translation import IDENTITY, Translation
@@ -549,18 +550,32 @@ def _require_a_citable_entry(
                 "it rather than in a metavariable. It cannot be cited across a "
                 "rename."
             )
-    if not layer.translation.identity and entry.matching == "string":
-        # A string-rewriting theorem is checked against surface *text*, so what
-        # it says is a fact about the symbols its own system spells — and a
-        # rename is free to spell them differently here. Nothing in the two
-        # grammars settles whether the rewriting agrees, so this is refused
-        # rather than transferred, on the same ground as the string-step refusal
-        # in `promotion.schematic_theorem`.
+    if entry.matching == "string" and not (
+        layer.translation.identity and layer.template.identity
+    ):
+        # A string-rewriting theorem is checked against surface *text*
+        # (`InferenceRule._string_binding_exists` reads `formula_string` and
+        # never a term), so what it says is a fact about the symbols its own
+        # system spells.
+        #
+        # A **rename** is free to spell them differently here, and nothing in
+        # the two grammars settles whether the rewriting agrees — refused on the
+        # same ground as the string-step refusal in
+        # `promotion.schematic_theorem`. A **wrap** is worse, and the review that
+        # caught it put it exactly right: a string-matched theorem never reads
+        # `schema_term`, so the composed wrap would be built and then thrown
+        # away, leaving the surface-string substitution this module's whole
+        # design refuses (§6.3). Both are one refusal because both end with a
+        # theorem checked against symbols it was not proved over.
+        crossing = (
+            "a renaming edge" if layer.template.identity
+            else "an edge that restates it"
+        )
         raise LookupError(
             f"Theorem {entry.label!r} is checked by string rewriting and reaches "
-            "this system through a renaming edge, so the symbols it was proved "
-            "over are not the symbols it would be checked against here. It "
-            "cannot be cited across a rename."
+            f"this system through {crossing}, so the symbols it was proved over "
+            "are not the symbols it would be checked against here. It cannot be "
+            "cited across one."
         )
 
 
@@ -650,21 +665,16 @@ def _wrapped(
     the same reasoning :func:`_translated` re-renders for a rename — the string
     is a record of the term rather than a second source for it.
 
-    Refused rather than approximated: an extra that shadows one of the theorem's
-    own metavariables (it would capture), and a statement or premise whose term
-    is missing and which is not simply a metavariable. That second one is
+    Refused rather than approximated: an extra that collides with **any name the
+    transferred theorem already uses**, and a statement or premise whose term is
+    missing and which is not simply a metavariable. That second one is
     :func:`_require_nothing_was_composed`'s rule stated where the wrap can act on
     it — composing here would read the source's text against the *target's*
     grammar, which is the one thing a transfer must never do.
     """
-    shadowed = sorted(set(template.extras) & set(spec.metavariables))
-    if shadowed:
-        raise LookupError(
-            f"Theorem {entry.label!r} declares "
-            + ", ".join(repr(name) for name in shadowed)
-            + ", which the edge's statement template also introduces, so wrapping "
-            "it here would capture. Rename the template's metavariable."
-        )
+    _require_the_extras_capture_nothing(
+        entry, template, spec, [statement_term, *premise_terms]
+    )
 
     def wrap(text: str, term: Term | None, what: str) -> Term:
         if term is None:
@@ -702,6 +712,74 @@ def _wrapped(
         wrapped_statement,
         wrapped_premises,
     )
+
+
+def _require_the_extras_capture_nothing(
+    entry: StoredTheorem,
+    template: BuiltTemplate,
+    spec: TheoremSpec,
+    terms: Sequence[Term | None],
+) -> None:
+    """Refuse a wrap whose extras collide with a name the theorem already uses.
+
+    Checking the theorem's declared *metavariables* is not enough, and that was
+    this guard's first form (found in review). What the extras have to avoid is
+    every name the wrapped spec will be **re-read** with, and promotion re-reads
+    a statement's text with the metavariables it is given
+    (``StringPattern.add_variables``) — so a name that was a **ground leaf** of
+    the source theorem gets silently rebound to the edge's sort. A source
+    theorem `(P → G)` whose `G` is a `wff` constant becomes, under a template
+    introducing `G : context`, a schema in which those `G`s are the context.
+
+    A proviso is the sharper half of the same thing, because it changes what the
+    theorem *constrains* rather than only what it matches: `not occurs(P, G)`
+    proved about a `wff` leaf comes out constraining the antecedent.
+
+    So the check is over the leaves of the terms actually being wrapped, plus the
+    proviso arguments — which is every place a name can appear in what crosses.
+    Refused rather than renamed: the theorem's names are the source's to choose
+    and the template's are the edge author's, and only one of those two people is
+    around to be told.
+    """
+    used = {
+        name
+        for term in terms
+        if term is not None
+        for name in _names_in(term)
+    }
+    used |= set(spec.metavariables)
+    used |= {
+        argument
+        for proviso in entry.provisos
+        for argument in (proviso.left_name, proviso.right_name)
+        if argument is not None
+    }
+    collided = sorted(set(template.extras) & used)
+    if collided:
+        raise LookupError(
+            f"Theorem {entry.label!r} already uses "
+            + ", ".join(repr(name) for name in collided)
+            + ", which the edge's statement template also introduces, so wrapping "
+            "it here would capture. Rename the template's metavariable."
+        )
+
+
+def _names_in(term: Term) -> set[str]:
+    """Every name a term's leaves carry — metavariables *and* ground literals.
+
+    Both, because promotion tells them apart by which are declared rather than by
+    anything in the term: a leaf spelled `G` is a constant until something says
+    `G` is a metavariable, and the wrap is exactly a thing that says so.
+    """
+    names: set[str] = set(term.free_vars())
+    stack = [term]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, Node):
+            if node.literal is not None:
+                names.add(node.literal)
+            stack.extend(node.children.values())
+    return names
 
 
 def _require_nothing_was_composed(

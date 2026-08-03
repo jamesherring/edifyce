@@ -26,9 +26,12 @@ spelled `{<sort>}`:
     G ⊢ {wff}          extras: G : context
 
 The hole names the sort the transferred statement is read at *here* — after the
-edge's rename, so it is one of the target's sorts. Braces are what make the hole
-unmistakable: a name a grammar could also spell would be a hole exactly when no
-production happened to claim it, which is not a property an author can predict.
+edge's rename, so it is one of the target's sorts. Braces plus a **declared sort
+name** are what make it a hole, and both halves are load-bearing. A bare name
+would be a hole exactly when no production happened to claim it, which is not a
+property an author can predict; and braces alone cannot do it either, since the
+corpus this feature exists for spells set-builder `{ x | ph }` (found in review).
+So braced text naming no sort is the target's own notation and is left alone.
 
 What is *not* here is a claim that the wrap is **sound**. The template says what
 shape a transferred statement takes; §2's obligations say why a theorem of that
@@ -59,10 +62,33 @@ if TYPE_CHECKING:
     from website.logical.formal_system import FormalSystem
     from website.logical.matching.context import Context
 
-# The hole, and the only thing a template's text says that is not target
-# notation. One per template: two would be two statements to put somewhere, and
-# an edge transfers one.
-_HOLE = re.compile(r"\{([^{}]*)\}")
+# Candidate holes. What makes one a *hole* rather than object notation is that
+# its content names one of the target's sorts — see :func:`_holes`, and the note
+# on why that test is not "it is in braces".
+_BRACED = re.compile(r"\{([^{}]*)\}")
+
+
+def _holes(target: FormalSystem, text: str) -> list[str]:
+    """The brace groups of ``text`` that are holes, as their sort names.
+
+    Braces alone cannot decide it, and the case that settles it is the one this
+    project exists to import: set-builder notation is `{ x | ph }`, so a grammar
+    that spells ZFC has braces of its own, and a template stating a set-builder
+    would otherwise read as a template with a spurious hole in it. Requiring the
+    content to be a **declared sort** separates the two, since a sort name is
+    something the grammar has told us about and `x | ph` is not.
+
+    It leaves one ambiguity, and it is worth naming rather than guarding: a
+    grammar whose object notation spells exactly `{wff}` for a sort it also calls
+    `wff`. Nothing distinguishes those, and no grammar has both.
+    """
+    if target.build_context is None:
+        return []
+    return [
+        braced
+        for braced in _BRACED.findall(text)
+        if isinstance(target.build_context.variables.get(braced), Pattern)
+    ]
 
 
 @dataclass(frozen=True)
@@ -162,7 +188,7 @@ def build_template(
     if template.identity or target.build_context is None:
         return None
 
-    holes = _HOLE.findall(template.text)
+    holes = _holes(target, template.text)
     if len(holes) != 1:
         return None
 
@@ -211,13 +237,26 @@ def template_errors(
     if template.identity:
         return []
 
+    if target.build_context is None:
+        return [
+            "The target system has no build context, so a template cannot be "
+            "read against it."
+        ]
+
     errors: list[str] = []
-    holes = _HOLE.findall(template.text)
+    holes = _holes(target, template.text)
     if not holes:
+        braced = _BRACED.findall(template.text)
         errors.append(
             f"The statement template {template.text!r} has no hole, so there is "
-            "nowhere for the transferred statement to go. Write the sort it is "
-            "read at in braces, as in 'G ⊢ {wff}'."
+            "nowhere for the transferred statement to go. A hole is a sort name "
+            "in braces, as in 'G ⊢ {wff}'."
+            + (
+                " This system's grammar does not declare "
+                + ", ".join(repr(text) for text in braced)
+                + " as a sort, so that reads as notation of its own."
+                if braced else ""
+            )
         )
     elif len(holes) > 1:
         errors.append(
@@ -226,23 +265,13 @@ def template_errors(
             "transfers one statement."
         )
 
-    if target.build_context is None:
-        errors.append(
-            "The target system has no build context, so a template cannot be "
-            "read against it."
-        )
-        return errors
-
-    for name, sort_name in ((None, holes[0] if holes else None), *(
+    for name, sort_name in (
         (name, sort) for name, sort in template.extras.items()
-    )):
-        if sort_name is None:
-            continue
+    ):
         if not isinstance(target.build_context.variables.get(sort_name), Pattern):
             errors.append(
-                f"The template's {'hole' if name is None else repr(name)} is read "
-                f"at sort {sort_name!r}, which the target system's grammar does "
-                "not declare."
+                f"The template's {name!r} is read at sort {sort_name!r}, which "
+                "the target system's grammar does not declare."
             )
 
     if not errors and build_template(target, template) is None:
