@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from ..kernel import Var, from_pattern, match_all
 from ..matching import StringPattern
 from ..matching.rewriting import joint_binding_exists
+from .diagnostics import SlotReport, numbers
 from .proof import ProofLine, Subproof
 
 if TYPE_CHECKING:
@@ -106,6 +107,14 @@ class InferenceRule:
         # proviso argument may use defined notation — then fills `side_conditions`
         # and clears this. Empty except transiently mid-build.
         self.pending_side_conditions: list[str] = []
+
+        # Each parsed proviso's own source line, index-aligned to
+        # `side_conditions`. Kept only so a *failure* can quote the author's own
+        # words: a reader wants `x not free in phi`, not the repr of a frozen
+        # dataclass. Nothing checks against it, and a rule built without it (a
+        # caller passing `side_conditions=` directly) simply reports the parsed
+        # form instead — see `failing_proviso`.
+        self.side_condition_sources: list[str] = []
 
         # Optionally allow extra antecedents
         self.allow_extra_antecedents: bool = allow_extra_antecedents
@@ -423,6 +432,100 @@ class InferenceRule:
             for name, sort in term.free_vars().items()
         }
         return term.substitute(renames, context) if renames else term
+
+    @staticmethod
+    def _schema_text(pattern: Pattern) -> str:
+        """A slot's schema as a reader would write it.
+
+        `str(pattern)` is the class-prefixed repr (`StringPattern: antecedent`),
+        which names the machinery and not the schema. A compound rule schema keeps
+        its own surface form in `display_pattern` — `( p -> q )`, which is the
+        thing a caller has to go and prove — and anything else is named by the
+        sort it draws from.
+        """
+        if isinstance(pattern, StringPattern):
+            return pattern.display_pattern
+        return pattern.name
+
+    def unsatisfied_slots(
+        self, lines: Sequence[ProofLine], context: Context
+    ) -> tuple[SlotReport, ...]:
+        """Antecedent slots that **no** cited line could fill on its own.
+
+        The diagnosis half of :meth:`slot_admits`, and the most useful thing a
+        failed citation can say: a slot with no candidate is a premise the proof
+        does not yet have, which is exactly the next goal a goal-directed caller
+        wants. Runs only after a line has already failed (see
+        :mod:`~.diagnostics`), so it may ask the question per slot rather than
+        stopping at the first.
+
+        Empty when every slot has *some* candidate — which does not mean the rule
+        applies, only that the failure is about the slots holding together rather
+        than about one being unreachable.
+        """
+        return tuple(
+            SlotReport(index=slot, schema=self._schema_text(self.antecedents[slot]))
+            for slot in range(len(self.antecedents))
+            if not any(self.slot_admits(slot, line, context) for line in lines)
+        )
+
+    def slot_reports(
+        self, lines: Sequence[ProofLine], context: Context
+    ) -> tuple[SlotReport, ...]:
+        """Every slot, with the cited lines individually admissible for it.
+
+        What :meth:`unsatisfied_slots` cannot say: when each slot has candidates
+        but they cannot be assigned to distinct lines, or cannot bind together,
+        the useful record is the whole bipartite graph rather than one slot.
+        """
+        return tuple(
+            SlotReport(
+                index=slot,
+                schema=self._schema_text(self.antecedents[slot]),
+                candidates=numbers(
+                    [line for line in lines if self.slot_admits(slot, line, context)]
+                ),
+            )
+            for slot in range(len(self.antecedents))
+        )
+
+    def failing_proviso(
+        self,
+        antecedents: Sequence[ProofLine],
+        deduction: ProofLine,
+        context: Context,
+    ) -> str | None:
+        """The first proviso that does not hold for this assignment, or None.
+
+        Reported in the author's own words where the build kept them
+        (`side_condition_sources`), because `x not free in phi` is what a reader
+        — and a caller trying to repair the step — can act on, where the repr of a
+        frozen dataclass is not.
+
+        None means the provisos are not what stopped this assignment: either they
+        all hold, or no binding exists for them to be checked against, which is a
+        different failure and is reported as one.
+        """
+        if self.matching == "string":
+            # A string-rewriting step binds surface strings and carries no kernel
+            # proviso, so there is never one to blame.
+            return None
+        binding = self._term_binding(antecedents, deduction, context)
+        if binding is None:
+            return None
+        for index, condition in enumerate(self.side_conditions):
+            try:
+                if condition.check(binding, context):
+                    continue
+            except Exception:
+                # A *malformed* proviso fails closed in `_side_conditions_hold`,
+                # so it is genuinely why the rule did not apply and naming it is
+                # the whole point of being here.
+                pass
+            if index < len(self.side_condition_sources):
+                return self.side_condition_sources[index]
+            return str(condition)
+        return None
 
     def _side_conditions_hold(self, binding: Binding, context: Context) -> bool:
         """Whether every side-condition holds against the rule's term binding.

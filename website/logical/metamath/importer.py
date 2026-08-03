@@ -37,8 +37,11 @@ from .parser import Assertion, Database, Hypothesis, MetamathError
 
 
 # Metamath labels admit letters, digits, and `-_.`; a citation adds the line
-# numbers and separators Edifyce's reference syntax uses.
-_REFERENCE_REGEX = r"[A-Za-z0-9_.\-, ]+"
+# numbers and separators Edifyce's reference syntax uses, plus `?` for an open
+# goal (`proof.HOLE_KEY`). `?` is not a Metamath label character, so admitting it
+# cannot make a citation ambiguous — and without it a proof written against an
+# imported corpus is the one place a hole could not be written.
+_REFERENCE_REGEX = r"[A-Za-z0-9_.\-,? ]+"
 
 
 @dataclass

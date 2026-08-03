@@ -144,11 +144,17 @@ def statement_line() -> LineSpec:
     The reference field allows ``.`` so a proof can cite a lemma imported from
     another proof with the engine's dotted navigation syntax (``[alias.line]``,
     or ``[RULE, alias.line, ...]``); without it such a citation won't even parse.
+
+    It allows ``?`` for the same kind of reason: an open goal is cited
+    ``[?]`` (``proof.HOLE_KEY``), and a grammar whose reference part excludes the
+    character cannot express one. That is a real constraint on an existing system
+    rather than something the engine can paper over — the Metamath importer widens
+    its own regex for it — and this helper stands in for a system that has done so.
     """
     return LineSpec(
         name="statement",
         shape="<formula> [<reference>]",
-        parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,.]+")],
+        parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,.?]+")],
         logical_sort="formula",
     )
 

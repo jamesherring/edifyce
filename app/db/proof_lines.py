@@ -46,6 +46,7 @@ from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, uuid_pk_column
+from app.db.models import _JSON
 
 if TYPE_CHECKING:
     from app.db.models import Proof
@@ -129,6 +130,13 @@ class ProofLineRow(Base):
 
     valid: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
     invalid_message: Mapped[str | None] = mapped_column(Text)
+    # Why the line is not established, as data beside the sentence: a code from
+    # `formal_system.diagnostics.FailureCode` and whatever detail that code
+    # carries. Stored rather than recomputed because the rows *are* the read path
+    # — a caller asking why a stored proof fails should not have to re-verify it —
+    # and because `hole` rides here, so "which lines are still open" is a query.
+    failure_code: Mapped[str | None] = mapped_column(String(32), index=True)
+    failure_detail: Mapped[dict | None] = mapped_column(_JSON)
     warning_message: Mapped[str | None] = mapped_column(Text)
 
     # The subproof structure, as the openers that bound it. `opens_scope` is the

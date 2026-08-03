@@ -103,6 +103,7 @@ from app.schemas import (
     SystemValidation,
     VerifyProofResponse,
 )
+from website.logical.formal_system.diagnostics import numbers
 from website.logical.declarative import DeclarativeError, SystemSpec, build_spec
 
 router = APIRouter(prefix="/formal-systems", tags=["formal-systems"])
@@ -1145,4 +1146,9 @@ async def verify_proof(
     except Exception as e:
         return VerifyProofResponse(success=False, errors=[str(e)])
 
-    return VerifyProofResponse(success=proof.valid, proof=proof.data())
+    return VerifyProofResponse(
+        success=proof.valid,
+        proof=proof.data(),
+        holes=numbers(proof.holes),
+        only_holes=proof.only_holes,
+    )

@@ -461,6 +461,38 @@ def test_verify_unparseable_line_is_reported_not_raised(client, db):
     assert body["proof"]["lines"][0]["valid"] is False
 
 
+def test_verify_reports_a_hole_as_unfinished_rather_than_wrong(client, db):
+    # The whole point of a hole reaching the API: `success` is False either way,
+    # and only these fields tell a caller whether there is anything to *fix*.
+    owner_id = _register_login(client, "ada@example.com")
+    system_id = _seed_zfc(db, owner_id)
+    res = client.post(
+        f"/api/formal-systems/{system_id}/verify", json={"proof_text": "x ∈ y [?]"}
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["success"] is False
+    assert body["holes"] == [1]
+    assert body["only_holes"] is True
+    assert body["proof"]["lines"][0]["failure"]["code"] == "hole"
+
+
+def test_verify_carries_the_structured_reason_a_line_failed(client, db):
+    # `invalid_message` says a rule did not apply; the failure says which citation
+    # the checker could not resolve, which is what a caller can act on.
+    owner_id = _register_login(client, "ada@example.com")
+    system_id = _seed_zfc(db, owner_id)
+    res = client.post(
+        f"/api/formal-systems/{system_id}/verify", json={"proof_text": "x ∈ y [NOPE, 1]"}
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    failure = body["proof"]["lines"][0]["failure"]
+    assert failure["code"] == "bad-reference"
+    assert failure["reference"] == "NOPE, 1"
+    assert body["only_holes"] is False
+
+
 def test_verify_on_a_non_compiling_system_is_400(client, db):
     # A stored system that cannot be built surfaces the errors as a 400 the
     # client renders verbatim, rather than a 500.
@@ -521,6 +553,8 @@ def test_verify_checker_exception_returns_structured_error(client, db, monkeypat
         "success": False,
         "errors": ["Can't find 'bad' in proof context."],
         "proof": None,
+        "holes": [],
+        "only_holes": False,
     }
 
 
