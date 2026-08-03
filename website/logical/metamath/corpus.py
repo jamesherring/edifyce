@@ -38,7 +38,13 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ..declarative import DeclarativeError, build_system, register_definition
+from ..declarative import (
+    DeclarativeError,
+    Production,
+    SystemSpec,
+    build_system,
+    register_definition,
+)
 from ..promotion import promote_from_source
 from .definitions import Classified, classify, constructors_used, statement_of
 from .importer import (
@@ -50,6 +56,7 @@ from .importer import (
     register,
 )
 from .parser import MetamathError
+from .sections import Layer, Layering, outline
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -124,6 +131,101 @@ def corpus_spec(
     return build_spec(
         database, name, before=horizon, variable_scope=horizon, binders=binders
     )
+
+
+def corpus_specs(
+    database: Database,
+    limit: int | None = None,
+    plan: Sequence[Layer] = (),
+    name: str = "Metamath",
+    binders: Mapping[str, Mapping[str, Sequence[str]]] | None = None,
+) -> list[SystemSpec]:
+    """:func:`corpus_spec`, split into one spec per layer of ``plan``, root first.
+
+    D3 of docs/system-relationships-roadmap.md. A corpus is not one theory —
+    `set.mm` is propositional calculus, then first-order logic, then set theory —
+    and §5.1's spine is how Edifyce says so. This is the split: each layer holds
+    only what its own sections declare, and inherits the rest.
+
+    **An empty plan is exactly today's behaviour**, one spec covering everything,
+    which is the contract `BINDERS` and `EQUIVALENCES` already follow and what
+    keeps this additive. So is a plan no section of the file opens.
+
+    The layers are **deltas after the first**. Layer zero carries the line type,
+    the brackets and the whole grammar declared before layer one opens; every
+    later layer carries only the productions its own range adds, because
+    `layered_spec` concatenates and a redeclared name is refused across a chain
+    (§5.1). That is not a convention this function invents — it is the shape
+    `tests/layered_systems.py` writes by hand, arrived at from the other end.
+
+    The contract, and what :func:`corpus_specs` is tested against:
+    ``layered_spec(corpus_specs(db, limit, plan))`` declares exactly what
+    ``corpus_spec(db, limit)`` declares. The partition moves where a production
+    is *stored*; it moves nothing about what the grammar is.
+    """
+    walked = theorems(database, limit)
+    if not walked:
+        raise MetamathError("Database declares no provable statements to walk.")
+    horizon = walked[-1].label
+
+    boundaries = _layer_boundaries(database, plan, horizon)
+    if len(boundaries) < 2:
+        # No plan, or a plan this file opens at most one layer of. One spec, and
+        # byte-for-byte the one `corpus_spec` returns.
+        return [corpus_spec(database, limit, name, binders)]
+
+    specs: list[SystemSpec] = []
+    seen: set[tuple[str, str]] = set()
+    for index, (layer, stop) in enumerate(boundaries):
+        whole = build_spec(
+            database, layer, before=stop, variable_scope=stop, binders=binders
+        )
+        fresh = [
+            production
+            for production in whole.productions
+            if _production_key(production) not in seen
+        ]
+        seen.update(_production_key(production) for production in whole.productions)
+        specs.append(
+            whole
+            if index == 0
+            # A delta: the line type, the brackets and the token-separation
+            # promise all belong to the root, which every later layer inherits.
+            # Restating them would be a redeclaration, and `layered_spec` refuses
+            # one (§9.25 for the one namespace where that bites hardest).
+            else SystemSpec(name=layer, productions=fresh)
+        )
+    return specs
+
+
+def _layer_boundaries(
+    database: Database, plan: Sequence[Layer], horizon: str
+) -> list[tuple[str, str]]:
+    # Each populated layer, and the label its grammar stops *before*.
+    #
+    # A layer's grammar is everything declared from its own start up to where the
+    # next one opens — so the stop is the next layer's first assertion, and the
+    # last layer's is the walk's own horizon. A layer opening at or after the
+    # horizon holds nothing a walk of this length reaches, and is dropped rather
+    # than emitted empty: an empty layer is a system row with no grammar, which
+    # is a worse thing to store than one fewer layer.
+    if not plan:
+        return []
+    starts = Layering(outline(database), plan).starts
+    reach = database.position(horizon)
+    within = [(name, at) for name, at in starts if at <= reach]
+    return [
+        (name, horizon if index + 1 == len(within) else database.order[within[index + 1][1]])
+        for index, (name, _at) in enumerate(within)
+    ]
+
+
+def _production_key(production: Production) -> tuple[str, str]:
+    # What makes two productions the same one across two builds of the same file.
+    # The name alone would collapse the *sort inclusions*, which all name a sort
+    # rather than themselves and are the one production `layered_spec` lets a
+    # chain repeat (`_declares_a_name`).
+    return production.sort, production.name
 
 
 def walk(
