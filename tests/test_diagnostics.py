@@ -16,6 +16,7 @@ import pytest
 pytest.importorskip("regex")
 
 from website.logical.declarative import (
+    Definition,
     LinePart,
     LineSpec,
     Production,
@@ -357,3 +358,113 @@ def test_a_line_that_checks_carries_no_failure() -> None:
         False,  # the hole
         True,
     ]
+
+
+def test_a_line_that_matches_no_line_type_is_diagnosed() -> None:
+    # The most common authoring error of all. It is decided in `check_proof`
+    # rather than in the citation path, which is why it needs saying separately:
+    # a caller branching on `failure` should not have to fall back to reading the
+    # sentence for the ordinary case.
+    proof = checked(propositional(), "this is not a formula at all\n")
+    failure = last(proof).failure
+
+    assert failure is not None
+    assert failure.code == "unparsed-line"
+
+
+def test_a_definitional_step_citing_a_later_line_is_diagnosed() -> None:
+    # The definitional path had its own early exits, and the same mistake on a
+    # rule citation was already diagnosed — so it must be here too.
+    system = build_system(
+        SystemSpec(
+            name="d",
+            productions=[
+                Production(sort="formula", name="var", regex="[p-r]"),
+                Production(
+                    sort="formula",
+                    name="implication",
+                    template="(A -> B)",
+                    bindings=[("A", "formula"), ("B", "formula")],
+                ),
+                Production(
+                    sort="formula",
+                    name="falsum",
+                    atom_value="F",
+                    denotes_constant=True,
+                ),
+            ],
+            definitions=[
+                Definition(
+                    sort="formula",
+                    name="d",
+                    higher="S",
+                    lower="(F -> F)",
+                    bindings=[],
+                    label="dfS",
+                )
+            ],
+            lines=[
+                LineSpec(
+                    name="statement",
+                    shape="<formula> [<reference>]",
+                    parts=[LinePart(name="reference", regex=_REFERENCE)],
+                    logical_sort="formula",
+                )
+            ],
+        )
+    )
+    # Cites itself, which is neither earlier nor a different line.
+    proof = checked(system, "S [dfS, 1]\n")
+    failure = last(proof).failure
+
+    assert failure is not None
+    assert failure.code == "ordering"
+    assert failure.rule == "dfS"
+
+
+def test_a_definitional_step_that_relates_to_nothing_names_what_was_tried() -> None:
+    system = build_system(
+        SystemSpec(
+            name="d",
+            productions=[
+                Production(sort="formula", name="var", regex="[p-r]"),
+                Production(
+                    sort="formula",
+                    name="implication",
+                    template="(A -> B)",
+                    bindings=[("A", "formula"), ("B", "formula")],
+                ),
+                Production(
+                    sort="formula",
+                    name="falsum",
+                    atom_value="F",
+                    denotes_constant=True,
+                ),
+            ],
+            definitions=[
+                Definition(
+                    sort="formula",
+                    name="d",
+                    higher="S",
+                    lower="(F -> F)",
+                    bindings=[],
+                    label="dfS",
+                )
+            ],
+            lines=[
+                LineSpec(
+                    name="statement",
+                    shape="<formula> [<reference>]",
+                    parts=[LinePart(name="reference", regex=_REFERENCE)],
+                    logical_sort="formula",
+                )
+            ],
+        )
+    )
+    proof = checked(system, "p [?]\nq [Def, 1]\n")
+    failure = last(proof).failure
+
+    assert failure is not None
+    assert failure.code == "definition-mismatch"
+    assert failure.lines == (1,)
+    assert failure.definitions == ("dfS",)

@@ -607,12 +607,18 @@ class Proof:
             # Not enough antecedents
             proof_line.valid = False
             proof_line.invalid_message = f"{key} requires {len(inference_rule.antecedents)!s} antecedent(s)."
+            cited = _proof_lines(antecedents)
             proof_line.fail(
                 "antecedent-count",
                 rule=key,
                 expected=len(inference_rule.antecedents),
                 given=len(antecedents),
-                slots=inference_rule.slot_reports(_proof_lines(antecedents), context),
+                # Which slots the lines they *did* cite could fill, so an author
+                # short of a premise is told which one is missing rather than only
+                # that a count is wrong.
+                slots=inference_rule.slot_reports(
+                    cited, inference_rule.admissibility(cited, context)
+                ),
             )
             return False
 
@@ -690,25 +696,26 @@ class Proof:
                 proof_line.fail("ordering", rule=key, lines=numbers([line]))
                 return
 
+        # The slot/line graph, built once: every question below is asked of it,
+        # and building it is a unification per edge.
+        adjacency = inference_rule.admissibility(lines, context)
+
         # 2. A slot no cited line can fill *on its own*. The most useful answer
         #    there is — that slot's schema is a premise this proof does not have,
         #    which is exactly the next goal for anyone working backwards.
-        unsatisfied = inference_rule.unsatisfied_slots(lines, context)
+        unsatisfied = inference_rule.unsatisfied_slots(adjacency)
         if unsatisfied:
             proof_line.fail("slot-unsatisfied", rule=key, lines=cited, slots=unsatisfied)
             return
 
         # 3. Every slot has candidates, so the failure is about them holding
-        #    *together*: either no assignment to distinct lines exists, or one does
-        #    and the shared metavariables will not agree across it. Both are the
-        #    same advice — the citation is individually plausible and jointly not —
-        #    so they share a code and the slot graph is what distinguishes them.
-        reports = inference_rule.slot_reports(lines, context)
-
-        # 4. Unless a proviso is what blocked. Asked last because it needs an
-        #    assignment to check against, and only an assignment that binds has
-        #    one; where several bind, the first that trips a proviso is reported.
-        for candidate in self._binding_assignments(inference_rule, lines, proof_line, context):
+        #    *together* — unless a proviso is what blocked. That is asked first
+        #    because it is the sharper answer, and it needs an assignment that
+        #    binds to be checked against; where several bind, the first that trips
+        #    a proviso is reported.
+        for candidate in self._binding_assignments(
+            inference_rule, lines, proof_line, context, adjacency
+        ):
             proviso = inference_rule.failing_proviso(candidate, proof_line, context)
             if proviso is not None:
                 proof_line.fail(
@@ -719,7 +726,16 @@ class Proof:
                 )
                 return
 
-        proof_line.fail("inconsistent-binding", rule=key, lines=cited, slots=reports)
+        # 4. Otherwise: either no assignment to distinct lines exists, or one does
+        #    and the shared metavariables will not agree across it. Both are the
+        #    same advice — the citation is individually plausible and jointly not —
+        #    so they share a code and the slot graph is what distinguishes them.
+        proof_line.fail(
+            "inconsistent-binding",
+            rule=key,
+            lines=cited,
+            slots=inference_rule.slot_reports(lines, adjacency),
+        )
 
     def _binding_assignments(
         self,
@@ -727,6 +743,7 @@ class Proof:
         lines: list[ProofLine],
         deduction: ProofLine,
         context: Context,
+        adjacency: dict[int, list[int]],
     ) -> list[tuple[ProofLine, ...]]:
         # Assignments of cited lines to slots that unify, ignoring provisos — the
         # candidates a side-condition could be what rejected. Diagnosis only: the
@@ -734,16 +751,13 @@ class Proof:
         # passes everything, and this one keeps going past the provisos precisely
         # to find out whether they are the reason it found none.
         #
-        # Bounded by the same slot/line admissibility graph, so it explores what
-        # that search explored and no more.
+        # Bounded exactly as that search is — the same admissibility graph, the
+        # same fast reject when no system of distinct representatives exists, and
+        # the same prefix pruning — so it explores what that search explored and no
+        # more, up to `_EXPLAINED_ASSIGNMENTS`.
         required = len(inference_rule.antecedents)
-        adjacency = {
-            slot: [
-                j for j, line in enumerate(lines)
-                if inference_rule.slot_admits(slot, line, context)
-            ]
-            for slot in range(required)
-        }
+        if saturating_matching(range(required), adjacency) is None:
+            return []
         found: list[tuple[ProofLine, ...]] = []
 
         def walk(slot: int, chosen: list[int]) -> None:
@@ -784,10 +798,7 @@ class Proof:
         # assignments instead of every permutation. Each complete candidate is
         # confirmed by the authoritative, binding-consistent InferenceRule.check.
         required = len(inference_rule.antecedents)
-        adjacency = {
-            slot: [j for j, line in enumerate(lines) if inference_rule.slot_admits(slot, line, context)]
-            for slot in range(required)
-        }
+        adjacency = inference_rule.admissibility(lines, context)
 
         if saturating_matching(range(required), adjacency) is None:
             # Some slot has no admissible line, or no system of distinct
@@ -915,12 +926,16 @@ class Proof:
             proof_line.invalid_message = (
                 f"Line {source.number} is out of scope (it is inside a closed subproof)."
             )
+            proof_line.fail(
+                "out-of-scope", rule=reference.key, lines=numbers([source])
+            )
             return False
 
         # A step in the same proof must come after the line it transforms.
         if source.proof is proof_line.proof and proof_line.index() <= source.index():
             proof_line.valid = False
             proof_line.invalid_message = f"{reference.key} must cite an earlier line."
+            proof_line.fail("ordering", rule=reference.key, lines=numbers([source]))
             return False
 
         # The cited line must be a formula-bearing logical line: a definitional
@@ -931,6 +946,7 @@ class Proof:
                 or source.formula_term is None:
             proof_line.valid = False
             proof_line.invalid_message = f"Line {source.number} is not a formula line."
+            proof_line.fail("no-formula", rule=reference.key, lines=numbers([source]))
             return False
 
         candidates = [reference.definition] if reference.definition is not None \

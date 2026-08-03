@@ -410,24 +410,46 @@ def _adopt_verdict(proof: EngineProof, line: EngineProofLine, row: ProofLineRow)
         proof.reference_context[row.label] = line
 
 
+def _mapping_list(value: object) -> list[dict]:
+    # A stored list of records, or nothing. See `failure_from_row` on why a
+    # malformed detail is dropped rather than raised on.
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _int_list(value: object) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, int)]
+
+
+def _str_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
 def failure_from_row(row: ProofLineRow) -> Failure | None:
     """Rebuild a line's :class:`Failure` from its stored columns.
 
     The detail is stored as the JSON `Failure.as_dict` produces, so this is that
-    shape read back. Unknown keys are ignored rather than raising: a row written
-    by an older build carries fewer of them, and a *diagnosis* must never be the
-    thing that stops a proof loading.
+    shape read back. Nothing here raises on a detail that is not that shape: a row
+    written by an older build carries fewer keys, one written by a newer build
+    carries more, and a *diagnosis* must never be the thing that stops a proof
+    loading. A malformed slot is dropped rather than guessed at.
     """
     if row.failure_code is None:
         return None
-    detail = row.failure_detail or {}
+    detail = row.failure_detail if isinstance(row.failure_detail, dict) else {}
     slots = tuple(
         SlotReport(
             index=int(slot["index"]),
             schema=str(slot["schema"]),
-            candidates=tuple(int(n) for n in slot.get("candidates", ())),
+            candidates=tuple(_int_list(slot.get("candidates"))),
         )
-        for slot in detail.get("slots", ())
+        for slot in _mapping_list(detail.get("slots"))
+        if "index" in slot and "schema" in slot
     )
     return Failure(
         # Narrowed at a trust boundary: the column is text and the vocabulary is
@@ -436,12 +458,12 @@ def failure_from_row(row: ProofLineRow) -> Failure | None:
         message=row.invalid_message or str(detail.get("message", "")),
         rule=detail.get("rule"),
         reference=detail.get("reference"),
-        lines=tuple(int(n) for n in detail.get("lines", ())),
+        lines=tuple(int(n) for n in _int_list(detail.get("lines"))),
         expected=detail.get("expected"),
         given=detail.get("given"),
         slots=slots,
         proviso=detail.get("proviso"),
-        definitions=tuple(detail.get("definitions", ())),
+        definitions=tuple(str(name) for name in _str_list(detail.get("definitions"))),
     )
 
 

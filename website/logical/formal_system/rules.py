@@ -12,7 +12,7 @@ from .diagnostics import SlotReport, numbers
 from .proof import ProofLine, Subproof
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from ..kernel import SideCondition, Term
     from ..matching.context import Context
@@ -447,17 +447,35 @@ class InferenceRule:
             return pattern.display_pattern
         return pattern.name
 
-    def unsatisfied_slots(
+    def admissibility(
         self, lines: Sequence[ProofLine], context: Context
+    ) -> dict[int, list[int]]:
+        """The slot/line bipartite graph: slot index -> indices of ``lines``.
+
+        An edge means the line is *individually* admissible for that slot
+        (:meth:`slot_admits`), which is the necessary condition any globally
+        consistent assignment satisfies pairwise. Both the checking search
+        (`Proof._first_valid_assignment`) and the diagnosis build their answers
+        from this, and it is the expensive part of either — one unification per
+        edge — so it is built once and passed around rather than recomputed.
+        """
+        return {
+            slot: [
+                j
+                for j, line in enumerate(lines)
+                if self.slot_admits(slot, line, context)
+            ]
+            for slot in range(len(self.antecedents))
+        }
+
+    def unsatisfied_slots(
+        self, adjacency: Mapping[int, Sequence[int]]
     ) -> tuple[SlotReport, ...]:
         """Antecedent slots that **no** cited line could fill on its own.
 
-        The diagnosis half of :meth:`slot_admits`, and the most useful thing a
-        failed citation can say: a slot with no candidate is a premise the proof
-        does not yet have, which is exactly the next goal a goal-directed caller
-        wants. Runs only after a line has already failed (see
-        :mod:`~.diagnostics`), so it may ask the question per slot rather than
-        stopping at the first.
+        The most useful thing a failed citation can say: a slot with no candidate
+        is a premise the proof does not yet have, which is exactly the next goal a
+        goal-directed caller wants.
 
         Empty when every slot has *some* candidate — which does not mean the rule
         applies, only that the failure is about the slots holding together rather
@@ -466,11 +484,11 @@ class InferenceRule:
         return tuple(
             SlotReport(index=slot, schema=self._schema_text(self.antecedents[slot]))
             for slot in range(len(self.antecedents))
-            if not any(self.slot_admits(slot, line, context) for line in lines)
+            if not adjacency.get(slot)
         )
 
     def slot_reports(
-        self, lines: Sequence[ProofLine], context: Context
+        self, lines: Sequence[ProofLine], adjacency: Mapping[int, Sequence[int]]
     ) -> tuple[SlotReport, ...]:
         """Every slot, with the cited lines individually admissible for it.
 
@@ -482,9 +500,7 @@ class InferenceRule:
             SlotReport(
                 index=slot,
                 schema=self._schema_text(self.antecedents[slot]),
-                candidates=numbers(
-                    [line for line in lines if self.slot_admits(slot, line, context)]
-                ),
+                candidates=numbers([lines[j] for j in adjacency.get(slot, ())]),
             )
             for slot in range(len(self.antecedents))
         )

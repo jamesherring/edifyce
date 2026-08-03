@@ -214,17 +214,18 @@ Closed, and each code carries what that kind of failure can say:
 
 | code | what it adds |
 |---|---|
-| `no-formula` | — |
-| `unparsed-line` | — |
+| `unparsed-line` | — (the line matched no line type) |
+| `no-formula` | the line cited, where a definitional step's source bears none |
 | `bad-reference` | the citation as written |
-| `out-of-scope` | the line cited, and the subproof that closed over it |
-| `antecedent-count` | expected against given |
-| `slot-unsatisfied` | **which slot**, its schema, and the lines that failed it |
-| `inconsistent-binding` | the slots that cannot hold together |
-| `side-condition` | **which proviso**, restated over the binding |
+| `out-of-scope` | the line cited from inside a closed subproof |
+| `antecedent-count` | expected against given, and the slots the cited lines *could* fill |
+| `too-many-antecedents` | the cap, against how many were cited |
+| `slot-unsatisfied` | **which slot** and its schema — the premise that is missing |
+| `inconsistent-binding` | every slot, with the lines individually admissible for it |
+| `side-condition` | **which proviso**, in the words the author wrote it in |
 | `ordering` | the antecedent that is not earlier |
 | `no-subproof` / `subproof-out-of-scope` / `discharge-mismatch` | the opener |
-| `definition-mismatch` | the definition tried, and the position |
+| `definition-mismatch` | the source line, and the *named* definitions tried |
 | `hole` | — (§8) |
 
 `slot-unsatisfied` and `side-condition` are the two that matter most: the first is
