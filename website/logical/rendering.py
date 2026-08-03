@@ -65,9 +65,33 @@ if TYPE_CHECKING:
 # Only a rule's steps are paths. A *template*'s are slot labels and are never
 # split, because a Metamath slot label may itself contain a dot — `set.mm` names
 # class variables `.+` and `.0.`, and `seq M ( .+ , F )` is a production whose slot
-# is one. Within a rule the same labels stay reachable by the whole-label-first
-# rule in :func:`_descend`.
+# is one. Within a rule those labels stay reachable because a path resolves
+# longest-label-first at every level (:func:`longest_label`), so `A..+` names the
+# `.+` of the child `A`.
 PATH = "."
+
+
+def longest_label(remaining: list[str], labelled: Callable[[str], bool]) -> int:
+    """How many of ``remaining``'s steps the next slot label spans.
+
+    A path is joined slot labels, and a Metamath slot label may itself contain the
+    separator — `set.mm` names class variables `.+`, `.x.` and `.0.`. So a step is
+    not simply everything up to the next dot: the longest join that names a child
+    is the label, and the rest of the path continues from there. 0 means no prefix
+    names one, which is a miss.
+
+    Longest-first rather than shortest, so a child genuinely called ``A.B`` is
+    preferred over descending into ``A``; a grammar with both is answering an
+    ambiguity nobody can see from the path alone, and taking the more specific
+    reading is the one that can be written around.
+
+    Shared by both folds through :func:`_descend` and its row-graph twin, which is
+    what keeps them agreeing about what a path *means*.
+    """
+    for count in range(len(remaining), 0, -1):
+        if labelled(PATH.join(remaining[:count])):
+            return count
+    return 0
 
 
 @dataclass(frozen=True)
@@ -106,11 +130,11 @@ class Rule:
     def roots(self, slots: Collection[str]) -> frozenset[str]:
         """Which of ``slots`` this rule accounts for - pinned or rendered.
 
-        The first step of every path it mentions, resolved the way :func:`render`
-        resolves one: a path whose *whole* text is a slot of the root is that slot,
-        since a Metamath slot label may contain a dot (`set.mm` names class
-        variables `.+` and `.0.`); anything else is read as a path and its first
-        step is what it touches.
+        The first *label* of every path it mentions, resolved against ``slots`` the
+        way :func:`render` resolves it against a term's children: longest match
+        first, since a Metamath slot label may itself contain a dot (`set.mm` names
+        class variables `.+` and `.0.`). ``.+.F`` therefore heads at ``.+`` where
+        the root has that slot, and ``F.G`` at ``F``.
 
         A slot of the root missing from this is one the rule would silently drop,
         which is a term shown as something it is not;
@@ -120,11 +144,17 @@ class Rule:
         paths = chain(
             self.pins, (text for kind, text in self.pieces if kind == "slot")
         )
-        return frozenset(
-            path if path in slots else path.split(PATH)[0]
-            for path in paths
-            if path
-        )
+        found: set[str] = set()
+        for path in paths:
+            if not path:
+                continue
+            steps = path.split(PATH)
+            span = longest_label(steps, slots.__contains__)
+            # A path whose first step names no slot of the root touches nothing
+            # this rule can account for; recording its head keeps it out of the
+            # set and so refuses the rule, which is the safe direction.
+            found.add(PATH.join(steps[:span]) if span else steps[0])
+        return frozenset(found)
 
 
 def rules_by_constructor(rules: Iterable[Rule]) -> dict[str, tuple[Rule, ...]]:
@@ -229,20 +259,17 @@ def _descend(term: Node, path: str) -> Term | None:
     # recurse on itself, so it is a miss rather than a fixed point.
     if not path:
         return None
-    # A whole label that *is* a child wins over reading it as a path. Metamath
-    # slot labels are variable names and set.mm has several with a dot in them
-    # (`.+`, `.0.`), so a rule addressing one directly must not be split.
-    direct = term.children.get(path)
-    if direct is not None:
-        return direct
     found: Term = term
-    for step in path.split(PATH):
+    remaining = path.split(PATH)
+    while remaining:
         if not isinstance(found, Node):
             return None
-        child = found.children.get(step)
-        if child is None:
+        children = found.children
+        span = longest_label(remaining, children.__contains__)
+        if not span:
             return None
-        found = child
+        found = children[PATH.join(remaining[:span])]
+        remaining = remaining[span:]
     return found
 
 

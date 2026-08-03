@@ -795,10 +795,12 @@ labels, and a Metamath slot label may contain a dot. `set.mm` names class
 variables `.+`, `.x.` and `.0.`, and `seq M ( .+ , F )` is a production whose slot
 is one of them, so splitting every step on a dot renders `seq M ( .+ , F )` — the
 label where the operand belongs, across thousands of statements. Within a rule the
-same labels stay addressable because a whole label that *is* a child wins over
-reading it as a path.
+same labels stay addressable because a path resolves **longest label first at each
+level** (`rendering.longest_label`): `A..+` is the `.+` of the child `A`, not three
+steps. `Rule.roots` resolves against the root's own slots the same way, or a rule
+descending into a dotted slot would look as though it accounted for none.
 
-`setmm.DISPLAY_RULES` is `set.mm`'s six, chosen where the mathematical notation is
+`setmm.DISPLAY_RULES` is `set.mm`'s, chosen where the mathematical notation is
 genuinely two-dimensional or fenced and the linear form is a transcription of it:
 
 | rule | source | before (§4.4) | after |
@@ -806,12 +808,13 @@ genuinely two-dimensional or fenced and the linear form is a transcription of it
 | `sqrt` | ``( sqrt ` A )`` | `\surd\left(A\right)` | `\sqrt{A}` |
 | `absolute-value` | ``( abs ` A )`` | `\operatorname{abs}\left(A\right)` | `\left\lvert A\right\rvert` |
 | `factorial` | ``( ! ` A )`` | `{!}\left(A\right)` | `A!` |
+| `factorial-of-factorial` | ``( ! ` ( ! ` A ) )`` | — | `\left(A!\right)!` |
 | `fraction` | `( A / B )` | `( A / B )` | `\frac{A}{B}` |
 | `power` | `( A ^ B )` | `( A \uparrow B )` | `{A}^{B}` |
 | `binomial` | `( N _C K )` | `( N \mathbin{\operatorname{C}} K )` | `\binom{N}{K}` |
 
 `+`, `x.` and the rest read correctly as `( A + B )` and are left alone. Measured
-over `set.mm`'s 50,421 parsed statements the six change **3,297** of them:
+over `set.mm`'s 50,421 parsed statements they change **3,297** of them:
 
 ```
 sqrt2irr  \surd\left(2\right) \notin \mathbb{Q}
@@ -835,6 +838,14 @@ against each other on a real grammar as it already did for the templates. Checke
 on `set.mm` itself as well — its 1,796-template `latex` notation stored, loaded
 back, and folded over stored terms, agreeing with the engine's own fold on each of
 `sqrt2irr`, `sqrtdiv`, `bcval`, `absval2`, `binom` and `facnn` (one per rule).
+
+The last of them is what pin-count precedence is *for*. `A!!` conventionally means
+the double factorial, a different operation, so a factorial of a factorial under
+the plain rule would be shown as mathematics the term does not say. Parenthesising
+every `N!` to prevent it would cost more than the rule wins; a second rule with one
+more pin is tried first and fences the whole operand, so it composes with itself
+and no depth produces a bare `!!`. `set.mm` contains no such statement today
+(measured: 0), which is why this is a rule rather than a redesign.
 
 Reading is layered like everything else, and by rule **name** — a child re-stating
 `sqrt` replaces it and keeps the ancestor's other rules. Not by root constructor,

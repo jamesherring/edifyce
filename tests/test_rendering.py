@@ -28,7 +28,13 @@ from website.logical.declarative import (
 from website.logical.formal_system import FormalSystem
 from website.logical.kernel.terms import Term
 from website.logical.metamath.display import notation_constructors
-from website.logical.rendering import Projection, Rule, render, total_projection
+from website.logical.rendering import (
+    Projection,
+    Rule,
+    longest_label,
+    render,
+    total_projection,
+)
 
 
 def system() -> FormalSystem:
@@ -350,3 +356,49 @@ def test_total_projection_carries_the_rules_through() -> None:
     assert completed.rules == (SQRT,)
     assert completed.name == "latex"
     assert "apply" in completed.templates
+
+
+def test_a_path_resolves_a_dotted_label_at_any_depth() -> None:
+    # A slot label may itself contain the separator (`set.mm` names class variables
+    # `.+`, `.0.`), so a path is not simply split on every dot: the longest join
+    # that names a child is the label, at each level rather than only at the root.
+    steps = ["A", "", "+"]
+
+    assert longest_label(steps, {"A"}.__contains__) == 1
+    assert longest_label(["", "+"], {".+"}.__contains__) == 2
+    assert longest_label(["F", "G"], {"F"}.__contains__) == 1
+    assert longest_label(["X"], {"F"}.__contains__) == 0
+    # Longest first, so a child genuinely called `A.B` beats descending into `A`.
+    assert longest_label(["A", "B"], {"A", "A.B"}.__contains__) == 2
+
+
+def test_a_rule_accounts_for_a_dotted_root_slot_it_descends_through() -> None:
+    # `Rule.roots` resolves the same way, or a rule reaching into a dotted slot
+    # would look as though it accounted for no slot at all and be refused.
+    rule = Rule(
+        constructor="c",
+        pins={".+.F": "x"},
+        pieces=(("slot", "A"),),
+    )
+
+    assert rule.roots({".+", "A"}) == {".+", "A"}
+
+
+def test_a_self_nesting_rule_composes_at_every_depth() -> None:
+    # The shape `setmm.DISPLAY_RULES` uses for factorial, where the general
+    # spelling is ambiguous under its own nesting: a second rule with one more pin
+    # is tried first, and fences the *whole* operand rather than reaching past it,
+    # so applying it again brackets its own output.
+    plain = Rule(
+        name="post", constructor="apply", pins={"F": "root"},
+        pieces=(("slot", "A"), ("lit", "!")),
+    )
+    nested = Rule(
+        name="post-of-post", constructor="apply", pins={"F": "root", "A.F": "root"},
+        pieces=(("lit", "("), ("slot", "A"), ("lit", ")!")),
+    )
+    projection = Projection(rules=(plain, nested))
+
+    assert render(applied("(sqrt @ b)"), projection) == "b!"
+    assert render(applied("(sqrt @ (sqrt @ b))"), projection) == "(b!)!"
+    assert render(applied("(sqrt @ (sqrt @ (sqrt @ b)))"), projection) == "((b!)!)!"

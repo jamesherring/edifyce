@@ -221,11 +221,30 @@ DISPLAY_RULES: dict[str, tuple[Rule, ...]] = {
             ),
         ),
         # `( ! ` A )`. Postfix, which no prefix application template can be.
+        #
+        # Its own nesting is the one place a postfix reading goes wrong, and the
+        # rule below is why this one may stay simple: `A!!` is conventionally the
+        # *double* factorial, a different operation, so a factorial of a factorial
+        # would be shown as mathematics the term does not say. `set.mm` contains no
+        # such statement today, and the fix costs a rule rather than parentheses on
+        # every `N!` in the corpus.
         Rule(
             name="factorial",
             constructor="cfv",
             pins={"F": "cfa"},
             pieces=(("slot", "A"), ("lit", "!")),
+        ),
+        # `( ! ` ( ! ` A ) )`. More pins than the rule above, so it is tried first
+        # whatever order the table is written in — which is what lets a general
+        # spelling stay general and the ambiguous case be answered separately.
+        # Fences the *whole* operand rather than reaching past it, so it composes
+        # with itself: a third application renders the second's output bracketed
+        # again, and no depth produces a bare `!!`.
+        Rule(
+            name="factorial-of-factorial",
+            constructor="cfv",
+            pins={"F": "cfa", "A.F": "cfa"},
+            pieces=(("lit", r"\left("), ("slot", "A"), ("lit", r"\right)!")),
         ),
         # `( A / B )`. The argument for a rule here is weaker than for `\sqrt` —
         # `A / B` is readable — but a corpus of real analysis is mostly quotients

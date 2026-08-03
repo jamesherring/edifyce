@@ -651,4 +651,4 @@ def test_the_curated_setmm_rules_are_shaped_for_setmm() -> None:
             # `applicable_rules` checks against a real grammar.
             expected = {"F", "A"} if rule.constructor == "cfv" else {"F", "A", "B"}
             assert rule.roots(expected) == expected, rule.name
-    assert len({rule.name for rules in DISPLAY_RULES.values() for rule in rules}) == 6
+    assert len({rule.name for rules in DISPLAY_RULES.values() for rule in rules}) == 7

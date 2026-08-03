@@ -36,6 +36,7 @@ from website.logical.rendering import (
     PATH,
     Projection,
     Rule,
+    longest_label,
     matches,
     rules_by_constructor,
 )
@@ -318,17 +319,15 @@ def _descend_row(graph: TermGraph, term_id: uuid.UUID, path: str) -> uuid.UUID |
     # path is a miss rather than this node, so a template cannot recurse on itself.
     if not path:
         return None
-    # A whole label that *is* a child wins over reading it as a path, as in the
-    # engine's own `_descend`: set.mm names class variables `.+` and `.0.`.
-    children = dict(graph.children_of(term_id))
-    if path in children:
-        return children[path]
     found = term_id
-    for step in path.split(PATH):
-        child = dict(graph.children_of(found)).get(step)
-        if child is None:
+    remaining = path.split(PATH)
+    while remaining:
+        children = dict(graph.children_of(found))
+        span = longest_label(remaining, children.__contains__)
+        if not span:
             return None
-        found = child
+        found = children[PATH.join(remaining[:span])]
+        remaining = remaining[span:]
     return found
 
 
