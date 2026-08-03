@@ -1579,8 +1579,8 @@ slice.
 exactly what the unlayered spec declares — `layered_spec(corpus_specs(…))`
 against `corpus_spec(…)`, same names and the notation in the same order. The
 partition moves where a production is *stored*; it moves nothing about what the
-grammar is. Verified on `set.mm` at N: 48 productions either way, 39 / 9 / 0
-across the layers.
+grammar is. Verified on `set.mm` at N: 48 productions either way, 34 / 14 / 0
+across the layers, and 34 / 14 / 1 at 2,681 where ZF's notation begins.
 
 *Pinned:* the layers are **deltas after the first** — only the root carries the
 line type and the brackets, because `layered_spec` refuses a redeclared name
@@ -1595,6 +1595,23 @@ thing the partition exists to prevent.
 made a second milestone visible: at N = 2,676 every layer holds theorems, but ZF
 declares no notation until 2,681, because the file opens it with `ax-ext` and
 five theorems before `cab`. §8's D1 carries both figures and what each answers.
+
+*From review*, and the first was wrong on the real file rather than only in
+principle. `build_spec` reads `before` **exclusively** and `variable_scope`
+**inclusively** — deliberately, so an ordered walk's leaves do not lag behind the
+theorem being checked — and passing one label as both makes the windows differ by
+an assertion. At a *boundary* that assertion is the next layer's first, so a
+`$f` typed there was declared by the layer below: **five of `set.mm`'s
+productions were in the wrong layer**, which is the one thing the partition
+exists to prevent. The fixture could not catch it, since its own variables all
+sit in the preamble.
+
+Three more: two plan layers sharing a start emitted a wholly empty layer (a part
+header and its section share a position — how the file opens each of its 21
+parts); the single-reached-layer fallback stored it under the *corpus's* name, so
+the same slice came back as "Metamath" at `limit=1` and "Propositional calculus"
+at `limit=2`; and `plan` had taken the third positional slot `corpus_spec` gives
+to `name`, so the obvious call died inside `Layering`.
 
 *Still to do here:* the store half, and the invalid case the original plan named
 — a plan assigning a production to a layer *after* a theorem that uses it. D1

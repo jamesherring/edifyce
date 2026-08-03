@@ -136,9 +136,10 @@ def corpus_spec(
 def corpus_specs(
     database: Database,
     limit: int | None = None,
-    plan: Sequence[Layer] = (),
     name: str = "Metamath",
     binders: Mapping[str, Mapping[str, Sequence[str]]] | None = None,
+    *,
+    plan: Sequence[Layer] = (),
 ) -> list[SystemSpec]:
     """:func:`corpus_spec`, split into one spec per layer of ``plan``, root first.
 
@@ -169,16 +170,26 @@ def corpus_specs(
     horizon = walked[-1].label
 
     boundaries = _layer_boundaries(database, plan, horizon)
-    if len(boundaries) < 2:
-        # No plan, or a plan this file opens at most one layer of. One spec, and
-        # byte-for-byte the one `corpus_spec` returns.
+    if not boundaries:
+        # No plan, or one this file opens no layer of. One spec, and byte-for-byte
+        # the one `corpus_spec` returns.
         return [corpus_spec(database, limit, name, binders)]
+    if len(boundaries) == 1:
+        # One layer reached. Still the single spec — but under the **layer's**
+        # name, not the corpus's: the same slice of the same file must not be
+        # stored under one name at `limit=1` and another at `limit=2` (found in
+        # review).
+        return [corpus_spec(database, limit, boundaries[0][0], binders)]
 
     specs: list[SystemSpec] = []
     seen: set[tuple[str, str]] = set()
     for index, (layer, stop) in enumerate(boundaries):
         whole = build_spec(
-            database, layer, before=stop, variable_scope=stop, binders=binders
+            database,
+            layer,
+            before=stop,
+            variable_scope=_variable_scope(database, stop, horizon),
+            binders=binders,
         )
         fresh = [
             production
@@ -198,6 +209,27 @@ def corpus_specs(
     return specs
 
 
+def _variable_scope(database: Database, stop: str, horizon: str) -> str:
+    # Where a layer's *variable* leaves stop, which is not where its notation
+    # does (found in review).
+    #
+    # `build_spec` reads `before` **exclusively** and `variable_scope`
+    # **inclusively** — deliberately, so an ordered walk's leaves do not lag
+    # behind the theorem being checked (see its note). For a single spec that is
+    # right. For a layer *boundary* it is off by one in the direction that
+    # matters: a `$f` first typed at the next layer's opening assertion would be
+    # declared by the layer before it, which is the one thing the partition
+    # exists to prevent.
+    #
+    # So an intermediate boundary takes the assertion *before* it, making the two
+    # windows agree; the final one keeps the horizon, because `corpus_spec` reads
+    # its variables inclusively there and the split has to sum to the same thing.
+    if stop == horizon:
+        return stop
+    at = database.position(stop)
+    return database.order[at - 1] if at else stop
+
+
 def _layer_boundaries(
     database: Database, plan: Sequence[Layer], horizon: str
 ) -> list[tuple[str, str]]:
@@ -205,15 +237,26 @@ def _layer_boundaries(
     #
     # A layer's grammar is everything declared from its own start up to where the
     # next one opens — so the stop is the next layer's first assertion, and the
-    # last layer's is the walk's own horizon. A layer opening at or after the
-    # horizon holds nothing a walk of this length reaches, and is dropped rather
-    # than emitted empty: an empty layer is a system row with no grammar, which
-    # is a worse thing to store than one fewer layer.
+    # last layer's is the walk's own horizon.
+    #
+    # Two layers are dropped rather than emitted, and for one reason: a system row
+    # with nothing in it is a worse thing to store than one fewer layer. A layer
+    # opening at or after the horizon holds nothing a walk of this length reaches.
+    # And a layer sharing its start with the next covers *no assertions at all* —
+    # which is not hypothetical, since a part header followed straight away by a
+    # section header share a position, and that is how `set.mm` opens each of its
+    # 21 parts (found in review). A layer with assertions but no *notation* is a
+    # different case and is kept: dropping it would put its theorems in the layer
+    # below.
     if not plan:
         return []
     starts = Layering(outline(database), plan).starts
     reach = database.position(horizon)
-    within = [(name, at) for name, at in starts if at <= reach]
+    within = [
+        (name, at)
+        for index, (name, at) in enumerate(starts)
+        if at <= reach and (index + 1 == len(starts) or starts[index + 1][1] != at)
+    ]
     return [
         (name, horizon if index + 1 == len(within) else database.order[within[index + 1][1]])
         for index, (name, _at) in enumerate(within)

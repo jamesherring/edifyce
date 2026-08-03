@@ -261,3 +261,74 @@ def test_a_layer_with_theorems_but_no_notation_is_still_a_layer() -> None:
     # And it still builds as a chain, which is what says an empty layer is a
     # legal one rather than something the builder tolerates by accident.
     assert "errors" not in build_system_spec(layered_spec(split))
+
+
+# ---------------------------------------------------------------------------
+# From review
+# ---------------------------------------------------------------------------
+
+
+def test_a_variable_first_typed_at_a_boundary_belongs_to_the_later_layer() -> None:
+    # **From review, and it was wrong on the real file** — five of `set.mm`'s
+    # productions sat in the layer below where they belong.
+    #
+    # `build_spec` reads `before` exclusively and `variable_scope` inclusively,
+    # deliberately, so an ordered walk's leaves do not lag behind the theorem
+    # being checked. Passing one label as both makes the two windows differ by an
+    # assertion, and at a *boundary* that assertion is the next layer's first —
+    # so its `$f` was declared by the layer before it.
+    #
+    # The fixture's own variables all sit in the preamble, which is why this
+    # needs one typed at the boundary itself.
+    source = CORPUS.replace(
+        "$v ph ps x A $.", "$v ph ps x y A $."
+    ).replace(
+        "wal $a wff A. x ph $.", "vy $f class y $.\nwal $a wff A. x ph $."
+    )
+    split = corpus_specs(parse(source), plan=LAYERS)
+
+    holders = [spec.name for spec in split if any("_y" in n for n in names(spec))]
+    assert holders == ["First-order logic"]
+
+
+def test_two_layers_opening_at_one_position_emit_one() -> None:
+    # **From review.** A part header followed straight away by a section header
+    # share a position — `Layering` documents it as how `set.mm` opens each of
+    # its 21 parts — so a plan naming both gives the first no assertions at all.
+    # That is the degenerate row the boundary code exists to avoid, and it is a
+    # different case from a layer with theorems and no notation, which is kept.
+    plan = (
+        Layer(name="Part", starts_with="LOGIC"),
+        Layer(name="Section", starts_with="Pre-logic"),
+        Layer(name="Later", starts_with="Predicate calculus with equality"),
+    )
+    split = corpus_specs(parse(CORPUS), plan=plan)
+
+    assert [spec.name for spec in split] == ["Section", "Later"]
+    assert all(names(spec) or spec.name == "Later" for spec in split)
+
+
+def test_one_reached_layer_is_still_stored_under_its_own_name() -> None:
+    # **From review.** The single-spec fallback used the corpus name, so the same
+    # slice of the same file came back as "Metamath" at `limit=1` and as
+    # "Propositional calculus" at `limit=2`. A layer's identity cannot depend on
+    # how far the walk happened to go.
+    database = parse(CORPUS)
+
+    assert [spec.name for spec in corpus_specs(database, limit=1, plan=LAYERS)] == [
+        "Propositional calculus"
+    ]
+    assert [spec.name for spec in corpus_specs(database, limit=2, plan=LAYERS)] == [
+        "Propositional calculus", "First-order logic"
+    ]
+
+
+def test_the_third_positional_argument_is_the_name_as_it_is_next_door() -> None:
+    # **From review.** `plan` had taken the slot `corpus_spec` gives to `name`,
+    # so the obvious call died inside `Layering` with an AttributeError about
+    # `starts_with`. Keyword-only now, which is what the sibling signature makes
+    # a reader expect.
+    database = parse(CORPUS)
+
+    assert corpus_specs(database, None, "MySystem")[0].name == "MySystem"
+    assert corpus_spec(database, None, "MySystem").name == "MySystem"
