@@ -726,3 +726,44 @@ def test_an_edge_round_trips_its_template(db, client):
     listed = client.get(f"/api/formal-systems/{target}/relations").json()
     assert [edge["statement_template"] for edge in listed] == ["G ⊢ {wff}"]
     assert listed[0]["extras"] == [{"name": "G", "sort": "context"}]
+
+
+def test_an_extension_may_not_restate_what_it_transfers(db, client):
+    # **From review (Codex, P1), and it was a hole rather than a wrinkle.**
+    # §5.4 defines an extension as the degenerate edge — the target contains the
+    # source, so every primitive is present under its own label and the
+    # obligations are filled in from the spine. A template contradicts that
+    # outright: it says the two do not even state the same kind of thing.
+    #
+    # Left unchecked, the empty-obligations refusal is scoped to
+    # `interpretation` and `related_layers` never reads `kind` at all — so a
+    # discharged `extension` carrying a template wrapped every source theorem
+    # into this system's shape with no primitive image established anywhere. The
+    # whole of §2, skipped by setting one column.
+    #
+    # Three assertions: refused on create, refused on a PATCH that changes the
+    # kind under an existing template, and accepted as the interpretation it
+    # actually is.
+    from tests.sequent_system import hilbert_spec, sequent_spec
+
+    owner = _register_login(client, "extension-wrap@example.com")
+    source = seed(db, hilbert_spec(), owner, None)
+    target = seed(db, sequent_spec(), owner, None)
+    wrap = {"statement_template": "G ⊢ {wff}",
+            "extras": [{"name": "G", "sort": "context"}]}
+
+    status_code, body = relate(
+        client, target, source, kind="extension", status="discharged", **wrap
+    )
+    assert status_code == 422
+    assert "extension edge transfers theorems as they are" in body["detail"]
+
+    created = relate(client, target, source, kind="interpretation", **wrap)
+    assert created[0] == 201
+    edge = created[1]["id"]
+
+    demoted = client.patch(
+        f"/api/formal-systems/{target}/relations/{edge}",
+        json={"kind": "extension"},
+    )
+    assert demoted.status_code == 422, demoted.text

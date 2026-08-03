@@ -270,6 +270,7 @@ async def _assign(
     # Unconditionally, not only when the obligations are what changed: a PATCH
     # that sets `status` alone is the other way an edge starts claiming to be
     # discharged, and the rows it would be discharged by are the stored ones.
+    _require_the_kind_and_the_wrap_agree(edge)
     await _require_discharges_the_target_can_honour(session, system_id, edge)
 
     # Only when the map is what is being written. A grammar either side can move
@@ -326,6 +327,38 @@ async def _clear(session: AsyncSession, collection: list) -> None:
     if collection:
         collection.clear()
         await session.flush()
+
+
+def _require_the_kind_and_the_wrap_agree(edge: SystemRelationRow) -> None:
+    """An `extension` may not restate what it transfers (Codex, on #171).
+
+    §5.4 defines an extension as the degenerate edge: the target's language
+    contains the source's and every source primitive is a primitive here under
+    the same label, which is why its obligations are filled in from the spine and
+    never asked of an author. A **template** contradicts that outright — it says
+    the target does not even state the same *kind* of thing — so an extension
+    carrying one is not a description of anything.
+
+    Left unchecked it was a hole rather than a wrinkle, and the shape is §9.21's:
+    the empty-obligations refusal below is scoped to `interpretation`, and
+    `related_layers` reads the obligations and the template and never the kind.
+    So a discharged `extension` with a template and no obligations wrapped every
+    source theorem into this system's shape without a single primitive image
+    established — the whole of §2, skipped by setting one column.
+
+    Unconditional, so it catches a PATCH that changes `kind` as well as one that
+    writes the template; and it passes for an edge whose template is being
+    cleared, which is the edit that has to keep working (§9.21).
+    """
+    if edge.kind == "extension" and edge.statement_template:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "An extension edge transfers theorems as they are: the target's "
+            "language contains the source's, so there is nothing to restate. A "
+            "statement template says the two state different kinds of thing, "
+            "which is an interpretation, and an interpretation discharges its "
+            "source's primitives one by one.",
+        )
 
 
 async def _require_discharges_the_target_can_honour(

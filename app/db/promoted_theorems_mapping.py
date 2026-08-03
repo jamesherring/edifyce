@@ -46,7 +46,12 @@ from website.logical.kernel.terms import Node
 from website.logical.matching import StringPattern
 from website.logical.promotion import TheoremSpec, promote_spec
 from website.logical.translation import IDENTITY, Translation
-from website.logical.wrapping import NO_TEMPLATE, StatementTemplate, build_template
+from website.logical.wrapping import (
+    NO_TEMPLATE,
+    SortMismatch,
+    StatementTemplate,
+    build_template,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -525,14 +530,25 @@ def _require_a_citable_entry(
             "it a different meaning from the one it was proved with. Re-verify "
             "the system that owns it."
         )
-    if not layer.translation.identity:
+    if not (layer.translation.identity and layer.template.identity):
         # A proviso argument that is not one of the theorem's metavariables is a
         # *term expression* parsed against the grammar (`equal(t, ∅)`, AGENTS.md
-        # on where text still becomes structure) — and it is text in the source's
-        # notation, which a rename is free to spell differently here. Translating
-        # it would mean re-rendering a parse this layer never made, so the entry
-        # is refused instead. A metavariable name is not renamed by anything and
-        # travels as it is.
+        # on where text still becomes structure), and neither kind of edge can
+        # carry one.
+        #
+        # A **rename** is free to spell its symbols differently here, so
+        # translating the expression would mean re-rendering a parse this layer
+        # never made. A **wrap** leaves the spelling alone and changes what the
+        # re-parse *means*: promotion re-reads the expression with the template's
+        # extras now in scope, so a ground leaf inside `¬G` becomes the edge's
+        # `G` metavariable and the proviso constrains something the source theorem
+        # never mentioned (Codex, on #171). Inventorying the leaves instead would
+        # mean parsing the expression here, and AGENTS.md records why that parse
+        # is the owner's and not cacheable — so the entry is refused, which costs
+        # nothing a real corpus produces: `set.mm` stores no such argument at all.
+        #
+        # A metavariable name is neither renamed nor captured (the capture guard
+        # covers that) and travels as it is.
         named = {var for var, _sort in entry.metavariables}
         foreign = sorted(
             {
@@ -546,9 +562,9 @@ def _require_a_citable_entry(
             raise LookupError(
                 f"Theorem {entry.label!r} carries a proviso over "
                 + ", ".join(repr(argument) for argument in foreign)
-                + ", which is written in the notation of the system that proved "
-                "it rather than in a metavariable. It cannot be cited across a "
-                "rename."
+                + ", which is a term written in the notation of the system that "
+                "proved it rather than a metavariable. It cannot be cited across "
+                "an edge that renames or restates."
             )
     if entry.matching == "string" and not (
         layer.translation.identity and layer.template.identity
@@ -693,7 +709,18 @@ def _wrapped(
                 "rather than the one it was proved in. Re-verify the system that "
                 "owns it."
             )
-        return template.wrap(term)
+        try:
+            return template.wrap(term)
+        except SortMismatch as mismatch:
+            # Reshaped rather than propagated: what an author needs to know is
+            # which theorem stopped resolving and that the edge is at fault, and
+            # every other refusal on this path is a `LookupError` the citation
+            # reports.
+            raise LookupError(
+                f"Theorem {entry.label!r} cannot be restated here: its {what} is "
+                "not something the edge's statement template can hold. "
+                f"{mismatch}"
+            ) from mismatch
 
     wrapped_statement = wrap(spec.statement, statement_term, "conclusion")
     terms = list(premise_terms)

@@ -44,9 +44,15 @@ from app.db.promoted_theorems_mapping import load_theorems
 from app.db.session import get_session
 from app.main import app
 from website.logical.declarative import build_spec
+from website.logical.kernel import from_match
 from website.logical.kernel.terms import Node
 from website.logical.promotion import TheoremSpec
-from website.logical.wrapping import StatementTemplate, build_template, template_errors
+from website.logical.wrapping import (
+    SortMismatch,
+    StatementTemplate,
+    build_template,
+    template_errors,
+)
 
 from tests.database import async_url, create_tables, database_url, enable_foreign_keys
 from tests.sequent_system import hilbert_spec, sequent_spec
@@ -142,8 +148,13 @@ def test_the_wrap_is_a_term_construction() -> None:
     built = build_template(target, StatementTemplate(WRAP, EXTRAS))
     assert built is not None
 
-    source = build_spec(hilbert_spec())["system"]
-    statement = _statement_term(source, "(P → P)", {"P": "wff"})
+    # Composed against the **target**, which is what actually crosses: a stored
+    # term is rebuilt in the citing system's context on the way through
+    # (`TermGraph.term`, R4b), so by the time the wrap sees it its constructors
+    # are this system's. Composing it against a separate build of the source
+    # instead is refused by the hole's sort check, which is the same identity
+    # rule §9.24 records — and a useful demonstration that the check bites.
+    statement = _statement_term(target, "(P → P)", {"P": "wff"})
 
     wrapped = built.wrap(statement)
     assert isinstance(wrapped, Node)
@@ -449,6 +460,68 @@ def test_a_string_matched_theorem_cannot_cross_a_wrap(db, client):
     assert "string rewriting" in " ".join(refused["errors"])
 
     assert verify_proof(client, db, target, "∅ ⊢ (P → P) [id-law]")["success"] is True
+
+
+def test_the_hole_refuses_a_term_its_sort_does_not_admit() -> None:
+    # **From review (Codex, P1).** `Term.substitute` places whatever it is given,
+    # and two productions of *different sorts* can be structurally identical —
+    # `[A-Z][A-Z0-9]*` in both `ind` and `wff` gives two constructors with the
+    # same `signature`, whose nodes therefore compare `equal`. Verified before
+    # fixing: `Node(wff_var='A').equal(Node(ind_var='A'))` is True, and
+    # `sort_admits` is the only thing that separates them.
+    #
+    # So a wrap that did not check would build a term the grammar does not
+    # generate, and it would then justify a line at the hole's sort. The pair:
+    # the `wff` the hole is declared for goes in, and the `ind` it is not does
+    # not.
+    target = build_spec(sequent_spec())["system"]
+    built = build_template(target, StatementTemplate(WRAP, EXTRAS))
+    assert built is not None
+
+    parse_context = copy(target.context)
+    wff = from_match(
+        target.build_context.variables["wff"].match("A", copy(parse_context))
+    )
+    ind = from_match(
+        target.build_context.variables["ind"].match("a", copy(parse_context))
+    )
+
+    assert built.wrap(wff).to_string() == "G ⊢ A"
+    with pytest.raises(SortMismatch):
+        built.wrap(ind)
+
+
+def test_a_proviso_over_a_term_expression_cannot_cross_a_wrap(db, client):
+    # **From review (Codex, P1).** A proviso argument that is not one of the
+    # theorem's metavariables is a *term expression* re-parsed at promotion — and
+    # the wrap adds the template's extras to what is in scope for that parse, so
+    # a ground leaf inside `¬G` becomes the edge's `G` and the proviso constrains
+    # something the source theorem never mentioned. The capture guard cannot see
+    # it, because the row stores the whole string `'¬G'` and not its leaves.
+    #
+    # Refused, as a rename already refused it and for the neighbouring reason.
+    # Paired with the same theorem whose proviso names only metavariables, which
+    # crosses.
+    source, target = two_systems(db, client, "proviso-wrap@example.com")
+    promote_into(db, source, TheoremSpec(
+        label="over-a-term", statement="(P → Q)",
+        metavariables={"P": "wff", "Q": "wff"},
+        distinct=("disjoint(P, ¬Q)",),
+    ))
+    promote_into(db, source, TheoremSpec(
+        label="over-metavariables", statement="(P → Q)",
+        metavariables={"P": "wff", "Q": "wff"},
+        distinct=("disjoint(P, Q)",),
+    ))
+    interpret(db, source, target)
+
+    refused = verify_proof(client, db, target, "∅ ⊢ (A → B) [over-a-term]")
+    assert refused["success"] is False
+    assert "term written in the notation" in " ".join(refused["errors"])
+
+    assert verify_proof(
+        client, db, target, "∅ ⊢ (A → B) [over-metavariables]"
+    )["success"] is True
 
 
 def test_a_theorem_wrapped_here_reads_in_this_system_s_notation(db, client):

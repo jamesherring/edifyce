@@ -53,6 +53,7 @@ from typing import TYPE_CHECKING
 from website.logical.kernel import from_match
 from website.logical.kernel.constructors import constructor_for
 from website.logical.kernel.terms import Term, Var, intern
+from website.logical.kernel.unify import sort_admits
 from website.logical.matching import Pattern
 from website.logical.promotion import logical_sorts
 
@@ -60,7 +61,17 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from website.logical.formal_system import FormalSystem
+    from website.logical.kernel.constructors import Constructor
     from website.logical.matching.context import Context
+
+class SortMismatch(ValueError):
+    """A transferred statement the template's hole cannot hold.
+
+    Its own class so the persistence layer can turn it into the refusal a
+    citation shows without catching every `ValueError` a substitution might
+    raise — the same reason `_wrapped`'s other refusals are `LookupError`.
+    """
+
 
 # Candidate holes. What makes one a *hole* rather than object notation is that
 # its content names one of the target's sorts — see :func:`_holes`, and the note
@@ -149,11 +160,30 @@ class BuiltTemplate:
 
     shape: Term
     hole: str
+    hole_sort: Constructor
     extras: Mapping[str, str]
     context: Context
 
     def wrap(self, term: Term) -> Term:
-        """``term`` restated in the target's shape."""
+        """``term`` restated in the target's shape.
+
+        Refuses a term the hole's sort does not admit, and that check is not
+        decoration (Codex, on #171). `Term.substitute` places whatever it is
+        given, and **two productions of different sorts can be structurally
+        identical** — declare `[A-Z]+` in both `ind` and `wff` and the two
+        constructors share a `signature`, so their nodes compare `equal`.
+        `sort_admits` is the only thing that tells them apart, and unify calls it
+        for a *variable binding*, not for a subterm the wrap put there. Without
+        this, an edge whose rename lands the source's statements in one sort and
+        whose hole names another builds a term the grammar does not generate, and
+        it would then justify a line at the hole's sort.
+        """
+        if not sort_admits(self.hole_sort, term):
+            raise SortMismatch(
+                f"The statement template reads a transferred statement at sort "
+                f"{self.hole_sort.name!r}, which does not admit "
+                f"{term.to_string()!r}."
+            )
         return self.shape.substitute({self.hole: term}, self.context)
 
     def variable(self, name: str, sort: str) -> Term | None:
@@ -217,6 +247,7 @@ def build_template(
             return BuiltTemplate(
                 shape=from_match(matched),
                 hole=hole,
+                hole_sort=constructor_for(declared[hole]),
                 extras=dict(template.extras),
                 context=context,
             )

@@ -1263,6 +1263,44 @@ which is §9.19's rule biting for the third time.
   the check never fires on the edit that turns an edge off was there before the
   code did it.
 
+A second round found three more (Codex, on #171), and the first is the sharpest
+thing S2 turned up about the *kernel* rather than about edges.
+
+- **`substitute` places whatever it is given, and two sorts can be
+  indistinguishable structurally.** Declare `[A-Z][A-Z0-9]*` in both `ind` and
+  `wff` and the two constructors share a `signature`, so their nodes compare
+  `equal` — verified directly before fixing. `sort_admits` is the only thing that
+  separates them, and unify calls it when *binding a variable*, not for a subterm
+  something else put there. So a wrap that did not check built a term the grammar
+  does not generate, and it would then justify a line at the hole's sort. The
+  hole now refuses a term its sort does not admit. Worth generalising: **a term
+  assembled outside the matcher has had no sort check at all**, and the kernel's
+  are positioned for terms that arrive from a parse or a binding.
+- **A term-expression proviso could cross a wrap.** Refused across a rename since
+  R4b, and the reason generalises with a twist: a rename may spell the
+  expression's symbols differently, while a wrap leaves the spelling alone and
+  changes what the re-parse *means* — promotion re-reads it with the extras now
+  in scope, so a ground leaf inside `¬G` becomes the edge's `G`. Inventorying the
+  leaves would mean parsing the expression here, which AGENTS.md records as the
+  owner's parse and not cacheable; refusing costs nothing a real corpus produces,
+  since `set.mm` stores no such argument at all.
+- **An `extension` could carry a template**, and that was a hole rather than a
+  wrinkle. §5.4 defines an extension as the degenerate edge — the target contains
+  the source, every primitive present under its own label, obligations filled in
+  from the spine and never asked of an author. A template says the two do not
+  state the same kind of thing, which is the opposite. And because the
+  empty-obligations refusal is scoped to `interpretation` while `related_layers`
+  never reads `kind` at all, a discharged `extension` with a template wrapped
+  every source theorem with no primitive image established anywhere: **the whole
+  of §2, skipped by setting one column.** The refusal is unconditional, so it
+  catches the PATCH that changes `kind` under an existing template as well as the
+  create.
+
+The three together restate §9.19 once more, and it is now the note's most
+frequently relearned lesson: **a guard written for one way of reaching a place
+does not cover the others**, and the ways multiply every time an edge learns to
+carry something new.
+
 #### S3 — benchmark the recursive context grammar — **substantially answered by S1**
 
 **Delivers** evidence for or against S4. Left-nested list parsing is the risk.
