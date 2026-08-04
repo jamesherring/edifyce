@@ -1863,11 +1863,23 @@ the sixth time in this track that the corpus being well behaved hid the general
 case, and the first where the corpus evidence was *positive* and still not
 enough.
 
-So the fingerprint stays ordered, and **the fix belongs in storage**: an
-inclusion has to keep its position among the productions, which the `symbols` row
-currently has nowhere to put. `tests/test_systems_store.py` pins the overlap
-outright, so the temptation cannot be taken up a second time, and carries the
-round-trip test as a strict `xfail` naming what is still owed.
+So the fingerprint stays ordered, and **the fix belongs in storage**:
+`symbols.inclusion_position` records where an inclusion sat among the
+productions, which `position` could not — that column is already the row's place
+among the *sorts*. `system_to_spec` puts it back there instead of appending it.
+
+The result is better than the digest change would have been even if that had been
+sound: the reader now computes **the digest the import already wrote**
+(`dc372469…`, `09cc4dab…`, `82838c6d…` on the layered and flat runs alike), so
+nothing stored is invalidated. The set-hash would have changed every digest in
+the database. A NULL `inclusion_position` — a row written before the column —
+still reads as trailing, which is how it was written.
+
+`tests/test_systems_store.py` carries four guards: the overlap decides the parse;
+a digest never gives two parses one value; the round trip preserves the digest;
+and, the strongest, a system whose inclusion *does* overlap parses the same text
+to the same term after a trip through the database. That last one compares parses
+rather than hashes, and would have caught both the bug and the wrong fix.
 
 *Why this had to come first.* D5's own pinned item is "re-verifying a stored
 layered proof from its rows gives the same verdict as the import did". Against a

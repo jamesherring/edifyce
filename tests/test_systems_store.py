@@ -146,8 +146,7 @@ def test_spec_round_trips_through_the_database(stored_system):
 def included_spec() -> SystemSpec:
     # A sort *inclusion* — a production with no shape, saying `atom` is a
     # `formula` — declared **between** two shaped productions. Where it sits is
-    # the whole point: `system_to_spec` emits every inclusion last, so an
-    # inclusion written anywhere else comes back somewhere else.
+    # the whole point: it is the one place the rows had nowhere to record.
     return SystemSpec(
         name="Included",
         productions=[
@@ -193,6 +192,28 @@ def test_where_a_sort_inclusion_sits_decides_the_parse():
     assert str(directly) == "Node(direct='A')"
 
 
+@pytest.mark.parametrize("inclusion_first", [True, False])
+def test_the_database_gives_back_the_grammar_it_was_given(session, inclusion_first):
+    # The two halves joined: a system whose inclusion *does* overlap, stored and
+    # reloaded, must still parse the same text to the same term. This is the
+    # assertion the digest is standing in for everywhere else, made directly —
+    # and the one that would have caught the wrong fix as well as the bug, since
+    # it compares parses rather than hashes.
+    spec = overlapping_spec(inclusion_first=inclusion_first)
+    session.add(spec_to_system(spec))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Overlap"))
+
+    rebuilt = system_to_spec(stored)
+    assert [p.name for p in rebuilt.productions] == [p.name for p in spec.productions]
+    assert library_digest(rebuilt) == library_digest(spec)
+
+    as_declared = build_system(spec).parse("A [HYP]").numbered_lines[0].formula_term
+    from_rows = build_system(rebuilt).parse("A [HYP]").numbered_lines[0].formula_term
+    assert str(from_rows) == str(as_declared)
+
+
 def test_a_digest_never_gives_two_parses_one_value():
     # The consequence, and the guard: `library_digest` must keep an inclusion
     # *ordered* among the productions. Hashing inclusions as an unordered set
@@ -205,19 +226,17 @@ def test_a_digest_never_gives_two_parses_one_value():
     )
 
 
-@pytest.mark.xfail(
-    reason=(
-        "An inclusion is stored as an edge with no position of its own, so "
-        "`system_to_spec` emits it last and the digest moves. Measured on "
-        "set.mm: nothing a reader computes matches what the import wrote, so "
-        "P4's term cache never hits for an imported corpus. The fix has to "
-        "preserve the position in storage — the digest cannot stop looking, "
-        "since `test_where_a_sort_inclusion_sits_decides_the_parse` shows what "
-        "it would be ignoring."
-    ),
-    strict=True,
-)
 def test_a_sort_inclusion_keeps_its_digest_across_the_database(session):
+    # The bug that started this, now fixed in storage. An inclusion carries no
+    # `position` of its own — that column is its place among the *sorts* — so
+    # `system_to_spec` used to emit every inclusion last. The order came back
+    # wrong, the digest moved, and an imported corpus's cached terms never once
+    # passed their guard: measured on `set.mm`, nothing a reader computed matched
+    # what the import wrote, on every layer and on a flat import alike.
+    #
+    # `inclusion_position` records where it sat. Not a hash the digest could have
+    # been taught to ignore — see the two tests above for what it would have been
+    # ignoring.
     spec = included_spec()
     session.add(spec_to_system(spec))
     session.commit()

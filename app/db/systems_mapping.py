@@ -140,6 +140,12 @@ def spec_to_system(spec: SystemSpec) -> FormalSystem:
         # already exists violates `uq_symbols_system_name`.
         if prod.name in symbols and symbols[prod.name].kind == "union":
             symbols[prod.name].union = symbols[prod.sort]
+            # Where it sat among the productions, which `position` cannot hold —
+            # that is already this row's place among the sorts. It has to be kept
+            # because the order decides the parse where an inclusion overlaps a
+            # direct production of the parent sort (`SymbolRow.inclusion_position`).
+            symbols[prod.name].inclusion_position = position
+            position += 1
             continue
 
         is_atom = prod.atom_value is not None or prod.atom_base is not None
@@ -239,30 +245,61 @@ def system_to_spec(system: FormalSystem) -> SystemSpec:
     # Productions are the non-union symbols, in declaration (position) order;
     # each names its sort by the union it belongs to. A *union* that belongs to
     # one is a sub-sort included into it, which the spec spells as a shapeless
-    # production (see spec_to_system); emit those last, so a sub-sort's own
-    # members are declared before it joins its parent.
-    spec.productions = [
-        Production(
-            sort=symbol.union.name,
-            name=symbol.name,
-            template=symbol.template,
-            regex=symbol.regex,
-            atom_value=symbol.atom_value,
-            atom_base=symbol.atom_base,
-            denotes_constant=symbol.denotes_constant,
-            bindings=[(b.var, b.symbol.name) for b in symbol.bindings],
-            scopes_over={
-                b.var: [s.scoped.var for s in b.scopes]
-                for b in symbol.bindings
-                if b.scopes
-            },
+    # production (see spec_to_system).
+    #
+    # An inclusion goes back **where it was**, from `inclusion_position`, not
+    # after everything else. Its position is load-bearing: `build_system` adds a
+    # sort's union members in `spec.productions` order and `UnionPattern.match`
+    # takes the first that succeeds, so an inclusion before or after a direct
+    # production of the parent sort matching the same text picks a different
+    # constructor. Emitting them last therefore handed back a *different
+    # grammar* — one that happens to agree with the original wherever no two
+    # members overlap, which is why it went unnoticed, and one whose digest
+    # differs regardless, which is why an imported corpus never hit its cache.
+    #
+    # A row from before that column falls back to last, which is how it was
+    # written and so how it must be read.
+    shaped = [
+        (
+            symbol.position,
+            Production(
+                sort=symbol.union.name,
+                name=symbol.name,
+                template=symbol.template,
+                regex=symbol.regex,
+                atom_value=symbol.atom_value,
+                atom_base=symbol.atom_base,
+                denotes_constant=symbol.denotes_constant,
+                bindings=[(b.var, b.symbol.name) for b in symbol.bindings],
+                scopes_over={
+                    b.var: [s.scoped.var for s in b.scopes]
+                    for b in symbol.bindings
+                    if b.scopes
+                },
+            ),
         )
         for symbol in system.symbols
         if symbol.kind != "union"
-    ] + [
-        Production(sort=symbol.union.name, name=symbol.name)
-        for symbol in system.symbols
-        if symbol.kind == "union" and symbol.union is not None
+    ]
+    trailing = 1 + max((position for position, _ in shaped), default=0)
+    inclusions = [
+        (
+            symbol.inclusion_position
+            if symbol.inclusion_position is not None
+            else trailing + index,
+            Production(sort=symbol.union.name, name=symbol.name),
+        )
+        for index, symbol in enumerate(
+            symbol
+            for symbol in system.symbols
+            if symbol.kind == "union" and symbol.union is not None
+        )
+    ]
+    spec.productions = [
+        production
+        for _position, production in sorted(
+            shaped + inclusions, key=lambda pair: pair[0]
+        )
     ]
 
     spec.lines = [

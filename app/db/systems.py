@@ -99,6 +99,22 @@ class SymbolRow(Base):
     member_of_union_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("symbols.id", ondelete="CASCADE"), index=True
     )
+    # Where a *sort inclusion* sat among the spec's productions. Set only on a
+    # union row that is itself a member of another union — `setvar_var` included
+    # into `setvar` — where `position` is already spoken for by the row's place
+    # among the sorts and has nowhere to record this.
+    #
+    # It has to be recorded, because the position is **load-bearing**:
+    # `build_system` adds a sort's union members in `spec.productions` order and
+    # `UnionPattern.match` takes the first that succeeds, so an inclusion sitting
+    # before or after a direct production of the parent sort that matches the
+    # same text selects a different constructor. Without this the rows gave the
+    # order back wrong, the digest moved, and an imported corpus's cached terms
+    # never once passed their guard (docs/verification-from-rows.md P4).
+    #
+    # NULL for a row written before this column existed; `system_to_spec` then
+    # falls back to emitting it last, which is what those rows were read as.
+    inclusion_position: Mapped[int | None] = mapped_column(Integer)
 
     system: Mapped[FormalSystem] = relationship(back_populates="symbols")
     union: Mapped[SymbolRow | None] = relationship(
