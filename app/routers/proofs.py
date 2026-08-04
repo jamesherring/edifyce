@@ -64,6 +64,7 @@ from app.db import (
     PendingLibrary,
     load_definition_terms,
     load_proof_for_check,
+    load_citable_theorems,
     load_proof_lines,
     load_schema_terms,
     load_theorems,
@@ -2185,7 +2186,7 @@ async def find_citations(
     candidates: int = Query(
         25,
         ge=0,
-        le=200,
+        le=50,
         description=(
             "How many library candidates the prefilter may offer for "
             "unification. Zero searches the system's own rules only."
@@ -2215,6 +2216,12 @@ async def find_citations(
     endpoint worth its cost, and the cost is why it lives on a proof rather than
     on a system: checking the proof has already built the system, so unifying a
     candidate against a real goal in a real scope adds almost nothing.
+
+    What bounds the work is the ladder rather than a budget. `candidates` caps how
+    many library entries are offered at all, and each is met first by `concludes`
+    — one unification against the goal — so only the few that could actually
+    conclude it go on to pay `admissibility`, which is the term that scales with
+    the proof's length. The verify above dominates either way.
 
     Depth one. This finds the rule that justifies a line **from lines that
     already stand** — it does not prove a gap, which is a search over sequences
@@ -2307,7 +2314,7 @@ async def find_citations(
         )
         exact_labels = {c.label for c in prefiltered.candidates if c.exact}
         promoted = await session.run_sync(
-            lambda sync: load_theorems(
+            lambda sync: load_citable_theorems(
                 sync,
                 verification.effective.library,
                 [c.label for c in prefiltered.candidates],
@@ -2342,5 +2349,6 @@ async def find_citations(
         rules_tried=len(rule_labels),
         candidates_tried=0 if prefiltered is None else len(prefiltered.candidates),
         unindexed=0 if prefiltered is None else prefiltered.unindexed,
+        unfiltered=0 if prefiltered is None else prefiltered.unfiltered,
         truncated=len(found) > limit or (prefiltered is not None and prefiltered.truncated),
     )

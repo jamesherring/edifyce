@@ -149,7 +149,7 @@ class Translation:
             return f"{self.sorts[sort]}{separator}{template}"
         return stored
 
-    def stored_name(self, target: str) -> str:
+    def stored_name(self, target: str) -> str | None:
         """What ``target``'s name is spelled as in the *source*, inverting :meth:`name`.
 
         The direction retrieval needs and checking never does. A search starts
@@ -165,9 +165,14 @@ class Translation:
         pre-images, and an unmentioned name inverts to itself for the same reason
         it passes through forwards.
 
-        A miss is the identity rather than an error: a goal naming a production the
-        layer simply does not have inverts to a name that matches no row there,
-        which is the right answer — that layer has nothing to offer.
+        ``None`` is **no pre-image**, and the case that makes this more than a
+        reversed dictionary. A name the source *has* but renames away — `imp` under
+        ``{"imp": "implication"}`` — is not its own pre-image here: the source's
+        `imp` arrives as `implication`, so whatever this system means by `imp` is
+        something the source does not supply. Falling back to the identity would
+        ask the source about its `imp` and read the answers as being about this
+        system's, which is a rename doing precisely the damage it exists to
+        prevent. A caller with ``None`` should ask that layer nothing.
         """
         for stored, renamed in self.symbols.items():
             if renamed == target:
@@ -180,6 +185,9 @@ class Translation:
             for stored, renamed in self.sorts.items():
                 if renamed == sort:
                     return f"{stored}{separator}{template}"
+        if self.name(target) != target:
+            # The source spells this, and calls it something else here.
+            return None
         return target
 
     @property

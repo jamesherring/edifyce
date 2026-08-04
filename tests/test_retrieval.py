@@ -51,6 +51,8 @@ MP_SYSTEM = SystemSpec(
         # A conclusion no proof below ever states, so it is the rule the search
         # must *not* return.
         rule("SELF", "self_implication", ["p"], "(p -> p)", _pq()),
+        # Two premises that are the same schema: one standing line satisfies both.
+        rule("TWO", "two", ["p", "p"], "(p -> p)", [("p", "formula")]),
     ],
 )
 
@@ -133,6 +135,24 @@ def test_the_search_stops_at_the_limit(mp_system):
         )
         == 2
     )
+
+
+def test_one_line_can_fill_two_slots(mp_system):
+    # A rule whose two premises are the same schema is satisfied by one standing
+    # line used twice, and `[TWO, 1, 1]` is a citation the checker accepts. A
+    # search demanding distinct lines per slot would have made exactly those
+    # rules unfindable — and reported "nothing can justify this" about a line
+    # that one rule justifies outright.
+    proof = mp_system.parse("a [HYP]\n(a -> a) [?]")
+    goal = proof.get_proof_line(2)
+
+    found = applications(
+        _rule(mp_system, "TWO"), goal, accessible_lines(goal), _context(mp_system)
+    )
+
+    assert [a.numbers for a in found] == [[1, 1]]
+    # And the citation it composes is one the checker takes.
+    assert mp_system.parse("a [HYP]\n(a -> a) [TWO, 1, 1]").proof_lines[-1].valid is True
 
 
 # ---------------------------------------------------------------------------

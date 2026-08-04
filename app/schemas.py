@@ -984,9 +984,11 @@ class TheoremMatches(BaseModel):
     endpoint). What it removes is the 47,589-to-a-handful step that a caller had
     no way to perform at all.
 
-    ``unindexed`` is what the filter could not see — theorems with no cached
-    conclusion term — because a short list is otherwise indistinguishable from a
-    complete one.
+    ``unindexed`` and ``unfiltered`` are what the filter could not see — theorems
+    with no cached conclusion term, and whole layers reached through an edge that
+    restates or renames past what a root-production filter can ask about. Both are
+    reported because a short list is otherwise indistinguishable from a complete
+    one.
     """
 
     formal_system_id: uuid.UUID
@@ -998,6 +1000,10 @@ class TheoremMatches(BaseModel):
     matched: int = 0
     truncated: bool = False
     unindexed: int = 0
+    # Entries in layers this filter cannot ask about at all — an edge that
+    # restates what it carries, or one whose rename leaves this system's
+    # production without a pre-image there.
+    unfiltered: int = 0
 
 
 class CitationSuggestion(BaseModel):
@@ -1050,6 +1056,9 @@ class CitationSearch(BaseModel):
     candidates_tried: int = 0
     # Library entries the prefilter could not reach (no cached conclusion term).
     unindexed: int = 0
+    # Library entries in a layer the prefilter cannot ask about at all; see
+    # `TheoremMatches.unfiltered`.
+    unfiltered: int = 0
     # Whether anything was cut: more justifications were found than `limit`, or
     # the prefilter matched more candidates than it was allowed to offer. Either
     # way there may be more, which is the only thing a caller can act on.

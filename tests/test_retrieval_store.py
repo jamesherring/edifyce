@@ -40,6 +40,7 @@ from tests.spec_helpers import (
 from website.logical.declarative import SystemSpec, build_spec
 from website.logical.kernel import from_match
 from website.logical.translation import Translation
+from website.logical.wrapping import NO_TEMPLATE, StatementTemplate
 
 
 def zfc_spec() -> SystemSpec:
@@ -134,13 +135,14 @@ def add_theorem(
     return row
 
 
-def chain_of(system_row, translation=None):
+def chain_of(system_row, translation=None, template=None):
     return LibraryChain(
         (
             LibraryLayer(
                 system_row.id,
                 "digest",
                 translation=translation or Translation(),
+                template=template or NO_TEMPLATE,
             ),
         )
     )
@@ -291,3 +293,72 @@ def test_an_empty_chain_asks_nothing(session):
     assert found.candidates == ()
     assert found.matched == 0
     assert found.unindexed == 0
+
+
+def test_a_renamed_away_production_is_not_asked_about(session, system_row, engine_context):
+    # The false positive the inverse has to refuse. The layer *has* an
+    # `implication` and calls it `imp` here, so this system's own `implication` —
+    # if it has one — is something the layer does not supply. Falling back to the
+    # identity would ask the layer about its `implication` and read the answers as
+    # being about ours, which is a rename doing exactly the damage it prevents.
+    add_theorem(session, system_row, engine_context, "imp1", "(x ∈ y → x ∈ z)")
+    chain = chain_of(system_row, Translation(symbols={"implication": "imp"}))
+
+    found = conclusion_candidates(session, chain, "implication")
+
+    assert found.candidates == ()
+    assert found.asked == {}
+    assert found.unfiltered == 1
+
+
+def test_a_restating_edge_is_counted_rather_than_answered_for(
+    session, system_row, engine_context
+):
+    # A wrapped edge gives its theorems a conclusion here whose root is the
+    # template's (`Γ ⊢ φ`), while the stored row's root is the source statement's.
+    # Filtering by the goal's production matches none of them — so the honest
+    # answer is "there is a layer I could not ask", not a confident empty list.
+    add_theorem(session, system_row, engine_context, "imp1", "(x ∈ y → x ∈ z)")
+    chain = chain_of(system_row, template=StatementTemplate(text="{Γ} ⊢ {0}"))
+
+    found = conclusion_candidates(session, chain, "implication")
+
+    assert found.candidates == ()
+    assert found.unfiltered == 1
+    assert found.asked == {}
+
+
+def test_a_label_a_nearer_layer_shadows_is_not_offered(session, engine_context):
+    # A citation resolves to the nearest layer that has the label, so a shadowed
+    # ancestor entry is not the theorem anyone would reach by naming it. Offering
+    # it would spend a `limit` slot on a name that means something else — and
+    # could lend its α-digest to the theorem a caller actually gets.
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            FormalSystem.__table__,
+            TermRow.__table__,
+            TermChildRow.__table__,
+            PromotedTheoremRow.__table__,
+            PromotedTheoremPremiseRow.__table__,
+        ],
+    )
+    with Session(engine) as session:
+        child = FormalSystem(name="Child", slug="child")
+        parent = FormalSystem(name="Parent", slug="parent")
+        session.add_all([child, parent])
+        session.flush()
+        add_theorem(session, child, engine_context, "id", "(x ∈ y → x ∈ y)")
+        add_theorem(session, parent, engine_context, "id", "(a ∈ b → a ∈ c)")
+        add_theorem(session, parent, engine_context, "other", "(a ∈ b → a ∈ c)")
+        # Nearest first, as an inheritance chain is read.
+        chain = LibraryChain(
+            (LibraryLayer(child.id, "d"), LibraryLayer(parent.id, "d"))
+        )
+
+        found = conclusion_candidates(session, chain, "implication")
+
+        labels = [(c.label, c.system_id) for c in found.candidates]
+        assert labels == [("id", child.id), ("other", parent.id)]
+        assert found.matched == 2

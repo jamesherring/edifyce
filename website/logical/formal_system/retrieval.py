@@ -33,7 +33,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ..graphs import saturating_matching
 from .proof import line_is_accessible
 
 if TYPE_CHECKING:
@@ -143,9 +142,9 @@ def applications(
 
     Three filters in increasing cost, the same ladder the checker climbs. The
     conclusion must be able to be this line at all (`concludes`); every slot must
-    have an individually-admissible line and a system of distinct representatives
-    must exist (`admissibility` + `saturating_matching`); and a partial assignment
-    that cannot bind is abandoned before it is completed (`prefix_binding_exists`).
+    have at least one individually-admissible line (`admissibility`); and a
+    partial assignment that cannot bind is abandoned before it is completed
+    (`prefix_binding_exists`).
     Only a complete assignment reaches `applies`, which is authoritative and
     includes the provisos.
 
@@ -169,9 +168,8 @@ def applications(
         return [Application(rule, ())]
 
     adjacency = rule.admissibility(pool, context)
-    if saturating_matching(range(required), adjacency) is None:
-        # Some slot has no admissible line, or no assignment of distinct lines to
-        # slots exists at all: no ordering can rescue it.
+    if any(not adjacency[slot] for slot in range(required)):
+        # A slot no standing line could fill on its own: no assignment can.
         return []
 
     found: list[Application] = []
@@ -188,9 +186,16 @@ def applications(
                 found.append(Application(rule, cited))
             return
 
+        # One line may fill **several slots**, which is why this does not skip
+        # what it has already chosen and why the feasibility test above is not a
+        # saturating matching. `[TWO, 1, 1]` is a citation the checker accepts —
+        # a rule whose two premises are both `p` is satisfied by one line twice —
+        # and demanding distinct representatives would have made exactly those
+        # rules unfindable. The checker's own search asks for distinct
+        # representatives because it is handed a citation and distributes it,
+        # where naming a line twice is the caller's way of saying "use it twice";
+        # this one is choosing, so the choice is its to repeat.
         for j in adjacency[slot]:
-            if j in chosen:
-                continue
             candidate = [*chosen, j]
             # Prune as the checker does: slots are filled in order, so this is a
             # prefix, and unification is monotone — a prefix that cannot bind has

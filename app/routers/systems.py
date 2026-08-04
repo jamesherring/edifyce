@@ -1402,4 +1402,5 @@ async def find_matching_theorems(
         matched=found.matched,
         truncated=found.truncated,
         unindexed=found.unindexed,
+        unfiltered=found.unfiltered,
     )

@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from sqlalchemy import case, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
 from app.db.terms import TermRow
@@ -78,20 +78,35 @@ class Candidate:
 class Candidates:
     """What the prefilter found, and what it could not see.
 
-    ``unindexed`` is the honest part. A theorem whose statement term was never
-    cached (or was invalidated) carries no constructor, so no query here can
-    reach it; reporting the count lets a caller distinguish "this library has
-    nothing that concludes your goal" from "part of this library is not indexed".
-    Silence would make those two look identical, and only one of them means the
-    search is finished.
+    Two counts, and both are the honest part — a short list must never read as a
+    complete one.
+
+    ``unindexed``: a theorem whose statement term was never cached (or was
+    invalidated) carries no constructor, so no query here can reach it. Reporting
+    the count lets a caller distinguish "this library has nothing that concludes
+    your goal" from "part of this library is not indexed", and only one of those
+    means the search is finished.
+
+    ``unfiltered``: a whole *layer* this filter cannot ask. Two edges do that. One
+    that **restates** what it transfers (`Γ ⊢ φ` where the source proved `φ`,
+    `wrapping.StatementTemplate`) gives its theorems a conclusion here whose root
+    is the template's, while the stored row's root is the source statement's — so
+    filtering by the goal's production matches none of them and would be a
+    confident empty answer. And one that **renames** a production this system has
+    but the layer spells for something else has no pre-image to ask about at all
+    (`Translation.stored_name` returning ``None``). Neither is a defect; both are
+    edges this filter is too cheap to cross, and saying so is the difference
+    between a limitation and a wrong answer.
     """
 
     candidates: tuple[Candidate, ...] = ()
     # How many rows the constructor filter matched, before `limit` cut the list.
     matched: int = 0
     unindexed: int = 0
+    unfiltered: int = 0
     # The per-layer spelling the goal's constructor was asked about, so a caller
-    # (or a test) can see a rename having been applied.
+    # (or a test) can see a rename having been applied. A layer that was not
+    # asked at all is absent.
     asked: dict[uuid.UUID, str] = field(default_factory=dict)
 
     @property
@@ -129,23 +144,43 @@ def conclusion_candidates(
         return Candidates()
 
     rank = {layer.system_id: index for index, layer in enumerate(chain.layers)}
-    # A translated layer spells the goal's production differently. Inverting the
-    # goal's name per layer is what keeps a renamed edge's theorems findable at
-    # all — asking every layer about the citing system's spelling would quietly
-    # return nothing from exactly the edges a rename exists to cross.
-    asked = {
-        layer.system_id: layer.translation.stored_name(constructor)
-        for layer in chain.layers
-    }
+    # A translated layer spells the goal's production differently, and inverting
+    # the goal's name per layer is what keeps a renamed edge's theorems findable
+    # at all. Two layers cannot be asked at all and are counted instead of being
+    # quietly answered for — see `Candidates`: one that restates what it carries
+    # (the stored root is the source statement's, not the template's), and one
+    # whose rename leaves this production without a pre-image.
+    asked: dict[uuid.UUID, str] = {}
+    skipped: list[uuid.UUID] = []
+    for layer in chain.layers:
+        stored = (
+            layer.translation.stored_name(constructor) if layer.template.identity else None
+        )
+        if stored is None:
+            skipped.append(layer.system_id)
+        else:
+            asked[layer.system_id] = stored
 
-    # Both sides of the join are constrained to the chain: the theorem's system
-    # for correctness, and the *term's* so the read can use
+    unfiltered = _theorem_count(session, skipped)
+    if not asked:
+        return Candidates(
+            unindexed=unindexed_theorems(session, chain), unfiltered=unfiltered
+        )
+
+    # Both sides of the join are constrained to the askable layers: the theorem's
+    # system for correctness, and the *term's* so the read can use
     # `ix_terms_system_constructor` rather than scanning constructors across every
     # system's graph at once.
     conditions = [
-        PromotedTheoremRow.system_id.in_(list(rank)),
-        TermRow.formal_system_id.in_(list(rank)),
+        PromotedTheoremRow.system_id.in_(list(asked)),
+        TermRow.formal_system_id.in_(list(asked)),
         _constructor_matches(asked),
+        # A label a **nearer** layer also declares resolves to that one, so this
+        # entry is not the theorem a citation of it would reach. `_nearest` drops
+        # it on the read path; dropping it here too is what keeps a shadowed
+        # ancestor from consuming a `limit` slot, being offered under a name that
+        # means something else, and lending its α-digest to the wrong theorem.
+        ~_shadowed(rank),
     ]
     if exclude:
         conditions.append(PromotedTheoremRow.label.notin_(list(exclude)))
@@ -206,6 +241,7 @@ def conclusion_candidates(
         ),
         matched=matched or 0,
         unindexed=unindexed_theorems(session, chain),
+        unfiltered=unfiltered,
         asked=asked,
     )
 
@@ -229,6 +265,56 @@ def _constructor_matches(asked: dict[uuid.UUID, str]) -> ColumnElement[bool]:
             (TermRow.formal_system_id == system_id) & (TermRow.constructor == name)
             for system_id, name in asked.items()
         )
+    )
+
+
+def _shadowed(rank: dict[uuid.UUID, int]) -> ColumnElement[bool]:
+    """Whether a **nearer** layer in the chain declares this row's label too.
+
+    A citation resolves to the nearest layer that has the label, so a shadowed
+    ancestor entry is not the theorem anyone would reach by naming it. Expressed
+    as a correlated ``EXISTS`` rather than settled after the read, because the
+    limit is applied in the database: dropping shadowed rows afterwards would
+    leave a short page and a `matched` count that included entries no caller can
+    cite.
+
+    Written as an explicit rank comparison rather than a join on position, since
+    "nearer" is the chain's order and the chain is not a table.
+    """
+    nearer = aliased(PromotedTheoremRow)
+    nearer_rank = case(
+        *((nearer.system_id == system_id, index) for system_id, index in rank.items()),
+        else_=len(rank),
+    )
+    this_rank = case(
+        *(
+            (PromotedTheoremRow.system_id == system_id, index)
+            for system_id, index in rank.items()
+        ),
+        else_=len(rank),
+    )
+    return (
+        select(nearer.id)
+        .where(
+            nearer.label == PromotedTheoremRow.label,
+            nearer.system_id.in_(list(rank)),
+            nearer_rank < this_rank,
+        )
+        .exists()
+    )
+
+
+def _theorem_count(session: Session, system_ids: Sequence[uuid.UUID]) -> int:
+    """How many promoted entries these systems hold, for a count this cannot filter."""
+    if not system_ids:
+        return 0
+    return (
+        session.scalar(
+            select(func.count())
+            .select_from(PromotedTheoremRow)
+            .where(PromotedTheoremRow.system_id.in_(list(system_ids)))
+        )
+        or 0
     )
 
 

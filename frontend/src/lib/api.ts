@@ -228,6 +228,10 @@ export interface TheoremMatches {
 	matched: number;
 	truncated: boolean;
 	unindexed: number;
+	/** Entries in layers this filter cannot ask about at all — an edge that
+	 *  restates what it carries, or one whose rename leaves this system's
+	 *  production without a pre-image there. */
+	unfiltered: number;
 }
 
 /** A justification that checks, in `CitationProposal`'s own shape so acting on
@@ -262,6 +266,9 @@ export interface CitationSearch {
 	candidates_tried: number;
 	/** Library entries the prefilter could not reach (no cached conclusion term). */
 	unindexed: number;
+	/** Library entries in a layer the prefilter cannot ask about at all; see
+	 *  `TheoremMatches.unfiltered`. */
+	unfiltered: number;
 	/** Whether anything was cut: more justifications were found than `limit`, or
 	 *  the prefilter matched more candidates than it was allowed to offer. */
 	truncated: boolean;
