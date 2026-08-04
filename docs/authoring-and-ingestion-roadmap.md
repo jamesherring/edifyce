@@ -663,22 +663,56 @@ the inference as a convenience for humans. The 29 that did not land came back as
 with a bare sentence and no code. That is the claim §7 makes and the one synthetic
 fixtures could only illustrate.
 
+### Deeper in
+
+The same rounds against **14,000** theorems — into ZF proper, where statements
+carry class abstractions and function application — pass too: the 20 longest proofs
+there run to 454 lines and cite up to 10 antecedents in a single step, and 160
+`state` restatements came back spelled exactly as `set.mm` spells them. That is the
+strongest thing the `state` round says, because it is the one place a projection
+could silently creep back into the write path: the round emits productions and
+compares the *text* that comes out against the corpus's own.
+
+The one restatement that blew the round's node budget was not from here. It was
+`retbwax1` line 23, in the *propositional* slice — a nest of implications sharing
+one subterm many ways, which as a tree is far larger than as the interned DAG it is
+stored as. Nothing in the ZF slice came close. So the expansion hazard tracks
+**sharing**, not the depth of the theory, and it is exactly the case `ref` exists
+for (§9a) — which this round deliberately declines to use, so that the render and
+the reparse are what is being tested.
+
 ### The cost, which is the open item
 
 A `/cite` call builds the system twice — once to rewrite the line, once inside the
-verify — and on a corpus grammar that is the whole cost. One call runs ~130 ms
-against a 400-theorem import and ~305 ms against a 3,000-theorem one, which is not
-a constant factor: it tracks the grammar, and a whole-corpus system is an order of
-magnitude larger again. A loop that makes one call per step is therefore paying in
-the wrong variable, and the fix is not in the loop but under it — the build is
-already cached in pieces (`schema_terms`, `definition_terms`), and what is not
-cached is the assembled `FormalSystem`. Worth doing before anything drives this at
-scale; not worth doing before there is something to drive it.
+verify — and on a corpus grammar that is most of the cost. Measured on the *same
+five proofs and the same 34 calls* against three imports, so the only variable is
+the system:
+
+| corpus | per call |
+|---|---|
+| 400 theorems | 65 ms |
+| 3,000 theorems | 80 ms |
+| 14,000 theorems | 136 ms |
+
+Sublinear — a 35× corpus costs about twice as much per call — because what grows is
+the *grammar* rather than the library, and a library is resolved label by label
+rather than built (docs/verification-from-rows.md, P4). Still, a loop making one
+call per step pays it every step, and the fix is not in the loop but under it: the
+build is already cached in pieces
+(`schema_terms`, `definition_terms`) and what is not cached is the assembled
+`FormalSystem`. Worth doing before anything drives this at scale; not worth doing
+before there is something to drive it.
 
 ### What it still does not reach
 
 The corpus is flat: a Metamath proof has no subproofs, so nothing here exercises
 scope openers, discharge lines or indentation, which is exactly the ground the
-synthetic fixtures do cover. And a slice is a slice — the deeper reaches of
-`set.mm`, where class abstractions and function application live, need a longer
-import than any of these runs took.
+synthetic fixtures do cover. The harness knows it — a proof whose citation numbers
+do not run 1..N with a rule behind each is skipped rather than mis-asserted, since
+the rounds predict a renumbering from a count.
+
+And 14,000 theorems is not 47,546. Nothing stops the harness running against the
+whole corpus — that import is a solved thing (metamath-import-roadmap §1.1) — but
+these runs imported into SQLite, where 14,000 theorems already takes 27 minutes and
+half a gigabyte, so the ceiling reached here is the throwaway database's rather
+than the engine's. A whole-corpus run wants Postgres and a longer budget.
