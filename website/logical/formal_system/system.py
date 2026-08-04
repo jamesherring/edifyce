@@ -9,9 +9,10 @@ from ..kernel.definitions import Definition as KernelDefinition
 from ..kernel.terms import from_match
 from ..matching import Context, Match, Pattern, StringPattern, UnionPattern
 from .promotion import PromotedTheorem
-from .proof import Proof, ProofLine
+from .proof import CITATION_SEPARATOR, Proof, ProofLine
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from collections.abc import Callable
 
     from ..declarative import _SchemaScan
@@ -179,6 +180,54 @@ class FormalSystem:
                 self.read_line(proof_line, context)
 
         return proof, context
+
+    def cite(self, rule: str, antecedents: Sequence[int] = ()) -> str:
+        """The citation text a rule applied to some lines is written as.
+
+        `cite("MP", [4, 6])` is ``"MP, 4, 6"`` — the *reference* only, not the
+        brackets around it, which belong to the line type's shape.
+
+        Trivial, and it exists so a caller proposing a justification *structurally*
+        never has to know a system's citation syntax. That is the whole point of
+        the structured path: a label and some integers are already unambiguous, and
+        making a client format them is exactly where a projection creeps back in.
+        """
+        return CITATION_SEPARATOR.join([rule, *(str(n) for n in antecedents)])
+
+    def recite(self, text: str, citation: str, context: Context | None = None) -> str | None:
+        """``text`` with its citation replaced by ``citation``, or None.
+
+        None when the line does not parse, declares no reference field, carries no
+        citation to replace, or — the case worth having — when the result does not
+        *read back* as the citation asked for. The substitution is textual, because
+        a `Match` records no positions; making it self-checking is what turns that
+        from a fragile splice into a safe one. A line whose formula happens to
+        contain its own citation text is refused rather than mangled.
+
+        The reference is replaced at its **last** occurrence, which is where a
+        citation sits in every shape anyone writes (`<formula> [<reference>]`).
+        A grammar that puts it first still works or is refused; it cannot silently
+        edit the wrong span, because the read-back would not match.
+        """
+        if context is None:
+            context = copy(self.context)
+
+        current = self._reference_of(text, context)
+        if current is None or current not in text:
+            return None
+        at = text.rindex(current)
+        spliced = f"{text[:at]}{citation}{text[at + len(current):]}"
+        if self._reference_of(spliced, copy(self.context)) != citation:
+            return None
+        return spliced
+
+    def _reference_of(self, text: str, context: Context) -> str | None:
+        # The citation a line carries, read through this grammar. A scratch
+        # `ProofLine` rather than a bespoke parse, so it is the same reading the
+        # checker will do — a citation this cannot see is one no check would use.
+        scratch = ProofLine(proof=Proof(formal_system=self), text=text, context=context)
+        self.read_line(scratch, context)
+        return scratch.reference_string
 
     def read_line(self, proof_line: ProofLine, context: Context) -> None:
         """Populate one line's content from its text, against this grammar.

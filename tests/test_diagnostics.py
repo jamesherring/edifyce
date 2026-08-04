@@ -468,3 +468,45 @@ def test_a_definitional_step_that_relates_to_nothing_names_what_was_tried() -> N
     assert failure.code == "definition-mismatch"
     assert failure.lines == (1,)
     assert failure.definitions == ("dfS",)
+
+
+# --- composing and replacing a citation ------------------------------------
+
+
+def test_a_citation_is_composed_from_a_label_and_line_numbers() -> None:
+    # So a caller proposing a justification structurally never has to know a
+    # system's citation syntax — which is where a projection would creep back in.
+    system = propositional()
+
+    assert system.cite("MP", [1, 2]) == "MP, 1, 2"
+    assert system.cite(HOLE_KEY) == "?"
+
+
+def test_replacing_a_citation_keeps_the_rest_of_the_line() -> None:
+    system = propositional()
+
+    assert system.recite("q [?]", "MP, 1, 2") == "q [MP, 1, 2]"
+    assert system.recite("q [MP, 1, 2]", HOLE_KEY) == "q [?]"
+
+
+def test_a_line_with_no_citation_to_replace_is_refused() -> None:
+    system = propositional()
+
+    assert system.recite("not a line at all", "MP, 1") is None
+    assert system.recite("q", "MP, 1") is None
+
+
+def test_a_replacement_that_would_not_read_back_is_refused() -> None:
+    """The reason the substitution is self-checking rather than trusted.
+
+    A `Match` records no positions, so replacing a citation is textual. Making
+    the result *read back* as the citation asked for is what turns a fragile
+    splice into a safe one: a line that would come out meaning something else is
+    refused rather than mangled.
+    """
+    system = propositional()
+
+    # A citation the grammar's reference part cannot spell — `[` is excluded — so
+    # the spliced line either fails to parse or parses as something else. Either
+    # way it must not be returned.
+    assert system.recite("q [?]", "MP, [1]") is None

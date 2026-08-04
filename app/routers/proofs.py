@@ -98,6 +98,8 @@ from app.routers.systems import load_effective, load_system
 from website.logical.formal_system.diagnostics import numbers
 from website.logical.formal_system.proof import Proof as EngineProof
 from app.schemas import (
+    CitationOutcome,
+    CitationProposal,
     FailureOut,
     Attribution,
     LabelDescription,
@@ -131,6 +133,7 @@ if TYPE_CHECKING:
 
     from app.routers.systems import EffectiveSystem
     from website.logical.formal_system import FormalSystem as EngineSystem
+    from website.logical.formal_system.proof import ProofLine as EngineProofLine
     from website.logical.formal_system import PromotedTheorem
     from website.logical.matching.context import Context
 
@@ -326,6 +329,7 @@ async def _verify_with_references(
     proof: Proof,
     system: FormalSystem | None = None,
     persist: bool = True,
+    source: str | None = None,
 ) -> _Verification:
     """Verify a stored proof, resolving the lemmas it cites from other proofs.
 
@@ -534,10 +538,19 @@ async def _verify_with_references(
         )
 
     try:
-        checked = await session.run_sync(
-            lambda sync: load_proof_for_check(
-                sync, proof.id, compiled_system, context, proof=root,
-                resolve_citations=lambda refs: cited_terms(sync, refs),
+        # `source` overrides what is stored, for a caller asking *what if* — a
+        # structured citation proposal, which must be checked in the proof's full
+        # context and must not disturb it. The stored rows describe the stored
+        # source, so an override skips them: they are not stale, they are about a
+        # different text.
+        checked = (
+            None
+            if source is not None
+            else await session.run_sync(
+                lambda sync: load_proof_for_check(
+                    sync, proof.id, compiled_system, context, proof=root,
+                    resolve_citations=lambda refs: cited_terms(sync, refs),
+                )
             )
         )
         if checked is None:
@@ -549,7 +562,9 @@ async def _verify_with_references(
             # `load_theorems` rather than the split above, because there is no
             # sweep to share: these lines were just parsed and already carry
             # their terms, so the library's is the only one this path does.
-            _read, read_context = compiled_system.read_proof(proof.source, proof=root)
+            _read, read_context = compiled_system.read_proof(
+                proof.source if source is None else source, proof=root
+            )
             await session.run_sync(
                 lambda sync: promote(
                     load_theorems(
@@ -1623,3 +1638,131 @@ async def verify_stored_proof(
         await session.commit()
 
     return verification.response
+
+
+@router.post("/{proof_id}/cite", response_model=CitationOutcome)
+async def propose_citation(
+    proof_id: uuid.UUID,
+    payload: CitationProposal,
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> CitationOutcome:
+    """Justify a line by naming a rule and the lines it uses — no text.
+
+    The write half of the structured path, and the cheap half of it: a citation
+    is a label and some integers, which are already unambiguous, so this needs
+    none of the term algebra that *stating* a new formula would
+    (docs/authoring-and-ingestion-roadmap.md §9).
+
+    **A dry run by default.** A caller trying several justifications for a hole
+    should not have to undo the ones that did not work, so nothing is written
+    unless ``apply`` is set — and applying requires ownership, as an edit does.
+
+    Checked in the proof's **whole** context rather than in isolation, because
+    that is the only place a citation means anything: scope, ordering and what
+    stands above the line all bear on it. A rejected proposal comes back with the
+    same structured `failure` a verify reports, so it names the next goal rather
+    than only saying no.
+
+    Addressed by **citation number** — the handle an antecedent edge already uses
+    — which needs the proof's stored structure. An unverified proof has none, and
+    says so rather than guessing.
+    """
+    proof = await _get_readable_or_404(session, proof_id, user)
+
+    row = await session.scalar(
+        select(ProofLineRow).where(
+            ProofLineRow.proof_id == proof.id, ProofLineRow.number == payload.line
+        )
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"This proof has no line {payload.line}. Verify it first: a line "
+                "is addressed by the citation number its stored structure gives it."
+            ),
+        )
+
+    system = await load_system(session, proof.formal_system_id)
+    if system is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Formal system not found.")
+    effective = await load_effective(session, system)
+    if effective.errors:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=effective.errors)
+    build = build_spec(effective.spec)
+    if "errors" in build:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=build["errors"])
+
+    citation = build["system"].cite(payload.rule, payload.antecedents)
+    lines = proof.source.split("\n")
+    if not 0 <= row.position < len(lines):
+        # The stored structure describes a source this proof no longer has.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This proof's stored structure is stale. Verify it first.",
+        )
+    rewritten = build["system"].recite(lines[row.position], citation)
+    if rewritten is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Line {payload.line} cannot carry the citation {citation!r} — it "
+                "declares no reference field, carries none to replace, or would "
+                "not read back as written."
+            ),
+        )
+    lines[row.position] = rewritten
+    source = "\n".join(lines)
+
+    owned = user is not None and proof.owner_id == user.id
+    if payload.apply and not owned:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the owner can apply a citation to this proof.",
+        )
+
+    verification = await _verify_with_references(
+        session, proof, persist=payload.apply and owned, source=source
+    )
+    checked = verification.engine_proof
+    line = _numbered_line(checked, payload.line)
+
+    outcome = CitationOutcome(
+        line=payload.line,
+        citation=citation,
+        # A line the check never reached — the system would not build, or the
+        # rewritten source no longer parses at that line — is not accepted.
+        accepted=line is not None and bool(line.valid),
+        failure=(
+            FailureOut(**line.failure.as_dict())
+            if line is not None and line.failure is not None
+            else None
+        ),
+    )
+    if not (payload.apply and owned):
+        return outcome
+
+    proof.source = source
+    await _record_verdict(session, proof, verification)
+    await session.commit()
+    return outcome.model_copy(
+        update={
+            "applied": True,
+            "valid": verification.valid,
+            "holes": verification.response.holes,
+            "only_holes": verification.response.only_holes,
+        }
+    )
+
+
+def _numbered_line(checked: EngineProof | None, number: int) -> EngineProofLine | None:
+    # The checked line a citation number names. `numbered_lines` is indexed from
+    # 1 and a proposal may name a number the rewritten source no longer produces,
+    # so this asks rather than indexes.
+    if checked is None:
+        return None
+    for line in checked.proof_lines:
+        if line.number == number:
+            return line
+    return None

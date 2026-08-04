@@ -326,7 +326,7 @@ Many projections, one truth.
 get_goals(proof)     → the holes                              §8, done
 expand(term, depth, notation)
                      → nodes, each with its id AND its reading §9a, done
-propose(line, justification)
+propose(line, justification)                                  §9b, done
    {rule: "MP", antecedents: [4, 6]}          ← cite: no formula emitted at all
    {statement: {constructor: "wcel",
                 slots: {A: {ref: "node:a3f"}, ← reuse, do not re-emit
@@ -366,7 +366,7 @@ overwhelming majority of steps are exactly that shape. Only *new statements* nee
 the expensive half. So:
 
 1. **Term subgraph, readable** — §9a, done.
-2. **Structured citation proposals** — a label and line numbers, no term algebra.
+2. **Structured citation proposals** — §9b, done.
 3. **Structured statement proposals** — the term-building half, and the only part
    that needs a real constructor vocabulary over the wire.
 
@@ -427,3 +427,56 @@ rendering all of them costs the sum of the subtree sizes; one memo across the
 calls makes it linear. Sound because a stored term graph is acyclic by
 construction — `store_term` interns bottom-up, so a node can never be its own
 ancestor and its rendering cannot depend on the path taken to it.
+
+## 9b. Structured citation proposals — *done*
+
+`POST /proofs/{proof_id}/cite` justifies a line by naming a rule and the lines it
+uses. `{line: 7, rule: "MP", antecedents: [4, 6]}` — a label and three integers,
+already unambiguous, and needing none of the system's citation syntax. Making a
+client format `[MP, 4, 6]` is exactly where a projection would creep back into a
+structured path.
+
+**A dry run by default.** A caller trying several justifications for one hole
+should not have to undo the ones that did not work, so nothing is written unless
+`apply` is set — and applying requires ownership, as any edit does. A published
+proof can be *proposed against* by anyone and edited by no one but its owner.
+
+**Checked in the proof's whole context**, because that is the only place a
+citation means anything: scope, ordering and what stands above the line all bear
+on it. `_verify_with_references` takes a `source` override for this — the stored
+rows describe the stored source, so an override skips them rather than treating
+them as stale, which they are not; they are about a different text.
+
+**A rejection names the next goal.** The outcome carries the same `Failure` §7
+gives a verify, so a citation that does not apply says *which premise is missing*
+rather than only that it failed. That is the loop closing: goal → proposal →
+failure → goal.
+
+**A hole is a citation**, so retracting a step needs no second endpoint: propose
+`rule: "?"` and the line is an open goal again.
+
+### Composing and replacing, self-checked
+
+`FormalSystem.cite(rule, antecedents)` composes the reference text — the label and
+the numbers joined by `proof.CITATION_SEPARATOR`, which the reader and the writer
+now share rather than each spelling `", "`.
+
+`FormalSystem.recite(text, citation)` puts it into a line. A `Match` records no
+positions, so the substitution is **textual** — and therefore self-checking: the
+result is re-read, and returned only if its citation reads back as the one asked
+for. A line whose formula happens to contain its own citation text, or a citation
+the grammar's reference part cannot spell, is refused rather than mangled. That
+turns a fragile splice into a safe one, and it is why `recite` returns
+`str | None` rather than a string it hopes is right.
+
+### The limits, deliberately
+
+A line is addressed by its **citation number** — the handle an antecedent edge
+already uses — which needs the proof's stored structure, so an unverified proof
+gets a 409 saying to verify first rather than a guess.
+
+And this only *re-justifies an existing line*. It cannot add one, because adding
+a line means stating a formula, which is §9's step 3 and the half that needs a
+constructor vocabulary over the wire. In an imported Metamath corpus the
+overwhelming majority of steps are citations of previously proved theorems, so
+the cheap half is also the common one.

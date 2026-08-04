@@ -63,6 +63,12 @@ DEFINITION_KEY = "Def"
 # `_REFERENCE_REGEX` is widened for it, and a hand-authored system declares its own.
 HOLE_KEY = "?"
 
+# What separates a citation's parts: `[MP, 4, 6]` is the rule `MP` applied to
+# lines 4 and 6. A constant because two places need to agree about it — the
+# reader below, and `FormalSystem.cite`, which composes one from a rule and some
+# line numbers so a caller need not know a system's citation syntax to write one.
+CITATION_SEPARATOR = ", "
+
 
 class Subproof:
     """A scoped block of a proof, opened by a scope line and closed by dedent.
@@ -440,9 +446,9 @@ class Proof:
         if ref == HOLE_KEY:
             return HoleReference(key=ref)
 
-        if ", " in ref:
+        if CITATION_SEPARATOR in ref:
             # Split the ref into parts
-            ref_parts = ref.split(", ")
+            ref_parts = ref.split(CITATION_SEPARATOR)
             key = ref_parts[0]
 
             rule = self.formal_system.rule_by_label(key)
