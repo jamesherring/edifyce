@@ -928,6 +928,11 @@ def build_system(
             parse_side_condition(line, rule_context)
             for line in inference_rule.pending_side_conditions
         )
+        # Index-aligned to what was just appended, so a failed proviso can be
+        # reported in the words the author wrote it in.
+        inference_rule.side_condition_sources.extend(
+            inference_rule.pending_side_conditions
+        )
         inference_rule.pending_side_conditions = []
 
     # 10. Index the patterns (the build context was wired at step 8).

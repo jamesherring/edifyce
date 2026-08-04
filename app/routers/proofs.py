@@ -78,6 +78,7 @@ from app.db import (
 from app.db.descriptions_mapping import load_description
 from app.db.models import User
 from app.db.notations_mapping import load_notation, render_stored
+from app.db.proofs_mapping import failure_from_row
 from app.db.terms_mapping import prefetch_terms
 from app.db.promoted_theorems import PromotedTheoremRow
 from app.routers._invalidation import (
@@ -94,8 +95,10 @@ from app.routers._common import (
     unique_slug,
 )
 from app.routers.systems import load_effective, load_system
+from website.logical.formal_system.diagnostics import numbers
 from website.logical.formal_system.proof import Proof as EngineProof
 from app.schemas import (
+    FailureOut,
     Attribution,
     LabelDescription,
     Page,
@@ -571,6 +574,8 @@ async def _verify_with_references(
             success=root.valid,
             proof=root.data(),
             errors=_unusable_errors(root, edges.get(proof.id, ()), unusable),
+            holes=numbers(root.holes),
+            only_holes=root.only_holes,
         ),
         valid=root.valid,
         engine_proof=root,
@@ -1486,6 +1491,14 @@ def _term_out(row: ProofLineRow) -> TermSummary | None:
     )
 
 
+def _failure_out(row: ProofLineRow) -> FailureOut | None:
+    # The stored diagnosis, as the API shape. Rebuilt through the engine's own
+    # `Failure` rather than read straight off the JSON, so the two cannot drift:
+    # one place decides what a failure's fields are.
+    failure = failure_from_row(row)
+    return None if failure is None else FailureOut(**failure.as_dict())
+
+
 def _line_out(row: ProofLineRow, rendered: str | None = None) -> ProofLineOut:
     return ProofLineOut(
         rendered=rendered,
@@ -1502,6 +1515,7 @@ def _line_out(row: ProofLineRow, rendered: str | None = None) -> ProofLineOut:
         definition_id=row.definition_id,
         valid=row.valid,
         invalid_message=row.invalid_message,
+        failure=_failure_out(row),
         warning_message=row.warning_message,
         opens_scope=row.opens_scope,
         scope_id=row.scope_id,

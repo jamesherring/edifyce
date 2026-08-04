@@ -17,6 +17,7 @@ function line(over: Partial<ProofStructureLine> = {}): ProofStructureLine {
 		definition_id: null,
 		valid: true,
 		invalid_message: null,
+		failure: null,
 		warning_message: null,
 		opens_scope: null,
 		scope_id: null,

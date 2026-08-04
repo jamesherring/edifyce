@@ -42,6 +42,7 @@ from app.db.proof_lines import (
 )
 from app.db.terms import TermRow
 from app.db.terms_mapping import TermGraph, prefetch_terms, store_term
+from website.logical.formal_system.diagnostics import Failure, SlotReport
 from website.logical.formal_system.proof import Proof as EngineProof
 from website.logical.formal_system.proof import ProofLine as EngineProofLine
 
@@ -157,6 +158,8 @@ def store_proof_lines(
             term=_line_term(session, system, line),
             valid=bool(line.valid),
             invalid_message=line.invalid_message,
+            failure_code=line.failure.code if line.failure is not None else None,
+            failure_detail=line.failure.as_dict() if line.failure is not None else None,
             warning_message=line.warning_message,
             opens_scope=line.opened_scope.kind if line.opened_scope is not None else None,
         )
@@ -386,6 +389,7 @@ def _adopt_verdict(proof: EngineProof, line: EngineProofLine, row: ProofLineRow)
     """
     line.valid = row.valid
     line.invalid_message = row.invalid_message
+    line.failure = failure_from_row(row)
     line.warning_message = row.warning_message
     line.number = row.number
 
@@ -404,6 +408,63 @@ def _adopt_verdict(proof: EngineProof, line: EngineProofLine, row: ProofLineRow)
         # What `ProofLine.execute` does for a labelled line: its own proof cites
         # it by name, and a proof citing into this one may too.
         proof.reference_context[row.label] = line
+
+
+def _mapping_list(value: object) -> list[dict]:
+    # A stored list of records, or nothing. See `failure_from_row` on why a
+    # malformed detail is dropped rather than raised on.
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _int_list(value: object) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, int)]
+
+
+def _str_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def failure_from_row(row: ProofLineRow) -> Failure | None:
+    """Rebuild a line's :class:`Failure` from its stored columns.
+
+    The detail is stored as the JSON `Failure.as_dict` produces, so this is that
+    shape read back. Nothing here raises on a detail that is not that shape: a row
+    written by an older build carries fewer keys, one written by a newer build
+    carries more, and a *diagnosis* must never be the thing that stops a proof
+    loading. A malformed slot is dropped rather than guessed at.
+    """
+    if row.failure_code is None:
+        return None
+    detail = row.failure_detail if isinstance(row.failure_detail, dict) else {}
+    slots = tuple(
+        SlotReport(
+            index=int(slot["index"]),
+            schema=str(slot["schema"]),
+            candidates=tuple(_int_list(slot.get("candidates"))),
+        )
+        for slot in _mapping_list(detail.get("slots"))
+        if "index" in slot and "schema" in slot
+    )
+    return Failure(
+        # Narrowed at a trust boundary: the column is text and the vocabulary is
+        # a Literal. A code this build does not know still round-trips as data.
+        code=row.failure_code,  # type: ignore[arg-type]
+        message=row.invalid_message or str(detail.get("message", "")),
+        rule=detail.get("rule"),
+        reference=detail.get("reference"),
+        lines=tuple(int(n) for n in _int_list(detail.get("lines"))),
+        expected=detail.get("expected"),
+        given=detail.get("given"),
+        slots=slots,
+        proviso=detail.get("proviso"),
+        definitions=tuple(str(name) for name in _str_list(detail.get("definitions"))),
+    )
 
 
 def _definition_id(

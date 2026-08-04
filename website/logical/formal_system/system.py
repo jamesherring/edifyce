@@ -289,6 +289,10 @@ class FormalSystem:
                 proof_line.valid = False
                 if proof_line.invalid_message is None:
                     proof_line.invalid_message = "Could not parse line."
+                # The most common authoring error of all, so it must carry a code
+                # too — a caller branching on `failure` should not have to fall
+                # back to reading `invalid_message` for the ordinary case.
+                proof_line.fail("unparsed-line")
             elif (
                 proof_line.line_type.formula_field is not None
                 and proof_line.formula_term is None
@@ -307,6 +311,7 @@ class FormalSystem:
                 proof_line.valid = False
                 if proof_line.invalid_message is None:
                     proof_line.invalid_message = "No formula could be read on this line."
+                proof_line.fail("no-formula")
             else:
                 # Execute the proof line
                 proof_line.execute(context)

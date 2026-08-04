@@ -53,10 +53,48 @@ class HealthResponse(BaseModel):
     status: str = "ok"
 
 
+class SlotReportOut(BaseModel):
+    """One antecedent slot of a rule, and how the citation fared against it."""
+
+    index: int
+    schema_: str = Field(alias="schema")
+    candidates: list[int] = Field(default_factory=list)
+
+    model_config = {"populate_by_name": True}
+
+
+class FailureOut(BaseModel):
+    """Why a line is not established, as data beside the sentence.
+
+    Mirrors `website.logical.formal_system.diagnostics.Failure`. Every field past
+    `code` and `message` is optional because the codes carry different detail — a
+    `side-condition` failure names the proviso, a `slot-unsatisfied` one names the
+    slot, and a `hole` adds nothing. Absent means "this code does not carry it".
+    """
+
+    code: str
+    message: str
+    rule: str | None = None
+    reference: str | None = None
+    lines: list[int] = Field(default_factory=list)
+    expected: int | None = None
+    given: int | None = None
+    slots: list[SlotReportOut] = Field(default_factory=list)
+    proviso: str | None = None
+    definitions: list[str] = Field(default_factory=list)
+
+
 class VerifyProofResponse(BaseModel):
     success: bool
     errors: list[str] = Field(default_factory=list)
     proof: dict | None = None
+    # The lines stated as open goals rather than proved, by citation number. A
+    # proof with holes is *unfinished*, not wrong, and a caller working top-down
+    # (or an elaboration loop) needs the difference — `success` is False for both.
+    holes: list[int] = Field(default_factory=list)
+    # Whether every failing line is a hole: nothing is wrong, there is just work
+    # left. False with holes present means both, and the errors come first.
+    only_holes: bool = False
 
 
 class ProofVerifyRequest(BaseModel):
@@ -792,6 +830,9 @@ class ProofLineOut(BaseModel):
     definition_id: uuid.UUID | None = None
     valid: bool
     invalid_message: str | None = None
+    # The same verdict as data: a code a caller can branch on, plus what the
+    # checker knew. `code == "hole"` is an open goal rather than a mistake.
+    failure: FailureOut | None = None
     warning_message: str | None = None
     # The line's formula re-spelled in the requested notation, or null when none
     # was asked for or the line bears no formula. `display` is left alone: it is

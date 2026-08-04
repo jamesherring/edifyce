@@ -9,11 +9,15 @@ from typing import TYPE_CHECKING
 from ..graphs import saturating_matching
 from ..kernel.definitions import check_definitional_step
 from ..kernel.side_conditions import Not, Occurs
+from .diagnostics import Failure, numbers
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from ..kernel.definitions import Definition
     from ..kernel.terms import Term
     from ..matching.context import Context
+    from .diagnostics import FailureCode, SlotReport
     from .rules import InferenceRule
 
 
@@ -30,6 +34,13 @@ if TYPE_CHECKING:
 # search tries is the one that works.
 MAX_CITED_ANTECEDENTS = 64
 
+# How many binding assignments a *diagnosis* will enumerate before giving up on
+# naming the proviso that blocked (see `Proof._binding_assignments`). A failed
+# citation with many admissible orderings is exactly where the search is
+# expensive, and this runs after the line has already failed — a slower, sharper
+# answer is worth having, an unbounded one is not.
+_EXPLAINED_ASSIGNMENTS = 8
+
 # The justification keyword for a definitional step: a line cited as
 # `[Def, <line>]` claims to be the cited line with one definition unfolded (or
 # folded) at a single position. The checker searches the definitions in scope
@@ -38,6 +49,19 @@ MAX_CITED_ANTECEDENTS = 64
 # still wins, since rules are resolved first, so a system is free to repurpose
 # the keyword.
 DEFINITION_KEY = "Def"
+
+# The justification keyword for an **open goal**: a line cited `[?]` states a
+# formula it does not claim to have proved. Later lines may cite it and check
+# against it — that is what makes a proof writable top-down — and the proof as a
+# whole stays invalid until it is filled, so nothing is claimed on its strength
+# (see docs/authoring-and-ingestion-roadmap.md §8).
+#
+# A keyword rather than a line type, following `DEFINITION_KEY`: an inference rule
+# of the same label still wins, since rules are resolved first, so a system is free
+# to repurpose it. The one thing a hole inherits from the grammar is that the
+# system's *reference part* must admit these characters — the Metamath importer's
+# `_REFERENCE_REGEX` is widened for it, and a hand-authored system declares its own.
+HOLE_KEY = "?"
 
 
 class Subproof:
@@ -143,6 +167,13 @@ class Subproof:
         return True
 
 
+def _proof_lines(items: Iterable[object]) -> list[ProofLine]:
+    # The proof lines among a resolved citation's antecedents. A reference may
+    # resolve to other things (a whole proof, a folder), which a diagnosis has
+    # nothing to say about and must not trip over.
+    return [item for item in items if isinstance(item, ProofLine)]
+
+
 def line_is_accessible(citing_line: ProofLine, cited_line: ProofLine) -> bool:
     # A line may cite another only if the cited line lives in the citing line's
     # own subproof or an enclosing one - never inside a closed sibling subproof.
@@ -195,6 +226,17 @@ class DefinitionReference:
     key: str
     source: "ProofLine"
     definition: object = None
+
+
+@dataclass(eq=False)
+class HoleReference:
+    """A reference that declares the line an **open goal** rather than justifying it.
+
+    Returned by :meth:`Proof.get_reference` for :data:`HOLE_KEY`. It carries only
+    the keyword because a hole cites nothing — that is what makes it a hole.
+    """
+
+    key: str
 
 
 class Proof:
@@ -319,6 +361,36 @@ class Proof:
             "lines": [line.data() for line in self.proof_lines]
         }
 
+    @property
+    def holes(self) -> list[ProofLine]:
+        """The lines stated as open goals rather than proved (`HOLE_KEY`).
+
+        What a caller needs to tell an *unfinished* proof from a wrong one: both
+        report `valid = False`, and only this says which. A proof with holes and no
+        other failure is one whose shape checks and whose remaining work is
+        enumerated here.
+        """
+        return [
+            line
+            for line in self.proof_lines
+            if line.failure is not None and line.failure.code == "hole"
+        ]
+
+    @property
+    def only_holes(self) -> bool:
+        """Whether every failing line is an open goal.
+
+        The predicate a top-down author (or an elaboration loop) works against:
+        true means nothing is *wrong*, there is just work left. False with holes
+        present means both, and the errors are the ones to fix first — filling a
+        goal beneath a broken step proves nothing.
+        """
+        failing = [line for line in self.proof_lines if not line.valid]
+        return bool(failing) and all(
+            line.failure is not None and line.failure.code == "hole"
+            for line in failing
+        )
+
     def logical_lines(self):
         # Count the logical lines in the proof
         return len([
@@ -362,6 +434,11 @@ class Proof:
         promoted = self.formal_system.promoted_theorems.get(ref)
         if promoted is not None:
             return InferenceReference(inference_rule=promoted.as_rule(), key=ref)
+
+        # An open goal. After the rule and theorem lookups, so a system that names
+        # something `?` keeps its own meaning — the same precedence `Def` has.
+        if ref == HOLE_KEY:
+            return HoleReference(key=ref)
 
         if ", " in ref:
             # Split the ref into parts
@@ -445,6 +522,7 @@ class Proof:
             proof_line.valid = False
             if proof_line.invalid_message is None:
                 proof_line.invalid_message = "No formula defined for logical line."
+            proof_line.fail("no-formula")
             return False
 
         # Get the reference
@@ -453,6 +531,7 @@ class Proof:
         except Exception as e:
             proof_line.invalid_message = str(e)
             proof_line.valid = False
+            proof_line.fail("bad-reference", reference=proof_line.reference_string)
             return False
 
         # A definitional step: this line is the cited line with one definition
@@ -460,9 +539,19 @@ class Proof:
         if isinstance(reference, DefinitionReference):
             return self.check_definitional_line(proof_line, reference, context)
 
+        # An open goal: stated, not proved. Invalid, so `proof.valid` is False and
+        # everything gated on validity (promotion above all) refuses it for free;
+        # the code is what lets a *reader* tell an unfinished step from a wrong one.
+        if isinstance(reference, HoleReference):
+            proof_line.valid = False
+            proof_line.invalid_message = "Open goal: this line is stated but not proved."
+            proof_line.fail("hole")
+            return False
+
         if not isinstance(reference, InferenceReference):
             proof_line.invalid_message = f"Invalid reference '{proof_line.reference_string}'."
             proof_line.valid = False
+            proof_line.fail("bad-reference", reference=proof_line.reference_string)
             return False
 
         # Otherwise, it's an inference rule
@@ -488,6 +577,7 @@ class Proof:
                     f"Line {ant.number} is out of scope "
                     "(it is inside a closed subproof)."
                 )
+                proof_line.fail("out-of-scope", rule=key, lines=numbers([ant]))
                 return False
 
         if len(antecedents) == 0 and len(inference_rule.antecedents) == 0:
@@ -517,12 +607,31 @@ class Proof:
             # Not enough antecedents
             proof_line.valid = False
             proof_line.invalid_message = f"{key} requires {len(inference_rule.antecedents)!s} antecedent(s)."
+            cited = _proof_lines(antecedents)
+            proof_line.fail(
+                "antecedent-count",
+                rule=key,
+                expected=len(inference_rule.antecedents),
+                given=len(antecedents),
+                # Which slots the lines they *did* cite could fill, so an author
+                # short of a premise is told which one is missing rather than only
+                # that a count is wrong.
+                slots=inference_rule.slot_reports(
+                    cited, inference_rule.admissibility(cited, context)
+                ),
+            )
             return False
 
         if len(antecedents) > len(inference_rule.antecedents) and not inference_rule.allow_extra_antecedents:
             # Too many antecedents
             proof_line.valid = False
             proof_line.invalid_message = f"{key} requires exactly {len(inference_rule.antecedents)!s} antecedent(s)."
+            proof_line.fail(
+                "antecedent-count",
+                rule=key,
+                expected=len(inference_rule.antecedents),
+                given=len(antecedents),
+            )
             return False
 
         if len(antecedents) > MAX_CITED_ANTECEDENTS:
@@ -535,6 +644,12 @@ class Proof:
             proof_line.valid = False
             proof_line.invalid_message = (
                 f"{key} cites too many antecedents ({len(antecedents)}; max {MAX_CITED_ANTECEDENTS})."
+            )
+            proof_line.fail(
+                "too-many-antecedents",
+                rule=key,
+                expected=MAX_CITED_ANTECEDENTS,
+                given=len(antecedents),
             )
             return False
 
@@ -551,10 +666,118 @@ class Proof:
             proof_line.inference_rule = inference_rule
             return True
 
-        # No admissible, consistent assignment: not a valid line.
+        # No admissible, consistent assignment: not a valid line. What *kind* of
+        # "does not apply" it was is worked out here, on the failure path only, so
+        # a corpus whose proofs all check pays nothing for it.
         proof_line.valid = False
         proof_line.invalid_message = f"{key} does not apply."
+        self._explain_assignment(proof_line, inference_rule, list(antecedents), key, context)
         return False
+
+    def _explain_assignment(
+        self,
+        proof_line: ProofLine,
+        inference_rule: InferenceRule,
+        lines: list[ProofLine],
+        key: str,
+        context: Context,
+    ) -> None:
+        # Work out which kind of "does not apply" this was, and record it. Runs
+        # only after the line has already failed, so the checking path is untouched
+        # and this may ask every question rather than stopping at the first.
+        #
+        # The order is by how actionable the answer is, not by how the check runs.
+        cited = numbers(lines)
+
+        # 1. Ordering. Cheap, unambiguous, and it explains a citation that looks
+        #    perfectly well shaped: a rule may not conclude from a later line.
+        for line in lines:
+            if proof_line.proof is line.proof and proof_line.index() <= line.index():
+                proof_line.fail("ordering", rule=key, lines=numbers([line]))
+                return
+
+        # The slot/line graph, built once: every question below is asked of it,
+        # and building it is a unification per edge.
+        adjacency = inference_rule.admissibility(lines, context)
+
+        # 2. A slot no cited line can fill *on its own*. The most useful answer
+        #    there is — that slot's schema is a premise this proof does not have,
+        #    which is exactly the next goal for anyone working backwards.
+        unsatisfied = inference_rule.unsatisfied_slots(adjacency)
+        if unsatisfied:
+            proof_line.fail("slot-unsatisfied", rule=key, lines=cited, slots=unsatisfied)
+            return
+
+        # 3. Every slot has candidates, so the failure is about them holding
+        #    *together* — unless a proviso is what blocked. That is asked first
+        #    because it is the sharper answer, and it needs an assignment that
+        #    binds to be checked against; where several bind, the first that trips
+        #    a proviso is reported.
+        for candidate in self._binding_assignments(
+            inference_rule, lines, proof_line, context, adjacency
+        ):
+            proviso = inference_rule.failing_proviso(candidate, proof_line, context)
+            if proviso is not None:
+                proof_line.fail(
+                    "side-condition",
+                    rule=key,
+                    lines=numbers(candidate),
+                    proviso=proviso,
+                )
+                return
+
+        # 4. Otherwise: either no assignment to distinct lines exists, or one does
+        #    and the shared metavariables will not agree across it. Both are the
+        #    same advice — the citation is individually plausible and jointly not —
+        #    so they share a code and the slot graph is what distinguishes them.
+        proof_line.fail(
+            "inconsistent-binding",
+            rule=key,
+            lines=cited,
+            slots=inference_rule.slot_reports(lines, adjacency),
+        )
+
+    def _binding_assignments(
+        self,
+        inference_rule: InferenceRule,
+        lines: list[ProofLine],
+        deduction: ProofLine,
+        context: Context,
+        adjacency: dict[int, list[int]],
+    ) -> list[tuple[ProofLine, ...]]:
+        # Assignments of cited lines to slots that unify, ignoring provisos — the
+        # candidates a side-condition could be what rejected. Diagnosis only: the
+        # search in `_first_valid_assignment` stops at the first assignment that
+        # passes everything, and this one keeps going past the provisos precisely
+        # to find out whether they are the reason it found none.
+        #
+        # Bounded exactly as that search is — the same admissibility graph, the
+        # same fast reject when no system of distinct representatives exists, and
+        # the same prefix pruning — so it explores what that search explored and no
+        # more, up to `_EXPLAINED_ASSIGNMENTS`.
+        required = len(inference_rule.antecedents)
+        if saturating_matching(range(required), adjacency) is None:
+            return []
+        found: list[tuple[ProofLine, ...]] = []
+
+        def walk(slot: int, chosen: list[int]) -> None:
+            if len(found) >= _EXPLAINED_ASSIGNMENTS:
+                return
+            if slot == required:
+                found.append(tuple(lines[j] for j in chosen))
+                return
+            for j in adjacency[slot]:
+                if j in chosen:
+                    continue
+                candidate = [*chosen, j]
+                if not inference_rule.prefix_binding_exists(
+                    [lines[k] for k in candidate], deduction, context
+                ):
+                    continue
+                walk(slot + 1, candidate)
+
+        walk(0, [])
+        return found
 
     def _first_valid_assignment(
         self,
@@ -575,10 +798,7 @@ class Proof:
         # assignments instead of every permutation. Each complete candidate is
         # confirmed by the authoritative, binding-consistent InferenceRule.check.
         required = len(inference_rule.antecedents)
-        adjacency = {
-            slot: [j for j, line in enumerate(lines) if inference_rule.slot_admits(slot, line, context)]
-            for slot in range(required)
-        }
+        adjacency = inference_rule.admissibility(lines, context)
 
         if saturating_matching(range(required), adjacency) is None:
             # Some slot has no admissible line, or no system of distinct
@@ -642,6 +862,9 @@ class Proof:
         if len(openers) != 1:
             proof_line.valid = False
             proof_line.invalid_message = f"{key} requires exactly one subproof reference."
+            proof_line.fail(
+                "no-subproof", rule=key, expected=1, given=len(openers)
+            )
             return False
 
         opener = openers[0]
@@ -650,6 +873,7 @@ class Proof:
         if subproof is None:
             proof_line.valid = False
             proof_line.invalid_message = f"Line {opener.number} does not open a subproof."
+            proof_line.fail("no-subproof", rule=key, lines=numbers([opener]))
             return False
 
         # The subproof must be a *completed* one, in scope to discharge from
@@ -661,6 +885,9 @@ class Proof:
             proof_line.invalid_message = (
                 f"Subproof at line {opener.number} is out of scope to discharge here."
             )
+            proof_line.fail(
+                "subproof-out-of-scope", rule=key, lines=numbers([opener])
+            )
             return False
 
         if inference_rule.check_discharge(subproof, proof_line, context):
@@ -670,6 +897,7 @@ class Proof:
 
         proof_line.valid = False
         proof_line.invalid_message = f"{key} does not apply."
+        proof_line.fail("discharge-mismatch", rule=key, lines=numbers([opener]))
         return False
 
     def _definition_by_label(self, label: str) -> Definition | None:
@@ -698,12 +926,16 @@ class Proof:
             proof_line.invalid_message = (
                 f"Line {source.number} is out of scope (it is inside a closed subproof)."
             )
+            proof_line.fail(
+                "out-of-scope", rule=reference.key, lines=numbers([source])
+            )
             return False
 
         # A step in the same proof must come after the line it transforms.
         if source.proof is proof_line.proof and proof_line.index() <= source.index():
             proof_line.valid = False
             proof_line.invalid_message = f"{reference.key} must cite an earlier line."
+            proof_line.fail("ordering", rule=reference.key, lines=numbers([source]))
             return False
 
         # The cited line must be a formula-bearing logical line: a definitional
@@ -714,6 +946,7 @@ class Proof:
                 or source.formula_term is None:
             proof_line.valid = False
             proof_line.invalid_message = f"Line {source.number} is not a formula line."
+            proof_line.fail("no-formula", rule=reference.key, lines=numbers([source]))
             return False
 
         candidates = [reference.definition] if reference.definition is not None \
@@ -738,6 +971,17 @@ class Proof:
                 f"{reference.key} does not apply: no definition in scope relates this line "
                 f"to line {source.number}."
             )
+        proof_line.fail(
+            "definition-mismatch",
+            rule=reference.key,
+            lines=numbers([source]),
+            # `Definition.label` is declared and may be None (an unnamed
+            # definition is legal); the ones with a name are the ones a caller
+            # could cite explicitly, so they are what is worth reporting.
+            definitions=tuple(
+                d.label for d in candidates if d is not None and d.label is not None
+            ),
+        )
         return False
 
     def justify(self, deduction, context, inference_rule=None):
@@ -755,6 +999,12 @@ class Proof:
                 # Not enough previous logical lines
                 deduction.valid = False
                 deduction.invalid_message = "Antecedent lines couldn't be inferred."
+                deduction.fail(
+                    "antecedent-count",
+                    rule=inference_rule.label,
+                    expected=len(inference_rule.antecedents),
+                    given=len(logical_lines),
+                )
                 return False
 
             # Same admissible-assignment search as an explicit citation: the
@@ -771,7 +1021,9 @@ class Proof:
             # Otherwise, no justification found
             deduction.valid = False
             deduction.invalid_message = f"{inference_rule.label} does not apply."
-
+            self._explain_assignment(
+                deduction, inference_rule, logical_lines, inference_rule.label, context
+            )
             return False
 
         # Otherwise, no inference rule specified.
@@ -878,6 +1130,11 @@ class ProofLine:
         # Invalid message
         self.invalid_message = None
 
+        # Why this line is not established, as data — the same verdict
+        # `invalid_message` states in a sentence, plus what the checker knew and
+        # used to discard. None while the line stands. See `.diagnostics`.
+        self.failure: Failure | None = None
+
         # Warning message
         self.warning_message = None
 
@@ -965,6 +1222,44 @@ class ProofLine:
         # Get the index of this line in the proof
         return self.proof.proof_lines.index(self)
 
+    def fail(
+        self,
+        code: FailureCode,
+        *,
+        rule: str | None = None,
+        reference: str | None = None,
+        lines: tuple[int, ...] = (),
+        expected: int | None = None,
+        given: int | None = None,
+        slots: tuple[SlotReport, ...] = (),
+        proviso: str | None = None,
+        definitions: tuple[str, ...] = (),
+    ) -> None:
+        """Record *why* this line is not established, beside the sentence.
+
+        Called wherever `invalid_message` is set, and it takes the message *from*
+        that field rather than restating it — two independently written texts for
+        one verdict drift, and the sentence is already the one a reader sees.
+
+        Never overwrites. The first thing to fail is the reason, and a later,
+        vaguer diagnosis (`_explain_assignment` falling through to its default)
+        must not bury a sharper one that already landed.
+        """
+        if self.failure is not None:
+            return
+        self.failure = Failure(
+            code=code,
+            message=self.invalid_message or "",
+            rule=rule,
+            reference=reference,
+            lines=lines,
+            expected=expected,
+            given=given,
+            slots=slots,
+            proviso=proviso,
+            definitions=definitions,
+        )
+
     def follows_from_definition(self, other, definition, context):
         # Check if this proof line follows from the other by means of a definition:
         # one structural unfold over the shared-DAG term representation, checked in
@@ -989,6 +1284,7 @@ class ProofLine:
             "behaviour": self.line_type.behaviour if self.line_type is not None else None,
             "name": self.line_type.name if self.line_type is not None else None,
             "invalid_message": self.invalid_message,
+            "failure": self.failure.as_dict() if self.failure is not None else None,
             "warning_message": self.warning_message,
             "reference": self.reference_string_display,
             "label": self.label,

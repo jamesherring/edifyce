@@ -8,6 +8,35 @@ export interface HealthResponse {
 	status: string;
 }
 
+/** One antecedent slot of a rule, and how the citation fared against it.
+ *  Mirrors `SlotReportOut` in app/schemas.py. */
+export interface SlotReport {
+	index: number;
+	/** The slot's schema as the rule states it — what a line must look like to
+	 *  fill it. A slot with no `candidates` is a premise the proof is missing. */
+	schema: string;
+	candidates: number[];
+}
+
+/** Why a line is not established, as data beside the sentence. Mirrors
+ *  `FailureOut` in app/schemas.py.
+ *
+ *  Fields past `code` and `message` are absent unless that code carries them: a
+ *  `side-condition` names the proviso, a `slot-unsatisfied` names the slot, and a
+ *  `hole` adds nothing. `code === 'hole'` is an open goal rather than a mistake. */
+export interface Failure {
+	code: string;
+	message: string;
+	rule?: string | null;
+	reference?: string | null;
+	lines?: number[];
+	expected?: number | null;
+	given?: number | null;
+	slots?: SlotReport[];
+	proviso?: string | null;
+	definitions?: string[];
+}
+
 export interface ProofLine {
 	valid: boolean;
 	// The number a citation names this line by. Null for a line no citation can
@@ -19,6 +48,9 @@ export interface ProofLine {
 	behaviour: string | null;
 	name: string | null;
 	invalid_message: string | null;
+	/** The same verdict as data. Optional because a proof verified before this
+	 *  existed has a cached payload without the field. */
+	failure?: Failure | null;
 	warning_message: string | null;
 	reference: string | null;
 	label: string | null;
@@ -35,6 +67,12 @@ export interface VerifyResponse {
 	success: boolean;
 	errors: string[];
 	proof: ProofData | null;
+	/** Lines stated as open goals rather than proved, by citation number. A proof
+	 *  with holes is unfinished, not wrong — `success` is false for both. */
+	holes?: number[];
+	/** Whether every failing line is a hole: nothing is wrong, there is just work
+	 *  left. False with holes present means both, and the errors come first. */
+	only_holes?: boolean;
 }
 
 /** The authenticated user — mirrors `UserRead` in app/auth/schemas.py. */
@@ -609,6 +647,8 @@ export interface ProofStructureLine {
 	definition_id: string | null;
 	valid: boolean;
 	invalid_message: string | null;
+	/** The same verdict as data; `code === 'hole'` is an open goal. */
+	failure: Failure | null;
 	warning_message: string | null;
 	/** The scope this line opens, and the opener of the subproof it sits in. */
 	opens_scope: string | null;
