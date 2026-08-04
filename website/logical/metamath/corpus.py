@@ -179,7 +179,7 @@ def corpus_specs(
         # name, not the corpus's: the same slice of the same file must not be
         # stored under one name at `limit=1` and another at `limit=2` (found in
         # review).
-        return [corpus_spec(database, limit, boundaries[0][0], binders)]
+        return [corpus_spec(database, limit, boundaries[0].name, binders)]
 
     # Every layer's grammar, cumulative — `build_spec` reads from the start of the
     # file up to `before`, so each of these covers its predecessors too and the
@@ -188,12 +188,12 @@ def corpus_specs(
     cumulative = [
         build_spec(
             database,
-            layer,
-            before=stop,
-            variable_scope=_variable_scope(database, stop, horizon),
+            boundary.name,
+            before=boundary.stop,
+            variable_scope=_variable_scope(database, boundary.stop, horizon),
             binders=binders,
         )
-        for layer, stop in boundaries
+        for boundary in boundaries
     ]
 
     specs: list[SystemSpec] = []
@@ -210,7 +210,7 @@ def corpus_specs(
             # promise all belong to the root, which every later layer inherits.
             # Restating them would be a redeclaration, and `layered_spec` refuses
             # one (§9.25 for the one namespace where that bites hardest).
-            specs.append(SystemSpec(name=boundaries[index][0], productions=fresh))
+            specs.append(SystemSpec(name=boundaries[index].name, productions=fresh))
             continue
         # The root's productions are its own, but its **line type is the
         # horizon's** (found in review). `_logical_sort` reads the sort a `|-`
@@ -226,6 +226,38 @@ def corpus_specs(
         # what the partition is for.
         specs.append(replace(whole, lines=cumulative[-1].lines))
     return specs
+
+
+def corpus_layers(
+    database: Database,
+    limit: int | None = None,
+    *,
+    plan: Sequence[Layer] = (),
+) -> list[tuple[str, int]]:
+    """Each layer :func:`corpus_specs` emits, and the position it opens at.
+
+    The same list, in the same order, decided the same way — which is the point
+    of it being one function rather than two. A caller storing a corpus needs to
+    know *which* layer a given assertion belongs to, and re-deriving the
+    boundaries from the plan could disagree with the specs that were built: a
+    plan layer the file does not open is not among them, and neither is one the
+    walk never reaches or one that shares its start with the next.
+
+    Positions index :attr:`Database.order`. An empty plan gives one layer opening
+    at zero, which is what an unlayered import is.
+
+    Read straight off the boundaries rather than re-derived and paired by name: a
+    plan may call two layers the same thing, and a dict keyed on the name keeps
+    only the last of their positions — which routes whole layers into the wrong
+    system while `corpus_specs` still emits every one of them (found in review).
+    """
+    walked = theorems(database, limit)
+    if not walked:
+        raise MetamathError("Database declares no provable statements to walk.")
+    boundaries = _layer_boundaries(database, plan, walked[-1].label)
+    if len(boundaries) < 2:
+        return [(boundaries[0].name if boundaries else "Metamath", 0)]
+    return [(boundary.name, boundary.at) for boundary in boundaries]
 
 
 def _variable_scope(database: Database, stop: str, horizon: str) -> str:
@@ -249,9 +281,29 @@ def _variable_scope(database: Database, stop: str, horizon: str) -> str:
     return database.order[at - 1] if at else stop
 
 
+@dataclass(frozen=True)
+class _Boundary:
+    """One populated layer of a plan: what it is called, and where it runs.
+
+    Carries the opening position as well as the stop, so the two callers read the
+    layers off **one** derivation. Re-deriving them and pairing by *name* is what
+    the first cut did, and a plan may name two layers the same thing — `Layer`
+    does not prohibit it — at which point a dict keyed on the name keeps only the
+    last position and the routing sends whole layers to the wrong system (found
+    in review).
+    """
+
+    name: str
+    # Where the layer opens, as a position in `Database.order`.
+    at: int
+    # The label its grammar stops *before*: the next layer's first assertion, or
+    # the walk's own horizon for the last.
+    stop: str
+
+
 def _layer_boundaries(
     database: Database, plan: Sequence[Layer], horizon: str
-) -> list[tuple[str, str]]:
+) -> list[_Boundary]:
     # Each populated layer, and the label its grammar stops *before*.
     #
     # A layer's grammar is everything declared from its own start up to where the
@@ -277,8 +329,14 @@ def _layer_boundaries(
         if at <= reach and (index + 1 == len(starts) or starts[index + 1][1] != at)
     ]
     return [
-        (name, horizon if index + 1 == len(within) else database.order[within[index + 1][1]])
-        for index, (name, _at) in enumerate(within)
+        _Boundary(
+            name=name,
+            at=at,
+            stop=horizon
+            if index + 1 == len(within)
+            else database.order[within[index + 1][1]],
+        )
+        for index, (name, at) in enumerate(within)
     ]
 
 

@@ -26,7 +26,7 @@ pytest.importorskip("regex")
 from website.logical.declarative import build_spec as build_system_spec
 from website.logical.declarative import layered_spec
 from website.logical.metamath import parse
-from website.logical.metamath.corpus import corpus_spec, corpus_specs
+from website.logical.metamath.corpus import corpus_layers, corpus_spec, corpus_specs
 from website.logical.metamath.sections import Layer
 from website.logical.metamath.setmm import LAYERS
 
@@ -35,8 +35,19 @@ SECTION = "#*" * 20
 SUBSECTION = "=-" * 20
 
 # Three layers, in `set.mm`'s own section titles so the shipped plan selects
-# them. Each declares notation of its own and proves something with it.
+# them. Each declares notation of its own and proves something with it — and the
+# proofs are **compressed**, which is the only form the importer reads, so this
+# fixture is one a store test can walk as well as a spec test can slice.
+#
+# The `$t` block spells a token from each of the three layers, which is what lets
+# a store test say where a *notation* lands: it is one declaration about the
+# whole file, so unlike a proof it does not follow the split.
 CORPUS = f"""
+$( $t
+    althtmldef "->" as ' &rarr; ';
+    althtmldef "A." as '&forall;';
+    althtmldef "e." as ' &isin; ';
+$)
 $c |- wff class ( ) -> A. e. $.
 $v ph ps x A $.
 wph $f wff ph $.
@@ -58,14 +69,14 @@ ax-1 $a |- ( ph -> ( ps -> ph ) ) $.
 $( {SUBSECTION}
    A subsection, which must not open a layer
    {SUBSECTION} $)
-pc-thm $p |- ( ph -> ( ps -> ph ) ) $= wph wps ax-1 $.
+pc-thm $p |- ( ph -> ( ps -> ph ) ) $= ( ax-1 ) ABC $.
 
 $( {SECTION}
    Predicate calculus with equality:  Tarski's system S2
    {SECTION} $)
 wal $a wff A. x ph $.
 ax-4 $a |- ( A. x ph -> ph ) $.
-fol-thm $p |- ( A. x ph -> ph ) $= vx wph ax-4 $.
+fol-thm $p |- ( A. x ph -> ph ) $= ( ax-4 ) ABC $.
 
 $( {PART}
    SET THEORY
@@ -75,7 +86,7 @@ $( {SECTION}
    {SECTION} $)
 wcel $a wff A e. A $.
 ax-ext $a |- ( A e. A -> A e. A ) $.
-zf-thm $p |- ( A e. A -> A e. A ) $= cA ax-ext $.
+zf-thm $p |- ( A e. A -> A e. A ) $= ( ax-ext ) AB $.
 """
 
 
@@ -249,7 +260,7 @@ def test_a_layer_with_theorems_but_no_notation_is_still_a_layer() -> None:
     source = CORPUS.replace(
         "wcel $a wff A e. A $.\nax-ext $a |- ( A e. A -> A e. A ) $.",
         "ax-ext $a |- ( ph -> ph ) $.",
-    ).replace("zf-thm $p |- ( A e. A -> A e. A ) $= cA ax-ext $.",
+    ).replace("zf-thm $p |- ( A e. A -> A e. A ) $= ( ax-ext ) AB $.",
               "zf-thm $p |- ( ph -> ph ) $= wph ax-ext $.")
     database = parse(source)
     split = corpus_specs(database, plan=LAYERS)
@@ -346,13 +357,13 @@ $( {SECTION}
    Pre-logic
    {SECTION} $)
 tf $a term f a $.
-t-thm $p |- f a $= va tf $.
+t-thm $p |- f a $= ( tf ) AB $.
 $( {SECTION}
    Predicate calculus with equality:  Tarski's system S2
    {SECTION} $)
 wph $f wff ph $.
 wi $a wff ( ph -> ph ) $.
-w-thm $p |- ( ph -> ph ) $= wph wi $.
+w-thm $p |- ( ph -> ph ) $= ( wi ) AB $.
 """
 
 
@@ -382,3 +393,29 @@ def test_the_root_takes_its_line_type_from_the_horizon() -> None:
     # line type alone rather than collapsing the layers.
     assert "tf" in names(split[0]) and "tf" not in names(split[1])
     assert "wi" in names(split[1]) and "wi" not in names(split[0])
+
+
+def test_two_layers_may_share_a_name_and_still_open_where_they_open() -> None:
+    # **From review.** `Layer` does not prohibit two layers being called the same
+    # thing, and `corpus_layers` used to pair the boundaries back with their
+    # positions through a dict keyed on the *name* — which keeps only the last of
+    # them. `corpus_specs` still emitted all three, so `import_corpus` got three
+    # systems and three copies of one position, and every layer but the last
+    # routed its theorems into the root: a first-order proof filed under a
+    # grammar that does not declare its notation.
+    #
+    # Not a fixture quirk. A plan is authored by hand, and two layers of a long
+    # corpus sharing a display name is an ordinary thing to write.
+    database = parse(CORPUS)
+    plan = tuple(
+        Layer(name="Logic", starts_with=layer.starts_with) for layer in LAYERS
+    )
+
+    layers = corpus_layers(database, plan=plan)
+
+    assert [name for name, _at in layers] == ["Logic", "Logic", "Logic"]
+    opens = [at for _name, at in layers]
+    assert opens == sorted(opens) and len(set(opens)) == 3
+    # And they are the same positions the distinct-name plan reports, since a
+    # layer opens where its section is regardless of what it is called.
+    assert opens == [at for _name, at in corpus_layers(database, plan=LAYERS)]

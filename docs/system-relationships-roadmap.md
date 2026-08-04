@@ -8,9 +8,11 @@ across into it, S2a puts a sequent calculus on top of a tower — including an
 imported one — and S3 is answered by S1's measurements. **Track D has started:**
 D1 and D2 are done — the outline is kept, the partition is measured against the
 real `set.mm`, and `setmm.LAYERS` carries the plan those numbers justify — and
-D3's **spec** half is built: `corpus_specs` returns one `SystemSpec` per layer,
-and layering them back declares exactly what the unlayered spec declared. D3's
-store half and D4 onward are still design.
+**D3 is built, both halves**: `corpus_specs` returns one `SystemSpec` per layer
+and layering them back declares exactly what the unlayered spec declared, and
+`import_corpus(plan=…)` stores a corpus as a spine of systems whose theorem
+count, verdicts and proof sources match an unlayered run exactly. D4 onward are
+still design.
 
 One correction this note owes its reader, since §6.3 and §8's S2 both imply
 otherwise: **an edge and a layer are not two ways to do the same thing.** An edge
@@ -1563,13 +1565,15 @@ nearest-wins rule the rest of the spine follows. The general shape is one this
 note keeps meeting: **a guard that compares derived values instead of the thing
 being ordered is a guard with a tie it does not see.**
 
-#### D2/D3 — the layer plan and one spec per layer — **the spec half done**
+#### D2/D3 — the layer plan and one spec per layer — **done**
 
 D2 landed with D1: `setmm.LAYERS` is the plan, justified by the measurement
 rather than asserted. D3's **spec** half is `corpus_specs(database, limit, plan)`
-in `metamath/corpus.py` — one `SystemSpec` per layer, root first. The **store**
-half (`import_corpus` creating a `formal_systems` row per layer and wiring the
-spine) is not built.
+in `metamath/corpus.py` — one `SystemSpec` per layer, root first — and its
+**store** half is `layered_systems` plus `import_corpus(plan=…)` in
+`app/db/metamath_store.py`: one `formal_systems` row per layer, wired by
+`inherits_from_id`, with each theorem, proof and promoted entry stored against
+the layer its own section falls in.
 
 **Tests and verification** — `tests/test_metamath_layered_specs.py`, on a fixture
 shaped like the file, plus a run against the real `set.mm` at the milestone
@@ -1625,7 +1629,76 @@ the same slice came back as "Metamath" at `limit=1` and "Propositional calculus"
 at `limit=2`; and `plan` had taken the third positional slot `corpus_spec` gives
 to `name`, so the obvious call died inside `Layering`.
 
-*Still to do here:* the store half, and the invalid case the original plan named
+**The store half**, and the two things it settled that the spec half could not.
+
+*Publication is not a step, it is a consequence.* §7.2 sketched each layer as
+"published on completion, which is what lets the next one inherit it", and
+completion turns out to be too late: a child's terms intern against its own chain
+from the first theorem stored, so the chain has to exist and be readable before
+the walk reaches the child at all. Publishing at creation costs nothing, because
+an imported layer's grammar is fixed by the file the moment it is written — there
+is no draft period during which it could move, which is the thing the flag
+protects against. And the rule that falls out is §5.1's own rather than a new
+one: **a layer is published exactly when something inherits from it**. The
+deepest is not, which is also what makes an unlayered import — one system, no
+children — behave precisely as it did before.
+
+*A digest is per layer, not per corpus.* A layer's stored terms are guarded by
+its **effective** digest — its own parts behind its ancestors' — which is what
+`LibraryChain` reads on the citation path (§3.1). One `library_digest(spec)`
+would be right for the root and silently wrong for everything under it, and the
+failure would not appear until something cited across a layer.
+
+*Pinned:* a layered run and an unlayered run of the same file agree on the
+theorem count, the per-theorem verdicts and the **byte-identical proof sources** —
+asserted against each other rather than against remembered numbers, which is
+§7.2's "the emitted proof text does not change" and the shape D5's headline
+invariant will take. A batched run files every theorem in the same layer as an
+unbatched one, which is the case a checkpoint could break: it empties the
+identity map and re-attaches the system, and a spine has several to re-attach.
+
+*From review, and the general rule it produced.* The store half's mistakes were
+all one mistake: **everything a read path reaches by system id has to follow the
+split**, and the first cut moved only the proofs and the library. So
+`_link_proofs_to_theorems` still filtered on the deepest layer, and linked that
+layer's proofs while leaving every other layer's `theorem_id` null; the outline
+was stored whole against the leaf, so each ancestor listed no folders while the
+leaf reported nought proofs in each of its own (the folder route is
+system-scoped at both ends); and the descriptions went to the leaf, which
+`load_description` — deliberately unlayered, since a child cannot describe a
+label it does not declare — could then never find for an ancestor's proof. Each
+now partitions by the boundaries that decided which specs exist.
+
+**Notation is the one exception, and it goes on the root.** A `$t` block is a
+single declaration about the whole file rather than something each layer has its
+own of, and a notation is read *root-first up the chain*
+(`notations_mapping.notation_layers`), so the root is the one place every layer
+can see it from. On the leaf it would be invisible to all of its ancestors —
+which, for an imported corpus, is every notation there is.
+
+*And one regression on the path that was already shipping.* Rebinding after a
+checkpoint by **rebuilding** the routing object reattaches nothing the walk can
+see: `walk` is handed one `store` callable before the first checkpoint and holds
+it for the whole run, so every later assertion was written through a
+`FormalSystem` that `expunge_all` had detached — and the label→id map went with
+it, leaving the proofs unlinked besides. A real import is batched
+(`scripts/import_metamath.py` defaults to `--batch 50`) and **unlayered**, so
+this cost the entire promoted-theorem library of every corpus import, plan or no
+plan. A rebind has to mutate in place. The existing batched test filed proofs
+correctly throughout and never looked at the library, which is why it passed.
+
+*And one in the derivation both halves read.* `corpus_layers` paired the
+boundaries back with their opening positions through a dict keyed on the layer's
+**name** — and a `Layer`'s name is a display name that nothing prohibits two
+layers from sharing. A plan calling three layers `Logic` therefore kept one
+position, and while `corpus_specs` still emitted all three systems, every layer
+but the last routed its theorems into the *root*: filed under a grammar that does
+not declare their notation, which a row-based reload cannot rebuild. The
+boundaries already carried the positions by occurrence, so they are read off
+them (`_Boundary`) rather than re-derived — which is what "one function rather
+than two" was supposed to mean in the first place.
+
+*Still to do here:* the invalid case the original plan named
 — a plan assigning a production to a layer *after* a theorem that uses it. D1
 established that `set.mm` presents no such case (no `|-` statement uses a
 constant first declared later), so the check has nothing to catch on this file
