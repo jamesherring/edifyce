@@ -1831,22 +1831,43 @@ that has been through the rows comes back with its three inclusions interleaved
 differently among its 48 shaped productions. `_grammar_fingerprint` hashed the
 flat list, so that was a difference.
 
-**It is not one**, and the evidence is end to end rather than an argument:
-importing `set.mm` under the spec as declared and under the spec the rows give
-back produces the same 2,676 verdicts, the same 2,710 promoted statements, and a
-**byte-identical term graph** — 14,344 term digests, same set. The fingerprint
-now hashes shaped productions in order, as before, and inclusions as a set. The
-shaped ones stay ordered because for them the round trip *is* exact and order is
-a fact about the grammar this has no licence to discard.
+What it costs is not correctness — a stale digest is a miss, "which costs a parse
+and never a difference" — but it means **P4's term cache has never once hit for an
+imported corpus**, which is the whole of what docs/verification-from-rows.md P4
+claims to deliver. It went unnoticed because the failure mode of a cache is
+silence, and because nothing had ever compared the digest written against the
+digest read.
 
-What it cost while it was wrong was not correctness — a stale digest is a miss,
-"which costs a parse and never a difference" — but it meant **P4's term cache had
-never once hit for an imported corpus**, which is the whole of what
-docs/verification-from-rows.md P4 claims to deliver. It went unnoticed because
-the failure mode of a cache is silence, and because nothing had ever compared the
-digest written against the digest read. `tests/test_systems_store.py` now pins
-both halves: an inclusion moving must not move the digest, and a shaped
-production moving must.
+**The obvious fix is wrong, and this is the part to remember.** Hash the
+inclusions as a set — they are edges, `_declares_a_name` says so, the schema
+stores them as such — and the digests match. `set.mm` agreed emphatically:
+importing the corpus under the spec as declared and under the spec the rows give
+back produces the same 2,676 verdicts, the same 2,710 promoted statements and a
+**byte-identical term graph**, 14,344 term digests, same set.
+
+It is still unsound (found in review on #181). `build_system` adds every member of
+a sort's union in `spec.productions` order and `UnionPattern.match` takes the
+first that succeeds, so where an inclusion sits **decides the parse** wherever it
+and a direct production of the parent sort match the same text:
+
+| `formula ::=` | `A` reads as |
+|---|---|
+| `atom \| direct` | `Node(atom_leaf='A')` |
+| `direct \| atom` | `Node(direct='A')` |
+
+Two grammars, two parses, and under the set-hash **one digest**. That is strictly
+worse than the bug it fixes: a stale digest is a miss, but an equal one is
+*believed*, so a term composed under one precedence would be accepted under the
+other. `set.mm` could not show it because `set.mm` has no overlapping members —
+the sixth time in this track that the corpus being well behaved hid the general
+case, and the first where the corpus evidence was *positive* and still not
+enough.
+
+So the fingerprint stays ordered, and **the fix belongs in storage**: an
+inclusion has to keep its position among the productions, which the `symbols` row
+currently has nowhere to put. `tests/test_systems_store.py` pins the overlap
+outright, so the temptation cannot be taken up a second time, and carries the
+round-trip test as a strict `xfail` naming what is still owed.
 
 *Why this had to come first.* D5's own pinned item is "re-verifying a stored
 layered proof from its rows gives the same verdict as the import did". Against a

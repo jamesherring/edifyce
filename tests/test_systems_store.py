@@ -6,8 +6,6 @@ builds a system checking the same proofs -- and the rows are queryable with
 plain SQL, no compile.
 """
 
-from dataclasses import replace
-
 import pytest
 
 pytest.importorskip("regex")
@@ -74,6 +72,7 @@ from website.logical.declarative import (
     Rule,
     SystemSpec,
     build_spec,
+    build_system,
     library_digest,
 )
 
@@ -161,19 +160,64 @@ def included_spec() -> SystemSpec:
     )
 
 
+def overlapping_spec(inclusion_first: bool) -> SystemSpec:
+    """`formula` reachable two ways at once: through `atom`, and directly.
+
+    Both members match the same token, so which one wins is decided by which is
+    tried first — and that is what makes an inclusion's position load-bearing.
+    """
+    inclusion = Production(sort="formula", name="atom")
+    direct = regex_prod("formula", "direct", r"[A-Z]")
+    members = [inclusion, direct] if inclusion_first else [direct, inclusion]
+    return SystemSpec(
+        name="Overlap",
+        productions=[regex_prod("atom", "atom_leaf", r"[A-Z]"), *members],
+        lines=[statement_line()],
+    )
+
+
+def test_where_a_sort_inclusion_sits_decides_the_parse():
+    # **From review on #181**, and it is the reason the obvious fix to the bug
+    # below is wrong. An inclusion looks order-free — it is an edge, and
+    # `spec_to_system` stores it as one — but `build_system` adds every member of
+    # a sort's union in `spec.productions` order and `UnionPattern.match` takes
+    # the first that succeeds. So where an inclusion sits selects a *different
+    # constructor* wherever it overlaps a direct production of the parent sort.
+    first = build_system(overlapping_spec(inclusion_first=True))
+    last = build_system(overlapping_spec(inclusion_first=False))
+
+    through_the_atom = first.parse("A [HYP]").numbered_lines[0].formula_term
+    directly = last.parse("A [HYP]").numbered_lines[0].formula_term
+
+    assert str(through_the_atom) == "Node(atom_leaf='A')"
+    assert str(directly) == "Node(direct='A')"
+
+
+def test_a_digest_never_gives_two_parses_one_value():
+    # The consequence, and the guard: `library_digest` must keep an inclusion
+    # *ordered* among the productions. Hashing inclusions as an unordered set
+    # would collapse the two grammars above into one digest — and unlike a stale
+    # digest, which costs a parse and never a difference, an equal one is
+    # believed, so a cached term composed under one precedence would be accepted
+    # under the other.
+    assert library_digest(overlapping_spec(inclusion_first=True)) != library_digest(
+        overlapping_spec(inclusion_first=False)
+    )
+
+
+@pytest.mark.xfail(
+    reason=(
+        "An inclusion is stored as an edge with no position of its own, so "
+        "`system_to_spec` emits it last and the digest moves. Measured on "
+        "set.mm: nothing a reader computes matches what the import wrote, so "
+        "P4's term cache never hits for an imported corpus. The fix has to "
+        "preserve the position in storage — the digest cannot stop looking, "
+        "since `test_where_a_sort_inclusion_sits_decides_the_parse` shows what "
+        "it would be ignoring."
+    ),
+    strict=True,
+)
 def test_a_sort_inclusion_keeps_its_digest_across_the_database(session):
-    # **D5.** `spec_to_system` stores an inclusion as an edge on the sub-sort,
-    # carrying no position of its own — deliberately, because it is membership
-    # rather than a declaration (`_declares_a_name`). So a spec that has been
-    # through the rows comes back with its inclusions interleaved differently
-    # among the shaped productions.
-    #
-    # That is not a difference in the grammar, and the digest must not say it is:
-    # a `library_digest` that moved would make every cached term of an imported
-    # corpus fail its guard and re-parse — silently, since a stale digest is a
-    # miss and never a wrong answer, which is why this went unnoticed. Measured
-    # on `set.mm` before the fix: the digest written at import matched nothing a
-    # reader computed, for every layer and for a flat import alike.
     spec = included_spec()
     session.add(spec_to_system(spec))
     session.commit()
@@ -181,28 +225,8 @@ def test_a_sort_inclusion_keeps_its_digest_across_the_database(session):
     stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Included"))
 
     rebuilt = system_to_spec(stored)
-    # The reordering is real — this is what the digest used to see.
-    assert [p.name for p in rebuilt.productions] != [p.name for p in spec.productions]
-    assert {p.name for p in rebuilt.productions} == {p.name for p in spec.productions}
-    # And it is not a difference.
+    assert [p.name for p in rebuilt.productions] == [p.name for p in spec.productions]
     assert library_digest(rebuilt) == library_digest(spec)
-
-
-def test_moving_a_shaped_production_still_moves_the_digest(session):
-    # The other half, so the fix above is not a blunting. An inclusion is
-    # order-free because it is an edge; a production *with a shape* is not, and
-    # the round trip preserves its position exactly — so the digest has no
-    # licence to stop looking.
-    spec = included_spec()
-    # The two *shaped* ones swapped; the inclusion left where it was.
-    shuffled = replace(
-        spec,
-        productions=[
-            spec.productions[2], spec.productions[1], spec.productions[0],
-        ],
-    )
-
-    assert library_digest(shuffled) != library_digest(spec)
 
 
 def atomic_spec() -> SystemSpec:

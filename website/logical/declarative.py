@@ -2218,24 +2218,23 @@ def _grammar_fingerprint(spec: SystemSpec) -> str:
     # decides where one may be split, and the names something else in the build
     # namespace shadows.
     #
-    # **A sort inclusion is hashed as membership, not as a positioned
-    # production.** `_declares_a_name` already says why — a production with no
-    # shape *includes* one sort into another, which is an edge rather than a
-    # declaration, and `spec_to_system` stores it as exactly that: an edge on the
-    # sub-sort, carrying no position of its own. So a spec that has been through
-    # the rows comes back with its inclusions interleaved differently among the
-    # shaped productions, and hashing the flat list made that a difference.
+    # **Ordered, and that includes the sort inclusions.** It is tempting to hash
+    # an inclusion as membership rather than as a positioned production — it is
+    # an edge, `_declares_a_name` says so, and `spec_to_system` stores it as one.
+    # It is not sound (found in review on #181). `build_system` adds every member
+    # of a sort's union in `spec.productions` order and `UnionPattern.match`
+    # takes the first that succeeds, so where an inclusion sits **decides the
+    # parse** wherever it and a direct production of the parent sort match the
+    # same text: `formula ::= atom | direct` reads `A` as `atom_leaf`, and
+    # `formula ::= direct | atom` reads it as `direct`.
     #
-    # It is not one. Verified end to end on `set.mm`: importing the corpus under
-    # the spec as declared and under the spec the rows give back produces the
-    # same verdicts, the same promoted statements and a **byte-identical term
-    # graph** — 14,344 term digests, same set. The digest was discriminating on
-    # something no grammar can tell apart, which meant an imported corpus's
-    # cached terms failed their guard and re-parsed, every time (D5;
-    # docs/verification-from-rows.md P4).
+    # A digest that ignored that would give two grammars with different parses
+    # one value — and unlike a stale digest, which costs a parse and never a
+    # difference, an equal one is *believed*. A cached term composed under one
+    # precedence would be accepted under the other.
     #
-    # The shaped productions stay **ordered**, because for them the round trip is
-    # exact and order is a fact about the grammar this has no licence to discard.
+    # `tests/test_systems_store.py` pins the overlap directly, so the temptation
+    # cannot be taken up a second time.
     return _fingerprint(
         [
             sorted((_bracket_map(spec) or {}).items()),
@@ -2247,13 +2246,7 @@ def _grammar_fingerprint(spec: SystemSpec) -> str:
                     prod.bindings, sorted(prod.scopes_over.items()),
                 ]
                 for prod in spec.productions
-                if _declares_a_name(prod)
             ],
-            sorted(
-                [prod.sort, prod.name]
-                for prod in spec.productions
-                if not _declares_a_name(prod)
-            ),
             _shadowed_grammar_names(spec),
         ]
     )
