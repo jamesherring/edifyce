@@ -794,6 +794,60 @@ class TermSummary(BaseModel):
     alpha_digest: str | None = None
 
 
+class TermChildOut(BaseModel):
+    """One edge below a term node: the slot it fills, and what sits there."""
+
+    slot: str
+    id: uuid.UUID
+
+
+class TermNodeOut(BaseModel):
+    """One node of a term subgraph — `TermSummary` plus its edges and reading.
+
+    The fields mirror a ``terms`` row. ``rendered`` is this node read through the
+    requested notation, so a caller has the projection *and* the identity of every
+    subterm at once: it can point at a formula's part by ``id`` without restating
+    it, which is the thing a rendered string alone cannot support.
+
+    ``truncated`` means the walk stopped here with children still below — a
+    horizon, not a leaf. ``children`` is reported either way, so a second, deeper
+    request can be aimed rather than repeated.
+    """
+
+    id: uuid.UUID
+    kind: str
+    constructor: str | None = None
+    literal: str | None = None
+    sort: str | None = None
+    var_name: str | None = None
+    bound_index: int | None = None
+    digest: str | None = None
+    alpha_digest: str | None = None
+    # How far below the requested root this node sits. A DAG node reachable by
+    # two paths is reported once, at the shallower of them.
+    depth: int
+    children: list[TermChildOut] = Field(default_factory=list)
+    rendered: str | None = None
+    truncated: bool = False
+
+
+class TermGraphOut(BaseModel):
+    """A term's subgraph: every node once, edges by id.
+
+    Flat rather than nested, because a term is an interned **DAG**. A subterm two
+    positions share is one row with one id, and nesting would emit it twice —
+    losing exactly the structure sharing the storage exists for, and the ability
+    to refer to a part rather than repeat it.
+    """
+
+    root: uuid.UUID
+    formal_system_id: uuid.UUID
+    notation: str | None = None
+    nodes: list[TermNodeOut] = Field(default_factory=list)
+    # Whether any node stopped short of its children (see `TermNodeOut.truncated`).
+    truncated: bool = False
+
+
 class ProofLineAntecedentOut(BaseModel):
     """One justification edge: a line this line was derived from.
 

@@ -1762,3 +1762,210 @@ def test_editing_the_system_discards_its_proofs_checks(client, db):
 
     assert client.get(f"/api/proofs/{pid}").json()["valid"] is None
     assert _structure(client, pid)["stored"] is False
+
+
+# ---------------------------------------------------------------------------
+# A stored term's shape (GET /formal-systems/{id}/terms/{term_id})
+#
+# What `ProofStructure` cannot say: it gives each line's term as a root identity,
+# and a reader wanting the formula's *parts* had to fall back to a rendered
+# string. A string cannot be pointed at.
+# ---------------------------------------------------------------------------
+
+# `x = y` twice under one implication. Interning makes that *one* row, which is
+# the property the flat shape exists to preserve.
+_SHARED_SUBTERM = "(x = y → x = y) [HYP]"
+
+# Deliberately not the source spelling, so a node's reading cannot be mistaken
+# for its stored shape.
+_DEMO_TEMPLATES = {
+    "equality": (("slot", "s"), ("lit", " EQ "), ("slot", "t")),
+    "implication": (
+        ("lit", "("),
+        ("slot", "p"),
+        ("lit", " IMP "),
+        ("slot", "q"),
+        ("lit", ")"),
+    ),
+}
+
+
+def _stored_term(client: TestClient, db_path, owner: str) -> tuple[str, str]:
+    """A verified proof's first term, as (system id, term id)."""
+    system_id = _seed_system(db_path, owner)
+    created = client.post(
+        "/api/proofs",
+        json={"name": "P", "formal_system_id": system_id, "source": _SHARED_SUBTERM},
+    ).json()
+    assert client.post(f"/api/proofs/{created['id']}/verify").json()["success"] is True
+    term = _structure(client, created["id"])["lines"][0]["term"]
+    assert term is not None
+    return system_id, term["id"]
+
+
+def test_a_shared_subterm_is_one_node_referenced_twice(client, db):
+    # The reason the response is flat rather than nested. `x = y` occurs at both
+    # slots of the implication and is one interned row; nesting would emit it
+    # twice and lose the sharing the storage exists for — and with it the ability
+    # to refer to a part instead of restating it.
+    owner = _register_login(client, "ada@example.com")
+    system_id, term_id = _stored_term(client, db, owner)
+
+    body = client.get(f"/api/formal-systems/{system_id}/terms/{term_id}").json()
+
+    assert body["root"] == term_id
+    assert body["truncated"] is False
+    ids = [node["id"] for node in body["nodes"]]
+    assert len(ids) == len(set(ids)), "a node must be reported once"
+    root = next(node for node in body["nodes"] if node["id"] == term_id)
+    slots = {child["slot"]: child["id"] for child in root["children"]}
+    assert len(slots) == 2
+    assert len(set(slots.values())) == 1, "both slots should name the same row"
+    # And that row is in the response exactly once, reachable by both edges.
+    assert ids.count(next(iter(slots.values()))) == 1
+
+
+def test_every_node_carries_its_identity(client, db):
+    # The digests are the point of serving nodes at all: structural equality and
+    # equality up to renaming become id comparisons rather than string ones.
+    owner = _register_login(client, "ada@example.com")
+    system_id, term_id = _stored_term(client, db, owner)
+
+    body = client.get(f"/api/formal-systems/{system_id}/terms/{term_id}").json()
+
+    assert all(node["digest"] for node in body["nodes"])
+    root = next(node for node in body["nodes"] if node["id"] == term_id)
+    assert root["depth"] == 0
+    assert root["kind"] == "node"
+    assert root["constructor"]
+
+
+def test_depth_bounds_the_output_and_marks_the_horizon(client, db):
+    # A reader must be able to tell a leaf from a horizon, or it will believe a
+    # formula ended where the request did. The children are reported either way,
+    # so a deeper request can be aimed rather than repeated.
+    owner = _register_login(client, "ada@example.com")
+    system_id, term_id = _stored_term(client, db, owner)
+
+    body = client.get(
+        f"/api/formal-systems/{system_id}/terms/{term_id}?depth=0"
+    ).json()
+
+    assert [node["id"] for node in body["nodes"]] == [term_id]
+    assert body["truncated"] is True
+    assert body["nodes"][0]["truncated"] is True
+    assert body["nodes"][0]["children"], "the horizon still names what is below it"
+
+    # The implication, the equality both its slots share, and the two variable
+    # leaves. Pinned exactly, because a claim about the shape of this response is
+    # the sort of thing prose in a roadmap gets wrong.
+    whole = client.get(f"/api/formal-systems/{system_id}/terms/{term_id}").json()
+    assert len(whole["nodes"]) == 4
+    assert whole["truncated"] is False
+
+
+def test_a_child_reachable_within_the_bound_is_not_called_missing(client, db):
+    # `truncated` is about what the response *omits*, not about which nodes sat at
+    # the horizon. In a DAG a child beyond one node's bound is often reachable
+    # within another's and already present — reporting the response incomplete
+    # when it is complete costs a caller a wasted deeper request.
+    owner = _register_login(client, "ada@example.com")
+    system_id, term_id = _stored_term(client, db, owner)
+
+    # At depth 1: the implication and the equality it shares. The equality's own
+    # children are absent, so it *is* truncated; the root is not.
+    body = client.get(f"/api/formal-systems/{system_id}/terms/{term_id}?depth=1").json()
+    by_id = {node["id"]: node for node in body["nodes"]}
+
+    assert by_id[term_id]["truncated"] is False, "both its children are present"
+    assert body["truncated"] is True, "the equality's leaves are not"
+
+    # And at full depth nothing is missing anywhere.
+    whole = client.get(f"/api/formal-systems/{system_id}/terms/{term_id}").json()
+    assert not any(node["truncated"] for node in whole["nodes"])
+
+
+def test_a_notation_reads_every_node(client, db):
+    # The headline: the identity *and* the projection of every part at once, so a
+    # caller can point at a subterm by id without restating it.
+    owner = _register_login(client, "ada@example.com")
+    system_id, term_id = _stored_term(client, db, owner)
+    _seed_notation(db, system_id, "demo", _DEMO_TEMPLATES)
+
+    body = client.get(
+        f"/api/formal-systems/{system_id}/terms/{term_id}?notation=demo"
+    ).json()
+
+    assert body["notation"] == "demo"
+    readings = {node["id"]: node["rendered"] for node in body["nodes"]}
+    assert readings[term_id] == "(x EQ y IMP x EQ y)"
+    # Each part reads in full, including the shared one.
+    assert "x EQ y" in readings.values()
+
+
+def test_a_node_at_the_horizon_still_reads_in_full(client, db):
+    # `depth` bounds what is *listed*, not what is rendered — a truncated node
+    # that read as a hole would make a shallow request useless.
+    owner = _register_login(client, "ada@example.com")
+    system_id, term_id = _stored_term(client, db, owner)
+    _seed_notation(db, system_id, "demo", _DEMO_TEMPLATES)
+
+    body = client.get(
+        f"/api/formal-systems/{system_id}/terms/{term_id}?notation=demo&depth=0"
+    ).json()
+
+    assert body["nodes"][0]["truncated"] is True
+    assert body["nodes"][0]["rendered"] == "(x EQ y IMP x EQ y)"
+
+
+def test_a_notation_the_system_does_not_store_is_404(client, db):
+    owner = _register_login(client, "ada@example.com")
+    system_id, term_id = _stored_term(client, db, owner)
+
+    res = client.get(f"/api/formal-systems/{system_id}/terms/{term_id}?notation=nope")
+    assert res.status_code == 404
+
+
+def test_a_term_of_another_system_is_not_found(client, db):
+    # A term belongs to the system that interned it. Serving another system's row
+    # would leak a draft's contents to anyone who could guess an id.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, term_id = _stored_term(client, db, owner)
+    other = _seed_system(db, owner)
+
+    res = client.get(f"/api/formal-systems/{other}/terms/{term_id}")
+    assert res.status_code == 404
+
+
+def test_an_unknown_term_id_is_not_found(client, db):
+    owner = _register_login(client, "ada@example.com")
+    system_id, _term_id = _stored_term(client, db, owner)
+
+    res = client.get(f"/api/formal-systems/{system_id}/terms/{uuid.uuid4()}")
+    assert res.status_code == 404
+
+
+def test_a_draft_systems_terms_are_owner_only(client, db):
+    # Visibility is the system's, which is the reason the route hangs off it.
+    owner = _register_login(client, "ada@example.com")
+    system_id, term_id = _stored_term(client, db, owner)
+    _register_login(client, "grace@example.com")
+
+    res = client.get(f"/api/formal-systems/{system_id}/terms/{term_id}")
+    assert res.status_code == 404
+
+
+def test_an_unknown_term_is_refused_before_a_notation_is_loaded(client, db):
+    # Ordering, not semantics: both are 404s, but loading a notation is thousands
+    # of rows on a corpus-sized system and a caller with a random id must not be
+    # able to make this route pay for it. The notation here is real, so a 404 can
+    # only be the term check — and it has to have run first.
+    owner = _register_login(client, "ada@example.com")
+    system_id, _term_id = _stored_term(client, db, owner)
+    _seed_notation(db, system_id, "demo", _DEMO_TEMPLATES)
+
+    res = client.get(
+        f"/api/formal-systems/{system_id}/terms/{uuid.uuid4()}?notation=demo"
+    )
+    assert res.status_code == 404
+    assert "term" in res.json()["detail"]

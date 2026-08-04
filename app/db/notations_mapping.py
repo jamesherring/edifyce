@@ -43,7 +43,7 @@ from website.logical.rendering import (
 
 if TYPE_CHECKING:
     import uuid
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
 
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.orm import Session
@@ -283,6 +283,36 @@ async def _load_rules(
     return tuple(rule for _at, rule in nearest.values())
 
 
+def render_each(
+    graph: TermGraph,
+    term_ids: Sequence[uuid.UUID],
+    projection: Projection,
+) -> dict[uuid.UUID, str]:
+    """Render many nodes of one graph, folding each subterm once.
+
+    :func:`render_stored` per node re-folds that node's whole subtree, so
+    rendering every node of a term costs the sum of its subtree sizes — fine for
+    one statement, wasteful on an endpoint whose shape invites being called
+    repeatedly (`GET /formal-systems/{id}/terms/{id}`). Sharing one memo across
+    the calls makes it linear, and interning means the sharing is the usual case
+    rather than the exception.
+
+    Sound because a stored term graph is **acyclic** by construction: `store_term`
+    interns bottom-up, so a node can never be its own ancestor and a node's
+    rendering cannot depend on the path taken to it. `_render_row` keeps its
+    path guard for the corrupt-data case regardless; what a memo would change
+    there is which empty string comes back, not whether one does.
+    """
+    templates = projection.templates
+    rules = rules_by_constructor(projection.rules)
+    memo: dict[uuid.UUID, str] = {}
+    return {
+        term_id: _render_row(graph, term_id, templates, rules, set(), memo)
+        for term_id in term_ids
+        if graph.node(term_id) is not None
+    }
+
+
 def render_stored(
     graph: TermGraph, term_id: uuid.UUID | None, projection: Projection
 ) -> str | None:
@@ -356,7 +386,10 @@ def _render_row(
     templates: Mapping[str, tuple[Piece, ...]],
     rules: Mapping[str, tuple[Rule, ...]],
     seen: set[uuid.UUID],
+    memo: dict[uuid.UUID, str] | None = None,
 ) -> str:
+    if memo is not None and term_id in memo:
+        return memo[term_id]
     row = graph.node(term_id)
     if row is None or term_id in seen:
         # A term graph is a DAG, so a repeat is sharing rather than a cycle - but
@@ -381,8 +414,17 @@ def _render_row(
             # instantiates every bound variable before anyone reads the result.
             return f"⟨{row.bound_index}⟩"
         if len(children) == 1:
-            return _render_row(
-                graph, next(iter(children.values())), templates, rules, seen | {term_id}
+            return _remember(
+                memo,
+                term_id,
+                _render_row(
+                    graph,
+                    next(iter(children.values())),
+                    templates,
+                    rules,
+                    seen | {term_id},
+                    memo,
+                ),
             )
         return ""
     out: list[str] = []
@@ -398,8 +440,14 @@ def _render_row(
             _descend_row(graph, term_id, text) if rule is not None else children.get(text)
         )
         out.append(
-            _render_row(graph, child, templates, rules, seen | {term_id})
+            _render_row(graph, child, templates, rules, seen | {term_id}, memo)
             if child is not None
             else text
         )
-    return "".join(out)
+    return _remember(memo, term_id, "".join(out))
+
+
+def _remember(memo: dict[uuid.UUID, str] | None, term_id: uuid.UUID, shown: str) -> str:
+    if memo is not None:
+        memo[term_id] = shown
+    return shown

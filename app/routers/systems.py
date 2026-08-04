@@ -23,7 +23,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -56,7 +56,9 @@ from app.routers._common import (
 )
 from app.db.descriptions_mapping import load_description
 from app.db.models import Proof, ProofFolder, User
-from app.db.notations_mapping import notation_names
+from app.db.notations_mapping import load_notation, notation_names, render_each
+from app.db.terms import TermRow
+from app.db.terms_mapping import prefetch_terms, term_digests, walk_subgraph
 from app.db.side_conditions import SideConditionRow
 from app.db.side_conditions_mapping import (
     definition_provisos_list,
@@ -77,6 +79,9 @@ from app.db.systems import (
 )
 from app.schemas import (
     Attribution,
+    TermChildOut,
+    TermGraphOut,
+    TermNodeOut,
     Axiom,
     DefinitionBinder,
     DefinitionBinders,
@@ -282,6 +287,34 @@ async def _get_readable_or_404(
         # 404 (not 403) for a draft you don't own, so unpublished ids don't leak.
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Formal system not found.")
     return system
+
+
+async def readable_system_id_or_404(
+    session: AsyncSession, system_id: uuid.UUID, user: User | None
+) -> uuid.UUID:
+    """Assert the system exists and is readable, **without loading it**.
+
+    :func:`_get_readable_or_404`'s cheap twin, for a route that needs the id and
+    nothing else. That one hydrates the whole grammar — symbols, lines,
+    definitions and their provisos, axioms, rules — which is the right trade for
+    a route that renders a system and badly wrong for one asked repeatedly for a
+    single row of something else.
+
+    Same 404-not-403 for a draft you do not own, so unpublished ids do not leak.
+    """
+    row = (
+        await session.execute(
+            select(FormalSystem.id, FormalSystem.owner_id, FormalSystem.published_at)
+            .where(FormalSystem.id == system_id)
+        )
+    ).first()
+    readable = row is not None and (
+        row.published_at is not None
+        or (user is not None and row.owner_id == user.id)
+    )
+    if not readable:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Formal system not found.")
+    return system_id
 
 
 async def owned_system_id_or_404(
@@ -1151,4 +1184,118 @@ async def verify_proof(
         proof=proof.data(),
         holes=numbers(proof.holes),
         only_holes=proof.only_holes,
+    )
+
+
+@router.get("/{system_id}/terms/{term_id}", response_model=TermGraphOut)
+async def get_term_subgraph(
+    system_id: uuid.UUID,
+    term_id: uuid.UUID,
+    notation: str | None = Query(
+        None,
+        description=(
+            "Read each node through one of the system's stored notations. "
+            "Omitted, nodes carry their shape and no reading."
+        ),
+    ),
+    depth: int | None = Query(
+        None,
+        ge=0,
+        description=(
+            "How far below the root to descend. Omitted, the whole subgraph. "
+            "A node with children it stopped short of is marked `truncated`."
+        ),
+    ),
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> TermGraphOut:
+    """A stored term's shape, node by node.
+
+    What a proof's structure could not say. `ProofStructure` gives each line's
+    term as a `TermSummary` — the root's identity and its digests — and a reader
+    wanting the formula's *parts* had to fall back to `display` or `rendered`,
+    which is a string. A string cannot be pointed at: "the second argument of the
+    application on line 4" is a thing a caller can compute here and cannot
+    compute there.
+
+    Served against the **system**, not a proof, because that is what a term
+    belongs to: interning is per system, and one row is the statement of however
+    many lines happen to share it. Visibility is therefore the system's.
+
+    Read-only, and reports what is stored. A term id this system does not own is
+    a 404 rather than an empty graph — a caller holding an id from elsewhere has
+    made a mistake worth hearing about.
+    """
+    # The id and nothing else: this route reads one term's rows, and hydrating a
+    # corpus-sized grammar to serve it would dominate the request — on an endpoint
+    # whose whole shape invites being called repeatedly, node by node.
+    system_id = await readable_system_id_or_404(session, system_id, user)
+
+    # Cheapest and most selective first. Both remaining checks 404, so the order
+    # is a cost decision rather than a semantic one — and loading a notation is
+    # thousands of rows on a corpus (set.mm's `latex` is 1,796 templates), which
+    # a caller with a random id should not be able to make this route pay for.
+    owner = await session.scalar(
+        select(TermRow.formal_system_id).where(TermRow.id == term_id)
+    )
+    if owner != system_id:
+        # Also the not-found case: `owner` is None for an id that names no row.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="This system has no term with that id.",
+        )
+
+    projection = None
+    if notation is not None:
+        projection = await load_notation(session, system_id, notation)
+        if projection is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"This system has no notation named {notation!r}.",
+            )
+
+    graph = await session.run_sync(lambda sync: prefetch_terms(sync, [term_id]))
+    nodes = walk_subgraph(graph, term_id, depth)
+    digests = await session.run_sync(
+        lambda sync: term_digests(sync, [node.id for node in nodes])
+    )
+    # Every node read as a root, so a caller has the identity and the projection
+    # of each part at once. One shared fold rather than one per node: rendering
+    # each separately would re-walk its whole subtree, which is the sum of the
+    # subtree sizes for a request that wants all of them.
+    #
+    # Rendered from the *whole* graph rather than the walked slice, so a node at
+    # the `depth` horizon still reads in full rather than as a hole — `depth`
+    # bounds what is listed, not what is read.
+    readings = (
+        render_each(graph, [node.id for node in nodes], projection)
+        if projection is not None
+        else {}
+    )
+
+    return TermGraphOut(
+        root=term_id,
+        formal_system_id=system_id,
+        notation=notation,
+        truncated=any(node.truncated for node in nodes),
+        nodes=[
+            TermNodeOut(
+                id=node.id,
+                kind=node.row.kind,
+                constructor=node.row.constructor,
+                literal=node.row.literal,
+                sort=node.row.sort,
+                var_name=node.row.var_name,
+                bound_index=node.row.bound_index,
+                digest=digests.get(node.id, (None, None))[0],
+                alpha_digest=digests.get(node.id, (None, None))[1],
+                depth=node.depth,
+                children=[
+                    TermChildOut(slot=slot, id=child) for slot, child in node.children
+                ],
+                rendered=readings.get(node.id),
+                truncated=node.truncated,
+            )
+            for node in nodes
+        ],
     )

@@ -285,3 +285,145 @@ just work left. False with holes present means both, and the errors come first �
 filling a goal beneath a broken step proves nothing. Both reach the API as
 `VerifyProofResponse.holes` and `.only_holes`, beside a `success` that is False
 either way.
+
+---
+
+## 9. Reasoning over the DAG rather than over a projection
+
+The question §3's option C invites: does making the *term* the buffer let a model
+reason about proofs structurally instead of about one rendering of them? Mostly
+yes — but "the DAG" is two different graphs, and separating them shows that half
+of this is already true and the other half is exactly what C is.
+
+### Two graphs
+
+**The justification DAG** — lines and the edges between them. Already served as
+structure: `GET /proofs/{id}/structure` gives per line the `rule` that justified
+it, `antecedents` as typed edges (`role`, `position`, and either `line_id` or
+`proof_id`/`number` for a citation reaching into a lemma), the scope tree through
+`scope_id`/`opens_scope`, and the `definition_id` a definitional step applied. No
+prose is involved anywhere in it.
+
+**The term DAG** — what a statement *is*. Interned, shared, digested. Until §9a
+below, the API stopped at the root: `TermSummary` gave `constructor`, `digest` and
+`alpha_digest`, and a reader wanting the formula's *parts* fell back to `display`
+or `rendered`. A string cannot be pointed at — "the second argument of the
+application on line 4" is computable from rows and not from a rendering.
+
+### The asymmetry C removes
+
+A model can already **read** structure and must still **reply in prose**, then
+hope the parse round-trips to the structure it meant. That round-trip is where
+§2's 19 ambiguities bite, and it fails silently.
+
+C makes the write path structural. The useful way to put it: a projection becomes
+a **view** — lossy, disposable, chosen per call — rather than the **carrier**.
+Many projections, one truth.
+
+### The loop, and what supplies each part
+
+```
+get_goals(proof)     → the holes                              §8, done
+expand(term, depth, notation)
+                     → nodes, each with its id AND its reading §9a, done
+propose(line, justification)
+   {rule: "MP", antecedents: [4, 6]}          ← cite: no formula emitted at all
+   {statement: {constructor: "wcel",
+                slots: {A: {ref: "node:a3f"}, ← reuse, do not re-emit
+                        B: {constructor: "cr"}}}}
+→ accepted, or Failure{code: "slot-unsatisfied", slots: [{schema: "(p -> q)"}]}
+                     → which becomes the next goal              §7, done
+```
+
+The loop closes: a failure names a missing premise, a missing premise is a goal, a
+goal is a hole, a hole is fillable. Two properties prose cannot supply:
+
+- **The vocabulary is closed and enumerable.** Constructor names come from the
+  system's own grammar, so valid emissions are a finite set — which is what makes
+  constrained decoding or a tool schema possible rather than aspirational.
+- **Structure sharing survives the wire.** `{ref: "node:a3f"}` says "the thing at
+  line 4's second slot" without re-emitting it. Where statements nest deeply that
+  is the difference between a tractable emission and a long one that has to be
+  exactly right.
+
+### What it is *not*
+
+Reasoning over the DAG with no projection at all is neither achievable nor
+desirable. A model's competence is in mathematical prose and LaTeX; node ids carry
+no semantics for it. The realistic split is **perception stays a projection** —
+but an annotated one, every rendered subterm tagged with its id, so the model can
+point without restating — and **commitment is structural**, so a mis-translation
+between the two is a caught error rather than a different term. That is the same
+resolution §4 reached for B: take the fluency at the translation boundary, not by
+making the carrier ambiguous.
+
+### Staging
+
+C is not all-or-nothing, and the cheap half is the bigger half.
+`{rule: "MP", antecedents: [4, 6]}` is already fully structural — a label and two
+integers, no term emission whatever — and in an imported Metamath corpus the
+overwhelming majority of steps are exactly that shape. Only *new statements* need
+the expensive half. So:
+
+1. **Term subgraph, readable** — §9a, done.
+2. **Structured citation proposals** — a label and line numbers, no term algebra.
+3. **Structured statement proposals** — the term-building half, and the only part
+   that needs a real constructor vocabulary over the wire.
+
+### What none of this solves
+
+Which of 47,589 theorems to cite. That is retrieval and it is separate — though
+`alpha_digest` is a strong primitive for the exact case: "have I already got this,
+up to renaming?" is an index lookup rather than a search.
+
+## 9a. The term subgraph, served — *done*
+
+`GET /formal-systems/{system_id}/terms/{term_id}` returns a stored term's nodes.
+
+Against the **system**, not a proof, because that is what a term belongs to:
+interning is per system, and one row is the statement of however many lines happen
+to share it. Visibility is therefore the system's, and a term id the system does
+not own is a 404 rather than an empty graph — a caller holding an id from
+elsewhere has made a mistake worth hearing about.
+
+**Flat, not nested.** A term is an interned DAG: a subterm two positions share is
+one row with one id. Nesting would emit it twice, losing exactly the structure
+sharing the storage exists for — and with it the ability to refer to a part rather
+than repeat it. `(x = y → x = y)` comes back as **four** nodes — the implication,
+the one equality both its slots name, and the two variable leaves — rather than
+the six a tree would have.
+
+**Every node carries its reading**, when a `notation` is asked for. That is the
+annotated projection §9 wants: identity *and* rendering of every part at once. A
+node at a `depth` horizon still reads in full — `depth` bounds what is listed, not
+what is rendered, or a shallow request would be useless.
+
+**`truncated` distinguishes a horizon from a leaf**, and a truncated node still
+reports its `children`, so a second, deeper request can be aimed rather than
+repeated. It is decided against what the walk *emitted* rather than against where
+the bound fell: in a DAG a child beyond one node's depth is often reachable within
+another's and already in the response, and calling that incomplete would cost a
+caller a deeper request that returns nothing new.
+
+Four implementation notes worth not rediscovering.
+
+The digests are fetched by a **second query** rather than added to `StoredTerm`:
+the sweep that builds a `TermGraph` runs on every proof view and every
+check-from-rows, and neither needs them, so widening it would put two columns per
+node on the hot path to serve a reader that asks rarely.
+
+`depth` bounds the **output** rather than the read — the sweep already fetches the
+closure in one query, so a shallow request costs the same and simply says less.
+
+Visibility uses `readable_system_id_or_404`, a cheap twin of the usual check.
+`_get_readable_or_404` hydrates the whole grammar — symbols, lines, definitions
+and their provisos, axioms, rules — which is right for a route that renders a
+system and badly wrong for one asked repeatedly for a single row of something
+else.
+
+Rendering is **one shared fold** (`notations_mapping.render_each`), not
+`render_stored` per node. Per node re-walks that node's whole subtree, so
+rendering all of them costs the sum of the subtree sizes; one memo across the
+calls makes it linear. Sound because a stored term graph is acyclic by
+construction — `store_term` interns bottom-up, so a node can never be its own
+ancestor and its rendering cannot depend on the path taken to it.
