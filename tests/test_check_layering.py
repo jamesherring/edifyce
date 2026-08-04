@@ -2,9 +2,10 @@
 
 The script itself runs against a real `.mm` and is not part of the suite — that
 is the point of it (D4, docs/system-relationships-roadmap.md §8). But its
-*comparison* is a pure function over two summaries, and what it refuses to accept
-is worth pinning, because the failure mode of a checking harness is passing
-vacuously and nothing about a green run says which kind of green it was.
+*comparison* is a pure function over two summaries and an expected partition, and
+what it refuses to accept is worth pinning, because the failure mode of a
+checking harness is passing vacuously and nothing about a green run says which
+kind of green it was.
 """
 
 from __future__ import annotations
@@ -15,16 +16,25 @@ pytest.importorskip("sqlalchemy")
 
 from scripts.check_layering import Run, compare
 
+PC = "Propositional calculus"
+FOL = "First-order logic"
+TWO_LAYERS = [(PC, 1), (FOL, 1)]
+BOTH = {"pc-thm": ("$= ( ax-1 ) ABC", True), "fol-thm": ("$= ( ax-4 ) ABC", True)}
+# Where the file says each of them belongs, which is what `expected_owners`
+# derives from the boundaries rather than reading back from the run.
+EXPECTED = {"pc-thm": PC, "fol-thm": FOL}
+
 
 def run(
     *,
     spine: list[tuple[str, int]],
     proofs: dict[str, tuple[str, bool]] | None = None,
     library: dict[str, bool] | None = None,
+    owners: dict[str, str] | None = None,
     **overrides: object,
 ) -> Run:
     """A summary with everything agreeing, so a test names only what it changes."""
-    stored = {"pc-thm": ("$= ( ax-1 ) ABC", True)} if proofs is None else proofs
+    stored = BOTH if proofs is None else proofs
     fields: dict[str, object] = {
         "checked": len(stored),
         "verified": len(stored),
@@ -43,59 +53,93 @@ def run(
         "folders": ["Pre-logic"],
         "described_labels": {"ax-1", "pc-thm"},
         "spine": spine,
+        # Default to filing everything where the file says it goes, so a test
+        # that is not about the partition does not have to restate it.
+        "owners": {label: EXPECTED[label] for label in stored} if owners is None
+        else owners,
     }
     return Run(**{**fields, **overrides})  # type: ignore[arg-type]
 
 
-TWO_LAYERS = [("Propositional calculus", 1), ("First-order logic", 1)]
-BOTH = {"pc-thm": ("$= ( ax-1 ) ABC", True), "fol-thm": ("$= ( ax-4 ) ABC", True)}
+def flat_run(**overrides: object) -> Run:
+    """The unlayered side: one system, so everything is filed under its name."""
+    stored = overrides.pop("proofs", BOTH)
+    return run(
+        spine=[("Metamath", len(stored))],
+        proofs=stored,  # type: ignore[arg-type]
+        owners=dict.fromkeys(stored, "Metamath"),
+        **overrides,
+    )
+
+
+def reasons(*args: object) -> list[str]:
+    return [difference.what for difference in compare(*args).differences]  # type: ignore[arg-type]
 
 
 def test_two_agreeing_runs_over_a_real_spine_are_a_confirmation() -> None:
-    flat = run(spine=[("Metamath", 2)], proofs=BOTH)
-    spined = run(spine=TWO_LAYERS, proofs=BOTH)
-
-    assert compare(flat, spined).differences == []
+    assert reasons(flat_run(), run(spine=TWO_LAYERS), EXPECTED) == []
 
 
-def test_a_spine_that_collapsed_to_one_layer_is_refused() -> None:
+def test_a_plan_covering_these_theorems_with_one_layer_is_refused() -> None:
     # **From review.** A plan whose section titles the file does not open, or a
-    # `--limit` short of the second boundary, gives one system — and then every
+    # `--limit` short of the second boundary, gives one layer — and then every
     # equality the script checks holds because the two runs *are* the same run.
     # Reproduced against the repo's own fixture: at `--limit 1` the script
     # printed "Layering changed nothing" and exited 0 while comparing nothing.
     #
-    # The same guard catches a regression that filed every proof into the root,
-    # which is a spine in name only.
-    flat = run(spine=[("Metamath", 1)])
-    spined = run(spine=[("Propositional calculus", 1)])
+    # Asked of the *expected* partition rather than the realised one, so a run
+    # that wrongly collapsed is caught by the next test instead of excused here.
+    one = {"pc-thm": ("$= ( ax-1 ) ABC", True)}
 
-    reasons = [difference.what for difference in compare(flat, spined).differences]
-    assert reasons == ["the spined run is not a spine"]
+    assert reasons(
+        flat_run(proofs=one),
+        run(spine=[(PC, 1)], proofs=one, owners={"pc-thm": PC}),
+        {"pc-thm": PC},
+    ) == ["nothing here is a comparison"]
+
+
+def test_a_layer_whose_proofs_went_somewhere_else_is_caught() -> None:
+    # **From review, and the gap the first cut left.** Requiring only that *some*
+    # two layers carry proofs passes a run that filed every ZF theorem under
+    # first-order logic: two non-empty shares summing correctly is all such a
+    # check ever asks. Every other comparison is blind to which system a row
+    # landed in, so the partition has to be compared element by element.
+    spined = run(
+        spine=[(PC, 2), (FOL, 0)],
+        owners={"pc-thm": PC, "fol-thm": PC},
+    )
+
+    differences = compare(flat_run(), spined, EXPECTED).differences
+    assert [d.what for d in differences] == ["proofs filed in the wrong layer"]
+    assert "fol-thm" in differences[0].detail
 
 
 def test_layers_that_do_not_add_up_are_refused() -> None:
-    # Non-empty is not enough: the shares have to partition what was stored, or
-    # the breakdown is describing a different run from the one being compared.
-    flat = run(spine=[("Metamath", 2)], proofs=BOTH)
-    spined = run(spine=[("Propositional calculus", 1), ("First-order logic", 5)],
-                 proofs=BOTH)
+    # The report's own breakdown has to describe the run it came from, even when
+    # every proof is filed correctly.
+    spined = run(spine=[(PC, 1), (FOL, 5)])
 
-    reasons = [difference.what for difference in compare(flat, spined).differences]
-    assert reasons == ["per-layer proof counts"]
+    assert reasons(flat_run(), spined, EXPECTED) == ["per-layer proof counts"]
+
+
+def test_a_flat_run_that_is_not_flat_is_refused() -> None:
+    # If it ever spread across systems, every "same either way" result would be
+    # comparing the wrong thing.
+    flat = run(spine=[("Metamath", 2)], owners={"pc-thm": "Metamath", "fol-thm": FOL})
+
+    assert "the flat run is not flat" in reasons(flat, run(spine=TWO_LAYERS), EXPECTED)
 
 
 def test_a_rewritten_proof_source_is_caught() -> None:
     # The headline: a citation is stored as a bare label and resolves through the
     # spine, so splitting a corpus must not rewrite one. Same labels, same
     # verdicts, same counts — and a different body.
-    flat = run(spine=[("Metamath", 2)], proofs=BOTH)
     spined = run(
         spine=TWO_LAYERS,
         proofs={**BOTH, "fol-thm": ("$= ( ax-4 ) ABD", True)},
     )
 
-    differences = compare(flat, spined).differences
+    differences = compare(flat_run(), spined, EXPECTED).differences
     assert [d.what for d in differences] == ["proof sources or verdicts"]
     assert "fol-thm" in differences[0].detail
 
@@ -106,14 +150,14 @@ def test_a_promotion_refused_under_a_spine_is_caught_twice() -> None:
     # because `theorems_failed` is counted apart from `failed`. The label set is
     # what caught it; the counter comparison was added afterwards so that the
     # next one trips both, and this asserts that it does.
-    flat = run(spine=[("Metamath", 2)], proofs=BOTH, library={"ax-1": True, "ax-5": True})
+    flat = flat_run(library={"ax-1": True, "ax-5": True})
     spined = run(
         spine=TWO_LAYERS,
-        proofs=BOTH,
         library={"ax-1": True},
         theorems=1,
         theorems_failed=1,
     )
 
-    reasons = {difference.what for difference in compare(flat, spined).differences}
-    assert reasons == {"theorems", "theorems failed", "library labels"}
+    assert set(reasons(flat, spined, EXPECTED)) == {
+        "theorems", "theorems failed", "library labels"
+    }

@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -48,13 +49,14 @@ from sqlalchemy.orm import Session  # noqa: E402
 from app.db import Base  # noqa: E402
 from app.db.descriptions import LabelDescriptionRow  # noqa: E402
 from app.db.metamath_store import import_corpus  # noqa: E402
-from app.db.models import Proof, ProofFolder  # noqa: E402
+from app.db.models import FormalSystem, Proof, ProofFolder  # noqa: E402
 from app.db.promoted_theorems import PromotedTheoremRow  # noqa: E402
 from website.logical.metamath import parse  # noqa: E402
+from website.logical.metamath.corpus import corpus_layers, theorems  # noqa: E402
 from website.logical.metamath.setmm import LAYERS  # noqa: E402
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from website.logical.metamath.sections import Layer
 
@@ -100,6 +102,10 @@ class Run:
     # one system, and then the comparison below is between two identical runs and
     # confirms nothing (found in review).
     spine: list[tuple[str, int]]
+    # Where each proof was actually filed: label -> the *name* of the system it
+    # was stored against. Names rather than ids, because an id is different in
+    # every run by construction and so can be compared with nothing.
+    owners: dict[str, str]
     seconds: float = 0.0
 
 
@@ -158,8 +164,16 @@ def run_import(source: str, limit: int | None, plan: Sequence[Layer]) -> Run:
                 batch=200,
                 plan=plan,
             )
+            named = {
+                system.id: system.name
+                for system in session.scalars(select(FormalSystem))
+            }
             proofs = {
                 proof.name: (proof.source, bool(proof.valid))
+                for proof in session.scalars(select(Proof))
+            }
+            owners = {
+                proof.name: named[proof.formal_system_id]
                 for proof in session.scalars(select(Proof))
             }
             library = {
@@ -193,38 +207,94 @@ def run_import(source: str, limit: int | None, plan: Sequence[Layer]) -> Run:
         folders=folders,
         described_labels=described,
         spine=[(layer.name, layer.proofs) for layer in report.layers],
+        owners=owners,
         seconds=time.monotonic() - started,
     )
 
 
-def compare(flat: Run, spined: Run) -> Comparison:
+def expected_owners(source: str, limit: int | None) -> dict[str, str]:
+    """Which layer each walked theorem *should* be filed in, derived here.
+
+    The point is that it is derived **here**, from the file and the plan, rather
+    than read back from the run: `corpus_layers` is the declared boundary list,
+    and this does its own assignment against it rather than trusting
+    `metamath_store`'s routing. So a regression anywhere between the boundaries
+    and the stored row — `_layer_of_label`, `_Routed`, `index_of`, the checkpoint
+    rebind — shows up as a disagreement.
+
+    **From review**, and the gap it closes is a real one: requiring only that
+    *some* two layers carry proofs passes a run that filed every ZF theorem
+    under first-order logic, since two non-empty shares summing correctly is all
+    that check ever asked for. The partition has to be compared element by
+    element or it is not being compared at all.
+    """
+    database = parse(source)
+    opens = corpus_layers(database, limit, plan=LAYERS)
+    names = [name for name, _at in opens]
+    starts = [at for _name, at in opens]
+    return {
+        theorem.label: names[
+            max(bisect_right(starts, database.position(theorem.label)) - 1, 0)
+        ]
+        for theorem in theorems(database, limit)
+    }
+
+
+def compare(flat: Run, spined: Run, expected: Mapping[str, str]) -> Comparison:
     """Every way the two runs must agree, checked one at a time.
 
     All of them, rather than stopping at the first: a run is minutes long, and
     knowing that the sources match while the library does not is a different
     diagnosis from knowing only that something differs.
+
+    ``expected`` is :func:`expected_owners` — where each theorem *should* have
+    been filed, derived from the file rather than read back from the run. It is
+    required rather than defaulted, because skipping it is precisely the failure
+    this function exists to avoid.
     """
     result = Comparison()
-    # **Before anything else**: was the second run actually spined? A plan whose
-    # section titles this file does not open, or a `--limit` short of the second
-    # boundary, collapses it to one system — and then every equality below holds
+    # **Before anything else**: can this run demonstrate anything at all? A plan
+    # whose section titles this file does not open, or a `--limit` short of the
+    # second boundary, gives one layer — and then every equality below holds
     # because the two runs are the same run, and a green result would mean
-    # nothing (found in review). The same guard catches a regression that filed
-    # every proof into the root.
-    filed = [proofs for _name, proofs in spined.spine if proofs]
-    if len(filed) < 2:
+    # nothing (found in review). Asked of the *expected* partition, not the
+    # realised one, so a run that wrongly collapsed is a failure below rather
+    # than an excuse here.
+    if len(set(expected.values())) < 2:
         result.differences.append(
             Difference(
-                what="the spined run is not a spine",
+                what="nothing here is a comparison",
                 detail=(
-                    f"{len(spined.spine)} layer(s), {len(filed)} carrying proofs "
-                    f"({spined.spine}) — nothing here is a comparison. Raise "
-                    "--limit until a second layer opens, or check that the plan's "
-                    "section titles match this file"
+                    f"the plan covers these theorems with {sorted(set(expected.values()))} "
+                    "— one layer, so the two runs are the same run. Raise --limit "
+                    "until a second layer opens, or check that the plan's section "
+                    "titles match this file"
                 ),
             )
         )
-    # And the shares must partition the whole, not merely be non-empty.
+    # **The partition itself**, element by element. Requiring only that some two
+    # layers be non-empty passes a run that filed every ZF theorem under
+    # first-order logic — two non-empty shares summing correctly is all such a
+    # check ever asks (found in review). Every other comparison below is blind to
+    # which system a row landed in, so this is the only thing that sees it.
+    misfiled = sorted(
+        label
+        for label, layer in expected.items()
+        if label in spined.owners and spined.owners[label] != layer
+    )
+    if misfiled:
+        example = misfiled[0]
+        result.differences.append(
+            Difference(
+                what="proofs filed in the wrong layer",
+                detail=(
+                    f"{len(misfiled)} of {len(expected)}, e.g. {example}: "
+                    f"expected {expected[example]!r}, filed under "
+                    f"{spined.owners[example]!r}"
+                ),
+            )
+        )
+    # And the report's own breakdown has to describe the run it came from.
     if sum(proofs for _name, proofs in spined.spine) != len(spined.proofs):
         result.differences.append(
             Difference(
@@ -233,6 +303,16 @@ def compare(flat: Run, spined: Run) -> Comparison:
                     f"{sum(p for _n, p in spined.spine)} across layers against "
                     f"{len(spined.proofs)} stored"
                 ),
+            )
+        )
+    # A flat run files everything in one system by construction; if it ever did
+    # not, every "same either way" result below would be comparing the wrong
+    # thing.
+    if len(set(flat.owners.values())) > 1:
+        result.differences.append(
+            Difference(
+                what="the flat run is not flat",
+                detail=f"{sorted(set(flat.owners.values()))}",
             )
         )
 
@@ -323,7 +403,7 @@ def main() -> int:
     for name, proofs in spined.spine:
         print(f"    {name}: {proofs} proofs")
 
-    result = compare(flat, spined)
+    result = compare(flat, spined, expected_owners(source, arguments.limit))
     print()
     print(f"  checked   {flat.checked}")
     print(f"  verified  {flat.verified}")

@@ -1733,7 +1733,9 @@ a fixture, which proves the mechanism and not the corpus.
 **Measured at the milestone slice, N = 2,676:** 2,676 checked, 2,676 verified, 0
 rejected, 0 failed; 2,710 promoted (34 primitive, 0 refused); 78 folders; 2,736
 documented labels — and **every proof source byte-identical** between the two
-runs. Roughly 65s per run, so the whole check is about two minutes.
+runs. The partition is **1,773 / 902 / 1**, which is D1's milestone confirmed
+from the other end: 2,676 is the smallest slice at which ZF holds a theorem, and
+it holds exactly one. Roughly 90s per run, so the whole check is a few minutes.
 
 *What the corpus found that the fixture could not, and it is the phase's real
 result.* A promoted theorem's side conditions name a sort, which
@@ -1765,18 +1767,29 @@ same checked, verified and rejected. What caught it was comparing the promoted
 labels **as a set**; the counter comparison was added afterwards, so the next one
 is caught by both.
 
-*From review, and it is the harness's own version of the same lesson.* The script
-compared two runs without ever asking whether the second one **was a spine**. A
-plan whose section titles the file does not open — or a `--limit` short of the
-second boundary — collapses it to one system, and then every equality holds
-because the two runs are the same run: at `--limit 1` against the repository's
-own fixture it printed "Layering changed nothing" and exited 0 having compared
-nothing. The same gap would have passed a regression that filed every proof into
-the root. It now refuses unless more than one layer carries proofs *and* the
-per-layer counts partition what was stored, and prints the spine it actually
-realised rather than the length of the plan it was handed. `compare` is a pure
-function over two summaries, so `tests/test_check_layering.py` pins that refusal
-without needing the corpus.
+*From review, and it is the harness's own version of the same lesson — twice
+over.* The script compared two runs without ever asking whether the second one
+**was a spine**. A plan whose section titles the file does not open — or a
+`--limit` short of the second boundary — collapses it to one system, and then
+every equality holds because the two runs are the same run: at `--limit 1`
+against the repository's own fixture it printed "Layering changed nothing" and
+exited 0 having compared nothing.
+
+The first cut of that guard was itself too weak, which is the part worth
+recording. Requiring that *some two* layers carry proofs, with the counts summing
+correctly, passes a run that filed every ZF theorem under first-order logic —
+two non-empty shares is all such a check ever asks, and **every other comparison
+in the script is blind to which system a row landed in**. So the partition is now
+compared element by element against `expected_owners`, which derives from the
+file and the plan rather than reading the answer back from the run: a regression
+anywhere between the boundaries and the stored row — `_layer_of_label`,
+`_Routed`, `index_of`, the checkpoint rebind — shows up as a disagreement.
+Verified by misfiling the deepest layer on purpose, which the weak guard passed
+and this one names. Vacuity is now asked of the *expected* partition too, so a
+run that wrongly collapsed is a failure rather than an excuse.
+
+`compare` is a pure function over two summaries and the expected partition, so
+`tests/test_check_layering.py` pins all of it without needing the corpus.
 
 The other review finding was latent rather than live: `_Library` is unusable
 until it holds a system, and `_Layers` was publishing the routed `store` before
