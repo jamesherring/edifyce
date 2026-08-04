@@ -1953,3 +1953,19 @@ def test_a_draft_systems_terms_are_owner_only(client, db):
 
     res = client.get(f"/api/formal-systems/{system_id}/terms/{term_id}")
     assert res.status_code == 404
+
+
+def test_an_unknown_term_is_refused_before_a_notation_is_loaded(client, db):
+    # Ordering, not semantics: both are 404s, but loading a notation is thousands
+    # of rows on a corpus-sized system and a caller with a random id must not be
+    # able to make this route pay for it. The notation here is real, so a 404 can
+    # only be the term check — and it has to have run first.
+    owner = _register_login(client, "ada@example.com")
+    system_id, _term_id = _stored_term(client, db, owner)
+    _seed_notation(db, system_id, "demo", _DEMO_TEMPLATES)
+
+    res = client.get(
+        f"/api/formal-systems/{system_id}/terms/{uuid.uuid4()}?notation=demo"
+    )
+    assert res.status_code == 404
+    assert "term" in res.json()["detail"]

@@ -1231,15 +1231,10 @@ async def get_term_subgraph(
     # whose whole shape invites being called repeatedly, node by node.
     system_id = await readable_system_id_or_404(session, system_id, user)
 
-    projection = None
-    if notation is not None:
-        projection = await load_notation(session, system_id, notation)
-        if projection is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"This system has no notation named {notation!r}.",
-            )
-
+    # Cheapest and most selective first. Both remaining checks 404, so the order
+    # is a cost decision rather than a semantic one — and loading a notation is
+    # thousands of rows on a corpus (set.mm's `latex` is 1,796 templates), which
+    # a caller with a random id should not be able to make this route pay for.
     owner = await session.scalar(
         select(TermRow.formal_system_id).where(TermRow.id == term_id)
     )
@@ -1249,6 +1244,15 @@ async def get_term_subgraph(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="This system has no term with that id.",
         )
+
+    projection = None
+    if notation is not None:
+        projection = await load_notation(session, system_id, notation)
+        if projection is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"This system has no notation named {notation!r}.",
+            )
 
     graph = await session.run_sync(lambda sync: prefetch_terms(sync, [term_id]))
     nodes = walk_subgraph(graph, term_id, depth)
