@@ -367,8 +367,7 @@ the expensive half. So:
 
 1. **Term subgraph, readable** — §9a, done.
 2. **Structured citation proposals** — §9b, done.
-3. **Structured statement proposals** — the term-building half, and the only part
-   that needs a real constructor vocabulary over the wire.
+3. **Structured statement proposals** — §9c, done.
 
 ### What none of this solves
 
@@ -504,3 +503,74 @@ a line means stating a formula, which is §9's step 3 and the half that needs a
 constructor vocabulary over the wire. In an imported Metamath corpus the
 overwhelming majority of steps are citations of previously proved theorems, so
 the cheap half is also the common one.
+
+## 9c. Structured statement proposals — *done*
+
+`POST /proofs/{proof_id}/lines` adds a line stating a proposed term. This is the
+expensive half: a citation is a label and some integers, but *stating* a formula
+needs the grammar, so this is where a constructor vocabulary crosses the wire.
+
+A `Proposal` is one of three things, and exactly one:
+
+* **`ref`** — a term that already exists. The reason the whole thing is worth
+  having: an interned term is shared, so a caller says "that subterm" instead of
+  restating it. Where statements nest deeply that is the difference between a
+  tractable emission and a long one that has to be exactly right.
+* **`constructor`** — a production by name, with a proposal per slot. The
+  vocabulary is the grammar's own, so it is closed and enumerable — which is what
+  makes a constrained emission possible rather than aspirational.
+* **`var`** — a metavariable of a named sort.
+
+### The round trip is checked, not trusted
+
+Resolution is not a second parser. Nothing reads surface syntax; a proposal names
+productions, and the text it becomes is `rendering.render` of the resolved term —
+**the source spelling by construction**, because a production's render steps *are*
+its source template.
+
+That is what lets the round trip be verified per proposal: render the term, splice
+it in, parse it back, and refuse the line unless the term that comes out is the
+term that went in. A caller never has to be believed about what it meant, and no
+ambiguity can pass unnoticed — which is precisely the guarantee §4 said a
+notation-as-source path could not offer.
+
+Three checks stack, each at its own level. `restate` and `recite` are
+string-level and self-checking (the formula and the citation must read back as
+written). The term comparison is the real one. And a renumbering may not break a
+line that stood before — see below.
+
+### Inserting costs a renumbering
+
+`before` names the citation number to insert ahead of, which is what a
+goal-directed caller wants: a rule's antecedents must precede its conclusion, so
+a premise for a hole goes *above* it. Appending displaces nothing and needs none
+of this.
+
+Citation numbers are positional, so a line added at `n` moves everything below it
+— and every citation naming one of those lines now names the wrong one
+**silently**, because the old number still resolves. `FormalSystem.renumber`
+shifts them, and only bare integers: a rule's label, the definitional and hole
+keywords, and a dotted lemma reference (`[MP, A.2]`, whose `2` is a line of
+another proof) are left exactly as they are. It refuses wholesale rather than
+rewriting in part, since a half-renumbered proof is worse than an untouched one.
+
+The guard that matters is after the fact: **no line that was valid before may be
+invalid after**. A mis-shifted citation still resolves, so nothing else would
+catch it.
+
+### Composed from a neighbour, not from a line type
+
+A new line takes its text from an existing one — `restate` swaps the formula,
+`recite` swaps the citation — so it inherits that line's type, shape and
+indentation. That avoids reconstructing a line type's syntax from its pattern,
+which is the one piece of surface-syntax composition this would otherwise need,
+and it makes the indentation right for the scope the line lands in.
+
+The consequence is that a proof with no ordinary logical line has nothing to copy,
+and says so. A scope opener is refused as a template for the same reason `/cite`
+refuses one as a target: it states nothing checkable.
+
+### What is still not here
+
+Deleting a line, and moving one. Both are the same renumbering problem in reverse
+and neither is needed to *build* a proof, which is what the loop does.

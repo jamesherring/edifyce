@@ -2261,3 +2261,270 @@ def test_a_line_no_citation_justifies_is_refused(client, db):
     assert client.get(f"/api/proofs/{created['id']}").json()["source"].startswith(
         "assume x ∈ y [HYP]"
     )
+
+
+# ---------------------------------------------------------------------------
+# Structured statement proposals (POST /proofs/{id}/lines)
+#
+# The expensive half: stating a formula needs the grammar, so this is where the
+# constructor vocabulary crosses the wire. The round trip is checked, not
+# trusted — the term that parses back must be the term that went in.
+# ---------------------------------------------------------------------------
+
+
+def _one_line_proof(client: TestClient, db_path, owner: str) -> tuple[str, str]:
+    system_id = _seed_system(db_path, owner)
+    created = client.post(
+        "/api/proofs",
+        json={"name": "P", "formal_system_id": system_id, "source": "x ∈ y [HYP]"},
+    ).json()
+    assert client.post(f"/api/proofs/{created['id']}/verify").json()["success"] is True
+    return system_id, created["id"]
+
+
+def test_a_statement_is_proposed_as_a_production_and_its_slots(client, db):
+    # No surface syntax crosses the wire: `membership` is a production of the
+    # system's own grammar, and the response shows the source its structure became.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _one_line_proof(client, db, owner)
+
+    res = client.post(
+        f"/api/proofs/{proof_id}/lines",
+        json={
+            "statement": {
+                "constructor": "membership",
+                "slots": {
+                    "s": {"constructor": "variable", "literal": "y"},
+                    "t": {"constructor": "variable", "literal": "x"},
+                },
+            }
+        },
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["display"] == "y ∈ x [?]"
+    assert body["line"] == 2
+    # A hole by default: stating a premise you have not proved *is* an open goal.
+    assert body["failure"]["code"] == "hole"
+
+
+def test_a_statement_may_point_at_a_term_that_already_exists(client, db):
+    # The reason the structured path is worth having: an interned term is shared,
+    # so a caller says "that subterm" instead of restating it.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _one_line_proof(client, db, owner)
+    existing = _structure(client, proof_id)["lines"][0]["term"]["id"]
+
+    body = client.post(
+        f"/api/proofs/{proof_id}/lines",
+        json={
+            "statement": {
+                "constructor": "implication",
+                "slots": {"p": {"ref": existing}, "q": {"ref": existing}},
+            }
+        },
+    ).json()
+
+    assert body["display"] == "(x ∈ y → x ∈ y) [?]"
+
+
+def test_a_term_of_another_system_is_refused(client, db):
+    # Interning is per system, so a foreign id names a term built over another
+    # grammar — stating one would mean a formula this system cannot.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _one_line_proof(client, db, owner)
+    _other_system, other_proof = _one_line_proof(client, db, owner)
+    foreign = _structure(client, other_proof)["lines"][0]["term"]["id"]
+
+    res = client.post(
+        f"/api/proofs/{proof_id}/lines", json={"statement": {"ref": foreign}}
+    )
+    assert res.status_code == 422
+    assert "no term with id" in res.json()["detail"]
+
+
+def test_a_proposal_naming_the_wrong_slots_says_which(client, db):
+    # A rejection in a structured path should name the production and the slot,
+    # not say that something was wrong.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _one_line_proof(client, db, owner)
+
+    res = client.post(
+        f"/api/proofs/{proof_id}/lines",
+        json={
+            "statement": {
+                "constructor": "membership",
+                "slots": {"s": {"constructor": "variable", "literal": "y"}},
+            }
+        },
+    )
+    assert res.status_code == 422
+    detail = res.json()["detail"]
+    assert "membership" in detail and "missing: t" in detail
+
+
+def test_a_production_the_grammar_lacks_is_refused(client, db):
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _one_line_proof(client, db, owner)
+
+    res = client.post(
+        f"/api/proofs/{proof_id}/lines", json={"statement": {"constructor": "nope"}}
+    )
+    assert res.status_code == 422
+    assert "no production" in res.json()["detail"]
+
+
+def test_inserting_a_line_moves_the_citations_below_it(client, db):
+    # Citation numbers are positional, so a line added above one moves every
+    # citation that named it — silently, because the old number still resolves.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner)
+    created = client.post(
+        "/api/proofs",
+        json={
+            "name": "P",
+            "formal_system_id": system_id,
+            "source": "x ∈ y [HYP]\n(x ∈ y → x = y) [HYP]\nx = y [MP, 1, 2]",
+        },
+    ).json()
+    proof_id = created["id"]
+    assert client.post(f"/api/proofs/{proof_id}/verify").json()["success"] is True
+
+    body = client.post(
+        f"/api/proofs/{proof_id}/lines",
+        json={
+            "statement": {
+                "constructor": "membership",
+                "slots": {
+                    "s": {"constructor": "variable", "literal": "y"},
+                    "t": {"constructor": "variable", "literal": "x"},
+                },
+            },
+            "before": 1,
+            "apply": True,
+        },
+    ).json()
+
+    assert body["line"] == 1
+    assert body["renumbered"] == [2, 3, 4]
+    source = client.get(f"/api/proofs/{proof_id}").json()["source"].splitlines()
+    assert source[0] == "y ∈ x [?]"
+    # The MP citation followed its premises down.
+    assert source[3] == "x = y [MP, 2, 3]"
+    # And the proof still stands apart from the goal just added.
+    assert body["only_holes"] is True
+
+
+def test_appending_displaces_nothing(client, db):
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _one_line_proof(client, db, owner)
+
+    body = client.post(
+        f"/api/proofs/{proof_id}/lines",
+        json={
+            "statement": {
+                "constructor": "membership",
+                "slots": {
+                    "s": {"constructor": "variable", "literal": "y"},
+                    "t": {"constructor": "variable", "literal": "x"},
+                },
+            },
+            "apply": True,
+        },
+    ).json()
+
+    assert body["renumbered"] == []
+    assert client.get(f"/api/proofs/{proof_id}").json()["source"].splitlines() == [
+        "x ∈ y [HYP]",
+        "y ∈ x [?]",
+    ]
+
+
+def test_a_dry_run_adds_nothing(client, db):
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _one_line_proof(client, db, owner)
+
+    client.post(
+        f"/api/proofs/{proof_id}/lines",
+        json={
+            "statement": {
+                "constructor": "membership",
+                "slots": {
+                    "s": {"constructor": "variable", "literal": "y"},
+                    "t": {"constructor": "variable", "literal": "x"},
+                },
+            }
+        },
+    )
+
+    assert client.get(f"/api/proofs/{proof_id}").json()["source"] == "x ∈ y [HYP]"
+
+
+def test_a_new_line_may_be_justified_at_once(client, db):
+    # The other half of the loop: state the premise and cite it in one step.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner)
+    created = client.post(
+        "/api/proofs",
+        json={
+            "name": "P",
+            "formal_system_id": system_id,
+            "source": "x ∈ y [HYP]\n(x ∈ y → x = y) [HYP]",
+        },
+    ).json()
+    proof_id = created["id"]
+    client.post(f"/api/proofs/{proof_id}/verify")
+
+    body = client.post(
+        f"/api/proofs/{proof_id}/lines",
+        json={
+            "statement": {
+                "constructor": "equality",
+                "slots": {
+                    "s": {"constructor": "variable", "literal": "x"},
+                    "t": {"constructor": "variable", "literal": "y"},
+                },
+            },
+            "rule": "MP",
+            "antecedents": [1, 2],
+            "apply": True,
+        },
+    ).json()
+
+    assert body["display"] == "x = y [MP, 1, 2]"
+    assert body["accepted"] is True
+    assert body["valid"] is True
+    assert body["holes"] == []
+
+
+def test_adding_a_line_is_owner_only(client, db):
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner, published=True)
+    created = client.post(
+        "/api/proofs",
+        json={"name": "P", "formal_system_id": system_id, "source": VALID_PROOF},
+    ).json()
+    assert client.patch(
+        f"/api/proofs/{created['id']}", json={"published": True}
+    ).status_code == 200
+    _register_login(client, "grace@example.com")
+
+    proposal = {
+        "statement": {
+            "constructor": "equality",
+            "slots": {
+                "s": {"constructor": "variable", "literal": "x"},
+                "t": {"constructor": "variable", "literal": "x"},
+            },
+        }
+    }
+    assert (
+        client.post(f"/api/proofs/{created['id']}/lines", json=proposal).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/api/proofs/{created['id']}/lines", json={**proposal, "apply": True}
+        ).status_code
+        == 403
+    )

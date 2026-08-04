@@ -109,6 +109,55 @@ export interface CitationOutcome {
 	only_holes: boolean;
 }
 
+/** A term named structurally: by reference, by production, or as a variable.
+ *  Mirrors `TermProposalIn` in app/schemas.py.
+ *
+ *  Exactly one of `ref`, `constructor` and `var`. `ref` names a term that already
+ *  exists — the reason this is worth having, since an interned term is shared and
+ *  a caller can point at a subterm instead of restating it. `constructor` names a
+ *  production of the system's own grammar, so the vocabulary is closed. */
+export interface TermProposal {
+	ref?: string;
+	constructor?: string;
+	slots?: Record<string, TermProposal>;
+	/** The token a leaf stands for. A constant atom's comes from the production
+	 *  itself, so it may be omitted there and may not contradict it. */
+	literal?: string;
+	var?: string;
+	sort?: string;
+}
+
+/** A new line, stated as structure and justified as structure. Mirrors
+ *  `LineProposal`.
+ *
+ *  `before` is the citation number to insert ahead of — what a goal-directed
+ *  caller wants, since a rule's antecedents must precede its conclusion. Omitted,
+ *  the line is appended. `rule` defaults to the hole keyword, because stating a
+ *  premise you have not proved *is* an open goal. */
+export interface LineProposal {
+	statement: TermProposal;
+	rule?: string;
+	antecedents?: number[];
+	before?: number;
+	apply?: boolean;
+}
+
+/** What a proposed line would do, or did. Mirrors `LineOutcome`. */
+export interface LineOutcome {
+	line: number;
+	/** The line as it would be written — the source its structure became. */
+	display: string;
+	accepted: boolean;
+	failure: Failure | null;
+	/** Lines whose citations moved to make room, by their *new* number. Empty for
+	 *  an appended line, which displaces nothing. */
+	renumbered: number[];
+	applied: boolean;
+	valid: boolean | null;
+	holes: number[];
+	only_holes: boolean;
+}
+
 /** One edge below a term node: the slot it fills, and what sits there. */
 export interface TermChild {
 	slot: string;
@@ -1116,6 +1165,15 @@ export const api = {
 		 * needs the proof's stored structure, so verify it first. */
 		cite: (id: string, proposal: CitationProposal) =>
 			request<CitationOutcome>(`/proofs/${id}/cite`, {
+				method: 'POST',
+				body: JSON.stringify(proposal)
+			}),
+		/** Add a line stating a proposed term — structure in, no surface syntax.
+		 * The resolved term is rendered into the system's own spelling and parsed
+		 * back; the line is refused unless what comes out is what went in. A dry
+		 * run unless `apply` is set; applying is owner-only. */
+		addLine: (id: string, proposal: LineProposal) =>
+			request<LineOutcome>(`/proofs/${id}/lines`, {
 				method: 'POST',
 				body: JSON.stringify(proposal)
 			}),

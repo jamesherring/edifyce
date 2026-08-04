@@ -11,6 +11,8 @@ the diagnosis must not cost the checking path anything.
 
 from __future__ import annotations
 
+from copy import copy
+
 import pytest
 
 pytest.importorskip("regex")
@@ -26,6 +28,13 @@ from website.logical.declarative import (
 )
 from website.logical.formal_system import FormalSystem
 from website.logical.formal_system.proof import HOLE_KEY, Proof, citation_text
+from website.logical.formal_system.proposals import (
+    Proposal,
+    ProposalError,
+    grammar_index,
+    resolve,
+)
+from website.logical.rendering import render
 
 # A reference part that admits `?`, which is what a hole needs of a grammar. The
 # Metamath importer's own regex is widened for the same reason.
@@ -508,3 +517,133 @@ def test_a_replacement_that_would_not_read_back_is_refused() -> None:
     # the spliced line either fails to parse or parses as something else. Either
     # way it must not be returned.
     assert system.recite("q [?]", "MP, [1]") is None
+
+
+# --- resolving a proposed term ---------------------------------------------
+
+
+def resolver(system: FormalSystem):
+    """`(context, constructor_for_name)` for resolving against a built system."""
+    context = copy(system.context)
+    context.variables.update(system.build_context.variables)
+    grammar = grammar_index(context)
+    return context, lambda name: system.constructor_named(name, context, grammar)
+
+
+def test_a_proposal_resolves_to_the_term_it_names() -> None:
+    system = propositional()
+    context, named = resolver(system)
+
+    term = resolve(
+        Proposal(
+            constructor="implication",
+            slots={
+                "A": Proposal(constructor="var", literal="p"),
+                "B": Proposal(constructor="var", literal="q"),
+            },
+        ),
+        context,
+        named,
+        lambda ref: None,
+    )
+
+    # Rendered with no projection is `to_string` exactly — the source spelling,
+    # because a production's render steps *are* its source template. That is what
+    # lets a proposal become text that parses back to the same term.
+    assert render(term) == "(p -> q)"
+
+
+def test_a_proposal_may_point_at_a_term_it_does_not_restate() -> None:
+    # The reason the structured path is worth having at all.
+    system = propositional()
+    context, named = resolver(system)
+    existing = system.parse("p [?]\n").proof_lines[0].formula_term
+
+    term = resolve(
+        Proposal(
+            constructor="implication",
+            slots={"A": Proposal(ref="x"), "B": Proposal(ref="x")},
+        ),
+        context,
+        named,
+        lambda ref: existing if ref == "x" else None,
+    )
+
+    assert render(term) == "(p -> p)"
+
+
+def test_a_proposal_must_name_exactly_one_thing() -> None:
+    system = propositional()
+    context, named = resolver(system)
+
+    with pytest.raises(ProposalError, match="exactly one"):
+        resolve(Proposal(), context, named, lambda ref: None)
+    with pytest.raises(ProposalError, match="exactly one"):
+        resolve(
+            Proposal(ref="x", constructor="implication"), context, named, lambda r: None
+        )
+
+
+def test_a_proposal_naming_the_wrong_slots_says_which() -> None:
+    # A slot left out would render as its own label and a slot invented would be
+    # dropped — both a term meaning something other than what was asked for, so
+    # the check is exact rather than "at least".
+    system = propositional()
+    context, named = resolver(system)
+
+    with pytest.raises(ProposalError, match="missing: B"):
+        resolve(
+            Proposal(
+                constructor="implication",
+                slots={"A": Proposal(constructor="var", literal="p")},
+            ),
+            context,
+            named,
+            lambda ref: None,
+        )
+
+
+def test_a_leaf_needs_the_token_it_stands_for() -> None:
+    system = propositional()
+    context, named = resolver(system)
+
+    with pytest.raises(ProposalError, match="needs the literal"):
+        resolve(Proposal(constructor="var"), context, named, lambda ref: None)
+
+
+def test_a_compound_carries_no_literal() -> None:
+    system = propositional()
+    context, named = resolver(system)
+
+    with pytest.raises(ProposalError, match="carries no literal"):
+        resolve(
+            Proposal(
+                constructor="implication",
+                literal="oops",
+                slots={
+                    "A": Proposal(constructor="var", literal="p"),
+                    "B": Proposal(constructor="var", literal="q"),
+                },
+            ),
+            context,
+            named,
+            lambda ref: None,
+        )
+
+
+def test_replacing_a_formula_keeps_the_rest_of_the_line() -> None:
+    # `recite`'s twin, and self-checking for the same reason. Together they
+    # compose a new line out of an existing one — same type, same indentation.
+    system = propositional()
+
+    assert system.restate("p [MP, 1, 2]", "(p -> q)") == "(p -> q) [MP, 1, 2]"
+    assert system.restate("not a line at all", "p") is None
+
+
+def test_renumbering_moves_cited_lines_and_leaves_labels_alone() -> None:
+    system = propositional()
+    lines = ["p [?]", "(p -> q) [?]", "q [MP, 1, 2]"]
+
+    assert system.renumber(lines, 1) == ["p [?]", "(p -> q) [?]", "q [MP, 2, 3]"]
+    # Only numbers at or past the insertion point move.
+    assert system.renumber(lines, 3) == lines

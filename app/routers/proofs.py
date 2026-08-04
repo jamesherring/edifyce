@@ -79,6 +79,7 @@ from app.db.descriptions_mapping import load_description
 from app.db.models import User
 from app.db.notations_mapping import load_notation, render_stored
 from app.db.proofs_mapping import failure_from_row
+from app.db.terms import TermRow
 from app.db.terms_mapping import prefetch_terms
 from app.db.promoted_theorems import PromotedTheoremRow
 from app.routers._invalidation import (
@@ -98,9 +99,19 @@ from app.routers.systems import load_effective, load_system
 from website.logical.formal_system.diagnostics import numbers
 from website.logical.formal_system.proof import Proof as EngineProof
 from website.logical.formal_system.proof import citation_text
+from website.logical.formal_system.proposals import (
+    Proposal,
+    ProposalError,
+    grammar_index,
+    resolve,
+)
+from website.logical.rendering import render
 from app.schemas import (
     CitationOutcome,
     CitationProposal,
+    LineOutcome,
+    LineProposal,
+    TermProposalIn,
     FailureOut,
     Attribution,
     LabelDescription,
@@ -1827,4 +1838,280 @@ def _numbered_line(checked: EngineProof | None, number: int) -> EngineProofLine 
     for line in checked.proof_lines:
         if line.number == number:
             return line
+    return None
+
+
+def _proposal(payload: TermProposalIn) -> Proposal:
+    # The API shape as the engine's, recursively. Two dataclasses rather than one
+    # shared model because the engine must not depend on Pydantic — and because
+    # `ref` is a caller-facing id here and an opaque string there, which is what
+    # lets `resolve` know nothing about storage.
+    return Proposal(
+        ref=str(payload.ref) if payload.ref is not None else None,
+        constructor=payload.constructor,
+        slots={slot: _proposal(child) for slot, child in payload.slots.items()},
+        literal=payload.literal,
+        var=payload.var,
+        sort=payload.sort,
+    )
+
+
+def _referenced(payload: TermProposalIn) -> list[uuid.UUID]:
+    # Every existing term the proposal points at, so they can be swept in one
+    # query rather than one per node.
+    found = [payload.ref] if payload.ref is not None else []
+    for child in payload.slots.values():
+        found.extend(_referenced(child))
+    return found
+
+
+@router.post("/{proof_id}/lines", response_model=LineOutcome)
+async def propose_line(
+    proof_id: uuid.UUID,
+    payload: LineProposal,
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> LineOutcome:
+    """Add a line stating a proposed term — structure in, no surface syntax.
+
+    The expensive half of the structured write path (§9's step 3). A citation is
+    a label and some integers; *stating* a formula needs the grammar, and this is
+    where the constructor vocabulary crosses the wire.
+
+    The term may **point at terms that already exist** (`ref`), which is the
+    whole reason to bother: an interned term is shared, so a caller says "that
+    subterm" instead of restating it.
+
+    **The round trip is checked, not trusted.** The resolved term is rendered
+    into the system's own spelling — exact by construction, since a production's
+    render steps *are* its source template — spliced in, and parsed back; the
+    line is refused unless the term that comes out is the term that went in. That
+    is the guarantee a notation-as-source path could not offer (§4).
+
+    A dry run unless ``apply``, and applying is owner-only, as `/cite` is.
+    """
+    proof = await _get_readable_or_404(session, proof_id, user)
+
+    rows = (
+        await session.scalars(
+            select(ProofLineRow)
+            .where(ProofLineRow.proof_id == proof.id, ProofLineRow.number.is_not(None))
+            .order_by(ProofLineRow.number)
+        )
+    ).all()
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This proof has no numbered lines to add to. Verify it first: a "
+                "new line takes its shape and indentation from an existing one."
+            ),
+        )
+    if payload.before is None:
+        template = rows[-1]
+        number = len(rows) + 1
+    else:
+        template = next((r for r in rows if r.number == payload.before), None)
+        if template is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"This proof has no line {payload.before}.",
+            )
+        number = payload.before
+    if template.opens_scope is not None or template.behaviour != "logical":
+        # The new line copies this one's shape, so it would inherit a line type
+        # that states nothing checkable.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Line {template.number} is not an ordinary logical line, so a "
+                "new statement cannot take its shape."
+            ),
+        )
+
+    system = await load_system(session, proof.formal_system_id)
+    if system is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Formal system not found.")
+    effective = await load_effective(session, system)
+    if effective.errors:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=effective.errors)
+    schema_terms = await session.run_sync(
+        lambda sync: load_schema_terms(
+            sync, system, effective.spec, effective.rule_offset
+        )
+    )
+    definition_terms = await session.run_sync(
+        lambda sync: load_definition_terms(
+            sync, system, effective.spec, effective.definition_offset
+        )
+    )
+    build = build_spec(
+        effective.spec, schema_terms=schema_terms, definition_terms=definition_terms
+    )
+    if "errors" in build:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=build["errors"])
+    compiled = build["system"]
+    context = term_context(compiled)
+
+    # A referenced term must belong to *this* system. Interning is per system, so
+    # a foreign id names a term built over another grammar — and resolving one
+    # would state a formula this system cannot mean.
+    wanted = _referenced(payload.statement)
+    owners = dict(
+        (
+            await session.execute(
+                select(TermRow.id, TermRow.formal_system_id).where(
+                    TermRow.id.in_(wanted)
+                )
+            )
+        ).all()
+    ) if wanted else {}
+    foreign = [str(rid) for rid in wanted if owners.get(rid) != system.id]
+    if foreign:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"This system has no term with id {foreign[0]}.",
+        )
+    graph = await session.run_sync(lambda sync: prefetch_terms(sync, wanted))
+
+    grammar = grammar_index(context)
+    try:
+        term = resolve(
+            _proposal(payload.statement),
+            context,
+            lambda name: compiled.constructor_named(name, context, grammar),
+            lambda ref: graph.term(uuid.UUID(ref), context),
+        )
+    except ProposalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+    # Rendered with no projection, which is `to_string` exactly — the source
+    # spelling, because a production's render steps are its source template.
+    stated = compiled.restate(template.display, render(term))
+    if stated is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Line {template.number} cannot carry this statement — it would "
+                "not read back as written."
+            ),
+        )
+    stated = compiled.recite(stated, citation_text(payload.rule, payload.antecedents))
+    if stated is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Line {template.number} cannot carry that citation.",
+        )
+
+    lines = proof.source.split("\n")
+    if not 0 <= template.position < len(lines):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This proof's stored structure is stale. Verify it first.",
+        )
+    if payload.before is None:
+        lines.append(stated)
+        renumbered: list[int] = []
+    else:
+        # Everything from here down moves, and every citation naming one of those
+        # lines has to move with it or it silently names a different line.
+        moved = compiled.renumber(lines, number)
+        if moved is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This proof's citations could not be renumbered to make room; "
+                    "no line was added."
+                ),
+            )
+        lines = moved
+        lines.insert(template.position, stated)
+        renumbered = [r.number + 1 for r in rows if r.number >= number]
+    source = "\n".join(lines)
+
+    owned = user is not None and proof.owner_id == user.id
+    if payload.apply and not owned:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the owner can add a line to this proof.",
+        )
+
+    verification = await _verify_with_references(
+        session, proof, persist=payload.apply and owned, source=source
+    )
+    checked = verification.engine_proof
+    added = _numbered_line(checked, number)
+
+    # The round trip, checked rather than trusted: the line that came back must
+    # state the term that went in. Anything else means the render or the splice
+    # said something the caller did not.
+    if added is None or added.formula_term is None or not added.formula_term.equal(
+        term, context
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "The statement did not survive the round trip: what parsed back "
+                f"from {stated!r} is not the term proposed."
+            ),
+        )
+
+    # And nothing that stood before may have been broken by the renumbering. A
+    # citation that now names a different line still *resolves*, so this is the
+    # only thing that would catch it.
+    broken = _broken_by_insert(rows, checked, number)
+    if broken:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Adding this line would break line {broken}, which stood before; "
+                "no line was added."
+            ),
+        )
+
+    outcome = LineOutcome(
+        line=number,
+        display=stated,
+        accepted=bool(added.valid),
+        failure=(
+            FailureOut(**added.failure.as_dict()) if added.failure is not None else None
+        ),
+        renumbered=renumbered,
+    )
+    if not (payload.apply and owned):
+        return outcome
+
+    proof.source = source
+    await _discard_check(session, proof)
+    await _invalidate_dependents(session, proof.id, proof.formal_system_id)
+    await _retire_promotion(session, proof)
+    if proof.published_at is not None:
+        await _require_publishable(session, proof)
+    await _record_verdict(session, proof, verification)
+    await session.commit()
+    return outcome.model_copy(
+        update={
+            "applied": True,
+            "valid": verification.valid,
+            "holes": verification.response.holes,
+            "only_holes": verification.response.only_holes,
+        }
+    )
+
+
+def _broken_by_insert(
+    before: Sequence[ProofLineRow], checked: EngineProof | None, at: int
+) -> int | None:
+    # The first line that was valid before the insert and is not after it, by its
+    # new number. None when nothing regressed.
+    if checked is None:
+        return None
+    after = {line.number: line for line in checked.proof_lines if line.number is not None}
+    for row in before:
+        moved = row.number + 1 if row.number >= at else row.number
+        line = after.get(moved)
+        if row.valid and (line is None or not line.valid):
+            return moved
     return None
