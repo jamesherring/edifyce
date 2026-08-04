@@ -94,6 +94,12 @@ class Run:
     folders: list[str]
     # Every documented label.
     described_labels: set[str]
+    # The spine this run actually produced: (layer name, proofs filed there),
+    # root first. **Not** what the plan asked for — a plan whose section titles
+    # the file does not open, or a `--limit` short of the second boundary, gives
+    # one system, and then the comparison below is between two identical runs and
+    # confirms nothing (found in review).
+    spine: list[tuple[str, int]]
     seconds: float = 0.0
 
 
@@ -186,6 +192,7 @@ def run_import(source: str, limit: int | None, plan: Sequence[Layer]) -> Run:
         library=library,
         folders=folders,
         described_labels=described,
+        spine=[(layer.name, layer.proofs) for layer in report.layers],
         seconds=time.monotonic() - started,
     )
 
@@ -198,6 +205,37 @@ def compare(flat: Run, spined: Run) -> Comparison:
     diagnosis from knowing only that something differs.
     """
     result = Comparison()
+    # **Before anything else**: was the second run actually spined? A plan whose
+    # section titles this file does not open, or a `--limit` short of the second
+    # boundary, collapses it to one system — and then every equality below holds
+    # because the two runs are the same run, and a green result would mean
+    # nothing (found in review). The same guard catches a regression that filed
+    # every proof into the root.
+    filed = [proofs for _name, proofs in spined.spine if proofs]
+    if len(filed) < 2:
+        result.differences.append(
+            Difference(
+                what="the spined run is not a spine",
+                detail=(
+                    f"{len(spined.spine)} layer(s), {len(filed)} carrying proofs "
+                    f"({spined.spine}) — nothing here is a comparison. Raise "
+                    "--limit until a second layer opens, or check that the plan's "
+                    "section titles match this file"
+                ),
+            )
+        )
+    # And the shares must partition the whole, not merely be non-empty.
+    if sum(proofs for _name, proofs in spined.spine) != len(spined.proofs):
+        result.differences.append(
+            Difference(
+                what="per-layer proof counts",
+                detail=(
+                    f"{sum(p for _n, p in spined.spine)} across layers against "
+                    f"{len(spined.proofs)} stored"
+                ),
+            )
+        )
+
     result.require("checked", flat.checked, spined.checked)
     result.require("verified", flat.verified, spined.verified)
     result.require("rejected", flat.rejected, spined.rejected)
@@ -277,9 +315,13 @@ def main() -> int:
     flat = run_import(source, arguments.limit, ())
     print(f"  {flat.checked} checked in {flat.seconds:.1f}s", flush=True)
 
-    print(f"Importing {arguments.source} as a spine of {len(LAYERS)} layers…", flush=True)
+    # The plan's length, not the spine's — this is what is being *attempted*.
+    # What it actually opened is printed below, from the run.
+    print(f"Importing {arguments.source} against a {len(LAYERS)}-layer plan…", flush=True)
     spined = run_import(source, arguments.limit, LAYERS)
     print(f"  {spined.checked} checked in {spined.seconds:.1f}s", flush=True)
+    for name, proofs in spined.spine:
+        print(f"    {name}: {proofs} proofs")
 
     result = compare(flat, spined)
     print()

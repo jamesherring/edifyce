@@ -554,6 +554,12 @@ class _Layers:
             _Library(session, report, share, digest)
             for share, digest in zip(self._reports, digests)
         ]
+        # Bound **before** `self.library` is published, not after the folders are
+        # written: a `_Library` is unusable until it holds a system, and
+        # `_Routed.store` swallows what goes wrong into `theorems_failed`, so a
+        # caller reaching one in that window would lose promotions silently
+        # rather than raise (found in review).
+        self._bind()
         # One entry point for the walk, which knows nothing about layers: it
         # hands over a promoted assertion and this routes it. Built **once** and
         # rebound in place — the walk is handed `library.store` before the first
@@ -575,7 +581,6 @@ class _Layers:
         ]
         for share, stored in zip(self._reports, self._folders):
             share.sections = len(stored)
-        self._bind()
 
     def rebind(self) -> None:
         """Re-attach after a checkpoint emptied the identity map.

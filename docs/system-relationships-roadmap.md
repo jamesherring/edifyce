@@ -1765,6 +1765,26 @@ same checked, verified and rejected. What caught it was comparing the promoted
 labels **as a set**; the counter comparison was added afterwards, so the next one
 is caught by both.
 
+*From review, and it is the harness's own version of the same lesson.* The script
+compared two runs without ever asking whether the second one **was a spine**. A
+plan whose section titles the file does not open — or a `--limit` short of the
+second boundary — collapses it to one system, and then every equality holds
+because the two runs are the same run: at `--limit 1` against the repository's
+own fixture it printed "Layering changed nothing" and exited 0 having compared
+nothing. The same gap would have passed a regression that filed every proof into
+the root. It now refuses unless more than one layer carries proofs *and* the
+per-layer counts partition what was stored, and prints the spine it actually
+realised rather than the length of the plan it was handed. `compare` is a pure
+function over two summaries, so `tests/test_check_layering.py` pins that refusal
+without needing the corpus.
+
+The other review finding was latent rather than live: `_Library` is unusable
+until it holds a system, and `_Layers` was publishing the routed `store` before
+binding them. Nothing reaches it in that window today — the walk has not started
+— but `_Routed.store` swallows what goes wrong into `theorems_failed`, so
+anything that ever did would lose promotions silently rather than raise. Bound
+before publishing now.
+
 #### D5 — the invariants
 
 - *Invalid, each a hard failure of the run:* a deliberately misfiled plan
