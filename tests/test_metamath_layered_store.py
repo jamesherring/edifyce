@@ -23,6 +23,9 @@ chain and so belongs on the root, where every layer can see it.
 
 from __future__ import annotations
 
+import uuid
+from typing import TYPE_CHECKING
+
 import pytest
 
 pytest.importorskip("sqlalchemy")
@@ -63,6 +66,11 @@ from website.logical.metamath.setmm import LAYERS
 from tests.test_metamath_layered_specs import CORPUS, SECTION
 from tests.test_metamath_persistence import _TABLES
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator, Sequence
+
+    from website.logical.metamath.parser import Database
+
 
 # The persistence suite's tables, plus the notation ones: this fixture carries a
 # `$t` block, so an import here derives a notation and has somewhere to put it.
@@ -75,7 +83,7 @@ _STORE_TABLES = _TABLES + [
 
 
 @pytest.fixture
-def session():
+def session() -> Iterator[Session]:
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine, tables=_STORE_TABLES)
     with Session(engine) as handle:
@@ -83,11 +91,11 @@ def session():
 
 
 @pytest.fixture
-def database():
+def database() -> Database:
     return parse(CORPUS)
 
 
-def systems(session) -> list[FormalSystem]:
+def systems(session: Session) -> list[FormalSystem]:
     """Every stored system, root first."""
     rows = list(session.scalars(select(FormalSystem)))
     spine = [row for row in rows if row.inherits_from_id is None]
@@ -485,7 +493,7 @@ def test_the_spine_is_wired_root_to_leaf(session, database) -> None:
 
 
 def test_a_citation_resolves_through_the_chain_and_hits_its_cache(
-    session, database
+    session: Session, database: Database
 ) -> None:
     """**D5's first invariant, and the first read of D3's per-layer digests.**
 
@@ -510,14 +518,14 @@ def test_a_citation_resolves_through_the_chain_and_hits_its_cache(
     spine = {system.id: system for system in systems(session)}
     parent = {i: s.inherits_from_id for i, s in spine.items()}
 
-    def chain(system_id):
-        walked = []
+    def chain(system_id: uuid.UUID | None) -> list[FormalSystem]:
+        walked: list[FormalSystem] = []
         while system_id is not None:
             walked.append(spine[system_id])
             system_id = parent[system_id]
         return list(reversed(walked))
 
-    references: dict = {}
+    references: dict[uuid.UUID, list[str | None]] = {}
     for line in session.scalars(select(ProofLineRow)):
         references.setdefault(line.proof_id, []).append(line.reference)
 
@@ -547,7 +555,9 @@ def test_a_citation_resolves_through_the_chain_and_hits_its_cache(
     assert crossed > 0
 
 
-def _recheck(session, proof, chain):
+def _recheck(
+    session: Session, proof: Proof, chain: Sequence[FormalSystem]
+) -> EngineProof | None:
     """Re-check one stored proof entirely from its rows, through its own chain.
 
     The `POST /proofs/{id}/verify` row path (`app/routers/proofs.py`) with the
@@ -571,7 +581,7 @@ def _recheck(session, proof, chain):
     compiled = build["system"]
     context = term_context(compiled)
 
-    def cited(references):
+    def cited(references: Sequence[str | None]) -> PendingCitations:
         pending = read_library(
             session, library, cited_labels(references),
             hypotheses_of=proof.theorem_id,
@@ -597,7 +607,7 @@ def _recheck(session, proof, chain):
 
 
 def test_a_stored_layered_proof_rechecks_to_the_verdict_the_import_gave_it(
-    session, database
+    session: Session, database: Database
 ) -> None:
     """**D5's pinned item**, and it needed the cache to work to mean anything.
 
@@ -617,8 +627,8 @@ def test_a_stored_layered_proof_rechecks_to_the_verdict_the_import_gave_it(
     spine = {system.id: system for system in systems(session)}
     parent = {i: s.inherits_from_id for i, s in spine.items()}
 
-    def chain(system_id):
-        walked = []
+    def chain(system_id: uuid.UUID | None) -> list[FormalSystem]:
+        walked: list[FormalSystem] = []
         while system_id is not None:
             walked.append(spine[system_id])
             system_id = parent[system_id]
@@ -641,7 +651,7 @@ def test_a_stored_layered_proof_rechecks_to_the_verdict_the_import_gave_it(
 
 
 def test_the_same_slice_imported_twice_gives_the_same_partition(
-    session, database
+    session: Session, database: Database
 ) -> None:
     # D5's other pinned item. Nothing in the split may depend on anything but the
     # file and the plan — not on a uuid, not on which layer happened to be
