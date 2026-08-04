@@ -1897,12 +1897,22 @@ and anything outside it re-parses.
 
 Measured on `set.mm` at N = 2,676: **8,581 citations resolved through the
 spine**, of which **0 were cached before `symbols.inclusion_position` and all
-8,581 after**. Broken down 4,704 / 3,874 / 3 across the layers, so the
-cross-layer case is included — a first-order proof citing a propositional
-theorem hits the *ancestor's* cache, which is the case a per-layer digest exists
-for and the one a single corpus-wide digest would have got wrong. Pinned on the
-fixture by `test_a_citation_resolves_through_the_chain_and_hits_its_cache`,
-which fails at 0/3 with the column ignored.
+8,581 after**. Broken down 4,704 / 3,874 / 3 by the citing layer — and **1,486
+of them cross a boundary**: 1,484 first-order proofs citing a propositional
+theorem, and two from ZF. That is the case a per-layer digest exists for and the
+one a corpus-wide digest would get wrong, so it is the number that matters, and
+it is counted rather than assumed.
+
+*From review, and it is the same lesson again.* The fixture had no cross-layer
+citation at all — every proof cited a label in its own layer — so the test
+pinning "resolves through the chain" reached `LibraryChain`'s ancestor
+resolution never. The corpus claim was true and the guard for it was not.
+`fol-cites-pc` is a first-order theorem whose proof cites `ax-1`, and the test
+now asserts that some citation crosses. Two smaller ones from the same review:
+the labels were taken from `proof_lines.rule`, which is not what the read path
+resolves (`cited_labels` over `reference`, and `rule` is null for a definitional
+step), and `hypotheses_of` was omitted, so a theorem's own `$e` labels went
+unresolved.
 
 **Re-verification from rows, and determinism — done.** The pinned pair. A
 layered import's proofs are stored against their own layers and their citations
