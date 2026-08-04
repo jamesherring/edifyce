@@ -589,3 +589,96 @@ refuses one as a target: it states nothing checkable.
 
 Deleting a line, and moving one. Both are the same renumbering problem in reverse
 and neither is needed to *build* a proof, which is what the loop does.
+
+## 9d. Driving the loop on a corpus — *done*
+
+Everything in §7–§9c was exercised by three-line synthetic proofs. Nobody had run
+the loop against `set.mm`, and that is where the remaining risk sat: corpus proofs
+are a hundred lines long, cite theorems with a dozen premises, and are written in
+a grammar with several thousand productions rather than four.
+
+`scripts/restore_proofs.py` closes that. The trick that makes it tractable is that
+the corpus is its own **answer key**: blank a step's citation and the right answer
+is already known, so "did the loop get there" is an exact question and needs no
+retrieval and no search. Five rounds — restore blanked citations, dry-run an
+insertion, restate a formula from stored rows, offer deliberately wrong citations,
+and really apply an insertion and read the structure back — over an imported slice
+in a throwaway database. `scripts/README.md` has the operating instructions;
+`tests/test_restore_proofs.py` runs the whole thing over a four-proof `.mm`
+fragment so the harness itself does not rot.
+
+### What it found
+
+**`Proof.justify` had an arity cliff.** A citation naming *no* antecedents asks the
+checker to infer them from the lines immediately above — a real and useful path,
+and the one an author uses most. It was gated at `len(rule.antecedents) < 5`: the
+permutation guard from before the assignment search became a bipartite matching,
+left behind when the search was replaced (the `MAX_CITED_ANTECEDENTS` comment a few
+lines below already records that the reasoning had lapsed). What it cost was not
+only a restriction but a **lie**: a five-premise rule cited with none was told it
+"requires 5 antecedent(s)", which reads as *too few given* when in fact nothing had
+been looked at.
+
+`set.mm` reaches it — 47 of the promoted theorems in its first 3,000 take five or
+more premises, and `cbvald`'s step 6 cites exactly the five lines above it, which
+is precisely what the branch would have inferred. The bound is now the same
+`MAX_CITED_ANTECEDENTS` the explicit path uses. Where the lines above are *not* the
+premises the rule wants, the verdict is now `slot-unsatisfied` or
+`inconsistent-binding` — a reason rather than a miscount. The corpus re-imports
+with the same 3,000 verified, 0 rejected.
+
+### What it measured
+
+The reference run: `set.mm`'s first 3,000 theorems, the 20 longest proofs among
+them (693 steps), all five rounds — **100 round-results, all passed, 2,105 calls**.
+The probes are where the interesting part is. Each of the four assertable
+mutations landed on its code every single time:
+
+| offered | told | n |
+|---|---|---|
+| a rule name nothing declares | `bad-reference` | 120/120 |
+| one antecedent too many | `antecedent-count` | 120/120 |
+| one antecedent too few | `antecedent-count` | 46/46 |
+| the line itself among its antecedents | `ordering` | 64/64 |
+| the antecedents reversed | *accepted* | 46/46 |
+| no antecedents at all | accepted 35, refused 29 | 64 |
+
+Three facts fall out, each of which changes what an emitting model should bother to
+get right:
+
+**Antecedent order carries no information.** Every swapped citation was accepted.
+The assignment search is a bipartite matching over slots, so a citation is a *set*
+of lines and the order is presentation. A model that treats getting the order right
+as part of the task is spending effort on a degree of freedom that is not one.
+
+**Omitting antecedents is not an error, it is a request.** A citation with none
+means "the lines immediately above", and on real proofs that lands over half the
+time — the corpus is written in dependency order, so the premises usually *are* the
+preceding lines. It is a genuinely different citation from the one the model may
+have meant, though, so the loop should always emit antecedents explicitly and treat
+the inference as a convenience for humans. The 29 that did not land came back as
+`inconsistent-binding` (26) or `slot-unsatisfied` (3) — a reason, not a shrug.
+
+**Every refusal landed in §7's closed vocabulary.** No wrong citation came back
+with a bare sentence and no code. That is the claim §7 makes and the one synthetic
+fixtures could only illustrate.
+
+### The cost, which is the open item
+
+A `/cite` call builds the system twice — once to rewrite the line, once inside the
+verify — and on a corpus grammar that is the whole cost. One call runs ~130 ms
+against a 400-theorem import and ~305 ms against a 3,000-theorem one, which is not
+a constant factor: it tracks the grammar, and a whole-corpus system is an order of
+magnitude larger again. A loop that makes one call per step is therefore paying in
+the wrong variable, and the fix is not in the loop but under it — the build is
+already cached in pieces (`schema_terms`, `definition_terms`), and what is not
+cached is the assembled `FormalSystem`. Worth doing before anything drives this at
+scale; not worth doing before there is something to drive it.
+
+### What it still does not reach
+
+The corpus is flat: a Metamath proof has no subproofs, so nothing here exercises
+scope openers, discharge lines or indentation, which is exactly the ground the
+synthetic fixtures do cover. And a slice is a slice — the deeper reaches of
+`set.mm`, where class abstractions and function application live, need a longer
+import than any of these runs took.

@@ -71,9 +71,35 @@ EXTRA_SYSTEM = SystemSpec(
 )
 
 
+# Five antecedents, which is one more than the arity the inference branch used to
+# stop at. `set.mm` has 47 such theorems in its first 3000 and cites them with the
+# lines immediately above, so this is the shape a corpus actually produces.
+WIDE_SYSTEM = SystemSpec(
+    name="Wide",
+    brackets=brackets(),
+    productions=_prop_productions(),
+    lines=[statement_line()],
+    rules=[
+        hyp_rule(),
+        rule(
+            "WIDE",
+            "wide",
+            ["p", "q", "(p -> q)", "(q -> p)", "((p -> q) -> q)"],
+            "q",
+            _pq(),
+        ),
+    ],
+)
+
+
 @pytest.fixture(scope="module")
 def mp_system():
     return build_system(MP_SYSTEM)
+
+
+@pytest.fixture(scope="module")
+def wide_system():
+    return build_system(WIDE_SYSTEM)
 
 
 @pytest.fixture(scope="module")
@@ -147,6 +173,43 @@ def test_auto_justification_finds_antecedents_without_citation(mp_system):
     # accessible prior lines to discover a valid application.
     proof = mp_system.parse("a [HYP]\n(a -> b) [HYP]\nb [MP]")
     assert last_line(proof).valid is True
+
+
+_WIDE_PREMISES = "a [HYP]\nb [HYP]\n(a -> b) [HYP]\n(b -> a) [HYP]\n((a -> b) -> b) [HYP]"
+
+
+def test_auto_justification_is_not_capped_at_four_antecedents(wide_system):
+    # The inference branch was bounded at an arity of its own (`< 5`), left over
+    # from when the assignment search was a permutation walk. A five-premise rule
+    # cited with none was told it "requires 5 antecedent(s)" — which reads as too
+    # few given, when in fact nothing had been looked at.
+    proof = wide_system.parse(f"{_WIDE_PREMISES}\nb [WIDE]")
+    line = last_line(proof)
+    assert line.valid is True
+    assert line.failure is None
+    assert len(line.antecedents) == 5
+
+
+def test_a_wide_rule_that_does_not_apply_says_why_rather_than_counting(wide_system):
+    # The premises above are five, so the count is right and the search runs. What
+    # comes back must be about the *slots* — the point of lifting the cap is that
+    # this line gets a real reason instead of a miscount.
+    wrong = _WIDE_PREMISES.replace("((a -> b) -> b) [HYP]", "c [HYP]")
+    line = last_line(wide_system.parse(f"{wrong}\nb [WIDE]"))
+    assert line.valid is False
+    assert line.failure is not None
+    assert line.failure.code == "slot-unsatisfied"
+
+
+def test_too_few_lines_above_a_wide_rule_is_still_a_count(wide_system):
+    # And the count verdict is still reached where it is the truth: three
+    # accessible lines cannot fill five slots, whatever the search would find.
+    proof = wide_system.parse("a [HYP]\nb [HYP]\n(a -> b) [HYP]\nb [WIDE]")
+    line = last_line(proof)
+    assert line.valid is False
+    assert line.failure is not None
+    assert line.failure.code == "antecedent-count"
+    assert (line.failure.expected, line.failure.given) == (5, 3)
 
 
 # ---------------------------------------------------------------------------

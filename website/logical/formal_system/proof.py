@@ -616,8 +616,21 @@ class Proof:
                 proof_line.inference_rule = inference_rule
                 return True
 
-        elif len(antecedents) == 0 and len(inference_rule.antecedents) < 5:
-            # Antecedents not provided. Try to justify:
+        elif (
+            len(antecedents) == 0
+            and len(inference_rule.antecedents) <= MAX_CITED_ANTECEDENTS
+        ):
+            # Antecedents not provided. Try to justify from the lines above.
+            #
+            # Bounded by the same constant the explicit path uses, not by an arity
+            # of its own: the old `< 5` was the permutation guard the assignment
+            # search retired (see `MAX_CITED_ANTECEDENTS` below), left behind when
+            # it was replaced. What it cost was a lie rather than only a
+            # restriction — a five-premise rule cited with none was told it
+            # "requires 5 antecedent(s)", which reads as too few given when in
+            # fact the checker declined to look. `set.mm` reaches it: `cbv2`'s
+            # step 6 cites the five lines immediately above it, which is exactly
+            # what this branch infers.
             return self.justify(
                 deduction=proof_line,
                 context=context,
