@@ -9,10 +9,9 @@ from ..kernel.definitions import Definition as KernelDefinition
 from ..kernel.terms import from_match
 from ..matching import Context, Match, Pattern, StringPattern, UnionPattern
 from .promotion import PromotedTheorem
-from .proof import CITATION_SEPARATOR, Proof, ProofLine
+from .proof import Proof, ProofLine
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
     from collections.abc import Callable
 
     from ..declarative import _SchemaScan
@@ -181,19 +180,6 @@ class FormalSystem:
 
         return proof, context
 
-    def cite(self, rule: str, antecedents: Sequence[int] = ()) -> str:
-        """The citation text a rule applied to some lines is written as.
-
-        `cite("MP", [4, 6])` is ``"MP, 4, 6"`` — the *reference* only, not the
-        brackets around it, which belong to the line type's shape.
-
-        Trivial, and it exists so a caller proposing a justification *structurally*
-        never has to know a system's citation syntax. That is the whole point of
-        the structured path: a label and some integers are already unambiguous, and
-        making a client format them is exactly where a projection creeps back in.
-        """
-        return CITATION_SEPARATOR.join([rule, *(str(n) for n in antecedents)])
-
     def recite(self, text: str, citation: str, context: Context | None = None) -> str | None:
         """``text`` with its citation replaced by ``citation``, or None.
 
@@ -217,7 +203,7 @@ class FormalSystem:
             return None
         at = text.rindex(current)
         spliced = f"{text[:at]}{citation}{text[at + len(current):]}"
-        if self._reference_of(spliced, copy(self.context)) != citation:
+        if self._reference_of(spliced, context) != citation:
             return None
         return spliced
 

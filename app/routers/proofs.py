@@ -97,6 +97,7 @@ from app.routers._common import (
 from app.routers.systems import load_effective, load_system
 from website.logical.formal_system.diagnostics import numbers
 from website.logical.formal_system.proof import Proof as EngineProof
+from website.logical.formal_system.proof import citation_text
 from app.schemas import (
     CitationOutcome,
     CitationProposal,
@@ -1690,11 +1691,27 @@ async def propose_citation(
     effective = await load_effective(session, system)
     if effective.errors:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=effective.errors)
-    build = build_spec(effective.spec)
+    # With the cached schema and definition terms, as a verify does. Rewriting a
+    # line needs the grammar to *read* it, and a build that re-parses every rule
+    # schema and definition form is about half a verify — which a search loop
+    # trying several justifications would pay for on each one.
+    schema_terms = await session.run_sync(
+        lambda sync: load_schema_terms(
+            sync, system, effective.spec, effective.rule_offset
+        )
+    )
+    definition_terms = await session.run_sync(
+        lambda sync: load_definition_terms(
+            sync, system, effective.spec, effective.definition_offset
+        )
+    )
+    build = build_spec(
+        effective.spec, schema_terms=schema_terms, definition_terms=definition_terms
+    )
     if "errors" in build:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=build["errors"])
 
-    citation = build["system"].cite(payload.rule, payload.antecedents)
+    citation = citation_text(payload.rule, payload.antecedents)
     lines = proof.source.split("\n")
     if not 0 <= row.position < len(lines):
         # The stored structure describes a source this proof no longer has.
@@ -1743,7 +1760,30 @@ async def propose_citation(
     if not (payload.apply and owned):
         return outcome
 
+    # Applying is a **source edit**, and every consequence of one applies. This
+    # mirrors `update_proof`'s post-edit block deliberately rather than by
+    # coincidence: a citation rewritten here can break a lemma, and without these
+    # a third proof laundering through that lemma would still verify against a
+    # cached verdict for a source that no longer says what it did.
     proof.source = source
+    # Before anything re-reads this proof. The stored structure describes the
+    # *previous* source, and a verify prefers rows to text — so leaving it would
+    # make the publish gate below re-check the old proof and pass a rewrite that
+    # breaks it. `update_proof` discards for the same reason.
+    await _discard_check(session, proof)
+    await _invalidate_dependents(session, proof.id, proof.formal_system_id)
+    # Including the library entry this proof established. Defence in depth rather
+    # than a live path: promotion requires publication and the gate below refuses
+    # a rewrite that stops a published proof verifying, so a promoted proof cannot
+    # actually reach here broken. Kept because that is an invariant of *another*
+    # route, and a source edit that skipped this would be a hole the moment it
+    # loosened.
+    await _retire_promotion(session, proof)
+    # A world-readable proof may not be edited into a non-verifying state — and
+    # `[?]` is exactly such an edit, which is what makes this gate load-bearing
+    # here rather than inherited. Raising rolls the whole proposal back.
+    if proof.published_at is not None:
+        await _require_publishable(session, proof)
     await _record_verdict(session, proof, verification)
     await session.commit()
     return outcome.model_copy(

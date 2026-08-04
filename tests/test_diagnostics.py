@@ -25,7 +25,7 @@ from website.logical.declarative import (
     build_system,
 )
 from website.logical.formal_system import FormalSystem
-from website.logical.formal_system.proof import HOLE_KEY, Proof
+from website.logical.formal_system.proof import HOLE_KEY, Proof, citation_text
 
 # A reference part that admits `?`, which is what a hole needs of a grammar. The
 # Metamath importer's own regex is widened for the same reason.
@@ -476,10 +476,8 @@ def test_a_definitional_step_that_relates_to_nothing_names_what_was_tried() -> N
 def test_a_citation_is_composed_from_a_label_and_line_numbers() -> None:
     # So a caller proposing a justification structurally never has to know a
     # system's citation syntax — which is where a projection would creep back in.
-    system = propositional()
-
-    assert system.cite("MP", [1, 2]) == "MP, 1, 2"
-    assert system.cite(HOLE_KEY) == "?"
+    assert citation_text("MP", [1, 2]) == "MP, 1, 2"
+    assert citation_text(HOLE_KEY) == "?"
 
 
 def test_replacing_a_citation_keeps_the_rest_of_the_line() -> None:

@@ -12,7 +12,7 @@ from ..kernel.side_conditions import Not, Occurs
 from .diagnostics import Failure, numbers
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Sequence
 
     from ..kernel.definitions import Definition
     from ..kernel.terms import Term
@@ -65,9 +65,25 @@ HOLE_KEY = "?"
 
 # What separates a citation's parts: `[MP, 4, 6]` is the rule `MP` applied to
 # lines 4 and 6. A constant because two places need to agree about it — the
-# reader below, and `FormalSystem.cite`, which composes one from a rule and some
-# line numbers so a caller need not know a system's citation syntax to write one.
+# reader below, and `citation_text`, which composes one from a rule and some line
+# numbers so a caller need not know a system's citation syntax to write one.
 CITATION_SEPARATOR = ", "
+
+
+def citation_text(rule: str, antecedents: Sequence[int] = ()) -> str:
+    """The citation text a rule applied to some lines is written as.
+
+    ``citation_text("MP", [4, 6])`` is ``"MP, 4, 6"`` — the *reference* only, not
+    the brackets around it, which belong to the line type's shape.
+
+    Trivial, and it exists so a caller proposing a justification *structurally*
+    never has to know a system's citation syntax: a label and some integers are
+    already unambiguous, and making a client format them is exactly where a
+    projection creeps back into a structured path. A free function rather than a
+    `FormalSystem` method because it needs no grammar — which matters, since a
+    caller that wanted only this would otherwise have to build one.
+    """
+    return CITATION_SEPARATOR.join([rule, *(str(n) for n in antecedents)])
 
 
 class Subproof:

@@ -2140,3 +2140,72 @@ def test_applying_is_owner_only(client, db):
         ).status_code
         == 403
     )
+
+
+def test_applying_a_citation_invalidates_dependents(client, db):
+    # Applying is a *source edit*, so every consequence of one applies. Without
+    # this a proof laundering through a lemma broken here would keep verifying
+    # against a cached verdict for a source that no longer says what it did.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
+    main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    client.post(f"/api/proofs/{lemma}/verify")
+    _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
+    assert client.post(f"/api/proofs/{main}/verify").json()["success"] is True
+    assert client.get(f"/api/proofs/{main}").json()["valid"] is True
+
+    # Park the lemma's only line as a goal: it no longer proves anything.
+    body = client.post(
+        f"/api/proofs/{lemma}/cite", json={"line": 1, "rule": "?", "apply": True}
+    ).json()
+    assert body["applied"] is True
+
+    assert client.get(f"/api/proofs/{main}").json()["valid"] is None
+    assert client.post(f"/api/proofs/{main}/verify").json()["success"] is False
+
+
+def test_a_promoted_proof_survives_a_citation_that_would_break_it(client, db):
+    """The library entry cannot be left warranted by a proof that no longer stands.
+
+    Two things protect it, and only one of them is reachable. Promotion requires
+    publication, and a published proof cannot be edited into not verifying — so a
+    citation that would break a promoted proof is refused before it lands, and the
+    entry is never orphaned. `/cite` retires the promotion anyway, as a source
+    edit must, but with that gate in place there is no path that reaches it.
+    """
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid, published=True)
+    lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
+    assert client.patch(f"/api/proofs/{lemma}", json={"published": True}).status_code == 200
+    promoted = client.post(f"/api/proofs/{lemma}/promote", json={"label": "lem"})
+    assert promoted.status_code in (200, 201), promoted.text
+
+    res = client.post(
+        f"/api/proofs/{lemma}/cite", json={"line": 1, "rule": "?", "apply": True}
+    )
+    assert res.status_code == 422
+
+    detail = client.get(f"/api/proofs/{lemma}").json()
+    assert detail["theorem"]["label"] == "lem"
+    assert detail["valid"] is True
+    assert detail["source"] == _LEMMA_SRC
+
+
+def test_applying_a_citation_cannot_break_a_published_proof(client, db):
+    # A world-readable proof may not be edited into a non-verifying state, and
+    # `[?]` is exactly such an edit — so the publish gate is load-bearing here
+    # rather than inherited. The whole proposal rolls back.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid, published=True)
+    proof_id = _create_proof(client, sid, "P", source=VALID_PROOF)
+    assert client.patch(f"/api/proofs/{proof_id}", json={"published": True}).status_code == 200
+
+    res = client.post(
+        f"/api/proofs/{proof_id}/cite", json={"line": 1, "rule": "?", "apply": True}
+    )
+    assert res.status_code == 422
+
+    detail = client.get(f"/api/proofs/{proof_id}").json()
+    assert detail["source"] == VALID_PROOF
+    assert detail["valid"] is True

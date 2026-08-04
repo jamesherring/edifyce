@@ -455,6 +455,16 @@ failure → goal.
 **A hole is a citation**, so retracting a step needs no second endpoint: propose
 `rule: "?"` and the line is an open goal again.
 
+**Applying is a source edit**, and carries every consequence of one. That is not
+a formality: without them a proof laundering through a lemma broken here would
+keep verifying against a cached verdict for a source that no longer says what it
+did. So the apply branch mirrors `update_proof`'s post-edit block — discard the
+stored check, invalidate dependents, retire the promotion, and re-gate a
+*published* proof, which may not be edited into a non-verifying state and for
+which `[?]` is exactly such an edit. Discarding first is load-bearing rather than
+tidy: a verify prefers rows to text, so leaving the old structure would make the
+publish gate re-check the previous source and wave the rewrite through.
+
 ### Composing and replacing, self-checked
 
 `FormalSystem.cite(rule, antecedents)` composes the reference text — the label and
@@ -474,6 +484,12 @@ turns a fragile splice into a safe one, and it is why `recite` returns
 A line is addressed by its **citation number** — the handle an antecedent edge
 already uses — which needs the proof's stored structure, so an unverified proof
 gets a 409 saying to verify first rather than a guess.
+
+The system is built **twice** per request: once here, to read the line being
+rewritten, and once inside the verify. Both builds now take the cached schema and
+definition terms, so neither re-parses a rule schema — but a single build would
+need `_verify_with_references` to accept a pre-compiled system, which is a wider
+change than this warranted. Worth doing if a search loop ever proves hot.
 
 And this only *re-justifies an existing line*. It cannot add one, because adding
 a line means stating a formula, which is §9's step 3 and the half that needs a
