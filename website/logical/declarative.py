@@ -2217,6 +2217,25 @@ def _grammar_fingerprint(spec: SystemSpec) -> str:
     # What a template is parsed *against*: the productions, the bracket map that
     # decides where one may be split, and the names something else in the build
     # namespace shadows.
+    #
+    # **A sort inclusion is hashed as membership, not as a positioned
+    # production.** `_declares_a_name` already says why — a production with no
+    # shape *includes* one sort into another, which is an edge rather than a
+    # declaration, and `spec_to_system` stores it as exactly that: an edge on the
+    # sub-sort, carrying no position of its own. So a spec that has been through
+    # the rows comes back with its inclusions interleaved differently among the
+    # shaped productions, and hashing the flat list made that a difference.
+    #
+    # It is not one. Verified end to end on `set.mm`: importing the corpus under
+    # the spec as declared and under the spec the rows give back produces the
+    # same verdicts, the same promoted statements and a **byte-identical term
+    # graph** — 14,344 term digests, same set. The digest was discriminating on
+    # something no grammar can tell apart, which meant an imported corpus's
+    # cached terms failed their guard and re-parsed, every time (D5;
+    # docs/verification-from-rows.md P4).
+    #
+    # The shaped productions stay **ordered**, because for them the round trip is
+    # exact and order is a fact about the grammar this has no licence to discard.
     return _fingerprint(
         [
             sorted((_bracket_map(spec) or {}).items()),
@@ -2228,7 +2247,13 @@ def _grammar_fingerprint(spec: SystemSpec) -> str:
                     prod.bindings, sorted(prod.scopes_over.items()),
                 ]
                 for prod in spec.productions
+                if _declares_a_name(prod)
             ],
+            sorted(
+                [prod.sort, prod.name]
+                for prod in spec.productions
+                if not _declares_a_name(prod)
+            ),
             _shadowed_grammar_names(spec),
         ]
     )

@@ -6,6 +6,8 @@ builds a system checking the same proofs -- and the rows are queryable with
 plain SQL, no compile.
 """
 
+from dataclasses import replace
+
 import pytest
 
 pytest.importorskip("regex")
@@ -68,9 +70,11 @@ from website.logical.declarative import (
     Justification,
     LinePart,
     LineSpec,
+    Production,
     Rule,
     SystemSpec,
     build_spec,
+    library_digest,
 )
 
 # The system decomposition now lives among the full app schema. The pgvector
@@ -138,6 +142,67 @@ def stored_system(session):
 def test_spec_round_trips_through_the_database(stored_system):
     rebuilt = system_to_spec(stored_system)
     assert rebuilt == zfc_spec()
+
+
+def included_spec() -> SystemSpec:
+    # A sort *inclusion* — a production with no shape, saying `atom` is a
+    # `formula` — declared **between** two shaped productions. Where it sits is
+    # the whole point: `system_to_spec` emits every inclusion last, so an
+    # inclusion written anywhere else comes back somewhere else.
+    return SystemSpec(
+        name="Included",
+        productions=[
+            regex_prod("atom", "atom_var", r"[A-Z]"),
+            Production(sort="formula", name="atom"),
+            template_prod("formula", "implication", "(x → y)",
+                          [("x", "formula"), ("y", "formula")]),
+        ],
+        lines=[statement_line()],
+    )
+
+
+def test_a_sort_inclusion_keeps_its_digest_across_the_database(session):
+    # **D5.** `spec_to_system` stores an inclusion as an edge on the sub-sort,
+    # carrying no position of its own — deliberately, because it is membership
+    # rather than a declaration (`_declares_a_name`). So a spec that has been
+    # through the rows comes back with its inclusions interleaved differently
+    # among the shaped productions.
+    #
+    # That is not a difference in the grammar, and the digest must not say it is:
+    # a `library_digest` that moved would make every cached term of an imported
+    # corpus fail its guard and re-parse — silently, since a stale digest is a
+    # miss and never a wrong answer, which is why this went unnoticed. Measured
+    # on `set.mm` before the fix: the digest written at import matched nothing a
+    # reader computed, for every layer and for a flat import alike.
+    spec = included_spec()
+    session.add(spec_to_system(spec))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Included"))
+
+    rebuilt = system_to_spec(stored)
+    # The reordering is real — this is what the digest used to see.
+    assert [p.name for p in rebuilt.productions] != [p.name for p in spec.productions]
+    assert {p.name for p in rebuilt.productions} == {p.name for p in spec.productions}
+    # And it is not a difference.
+    assert library_digest(rebuilt) == library_digest(spec)
+
+
+def test_moving_a_shaped_production_still_moves_the_digest(session):
+    # The other half, so the fix above is not a blunting. An inclusion is
+    # order-free because it is an edge; a production *with a shape* is not, and
+    # the round trip preserves its position exactly — so the digest has no
+    # licence to stop looking.
+    spec = included_spec()
+    # The two *shaped* ones swapped; the inclusion left where it was.
+    shuffled = replace(
+        spec,
+        productions=[
+            spec.productions[2], spec.productions[1], spec.productions[0],
+        ],
+    )
+
+    assert library_digest(shuffled) != library_digest(spec)
 
 
 def atomic_spec() -> SystemSpec:
