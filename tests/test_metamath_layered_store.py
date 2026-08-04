@@ -47,7 +47,7 @@ from website.logical.metamath.corpus import corpus_specs
 from website.logical.metamath.sections import Layer
 from website.logical.metamath.setmm import LAYERS
 
-from tests.test_metamath_layered_specs import CORPUS
+from tests.test_metamath_layered_specs import CORPUS, SECTION
 from tests.test_metamath_persistence import _TABLES
 
 
@@ -314,6 +314,47 @@ def test_a_checkpoint_leaves_the_library_writing_through_a_live_session(
     assert all(proof.theorem_id is not None for proof in session.scalars(select(Proof)))
 
 
+def test_the_report_breaks_the_run_down_by_layer(session, database) -> None:
+    # §7.3's per-layer breakdown, which is what `--setmm-layers` prints. Counted
+    # as the run goes rather than derived by a reader, because a stored row keeps
+    # the system it landed in and not the section that put it there.
+    report = import_corpus(session, database, name="Corpus", plan=LAYERS)
+
+    assert [layer.name for layer in report.layers] == [
+        "Propositional calculus", "First-order logic", "ZF set theory"
+    ]
+    assert [layer.system_id for layer in report.layers] == report.system_ids
+    # One proof each, and the shares add up to the totals — which is the property
+    # that says the breakdown is a partition rather than three tallies.
+    assert [layer.proofs for layer in report.layers] == [1, 1, 1]
+    assert sum(layer.proofs for layer in report.layers) == (
+        report.verified + report.rejected
+    )
+    for field_name in ("theorems", "primitives", "sections", "described"):
+        assert sum(getattr(layer, field_name) for layer in report.layers) == getattr(
+            report, field_name if field_name != "sections" else "sections"
+        ), field_name
+
+
+def test_an_unlayered_run_reports_one_layer_carrying_everything(
+    session, database
+) -> None:
+    # So a reader never has to ask whether a plan was given before reading the
+    # breakdown. The script prints it only for a spine, but the field is always
+    # populated and always sums to the totals.
+    report = import_corpus(session, database, name="Corpus")
+
+    assert len(report.layers) == 1
+    only = report.layers[0]
+    assert only.name == "Corpus" and only.system_id == report.system_id
+    assert (only.proofs, only.theorems, only.sections, only.described) == (
+        report.verified + report.rejected,
+        report.theorems,
+        report.sections,
+        report.described,
+    )
+
+
 def test_a_plan_whose_layers_share_a_name_still_files_each_proof_in_its_own(
     session, database
 ) -> None:
@@ -336,6 +377,76 @@ def test_a_plan_whose_layers_share_a_name_still_files_each_proof_in_its_own(
         for proof in session.scalars(select(Proof))
     }
     assert filed == {"pc-thm": 0, "fol-thm": 1, "zf-thm": 2}
+
+
+# A corpus whose `$f` declarations sit **inside** a layer rather than in the
+# preamble, and which states a `$d` over a metavariable typed in the layer below.
+#
+# That is `set.mm`'s own shape and the shared `CORPUS` above is not: its variables
+# are all declared before any layer opens, so they all land in the root and every
+# layer's own symbol table happens to be enough. Here `wff_var` is the
+# propositional layer's, and `ax-5`'s disjoint-variable condition — stated in the
+# first-order layer over `ph` — has to resolve through it.
+SCOPED_VARIABLES = f"""
+$c |- wff class ( ) -> A. $.
+$v ph ps x $.
+
+$( {SECTION}
+   Pre-logic
+   {SECTION} $)
+wph $f wff ph $.
+wps $f wff ps $.
+wi $a wff ( ph -> ps ) $.
+ax-1 $a |- ( ph -> ( ps -> ph ) ) $.
+pc-thm $p |- ( ph -> ( ps -> ph ) ) $= ( ax-1 ) ABC $.
+
+$( {SECTION}
+   Predicate calculus with equality:  Tarski's system S2
+   {SECTION} $)
+vx $f class x $.
+wal $a wff A. x ph $.
+${{
+  $d x ph $.
+  ax-5 $a |- ( ph -> A. x ph ) $.
+$}}
+fol-thm $p |- ( ph -> A. x ph ) $= ( ax-5 ) ABC $.
+"""
+
+
+def test_a_layer_resolves_a_proviso_sort_through_its_ancestors(session) -> None:
+    # **From the corpus run** (`scripts/check_layering.py`, §8's D4). A promoted
+    # theorem's side conditions name a sort, which `side_conditions_mapping`
+    # resolves to a real `symbols` FK — and a layer that offered only its *own*
+    # symbols could not resolve one its ancestor declares. On `set.mm` that is
+    # `wff_var`, declared in the propositional layer while the theorems carrying
+    # a `$d` over a `wff` run to the top of the file: **354 of the first 2,676
+    # promotions were refused** with "Side-condition sort 'wff_var' is not a
+    # symbol of the system", and every proof citing one of them lost its library
+    # entry.
+    #
+    # The symbol row it points at is the *ancestor's*, not a copy — §5.1's
+    # guarantee is cheap precisely because a child's primitives are the
+    # ancestor's rows.
+    database = parse(SCOPED_VARIABLES)
+    plan = (
+        Layer(name="Propositional calculus", starts_with="Pre-logic"),
+        Layer(name="First-order logic", starts_with="Predicate calculus with equality"),
+    )
+
+    report = import_corpus(session, database, name="Corpus", plan=plan)
+
+    assert (report.theorems_failed, report.failures) == (0, [])
+    stored = {row.label for row in session.scalars(select(PromotedTheoremRow))}
+    assert "ax-5" in stored
+    # And it is filed in the layer that states it, resolving a sort that is not
+    # that layer's own — which is the whole of the case.
+    spine = {system.id: system.name for system in systems(session)}
+    where = {
+        row.label: spine[row.system_id]
+        for row in session.scalars(select(PromotedTheoremRow))
+    }
+    assert where["ax-5"] == "First-order logic"
+    assert where["ax-1"] == "Propositional calculus"
 
 
 # ---------------------------------------------------------------------------

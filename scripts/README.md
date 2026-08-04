@@ -4,6 +4,7 @@
 |---|---|
 | `edifyce-dev` | Run the whole app (Postgres, migrations, API, SPA) with one command |
 | `import_metamath.py` | Import a Metamath `.mm` database — system, proofs, line graphs, terms |
+| `check_layering.py` | Assert that importing a corpus as a **spine** changes nothing about the import |
 
 ## `edifyce-dev` — run the whole app with one command
 
@@ -118,6 +119,34 @@ DATABASE_URL="$(scripts/edifyce-dev env | sed -n 's/^DATABASE_URL=\([^ ]*\).*/\1
 corpus (slow, and see the roadmap's note on the rebuild cost). `--batch` sets how
 often the run commits and empties the identity map, which is what keeps a long
 import's memory flat.
+
+`--setmm-layers` stores the corpus as a **spine of systems** — propositional
+calculus, then first-order logic, then ZF set theory — rather than one, and the
+run then prints a per-layer breakdown. Off by default, like `--setmm-overrides`
+and for the same reason: a layer plan names one library's own section titles. See
+the relationships roadmap, §7.2.
+
+## `check_layering.py` — does layering change the import?
+
+It must not. A layer plan says how a corpus is *filed*, never how it is
+*checked*, so the same file imported flat and imported as a spine has to agree on
+the verdicts, the promoted library, the derived rows — and on the **byte-identical
+proof sources**, which is the whole of "preserving references": a citation is
+stored as a bare label and resolves through the spine, so splitting the corpus
+must not rewrite one of them.
+
+```bash
+uv run python scripts/check_layering.py set.mm --limit 2676
+```
+
+Needs no database — it imports twice into throwaway in-memory SQLite and diffs —
+and exits non-zero on any difference, naming each one. `2676` is the milestone
+slice: the smallest at which all three of `set.mm`'s layers hold theorems. Budget
+about a minute per run.
+
+`tests/test_metamath_layered_store.py` pins the same equality on a fixture, which
+proves the mechanism; this is the corpus half, and running it is what found the
+one thing the fixture could not (relationships roadmap, §8's D4).
 
 The imported system and proofs are **ownerless**, so they do not appear in the
 app and cannot be verified through it — deliberately, because a stored system

@@ -79,6 +79,7 @@ from website.logical.metamath.importer import LibraryEntry
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
+    from app.db.systems import SymbolRow
     from website.logical.declarative import SystemSpec
     from website.logical.metamath.sections import Layer, Section
     from website.logical.metamath.comments import Description
@@ -90,6 +91,36 @@ if TYPE_CHECKING:
 # Kept short deliberately: the report is a summary, and a run where thousands
 # fail should be diagnosed from the corpus, not from a list carried in memory.
 _FAILURES_KEPT = 20
+
+
+@dataclass
+class LayerReport:
+    """One layer's share of a spined import (D4, §7.3).
+
+    Counted rather than derived by a reader, because the only thing that knows
+    which layer an assertion belongs to is the run: the boundary is a position in
+    the file, and a stored row keeps the system it landed in and not the section
+    that put it there.
+
+    Every field here is something the split *moves*. What it does not move —
+    notation, which is one declaration about the whole file and lives on the root
+    — stays on :class:`ImportReport`, so a per-layer figure never implies a
+    per-layer `$t`.
+    """
+
+    name: str
+    system_id: uuid.UUID
+    # Proofs filed here: the theorems whose own section falls in this layer,
+    # verified and rejected alike, since both are stored.
+    proofs: int = 0
+    # Promoted entries, and how many of those are primitives *of this layer* — a
+    # `$a` declared here rather than inherited.
+    theorems: int = 0
+    primitives: int = 0
+    # Folders drawn from the section headers this layer covers, and labels it
+    # documents.
+    sections: int = 0
+    described: int = 0
 
 
 @dataclass
@@ -111,6 +142,10 @@ class ImportReport:
     # Every layer, root first, for a caller that wants the spine rather than the
     # leaf. One entry when no plan was given.
     system_ids: list[uuid.UUID] = field(default_factory=list)
+    # The same spine, with each layer's share of what was stored. One entry for
+    # an unlayered import, carrying the whole run — so a reader never has to ask
+    # whether a plan was given before reading it.
+    layers: list[LayerReport] = field(default_factory=list)
     checked: int = 0
     verified: int = 0
     rejected: int = 0
@@ -221,7 +256,7 @@ def import_corpus(
     report.sections = layers.sections
 
     for position, checked in enumerate(walk(database, limit, name, library.store)):
-        owner = layers.owning(checked.label)
+        owner = layers.index_of(checked.label)
         report.checked += 1
         if checked.proof is None:
             _record_failure(report, checked.label, checked.error or "")
@@ -239,11 +274,11 @@ def import_corpus(
                 with session.begin_nested():
                     stored = _store(
                         session,
-                        owner,
+                        layers.system_at(owner),
                         position,
                         checked,
                         descriptions,
-                        layers.folder_for(checked.label),
+                        layers.folder_for(owner, checked.label),
                     )
             except Exception as exc:  # noqa: BLE001 - reported, not fatal
                 _record_failure(report, checked.label, str(exc))
@@ -252,6 +287,7 @@ def import_corpus(
                 report.rejected += not stored.valid
                 report.lines += stored.lines
                 report.formulas += stored.formulas
+                report.layers[owner].proofs += 1
 
         if progress is not None:
             progress(report, checked)
@@ -469,6 +505,13 @@ class _Layers:
     exactly as `LibraryChain` expects (§3.1). A single `library_digest(spec)`
     would be right for the root and wrong for everything below it.
 
+    And so is the **symbol table** a promoted theorem's side conditions resolve a
+    sort through, for the same reason and with real teeth: `wff_var` is declared
+    where the `$f` for a `wff` is, which on `set.mm` is the propositional layer,
+    while the theorems carrying a `$d` over a `wff` metavariable run all the way
+    up. A layer that offered only its own symbols therefore refused **354 of
+    set.mm's first 2,676 promotions** — see `_effective_symbols`.
+
     Notation is the exception, and stays on the root: see `import_corpus`.
 
     For an unlayered import this is one system and one library, and every lookup
@@ -494,6 +537,13 @@ class _Layers:
         opens = [at for _name, at in corpus_layers(database, limit, plan=plan)]
         self._of_label = _layer_of_label(database, opens)
         self._of_position = _layer_of_position(opens)
+        # The per-layer breakdown (§7.3), counted as the run goes: only the run
+        # knows which layer an assertion belongs to, since a stored row keeps the
+        # system it landed in and not the section that put it there.
+        report.layers = [
+            LayerReport(name=system.name, system_id=system.id) for system in spine
+        ]
+        self._reports = report.layers
         # Each layer's *effective* digest: its own spec layered onto its
         # ancestors', which is what guards the terms it interns.
         digests = [
@@ -501,9 +551,15 @@ class _Layers:
             for index in range(len(specs))
         ]
         self._libraries = [
-            _Library(session, system, report, digest)
-            for system, digest in zip(spine, digests)
+            _Library(session, report, share, digest)
+            for share, digest in zip(self._reports, digests)
         ]
+        # Bound **before** `self.library` is published, not after the folders are
+        # written: a `_Library` is unusable until it holds a system, and
+        # `_Routed.store` swallows what goes wrong into `theorems_failed`, so a
+        # caller reaching one in that window would lose promotions silently
+        # rather than raise (found in review).
+        self._bind()
         # One entry point for the walk, which knows nothing about layers: it
         # hands over a promoted assertion and this routes it. Built **once** and
         # rebound in place — the walk is handed `library.store` before the first
@@ -523,6 +579,8 @@ class _Layers:
             )
             for index, system in enumerate(spine)
         ]
+        for share, stored in zip(self._reports, self._folders):
+            share.sections = len(stored)
 
     def rebind(self) -> None:
         """Re-attach after a checkpoint emptied the identity map.
@@ -535,21 +593,36 @@ class _Layers:
         self._spine = [
             self._session.get(FormalSystem, layer) for layer in self._ids
         ]
-        for library, system in zip(self._libraries, self._spine):
-            library.rebind(system)
+        self._bind()
+
+    def _bind(self) -> None:
+        # Hand each library its layer's system and that layer's *effective*
+        # symbol table. Done in one place so a checkpoint cannot re-attach one
+        # without the other.
+        for library, system, symbols in zip(
+            self._libraries, self._spine, _effective_symbols(self._spine)
+        ):
+            library.rebind(system, symbols)
 
     @property
     def sections(self) -> int:
         """Folders stored, across every layer."""
         return sum(len(stored) for stored in self._folders)
 
-    def owning(self, label: str) -> FormalSystem:
-        """The system ``label``'s own section puts it in."""
-        return self._spine[self._of_label(label)]
+    def index_of(self, label: str) -> int:
+        """Which layer ``label``'s own section puts it in.
 
-    def folder_for(self, label: str) -> uuid.UUID | None:
+        The index, not the system, because a caller needs both that layer's
+        system *and* its share of the report and must not look the same label up
+        twice to get them.
+        """
+        return self._of_label(label)
+
+    def system_at(self, index: int) -> FormalSystem:
+        return self._spine[index]
+
+    def folder_for(self, index: int, label: str) -> uuid.UUID | None:
         """The folder ``label`` is filed in, within its own layer's outline."""
-        index = self._of_label(label)
         return self._folders[index].folder_for(self._database.position(label))
 
     def describe(self, descriptions: Mapping[str, Description]) -> int:
@@ -557,10 +630,11 @@ class _Layers:
         split: list[dict[str, Description]] = [{} for _ in self._ids]
         for label, description in descriptions.items():
             split[self._of_label(label)][label] = description
-        return sum(
-            store_descriptions(self._session, system_id, share)
-            for system_id, share in zip(self._ids, split)
-        )
+        total = 0
+        for system_id, share, report in zip(self._ids, split, self._reports):
+            report.described = store_descriptions(self._session, system_id, share)
+            total += report.described
+        return total
 
 
 class _Routed:
@@ -590,6 +664,36 @@ class _Routed:
 
     def store(self, entry: LibraryEntry) -> None:
         self._libraries[self._of_label(entry.spec.label)].store(entry)
+
+
+def _effective_symbols(spine: Sequence[FormalSystem]) -> list[dict[str, SymbolRow]]:
+    """Each layer's symbol table as its own grammar sees it, root first.
+
+    A child's effective system is its ancestors' parts followed by its own
+    (`layered_spec`), so its *sorts* are theirs as well — and a promoted
+    theorem's side conditions name a sort, which `side_conditions_mapping`
+    resolves to a real `symbols` FK. The row it should point at is the
+    ancestor's, not a copy: §5.1's guarantee is cheap precisely because a child's
+    primitives **are** the ancestor's rows.
+
+    Found by running the corpus. `wff_var` is declared wherever the `$f` for a
+    `wff` is — the propositional layer, on `set.mm` — while the theorems carrying
+    a `$d` over a `wff` metavariable run to the top of the file. Giving each
+    layer only its own symbols refused 354 of the first 2,676 promotions with
+    "Side-condition sort 'wff_var' is not a symbol of the system", and the
+    fixture could not see it: every one of its `$f`s sits in the preamble, so
+    they all land in the root and every layer's own table happens to be enough.
+
+    Nearest wins, which costs nothing here — `layered_spec` refuses a name
+    redeclared across a chain — but is the rule the rest of the spine follows and
+    so is the one to write.
+    """
+    tables: list[dict[str, SymbolRow]] = []
+    effective: dict[str, SymbolRow] = {}
+    for system in spine:
+        effective = effective | {symbol.name: symbol for symbol in system.symbols}
+        tables.append(effective)
+    return tables
 
 
 def _layer_of_position(opens: Sequence[int]) -> Callable[[int], int]:
@@ -636,21 +740,23 @@ class _Library:
     def __init__(
         self,
         session: Session,
-        system: FormalSystem,
         report: ImportReport,
+        share: LayerReport,
         digest: str,
     ) -> None:
         self._session = session
         self._report = report
+        self._share = share
         self._digest = digest
         # Label -> stored id, so a proof can be linked to the theorem it
         # establishes. Ids survive a checkpoint; the ORM objects do not.
         self.ids: dict[str, uuid.UUID] = {}
-        self.rebind(system)
 
-    def rebind(self, system: FormalSystem) -> None:
+    def rebind(self, system: FormalSystem, symbols: Mapping[str, SymbolRow]) -> None:
+        # `symbols` is the layer's *effective* table, not `system.symbols`: see
+        # `_effective_symbols` for the 354 promotions that told us so.
         self._system = system
-        self._symbols = {symbol.name: symbol for symbol in system.symbols}
+        self._symbols = symbols
 
     def store(self, entry: LibraryEntry) -> None:
         try:
@@ -675,6 +781,8 @@ class _Library:
             return
         self._report.theorems += 1
         self._report.primitives += entry.primitive
+        self._share.theorems += 1
+        self._share.primitives += entry.primitive
 
 
 def _record_failure(report: ImportReport, label: str, message: str) -> None:

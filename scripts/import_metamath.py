@@ -31,6 +31,7 @@ from website.logical.metamath import CheckedTheorem, parse  # noqa: E402
 from website.logical.metamath.setmm import (  # noqa: E402
     DISPLAY_OVERRIDES,
     DISPLAY_RULES,
+    LAYERS,
 )
 
 
@@ -61,6 +62,16 @@ def _arguments() -> argparse.Namespace:
             "apply the curated set.mm display tables (setmm.DISPLAY_OVERRIDES and "
             "setmm.DISPLAY_RULES). Off by default: a Metamath label is local to "
             "its library, so the tables mean what they say only for set.mm"
+        ),
+    )
+    parser.add_argument(
+        "--setmm-layers",
+        action="store_true",
+        help=(
+            "store the corpus as a spine of systems (setmm.LAYERS: propositional "
+            "calculus, then first-order logic, then ZF set theory) rather than "
+            "one. Off by default, and off for the same reason the display tables "
+            "are: a layer plan names one library's own section titles"
         ),
     )
     return parser.parse_args()
@@ -120,6 +131,7 @@ async def main() -> int:
                 # `display.applicable` stops the mess, not the presumption.
                 overrides=DISPLAY_OVERRIDES if arguments.setmm_overrides else None,
                 rules=DISPLAY_RULES if arguments.setmm_overrides else None,
+                plan=LAYERS if arguments.setmm_layers else (),
             )
         )
     await get_engine().dispose()
@@ -140,6 +152,18 @@ async def main() -> int:
     print(f"  described {report.described}")
     print(f"  notation  {report.notation}")
     print(f"  sections  {report.sections}")
+    # The spine, root first. Printed only when there is one to print: for an
+    # unlayered import the single entry restates the totals above, which reads as
+    # noise rather than as information.
+    if len(report.layers) > 1:
+        print("\n  layers (root first)")
+        for layer in report.layers:
+            print(
+                f"    {layer.name}\n"
+                f"      {layer.proofs} proofs, {layer.theorems} theorems "
+                f"({layer.primitives} primitive), "
+                f"{layer.sections} sections, {layer.described} described"
+            )
     for label, error in report.failures:
         print(f"    ! {label}: {error}")
     return 0
