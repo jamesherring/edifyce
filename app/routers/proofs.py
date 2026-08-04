@@ -1985,6 +1985,20 @@ async def propose_line(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         ) from exc
+    except LookupError as exc:
+        # A referenced term whose constructor this grammar no longer has. Term
+        # rows outlive the productions that built them, so the ownership check
+        # above passes and `TermGraph.term` is where it surfaces — as a raise, out
+        # of a rebuild. That is a stale id in a request, not a fault here, and
+        # this route reshapes it as `_verify_with_references` already reshapes the
+        # same raise from a lemma's rows.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "A referenced term was built over a grammar this system no longer "
+                f"has, so it cannot be restated here: {exc}"
+            ),
+        ) from exc
 
     # Rendered with no projection, which is `to_string` exactly — the source
     # spelling, because a production's render steps are its source template.

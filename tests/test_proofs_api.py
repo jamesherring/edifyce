@@ -2616,3 +2616,39 @@ def test_a_ref_that_carries_slots_is_refused(client, db):
     assert res.status_code == 422
     assert "does not use" in res.json()["detail"]
     assert client.get(f"/api/proofs/{proof_id}").json()["source"] == "x ∈ y [HYP]"
+
+
+def test_a_referenced_term_the_grammar_has_outgrown_is_refused(client, db):
+    """A term row outlives the production that built it.
+
+    So the same-system ownership check passes for an id whose constructor has
+    since been renamed, and the raise surfaces from `TermGraph.term` during the
+    rebuild. That is a stale id in a request rather than a fault here — 422, as
+    `_verify_with_references` already reshapes the same raise from a lemma's rows.
+    """
+    owner = _register_login(client, "ada@example.com")
+    system_id, proof_id = _one_line_proof(client, db, owner)
+    existing = _structure(client, proof_id)["lines"][0]["term"]["id"]
+
+    # Rename the production the stored term names, leaving the term row behind.
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            session.execute(
+                sa_update(SymbolRow)
+                .where(
+                    SymbolRow.system_id == uuid.UUID(system_id),
+                    SymbolRow.name == "membership",
+                )
+                .values(name="membership_renamed")
+            )
+            session.commit()
+    finally:
+        engine.dispose()
+
+    res = client.post(
+        f"/api/proofs/{proof_id}/lines", json={"statement": {"ref": existing}}
+    )
+
+    assert res.status_code == 422, res.text
+    assert "no longer has" in res.json()["detail"]
