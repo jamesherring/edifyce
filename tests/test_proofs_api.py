@@ -90,7 +90,7 @@ from tests.database import (
     enable_foreign_keys,
 )
 from tests.zfc_systems import scoped_zfc_spec
-from website.logical.declarative import SystemSpec, build_spec
+from website.logical.declarative import LinePart, LineSpec, SystemSpec, build_spec
 from website.logical.formal_system import FormalSystem as EngineFormalSystem
 from website.logical.rendering import Projection
 
@@ -2209,3 +2209,55 @@ def test_applying_a_citation_cannot_break_a_published_proof(client, db):
     detail = client.get(f"/api/proofs/{proof_id}").json()
     assert detail["source"] == VALID_PROOF
     assert detail["valid"] is True
+
+
+# A scope opener that *also* declares a reference field. Nothing forbids it, and
+# such a line is granted by fiat — so its citation is never resolved, and reading
+# a proposal's outcome off the line's validity would report `accepted` for a
+# citation nothing looked at.
+def _scoped_with_reference_spec() -> SystemSpec:
+    return SystemSpec(
+        name="ND",
+        brackets=brackets(),
+        productions=[variable_prod(), membership_prod(), equality_prod(),
+                     implication_prod()],
+        lines=[
+            statement_line(),
+            LineSpec(
+                name="assume",
+                shape="assume <formula> [<reference>]",
+                parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,.?]+")],
+                logical_sort="formula",
+                scope="assumption",
+            ),
+        ],
+        rules=[hyp_rule(), mp_rule()],
+    )
+
+
+def test_a_line_no_citation_justifies_is_refused(client, db):
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner, spec=_scoped_with_reference_spec())
+    created = client.post(
+        "/api/proofs",
+        json={
+            "name": "P",
+            "formal_system_id": system_id,
+            "source": "assume x ∈ y [HYP]\n    x ∈ y [HYP]",
+        },
+    ).json()
+    assert client.post(f"/api/proofs/{created['id']}/verify").json()["success"] is True
+
+    res = client.post(
+        f"/api/proofs/{created['id']}/cite",
+        json={"line": 1, "rule": "NOPE", "antecedents": [99]},
+    )
+
+    # Refused, rather than reported accepted — the scope opener is valid whatever
+    # its reference says, so its validity is no evidence about the citation.
+    assert res.status_code == 422
+    assert "granted" in res.json()["detail"]
+    # And nothing was written, even though this was a dry run anyway.
+    assert client.get(f"/api/proofs/{created['id']}").json()["source"].startswith(
+        "assume x ∈ y [HYP]"
+    )

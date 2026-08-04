@@ -485,6 +485,14 @@ A line is addressed by its **citation number** — the handle an antecedent edge
 already uses — which needs the proof's stored structure, so an unverified proof
 gets a 409 saying to verify first rather than a guess.
 
+A line whose citation the checker never **resolves** is refused rather than
+reported on. A scope opener is granted by fiat — a hypothesis holds for its
+subproof, a fresh variable is introduced — and an axiom line asserts itself; both
+are valid whatever their reference says, and nothing stops a system declaring a
+reference field on either. Reading a proposal's outcome off such a line's validity
+would answer `accepted` for a citation nothing looked at, so the line type is
+checked from the stored row before any work happens.
+
 The system is built **twice** per request: once here, to read the line being
 rewritten, and once inside the verify. Both builds now take the cached schema and
 definition terms, so neither re-parses a rule schema — but a single build would

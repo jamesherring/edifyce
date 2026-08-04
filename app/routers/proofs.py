@@ -1685,6 +1685,28 @@ async def propose_citation(
             ),
         )
 
+    # A line whose citation the checker never resolves cannot be justified by one,
+    # and reporting a proposal against it on the line's overall validity would say
+    # `accepted` for a citation nothing looked at. A scope opener is granted by
+    # fiat — a hypothesis holds for its subproof, a fresh variable is introduced —
+    # and an axiom line asserts itself; both are valid whatever their reference
+    # says, and a system is free to declare a reference field on either.
+    #
+    # Decided from the stored row, before any build work, because it is a fact
+    # about the line type rather than about this proposal.
+    if row.opens_scope is not None or row.behaviour != "logical":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Line {payload.line} is not justified by a citation: it "
+                + (
+                    "opens a subproof, which is granted rather than proved."
+                    if row.opens_scope is not None
+                    else f"is a {row.behaviour or 'non-logical'} line."
+                )
+            ),
+        )
+
     system = await load_system(session, proof.formal_system_id)
     if system is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Formal system not found.")
