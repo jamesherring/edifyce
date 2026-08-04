@@ -23,7 +23,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -56,7 +56,9 @@ from app.routers._common import (
 )
 from app.db.descriptions_mapping import load_description
 from app.db.models import Proof, ProofFolder, User
-from app.db.notations_mapping import notation_names
+from app.db.notations_mapping import load_notation, notation_names, render_stored
+from app.db.terms import TermRow
+from app.db.terms_mapping import prefetch_terms, term_digests, walk_subgraph
 from app.db.side_conditions import SideConditionRow
 from app.db.side_conditions_mapping import (
     definition_provisos_list,
@@ -77,6 +79,9 @@ from app.db.systems import (
 )
 from app.schemas import (
     Attribution,
+    TermChildOut,
+    TermGraphOut,
+    TermNodeOut,
     Axiom,
     DefinitionBinder,
     DefinitionBinders,
@@ -1151,4 +1156,106 @@ async def verify_proof(
         proof=proof.data(),
         holes=numbers(proof.holes),
         only_holes=proof.only_holes,
+    )
+
+
+@router.get("/{system_id}/terms/{term_id}", response_model=TermGraphOut)
+async def get_term_subgraph(
+    system_id: uuid.UUID,
+    term_id: uuid.UUID,
+    notation: str | None = Query(
+        None,
+        description=(
+            "Read each node through one of the system's stored notations. "
+            "Omitted, nodes carry their shape and no reading."
+        ),
+    ),
+    depth: int | None = Query(
+        None,
+        ge=0,
+        description=(
+            "How far below the root to descend. Omitted, the whole subgraph. "
+            "A node with children it stopped short of is marked `truncated`."
+        ),
+    ),
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> TermGraphOut:
+    """A stored term's shape, node by node.
+
+    What a proof's structure could not say. `ProofStructure` gives each line's
+    term as a `TermSummary` — the root's identity and its digests — and a reader
+    wanting the formula's *parts* had to fall back to `display` or `rendered`,
+    which is a string. A string cannot be pointed at: "the second argument of the
+    application on line 4" is a thing a caller can compute here and cannot
+    compute there.
+
+    Served against the **system**, not a proof, because that is what a term
+    belongs to: interning is per system, and one row is the statement of however
+    many lines happen to share it. Visibility is therefore the system's.
+
+    Read-only, and reports what is stored. A term id this system does not own is
+    a 404 rather than an empty graph — a caller holding an id from elsewhere has
+    made a mistake worth hearing about.
+    """
+    system = await _get_readable_or_404(session, system_id, user)
+
+    projection = None
+    if notation is not None:
+        projection = await load_notation(session, system.id, notation)
+        if projection is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"This system has no notation named {notation!r}.",
+            )
+
+    owner = await session.scalar(
+        select(TermRow.formal_system_id).where(TermRow.id == term_id)
+    )
+    if owner != system.id:
+        # Also the not-found case: `owner` is None for an id that names no row.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="This system has no term with that id.",
+        )
+
+    graph = await session.run_sync(lambda sync: prefetch_terms(sync, [term_id]))
+    nodes = walk_subgraph(graph, term_id, depth)
+    digests = await session.run_sync(
+        lambda sync: term_digests(sync, [node.id for node in nodes])
+    )
+
+    return TermGraphOut(
+        root=term_id,
+        formal_system_id=system.id,
+        notation=notation,
+        truncated=any(node.truncated for node in nodes),
+        nodes=[
+            TermNodeOut(
+                id=node.id,
+                kind=node.row.kind,
+                constructor=node.row.constructor,
+                literal=node.row.literal,
+                sort=node.row.sort,
+                var_name=node.row.var_name,
+                bound_index=node.row.bound_index,
+                digest=digests.get(node.id, (None, None))[0],
+                alpha_digest=digests.get(node.id, (None, None))[1],
+                depth=node.depth,
+                children=[
+                    TermChildOut(slot=slot, id=child) for slot, child in node.children
+                ],
+                # Each node read as a root, so a caller has the identity and the
+                # projection of every part at once. Rendered from the *whole*
+                # graph rather than the walked slice, so a node at the horizon
+                # still reads in full rather than as a hole.
+                rendered=(
+                    render_stored(graph, node.id, projection)
+                    if projection is not None
+                    else None
+                ),
+                truncated=node.truncated,
+            )
+            for node in nodes
+        ],
     )

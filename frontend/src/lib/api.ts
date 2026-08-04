@@ -75,6 +75,49 @@ export interface VerifyResponse {
 	only_holes?: boolean;
 }
 
+/** One edge below a term node: the slot it fills, and what sits there. */
+export interface TermChild {
+	slot: string;
+	id: string;
+}
+
+/** One node of a term subgraph. Mirrors `TermNodeOut` in app/schemas.py.
+ *
+ *  `rendered` is this node read through the requested notation, so a caller has
+ *  the projection *and* the identity of every subterm at once — it can point at a
+ *  formula's part by `id` without restating it, which a rendered string alone
+ *  cannot support.
+ *
+ *  `truncated` means the walk stopped here with children still below: a horizon,
+ *  not a leaf. `children` is reported either way, so a deeper request can be
+ *  aimed rather than repeated. */
+export interface TermNode {
+	id: string;
+	kind: string;
+	constructor: string | null;
+	literal: string | null;
+	sort: string | null;
+	var_name: string | null;
+	bound_index: number | null;
+	digest: string | null;
+	alpha_digest: string | null;
+	/** How far below the requested root this node sits. A node reachable by two
+	 *  paths is reported once, at the shallower of them. */
+	depth: number;
+	children: TermChild[];
+	rendered: string | null;
+	truncated: boolean;
+}
+
+/** A term's subgraph: every node once, edges by id. Mirrors `TermGraphOut`. */
+export interface TermGraph {
+	root: string;
+	formal_system_id: string;
+	notation: string | null;
+	nodes: TermNode[];
+	truncated: boolean;
+}
+
 /** The authenticated user — mirrors `UserRead` in app/auth/schemas.py. */
 export interface User {
 	id: string;
@@ -929,6 +972,21 @@ export const api = {
 			request<Page<FormalSystemSummary>>(`/formal-systems/public${listQuery(params)}`),
 		/** A single system. Published ones are public; drafts are owner-only. */
 		get: (id: string) => request<FormalSystemDetail>(`/formal-systems/${id}`),
+		/** A stored term's shape, node by node — what `ProofStructure` cannot say,
+		 * since it gives each line's term as a root identity only.
+		 *
+		 * Flat, because a term is an interned DAG: a subterm two positions share is
+		 * one node with one id, and every reference to it is that id. `notation`
+		 * reads each node through one of the system's stored notations; `depth`
+		 * bounds how far below the root to descend (nodes stopping short are
+		 * marked `truncated`). */
+		term: (systemId: string, termId: string, options?: { notation?: string; depth?: number }) => {
+			const query = new URLSearchParams();
+			if (options?.notation) query.set('notation', options.notation);
+			if (options?.depth !== undefined) query.set('depth', String(options.depth));
+			const suffix = query.size ? `?${query}` : '';
+			return request<TermGraph>(`/formal-systems/${systemId}/terms/${termId}${suffix}`);
+		},
 		create: (payload: FormalSystemCreate) =>
 			request<FormalSystemDetail>('/formal-systems', {
 				method: 'POST',

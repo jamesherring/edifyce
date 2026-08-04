@@ -37,7 +37,7 @@ from website.logical.matching import Pattern, UnionPattern
 from website.logical.translation import IDENTITY, Translation
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Collection, Sequence
 
     from sqlalchemy import CTE, Select
 
@@ -671,6 +671,98 @@ def _sweep_statement() -> Select:
 
 
 _SWEEP = _sweep_statement()
+
+
+@dataclass(frozen=True)
+class SubgraphNode:
+    """One node of a term subgraph, as a reader of the *shape* wants it.
+
+    ``truncated`` says this node has children the walk did not descend into
+    (a ``depth`` bound), which is different from having none — a reader must be
+    able to tell a leaf from a horizon, or it will believe a formula ended where
+    the request did.
+    """
+
+    id: uuid.UUID
+    row: StoredTerm
+    children: tuple[tuple[str, uuid.UUID], ...]
+    depth: int
+    truncated: bool
+
+
+def walk_subgraph(
+    graph: TermGraph, root: uuid.UUID, depth: int | None = None
+) -> list[SubgraphNode]:
+    """The nodes reachable from ``root``, breadth-first, each visited once.
+
+    **Once**, which is the whole point: a term is an interned DAG, so a subterm
+    two positions share is one node with one id. Emitting it once and letting
+    both positions reference it is what lets a caller — a person or a model —
+    say "that subterm" instead of restating it. A nested rendering would
+    duplicate it and lose exactly the structure sharing the storage exists for.
+
+    ``depth`` bounds how far below the root the walk descends; None is the whole
+    subgraph. It bounds the *output* rather than the read: the sweep that built
+    ``graph`` already fetched the closure in one query, so a shallow request
+    costs the same and simply says less.
+
+    Empty when ``root`` is not in the graph, which is a caller asking about a term
+    of another system rather than an error here.
+    """
+    if graph.node(root) is None:
+        return []
+    found: list[SubgraphNode] = []
+    seen: set[uuid.UUID] = {root}
+    frontier: list[tuple[uuid.UUID, int]] = [(root, 0)]
+    while frontier:
+        term_id, at = frontier.pop(0)
+        row = graph.node(term_id)
+        if row is None:
+            # A dangling edge: the sweep returns a closed set, so this is a
+            # defensive skip rather than something a caller can provoke.
+            continue
+        children = graph.children_of(term_id)
+        beyond = depth is not None and at >= depth
+        found.append(
+            SubgraphNode(
+                id=term_id,
+                row=row,
+                # Reported even at the horizon: knowing *which* slots were not
+                # descended into is what makes a second, deeper request targeted.
+                children=children,
+                depth=at,
+                truncated=beyond and bool(children),
+            )
+        )
+        if beyond:
+            continue
+        for _slot, child in children:
+            if child in seen:
+                continue
+            seen.add(child)
+            frontier.append((child, at + 1))
+    return found
+
+
+def term_digests(
+    session: Session, ids: Collection[uuid.UUID]
+) -> dict[uuid.UUID, tuple[str, str | None]]:
+    """``id -> (digest, alpha_digest)`` for these rows.
+
+    A second query rather than more columns on :class:`StoredTerm`, deliberately.
+    The sweep runs on every proof view and every check-from-rows, and the digests
+    are needed by neither — widening it would put two more columns per node on
+    the hot path to serve a reader that asks for them rarely.
+    """
+    wanted = list(ids)
+    if not wanted:
+        return {}
+    rows = session.execute(
+        select(TermRow.id, TermRow.digest, TermRow.alpha_digest).where(
+            TermRow.id.in_(wanted)
+        )
+    )
+    return {row.id: (row.digest, row.alpha_digest) for row in rows}
 
 
 def term_context(system: EngineSystem) -> Context:
