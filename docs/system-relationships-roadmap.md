@@ -1888,6 +1888,22 @@ fallback* — green, and testing the opposite of what it claims. That is the fif
 time in this track that a check would have been satisfied by the thing it was
 meant to rule out.
 
+**A citation resolves through the chain and hits its cache — done.** The first
+thing to read D3's per-layer digests *back*. `_Layers` writes each layer's
+effective digest and the read path recomputes its own from the rows, so until
+something compared the two there was nothing to notice a disagreement with;
+`read_library`'s `fresh` is exactly the set whose stored digest still matches,
+and anything outside it re-parses.
+
+Measured on `set.mm` at N = 2,676: **8,581 citations resolved through the
+spine**, of which **0 were cached before `symbols.inclusion_position` and all
+8,581 after**. Broken down 4,704 / 3,874 / 3 across the layers, so the
+cross-layer case is included — a first-order proof citing a propositional
+theorem hits the *ancestor's* cache, which is the case a per-layer digest exists
+for and the one a single corpus-wide digest would have got wrong. Pinned on the
+fixture by `test_a_citation_resolves_through_the_chain_and_hits_its_cache`,
+which fails at 0/3 with the column ignored.
+
 - *Invalid, each a hard failure of the run:* a deliberately misfiled plan
   (`ax-mp` assigned to ZFC) must fail loudly rather than quietly dropping the
   theorems that cite it; a synthesised forward-layer citation must be caught;

@@ -35,7 +35,10 @@ from app.db import Base
 from app.db.descriptions import LabelDescriptionRow
 from app.db.metamath_store import import_corpus, layered_systems
 from app.db.models import FormalSystem, Proof, ProofFolder
+from app.db.proof_lines import ProofLineRow
 from app.db.promoted_theorems import PromotedTheoremRow
+from app.db.promoted_theorems_mapping import read_library
+from app.db.systems_mapping import effective_library
 from app.db.systems import (
     NotationPieceRow,
     NotationRulePieceRow,
@@ -461,3 +464,56 @@ def test_the_spine_is_wired_root_to_leaf(session, database) -> None:
         None, spine[0].id, spine[1].id
     ]
     assert all(system.owner_id is None for system in spine)
+
+
+def test_a_citation_resolves_through_the_chain_and_hits_its_cache(
+    session, database
+) -> None:
+    """**D5's first invariant, and the first read of D3's per-layer digests.**
+
+    A stored theorem's terms are guarded by the digest of the system they were
+    composed against — for an ancestor's entry, the *ancestor's*, which is what
+    `LibraryChain` carries a digest per layer for. Nothing had ever read those
+    back: `_Layers` wrote them and the read path recomputes its own from the
+    rows, so a disagreement was invisible until something compared the two.
+
+    `read_library`'s `fresh` is exactly the set whose stored digest still
+    matches. Anything outside it re-parses — silently, since a stale digest is a
+    miss and never a wrong answer, which is how this went unnoticed for the whole
+    life of P4.
+
+    Measured on `set.mm` at N = 2,676: 8,581 citations resolved through the
+    spine, **0 of them cached** before `symbols.inclusion_position` and **all
+    8,581** after. Cross-layer included — a first-order proof citing a
+    propositional theorem hits the ancestor's cache, which is the case the
+    per-layer digest exists for.
+    """
+    report = import_corpus(session, database, name="Corpus", plan=LAYERS)
+
+    systems_by_id = {system.id: system for system in systems(session)}
+    parent = {i: s.inherits_from_id for i, s in systems_by_id.items()}
+
+    def chain(system_id):
+        walked = []
+        while system_id is not None:
+            walked.append(systems_by_id[system_id])
+            system_id = parent[system_id]
+        return list(reversed(walked))
+
+    lines: dict = {}
+    for line in session.scalars(select(ProofLineRow)):
+        lines.setdefault(line.proof_id, []).append(line)
+
+    resolved = cached = 0
+    for proof in session.scalars(select(Proof)):
+        labels = {line.rule for line in lines.get(proof.id, ()) if line.rule}
+        if not labels:
+            continue
+        _spec, library = effective_library(chain(proof.formal_system_id))
+        pending = read_library(session, library, labels)
+        resolved += len(pending.cited)
+        cached += len(pending.fresh)
+
+    # Every proof cites something, and every citation it makes is cached.
+    assert resolved == len(report.system_ids)
+    assert cached == resolved
