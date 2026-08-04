@@ -10,9 +10,14 @@ D1 and D2 are done — the outline is kept, the partition is measured against th
 real `set.mm`, and `setmm.LAYERS` carries the plan those numbers justify — and
 **D3 is built, both halves**: `corpus_specs` returns one `SystemSpec` per layer
 and layering them back declares exactly what the unlayered spec declared, and
-`import_corpus(plan=…)` stores a corpus as a spine of systems whose theorem
-count, verdicts and proof sources match an unlayered run exactly. D4 onward are
-still design.
+`import_corpus(plan=…)` stores a corpus as a spine of systems. **D4 is done** —
+`--setmm-layers` runs it, the report breaks down per layer, and
+`scripts/check_layering.py` holds the headline invariant against the real file:
+at the milestone slice a spined import of `set.mm` produces the same verdicts and
+**byte-identical proof sources** as a flat one. Running it on the corpus is what
+found the one thing the fixture could not — a layer resolving a proviso's sort
+through its own symbols rather than its ancestors', which had been refusing 354
+of the first 2,676 promotions. D5 and D6 are still design.
 
 One correction this note owes its reader, since §6.3 and §8's S2 both imply
 otherwise: **an edge and a layer are not two ways to do the same thing.** An edge
@@ -668,8 +673,8 @@ and refuses forward citations. Layering coarsens that:
   a 24-minute whole-corpus walk this is noise, but the child's build is
   proportional to the *whole* chain, so a deep tower would not be.
 - **Slugs and names multiply.** Three `formal_systems` rows where there was one;
-  `scripts/import_metamath.py` gains a `--layers` flag and the report gains a
-  per-layer breakdown.
+  `scripts/import_metamath.py` gains a `--setmm-layers` flag and the report gains
+  a per-layer breakdown. Both built in D4.
 
 ---
 
@@ -1704,12 +1709,64 @@ established that `set.mm` presents no such case (no `|-` statement uses a
 constant first declared later), so the check has nothing to catch on this file
 and belongs with whatever first reads a plan it did not measure.
 
-#### D4/D5 — store per layer; the invariants
+#### D4 — store each theorem in its layer — **done**
 
-- *Valid:* the layered import of the measured slice produces the **same theorem
-  count and the same per-theorem verdicts** as the unlayered import, and the
-  emitted proof sources are **byte-identical**. This is the phase's headline
-  assertion and it is a strict equality, not a summary comparison.
+The *mechanism* landed with D3's store half; what D4 is, is running it on the
+corpus and giving an operator a way to. Three things:
+
+`scripts/import_metamath.py` gains **`--setmm-layers`**, off by default and for
+the reason `--setmm-overrides` is: a layer plan names one library's own section
+titles. The report gains a **per-layer breakdown** (`ImportReport.layers`),
+counted as the run goes rather than derived by a reader — a stored row keeps the
+system it landed in, not the section that put it there. One entry for an
+unlayered import, so nothing has to ask whether a plan was given before reading
+it.
+
+`scripts/check_layering.py` is the **headline invariant**, run against a real
+`.mm` at any slice: import the file twice, flat and spined, and assert a strict
+equality on the counters, the promoted library label-for-label, the folder
+titles, the documented labels, and the **byte-identical proof sources**. A script
+rather than a test because `set.mm` is not in the repository and the claim is
+about `set.mm`; `tests/test_metamath_layered_store.py` pins the same equality on
+a fixture, which proves the mechanism and not the corpus.
+
+**Measured at the milestone slice, N = 2,676:** 2,676 checked, 2,676 verified, 0
+rejected, 0 failed; 2,710 promoted (34 primitive, 0 refused); 78 folders; 2,736
+documented labels — and **every proof source byte-identical** between the two
+runs. Roughly 65s per run, so the whole check is about two minutes.
+
+*What the corpus found that the fixture could not, and it is the phase's real
+result.* A promoted theorem's side conditions name a sort, which
+`side_conditions_mapping` resolves to a real `symbols` **FK** — and each layer's
+library was resolving that through its *own* `symbols` rows. `wff_var` is
+declared wherever the `$f` for a `wff` is, which on `set.mm` is the propositional
+layer, while the theorems carrying a `$d` over a `wff` metavariable run to the
+top of the file. So **354 of the first 2,676 promotions were refused** under a
+spine — `ax-5`, `nfv`, `19.21v` and everything downstream of them — and every
+proof citing one lost its library entry, silently, because a refused promotion is
+counted apart from a failed proof.
+
+The fix is the same sentence as every other one in this track: a layer's
+effective view is its ancestors' plus its own (`_effective_symbols`). The FK
+points at the **ancestor's** row rather than a copy, which is §5.1's guarantee
+being cheap for the reason §5.1 gives.
+
+Why the fixture missed it is worth recording, because it is the third instance of
+one pattern: every `$f` in the shared fixture sits in the preamble, so every
+variable production lands in the root and each layer's own table happens to
+suffice. `tests/test_metamath_layered_store.py::SCOPED_VARIABLES` is a second
+fixture shaped the way the file actually is — variables declared *inside* a layer,
+and a `$d` stated one layer up.
+
+And the counters alone would not have shown it. `theorems_failed` is deliberately
+counted apart from `failed` — a theorem that would not *store* against a proof
+that would not *check* — so a run promoting 354 fewer theorems still reported the
+same checked, verified and rejected. What caught it was comparing the promoted
+labels **as a set**; the counter comparison was added afterwards, so the next one
+is caught by both.
+
+#### D5 — the invariants
+
 - *Invalid, each a hard failure of the run:* a deliberately misfiled plan
   (`ax-mp` assigned to ZFC) must fail loudly rather than quietly dropping the
   theorems that cite it; a synthesised forward-layer citation must be caught;
@@ -1720,6 +1777,9 @@ and belongs with whatever first reads a plan it did not measure.
 - *Pinned:* the same slice imported twice gives the same partition (determinism);
   re-verifying a stored layered proof from its rows gives the same verdict as the
   import did.
+- The **valid** case is already met — see D4's measurement — and
+  `scripts/check_layering.py` is where D5's additions belong, since a hard
+  failure is a difference between two runs like any other.
 
 #### D6 — the provenance report
 
