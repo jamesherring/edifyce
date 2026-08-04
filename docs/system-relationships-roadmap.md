@@ -1904,6 +1904,27 @@ for and the one a single corpus-wide digest would have got wrong. Pinned on the
 fixture by `test_a_citation_resolves_through_the_chain_and_hits_its_cache`,
 which fails at 0/3 with the column ignored.
 
+**Re-verification from rows, and determinism — done.** The pinned pair. A
+layered import's proofs are stored against their own layers and their citations
+reach across the spine, so re-checking one from its rows exercises the whole read
+path at once: the effective spec built from the chain's parts, the lines rebuilt
+from `proof_lines`, and the library resolved nearest-first with each layer's own
+digest guarding its own terms. Every layer's proof re-checks to the verdict the
+import gave it.
+
+Worth being exact about what that is worth, because it is the fifth trap of the
+same family. **Against a digest that never matched, this test would still have
+passed** — the citations would have re-parsed and reached the same answer, which
+is precisely what makes a cache's failure silent. A green result here only says
+what it appears to say *after* `inclusion_position`, and the citation-cache
+measurement above is what says so. The re-check is also verified non-vacuous
+directly: with `resolve_citations` removed the proofs come back invalid, so the
+library is load-bearing rather than incidental.
+
+Determinism is the cheap one and holds: the same slice imported twice gives the
+same partition and the same per-layer counts, asserted on names because the ids
+differ between runs by construction.
+
 - *Invalid, each a hard failure of the run:* a deliberately misfiled plan
   (`ax-mp` assigned to ZFC) must fail loudly rather than quietly dropping the
   theorems that cite it; a synthesised forward-layer citation must be caught;

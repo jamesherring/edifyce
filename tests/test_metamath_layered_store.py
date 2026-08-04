@@ -37,14 +37,23 @@ from app.db.metamath_store import import_corpus, layered_systems
 from app.db.models import FormalSystem, Proof, ProofFolder
 from app.db.proof_lines import ProofLineRow
 from app.db.promoted_theorems import PromotedTheoremRow
-from app.db.promoted_theorems_mapping import read_library
-from app.db.systems_mapping import effective_library
+from app.db.definition_terms import load_definition_terms
+from app.db.proofs_mapping import PendingCitations, load_proof_for_check
+from app.db.promoted_theorems_mapping import cited_labels, read_library
+from app.db.schema_terms import load_schema_terms
+from app.db.terms_mapping import term_context
+from app.db.systems_mapping import (
+    effective_library,
+    inherited_definition_count,
+    inherited_rule_count,
+)
 from app.db.systems import (
     NotationPieceRow,
     NotationRulePieceRow,
     NotationRulePinRow,
     NotationRuleRow,
 )
+from website.logical.declarative import build_spec
 from website.logical.metamath import parse
 from website.logical.metamath.corpus import corpus_specs
 from website.logical.metamath.sections import Layer
@@ -517,3 +526,122 @@ def test_a_citation_resolves_through_the_chain_and_hits_its_cache(
     # Every proof cites something, and every citation it makes is cached.
     assert resolved == len(report.system_ids)
     assert cached == resolved
+
+
+def _recheck(session, proof, chain):
+    """Re-check one stored proof entirely from its rows, through its own chain.
+
+    The `POST /proofs/{id}/verify` row path (`app/routers/proofs.py`) with the
+    HTTP and the ownership taken away: build the effective system from the
+    stored parts, rebuild the lines from `proof_lines`, and resolve what they
+    cite through `LibraryChain`. The verdict is *not* read back — numbering,
+    scope and justification are all re-derived — so this is a re-check that
+    happens to skip the parse, which is the whole of P2.
+    """
+    spec, library = effective_library(chain)
+    build = build_spec(
+        spec,
+        schema_terms=load_schema_terms(
+            session, chain[-1], spec, inherited_rule_count(chain)
+        ),
+        definition_terms=load_definition_terms(
+            session, chain[-1], spec, inherited_definition_count(chain)
+        ),
+    )
+    assert "errors" not in build, build.get("errors")
+    compiled = build["system"]
+    context = term_context(compiled)
+
+    def cited(references):
+        pending = read_library(
+            session, library, cited_labels(references),
+            hypotheses_of=proof.theorem_id,
+        )
+        return PendingCitations(
+            pending.term_ids,
+            lambda graph: [
+                compiled.promote(theorem)
+                for theorem in pending.promote(compiled, context, graph).values()
+            ],
+        )
+
+    return load_proof_for_check(
+        session, proof.id, compiled, context, resolve_citations=cited
+    )
+
+
+def test_a_stored_layered_proof_rechecks_to_the_verdict_the_import_gave_it(
+    session, database
+) -> None:
+    """**D5's pinned item**, and it needed the cache to work to mean anything.
+
+    A layered import's proofs are stored against their own layers, and their
+    citations reach across the spine. Re-checking one from its rows therefore
+    exercises the whole read path at once — the effective spec built from the
+    chain's parts, the lines rebuilt from `proof_lines`, and the library resolved
+    nearest-first with each layer's own digest guarding its own cached terms.
+
+    Against a digest that never matched, this test would still have passed: the
+    citations would have re-parsed and reached the same answer, which is exactly
+    what makes a cache's failure silent. It is only after `inclusion_position`
+    that a green result here says the thing it appears to say.
+    """
+    import_corpus(session, database, name="Corpus", plan=LAYERS)
+
+    spine = {system.id: system for system in systems(session)}
+    parent = {i: s.inherits_from_id for i, s in spine.items()}
+
+    def chain(system_id):
+        walked = []
+        while system_id is not None:
+            walked.append(spine[system_id])
+            system_id = parent[system_id]
+        return list(reversed(walked))
+
+    rechecked = {}
+    for proof in session.scalars(select(Proof)):
+        loaded = _recheck(session, proof, chain(proof.formal_system_id))
+        assert loaded is not None, f"{proof.name} stored no lines"
+        rechecked[proof.name] = (bool(loaded.valid), bool(proof.valid))
+
+    # Every layer's proof, re-checked from rows, agrees with what the import
+    # stored — including the two whose citations cross a layer boundary.
+    assert rechecked == {
+        "pc-thm": (True, True),
+        "fol-thm": (True, True),
+        "zf-thm": (True, True),
+    }
+
+
+def test_the_same_slice_imported_twice_gives_the_same_partition(
+    session, database
+) -> None:
+    # D5's other pinned item. Nothing in the split may depend on anything but the
+    # file and the plan — not on a dict's iteration order, not on a uuid, not on
+    # which layer happened to be flushed first. Asserted on the *names*, since
+    # the ids differ between runs by construction and are the one thing that
+    # must.
+    first = import_corpus(session, database, name="Corpus", plan=LAYERS)
+    spine = {system.id: system.name for system in systems(session)}
+    partition = {
+        proof.name: spine[proof.formal_system_id]
+        for proof in session.scalars(select(Proof))
+    }
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine, tables=_STORE_TABLES)
+    with Session(engine) as again:
+        second = import_corpus(again, parse(CORPUS), name="Corpus", plan=LAYERS)
+        twice = {system.id: system.name for system in systems(again)}
+        repeated = {
+            proof.name: twice[proof.formal_system_id]
+            for proof in again.scalars(select(Proof))
+        }
+
+    assert repeated == partition
+    assert [layer.name for layer in second.layers] == [
+        layer.name for layer in first.layers
+    ]
+    assert [layer.proofs for layer in second.layers] == [
+        layer.proofs for layer in first.layers
+    ]
