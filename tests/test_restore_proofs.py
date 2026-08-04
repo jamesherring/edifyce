@@ -25,7 +25,7 @@ pytest.importorskip("fastapi")
 pytest.importorskip("aiosqlite")
 pytest.importorskip("regex")
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
@@ -264,6 +264,31 @@ def test_the_async_url_understands_a_url_that_names_its_driver():
     assert restore._async_url("sqlite:////tmp/x.db") == "sqlite+aiosqlite:////tmp/x.db"
     for named in ("postgresql+psycopg://u@h/db", "postgres://u@h/db"):
         assert restore._async_url(named) == "postgresql+asyncpg://u@h/db"
+
+
+def test_a_platform_url_reaches_a_driver_that_is_installed():
+    # A bare `postgresql://` defaults to psycopg2, which this project does not
+    # depend on, and `postgres://` — what Neon, Vercel and Heroku hand out — has
+    # no dialect at all. Both die inside the very first `create_engine`, so the
+    # documented Postgres path would not survive its own first line.
+    assert restore._sync_url("postgres://u@h/db") == "postgresql+psycopg://u@h/db"
+    assert restore._sync_url("postgresql://u@h/db") == "postgresql+psycopg://u@h/db"
+    # SQLite is left exactly as it came: its default driver is the built-in one.
+    assert restore._sync_url("sqlite:////tmp/x.db") == "sqlite:////tmp/x.db"
+    create_engine(restore._sync_url("postgres://u@h/db"))  # must not raise
+
+
+def test_libpq_only_query_params_survive_sync_and_are_translated_for_asyncpg():
+    # The two drivers want opposite things from a platform URL: psycopg *is*
+    # libpq, so `sslmode` means there what it means in the URL; asyncpg is not,
+    # spells it `ssl`, and has no `channel_binding` at all — SQLAlchemy forwards
+    # both straight to `asyncpg.connect`, which raises on them.
+    neon = "postgres://u:p@h/db?sslmode=require&channel_binding=require"
+    kept = make_url(restore._sync_url(neon)).query
+    assert kept["sslmode"] == "require" and kept["channel_binding"] == "require"
+
+    translated = make_url(restore._async_url(neon)).query
+    assert translated == {"ssl": "require"}
 
 
 def test_a_short_citation_needs_two_antecedents_to_be_short():

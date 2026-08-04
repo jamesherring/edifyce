@@ -20,17 +20,15 @@ from sqlalchemy.ext.asyncio import (
 )
 
 
-def _database_url() -> URL:
-    # Prefer DATABASE_URL, but fall back to POSTGRES_URL: the Neon/Vercel
-    # Marketplace integration provisions the latter (pooled) automatically, so
-    # accepting it lets those deployments work without a manual alias.
-    raw = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
-    if not raw:
-        raise RuntimeError(
-            "Neither DATABASE_URL nor POSTGRES_URL is set. Point one at the Neon "
-            "*pooled* connection string (the '-pooler' host) for serverless "
-            "deployments."
-        )
+def asyncpg_url(raw: str | URL) -> URL:
+    """``raw`` on the asyncpg driver, with libpq-only query params dealt with.
+
+    Public because anything opening an async engine against a URL a *platform*
+    wrote needs exactly this, and there is nowhere else the knowledge lives: a
+    Neon or Vercel connection string is a libpq string, and asyncpg is not libpq.
+    A second copy of these two rules would be a second thing to keep in step
+    (`scripts/restore_proofs.py` is the other caller).
+    """
     # Route whatever scheme the platform hands us (postgres://, postgresql://,
     # even postgresql+psycopg://) onto the asyncpg driver the app uses.
     url = make_url(raw).set(drivername="postgresql+asyncpg")
@@ -52,6 +50,20 @@ def _database_url() -> URL:
     # the param is redundant here; drop it rather than translate it.
     query.pop("channel_binding", None)
     return url.set(query=query)
+
+
+def _database_url() -> URL:
+    # Prefer DATABASE_URL, but fall back to POSTGRES_URL: the Neon/Vercel
+    # Marketplace integration provisions the latter (pooled) automatically, so
+    # accepting it lets those deployments work without a manual alias.
+    raw = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
+    if not raw:
+        raise RuntimeError(
+            "Neither DATABASE_URL nor POSTGRES_URL is set. Point one at the Neon "
+            "*pooled* connection string (the '-pooler' host) for serverless "
+            "deployments."
+        )
+    return asyncpg_url(raw)
 
 
 @lru_cache(maxsize=1)

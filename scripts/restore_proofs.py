@@ -61,6 +61,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fastapi import HTTPException  # noqa: E402
 from sqlalchemy import create_engine, func, inspect, make_url, select  # noqa: E402
 from sqlalchemy import update as sa_update  # noqa: E402
+from sqlalchemy.exc import ArgumentError  # noqa: E402
 from sqlalchemy.ext.asyncio import (  # noqa: E402
     AsyncSession,
     async_sessionmaker,
@@ -77,6 +78,7 @@ from app.db import (  # noqa: E402
 )
 from app.db.metamath_store import import_corpus  # noqa: E402
 from app.db.models import Theorem, User  # noqa: E402
+from app.db.session import asyncpg_url  # noqa: E402
 from app.db.terms import TERM_KIND_NODE  # noqa: E402
 from app.db.terms_mapping import StoredTerm, prefetch_terms, walk_subgraph  # noqa: E402
 from app.routers.proofs import (  # noqa: E402
@@ -1204,21 +1206,41 @@ async def drive(
     return tallies
 
 
+def _sync_url(url: str) -> str:
+    """A URL an operator gave us, on a driver that is actually installed.
+
+    SQLAlchemy's default for a bare ``postgresql://`` is **psycopg2**, which this
+    project does not depend on; the dev group installs psycopg 3. And
+    ``postgres://`` — the scheme Neon, Vercel and Heroku hand out — has no dialect
+    at all. Either dies inside the very first `create_engine`, so the documented
+    Postgres path would not survive its own first line.
+
+    Query params are left exactly as they came: psycopg speaks libpq, so
+    ``sslmode`` and ``channel_binding`` mean there what they mean in the URL. That
+    is the whole difference from `_async_url` below.
+    """
+    parsed = make_url(url)
+    if parsed.get_backend_name() == "sqlite":
+        return url
+    return parsed.set(drivername="postgresql+psycopg").render_as_string(
+        hide_password=False
+    )
+
+
 def _async_url(url: str) -> str:
     """The async driver URL matching a synchronous one.
 
-    Parsed rather than string-replaced, so a URL naming its driver
-    (``postgresql+psycopg://``) or the legacy scheme (``postgres://``) is
-    understood rather than passed through to fail inside `create_async_engine` —
-    which, on the default path, is after the import has already been paid for.
+    Postgres goes through the app's own normalisation rather than a second copy
+    of it: asyncpg is not libpq, so a platform URL's ``sslmode`` has to be
+    translated and its ``channel_binding`` dropped, and those two rules should
+    have one home (`app.db.session.asyncpg_url`).
     """
     parsed = make_url(url)
-    driver = (
-        "sqlite+aiosqlite"
-        if parsed.get_backend_name() == "sqlite"
-        else "postgresql+asyncpg"
-    )
-    return parsed.set(drivername=driver).render_as_string(hide_password=False)
+    if parsed.get_backend_name() == "sqlite":
+        return parsed.set(drivername="sqlite+aiosqlite").render_as_string(
+            hide_password=False
+        )
+    return asyncpg_url(parsed).render_as_string(hide_password=False)
 
 
 # ---------------------------------------------------------------------------
@@ -1323,7 +1345,17 @@ async def main() -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    url = arguments.database_url or f"sqlite:///{arguments.source.with_suffix('.restore.db')}"
+    # Normalised once, here, so every `create_engine` below gets a driver that
+    # exists — and so a URL naming an unusable one fails on the first line
+    # rather than after an import has been paid for.
+    try:
+        url = _sync_url(
+            arguments.database_url
+            or f"sqlite:///{arguments.source.with_suffix('.restore.db')}"
+        )
+    except ArgumentError as exc:
+        print(f"unusable --database-url: {exc}", file=sys.stderr)
+        return 2
 
     if not arguments.keep:
         _provision(url, arguments.recreate)
