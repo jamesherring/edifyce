@@ -2528,3 +2528,91 @@ def test_adding_a_line_is_owner_only(client, db):
         ).status_code
         == 403
     )
+
+
+def test_a_new_line_keeps_the_indentation_of_the_line_it_copies(client, db):
+    """Indentation is what places a line in a subproof, not decoration.
+
+    `display` is stored stripped — the indent is its own column — so a line
+    composed from it and written as-is lands at the root, silently escaping the
+    scope it was meant to join. The `_broken_by_insert` guard catches that when
+    something below depends on it; appending has nothing below, so nothing else
+    would.
+    """
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner, spec=scoped_zfc_spec())
+    created = client.post(
+        "/api/proofs",
+        json={
+            "name": "P",
+            "formal_system_id": system_id,
+            "source": "assume x ∈ y\n    x ∈ y [R, 1]",
+        },
+    ).json()
+    proof_id = created["id"]
+    assert client.post(f"/api/proofs/{proof_id}/verify").json()["success"] is True
+
+    body = client.post(
+        f"/api/proofs/{proof_id}/lines",
+        json={
+            "statement": {
+                "constructor": "membership",
+                "slots": {
+                    "x": {"constructor": "setvar_atom", "literal": "y"},
+                    "y": {"constructor": "setvar_atom", "literal": "x"},
+                },
+            },
+            "apply": True,
+        },
+    ).json()
+
+    assert body["display"] == "    y ∈ x [?]"
+    assert client.get(f"/api/proofs/{proof_id}").json()["source"].splitlines()[2] == (
+        "    y ∈ x [?]"
+    )
+
+
+def test_a_metavariable_is_not_something_a_line_can_state(client, db):
+    """A proof line states a *ground* formula.
+
+    The engine's `Proposal` has a `var` arm — `Var` is a term — but the API's does
+    not, because one could never survive the round trip: `Q` parses back as the
+    grammar's variable *production*, a `Node`, not as a schematic `Var`. Offering
+    it and refusing it would be worse than leaving it out, so the field is absent
+    and a caller naming it gets the ordinary "names nothing" rejection.
+    """
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _one_line_proof(client, db, owner)
+
+    res = client.post(
+        f"/api/proofs/{proof_id}/lines",
+        json={"statement": {"var": "Q", "sort": "formula"}},
+    )
+
+    assert res.status_code == 422
+    assert "exactly one of" in res.json()["detail"]
+
+
+def test_a_ref_that_carries_slots_is_refused(client, db):
+    # The arm where silence would be worst: a referenced term *is* the term that
+    # comes back, so the round-trip check cannot notice that slots were meant to
+    # qualify it, and an applying request would commit a line stating something
+    # other than what was asked for.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _one_line_proof(client, db, owner)
+    existing = _structure(client, proof_id)["lines"][0]["term"]["id"]
+
+    res = client.post(
+        f"/api/proofs/{proof_id}/lines",
+        json={
+            "statement": {
+                "ref": existing,
+                "slots": {"s": {"constructor": "variable", "literal": "y"}},
+            },
+            "apply": True,
+        },
+    )
+
+    assert res.status_code == 422
+    assert "does not use" in res.json()["detail"]
+    assert client.get(f"/api/proofs/{proof_id}").json()["source"] == "x ∈ y [HYP]"

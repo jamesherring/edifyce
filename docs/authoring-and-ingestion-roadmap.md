@@ -519,7 +519,12 @@ A `Proposal` is one of three things, and exactly one:
 * **`constructor`** — a production by name, with a proposal per slot. The
   vocabulary is the grammar's own, so it is closed and enumerable — which is what
   makes a constrained emission possible rather than aspirational.
-* **`var`** — a metavariable of a named sort.
+A metavariable is deliberately **not** among them, though the engine's `Proposal`
+has that arm. A proof line states a *ground* formula; a schematic variable belongs
+to a rule schema or a promoted theorem's statement, and one proposed for a line
+could not survive the round trip — `Q` parses back as the grammar's variable
+*production*, a `Node`, not as a `Var`. Offering it and refusing it would be worse
+than leaving it out.
 
 ### The round trip is checked, not trusted
 
@@ -536,8 +541,16 @@ notation-as-source path could not offer.
 
 Three checks stack, each at its own level. `restate` and `recite` are
 string-level and self-checking (the formula and the citation must read back as
-written). The term comparison is the real one. And a renumbering may not break a
-line that stood before — see below.
+written). The term comparison is the real one, and it compares **digests** rather
+than terms: the proposal is resolved against the system built to compose the line
+and the line is parsed against the one the verify builds, and a `Var`'s sort
+compares by object identity, which does not survive two builds. A digest is
+structural.
+
+What the round trip cannot catch is a proposal that was *ignored* rather than
+misread — a `ref` carrying slots, say, where the referenced term is exactly what
+comes back. So the resolver refuses any field an arm does not use, rather than
+quietly doing less than was asked.
 
 ### Inserting costs a renumbering
 
@@ -562,7 +575,9 @@ catch it.
 
 A new line takes its text from an existing one — `restate` swaps the formula,
 `recite` swaps the citation — so it inherits that line's type, shape and
-indentation. That avoids reconstructing a line type's syntax from its pattern,
+indentation. The indent is put back explicitly, because `display` is stored
+*stripped* with the indent in its own column; a line composed from it and written
+as-is lands at the root, silently escaping the subproof it was meant to join. That avoids reconstructing a line type's syntax from its pattern,
 which is the one piece of surface-syntax composition this would otherwise need,
 and it makes the indentation right for the scope the line lands in.
 

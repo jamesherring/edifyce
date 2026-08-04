@@ -819,15 +819,20 @@ class CitationProposal(BaseModel):
 
 
 class TermProposalIn(BaseModel):
-    """A term named structurally: by reference, by production, or as a variable.
+    """A term named structurally: by reference, or by production.
 
-    Exactly one of ``ref``, ``constructor`` and ``var``. ``ref`` names a term
-    that already exists — the reason this is worth having, since an interned term
-    is shared and a caller can point at a subterm instead of restating it.
-    ``constructor`` names a production of the system's own grammar, so the
-    vocabulary is closed and enumerable.
+    Exactly one of ``ref`` and ``constructor``. ``ref`` names a term that already
+    exists — the reason this is worth having, since an interned term is shared and
+    a caller can point at a subterm instead of restating it. ``constructor`` names
+    a production of the system's own grammar, so the vocabulary is closed and
+    enumerable.
 
-    Mirrors `website.logical.formal_system.proposals.Proposal`.
+    A **metavariable is not among them**, though the engine's `Proposal` has one:
+    a proof line states a *ground* formula, and a schematic variable belongs to a
+    rule schema or a promoted theorem's statement. One proposed here could not
+    survive the round trip — `Q` parses back as the grammar's variable
+    *production*, not as a `Var` — so it is left out rather than offered and
+    refused.
     """
 
     ref: uuid.UUID | None = None
@@ -836,7 +841,8 @@ class TermProposalIn(BaseModel):
     # The token a leaf stands for. A constant atom's comes from the production
     # itself, so it may be omitted there and may not contradict it.
     literal: str | None = None
-    var: str | None = None
+    # The sort a term *inhabits*, for the one case a term carries it: a defined
+    # form, whose constructor is not itself a member of the sort it inhabits.
     sort: str | None = None
 
 

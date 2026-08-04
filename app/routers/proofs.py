@@ -80,7 +80,7 @@ from app.db.models import User
 from app.db.notations_mapping import load_notation, render_stored
 from app.db.proofs_mapping import failure_from_row
 from app.db.terms import TermRow
-from app.db.terms_mapping import prefetch_terms
+from app.db.terms_mapping import digest_term, prefetch_terms
 from app.db.promoted_theorems import PromotedTheoremRow
 from app.routers._invalidation import (
     clear_verdicts,
@@ -1851,7 +1851,6 @@ def _proposal(payload: TermProposalIn) -> Proposal:
         constructor=payload.constructor,
         slots={slot: _proposal(child) for slot, child in payload.slots.items()},
         literal=payload.literal,
-        var=payload.var,
         sort=payload.sort,
     )
 
@@ -2004,6 +2003,11 @@ async def propose_line(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Line {template.number} cannot carry that citation.",
         )
+    # `display` is stored *stripped* — the indent is its own column — so the
+    # template's has to be put back. Not cosmetic: indentation is what places a
+    # line in a subproof, and a line written at the root instead would silently
+    # escape the scope it was meant to join.
+    stated = " " * template.indent + stated
 
     lines = proof.source.split("\n")
     if not 0 <= template.position < len(lines):
@@ -2047,8 +2051,15 @@ async def propose_line(
     # The round trip, checked rather than trusted: the line that came back must
     # state the term that went in. Anything else means the render or the splice
     # said something the caller did not.
-    if added is None or added.formula_term is None or not added.formula_term.equal(
-        term, context
+    # By digest rather than by `Term.equal`: the proposal was resolved against the
+    # system built here and the line was parsed against the one the verify built,
+    # and `Var.equal` compares its sort by *identity*, which does not survive two
+    # builds. A digest is structural and independent of object identity, which is
+    # exactly the difference that matters across the boundary.
+    if (
+        added is None
+        or added.formula_term is None
+        or digest_term(added.formula_term) != digest_term(term)
     ):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

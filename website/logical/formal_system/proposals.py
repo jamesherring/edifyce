@@ -114,6 +114,26 @@ def resolve(
     return intern(_resolve(proposal, context, constructor_for_name, term_for_ref, ()))
 
 
+def _forbid(
+    proposal: Proposal, where: str, kind: str, *, sort: bool = True
+) -> None:
+    # Fields this kind of proposal does not use. A proposal carrying one meant
+    # something the resolution will not do, and saying so beats quietly doing
+    # less than was asked — which for a `ref` the round trip cannot even notice,
+    # since the referenced term *is* the term that comes back.
+    carried: list[str] = []
+    if proposal.slots:
+        carried.append("slots")
+    if proposal.literal is not None:
+        carried.append("literal")
+    if sort and proposal.sort is not None:
+        carried.append("sort")
+    if carried:
+        raise ProposalError(
+            f"{kind}{where} carries {', '.join(carried)}, which it does not use."
+        )
+
+
 def _resolve(
     proposal: Proposal,
     context: Context,
@@ -138,12 +158,18 @@ def _resolve(
         )
 
     if proposal.ref is not None:
+        # Refused rather than ignored, and this is the arm where it matters most:
+        # a referenced term *is* the term, so the round-trip check cannot notice
+        # that slots were meant to qualify it. Silently dropping them would commit
+        # a line stating something other than what was asked for.
+        _forbid(proposal, where, "A ref")
         found = term_for_ref(proposal.ref)
         if found is None:
             raise ProposalError(f"No term{where} with id {proposal.ref!r}.")
         return found
 
     if proposal.var is not None:
+        _forbid(proposal, where, "A variable", sort=False)
         if proposal.sort is None:
             raise ProposalError(
                 f"The variable {proposal.var!r}{where} needs a sort to range over."

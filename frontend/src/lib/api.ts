@@ -112,10 +112,13 @@ export interface CitationOutcome {
 /** A term named structurally: by reference, by production, or as a variable.
  *  Mirrors `TermProposalIn` in app/schemas.py.
  *
- *  Exactly one of `ref`, `constructor` and `var`. `ref` names a term that already
+ *  Exactly one of `ref` and `constructor`. `ref` names a term that already
  *  exists — the reason this is worth having, since an interned term is shared and
  *  a caller can point at a subterm instead of restating it. `constructor` names a
- *  production of the system's own grammar, so the vocabulary is closed. */
+ *  production of the system's own grammar, so the vocabulary is closed.
+ *
+ *  A metavariable is deliberately not among them: a proof line states a *ground*
+ *  formula, and a schematic variable belongs to a rule schema. */
 export interface TermProposal {
 	ref?: string;
 	constructor?: string;
@@ -123,7 +126,7 @@ export interface TermProposal {
 	/** The token a leaf stands for. A constant atom's comes from the production
 	 *  itself, so it may be omitted there and may not contradict it. */
 	literal?: string;
-	var?: string;
+	/** The sort a term *inhabits* — only a defined form carries one. */
 	sort?: string;
 }
 
