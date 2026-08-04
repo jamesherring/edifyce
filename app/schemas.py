@@ -794,6 +794,50 @@ class TermSummary(BaseModel):
     alpha_digest: str | None = None
 
 
+class CitationProposal(BaseModel):
+    """A justification for one line, proposed as structure rather than as text.
+
+    `{line: 7, rule: "MP", antecedents: [4, 6]}` is a label and three integers —
+    already unambiguous, and needing none of the system's citation syntax. That is
+    the point: making a client format `[MP, 4, 6]` is exactly where a projection
+    creeps back into a structured path (docs/authoring-and-ingestion-roadmap.md §9).
+
+    ``rule`` may be the hole keyword, which parks the line as an open goal — the
+    same operation in reverse, and it needs no special case because a hole *is* a
+    citation.
+
+    Lines are named by their **citation number**, the same handle an antecedent
+    edge uses, not by an index into the source.
+    """
+
+    line: int = Field(ge=1)
+    rule: _Name128
+    antecedents: list[int] = Field(default_factory=list)
+    # False — a dry run — because a caller trying several justifications should
+    # not have to undo the ones that did not work.
+    apply: bool = False
+
+
+class CitationOutcome(BaseModel):
+    """What a proposed justification would do, or did."""
+
+    line: int
+    # The reference text the proposal formats to, so a caller can see what was
+    # actually tried without reconstructing it.
+    citation: str
+    accepted: bool
+    # Why not, when not — the same structured reason a verify reports, so a
+    # rejected proposal names the next goal rather than only saying no.
+    failure: FailureOut | None = None
+    applied: bool = False
+    # Where the proof stands afterwards. Populated on an applied proposal only:
+    # a dry run changed nothing, so reporting a verdict for it would invite
+    # reading it as the proof's.
+    valid: bool | None = None
+    holes: list[int] = Field(default_factory=list)
+    only_holes: bool = False
+
+
 class TermChildOut(BaseModel):
     """One edge below a term node: the slot it fills, and what sits there."""
 

@@ -90,7 +90,7 @@ from tests.database import (
     enable_foreign_keys,
 )
 from tests.zfc_systems import scoped_zfc_spec
-from website.logical.declarative import SystemSpec, build_spec
+from website.logical.declarative import LinePart, LineSpec, SystemSpec, build_spec
 from website.logical.formal_system import FormalSystem as EngineFormalSystem
 from website.logical.rendering import Projection
 
@@ -1969,3 +1969,295 @@ def test_an_unknown_term_is_refused_before_a_notation_is_loaded(client, db):
     )
     assert res.status_code == 404
     assert "term" in res.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Structured citation proposals (POST /proofs/{id}/cite)
+#
+# The write half of the structured path, and the cheap half of it: a citation is
+# a label and some integers, so this needs none of the term algebra that stating
+# a new formula would.
+# ---------------------------------------------------------------------------
+
+# Two holes and a step that follows from them by MP. The step is a hole to begin
+# with, which is how a proof gets written top-down.
+_HOLED = "x ∈ y [?]\n(x ∈ y → y ∈ x) [?]\ny ∈ x [?]"
+
+
+def _holed_proof(client: TestClient, db_path, owner: str) -> tuple[str, str]:
+    system_id = _seed_system(db_path, owner)
+    created = client.post(
+        "/api/proofs",
+        json={"name": "P", "formal_system_id": system_id, "source": _HOLED},
+    ).json()
+    verdict = client.post(f"/api/proofs/{created['id']}/verify").json()
+    assert verdict["holes"] == [1, 2, 3], verdict
+    assert verdict["only_holes"] is True
+    return system_id, created["id"]
+
+
+def test_a_citation_is_proposed_as_a_label_and_line_numbers(client, db):
+    # The point of the endpoint: no citation syntax crosses the wire, and the
+    # response says what the proposal actually formatted to.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _holed_proof(client, db, owner)
+
+    res = client.post(
+        f"/api/proofs/{proof_id}/cite",
+        json={"line": 3, "rule": "MP", "antecedents": [1, 2]},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["citation"] == "MP, 1, 2"
+    assert body["accepted"] is True
+    assert body["failure"] is None
+
+
+def test_a_dry_run_changes_nothing(client, db):
+    # A caller trying several justifications for one hole must not have to undo
+    # the ones that did not work.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _holed_proof(client, db, owner)
+
+    client.post(
+        f"/api/proofs/{proof_id}/cite",
+        json={"line": 3, "rule": "MP", "antecedents": [1, 2]},
+    )
+
+    detail = client.get(f"/api/proofs/{proof_id}").json()
+    assert detail["source"] == _HOLED
+    assert _structure(client, proof_id)["lines"][2]["failure"]["code"] == "hole"
+
+
+def test_applying_rewrites_the_source_and_reports_where_the_proof_stands(client, db):
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _holed_proof(client, db, owner)
+
+    body = client.post(
+        f"/api/proofs/{proof_id}/cite",
+        json={"line": 3, "rule": "MP", "antecedents": [1, 2], "apply": True},
+    ).json()
+
+    assert body["applied"] is True
+    assert body["accepted"] is True
+    # Two holes left, and nothing wrong — which is what a loop reads to decide
+    # whether it has work or a bug.
+    assert body["holes"] == [1, 2]
+    assert body["only_holes"] is True
+    assert body["valid"] is False
+
+    detail = client.get(f"/api/proofs/{proof_id}").json()
+    assert detail["source"].splitlines()[2] == "y ∈ x [MP, 1, 2]"
+
+
+def test_a_rejected_proposal_names_the_next_goal(client, db):
+    # The loop closes here: a citation that does not apply comes back with the
+    # same structured reason a verify gives, so the missing premise is named
+    # rather than guessed at.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _holed_proof(client, db, owner)
+
+    body = client.post(
+        f"/api/proofs/{proof_id}/cite",
+        json={"line": 3, "rule": "MP", "antecedents": [1]},
+    ).json()
+
+    assert body["accepted"] is False
+    assert body["failure"]["code"] == "antecedent-count"
+    assert body["failure"]["expected"] == 2
+
+
+def test_a_line_can_be_parked_as_a_goal_again(client, db):
+    # A hole is a citation, so retracting a step needs no special case — the same
+    # endpoint, with the hole keyword as the rule.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _holed_proof(client, db, owner)
+    client.post(
+        f"/api/proofs/{proof_id}/cite",
+        json={"line": 3, "rule": "MP", "antecedents": [1, 2], "apply": True},
+    )
+
+    body = client.post(
+        f"/api/proofs/{proof_id}/cite", json={"line": 3, "rule": "?", "apply": True}
+    ).json()
+
+    assert body["citation"] == "?"
+    assert body["holes"] == [1, 2, 3]
+    detail = client.get(f"/api/proofs/{proof_id}").json()
+    assert detail["source"] == _HOLED
+
+
+def test_an_unknown_rule_is_a_rejection_and_not_an_error(client, db):
+    # A machine caller guessing a label should get a verdict it can act on, not
+    # a 4xx it has to special-case.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _holed_proof(client, db, owner)
+
+    body = client.post(
+        f"/api/proofs/{proof_id}/cite",
+        json={"line": 3, "rule": "NOPE", "antecedents": [1]},
+    ).json()
+
+    assert body["accepted"] is False
+    assert body["failure"]["code"] == "bad-reference"
+
+
+def test_a_line_the_stored_structure_does_not_number_is_409(client, db):
+    # Lines are addressed by citation number, which only a verified proof has.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _holed_proof(client, db, owner)
+
+    res = client.post(
+        f"/api/proofs/{proof_id}/cite", json={"line": 99, "rule": "MP"}
+    )
+    assert res.status_code == 409
+    assert "verify" in res.json()["detail"].lower()
+
+
+def test_applying_is_owner_only(client, db):
+    # A published proof is readable by anyone, so a dry run is too — but an edit
+    # is an edit. (Published, because a proof with holes cannot be: publishing is
+    # gated on verifying, and a hole is exactly what stops one doing so.)
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner, published=True)
+    created = client.post(
+        "/api/proofs",
+        json={"name": "P", "formal_system_id": system_id, "source": VALID_PROOF},
+    ).json()
+    assert client.patch(
+        f"/api/proofs/{created['id']}", json={"published": True}
+    ).status_code == 200
+    _register_login(client, "grace@example.com")
+
+    proposal = {"line": 1, "rule": "HYP"}
+    assert (
+        client.post(f"/api/proofs/{created['id']}/cite", json=proposal).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/api/proofs/{created['id']}/cite", json={**proposal, "apply": True}
+        ).status_code
+        == 403
+    )
+
+
+def test_applying_a_citation_invalidates_dependents(client, db):
+    # Applying is a *source edit*, so every consequence of one applies. Without
+    # this a proof laundering through a lemma broken here would keep verifying
+    # against a cached verdict for a source that no longer says what it did.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)
+    lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
+    main = _create_proof(client, sid, "Main", source=_USER_SRC)
+    client.post(f"/api/proofs/{lemma}/verify")
+    _set_refs(client, main, [{"referenced_proof_id": lemma, "alias": "A"}])
+    assert client.post(f"/api/proofs/{main}/verify").json()["success"] is True
+    assert client.get(f"/api/proofs/{main}").json()["valid"] is True
+
+    # Park the lemma's only line as a goal: it no longer proves anything.
+    body = client.post(
+        f"/api/proofs/{lemma}/cite", json={"line": 1, "rule": "?", "apply": True}
+    ).json()
+    assert body["applied"] is True
+
+    assert client.get(f"/api/proofs/{main}").json()["valid"] is None
+    assert client.post(f"/api/proofs/{main}/verify").json()["success"] is False
+
+
+def test_a_promoted_proof_survives_a_citation_that_would_break_it(client, db):
+    """The library entry cannot be left warranted by a proof that no longer stands.
+
+    Two things protect it, and only one of them is reachable. Promotion requires
+    publication, and a published proof cannot be edited into not verifying — so a
+    citation that would break a promoted proof is refused before it lands, and the
+    entry is never orphaned. `/cite` retires the promotion anyway, as a source
+    edit must, but with that gate in place there is no path that reaches it.
+    """
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid, published=True)
+    lemma = _create_proof(client, sid, "Lemma", source=_LEMMA_SRC)
+    assert client.patch(f"/api/proofs/{lemma}", json={"published": True}).status_code == 200
+    promoted = client.post(f"/api/proofs/{lemma}/promote", json={"label": "lem"})
+    assert promoted.status_code in (200, 201), promoted.text
+
+    res = client.post(
+        f"/api/proofs/{lemma}/cite", json={"line": 1, "rule": "?", "apply": True}
+    )
+    assert res.status_code == 422
+
+    detail = client.get(f"/api/proofs/{lemma}").json()
+    assert detail["theorem"]["label"] == "lem"
+    assert detail["valid"] is True
+    assert detail["source"] == _LEMMA_SRC
+
+
+def test_applying_a_citation_cannot_break_a_published_proof(client, db):
+    # A world-readable proof may not be edited into a non-verifying state, and
+    # `[?]` is exactly such an edit — so the publish gate is load-bearing here
+    # rather than inherited. The whole proposal rolls back.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid, published=True)
+    proof_id = _create_proof(client, sid, "P", source=VALID_PROOF)
+    assert client.patch(f"/api/proofs/{proof_id}", json={"published": True}).status_code == 200
+
+    res = client.post(
+        f"/api/proofs/{proof_id}/cite", json={"line": 1, "rule": "?", "apply": True}
+    )
+    assert res.status_code == 422
+
+    detail = client.get(f"/api/proofs/{proof_id}").json()
+    assert detail["source"] == VALID_PROOF
+    assert detail["valid"] is True
+
+
+# A scope opener that *also* declares a reference field. Nothing forbids it, and
+# such a line is granted by fiat — so its citation is never resolved, and reading
+# a proposal's outcome off the line's validity would report `accepted` for a
+# citation nothing looked at.
+def _scoped_with_reference_spec() -> SystemSpec:
+    return SystemSpec(
+        name="ND",
+        brackets=brackets(),
+        productions=[variable_prod(), membership_prod(), equality_prod(),
+                     implication_prod()],
+        lines=[
+            statement_line(),
+            LineSpec(
+                name="assume",
+                shape="assume <formula> [<reference>]",
+                parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,.?]+")],
+                logical_sort="formula",
+                scope="assumption",
+            ),
+        ],
+        rules=[hyp_rule(), mp_rule()],
+    )
+
+
+def test_a_line_no_citation_justifies_is_refused(client, db):
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner, spec=_scoped_with_reference_spec())
+    created = client.post(
+        "/api/proofs",
+        json={
+            "name": "P",
+            "formal_system_id": system_id,
+            "source": "assume x ∈ y [HYP]\n    x ∈ y [HYP]",
+        },
+    ).json()
+    assert client.post(f"/api/proofs/{created['id']}/verify").json()["success"] is True
+
+    res = client.post(
+        f"/api/proofs/{created['id']}/cite",
+        json={"line": 1, "rule": "NOPE", "antecedents": [99]},
+    )
+
+    # Refused, rather than reported accepted — the scope opener is valid whatever
+    # its reference says, so its validity is no evidence about the citation.
+    assert res.status_code == 422
+    assert "granted" in res.json()["detail"]
+    # And nothing was written, even though this was a dry run anyway.
+    assert client.get(f"/api/proofs/{created['id']}").json()["source"].startswith(
+        "assume x ∈ y [HYP]"
+    )

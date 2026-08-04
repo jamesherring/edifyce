@@ -75,6 +75,40 @@ export interface VerifyResponse {
 	only_holes?: boolean;
 }
 
+/** A justification for one line, proposed as structure rather than as text.
+ *  Mirrors `CitationProposal` in app/schemas.py.
+ *
+ *  `{line: 7, rule: 'MP', antecedents: [4, 6]}` is a label and three integers —
+ *  already unambiguous, and needing none of the system's citation syntax. `rule`
+ *  may be the hole keyword (`'?'`), which parks the line as an open goal.
+ *
+ *  Lines are named by their **citation number**, the handle an antecedent edge
+ *  already uses, not by an index into the source. */
+export interface CitationProposal {
+	line: number;
+	rule: string;
+	antecedents?: number[];
+	/** Commit it to the source. Omitted, this is a dry run — so several
+	 *  justifications can be tried without undoing the ones that failed. */
+	apply?: boolean;
+}
+
+/** What a proposed justification would do, or did. Mirrors `CitationOutcome`. */
+export interface CitationOutcome {
+	line: number;
+	/** The reference text the proposal formatted to, e.g. `"MP, 4, 6"`. */
+	citation: string;
+	accepted: boolean;
+	/** Why not, when not — the same structured reason a verify reports, so a
+	 *  rejected proposal names the next goal rather than only saying no. */
+	failure: Failure | null;
+	applied: boolean;
+	/** Where the proof stands afterwards. Populated on an applied proposal only. */
+	valid: boolean | null;
+	holes: number[];
+	only_holes: boolean;
+}
+
 /** One edge below a term node: the slot it fills, and what sits there. */
 export interface TermChild {
 	slot: string;
@@ -1076,6 +1110,15 @@ export const api = {
 			request<ProofStructure>(
 				`/proofs/${id}/structure${notation ? `?notation=${encodeURIComponent(notation)}` : ''}`
 			),
+		/** Justify a line by naming a rule and the lines it uses — no citation
+		 * syntax crosses the wire. A dry run unless `apply` is set; applying is
+		 * owner-only, as an edit is. Lines are addressed by citation number, which
+		 * needs the proof's stored structure, so verify it first. */
+		cite: (id: string, proposal: CitationProposal) =>
+			request<CitationOutcome>(`/proofs/${id}/cite`, {
+				method: 'POST',
+				body: JSON.stringify(proposal)
+			}),
 		/** Replace this proof's outgoing references (lemmas it cites) wholesale. */
 		setReferences: (id: string, references: ProofReferenceInput[]) =>
 			request<ProofDetail>(`/proofs/${id}/references`, {
