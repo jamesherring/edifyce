@@ -818,6 +818,73 @@ class CitationProposal(BaseModel):
     apply: bool = False
 
 
+class TermProposalIn(BaseModel):
+    """A term named structurally: by reference, or by production.
+
+    Exactly one of ``ref`` and ``constructor``. ``ref`` names a term that already
+    exists — the reason this is worth having, since an interned term is shared and
+    a caller can point at a subterm instead of restating it. ``constructor`` names
+    a production of the system's own grammar, so the vocabulary is closed and
+    enumerable.
+
+    A **metavariable is not among them**, though the engine's `Proposal` has one:
+    a proof line states a *ground* formula, and a schematic variable belongs to a
+    rule schema or a promoted theorem's statement. One proposed here could not
+    survive the round trip — `Q` parses back as the grammar's variable
+    *production*, not as a `Var` — so it is left out rather than offered and
+    refused.
+    """
+
+    ref: uuid.UUID | None = None
+    constructor: str | None = None
+    slots: dict[str, "TermProposalIn"] = Field(default_factory=dict)
+    # The token a leaf stands for. A constant atom's comes from the production
+    # itself, so it may be omitted there and may not contradict it.
+    literal: str | None = None
+    # The sort a term *inhabits*, for the one case a term carries it: a defined
+    # form, whose constructor is not itself a member of the sort it inhabits.
+    sort: str | None = None
+
+
+class LineProposal(BaseModel):
+    """A new line, stated as structure and justified as structure.
+
+    The expensive half of the structured write path: a citation is a label and
+    some integers, but *stating* a formula needs the grammar
+    (docs/authoring-and-ingestion-roadmap.md §9).
+
+    ``before`` is the citation number to insert ahead of — which is what a
+    goal-directed caller wants, since a rule's antecedents must precede its
+    conclusion. Omitted, the line is appended. ``rule`` defaults to the hole
+    keyword, because stating a premise you have not proved *is* an open goal.
+    """
+
+    statement: TermProposalIn
+    rule: _Name128 = "?"
+    antecedents: list[int] = Field(default_factory=list)
+    before: int | None = Field(default=None, ge=1)
+    apply: bool = False
+
+
+class LineOutcome(BaseModel):
+    """What a proposed line would do, or did."""
+
+    # The citation number the new line takes, which is `before` when given.
+    line: int
+    # The line as it would be written, so a caller sees the source its structure
+    # became without reconstructing it.
+    display: str
+    accepted: bool
+    failure: FailureOut | None = None
+    # Lines whose citations moved to make room, by their *new* number. Empty for
+    # an appended line, which displaces nothing.
+    renumbered: list[int] = Field(default_factory=list)
+    applied: bool = False
+    valid: bool | None = None
+    holes: list[int] = Field(default_factory=list)
+    only_holes: bool = False
+
+
 class CitationOutcome(BaseModel):
     """What a proposed justification would do, or did."""
 

@@ -6,12 +6,15 @@ from copy import copy
 from typing import TYPE_CHECKING
 
 from ..kernel.definitions import Definition as KernelDefinition
+from ..kernel.constructors import constructor_for
 from ..kernel.terms import from_match
 from ..matching import Context, Match, Pattern, StringPattern, UnionPattern
 from .promotion import PromotedTheorem
-from .proof import Proof, ProofLine
+from .proof import CITATION_SEPARATOR, Proof, ProofLine
+from .proposals import ProposalError, grammar_index
 
 if TYPE_CHECKING:
+    from ..kernel.constructors import Constructor
     from collections.abc import Callable
 
     from ..declarative import _SchemaScan
@@ -179,6 +182,119 @@ class FormalSystem:
                 self.read_line(proof_line, context)
 
         return proof, context
+
+    def constructor_named(
+        self, name: str, context: Context, grammar: dict[str, Pattern] | None = None
+    ) -> Constructor:
+        """The production or defined notation ``name`` denotes.
+
+        The same three-step lookup a *stored* term's constructor takes
+        (`TermGraph._constructor`), and for the same reason: a grammar name is
+        unique within a system, but `context.variables` is shared with lines,
+        line parts and axioms, so the sort unions are the authority and the
+        namespace is only the fallback for a top-level sort, which is nobody's
+        member.
+
+        ``grammar`` is :func:`~.proposals.grammar_index` of the same context,
+        passed in by a caller resolving several names — building it is
+        O(grammar), and a proposal has a name per node.
+        """
+        index = grammar_index(context) if grammar is None else grammar
+        pattern = index.get(name)
+        if pattern is None:
+            pattern = next(
+                (n.template for n in context.definitions if n.template.name == name),
+                None,
+            )
+        if pattern is None:
+            found = context.variables.get(name)
+            pattern = found if isinstance(found, Pattern) else None
+        if pattern is None:
+            raise ProposalError(
+                f"This system has no production or defined notation named {name!r}."
+            )
+        return constructor_for(pattern)
+
+    def restate(
+        self, text: str, formula: str, context: Context | None = None
+    ) -> str | None:
+        """``text`` with its formula replaced by ``formula``, or None.
+
+        :meth:`recite`'s twin for the other declared field, and self-checking for
+        the same reason: a `Match` records no positions, so the substitution is
+        textual, and making the result *read back* as the formula asked for is
+        what turns a fragile splice into a safe one.
+
+        Together the two compose a new line out of an existing one — same line
+        type, same indentation, same shape — which is how a line gets *added*
+        without this having to reconstruct a line type's syntax from its pattern.
+
+        The formula is replaced at its **first** occurrence, where a formula sits
+        in every shape anyone writes; the read-back refuses anything else.
+        """
+        if context is None:
+            context = copy(self.context)
+
+        current = self._formula_of(text, context)
+        if current is None or current not in text:
+            return None
+        at = text.index(current)
+        spliced = f"{text[:at]}{formula}{text[at + len(current):]}"
+        if self._formula_of(spliced, context) != formula:
+            return None
+        return spliced
+
+    def renumber(
+        self, lines: list[str], at: int, context: Context | None = None
+    ) -> list[str] | None:
+        """``lines`` with every cited line number ``>= at`` shifted up by one.
+
+        What inserting a line costs. Citation numbers are positional, so a line
+        added at ``at`` moves everything below it and every citation that named
+        one of those lines now names the wrong one — silently, because the old
+        number still resolves.
+
+        Only bare integers shift. A rule's label, the definitional keyword, the
+        hole keyword and a dotted lemma reference (`[MP, A.2]`, whose `2` is a
+        line of *another* proof) are left exactly as they are.
+
+        None if any line cannot be rewritten, which — since :meth:`recite` is
+        self-checking — means the whole renumbering is refused rather than
+        applied in part. A proof half-renumbered is worse than one not touched.
+        """
+        if context is None:
+            context = copy(self.context)
+
+        shifted: list[str] = []
+        for text in lines:
+            reference = self._reference_of(text, context)
+            if reference is None:
+                # No citation to move: a blank, a comment, or a line type that
+                # declares no reference field.
+                shifted.append(text)
+                continue
+            parts = [
+                str(int(part) + 1)
+                if part.isdigit() and int(part) >= at
+                else part
+                for part in reference.split(CITATION_SEPARATOR)
+            ]
+            citation = CITATION_SEPARATOR.join(parts)
+            if citation == reference:
+                shifted.append(text)
+                continue
+            rewritten = self.recite(text, citation, context)
+            if rewritten is None:
+                return None
+            shifted.append(rewritten)
+        return shifted
+
+    def _formula_of(self, text: str, context: Context) -> str | None:
+        # The formula a line carries, read through this grammar — the same reading
+        # the checker will do, for the reason `_reference_of` gives.
+        scratch = ProofLine(proof=Proof(formal_system=self), text=text, context=context)
+        self.read_line(scratch, context)
+        return scratch.formula_string
 
     def recite(self, text: str, citation: str, context: Context | None = None) -> str | None:
         """``text`` with its citation replaced by ``citation``, or None.
