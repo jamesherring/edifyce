@@ -178,7 +178,12 @@ Needs no database of its own — it imports into a throwaway SQLite file beside 
 `.mm` (or `--database-url`), gives the imported proofs an owner so the owner-only
 apply path is reachable, and exits non-zero if any round fails. `--keep` reuses an
 already-imported file, which is what you want while iterating: the import is the
-slow part.
+slow part, and a run puts every proof it drove back the way it found it.
+
+A target that already holds systems is **refused** rather than rebuilt (pass
+`--recreate` to mean it). This run drops every table and then takes ownership of
+every proof it finds, and the obvious thing to hand `--database-url` is whatever
+`DATABASE_URL` already points at.
 
 Five rounds, selected with `--rounds`:
 

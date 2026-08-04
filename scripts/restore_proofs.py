@@ -59,7 +59,7 @@ from typing import TYPE_CHECKING
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi import HTTPException  # noqa: E402
-from sqlalchemy import create_engine, func, select  # noqa: E402
+from sqlalchemy import create_engine, func, inspect, make_url, select  # noqa: E402
 from sqlalchemy import update as sa_update  # noqa: E402
 from sqlalchemy.ext.asyncio import (  # noqa: E402
     AsyncSession,
@@ -68,7 +68,13 @@ from sqlalchemy.ext.asyncio import (  # noqa: E402
 )
 from sqlalchemy.orm import Session, selectinload  # noqa: E402
 
-from app.db import Base, Proof, ProofLineAntecedentRow, ProofLineRow  # noqa: E402
+from app.db import (  # noqa: E402
+    Base,
+    FormalSystem,
+    Proof,
+    ProofLineAntecedentRow,
+    ProofLineRow,
+)
 from app.db.metamath_store import import_corpus  # noqa: E402
 from app.db.models import Theorem, User  # noqa: E402
 from app.db.terms import TERM_KIND_NODE  # noqa: E402
@@ -76,6 +82,7 @@ from app.db.terms_mapping import StoredTerm, prefetch_terms, walk_subgraph  # no
 from app.routers.proofs import (  # noqa: E402
     propose_citation,
     propose_line,
+    update_proof,
     verify_stored_proof,
 )
 from app.schemas import (  # noqa: E402
@@ -83,10 +90,16 @@ from app.schemas import (  # noqa: E402
     CitationProposal,
     LineOutcome,
     LineProposal,
+    ProofDetail,
+    ProofUpdate,
     TermProposalIn,
     VerifyProofResponse,
 )
-from website.logical.formal_system.proof import HOLE_KEY  # noqa: E402
+from website.logical.formal_system.proof import (  # noqa: E402
+    CITATION_SEPARATOR,
+    HOLE_KEY,
+    citation_text,
+)
 from website.logical.metamath import parse  # noqa: E402
 from website.logical.metamath.setmm import (  # noqa: E402
     DISPLAY_OVERRIDES,
@@ -100,7 +113,7 @@ ROUNDS = ("cite", "insert", "state", "probe", "apply")
 
 # What one of these endpoints answers with. Named because `Call` carries whichever
 # of them the route it wrapped returns, and `object` would say nothing.
-Outcome = CitationOutcome | LineOutcome | VerifyProofResponse
+Outcome = CitationOutcome | LineOutcome | ProofDetail | VerifyProofResponse
 
 
 # ---------------------------------------------------------------------------
@@ -112,10 +125,16 @@ Outcome = CitationOutcome | LineOutcome | VerifyProofResponse
 class Step:
     """One numbered line of a corpus proof, as the checker decomposed it.
 
-    The justification is taken from the **rows**, not from the citation text: the
-    rule is the name the checker resolved, and an antecedent is the number of the
-    line the edge points at. That is what makes this an answer key rather than a
-    second parse of the same string.
+    The rule is the name the checker **resolved**, off the row rather than out of
+    the text. The antecedents are the lines the *citation* names, in the order it
+    names them, and that split is deliberate: an edge's position is the rule's
+    **slot**, and the assignment search fills slots by matching, so `[MP, 2, 1]`
+    and `[MP, 1, 2]` store exactly the same edges. Only the citation records which
+    of the two the author wrote, and the `cite` round has to put back the one that
+    was there.
+
+    So the order is read off the citation and the identity is checked against the
+    edges (`Key.discrepancies`), rather than either being trusted alone.
     """
 
     number: int
@@ -136,6 +155,10 @@ class Key:
     steps: tuple[Step, ...]
     # Every citation number the proof has, including any line `steps` left out.
     numbered: tuple[int, ...]
+    # Steps whose citation and whose justification edges name different lines.
+    # Not a reason to skip: the two are meant to describe one thing, so a
+    # disagreement is a finding about the store rather than about this proof.
+    discrepancies: tuple[str, ...] = ()
 
     @property
     def widest(self) -> int:
@@ -267,6 +290,28 @@ async def _line(
             proof_id, payload, user=user, session=session
         ),
     )
+
+
+async def _rewrite(
+    sessions: async_sessionmaker[AsyncSession],
+    owner: uuid.UUID,
+    proof_id: uuid.UUID,
+    source: str,
+) -> Call:
+    """Put a source back through the ordinary edit route, and re-check it.
+
+    Two calls because they are two operations: `update_proof` discards the stored
+    structure and the cached verdict rather than recomputing them, so a proof
+    edited and not verified sits at ``valid = None`` — which the selection reads
+    as "not a verified proof" just as firmly as False.
+    """
+    payload = ProofUpdate(source=source)
+    edited = await _call(
+        sessions,
+        owner,
+        lambda session, user: update_proof(proof_id, payload, user=user, session=session),
+    )
+    return edited if not edited.ok else await _verify(sessions, owner, proof_id)
 
 
 async def _verify(
@@ -488,7 +533,11 @@ async def round_apply(
     fine on the way in and is wrong on the way out, and only reading the rows back
     against the answer key says so.
 
-    Runs last, because it leaves the proof one line longer than the corpus wrote it.
+    The proof is put back afterwards, through the ordinary edit route rather than
+    by writing the row: a `--keep` re-run must find the corpus as it was, and a
+    proof left carrying a hole is not merely different — it is *invalid*, and the
+    selection only takes proofs that verify, so it would quietly disappear from
+    every subsequent run.
     """
     total = len(key.steps)
     if total < 2:
@@ -541,7 +590,19 @@ async def round_apply(
         stored = await session.run_sync(
             lambda sync: _key(sync, sync.get(Proof, key.proof_id))
         )
-    return _shifted(key, stored, at)
+    verdict = _shifted(key, stored, at)
+
+    counter[0] += 1
+    restored = await _rewrite(sessions, owner, key.proof_id, key.source)
+    if not restored.ok:
+        return Result(
+            key.label,
+            "apply",
+            False,
+            f"the inserted line could not be taken back out: "
+            f"{restored.status} {restored.detail}",
+        )
+    return verdict if not verdict.ok else await _settled(sessions, owner, key, "apply")
 
 
 def _shifted(key: Key, stored: Key, at: int) -> Result:
@@ -690,10 +751,22 @@ async def round_probe(
                     f"line {number} {mutation}: {tried.status} {tried.detail}",
                 )
             outcome = tried.outcome
+            wanted = _expected_code(mutation)
             if outcome.accepted:
-                # Not a failure by itself: a swap can be a real symmetry, and a
-                # rule may genuinely ignore an argument. Counted so the run says
-                # how often a wrong citation went through.
+                if wanted is not None:
+                    # A mutation with a verdict of its own must be refused. An
+                    # accepted one is the *worst* result this round can produce —
+                    # the checker took a citation that is wrong — so it fails
+                    # rather than being counted alongside the measurements.
+                    return Result(
+                        key.label,
+                        "probe",
+                        False,
+                        f"line {number} accepted a {mutation} citation, which "
+                        f"should have been refused with {wanted!r}",
+                    )
+                # `swapped` and `none-cited` may legitimately go through; counted
+                # so the run says how often they do.
                 codes[f"{mutation}:accepted"] = codes.get(f"{mutation}:accepted", 0) + 1
                 continue
             failure = outcome.failure
@@ -707,7 +780,6 @@ async def round_probe(
             codes[f"{mutation}:{failure.code}"] = (
                 codes.get(f"{mutation}:{failure.code}", 0) + 1
             )
-            wanted = _expected_code(mutation)
             if wanted is not None and failure.code != wanted:
                 return Result(
                     key.label,
@@ -848,16 +920,29 @@ def _spread(items: Iterable[int], count: int) -> list[int]:
 # ---------------------------------------------------------------------------
 
 
-def _provision(url: str) -> None:
+def _provision(url: str, recreate: bool) -> None:
     """An empty schema for the run.
 
     Every table but the pgvector ``theorems``, which needs an extension and which
     nothing here reads. A SQLite file is deleted rather than dropped table by
     table: ``proofs`` and ``promoted_theorems`` reference each other, so a sorted
     DROP is impossible without ``ALTER``, which SQLite has not got.
+
+    **Refuses a target that already holds systems** unless ``recreate``. This is a
+    harness that drops every table and then reassigns the owner of every proof it
+    finds, and the natural thing to reach for when handing it a
+    ``--database-url`` is the one already in the shell's ``DATABASE_URL``. Making
+    that take an explicit flag costs a retry; not making it costs a database.
     """
-    if url.startswith("sqlite:///"):
-        Path(url.removeprefix("sqlite:///")).unlink(missing_ok=True)
+    if _holds_data(url):
+        if not recreate:
+            raise SystemExit(
+                f"{url} already holds formal systems. This run would drop every "
+                "table and take ownership of every proof — pass --recreate if that "
+                "is what you meant, or --keep to reuse what is there."
+            )
+        if url.startswith("sqlite:///"):
+            Path(url.removeprefix("sqlite:///")).unlink(missing_ok=True)
     engine = create_engine(url)
     try:
         tables = [
@@ -868,6 +953,24 @@ def _provision(url: str) -> None:
         if not url.startswith("sqlite:///"):
             Base.metadata.drop_all(engine, tables=tables)
         Base.metadata.create_all(engine, tables=tables)
+    finally:
+        engine.dispose()
+
+
+def _holds_data(url: str) -> bool:
+    """Whether this target already carries an Edifyce system.
+
+    A missing table means an unprovisioned database, which is the case this whole
+    guard is here to let through.
+    """
+    engine = create_engine(url)
+    try:
+        with engine.connect() as connection:
+            if not inspect(connection).has_table(FormalSystem.__tablename__):
+                return False
+            return bool(
+                connection.execute(select(func.count()).select_from(FormalSystem)).scalar()
+            )
     finally:
         engine.dispose()
 
@@ -947,21 +1050,34 @@ def _key(session: Session, proof: Proof) -> Key:
         )
     ).all()
     steps: list[Step] = []
+    discrepancies: list[str] = []
     for row in rows:
         if row.rule is None or row.opens_scope is not None or row.behaviour != "logical":
             continue
-        antecedents = tuple(
+        cited = _cited(row)
+        if cited is None:
+            # A reference `/cite` could not write back — a dotted lemma citation,
+            # a definitional step, anything whose text is not `rule, ints`. Left
+            # out of the steps, which makes the proof undrivable rather than
+            # driving it against an answer key that cannot restore it.
+            continue
+        edges = {
             edge.antecedent_line.number
             if edge.antecedent_line is not None
             else edge.antecedent_number
-            for edge in sorted(row.antecedents, key=lambda e: e.position)
-        )
+            for edge in row.antecedents
+        }
+        if edges != set(cited):
+            discrepancies.append(
+                f"{proof.name} line {row.number}: cites {sorted(cited)} but its "
+                f"edges point at {sorted(edges)}"
+            )
         steps.append(
             Step(
                 number=row.number,
                 position=row.position,
                 rule=row.rule,
-                antecedents=antecedents,
+                antecedents=cited,
                 term_id=row.term_id,
                 display=row.display,
             )
@@ -972,7 +1088,31 @@ def _key(session: Session, proof: Proof) -> Key:
         source=proof.source,
         steps=tuple(steps),
         numbered=tuple(row.number for row in rows),
+        discrepancies=tuple(discrepancies),
     )
+
+
+def _cited(row: ProofLineRow) -> tuple[int, ...] | None:
+    """The lines this row's citation names, in order — or None if `/cite` cannot
+    write that citation back.
+
+    The condition is exactly the one the `cite` round needs and is checked as
+    such: the reference must be *reproduced* by `citation_text(row.rule, ...)`.
+    That covers the rule resolving to something the citation does not spell (a
+    `[Def, 3]` step, a rule found by search) and any antecedent that is not a bare
+    number (a dotted `[MP, A.2]`, which names a line of another proof), without
+    having to enumerate those cases.
+    """
+    if row.reference is None:
+        return None
+    tokens = row.reference.split(CITATION_SEPARATOR)
+    numbers: list[int] = []
+    for token in tokens[1:]:
+        if not token.isdigit():
+            return None
+        numbers.append(int(token))
+    ordered = tuple(numbers)
+    return ordered if citation_text(row.rule, ordered) == row.reference else None
 
 
 def _term_rows(
@@ -1065,11 +1205,20 @@ async def drive(
 
 
 def _async_url(url: str) -> str:
-    return (
-        url.replace("sqlite://", "sqlite+aiosqlite://", 1)
-        if url.startswith("sqlite://")
-        else url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    """The async driver URL matching a synchronous one.
+
+    Parsed rather than string-replaced, so a URL naming its driver
+    (``postgresql+psycopg://``) or the legacy scheme (``postgres://``) is
+    understood rather than passed through to fail inside `create_async_engine` —
+    which, on the default path, is after the import has already been paid for.
+    """
+    parsed = make_url(url)
+    driver = (
+        "sqlite+aiosqlite"
+        if parsed.get_backend_name() == "sqlite"
+        else "postgresql+asyncpg"
     )
+    return parsed.set(drivername=driver).render_as_string(hide_password=False)
 
 
 # ---------------------------------------------------------------------------
@@ -1082,6 +1231,22 @@ def _positive(value: str) -> int:
     if number < 1:
         raise argparse.ArgumentTypeError(f"must be at least 1, not {number}")
     return number
+
+
+def _ordered_rounds(text: str) -> list[str]:
+    """The rounds ``text`` names, in `ROUNDS` order whatever order it names them.
+
+    The rounds are not independent — `apply` edits the proof the others read from,
+    which is why it runs last — so the sequence is the harness's to decide rather
+    than a knob. Taking the operator's order would let ``--rounds apply,cite``
+    drive `cite` against an answer key one line out of date and report a failure
+    that is the flag's fault.
+    """
+    asked = [name.strip() for name in text.split(",") if name.strip()]
+    unknown = [name for name in asked if name not in ROUNDS]
+    if unknown:
+        raise ValueError(f"unknown round(s): {', '.join(unknown)}")
+    return [name for name in ROUNDS if name in asked]
 
 
 def _arguments() -> argparse.Namespace:
@@ -1141,22 +1306,27 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument(
         "--keep", action="store_true", help="reuse an existing database rather than recreating it"
     )
+    parser.add_argument(
+        "--recreate",
+        action="store_true",
+        help="drop and rebuild a --database-url that already holds systems",
+    )
     parser.add_argument("--quiet", action="store_true", help="suppress the progress line")
     return parser.parse_args()
 
 
 async def main() -> int:
     arguments = _arguments()
-    rounds = [name.strip() for name in arguments.rounds.split(",") if name.strip()]
-    unknown = [name for name in rounds if name not in ROUNDS]
-    if unknown:
-        print(f"unknown round(s): {', '.join(unknown)}", file=sys.stderr)
+    try:
+        rounds = _ordered_rounds(arguments.rounds)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
         return 2
 
     url = arguments.database_url or f"sqlite:///{arguments.source.with_suffix('.restore.db')}"
 
     if not arguments.keep:
-        _provision(url)
+        _provision(url, arguments.recreate)
         started = time.monotonic()
         print(f"Reading {arguments.source}…", flush=True)
         # `.mm` is UTF-8; reading it under the platform locale fails wherever
@@ -1201,6 +1371,15 @@ async def main() -> int:
         _term_rows(url, keys) if "state" in rounds else ({}, {})
     )
     dropped = len(found) - len(keys)
+    # Before anything is driven: a step whose citation and whose edges name
+    # different lines means the store contradicts itself, which is worth more than
+    # any round's verdict and is not something a round would report.
+    discrepancies = [line for key in keys for line in key.discrepancies]
+    if discrepancies:
+        print("\nthe stored structure disagrees with the citation:", file=sys.stderr)
+        for line in discrepancies:
+            print(f"  ! {line}", file=sys.stderr)
+        return 1
     print(
         f"\nDriving {len(keys)} proofs — "
         f"{sum(len(k.steps) for k in keys)} steps, "
