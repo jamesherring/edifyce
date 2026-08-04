@@ -56,7 +56,7 @@ from app.routers._common import (
 )
 from app.db.descriptions_mapping import load_description
 from app.db.models import Proof, ProofFolder, User
-from app.db.notations_mapping import load_notation, notation_names, render_stored
+from app.db.notations_mapping import load_notation, notation_names, render_each
 from app.db.terms import TermRow
 from app.db.terms_mapping import prefetch_terms, term_digests, walk_subgraph
 from app.db.side_conditions import SideConditionRow
@@ -287,6 +287,34 @@ async def _get_readable_or_404(
         # 404 (not 403) for a draft you don't own, so unpublished ids don't leak.
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Formal system not found.")
     return system
+
+
+async def readable_system_id_or_404(
+    session: AsyncSession, system_id: uuid.UUID, user: User | None
+) -> uuid.UUID:
+    """Assert the system exists and is readable, **without loading it**.
+
+    :func:`_get_readable_or_404`'s cheap twin, for a route that needs the id and
+    nothing else. That one hydrates the whole grammar — symbols, lines,
+    definitions and their provisos, axioms, rules — which is the right trade for
+    a route that renders a system and badly wrong for one asked repeatedly for a
+    single row of something else.
+
+    Same 404-not-403 for a draft you do not own, so unpublished ids do not leak.
+    """
+    row = (
+        await session.execute(
+            select(FormalSystem.id, FormalSystem.owner_id, FormalSystem.published_at)
+            .where(FormalSystem.id == system_id)
+        )
+    ).first()
+    readable = row is not None and (
+        row.published_at is not None
+        or (user is not None and row.owner_id == user.id)
+    )
+    if not readable:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Formal system not found.")
+    return system_id
 
 
 async def owned_system_id_or_404(
@@ -1198,11 +1226,14 @@ async def get_term_subgraph(
     a 404 rather than an empty graph — a caller holding an id from elsewhere has
     made a mistake worth hearing about.
     """
-    system = await _get_readable_or_404(session, system_id, user)
+    # The id and nothing else: this route reads one term's rows, and hydrating a
+    # corpus-sized grammar to serve it would dominate the request — on an endpoint
+    # whose whole shape invites being called repeatedly, node by node.
+    system_id = await readable_system_id_or_404(session, system_id, user)
 
     projection = None
     if notation is not None:
-        projection = await load_notation(session, system.id, notation)
+        projection = await load_notation(session, system_id, notation)
         if projection is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1212,7 +1243,7 @@ async def get_term_subgraph(
     owner = await session.scalar(
         select(TermRow.formal_system_id).where(TermRow.id == term_id)
     )
-    if owner != system.id:
+    if owner != system_id:
         # Also the not-found case: `owner` is None for an id that names no row.
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1224,10 +1255,23 @@ async def get_term_subgraph(
     digests = await session.run_sync(
         lambda sync: term_digests(sync, [node.id for node in nodes])
     )
+    # Every node read as a root, so a caller has the identity and the projection
+    # of each part at once. One shared fold rather than one per node: rendering
+    # each separately would re-walk its whole subtree, which is the sum of the
+    # subtree sizes for a request that wants all of them.
+    #
+    # Rendered from the *whole* graph rather than the walked slice, so a node at
+    # the `depth` horizon still reads in full rather than as a hole — `depth`
+    # bounds what is listed, not what is read.
+    readings = (
+        render_each(graph, [node.id for node in nodes], projection)
+        if projection is not None
+        else {}
+    )
 
     return TermGraphOut(
         root=term_id,
-        formal_system_id=system.id,
+        formal_system_id=system_id,
         notation=notation,
         truncated=any(node.truncated for node in nodes),
         nodes=[
@@ -1245,15 +1289,7 @@ async def get_term_subgraph(
                 children=[
                     TermChildOut(slot=slot, id=child) for slot, child in node.children
                 ],
-                # Each node read as a root, so a caller has the identity and the
-                # projection of every part at once. Rendered from the *whole*
-                # graph rather than the walked slice, so a node at the horizon
-                # still reads in full rather than as a hole.
-                rendered=(
-                    render_stored(graph, node.id, projection)
-                    if projection is not None
-                    else None
-                ),
+                rendered=readings.get(node.id),
                 truncated=node.truncated,
             )
             for node in nodes

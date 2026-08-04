@@ -711,7 +711,7 @@ def walk_subgraph(
     """
     if graph.node(root) is None:
         return []
-    found: list[SubgraphNode] = []
+    visited: list[tuple[uuid.UUID, StoredTerm, int]] = []
     seen: set[uuid.UUID] = {root}
     frontier: list[tuple[uuid.UUID, int]] = [(root, 0)]
     while frontier:
@@ -721,27 +721,35 @@ def walk_subgraph(
             # A dangling edge: the sweep returns a closed set, so this is a
             # defensive skip rather than something a caller can provoke.
             continue
-        children = graph.children_of(term_id)
-        beyond = depth is not None and at >= depth
-        found.append(
-            SubgraphNode(
-                id=term_id,
-                row=row,
-                # Reported even at the horizon: knowing *which* slots were not
-                # descended into is what makes a second, deeper request targeted.
-                children=children,
-                depth=at,
-                truncated=beyond and bool(children),
-            )
-        )
-        if beyond:
+        visited.append((term_id, row, at))
+        if depth is not None and at >= depth:
             continue
-        for _slot, child in children:
+        for _slot, child in graph.children_of(term_id):
             if child in seen:
                 continue
             seen.add(child)
             frontier.append((child, at + 1))
-    return found
+
+    # `truncated` is decided once the walk is done, against what it *emitted* —
+    # not against whether this node was at the horizon. In a DAG a child beyond
+    # one node's bound is often reachable within another's and already present,
+    # and reporting the response incomplete when it is complete costs a caller a
+    # wasted deeper request. `R→A, R→X, A→X` at depth 1 is the case.
+    emitted = {term_id for term_id, _row, _at in visited}
+    return [
+        SubgraphNode(
+            id=term_id,
+            row=row,
+            # Reported whether or not this node was descended into: knowing which
+            # slots are missing is what makes a second request targeted.
+            children=graph.children_of(term_id),
+            depth=at,
+            truncated=any(
+                child not in emitted for _slot, child in graph.children_of(term_id)
+            ),
+        )
+        for term_id, row, at in visited
+    ]
 
 
 def term_digests(

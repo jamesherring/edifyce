@@ -389,8 +389,9 @@ elsewhere has made a mistake worth hearing about.
 **Flat, not nested.** A term is an interned DAG: a subterm two positions share is
 one row with one id. Nesting would emit it twice, losing exactly the structure
 sharing the storage exists for — and with it the ability to refer to a part rather
-than repeat it. `(x = y → x = y)` comes back as three nodes, with both of the
-implication's slots naming the same id.
+than repeat it. `(x = y → x = y)` comes back as **four** nodes — the implication,
+the one equality both its slots name, and the two variable leaves — rather than
+the six a tree would have.
 
 **Every node carries its reading**, when a `notation` is asked for. That is the
 annotated projection §9 wants: identity *and* rendering of every part at once. A
@@ -399,12 +400,30 @@ what is rendered, or a shallow request would be useless.
 
 **`truncated` distinguishes a horizon from a leaf**, and a truncated node still
 reports its `children`, so a second, deeper request can be aimed rather than
-repeated.
+repeated. It is decided against what the walk *emitted* rather than against where
+the bound fell: in a DAG a child beyond one node's depth is often reachable within
+another's and already in the response, and calling that incomplete would cost a
+caller a deeper request that returns nothing new.
 
-Two implementation notes worth not rediscovering. The digests are fetched by a
-**second query** rather than added to `StoredTerm`: the sweep that builds a
-`TermGraph` runs on every proof view and every check-from-rows, and neither needs
-them, so widening it would put two columns per node on the hot path to serve a
-reader that asks rarely. And `depth` bounds the *output* rather than the read —
-the sweep already fetches the closure in one query, so a shallow request costs the
-same and simply says less.
+Four implementation notes worth not rediscovering.
+
+The digests are fetched by a **second query** rather than added to `StoredTerm`:
+the sweep that builds a `TermGraph` runs on every proof view and every
+check-from-rows, and neither needs them, so widening it would put two columns per
+node on the hot path to serve a reader that asks rarely.
+
+`depth` bounds the **output** rather than the read — the sweep already fetches the
+closure in one query, so a shallow request costs the same and simply says less.
+
+Visibility uses `readable_system_id_or_404`, a cheap twin of the usual check.
+`_get_readable_or_404` hydrates the whole grammar — symbols, lines, definitions
+and their provisos, axioms, rules — which is right for a route that renders a
+system and badly wrong for one asked repeatedly for a single row of something
+else.
+
+Rendering is **one shared fold** (`notations_mapping.render_each`), not
+`render_stored` per node. Per node re-walks that node's whole subtree, so
+rendering all of them costs the sum of the subtree sizes; one memo across the
+calls makes it linear. Sound because a stored term graph is acyclic by
+construction — `store_term` interns bottom-up, so a node can never be its own
+ancestor and its rendering cannot depend on the path taken to it.

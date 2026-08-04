@@ -1856,9 +1856,33 @@ def test_depth_bounds_the_output_and_marks_the_horizon(client, db):
     assert body["nodes"][0]["truncated"] is True
     assert body["nodes"][0]["children"], "the horizon still names what is below it"
 
+    # The implication, the equality both its slots share, and the two variable
+    # leaves. Pinned exactly, because a claim about the shape of this response is
+    # the sort of thing prose in a roadmap gets wrong.
     whole = client.get(f"/api/formal-systems/{system_id}/terms/{term_id}").json()
-    assert len(whole["nodes"]) > 1
+    assert len(whole["nodes"]) == 4
     assert whole["truncated"] is False
+
+
+def test_a_child_reachable_within_the_bound_is_not_called_missing(client, db):
+    # `truncated` is about what the response *omits*, not about which nodes sat at
+    # the horizon. In a DAG a child beyond one node's bound is often reachable
+    # within another's and already present — reporting the response incomplete
+    # when it is complete costs a caller a wasted deeper request.
+    owner = _register_login(client, "ada@example.com")
+    system_id, term_id = _stored_term(client, db, owner)
+
+    # At depth 1: the implication and the equality it shares. The equality's own
+    # children are absent, so it *is* truncated; the root is not.
+    body = client.get(f"/api/formal-systems/{system_id}/terms/{term_id}?depth=1").json()
+    by_id = {node["id"]: node for node in body["nodes"]}
+
+    assert by_id[term_id]["truncated"] is False, "both its children are present"
+    assert body["truncated"] is True, "the equality's leaves are not"
+
+    # And at full depth nothing is missing anywhere.
+    whole = client.get(f"/api/formal-systems/{system_id}/terms/{term_id}").json()
+    assert not any(node["truncated"] for node in whole["nodes"])
 
 
 def test_a_notation_reads_every_node(client, db):
