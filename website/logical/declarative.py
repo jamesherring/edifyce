@@ -2217,6 +2217,24 @@ def _grammar_fingerprint(spec: SystemSpec) -> str:
     # What a template is parsed *against*: the productions, the bracket map that
     # decides where one may be split, and the names something else in the build
     # namespace shadows.
+    #
+    # **Ordered, and that includes the sort inclusions.** It is tempting to hash
+    # an inclusion as membership rather than as a positioned production — it is
+    # an edge, `_declares_a_name` says so, and `spec_to_system` stores it as one.
+    # It is not sound (found in review on #181). `build_system` adds every member
+    # of a sort's union in `spec.productions` order and `UnionPattern.match`
+    # takes the first that succeeds, so where an inclusion sits **decides the
+    # parse** wherever it and a direct production of the parent sort match the
+    # same text: `formula ::= atom | direct` reads `A` as `atom_leaf`, and
+    # `formula ::= direct | atom` reads it as `direct`.
+    #
+    # A digest that ignored that would give two grammars with different parses
+    # one value — and unlike a stale digest, which costs a parse and never a
+    # difference, an equal one is *believed*. A cached term composed under one
+    # precedence would be accepted under the other.
+    #
+    # `tests/test_systems_store.py` pins the overlap directly, so the temptation
+    # cannot be taken up a second time.
     return _fingerprint(
         [
             sorted((_bracket_map(spec) or {}).items()),

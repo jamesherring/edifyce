@@ -68,9 +68,12 @@ from website.logical.declarative import (
     Justification,
     LinePart,
     LineSpec,
+    Production,
     Rule,
     SystemSpec,
     build_spec,
+    build_system,
+    library_digest,
 )
 
 # The system decomposition now lives among the full app schema. The pgvector
@@ -138,6 +141,111 @@ def stored_system(session):
 def test_spec_round_trips_through_the_database(stored_system):
     rebuilt = system_to_spec(stored_system)
     assert rebuilt == zfc_spec()
+
+
+def included_spec() -> SystemSpec:
+    # A sort *inclusion* — a production with no shape, saying `atom` is a
+    # `formula` — declared **between** two shaped productions. Where it sits is
+    # the whole point: it is the one place the rows had nowhere to record.
+    return SystemSpec(
+        name="Included",
+        productions=[
+            regex_prod("atom", "atom_var", r"[A-Z]"),
+            Production(sort="formula", name="atom"),
+            template_prod("formula", "implication", "(x → y)",
+                          [("x", "formula"), ("y", "formula")]),
+        ],
+        lines=[statement_line()],
+    )
+
+
+def overlapping_spec(inclusion_first: bool) -> SystemSpec:
+    """`formula` reachable two ways at once: through `atom`, and directly.
+
+    Both members match the same token, so which one wins is decided by which is
+    tried first — and that is what makes an inclusion's position load-bearing.
+    """
+    inclusion = Production(sort="formula", name="atom")
+    direct = regex_prod("formula", "direct", r"[A-Z]")
+    members = [inclusion, direct] if inclusion_first else [direct, inclusion]
+    return SystemSpec(
+        name="Overlap",
+        productions=[regex_prod("atom", "atom_leaf", r"[A-Z]"), *members],
+        lines=[statement_line()],
+    )
+
+
+def test_where_a_sort_inclusion_sits_decides_the_parse():
+    # **From review on #181**, and it is the reason the obvious fix to the bug
+    # below is wrong. An inclusion looks order-free — it is an edge, and
+    # `spec_to_system` stores it as one — but `build_system` adds every member of
+    # a sort's union in `spec.productions` order and `UnionPattern.match` takes
+    # the first that succeeds. So where an inclusion sits selects a *different
+    # constructor* wherever it overlaps a direct production of the parent sort.
+    first = build_system(overlapping_spec(inclusion_first=True))
+    last = build_system(overlapping_spec(inclusion_first=False))
+
+    through_the_atom = first.parse("A [HYP]").numbered_lines[0].formula_term
+    directly = last.parse("A [HYP]").numbered_lines[0].formula_term
+
+    assert str(through_the_atom) == "Node(atom_leaf='A')"
+    assert str(directly) == "Node(direct='A')"
+
+
+@pytest.mark.parametrize("inclusion_first", [True, False])
+def test_the_database_gives_back_the_grammar_it_was_given(session, inclusion_first):
+    # The two halves joined: a system whose inclusion *does* overlap, stored and
+    # reloaded, must still parse the same text to the same term. This is the
+    # assertion the digest is standing in for everywhere else, made directly —
+    # and the one that would have caught the wrong fix as well as the bug, since
+    # it compares parses rather than hashes.
+    spec = overlapping_spec(inclusion_first=inclusion_first)
+    session.add(spec_to_system(spec))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Overlap"))
+
+    rebuilt = system_to_spec(stored)
+    assert [p.name for p in rebuilt.productions] == [p.name for p in spec.productions]
+    assert library_digest(rebuilt) == library_digest(spec)
+
+    as_declared = build_system(spec).parse("A [HYP]").numbered_lines[0].formula_term
+    from_rows = build_system(rebuilt).parse("A [HYP]").numbered_lines[0].formula_term
+    assert str(from_rows) == str(as_declared)
+
+
+def test_a_digest_never_gives_two_parses_one_value():
+    # The consequence, and the guard: `library_digest` must keep an inclusion
+    # *ordered* among the productions. Hashing inclusions as an unordered set
+    # would collapse the two grammars above into one digest — and unlike a stale
+    # digest, which costs a parse and never a difference, an equal one is
+    # believed, so a cached term composed under one precedence would be accepted
+    # under the other.
+    assert library_digest(overlapping_spec(inclusion_first=True)) != library_digest(
+        overlapping_spec(inclusion_first=False)
+    )
+
+
+def test_a_sort_inclusion_keeps_its_digest_across_the_database(session):
+    # The bug that started this, now fixed in storage. An inclusion carries no
+    # `position` of its own — that column is its place among the *sorts* — so
+    # `system_to_spec` used to emit every inclusion last. The order came back
+    # wrong, the digest moved, and an imported corpus's cached terms never once
+    # passed their guard: measured on `set.mm`, nothing a reader computed matched
+    # what the import wrote, on every layer and on a flat import alike.
+    #
+    # `inclusion_position` records where it sat. Not a hash the digest could have
+    # been taught to ignore — see the two tests above for what it would have been
+    # ignoring.
+    spec = included_spec()
+    session.add(spec_to_system(spec))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Included"))
+
+    rebuilt = system_to_spec(stored)
+    assert [p.name for p in rebuilt.productions] == [p.name for p in spec.productions]
+    assert library_digest(rebuilt) == library_digest(spec)
 
 
 def atomic_spec() -> SystemSpec:

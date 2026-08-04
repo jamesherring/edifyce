@@ -1800,6 +1800,94 @@ before publishing now.
 
 #### D5 — the invariants
 
+**What D5 found before it wrote a line of D5.** Two things, and the second is the
+larger.
+
+*The forward-citation case is unreachable, and that is a result rather than a
+gap.* §7.2's first invariant — "no proof cites a label from a strictly later
+layer" — cannot fail through a plan. A plan names section prefixes, `Layering`
+refuses one whose layers open out of order, and every boundary is a position in
+the file; so a label a proof cites is declared before it and therefore in the
+same layer or an earlier one. Checked on the corpus all the same: across all
+2,676 theorems of a layered `set.mm` import, **every citation resolves through
+its own proof's chain**, and the 2,539 that resolve to no promoted row at all are
+the theorems' own `$e` hypotheses, which is what they should be. So the guard can
+only be exercised by injecting a bad partition — as D4's misfiling check already
+does — rather than by writing a bad plan. It becomes reachable the moment
+anything non-positional decides a layer.
+
+*The stored digests had never been read back, and they did not match.* This is
+the one that mattered. `_Layers` guards each layer's cached terms with
+`library_digest(layered_spec(corpus_specs[: i + 1]))`; a reader recomputes it from
+the **stored rows** through `effective_library`. At N = 2,676 those disagreed on
+every layer — and on a *flat* import too, so it predated D3 entirely.
+
+The cause is a round trip that is exact in content and not in order.
+`spec_to_system` stores a sort inclusion — a production with no shape, saying
+`wff_var` is a `wff` — as an **edge on the sub-sort**, deliberately and for the
+reason `_declares_a_name` gives: it is membership, not a declaration. An edge
+carries no position, so `system_to_spec` emits every inclusion last, and a spec
+that has been through the rows comes back with its three inclusions interleaved
+differently among its 48 shaped productions. `_grammar_fingerprint` hashed the
+flat list, so that was a difference.
+
+What it costs is not correctness — a stale digest is a miss, "which costs a parse
+and never a difference" — but it means **P4's term cache has never once hit for an
+imported corpus**, which is the whole of what docs/verification-from-rows.md P4
+claims to deliver. It went unnoticed because the failure mode of a cache is
+silence, and because nothing had ever compared the digest written against the
+digest read.
+
+**The obvious fix is wrong, and this is the part to remember.** Hash the
+inclusions as a set — they are edges, `_declares_a_name` says so, the schema
+stores them as such — and the digests match. `set.mm` agreed emphatically:
+importing the corpus under the spec as declared and under the spec the rows give
+back produces the same 2,676 verdicts, the same 2,710 promoted statements and a
+**byte-identical term graph**, 14,344 term digests, same set.
+
+It is still unsound (found in review on #181). `build_system` adds every member of
+a sort's union in `spec.productions` order and `UnionPattern.match` takes the
+first that succeeds, so where an inclusion sits **decides the parse** wherever it
+and a direct production of the parent sort match the same text:
+
+| `formula ::=` | `A` reads as |
+|---|---|
+| `atom \| direct` | `Node(atom_leaf='A')` |
+| `direct \| atom` | `Node(direct='A')` |
+
+Two grammars, two parses, and under the set-hash **one digest**. That is strictly
+worse than the bug it fixes: a stale digest is a miss, but an equal one is
+*believed*, so a term composed under one precedence would be accepted under the
+other. `set.mm` could not show it because `set.mm` has no overlapping members —
+the sixth time in this track that the corpus being well behaved hid the general
+case, and the first where the corpus evidence was *positive* and still not
+enough.
+
+So the fingerprint stays ordered, and **the fix belongs in storage**:
+`symbols.inclusion_position` records where an inclusion sat among the
+productions, which `position` could not — that column is already the row's place
+among the *sorts*. `system_to_spec` puts it back there instead of appending it.
+
+The result is better than the digest change would have been even if that had been
+sound: the reader now computes **the digest the import already wrote**
+(`dc372469…`, `09cc4dab…`, `82838c6d…` on the layered and flat runs alike), so
+nothing stored is invalidated. The set-hash would have changed every digest in
+the database. A NULL `inclusion_position` — a row written before the column —
+still reads as trailing, which is how it was written.
+
+`tests/test_systems_store.py` carries four guards: the overlap decides the parse;
+a digest never gives two parses one value; the round trip preserves the digest;
+and, the strongest, a system whose inclusion *does* overlap parses the same text
+to the same term after a trip through the database. That last one compares parses
+rather than hashes, and would have caught both the bug and the wrong fix.
+
+*Why this had to come first.* D5's own pinned item is "re-verifying a stored
+layered proof from its rows gives the same verdict as the import did". Against a
+digest that never matches, that test passes while exercising the *parse
+fallback* — green, and testing the opposite of what it claims. That is the fifth
+time in this track that a check would have been satisfied by the thing it was
+meant to rule out.
+
 - *Invalid, each a hard failure of the run:* a deliberately misfiled plan
   (`ax-mp` assigned to ZFC) must fail loudly rather than quietly dropping the
   theorems that cite it; a synthesised forward-layer citation must be caught;
