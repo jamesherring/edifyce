@@ -1935,19 +1935,40 @@ Determinism is the cheap one and holds: the same slice imported twice gives the
 same partition and the same per-layer counts, asserted on names because the ids
 differ between runs by construction.
 
-- *Invalid, each a hard failure of the run:* a deliberately misfiled plan
-  (`ax-mp` assigned to ZFC) must fail loudly rather than quietly dropping the
-  theorems that cite it; a synthesised forward-layer citation must be caught;
-  a citation that resolves to nothing must fail the run.
+**The invalid cases — done, and two of the three were already true.**
+
+*A citation that resolves to nothing already fails the run*, and the guard was
+there before D5 asked for it: `walk` refuses the theorem with `proof cites
+unknown label`, counts it in `failed`, names it in `failures`, and stores no
+proof row. Measured on a fixture whose ZF theorem cites a label the file never
+declares: `checked=4 verified=3 failed=1`, three proofs stored. Nothing to
+build; worth recording that it was checked rather than assumed.
+
+*A misfiled plan* is the one that needed a guard, and the guard is
+`check_layering.unreachable_citations`: **every citation a stored proof makes
+must be reachable from the layer the proof was filed in.** That is §5.2 stated
+as something a run can check — a proof filed where it cannot see what it cites
+is stored as *verified* and is not re-verifiable, which is a lie in the database
+rather than a failure of the run, and so is precisely the kind of thing nothing
+notices.
+
+It is sound because it asks only about labels the run **did** promote. A
+citation resolving to no promoted row at all is a different thing and not an
+error: it may name a rule, a definition, or one of the theorem's own `$e`
+hypotheses, which `read_library` reaches through `hypotheses_of` rather than
+through the chain — 2,539 of `set.mm`'s citations at N are of that kind.
+
+*The forward-layer citation* is the same guard from the other side, and
+unreachable through the public surface for the reason recorded above. Both are
+therefore exercised by **injecting** a bad partition rather than by writing a
+bad plan, which is honest but weaker: it proves the guard fires, not that the
+system can reach the state. Verified by moving a stored ZF proof one layer up,
+where the check names it exactly — `zf-thm (in 'First-order logic') cites
+'ax-ext', declared in 'ZF set theory'`.
+
 - **Bound variables at corpus scale:** spot-check that a `$d`-carrying theorem
   imported into FOL still refuses a capturing citation from ZFC — the R2 test,
-  run against real `set.mm` data rather than a fixture.
-- *Pinned:* the same slice imported twice gives the same partition (determinism);
-  re-verifying a stored layered proof from its rows gives the same verdict as the
-  import did.
-- The **valid** case is already met — see D4's measurement — and
-  `scripts/check_layering.py` is where D5's additions belong, since a hard
-  failure is a difference between two runs like any other.
+  run against real `set.mm` data rather than a fixture. **Still open.**
 
 #### D6 — the provenance report
 

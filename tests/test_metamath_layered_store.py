@@ -63,6 +63,8 @@ from website.logical.metamath.corpus import corpus_specs
 from website.logical.metamath.sections import Layer
 from website.logical.metamath.setmm import LAYERS
 
+from scripts.check_layering import unreachable_citations
+
 from tests.test_metamath_layered_specs import CORPUS, SECTION
 from tests.test_metamath_persistence import _TABLES
 
@@ -691,3 +693,38 @@ def test_the_same_slice_imported_twice_gives_the_same_partition(
     assert [layer.proofs for layer in second.layers] == [
         layer.proofs for layer in first.layers
     ]
+
+
+def test_no_citation_is_stranded_where_its_proof_cannot_reach_it(
+    session: Session, database: Database
+) -> None:
+    # **D5's misfiled-plan guard.** §5.2 says a citation resolves against the
+    # proof's own layer and then its ancestors' — never a sibling's, never a
+    # descendant's. A proof filed where it cannot see what it cites is stored as
+    # verified and is *not* re-verifiable, which is a lie in the database rather
+    # than a failure of the run, and so is exactly what nothing notices.
+    import_corpus(session, database, name="Corpus", plan=LAYERS)
+
+    assert unreachable_citations(session) == ()
+
+
+def test_a_proof_moved_out_of_reach_of_its_citation_is_caught(
+    session: Session, database: Database
+) -> None:
+    # The same guard, given something to find. A positional partition cannot
+    # produce this — `set.mm`'s order guarantees a cited label is declared before
+    # the proof citing it, and every boundary is a file position — so it is
+    # exercised by moving a stored proof after the fact, which is what a plan
+    # deciding layers by anything other than position would do.
+    import_corpus(session, database, name="Corpus", plan=LAYERS)
+    spine = systems(session)
+
+    stranded = session.scalar(select(Proof).where(Proof.name == "zf-thm"))
+    stranded.formal_system_id = spine[1].id  # up one layer, out of ZF's sight
+    session.flush()
+
+    caught = unreachable_citations(session)
+    assert [(u.proof, u.label, u.declared_in) for u in caught] == [
+        ("zf-thm", "ax-ext", "ZF set theory")
+    ]
+    assert caught[0].filed_in == "First-order logic"
