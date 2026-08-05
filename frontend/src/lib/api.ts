@@ -204,6 +204,9 @@ export interface TermNode {
 export interface TheoremCandidate {
 	label: string;
 	formal_system_id: string;
+	/** The interned root of the conclusion — pass to `systems.term` to walk the
+	 *  structure instead of reparsing `statement`. Identity and reading together. */
+	statement_term_id: string;
 	statement: string;
 	primitive: boolean;
 	premise_count: number;

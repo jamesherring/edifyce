@@ -2895,6 +2895,15 @@ def test_a_goal_finds_the_theorems_shaped_like_its_conclusion(client, db):
     assert body["candidates"][0]["premise_count"] == 0
     assert body["unindexed"] == 0
 
+    # The candidate is point-at-able: its statement_term_id is a real handle that
+    # `GET .../terms/{id}` resolves to the conclusion's graph — projection and
+    # identity together, not a string a caller must reparse.
+    node = client.get(
+        f"/api/formal-systems/{system_id}/terms/{body['candidates'][0]['statement_term_id']}"
+    )
+    assert node.status_code == 200, node.text
+    assert node.json()["root"] == body["candidates"][0]["statement_term_id"]
+
 
 def test_a_goal_of_another_shape_is_not_offered_the_library(client, db):
     # The filter doing its work: the library's implication is not a candidate for

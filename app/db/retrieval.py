@@ -68,6 +68,11 @@ class Candidate:
 
     label: str
     system_id: uuid.UUID
+    # The interned root of the conclusion, so a matched candidate is *point-at-able*
+    # — feed it to `GET /formal-systems/{id}/terms/{id}` to walk its structure
+    # rather than reparse `statement`. Never null: the query inner-joins on it, so
+    # a theorem without a cached term is `unindexed`, not a candidate.
+    statement_term_id: uuid.UUID
     statement: str
     primitive: bool
     premise_count: int
@@ -212,6 +217,7 @@ def conclusion_candidates(
         select(
             PromotedTheoremRow.label,
             PromotedTheoremRow.system_id,
+            PromotedTheoremRow.statement_term_id,
             PromotedTheoremRow.statement,
             PromotedTheoremRow.primitive,
             premises.label("premises"),
@@ -232,6 +238,7 @@ def conclusion_candidates(
             Candidate(
                 label=row.label,
                 system_id=row.system_id,
+                statement_term_id=row.statement_term_id,
                 statement=row.statement,
                 primitive=row.primitive,
                 premise_count=row.premises,

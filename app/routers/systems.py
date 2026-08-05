@@ -1392,6 +1392,7 @@ async def find_matching_theorems(
             TheoremCandidate(
                 label=candidate.label,
                 formal_system_id=candidate.system_id,
+                statement_term_id=candidate.statement_term_id,
                 statement=candidate.statement,
                 primitive=candidate.primitive,
                 premise_count=candidate.premise_count,

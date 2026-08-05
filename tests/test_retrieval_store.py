@@ -158,7 +158,7 @@ def test_only_theorems_concluding_the_goals_production_are_offered(
 ):
     # The whole point: a goal that is an implication does not want the library's
     # memberships, and on a real corpus that is most of it.
-    add_theorem(session, system_row, engine_context, "imp1", "(x ∈ y → x ∈ z)")
+    imp1 = add_theorem(session, system_row, engine_context, "imp1", "(x ∈ y → x ∈ z)")
     add_theorem(session, system_row, engine_context, "imp2", "(x ∈ z → x ∈ y)")
     add_theorem(session, system_row, engine_context, "mem1", "x ∈ y")
 
@@ -167,6 +167,9 @@ def test_only_theorems_concluding_the_goals_production_are_offered(
     assert [c.label for c in found.candidates] == ["imp1", "imp2"]
     assert found.matched == 2
     assert found.truncated is False
+    # A candidate is point-at-able: it carries the interned root of its
+    # conclusion, the handle `GET .../terms/{id}` walks — not just a string.
+    assert found.candidates[0].statement_term_id == imp1.statement_term_id
 
 
 def test_a_goal_no_theorem_concludes_finds_nothing(session, system_row, engine_context):

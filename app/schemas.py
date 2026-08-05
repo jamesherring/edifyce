@@ -970,6 +970,11 @@ class TheoremCandidate(BaseModel):
 
     label: str
     formal_system_id: uuid.UUID
+    # The interned root of the conclusion. A candidate is thus *point-at-able*:
+    # feed it to `GET /formal-systems/{id}/terms/{term_id}` to walk the structure,
+    # rather than reparse `statement`. `statement` stays the human reading of the
+    # same node — identity and projection together, per §9a.
+    statement_term_id: uuid.UUID
     statement: str
     primitive: bool
     premise_count: int
