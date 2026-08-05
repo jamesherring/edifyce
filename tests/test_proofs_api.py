@@ -2013,6 +2013,66 @@ def test_a_citation_is_proposed_as_a_label_and_line_numbers(client, db):
     assert body["failure"] is None
 
 
+def _builds(monkeypatch) -> list[int]:
+    """Count how many times a request compiles the system.
+
+    Counted rather than timed, because the thing worth pinning is structural: a
+    build is one object per request or it is not, and a wall-clock assertion would
+    be flaky about a fact that is exact.
+    """
+    seen = [0]
+    real = proofs_router.build_spec
+
+    def counting(*args, **kwargs):
+        seen[0] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(proofs_router, "build_spec", counting)
+    return seen
+
+
+def test_a_citation_compiles_the_system_once(client, db, monkeypatch):
+    # `/cite` needs the grammar to rewrite the line *before* it can check the
+    # result, and used to build a second system inside the verify to do the
+    # checking — the single largest thing the route did, on a corpus system
+    # (docs/authoring-and-ingestion-roadmap.md §9d).
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _holed_proof(client, db, owner)
+
+    builds = _builds(monkeypatch)
+    res = client.post(
+        f"/api/proofs/{proof_id}/cite",
+        json={"line": 3, "rule": "MP", "antecedents": [1, 2], "apply": True},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["accepted"] is True
+    assert builds == [1]
+
+
+def test_adding_a_line_compiles_the_system_once(client, db, monkeypatch):
+    # The same for `/lines`, which needs the grammar earlier still: it resolves a
+    # proposal against it and renders the term back out.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _one_line_proof(client, db, owner)
+
+    builds = _builds(monkeypatch)
+    res = client.post(
+        f"/api/proofs/{proof_id}/lines",
+        json={
+            "statement": {
+                "constructor": "membership",
+                "slots": {
+                    "s": {"constructor": "variable", "literal": "y"},
+                    "t": {"constructor": "variable", "literal": "x"},
+                },
+            },
+            "apply": True,
+        },
+    )
+    assert res.status_code == 200, res.text
+    assert builds == [1]
+
+
 def test_a_dry_run_changes_nothing(client, db):
     # A caller trying several justifications for one hole must not have to undo
     # the ones that did not work.

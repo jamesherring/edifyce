@@ -141,6 +141,7 @@ from website.logical.promotion import proved_theorem, schematic_theorem
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from app.db import DefinitionTermCache, SchemaTermCache
     from app.db.descriptions import LabelDescriptionRow
 
     from app.routers.systems import EffectiveSystem
@@ -336,66 +337,66 @@ class _Verification:
     cited_proofs: list[tuple[EngineProof, uuid.UUID]] = field(default_factory=list)
 
 
-async def _verify_with_references(
-    session: AsyncSession,
-    proof: Proof,
-    system: FormalSystem | None = None,
-    persist: bool = True,
-    source: str | None = None,
-) -> _Verification:
-    """Verify a stored proof, resolving the lemmas it cites from other proofs.
+@dataclass(frozen=True)
+class _Built:
+    """A system read from its rows, resolved against its ancestors, and compiled.
 
-    Compiles the system once and parses the whole transitive reference closure in
-    dependency order (a lemma before its dependents), pre-seeding each proof's
-    ``reference_context`` with the already-compiled proofs it references — keyed by
-    the stored citation alias — so a `[alias.line]` citation resolves to that
-    lemma's line. Only *usable* lemmas (fully valid, warning-free) are seeded, so
-    a proof leaning on an unproven lemma fails rather than borrowing an unsound
-    line. Pass ``system`` to reuse an already-loaded system (a publish gate has
-    one in hand); otherwise it is loaded here.
+    One object because it is one *cost*: thirteen queries to hydrate the parts,
+    the chain resolved into a spec, the cached schema and definition terms read,
+    and the spec built. On a corpus system that runs about 55 ms, and a route
+    doing it twice pays it twice — which is what every call of `/cite` and
+    `/lines` did, once to rewrite the line and once inside the verify.
 
-    ``persist=False`` for a caller whose transaction will be rolled back — an
-    anonymous viewer verifying a published proof. The verdict is the same either
-    way; what it skips is warming the schema-term cache, whose inserts would be
-    discarded with everything else.
+    ``system is None`` means the row is gone; ``errors`` means the rows describe
+    no system that builds. The two are kept apart because the callers answer them
+    differently — a missing system is a 404 and an unbuildable one is a 400 — and
+    a single "it did not work" would make that the caller's guess.
     """
-    # Before anything is read. A verify now trusts the lemmas' stored rows
-    # instead of re-checking them, so the read and the write must sit inside one
-    # critical section: otherwise an invalidation can commit between them and
-    # this transaction writes a valid snapshot back over it. See lock_system.
-    await lock_system(session, proof.formal_system_id)
 
-    if system is None:
-        system = await load_system(session, proof.formal_system_id)
-    if system is None:
-        return _Verification(
-            VerifyProofResponse(
-                success=False, errors=["The proof's system no longer exists."]
-            ),
-            None,
-        )
+    system: FormalSystem | None = None
+    effective: EffectiveSystem | None = None
+    compiled: EngineSystem | None = None
+    # What was read from the cache, so the write-back can tell what this build had
+    # to compose for itself (see app/db/schema_terms.py).
+    schema_terms: SchemaTermCache | None = None
+    definition_terms: DefinitionTermCache | None = None
+    errors: list[str] = field(default_factory=list)
 
-    # The rules' schema templates are parsed against the grammar to get the terms
-    # the checker unifies with, which is about half of a build and the same
-    # answer every time. Read the terms a previous build composed, and write back
-    # anything this one had to compose itself — a system settles after one
-    # verify, and a grammar edit makes the stored terms inert rather than wrong
-    # (see app/db/schema_terms.py). Under the system lock, like everything else
-    # this function writes.
-    #
+
+async def _build_system(
+    session: AsyncSession,
+    system_id: uuid.UUID,
+    system: FormalSystem | None = None,
+) -> _Built:
+    """Load, resolve and compile a system — the shared half of a verify.
+
+    Extracted so a route that needs the built system *before* it verifies can hand
+    the same one back in rather than paying for a second. Takes no lock of its
+    own: a caller that will act on what this returns must already hold the
+    system's, or the grammar it built against can change under it.
+    """
+    if system is None:
+        system = await load_system(session, system_id)
+    if system is None:
+        return _Built(errors=["The proof's system no longer exists."])
+
     # Against the system's whole inheritance chain: a child is only a system at
     # all once its ancestors' parts are in front of its own, so the spec that is
     # built — and the digests computed from it — cover the chain rather than this
     # row (app.db.effective_spec).
     effective = await load_effective(session, system)
     if effective.errors:
-        return _Verification(
-            VerifyProofResponse(success=False, errors=effective.errors), None
-        )
+        return _Built(system=system, effective=effective, errors=effective.errors)
+
+    # The rules' schema templates are parsed against the grammar to get the terms
+    # the checker unifies with, which is about half of a build and the same
+    # answer every time. Read the terms a previous build composed; the caller
+    # writes back anything this one had to compose itself — a system settles after
+    # one verify, and a grammar edit makes the stored terms inert rather than
+    # wrong (see app/db/schema_terms.py).
     spec = effective.spec
-    offset = effective.rule_offset
     schema_terms = await session.run_sync(
-        lambda sync: load_schema_terms(sync, system, spec, offset)
+        lambda sync: load_schema_terms(sync, system, spec, effective.rule_offset)
     )
     # The same trade for each definition's two surface forms, which the build
     # parses into the terms an unfold is checked against (app/db/definition_terms.py).
@@ -408,19 +409,91 @@ async def _verify_with_references(
         spec, schema_terms=schema_terms, definition_terms=definition_terms
     )
     if "errors" in build:
+        return _Built(system=system, effective=effective, errors=build["errors"])
+    return _Built(
+        system=system,
+        effective=effective,
+        compiled=build["system"],
+        schema_terms=schema_terms,
+        definition_terms=definition_terms,
+    )
+
+
+def _require_a_built_system(built: _Built) -> None:
+    """Raise the answer a *route* owes for a system it cannot build.
+
+    A verify reshapes both of these into a verdict instead; a route that needs the
+    grammar before it can compose anything has nothing to report a verdict about,
+    so it answers with a status. The two are kept distinct — a system that is gone
+    is a 404, one whose rows describe nothing buildable is a 400 — because a
+    client can act on the second and not on the first.
+    """
+    if built.system is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Formal system not found.")
+    if built.compiled is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=built.errors)
+
+
+async def _verify_with_references(
+    session: AsyncSession,
+    proof: Proof,
+    persist: bool = True,
+    source: str | None = None,
+    built: _Built | None = None,
+) -> _Verification:
+    """Verify a stored proof, resolving the lemmas it cites from other proofs.
+
+    Compiles the system once and parses the whole transitive reference closure in
+    dependency order (a lemma before its dependents), pre-seeding each proof's
+    ``reference_context`` with the already-compiled proofs it references — keyed by
+    the stored citation alias — so a `[alias.line]` citation resolves to that
+    lemma's line. Only *usable* lemmas (fully valid, warning-free) are seeded, so
+    a proof leaning on an unproven lemma fails rather than borrowing an unsound
+    line. Pass ``built`` to reuse a system this caller has already compiled —
+    `/cite` and `/lines` need the grammar before they can rewrite a line, and
+    building it a second time here was the largest single thing either route did
+    (roadmap §9d). Otherwise it is built here, under the lock.
+
+    ``persist=False`` for a caller whose transaction will be rolled back — an
+    anonymous viewer verifying a published proof. The verdict is the same either
+    way; what it skips is warming the schema-term cache, whose inserts would be
+    discarded with everything else.
+    """
+    # Before anything is read. A verify now trusts the lemmas' stored rows
+    # instead of re-checking them, so the read and the write must sit inside one
+    # critical section: otherwise an invalidation can commit between them and
+    # this transaction writes a valid snapshot back over it. See lock_system.
+    await lock_system(session, proof.formal_system_id)
+
+    # A build handed in was made *before* this lock — the caller needed the
+    # grammar to compose a line — so it is only safe to reuse if the caller took
+    # the lock itself first, which `/cite` and `/lines` do for exactly this
+    # reason. Rebuilt here otherwise.
+    if built is None:
+        built = await _build_system(session, proof.formal_system_id)
+    if built.compiled is None:
         return _Verification(
-            VerifyProofResponse(success=False, errors=build["errors"]), None
+            VerifyProofResponse(
+                success=False,
+                errors=built.errors or ["The proof's system no longer exists."],
+            ),
+            None,
         )
-    compiled_system = build["system"]
+    system = built.system
+    effective = built.effective
+    compiled_system = built.compiled
+
+    # Write back whatever this build had to compose for itself, so the next one
+    # reads it instead. Under the system lock, like everything else written here.
     if persist:
         await session.run_sync(
             lambda sync: store_schema_terms(
-                sync, system, compiled_system, schema_terms, offset
+                sync, system, compiled_system, built.schema_terms, effective.rule_offset
             )
         )
         await session.run_sync(
             lambda sync: store_definition_terms(
-                sync, system, compiled_system, definition_terms,
+                sync, system, compiled_system, built.definition_terms,
                 effective.definition_offset
             )
         )
@@ -754,7 +827,9 @@ async def _has_published_dependents(session: AsyncSession, proof_id: uuid.UUID) 
     return dependent is not None
 
 
-async def _require_publishable(session: AsyncSession, proof: Proof) -> None:
+async def _require_publishable(
+    session: AsyncSession, proof: Proof, built: _Built | None = None
+) -> None:
     """Reject a publish that would expose an unverified or dangling public proof.
 
     Two things a published proof must not do, since it becomes world-readable: it
@@ -771,7 +846,12 @@ async def _require_publishable(session: AsyncSession, proof: Proof) -> None:
     edits: re-running it after a source edit rejects a change that would leave a
     world-readable proof unverifying.
     """
-    system = await load_system(session, proof.formal_system_id)
+    # ``built`` is the caller's own build of this system, when it has one: an
+    # applied `/cite` on a published proof re-gates it here, and the grammar has
+    # not moved between the two — the *proof* changed, not the system.
+    if built is None:
+        built = await _build_system(session, proof.formal_system_id)
+    system = built.system
     if system is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "The proof's system no longer exists.")
 
@@ -790,8 +870,8 @@ async def _require_publishable(session: AsyncSession, proof: Proof) -> None:
         )
 
     # Verify with references resolved, so a proof that leans on a lemma is gated
-    # on the lemma actually proving it. Reuse the system already loaded above.
-    verification = await _verify_with_references(session, proof, system=system)
+    # on the lemma actually proving it. Reuse the build made above.
+    verification = await _verify_with_references(session, proof, built=built)
     if not verification.response.success:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1718,31 +1798,17 @@ async def propose_citation(
             ),
         )
 
-    system = await load_system(session, proof.formal_system_id)
-    if system is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Formal system not found.")
-    effective = await load_effective(session, system)
-    if effective.errors:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=effective.errors)
-    # With the cached schema and definition terms, as a verify does. Rewriting a
-    # line needs the grammar to *read* it, and a build that re-parses every rule
-    # schema and definition form is about half a verify — which a search loop
-    # trying several justifications would pay for on each one.
-    schema_terms = await session.run_sync(
-        lambda sync: load_schema_terms(
-            sync, system, effective.spec, effective.rule_offset
-        )
-    )
-    definition_terms = await session.run_sync(
-        lambda sync: load_definition_terms(
-            sync, system, effective.spec, effective.definition_offset
-        )
-    )
-    build = build_spec(
-        effective.spec, schema_terms=schema_terms, definition_terms=definition_terms
-    )
-    if "errors" in build:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=build["errors"])
+    # Built once and reused by the verify below. Rewriting a line needs the
+    # grammar to *read* it, so this route needs the system before it checks — and
+    # building it a second time inside the verify was the single largest thing a
+    # call of this route did (roadmap §9d).
+    #
+    # Under the system lock, which the verify would otherwise be the first to
+    # take: a build made outside it could be against a grammar that has changed
+    # by the time the check runs.
+    await lock_system(session, proof.formal_system_id)
+    built = await _build_system(session, proof.formal_system_id)
+    _require_a_built_system(built)
 
     citation = citation_text(payload.rule, payload.antecedents)
     lines = proof.source.split("\n")
@@ -1752,7 +1818,7 @@ async def propose_citation(
             status_code=status.HTTP_409_CONFLICT,
             detail="This proof's stored structure is stale. Verify it first.",
         )
-    rewritten = build["system"].recite(lines[row.position], citation)
+    rewritten = built.compiled.recite(lines[row.position], citation)
     if rewritten is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1773,7 +1839,7 @@ async def propose_citation(
         )
 
     verification = await _verify_with_references(
-        session, proof, persist=payload.apply and owned, source=source
+        session, proof, persist=payload.apply and owned, source=source, built=built
     )
     checked = verification.engine_proof
     line = _numbered_line(checked, payload.line)
@@ -1816,7 +1882,7 @@ async def propose_citation(
     # `[?]` is exactly such an edit, which is what makes this gate load-bearing
     # here rather than inherited. Raising rolls the whole proposal back.
     if proof.published_at is not None:
-        await _require_publishable(session, proof)
+        await _require_publishable(session, proof, built=built)
     await _record_verdict(session, proof, verification)
     await session.commit()
     return outcome.model_copy(
@@ -1928,28 +1994,14 @@ async def propose_line(
             ),
         )
 
-    system = await load_system(session, proof.formal_system_id)
-    if system is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Formal system not found.")
-    effective = await load_effective(session, system)
-    if effective.errors:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=effective.errors)
-    schema_terms = await session.run_sync(
-        lambda sync: load_schema_terms(
-            sync, system, effective.spec, effective.rule_offset
-        )
-    )
-    definition_terms = await session.run_sync(
-        lambda sync: load_definition_terms(
-            sync, system, effective.spec, effective.definition_offset
-        )
-    )
-    build = build_spec(
-        effective.spec, schema_terms=schema_terms, definition_terms=definition_terms
-    )
-    if "errors" in build:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=build["errors"])
-    compiled = build["system"]
+    # Built once, under the lock, and reused by the verify — as `/cite` does, and
+    # for the same reason: this route needs the grammar to resolve the proposal
+    # and render it, long before anything is checked.
+    await lock_system(session, proof.formal_system_id)
+    built = await _build_system(session, proof.formal_system_id)
+    _require_a_built_system(built)
+    system = built.system
+    compiled = built.compiled
     context = term_context(compiled)
 
     # A referenced term must belong to *this* system. Interning is per system, so
@@ -2057,7 +2109,7 @@ async def propose_line(
         )
 
     verification = await _verify_with_references(
-        session, proof, persist=payload.apply and owned, source=source
+        session, proof, persist=payload.apply and owned, source=source, built=built
     )
     checked = verification.engine_proof
     added = _numbered_line(checked, number)
@@ -2113,7 +2165,7 @@ async def propose_line(
     await _invalidate_dependents(session, proof.id, proof.formal_system_id)
     await _retire_promotion(session, proof)
     if proof.published_at is not None:
-        await _require_publishable(session, proof)
+        await _require_publishable(session, proof, built=built)
     await _record_verdict(session, proof, verification)
     await session.commit()
     return outcome.model_copy(
