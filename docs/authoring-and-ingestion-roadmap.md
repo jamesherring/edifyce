@@ -681,27 +681,67 @@ stored as. Nothing in the ZF slice came close. So the expansion hazard tracks
 for (§9a) — which this round deliberately declines to use, so that the render and
 the reparse are what is being tested.
 
-### The cost, which is the open item
+### The cost — *closed, and not where this said it was*
 
-A `/cite` call builds the system twice — once to rewrite the line, once inside the
-verify — and on a corpus grammar that is most of the cost. Measured on the *same
-five proofs and the same 34 calls* against three imports, so the only variable is
-the system:
+Measured on the *same five proofs and the same 34 calls* against three imports, so
+the only variable is the system:
 
-| corpus | per call |
+| corpus | per call, before | after |
+|---|---|---|
+| 400 theorems | 65 ms | **45 ms** |
+| 3,000 theorems | 80 ms | **56 ms** |
+| 14,000 theorems | 136 ms | **93 ms** |
+
+Sublinear in the corpus — a 35× corpus costs about twice as much per call —
+because what grows is the *grammar* rather than the library, and a library is
+resolved label by label rather than built (docs/verification-from-rows.md, P4).
+
+**The diagnosis this section originally gave was wrong**, and the correction is
+the useful part. It said the assembled `FormalSystem` was the thing to cache.
+Profiling one `/cite` against the 14,000-theorem import says otherwise:
+
+| | per build |
 |---|---|
-| 400 theorems | 65 ms |
-| 3,000 theorems | 80 ms |
-| 14,000 theorems | 136 ms |
+| `load_system` — the parts, as ORM rows | 36 ms |
+| `load_effective` — the chain, into a spec | 5 ms |
+| the cached schema and definition terms | 1 ms |
+| `build_spec` | 12 ms |
+| **one build, end to end** | **54 ms** |
 
-Sublinear — a 35× corpus costs about twice as much per call — because what grows is
-the *grammar* rather than the library, and a library is resolved label by label
-rather than built (docs/verification-from-rows.md, P4). Still, a loop making one
-call per step pays it every step, and the fix is not in the loop but under it: the
-build is already cached in pieces
-(`schema_terms`, `definition_terms`) and what is not cached is the assembled
-`FormalSystem`. Worth doing before anything drives this at scale; not worth doing
-before there is something to drive it.
+`build_spec` is a fifth of it. Two-thirds is `load_system`, and that is not row
+volume — the corpus system has 336 symbols and 241 bindings — but **thirteen
+queries**, one per eagerly-loaded child collection, each crossing the async
+greenlet bridge. It is latency, not work.
+
+Which makes the fix simpler than a cache: **build once per request.** `/cite` and
+`/lines` need the grammar before they can compose a line, and then handed the
+verify nothing, so it loaded and built the whole system a second time — 2 builds,
+26 queries, 2 `build_spec`s for one call. `_Built` is now one object carrying the
+loaded system, its effective spec, the cached terms and the compiled system, and
+`_verify_with_references` takes one instead of making one. `_require_publishable`
+takes one too, which is what an applied `/cite` on a published proof re-gates
+through — after its two cheap gates, so a publish refused for a draft system still
+pays nothing for a compile it would throw away.
+
+**Every build is now inside the system lock**, which the build used to rewrite a
+line was not: `/cite` and `/lines` take it before they compose, and the publish
+gate takes it on the one path that holds none of its own (`PATCH` with only
+`published`). That matters beyond tidiness — the grammar a line is composed
+against is now provably the grammar the check runs against.
+
+Structural, so it is pinned structurally:
+`test_a_citation_compiles_the_system_once` counts `build_spec` calls rather than
+timing anything, and both new tests report `[2] == [1]` against the old code.
+
+**What is deliberately not done.** A cache *across* requests would take the
+remaining 54 ms to nearly nothing, and it is the wrong trade at this size. Its key
+has to be readable without doing the work — which rules out any digest of the
+spec, since computing one means loading the rows that cost the 36 ms — so it needs
+a version stamp on `formal_systems` that every write to the system *or any of its
+parts* bumps. That is precisely the invalidation cascade `app/db/schema_terms.py`
+was written to avoid ("freshness is decided, not maintained"), and the failure
+mode of a missed write path is a proof checked against a grammar that has moved.
+Not worth it to save 54 ms on a request that no longer does it twice.
 
 ### What it still does not reach
 

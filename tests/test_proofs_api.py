@@ -1137,6 +1137,53 @@ def locked(monkeypatch) -> list:
     return taken
 
 
+def test_publishing_locks_the_system_before_it_compiles_it(client, db, locked, monkeypatch):
+    # `PATCH {"published": true}` is the one publish path that holds no lock of
+    # its own — `update_proof` only locks on a *source* change. The gate then
+    # compiles the system and writes a verdict derived from it, so the compile has
+    # to be inside the critical section, not before it.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid, published=True)
+    pid = _create_proof(client, sid, "P", source=VALID_PROOF)
+
+    order: list[str] = []
+    real_lock = _common.lock_system
+
+    async def note_lock(session, system_id):
+        order.append("lock")
+        return await real_lock(session, system_id)
+
+    real_build = proofs_router.build_spec
+
+    def note_build(*args, **kwargs):
+        order.append("build")
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(_common, "lock_system", note_lock)
+    monkeypatch.setattr(proofs_router, "lock_system", note_lock)
+    monkeypatch.setattr(proofs_router, "build_spec", note_build)
+
+    res = client.patch(f"/api/proofs/{pid}", json={"published": True})
+    assert res.status_code == 200, res.text
+    assert order and order[0] == "lock", order
+    assert "build" in order
+
+
+def test_a_publish_refused_on_a_cheap_gate_does_not_compile(client, db, monkeypatch):
+    # Both early gates are answerable from the system row alone. A publish they
+    # refuse used to pay a full compile — ~54 ms on a corpus system — and throw it
+    # away.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)  # a draft system: the first gate refuses
+    pid = _create_proof(client, sid, "P", source=VALID_PROOF)
+
+    builds = _builds(monkeypatch)
+    res = client.patch(f"/api/proofs/{pid}", json={"published": True})
+    assert res.status_code == 400, res.text
+    assert "unpublished draft" in res.json()["detail"]
+    assert builds == [0]
+
+
 def test_verification_takes_the_system_lock_before_reading(client, db, locked):
     # The point of the whole exercise: a verify trusts its lemmas' stored rows,
     # so the read and the write must be one critical section. Locking just before
@@ -2011,6 +2058,66 @@ def test_a_citation_is_proposed_as_a_label_and_line_numbers(client, db):
     assert body["citation"] == "MP, 1, 2"
     assert body["accepted"] is True
     assert body["failure"] is None
+
+
+def _builds(monkeypatch) -> list[int]:
+    """Count how many times a request compiles the system.
+
+    Counted rather than timed, because the thing worth pinning is structural: a
+    build is one object per request or it is not, and a wall-clock assertion would
+    be flaky about a fact that is exact.
+    """
+    seen = [0]
+    real = proofs_router.build_spec
+
+    def counting(*args, **kwargs):
+        seen[0] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(proofs_router, "build_spec", counting)
+    return seen
+
+
+def test_a_citation_compiles_the_system_once(client, db, monkeypatch):
+    # `/cite` needs the grammar to rewrite the line *before* it can check the
+    # result, and used to build a second system inside the verify to do the
+    # checking — the single largest thing the route did, on a corpus system
+    # (docs/authoring-and-ingestion-roadmap.md §9d).
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _holed_proof(client, db, owner)
+
+    builds = _builds(monkeypatch)
+    res = client.post(
+        f"/api/proofs/{proof_id}/cite",
+        json={"line": 3, "rule": "MP", "antecedents": [1, 2], "apply": True},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["accepted"] is True
+    assert builds == [1]
+
+
+def test_adding_a_line_compiles_the_system_once(client, db, monkeypatch):
+    # The same for `/lines`, which needs the grammar earlier still: it resolves a
+    # proposal against it and renders the term back out.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _one_line_proof(client, db, owner)
+
+    builds = _builds(monkeypatch)
+    res = client.post(
+        f"/api/proofs/{proof_id}/lines",
+        json={
+            "statement": {
+                "constructor": "membership",
+                "slots": {
+                    "s": {"constructor": "variable", "literal": "y"},
+                    "t": {"constructor": "variable", "literal": "x"},
+                },
+            },
+            "apply": True,
+        },
+    )
+    assert res.status_code == 200, res.text
+    assert builds == [1]
 
 
 def test_a_dry_run_changes_nothing(client, db):
