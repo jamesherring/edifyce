@@ -23,6 +23,9 @@ chain and so belongs on the root, where every layer can see it.
 
 from __future__ import annotations
 
+import uuid
+from typing import TYPE_CHECKING
+
 import pytest
 
 pytest.importorskip("sqlalchemy")
@@ -35,13 +38,26 @@ from app.db import Base
 from app.db.descriptions import LabelDescriptionRow
 from app.db.metamath_store import import_corpus, layered_systems
 from app.db.models import FormalSystem, Proof, ProofFolder
+from app.db.proof_lines import ProofLineRow
 from app.db.promoted_theorems import PromotedTheoremRow
+from app.db.definition_terms import load_definition_terms
+from app.db.proofs_mapping import PendingCitations, load_proof_for_check
+from app.db.promoted_theorems_mapping import cited_labels, read_library
+from app.db.schema_terms import load_schema_terms
+from app.db.terms_mapping import term_context
+from app.db.systems_mapping import (
+    effective_library,
+    inherited_definition_count,
+    inherited_rule_count,
+)
 from app.db.systems import (
     NotationPieceRow,
     NotationRulePieceRow,
     NotationRulePinRow,
     NotationRuleRow,
 )
+from website.logical.declarative import build_spec
+from website.logical.formal_system import Proof as EngineProof
 from website.logical.metamath import parse
 from website.logical.metamath.corpus import corpus_specs
 from website.logical.metamath.sections import Layer
@@ -49,6 +65,11 @@ from website.logical.metamath.setmm import LAYERS
 
 from tests.test_metamath_layered_specs import CORPUS, SECTION
 from tests.test_metamath_persistence import _TABLES
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator, Sequence
+
+    from website.logical.metamath.parser import Database
 
 
 # The persistence suite's tables, plus the notation ones: this fixture carries a
@@ -62,7 +83,7 @@ _STORE_TABLES = _TABLES + [
 
 
 @pytest.fixture
-def session():
+def session() -> Iterator[Session]:
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine, tables=_STORE_TABLES)
     with Session(engine) as handle:
@@ -70,11 +91,11 @@ def session():
 
 
 @pytest.fixture
-def database():
+def database() -> Database:
     return parse(CORPUS)
 
 
-def systems(session) -> list[FormalSystem]:
+def systems(session: Session) -> list[FormalSystem]:
     """Every stored system, root first."""
     rows = list(session.scalars(select(FormalSystem)))
     spine = [row for row in rows if row.inherits_from_id is None]
@@ -147,6 +168,8 @@ def test_a_theorem_is_stored_against_the_layer_its_section_falls_in(
     assert filed == {
         "pc-thm": "Propositional calculus",
         "fol-thm": "First-order logic",
+        # The cross-layer one: filed in first-order logic, citing propositional.
+        "fol-cites-pc": "First-order logic",
         "zf-thm": "ZF set theory",
     }
 
@@ -212,7 +235,9 @@ def test_every_layers_proofs_are_linked_to_their_theorems(session, database) -> 
         proof.name: proof.theorem_id is not None
         for proof in session.scalars(select(Proof))
     }
-    assert linked == {"pc-thm": True, "fol-thm": True, "zf-thm": True}
+    assert linked == {
+        "pc-thm": True, "fol-thm": True, "fol-cites-pc": True, "zf-thm": True
+    }
 
 
 def test_a_proofs_folder_belongs_to_the_proofs_own_layer(session, database) -> None:
@@ -232,6 +257,8 @@ def test_a_proofs_folder_belongs_to_the_proofs_own_layer(session, database) -> N
     assert filed == {
         "pc-thm": "Propositional calculus",
         "fol-thm": "First-order logic",
+        # The cross-layer one: filed in first-order logic, citing propositional.
+        "fol-cites-pc": "First-order logic",
         "zf-thm": "ZF set theory",
     }
     # Every layer holds some of the outline, which is the other half of it: a
@@ -290,6 +317,8 @@ def test_a_batched_layered_run_stores_the_same_rows(session, database) -> None:
     assert filed == {
         "pc-thm": "Propositional calculus",
         "fol-thm": "First-order logic",
+        # The cross-layer one: filed in first-order logic, citing propositional.
+        "fol-cites-pc": "First-order logic",
         "zf-thm": "ZF set theory",
     }
 
@@ -310,7 +339,7 @@ def test_a_checkpoint_leaves_the_library_writing_through_a_live_session(
     report = import_corpus(session, database, name="Corpus", plan=plan, batch=1)
 
     assert (report.theorems_failed, report.failures) == (0, [])
-    assert report.theorems == 6
+    assert report.theorems == 7
     assert all(proof.theorem_id is not None for proof in session.scalars(select(Proof)))
 
 
@@ -326,7 +355,7 @@ def test_the_report_breaks_the_run_down_by_layer(session, database) -> None:
     assert [layer.system_id for layer in report.layers] == report.system_ids
     # One proof each, and the shares add up to the totals — which is the property
     # that says the breakdown is a partition rather than three tallies.
-    assert [layer.proofs for layer in report.layers] == [1, 1, 1]
+    assert [layer.proofs for layer in report.layers] == [1, 2, 1]
     assert sum(layer.proofs for layer in report.layers) == (
         report.verified + report.rejected
     )
@@ -376,7 +405,7 @@ def test_a_plan_whose_layers_share_a_name_still_files_each_proof_in_its_own(
         )
         for proof in session.scalars(select(Proof))
     }
-    assert filed == {"pc-thm": 0, "fol-thm": 1, "zf-thm": 2}
+    assert filed == {"pc-thm": 0, "fol-thm": 1, "fol-cites-pc": 1, "zf-thm": 2}
 
 
 # A corpus whose `$f` declarations sit **inside** a layer rather than in the
@@ -461,3 +490,204 @@ def test_the_spine_is_wired_root_to_leaf(session, database) -> None:
         None, spine[0].id, spine[1].id
     ]
     assert all(system.owner_id is None for system in spine)
+
+
+def test_a_citation_resolves_through_the_chain_and_hits_its_cache(
+    session: Session, database: Database
+) -> None:
+    """**D5's first invariant, and the first read of D3's per-layer digests.**
+
+    A stored theorem's terms are guarded by the digest of the system they were
+    composed against — for an ancestor's entry, the *ancestor's*, which is what
+    `LibraryChain` carries a digest per layer for. Nothing had ever read those
+    back: `_Layers` wrote them and the read path recomputes its own from the
+    rows, so a disagreement was invisible until something compared the two.
+
+    `read_library`'s `fresh` is exactly the set whose stored digest still
+    matches. Anything outside it re-parses — silently, since a stale digest is a
+    miss and never a wrong answer, which is how this went unnoticed for the whole
+    life of P4.
+
+    Measured on `set.mm` at N = 2,676: 8,581 citations resolved through the
+    spine, **0 of them cached** before `symbols.inclusion_position` and **all
+    8,581** after — including **1,486 that cross a layer boundary**, which is the
+    case a per-layer digest exists for and a corpus-wide one would get wrong.
+    """
+    import_corpus(session, database, name="Corpus", plan=LAYERS)
+
+    spine = {system.id: system for system in systems(session)}
+    parent = {i: s.inherits_from_id for i, s in spine.items()}
+
+    def chain(system_id: uuid.UUID | None) -> list[FormalSystem]:
+        walked: list[FormalSystem] = []
+        while system_id is not None:
+            walked.append(spine[system_id])
+            system_id = parent[system_id]
+        return list(reversed(walked))
+
+    references: dict[uuid.UUID, list[str | None]] = {}
+    for line in session.scalars(select(ProofLineRow)):
+        references.setdefault(line.proof_id, []).append(line.reference)
+
+    resolved = cached = crossed = 0
+    for proof in session.scalars(select(Proof)):
+        # The label set the *read path* uses — `cited_labels` over the stored
+        # `reference` column, not `proof_lines.rule`, which is a different thing
+        # and null for a definitional step (`_recheck` below does the same).
+        labels = cited_labels(references.get(proof.id, ()))
+        if not labels:
+            continue
+        _spec, library = effective_library(chain(proof.formal_system_id))
+        pending = read_library(
+            session, library, labels, hypotheses_of=proof.theorem_id
+        )
+        resolved += len(pending.cited)
+        cached += len(pending.fresh)
+        crossed += sum(
+            1 for entry in pending.cited
+            if entry.system_id != proof.formal_system_id
+        )
+
+    # Every citation this fixture makes is cached, and *some of them reach an
+    # ancestor* — without which `LibraryChain`'s per-layer digest would never be
+    # exercised and this test would pin nothing it claims to (found in review).
+    assert resolved > 0 and cached == resolved
+    assert crossed > 0
+
+
+def _recheck(
+    session: Session, proof: Proof, chain: Sequence[FormalSystem]
+) -> EngineProof | None:
+    """Re-check one stored proof entirely from its rows, through its own chain.
+
+    The `POST /proofs/{id}/verify` row path (`app/routers/proofs.py`) with the
+    HTTP and the ownership taken away: build the effective system from the
+    stored parts, rebuild the lines from `proof_lines`, and resolve what they
+    cite through `LibraryChain`. The verdict is *not* read back — numbering,
+    scope and justification are all re-derived — so this is a re-check that
+    happens to skip the parse, which is the whole of P2.
+    """
+    spec, library = effective_library(chain)
+    build = build_spec(
+        spec,
+        schema_terms=load_schema_terms(
+            session, chain[-1], spec, inherited_rule_count(chain)
+        ),
+        definition_terms=load_definition_terms(
+            session, chain[-1], spec, inherited_definition_count(chain)
+        ),
+    )
+    assert "errors" not in build, build.get("errors")
+    compiled = build["system"]
+    context = term_context(compiled)
+
+    def cited(references: Sequence[str | None]) -> PendingCitations:
+        pending = read_library(
+            session, library, cited_labels(references),
+            hypotheses_of=proof.theorem_id,
+        )
+        return PendingCitations(
+            pending.term_ids,
+            lambda graph: [
+                compiled.promote(theorem)
+                for theorem in pending.promote(compiled, context, graph).values()
+            ],
+        )
+
+    # `proof=` seeds the lemmas a proof may cite by alias, which the router
+    # takes from `proof_references`. An import creates none — a Metamath proof
+    # cites labels, not other proofs — but passing the root rather than letting
+    # one be made keeps this the same call the router makes, so a proof that did
+    # carry references would not silently re-check against fewer of them.
+    root = EngineProof(formal_system=compiled)
+    root.reference_context = {}
+    return load_proof_for_check(
+        session, proof.id, compiled, context, proof=root, resolve_citations=cited
+    )
+
+
+def test_a_stored_layered_proof_rechecks_to_the_verdict_the_import_gave_it(
+    session: Session, database: Database
+) -> None:
+    """**D5's pinned item**, and it needed the cache to work to mean anything.
+
+    A layered import's proofs are stored against their own layers, and their
+    citations reach across the spine. Re-checking one from its rows therefore
+    exercises the whole read path at once — the effective spec built from the
+    chain's parts, the lines rebuilt from `proof_lines`, and the library resolved
+    nearest-first with each layer's own digest guarding its own cached terms.
+
+    Against a digest that never matched, this test would still have passed: the
+    citations would have re-parsed and reached the same answer, which is exactly
+    what makes a cache's failure silent. It is only after `inclusion_position`
+    that a green result here says the thing it appears to say.
+    """
+    import_corpus(session, database, name="Corpus", plan=LAYERS)
+
+    spine = {system.id: system for system in systems(session)}
+    parent = {i: s.inherits_from_id for i, s in spine.items()}
+
+    def chain(system_id: uuid.UUID | None) -> list[FormalSystem]:
+        walked: list[FormalSystem] = []
+        while system_id is not None:
+            walked.append(spine[system_id])
+            system_id = parent[system_id]
+        return list(reversed(walked))
+
+    rechecked = {}
+    for proof in session.scalars(select(Proof)):
+        loaded = _recheck(session, proof, chain(proof.formal_system_id))
+        assert loaded is not None, f"{proof.name} stored no lines"
+        rechecked[proof.name] = (bool(loaded.valid), bool(proof.valid))
+
+    # Every layer's proof, re-checked from rows, agrees with what the import
+    # stored — including the two whose citations cross a layer boundary.
+    assert rechecked == {
+        "pc-thm": (True, True),
+        "fol-thm": (True, True),
+        "fol-cites-pc": (True, True),
+        "zf-thm": (True, True),
+    }
+
+
+def test_the_same_slice_imported_twice_gives_the_same_partition(
+    session: Session, database: Database
+) -> None:
+    # D5's other pinned item. Nothing in the split may depend on anything but the
+    # file and the plan — not on a uuid, not on which layer happened to be
+    # flushed first. Asserted on the *names*, since the ids differ between runs
+    # by construction and are the one thing that must.
+    #
+    # Both runs share a process, so this cannot see a `PYTHONHASHSEED`-dependent
+    # ordering; what it does cover is everything the run itself decides, which is
+    # where a partition would realistically drift.
+    first = import_corpus(session, database, name="Corpus", plan=LAYERS)
+    spine = {system.id: system.name for system in systems(session)}
+    partition = {
+        proof.name: spine[proof.formal_system_id]
+        for proof in session.scalars(select(Proof))
+    }
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine, tables=_STORE_TABLES)
+    try:
+        with Session(engine) as again:
+            second = import_corpus(again, parse(CORPUS), name="Corpus", plan=LAYERS)
+            twice = {system.id: system.name for system in systems(again)}
+            repeated = {
+                proof.name: twice[proof.formal_system_id]
+                for proof in again.scalars(select(Proof))
+            }
+    finally:
+        engine.dispose()
+
+    # Non-vacuous: there is a partition to compare, and it has more than one part.
+    assert len(partition) == first.checked > 0
+    assert len(set(partition.values())) > 1
+    assert repeated == partition
+    assert [layer.name for layer in second.layers] == [
+        layer.name for layer in first.layers
+    ]
+    assert [layer.proofs for layer in second.layers] == [
+        layer.proofs for layer in first.layers
+    ]
