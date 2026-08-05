@@ -17,7 +17,11 @@ at the milestone slice a spined import of `set.mm` produces the same verdicts an
 **byte-identical proof sources** as a flat one. Running it on the corpus is what
 found the one thing the fixture could not — a layer resolving a proviso's sort
 through its own symbols rather than its ancestors', which had been refusing 354
-of the first 2,676 promotions. D5 and D6 are still design.
+of the first 2,676 promotions. **D5 is done**: every citation resolves through
+the chain and hits its cache, a stored proof re-verifies from rows alone and does
+so identically twice, the three invalid cases are each refused by name, and a
+`$d` written in the `.mm` file still refuses a capture two layer boundaries away
+(`scripts/check_boundary_provisos.py`). **D6 is still design.**
 
 One correction this note owes its reader, since §6.3 and §8's S2 both imply
 otherwise: **an edge and a layer are not two ways to do the same thing.** An edge
@@ -1935,19 +1939,89 @@ Determinism is the cheap one and holds: the same slice imported twice gives the
 same partition and the same per-layer counts, asserted on names because the ids
 differ between runs by construction.
 
-- *Invalid, each a hard failure of the run:* a deliberately misfiled plan
-  (`ax-mp` assigned to ZFC) must fail loudly rather than quietly dropping the
-  theorems that cite it; a synthesised forward-layer citation must be caught;
-  a citation that resolves to nothing must fail the run.
-- **Bound variables at corpus scale:** spot-check that a `$d`-carrying theorem
-  imported into FOL still refuses a capturing citation from ZFC — the R2 test,
-  run against real `set.mm` data rather than a fixture.
-- *Pinned:* the same slice imported twice gives the same partition (determinism);
-  re-verifying a stored layered proof from its rows gives the same verdict as the
-  import did.
-- The **valid** case is already met — see D4's measurement — and
-  `scripts/check_layering.py` is where D5's additions belong, since a hard
-  failure is a difference between two runs like any other.
+**The invalid cases — done, and two of the three were already true.**
+
+*A citation that resolves to nothing already fails the run*, and the guard was
+there before D5 asked for it: `walk` refuses the theorem with `proof cites
+unknown label`, counts it in `failed`, names it in `failures`, and stores no
+proof row. Measured on a fixture whose ZF theorem cites a label the file never
+declares: `checked=4 verified=3 failed=1`, three proofs stored. Nothing to
+build; worth recording that it was checked rather than assumed.
+
+*A misfiled plan* is the one that needed a guard, and the guard is
+`check_layering.unreachable_citations`: **every citation a stored proof makes
+must be reachable from the layer the proof was filed in.** That is §5.2 stated
+as something a run can check — a proof filed where it cannot see what it cites
+is stored as *verified* and is not re-verifiable, which is a lie in the database
+rather than a failure of the run, and so is precisely the kind of thing nothing
+notices.
+
+It is sound because it asks only about labels the run **did** promote. A
+citation resolving to no promoted row at all is a different thing and not an
+error: it may name a rule, a definition, or one of the theorem's own `$e`
+hypotheses, which `read_library` reaches through `hypotheses_of` rather than
+through the chain — 2,539 of `set.mm`'s citations at N are of that kind.
+
+*The forward-layer citation* is the same guard from the other side, and
+unreachable through the public surface for the reason recorded above. Both are
+therefore exercised by **injecting** a bad partition rather than by writing a
+bad plan, which is honest but weaker: it proves the guard fires, not that the
+system can reach the state. Verified by moving a stored ZF proof one layer up,
+where the check names it exactly — `zf-thm (in 'First-order logic') cites
+'ax-ext', declared in 'ZF set theory'`.
+
+**Bound variables at corpus scale — done.** R2 pinned this on a fixture: FOL's `ax-5` carries
+`not occurs(x, ph)`, cited in ZFC at `ph := (x ∈ y)` is refused and at
+`ph := (z ∈ y)` is accepted. D5 asks for the same against real data, and the
+first question is whether the corpus even carries what the check needs. It does:
+
+| | |
+|---|---|
+| `ax-5` is filed in | **First-order logic**, statement `( ph -> A. x ph )` |
+| metavariables | `ph : wff`, `x : setvar` |
+| its `$d x ph` survives as | an `and` over three `disjoint` provisos — one per variable sort, `wff_var` / `setvar_var` / `class_var` |
+| from the **ZF** layer | resolves, and its terms are **cached** |
+
+The three-way expansion is what a Metamath `$d` over a `wff` metavariable means:
+`x` must not occur in `ph` as a variable of *any* sort. And the `wff_var` one is
+the proviso that `_effective_symbols` exists for — declared in the propositional
+layer, needed by a first-order theorem, which is the shape that refused 354
+promotions before D4 found it.
+
+So the boundary carries the constraint. **And it enforces it.** Building the ZF
+layer from its stored rows, promoting `ax-5` through the chain, and citing it
+from a ZF-layer line:
+
+| citation | instance | verdict |
+|---|---|---|
+| `( x e. y -> A. x x e. y ) [ax-5]` | `ph := x e. y` — `x` occurs | **refused**, `ax-5 does not apply` |
+| `( z e. y -> A. x z e. y ) [ax-5]` | `ph := z e. y` — `x` does not | **accepted** |
+| the same, `ax-5` re-promoted with its provisos dropped | control | **accepted** |
+
+Both directions, which is the point R2 makes: either alone is passed by a check
+that is not running. The third row is why the first can be believed: `ax-5 does
+not apply` is what the checker says about a citation that fails to *unify* too,
+so a refusal proves nothing until the proviso is removed and the same citation
+goes through. So the `$d` written in the `.mm` file survives the import,
+crosses two layer boundaries, is read back from cache rather than re-parsed, and
+still refuses the capture — which is R2's guarantee restated over corpus data
+instead of a fixture, and the last of D5's items.
+
+*What this is and is not.* It is a measurement, reproducible against a real
+`set.mm` and recorded here, on the same footing as D1's partition and D4's
+byte-identical sources — the file is not in the repository, so it cannot be a
+suite test. The mechanism is pinned on fixtures by `tests/test_cross_system_citation.py`
+(R2) and `tests/test_metamath_layered_store.py` (the import and the chain); what
+this adds is that the two meet on the real corpus.
+
+It is reproducible by `scripts/check_boundary_provisos.py`, beside
+`check_layering.py` and for the same reason. The script refuses to report a
+verdict it cannot trust: it exits on a one-system chain, on an `ax-5` filed in
+the very system the citations are parsed in, on a stale digest, and on an entry
+that arrived carrying no side conditions at all — the four ways this passes while
+crossing nothing, which is the failure mode D4 and D5 each hit once already. The
+control row above is the fifth, and the only one that is a *verdict* rather than
+a precondition.
 
 #### D6 — the provenance report
 

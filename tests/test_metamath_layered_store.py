@@ -63,6 +63,8 @@ from website.logical.metamath.corpus import corpus_specs
 from website.logical.metamath.sections import Layer
 from website.logical.metamath.setmm import LAYERS
 
+from scripts.check_layering import unreachable_citations
+
 from tests.test_metamath_layered_specs import CORPUS, SECTION
 from tests.test_metamath_persistence import _TABLES
 
@@ -691,3 +693,70 @@ def test_the_same_slice_imported_twice_gives_the_same_partition(
     assert [layer.proofs for layer in second.layers] == [
         layer.proofs for layer in first.layers
     ]
+
+
+def test_no_citation_is_stranded_where_its_proof_cannot_reach_it(
+    session: Session, database: Database
+) -> None:
+    # **D5's misfiled-plan guard.** §5.2 says a citation resolves against the
+    # proof's own layer and then its ancestors' — never a sibling's, never a
+    # descendant's. A proof filed where it cannot see what it cites is stored as
+    # verified and is *not* re-verifiable, which is a lie in the database rather
+    # than a failure of the run, and so is exactly what nothing notices.
+    import_corpus(session, database, name="Corpus", plan=LAYERS)
+
+    assert unreachable_citations(session) == ()
+
+
+def test_a_proof_moved_out_of_reach_of_its_citation_is_caught(
+    session: Session, database: Database
+) -> None:
+    # The same guard, given something to find. A positional partition cannot
+    # produce this — `set.mm`'s order guarantees a cited label is declared before
+    # the proof citing it, and every boundary is a file position — so it is
+    # exercised by moving a stored proof after the fact, which is what a plan
+    # deciding layers by anything other than position would do.
+    import_corpus(session, database, name="Corpus", plan=LAYERS)
+    spine = systems(session)
+
+    stranded = session.scalar(select(Proof).where(Proof.name == "zf-thm"))
+    stranded.formal_system_id = spine[1].id  # up one layer, out of ZF's sight
+    session.flush()
+
+    caught = unreachable_citations(session)
+    assert [(u.proof, u.label, u.declared_in) for u in caught] == [
+        ("zf-thm", "ax-ext", ("ZF set theory",))
+    ]
+    assert caught[0].filed_in == "First-order logic"
+
+
+def test_a_label_declared_in_two_layers_is_reachable_from_either(
+    session: Session, database: Database
+) -> None:
+    # A label is unique per *system*, not per database — `_nearest` exists
+    # because a spine may declare one twice — so "where is this label declared?"
+    # has more than one answer, and a citation is stranded only when the chain
+    # reaches *none* of them. Keyed by label alone the guard answers with
+    # whichever row the query returned last, which invents a failure as readily
+    # as it hides one (found in review).
+    import_corpus(session, database, name="Corpus", plan=LAYERS)
+    spine = systems(session)
+
+    # `fol-thm` cites `ax-4`, which its own layer declares. Promote a second
+    # `ax-4` in the *leaf*, which the first-order layer cannot see: the citation
+    # is still reachable through FOL's own copy, and calling it stranded because
+    # a descendant happens to share the spelling would be a false alarm.
+    own = session.scalar(
+        select(PromotedTheoremRow).where(PromotedTheoremRow.label == "ax-4")
+    )
+    session.add(
+        PromotedTheoremRow(
+            system_id=spine[-1].id,
+            label=own.label,
+            statement=own.statement,
+            primitive=own.primitive,
+        )
+    )
+    session.flush()
+
+    assert unreachable_citations(session) == ()

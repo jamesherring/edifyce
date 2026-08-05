@@ -220,6 +220,88 @@ export interface TermNode {
 	truncated: boolean;
 }
 
+/** One theorem whose conclusion could be a goal — a candidate, not an answer.
+ *  Mirrors `TheoremCandidate`.
+ *
+ *  `exact` says the conclusion *is* the goal up to a consistent renaming of its
+ *  variables, so citing it needs no instantiation. `premise_count` is what to
+ *  rank by after that: a theorem with none can close the goal on its own. */
+export interface TheoremCandidate {
+	label: string;
+	formal_system_id: string;
+	/** The interned root of the conclusion — pass to `systems.term` to walk the
+	 *  structure instead of reparsing `statement`. Identity and reading together. */
+	statement_term_id: string;
+	statement: string;
+	primitive: boolean;
+	premise_count: number;
+	exact: boolean;
+}
+
+/** What could conclude a goal, narrowed by the shape of its conclusion.
+ *  Mirrors `TheoremMatches`.
+ *
+ *  A filter's output, deliberately not a verdict: every candidate still has to
+ *  unify, and this endpoint does not build the system to find out — the citation
+ *  search on a proof line does. `unindexed` is what the filter could not see
+ *  (theorems with no cached conclusion term), because a short list is otherwise
+ *  indistinguishable from a complete one. */
+export interface TheoremMatches {
+	formal_system_id: string;
+	term_id: string;
+	/** The goal's root production, which is what was filtered on. */
+	constructor: string;
+	candidates: TheoremCandidate[];
+	/** How many matched before `limit` cut the list. */
+	matched: number;
+	truncated: boolean;
+	unindexed: number;
+	/** Entries in layers this filter cannot ask about at all — an edge that
+	 *  restates what it carries, or one whose rename leaves this system's
+	 *  production without a pre-image there. */
+	unfiltered: number;
+}
+
+/** A justification that checks, in `CitationProposal`'s own shape so acting on
+ *  one is a copy rather than a translation. Mirrors `CitationSuggestion`. */
+export interface CitationSuggestion {
+	rule: string;
+	antecedents: number[];
+	/** The reference text this formats to, e.g. `"MP, 1, 2"`. */
+	citation: string;
+	/** Whether it is one of the system's own rules or an entry from its library —
+	 *  where it came from, not how it was checked. */
+	source: 'rule' | 'theorem';
+	/** Whether the cited line is a subproof opener rather than an antecedent. */
+	discharge: boolean;
+	exact: boolean;
+	/** Whether this rule justifies *any* line (a hypothesis rule). True, and a
+	 *  fact about the system rather than about this goal — so it is reported and
+	 *  ranked last rather than dropped. */
+	assumption: boolean;
+}
+
+/** Justifications found for one line, and how much was looked at.
+ *  Mirrors `CitationSearch`.
+ *
+ *  The move the loop was missing: a failure says which premise is missing and a
+ *  hole says what is left to prove, and this says *what to cite* — as proposals
+ *  already checked against the lines that stand above the goal. */
+export interface CitationSearch {
+	line: number;
+	suggestions: CitationSuggestion[];
+	rules_tried: number;
+	candidates_tried: number;
+	/** Library entries the prefilter could not reach (no cached conclusion term). */
+	unindexed: number;
+	/** Library entries in a layer the prefilter cannot ask about at all; see
+	 *  `TheoremMatches.unfiltered`. */
+	unfiltered: number;
+	/** Whether anything was cut: more justifications were found than `limit`, or
+	 *  the prefilter matched more candidates than it was allowed to offer. */
+	truncated: boolean;
+}
+
 /** A term's subgraph: every node once, edges by id. Mirrors `TermGraphOut`. */
 export interface TermGraph {
 	root: string;
@@ -1098,6 +1180,22 @@ export const api = {
 			const suffix = query.size ? `?${query}` : '';
 			return request<TermGraph>(`/formal-systems/${systemId}/terms/${termId}${suffix}`);
 		},
+		/** Which of this system's theorems could conclude a goal.
+		 *
+		 * A filter, and only a filter: candidates are narrowed by the root
+		 * production of their conclusion — a column, indexed per system — and
+		 * ranked by whether the α-digest says the conclusion already *is* the
+		 * goal. Every one still has to unify, and this does not build the system
+		 * to find out; `proofs.citations` does, because checking a proof has
+		 * already built it. `term` is a stored term of this system: a proof
+		 * line's statement, or any node `systems.term` returned. */
+		matchingTheorems: (systemId: string, termId: string, limit?: number) => {
+			const query = new URLSearchParams({ term: termId });
+			if (limit !== undefined) query.set('limit', String(limit));
+			return request<TheoremMatches>(
+				`/formal-systems/${systemId}/theorems/matching?${query.toString()}`
+			);
+		},
 		create: (payload: FormalSystemCreate) =>
 			request<FormalSystemDetail>('/formal-systems', {
 				method: 'POST',
@@ -1196,6 +1294,26 @@ export const api = {
 				method: 'POST',
 				body: JSON.stringify(proposal)
 			}),
+		/** What could justify a line — proposals that have already been checked.
+		 *
+		 * The move between `verify` (this line is a hole) and `cite` (does *this*
+		 * justification work): which justification to name. Every suggestion comes
+		 * back in `CitationProposal`'s own shape, so acting on one is a copy into
+		 * `cite` rather than a translation, and it applies — the search confirms
+		 * with the check a verify runs, against the lines that stand above the
+		 * goal. `candidates` bounds how many library entries the prefilter may
+		 * offer for unification; zero searches the system's own rules only.
+		 *
+		 * Depth one: it finds the rule that justifies a line from lines that
+		 * already stand. It does not prove a gap. */
+		citations: (id: string, line: number, options?: { limit?: number; candidates?: number }) => {
+			const query = new URLSearchParams();
+			if (options?.limit !== undefined) query.set('limit', String(options.limit));
+			if (options?.candidates !== undefined)
+				query.set('candidates', String(options.candidates));
+			const suffix = query.toString() ? `?${query.toString()}` : '';
+			return request<CitationSearch>(`/proofs/${id}/lines/${line}/citations${suffix}`);
+		},
 		/** Add a line stating a proposed term — structure in, no surface syntax.
 		 * The resolved term is rendered into the system's own spelling and parsed
 		 * back; the line is refused unless what comes out is what went in. A dry

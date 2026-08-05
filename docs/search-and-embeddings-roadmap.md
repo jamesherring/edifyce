@@ -74,6 +74,20 @@ WHERE formal_system_id = :sys AND alpha_digest = :query_alpha;
 
 ## Phase 1 — Structural retrieval index (pattern / goal-directed search)
 
+**The prefilter half of this is built** — see
+[authoring-and-ingestion-roadmap.md](authoring-and-ingestion-roadmap.md) §9d. The
+head-symbol filter (`terms.constructor`, indexed per system) and the `unify`
+confirm are in place and serving two endpoints; the α-exact case is Phase 0's
+digest doing the work. What is *not* built is the index below — the discrimination
+tree that makes the candidate set small rather than merely smaller.
+
+That ordering was deliberate: the cheap filter needs no new representation and no
+new storage, so it could ship behind the same interface a term net will use.
+Candidates in, unification confirms; `app/db/retrieval.py` is the seam, and
+replacing its query with an index lookup is a local change. The measurements below
+are still the ones that say whether it was worth doing — and now have a baseline
+to beat rather than a brute-force oracle alone.
+
 A **discrimination tree** (a.k.a. term net) over the term graph, plus a
 head-symbol prefilter, plus a kernel-`unify` confirm step. The index key is the
 pre-order flattening of a term with variable positions collapsed to a wildcard

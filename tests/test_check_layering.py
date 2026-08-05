@@ -14,7 +14,7 @@ import pytest
 
 pytest.importorskip("sqlalchemy")
 
-from scripts.check_layering import Run, compare
+from scripts.check_layering import Run, Unreachable, compare
 
 PC = "Propositional calculus"
 FOL = "First-order logic"
@@ -142,6 +142,40 @@ def test_a_rewritten_proof_source_is_caught() -> None:
     differences = compare(flat_run(), spined, EXPECTED).differences
     assert [d.what for d in differences] == ["proof sources or verdicts"]
     assert "fol-thm" in differences[0].detail
+
+
+STRANDED = Unreachable(
+    proof="zf-thm", filed_in=FOL, label="ax-ext", declared_in=("ZF set theory",)
+)
+
+
+def test_a_stranded_citation_is_reported_with_where_it_lives() -> None:
+    # The point of the guard is that the reader can act on it, so the detail has
+    # to name the proof, the layer it was filed in, and where the label actually
+    # is — a count alone says a plan is wrong without saying which part of it.
+    spined = run(spine=TWO_LAYERS, unreachable=(STRANDED,))
+
+    differences = compare(flat_run(), spined, EXPECTED).differences
+    assert [d.what for d in differences] == [
+        "a citation the citing proof's chain cannot reach"
+    ]
+    assert differences[0].detail == (
+        "zf-thm (in 'First-order logic') cites 'ax-ext', "
+        "declared in 'ZF set theory'"
+    )
+
+
+def test_the_flat_run_is_reported_as_itself_and_not_as_a_disagreement() -> None:
+    # **From review.** This was `require("…", (), flat.unreachable)`, whose
+    # detail reads "flat=() spined=(…)" — so a defect in the *flat* run printed
+    # under the spined run's heading and sent the reader to the wrong import.
+    flat = flat_run(unreachable=(STRANDED,))
+
+    differences = compare(flat, run(spine=TWO_LAYERS), EXPECTED).differences
+    assert [d.what for d in differences] == [
+        "a citation out of reach in the *flat* run"
+    ]
+    assert "spined=" not in differences[0].detail
 
 
 def test_a_promotion_refused_under_a_spine_is_caught_twice() -> None:

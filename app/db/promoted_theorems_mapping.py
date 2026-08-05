@@ -952,6 +952,54 @@ def load_theorems(
     return pending.promote(built, context, graph)
 
 
+def load_citable_theorems(
+    session: Session,
+    chain: LibraryChain,
+    labels: Iterable[str],
+    built: EngineSystem,
+    context: Context,
+) -> dict[str, PromotedTheorem]:
+    """Promote what *can* be cited here, leaving out what cannot.
+
+    :func:`load_theorems` raises on an entry a citation could not resolve — an
+    inherited one whose cached terms are stale, a proviso a renaming edge cannot
+    carry, a string-rewriting theorem crossing one — and that is right for a
+    **citation**: the proof named that theorem, so it must be told why the name
+    does not work. A **search** names nothing. It is choosing what to offer, so an
+    entry it cannot promote is one to leave out of the offer rather than a reason
+    to fail the whole request, and a caller asking "what could justify this line?"
+    should not get a 500 because some ancestor's library needs re-verifying.
+
+    The refusals stay :func:`_require_a_citable_entry`'s. Restating them as a
+    predicate here would be a second copy of a rule that has three clauses and
+    room to grow, and a divergence between the two is the bug class this
+    module's own docstring warns about — so each entry is promoted for itself and
+    the ones that raise are dropped. Only the ``except`` branch costs anything a
+    batch would not: the term sweep is shared, since which terms are wanted is
+    settled by rows before any of them are promoted.
+    """
+    pending = read_library(session, chain, labels)
+    graph = prefetch_terms(session, pending.term_ids)
+
+    promoted: dict[str, PromotedTheorem] = {}
+    for entry in pending.cited:
+        alone = replace(
+            pending,
+            cited=(entry,),
+            specs={entry.label: pending.specs[entry.label]},
+            fresh=(
+                {entry.label: entry} if entry.label in pending.fresh else {}
+            ),
+        )
+        try:
+            promoted.update(alone.promote(built, context, graph))
+        except LookupError:
+            # Not citable from here. `_require_a_citable_entry` says why, and a
+            # search's answer to "why" is to offer something else.
+            continue
+    return promoted
+
+
 def _hypotheses(
     owner: StoredTheorem,
     built: EngineSystem,

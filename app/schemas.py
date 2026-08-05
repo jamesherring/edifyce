@@ -988,6 +988,117 @@ class TermGraphOut(BaseModel):
     truncated: bool = False
 
 
+class TheoremCandidate(BaseModel):
+    """One theorem whose conclusion could be the goal — a candidate, not an answer.
+
+    ``exact`` says the conclusion *is* the goal up to a consistent renaming of its
+    variables, so citing it needs no instantiation at all. ``premise_count`` is
+    what a caller ranks by after that: a theorem with none can close the goal on
+    its own, and one with two needs two standing lines found for it first.
+    """
+
+    label: str
+    formal_system_id: uuid.UUID
+    # The interned root of the conclusion. A candidate is thus *point-at-able*:
+    # feed it to `GET /formal-systems/{id}/terms/{term_id}` to walk the structure,
+    # rather than reparse `statement`. `statement` stays the human reading of the
+    # same node — identity and projection together, per §9a.
+    statement_term_id: uuid.UUID
+    statement: str
+    primitive: bool
+    premise_count: int
+    exact: bool = False
+
+
+class TheoremMatches(BaseModel):
+    """What could conclude a goal, narrowed by the shape of its conclusion.
+
+    A **filter's** output, and deliberately not a verdict: every candidate still
+    has to unify, and this route does not build the system to find out (see the
+    endpoint). What it removes is the 47,589-to-a-handful step that a caller had
+    no way to perform at all.
+
+    ``unindexed`` and ``unfiltered`` are what the filter could not see — theorems
+    with no cached conclusion term, and whole layers reached through an edge that
+    restates or renames past what a root-production filter can ask about. Both are
+    reported because a short list is otherwise indistinguishable from a complete
+    one.
+    """
+
+    formal_system_id: uuid.UUID
+    term_id: uuid.UUID
+    # The goal's root production, which is what was actually filtered on.
+    constructor: str
+    candidates: list[TheoremCandidate] = Field(default_factory=list)
+    # How many matched before `limit` cut the list.
+    matched: int = 0
+    truncated: bool = False
+    unindexed: int = 0
+    # Entries in layers this filter cannot ask about at all — an edge that
+    # restates what it carries, or one whose rename leaves this system's
+    # production without a pre-image there.
+    unfiltered: int = 0
+
+
+class CitationSuggestion(BaseModel):
+    """A justification that **checks**, ready to be sent back to `/cite`.
+
+    Not a guess: each of these was confirmed by the same unification and proviso
+    check a verify runs, against the lines that actually stand above the goal. The
+    fields are exactly `CitationProposal`'s, so acting on one is a copy rather
+    than a translation.
+
+    ``source`` says whether the justification is one of the system's own inference
+    rules or an entry from its library — a distinction of *where it came from*,
+    not of how it was checked, since a promoted theorem is cited exactly as a rule
+    is.
+    """
+
+    rule: str
+    antecedents: list[int] = Field(default_factory=list)
+    # The reference text this formats to, so a caller can show its work.
+    citation: str
+    source: Literal["rule", "theorem"]
+    # Whether the cited line is a subproof opener rather than an antecedent —
+    # the same citation shape, a different thing being cited.
+    discharge: bool = False
+    exact: bool = False
+    # Whether this rule justifies *any* line (a hypothesis rule). True, and a
+    # fact about the system rather than about this goal — so it is reported and
+    # ranked last rather than dropped, since assuming the line is sometimes
+    # exactly what an author means to do.
+    assumption: bool = False
+
+
+class CitationSearch(BaseModel):
+    """Justifications found for one line, and how much was looked at.
+
+    The move the loop was missing. `slot-unsatisfied` says which premise is
+    missing and a hole says what is left to prove; neither says *what to cite*,
+    and this does — as proposals that have already been checked, so a caller can
+    apply one rather than trying it.
+
+    ``scanned`` is the honest accounting: how many rules were tried, how many
+    library candidates the prefilter offered, how many it could not see, and
+    whether a limit cut the list. A search that quietly stopped early would
+    otherwise read as one that found everything there was.
+    """
+
+    line: int
+    suggestions: list[CitationSuggestion] = Field(default_factory=list)
+    rules_tried: int = 0
+    candidates_tried: int = 0
+    # Library entries the prefilter could not reach (no cached conclusion term).
+    unindexed: int = 0
+    # Library entries in a layer the prefilter cannot ask about at all; see
+    # `TheoremMatches.unfiltered`.
+    unfiltered: int = 0
+    # Whether anything was cut: more justifications were found than `limit`, or
+    # the prefilter matched more candidates than it was allowed to offer. Either
+    # way there may be more, which is the only thing a caller can act on.
+    truncated: bool = False
+
+
 class ProofLineAntecedentOut(BaseModel):
     """One justification edge: a line this line was derived from.
 

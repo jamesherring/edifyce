@@ -2082,7 +2082,7 @@ def test_a_citation_compiles_the_system_once(client, db, monkeypatch):
     # `/cite` needs the grammar to rewrite the line *before* it can check the
     # result, and used to build a second system inside the verify to do the
     # checking — the single largest thing the route did, on a corpus system
-    # (docs/authoring-and-ingestion-roadmap.md §9d).
+    # (docs/authoring-and-ingestion-roadmap.md §9e).
     owner = _register_login(client, "ada@example.com")
     _system_id, proof_id = _holed_proof(client, db, owner)
 
@@ -2962,3 +2962,325 @@ def test_the_removed_line_comes_back_exactly_as_it_stood(client, db):
     body = client.post(f"/api/proofs/{proof_id}/lines/remove", json={"line": 2}).json()
 
     assert body["removed"] == odd.split("\n")[1]
+
+
+# ---------------------------------------------------------------------------
+# Citation search (GET /proofs/{id}/lines/{n}/citations)
+#
+# The move the loop was missing: `/verify` says a line is a hole and `/cite` says
+# whether a *named* justification works, and between them sat the question
+# neither answered — which justification to name.
+# ---------------------------------------------------------------------------
+
+
+def _citations(client: TestClient, proof_id: str, number: int, **params) -> dict:
+    res = client.get(f"/api/proofs/{proof_id}/lines/{number}/citations", params=params)
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def test_a_hole_is_told_what_could_justify_it(client, db):
+    # The whole point. Line 3 is stated and unproved; MP justifies it from the two
+    # lines above, and nothing before this would tell a caller so.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _holed_proof(client, db, owner)
+
+    body = _citations(client, proof_id, 3)
+    first = body["suggestions"][0]
+
+    assert (first["rule"], first["antecedents"]) == ("MP", [1, 2])
+    assert first["source"] == "rule"
+    assert first["citation"] == "MP, 1, 2"
+
+
+def test_a_rule_that_justifies_anything_is_reported_but_ranked_last(client, db):
+    # `HYP` concludes a bare metavariable and cites nothing, so it applies to
+    # every line in the system. That is a true answer and an uninformative one:
+    # dropping it would hide a move an author sometimes means to make, and
+    # ranking it on premise count alone would put it ahead of every real
+    # justification, since it needs none.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _holed_proof(client, db, owner)
+
+    suggestions = _citations(client, proof_id, 3)["suggestions"]
+
+    assert [s["rule"] for s in suggestions] == ["MP", "HYP"]
+    assert [s["assumption"] for s in suggestions] == [False, True]
+
+
+def test_a_suggestion_is_a_citation_proposal_that_applies(client, db):
+    # The loop closing, end to end: what the search returns is what `/cite` takes,
+    # and it is accepted — so a caller acts on a suggestion rather than trying it.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _holed_proof(client, db, owner)
+
+    suggestion = _citations(client, proof_id, 3)["suggestions"][0]
+    applied = client.post(
+        f"/api/proofs/{proof_id}/cite",
+        json={
+            "line": 3,
+            "rule": suggestion["rule"],
+            "antecedents": suggestion["antecedents"],
+            "apply": True,
+        },
+    ).json()
+
+    assert applied["accepted"] is True
+    assert applied["holes"] == [1, 2]
+
+
+def test_searching_does_not_fill_the_hole(client, db):
+    # Asking what could justify a line must not justify it. A search runs the
+    # same check a verify does, and the probe that finds an answer is the one
+    # that would otherwise record it.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _holed_proof(client, db, owner)
+
+    _citations(client, proof_id, 3)
+
+    detail = client.get(f"/api/proofs/{proof_id}").json()
+    assert detail["source"] == _HOLED
+    assert _structure(client, proof_id)["lines"][2]["failure"]["code"] == "hole"
+
+
+def test_a_line_nothing_can_justify_gets_an_empty_list(client, db):
+    # Not an error: "there is no move from here" is an answer a loop acts on, and
+    # the accounting says how much was looked at to reach it.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner)
+    proof_id = _create_proof(
+        client, system_id, "P", source="x ∈ y [?]\nx = y [?]"
+    )
+    client.post(f"/api/proofs/{proof_id}/verify")
+
+    body = _citations(client, proof_id, 2)
+
+    # Nothing derives `x = y` here; only the rule that would let an author assume
+    # it, which is reported for what it is.
+    assert [(s["rule"], s["assumption"]) for s in body["suggestions"]] == [
+        ("HYP", True)
+    ]
+    assert body["rules_tried"] >= 2
+    assert body["unindexed"] == 0
+
+
+def test_the_search_is_readable_by_anyone_on_a_published_proof(client, db):
+    # A dry run over someone else's published proof, exactly as `/cite`'s is: it
+    # writes nothing, so there is nothing to own.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner, published=True)
+    proof_id = _create_proof(client, system_id, "P", source=VALID_PROOF)
+    assert client.patch(
+        f"/api/proofs/{proof_id}", json={"published": True}
+    ).status_code == 200
+    _logout(client)
+
+    res = client.get(f"/api/proofs/{proof_id}/lines/1/citations")
+
+    assert res.status_code == 200, res.text
+
+
+def test_a_line_the_proof_does_not_have_is_404(client, db):
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _holed_proof(client, db, owner)
+
+    res = client.get(f"/api/proofs/{proof_id}/lines/99/citations")
+
+    assert res.status_code == 404
+
+
+def test_a_scope_opener_has_no_citation_to_search_for(client, db):
+    # A scope opener is granted rather than proved, so a justification for it
+    # would be a justification of nothing — the same refusal `/cite` makes.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner, spec=scoped_zfc_spec())
+    proof_id = _create_proof(client, system_id, "P", source=_SUBPROOF_SRC)
+    client.post(f"/api/proofs/{proof_id}/verify")
+
+    res = client.get(f"/api/proofs/{proof_id}/lines/1/citations")
+
+    assert res.status_code == 422
+    assert "subproof" in res.json()["detail"]
+
+
+def test_a_discharge_is_suggested_for_the_line_that_closes_a_subproof(client, db):
+    # The rules a search would otherwise be blind to: in a natural-deduction
+    # system every step that closes a subproof is a discharge, and a discharge
+    # cites the subproof's *opener* rather than antecedents.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner, spec=scoped_zfc_spec())
+    proof_id = _create_proof(
+        client,
+        system_id,
+        "P",
+        source="assume x ∈ y\n    x ∈ y [R, 1]\n(x ∈ y → x ∈ y) [?]",
+    )
+    client.post(f"/api/proofs/{proof_id}/verify")
+
+    body = _citations(client, proof_id, 3)
+
+    assert ("CP", [1], True) in [
+        (s["rule"], s["antecedents"], s["discharge"]) for s in body["suggestions"]
+    ]
+
+
+def test_a_promoted_theorem_is_found_by_the_shape_of_its_conclusion(client, db):
+    # The library half, and the reason the prefilter exists: the theorem is not
+    # one of the system's rules, and it is found because its conclusion's root
+    # production is the goal's.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner, published=True)
+    lemma = _create_proof(client, system_id, "Lemma", source=_LEMMA_SRC)
+    assert client.patch(
+        f"/api/proofs/{lemma}", json={"published": True}
+    ).status_code == 200
+    assert client.post(
+        f"/api/proofs/{lemma}/promote", json={"label": "lem"}
+    ).status_code in (200, 201)
+
+    user = _create_proof(client, system_id, "User", source="(x ∈ y → x = y) [?]")
+    client.post(f"/api/proofs/{user}/verify")
+
+    body = _citations(client, user, 1)
+
+    assert ("lem", "theorem") in [
+        (s["rule"], s["source"]) for s in body["suggestions"]
+    ]
+    assert body["candidates_tried"] >= 1
+
+
+def test_the_library_can_be_left_out_of_the_search(client, db):
+    # `candidates=0` searches the system's own rules only — the cheap question,
+    # for a caller that does not want to pay for the library.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner, published=True)
+    lemma = _create_proof(client, system_id, "Lemma", source=_LEMMA_SRC)
+    client.patch(f"/api/proofs/{lemma}", json={"published": True})
+    client.post(f"/api/proofs/{lemma}/promote", json={"label": "lem"})
+    user = _create_proof(client, system_id, "User", source="(x ∈ y → x = y) [?]")
+    client.post(f"/api/proofs/{user}/verify")
+
+    body = _citations(client, user, 1, candidates=0)
+
+    assert "lem" not in [s["rule"] for s in body["suggestions"]]
+    assert body["candidates_tried"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Library retrieval (GET /formal-systems/{id}/theorems/matching)
+#
+# The filter, served against the system because that is what a library belongs
+# to. Unifying the survivors is the proof-scoped search's job; this narrows.
+# ---------------------------------------------------------------------------
+
+
+def _library_system(client: TestClient, db_path, owner: str) -> str:
+    """A published system with one promoted theorem concluding an implication."""
+    system_id = _seed_system(db_path, owner, published=True)
+    lemma = _create_proof(client, system_id, "Lemma", source=_LEMMA_SRC)
+    assert client.patch(
+        f"/api/proofs/{lemma}", json={"published": True}
+    ).status_code == 200
+    assert client.post(
+        f"/api/proofs/{lemma}/promote", json={"label": "lem"}
+    ).status_code in (200, 201)
+    return system_id
+
+
+def test_a_goal_finds_the_theorems_shaped_like_its_conclusion(client, db):
+    # "Here are the theorems that could conclude that" — the question a caller on
+    # a 47,589-entry library had no way to ask.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _library_system(client, db, owner)
+    goal = _create_proof(client, system_id, "Goal", source="(x ∈ y → x = y) [HYP]")
+    client.post(f"/api/proofs/{goal}/verify")
+    term_id = _structure(client, goal)["lines"][0]["term"]["id"]
+
+    body = client.get(
+        f"/api/formal-systems/{system_id}/theorems/matching", params={"term": term_id}
+    ).json()
+
+    assert body["constructor"] == "implication"
+    assert [c["label"] for c in body["candidates"]] == ["lem"]
+    assert body["candidates"][0]["premise_count"] == 0
+    assert body["unindexed"] == 0
+
+    # The candidate is point-at-able: its statement_term_id is a real handle that
+    # `GET .../terms/{id}` resolves to the conclusion's graph — projection and
+    # identity together, not a string a caller must reparse.
+    node = client.get(
+        f"/api/formal-systems/{system_id}/terms/{body['candidates'][0]['statement_term_id']}"
+    )
+    assert node.status_code == 200, node.text
+    assert node.json()["root"] == body["candidates"][0]["statement_term_id"]
+
+
+def test_a_goal_of_another_shape_is_not_offered_the_library(client, db):
+    # The filter doing its work: the library's implication is not a candidate for
+    # a membership goal, and on a real corpus that is most of it removed.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _library_system(client, db, owner)
+    goal = _create_proof(client, system_id, "Goal", source="x ∈ y [HYP]")
+    client.post(f"/api/proofs/{goal}/verify")
+    term_id = _structure(client, goal)["lines"][0]["term"]["id"]
+
+    body = client.get(
+        f"/api/formal-systems/{system_id}/theorems/matching", params={"term": term_id}
+    ).json()
+
+    assert body["candidates"] == []
+    assert body["matched"] == 0
+
+
+def test_an_already_proved_statement_comes_back_exact(client, db):
+    # `alpha_digest` covering the exact case for free: the goal *is* the theorem's
+    # statement, so citing it needs no instantiation at all.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _library_system(client, db, owner)
+    goal = _create_proof(client, system_id, "Goal", source=_LEMMA_SRC)
+    client.post(f"/api/proofs/{goal}/verify")
+    term_id = _structure(client, goal)["lines"][0]["term"]["id"]
+
+    body = client.get(
+        f"/api/formal-systems/{system_id}/theorems/matching", params={"term": term_id}
+    ).json()
+
+    assert [(c["label"], c["exact"]) for c in body["candidates"]] == [("lem", True)]
+
+
+def test_a_term_from_another_system_is_404(client, db):
+    # Interning is per system, so an id from elsewhere names a term built over
+    # another grammar — a mistake worth hearing about, not an empty result.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _library_system(client, db, owner)
+    other_system, other_term = _stored_term(client, db, owner)
+    assert other_system != system_id
+
+    res = client.get(
+        f"/api/formal-systems/{system_id}/theorems/matching",
+        params={"term": other_term},
+    )
+
+    assert res.status_code == 404
+
+
+def test_the_limit_reports_what_it_hid(client, db):
+    # A truncated list must not read as a complete one.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner, published=True)
+    for n in range(3):
+        lemma = _create_proof(client, system_id, f"L{n}", source=_LEMMA_SRC)
+        client.patch(f"/api/proofs/{lemma}", json={"published": True})
+        client.post(f"/api/proofs/{lemma}/promote", json={"label": f"lem{n}"})
+    goal = _create_proof(client, system_id, "Goal", source="(x ∈ y → x = y) [HYP]")
+    client.post(f"/api/proofs/{goal}/verify")
+    term_id = _structure(client, goal)["lines"][0]["term"]["id"]
+
+    body = client.get(
+        f"/api/formal-systems/{system_id}/theorems/matching",
+        params={"term": term_id, "limit": 2},
+    ).json()
+
+    assert len(body["candidates"]) == 2
+    assert body["matched"] == 3
+    assert body["truncated"] is True

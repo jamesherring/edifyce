@@ -735,6 +735,38 @@ difference. `library_digest` is the system half of that digest and is wider than
 does — a statement is composed at the sorts a **line** is read at, and a ground
 one may use the system's resolved **definitions**.
 
+> **Correction (D5).** That is what the cache was built to do, and for an
+> imported corpus it did not do it — **not once**, from the day P4 landed until
+> the relationships track's D5 measured it. The digest a reader computed never
+> matched the digest the import wrote, so every cached library term missed and
+> every citation re-parsed.
+>
+> Nothing about the caching was wrong. `spec_to_system` stores a *sort inclusion*
+> — a production with no shape, saying `wff_var` is a `wff` — as an edge on the
+> sub-sort, and an edge carries no position, so `system_to_spec` gave the
+> inclusions back at the end of the production list rather than where they were
+> written. That reordering changed `library_digest`, and since a stale digest is
+> a miss rather than a difference, **nothing failed and nothing was slow enough
+> to notice**: the fallback is the parse this phase exists to avoid, so the
+> system behaved exactly as it had before P4, correctly and at the old cost.
+>
+> It went unseen because no test compared the digest *written* against the digest
+> *read*, and because the failure mode of a cache is silence. The fix is
+> `symbols.inclusion_position`, which records where an inclusion sat; the digests
+> now agree and are the same values the import had been writing all along, so
+> nothing stored was invalidated. Measured on `set.mm` at 2,676 theorems: 8,581
+> citations resolved through the library, **0 cached before the column and all
+> 8,581 after**.
+>
+> The lesson this document should carry is the one that took two attempts to
+> learn. A digest that ignored the inclusions' order would also have made them
+> agree — and would have been *unsound*, because a sort's union members are tried
+> in declaration order, so where an inclusion sits selects a different
+> constructor wherever it overlaps a direct production of the parent sort. A
+> stale digest is a miss; an equal one is **believed**. The asymmetry that makes
+> this cache safe to get wrong in one direction is exactly what makes it unsafe
+> to get wrong in the other.
+
 **One asymmetry worth naming.** For an imported corpus the *cached* term is more
 faithful than a re-parse, which is unusual — everywhere else in this document the
 stored value is a saved copy of what re-deriving would produce. A walk promotes

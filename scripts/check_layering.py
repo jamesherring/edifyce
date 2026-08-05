@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+import uuid
 from bisect import bisect_right
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -50,7 +51,9 @@ from app.db import Base  # noqa: E402
 from app.db.descriptions import LabelDescriptionRow  # noqa: E402
 from app.db.metamath_store import import_corpus  # noqa: E402
 from app.db.models import FormalSystem, Proof, ProofFolder  # noqa: E402
+from app.db.proof_lines import ProofLineRow  # noqa: E402
 from app.db.promoted_theorems import PromotedTheoremRow  # noqa: E402
+from app.db.promoted_theorems_mapping import cited_labels  # noqa: E402
 from website.logical.metamath import parse  # noqa: E402
 from website.logical.metamath.corpus import corpus_layers, theorems  # noqa: E402
 from website.logical.metamath.setmm import LAYERS  # noqa: E402
@@ -106,7 +109,41 @@ class Run:
     # was stored against. Names rather than ids, because an id is different in
     # every run by construction and so can be compared with nothing.
     owners: dict[str, str]
+    # Citations a stored proof makes that its own chain cannot reach. Empty on
+    # any run worth trusting; see `unreachable_citations` for what it catches
+    # and why a positional plan cannot produce one.
+    unreachable: tuple[Unreachable, ...] = ()
     seconds: float = 0.0
+
+
+@dataclass(frozen=True)
+class Unreachable:
+    """A citation whose theorem exists, filed where the citing proof cannot see it.
+
+    The precise shape of a misfiled plan. `set.mm`'s order guarantees a cited
+    label is declared before the proof citing it, and every boundary is a
+    position in the file, so a *positional* partition cannot produce one — which
+    is why this is exercised by injecting a bad partition rather than by writing
+    a bad plan (relationships roadmap, §8's D5).
+
+    Sound because it asks only about labels the run **did** promote. A citation
+    resolving to no promoted row at all is a different thing and not an error:
+    it may name a rule, a definition, or one of the theorem's own `$e`
+    hypotheses, which `read_library` reaches through `hypotheses_of` rather than
+    through the chain. On `set.mm` 2,539 citations are of that kind. A citation
+    that genuinely resolves to nothing already fails the *import* — `walk`
+    refuses it with "proof cites unknown label" and stores no proof.
+    """
+
+    proof: str
+    filed_in: str
+    label: str
+    # Every system that declares this label, not one of them. A label is unique
+    # per *system*, not per database — that is the whole reason `_nearest`
+    # exists — so a label promoted in two layers has two homes, and the citation
+    # is out of reach only if the chain reaches neither. Collapsing them to one
+    # would both invent failures and hide them, depending which row won.
+    declared_in: tuple[str, ...]
 
 
 @dataclass
@@ -186,6 +223,7 @@ def run_import(source: str, limit: int | None, plan: Sequence[Layer]) -> Run:
             described = {
                 row.label for row in session.scalars(select(LabelDescriptionRow))
             }
+            unreachable = unreachable_citations(session)
     finally:
         engine.dispose()
 
@@ -208,8 +246,68 @@ def run_import(source: str, limit: int | None, plan: Sequence[Layer]) -> Run:
         described_labels=described,
         spine=[(layer.name, layer.proofs) for layer in report.layers],
         owners=owners,
+        unreachable=unreachable,
         seconds=time.monotonic() - started,
     )
+
+
+def unreachable_citations(session: Session) -> tuple[Unreachable, ...]:
+    """Every citation a stored proof makes that its own chain cannot reach.
+
+    The invariant that makes a spine mean anything: a proof is filed against one
+    layer, and §5.2 says its citations resolve against that layer's library and
+    then its *ancestors'* — never a sibling's and never a descendant's. A proof
+    filed where it cannot see what it cites is stored as verified and is not
+    re-verifiable, which is a lie in the database rather than a failure of the
+    run, and so is exactly the kind of thing nothing notices.
+
+    Asked only of labels this run promoted; see :class:`Unreachable` for why the
+    rest are not this function's business.
+    """
+    names = {system.id: system.name for system in session.scalars(select(FormalSystem))}
+    parent = {
+        system.id: system.inherits_from_id
+        for system in session.scalars(select(FormalSystem))
+    }
+
+    def visible(system_id: uuid.UUID) -> set[uuid.UUID]:
+        seen = set()
+        while system_id is not None and system_id not in seen:
+            seen.add(system_id)
+            system_id = parent[system_id]
+        return seen
+
+    declared: dict[str, set[uuid.UUID]] = {}
+    for label, system_id in session.execute(
+        select(PromotedTheoremRow.label, PromotedTheoremRow.system_id)
+    ):
+        declared.setdefault(label, set()).add(system_id)
+    # Columns rather than ORM objects: this runs over the whole corpus, and
+    # loading every line as an entity would fill the identity map the import's
+    # `_checkpoint` batching exists to keep empty. Only these two are read.
+    references: dict[uuid.UUID, list[str | None]] = {}
+    for proof_id, reference in session.execute(
+        select(ProofLineRow.proof_id, ProofLineRow.reference)
+    ):
+        references.setdefault(proof_id, []).append(reference)
+
+    found: list[Unreachable] = []
+    for proof_id, proof_name, filed_in in session.execute(
+        select(Proof.id, Proof.name, Proof.formal_system_id)
+    ):
+        reachable = visible(filed_in)
+        for label in cited_labels(references.get(proof_id, ())):
+            homes = declared.get(label, set())
+            if homes and not homes & reachable:
+                found.append(
+                    Unreachable(
+                        proof=proof_name,
+                        filed_in=names[filed_in],
+                        label=label,
+                        declared_in=tuple(sorted(names[home] for home in homes)),
+                    )
+                )
+    return tuple(found)
 
 
 def expected_owners(source: str, limit: int | None) -> dict[str, str]:
@@ -313,6 +411,40 @@ def compare(flat: Run, spined: Run, expected: Mapping[str, str]) -> Comparison:
             Difference(
                 what="the flat run is not flat",
                 detail=f"{sorted(set(flat.owners.values()))}",
+            )
+        )
+
+    # **Every citation must be reachable from where its proof was filed.** Not a
+    # comparison between the runs — a fact about the spined one alone, and the
+    # invariant that makes a spine mean anything (§5.2). A proof filed where it
+    # cannot see what it cites is stored as verified and is not re-verifiable.
+    for stranded in spined.unreachable[:5]:
+        result.differences.append(
+            Difference(
+                what="a citation the citing proof's chain cannot reach",
+                detail=(
+                    f"{stranded.proof} (in {stranded.filed_in!r}) cites "
+                    f"{stranded.label!r}, declared in "
+                    f"{', '.join(repr(name) for name in stranded.declared_in)}"
+                ),
+            )
+        )
+    if len(spined.unreachable) > 5:
+        result.differences.append(
+            Difference(
+                what="unreachable citations",
+                detail=f"{len(spined.unreachable)} in all; first five above",
+            )
+        )
+    # And the flat run has one system, so nothing there can be out of reach — if
+    # it ever were, the comparison below would be against a broken baseline. Not
+    # `require`, whose detail reads "flat=… spined=…": this is a fact about one
+    # run, and phrasing it as a disagreement between the two misnames it.
+    if flat.unreachable:
+        result.differences.append(
+            Difference(
+                what="a citation out of reach in the *flat* run",
+                detail=f"{len(flat.unreachable)}, e.g. {flat.unreachable[0]}",
             )
         )
 

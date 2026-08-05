@@ -3,7 +3,7 @@
 `scripts/restore_proofs.py` drives the structured write path — holes, `/cite`,
 `/lines` — against imported Metamath proofs, using the original as an answer key.
 Running it over `set.mm` is what found the arity cliff in `Proof.justify`
-(docs/authoring-and-ingestion-roadmap.md §9d), and that is not something a suite
+(docs/authoring-and-ingestion-roadmap.md §9e), and that is not something a suite
 can do: the corpus is a 50 MB download and a slice big enough to be interesting
 takes minutes to import.
 
@@ -225,7 +225,7 @@ def test_antecedent_order_carries_no_information(corpus):
     # assignment search is a bipartite matching over slots, so the *set* is the
     # citation and the order is presentation. Recorded because an emitting model
     # that thinks otherwise will spend effort on a degree of freedom that is not
-    # one (roadmap §9d).
+    # one (roadmap §9e).
     _, codes = _run(corpus, ["probe"])
     swapped = {key: n for key, n in codes.items() if key.startswith("swapped:")}
     assert swapped and set(swapped) == {"swapped:accepted"}
