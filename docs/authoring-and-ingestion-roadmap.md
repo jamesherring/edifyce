@@ -368,12 +368,15 @@ the expensive half. So:
 1. **Term subgraph, readable** — §9a, done.
 2. **Structured citation proposals** — §9b, done.
 3. **Structured statement proposals** — §9c, done.
+4. **Retrieval** — §9d, done. Which of the 47,589 to cite.
 
 ### What none of this solves
 
-Which of 47,589 theorems to cite. That is retrieval and it is separate — though
-`alpha_digest` is a strong primitive for the exact case: "have I already got this,
-up to renaming?" is an index lookup rather than a search.
+Which of 47,589 theorems to cite — *was* this section, and it was wrong to file it
+as a nicety. The loop closed without being **driveable**: `slot-unsatisfied` says
+"I need `(p → q)`" and nothing answered "here are the twelve theorems that could
+conclude that", so on a corpus-sized library a caller had no move. That is §9d
+below, and it turned out to be smaller than option D rather than adjacent to it.
 
 ## 9a. The term subgraph, served — *done*
 
@@ -590,7 +593,124 @@ refuses one as a target: it states nothing checkable.
 Deleting a line, and moving one. Both are the same renumbering problem in reverse
 and neither is needed to *build* a proof, which is what the loop does.
 
-## 9d. Driving the loop on a corpus — *done*
+## 9d. Retrieval — the loop, driveable — *done*
+
+The loop §9 drew closes: a failure names a missing premise, a missing premise is a
+goal, a goal is a hole, a hole is fillable. What it could not do is *move*. Every
+step of it takes a justification as an input — `/cite` asks whether **this** rule
+applies, and `propose` asks whether **this** statement checks — and nothing
+produced one. On a library of 47,589 entries "try them all" is not an
+implementation.
+
+Two endpoints, split by what each can afford.
+
+`GET /formal-systems/{id}/theorems/matching?term=…` is the **filter**. A
+conclusion's root production is a column (`terms.constructor`, indexed per
+system), so "theorems concluding an implication" is an index scan; α-identical
+conclusions sort first, which is `alpha_digest` covering the exact case exactly as
+§9 predicted. It builds nothing and confirms nothing, and says so.
+
+`GET /proofs/{id}/lines/{n}/citations` is the **answer**. It returns
+justifications that *check* — in `CitationProposal`'s own shape, so acting on one
+is a copy into `/cite` rather than a translation.
+
+### Why the confirm lives on the proof and the filter on the system
+
+A library belongs to a system, so retrieval is the system's; but *confirming* a
+candidate needs the system built, the theorems promoted, and the goal in a real
+scope with real lines above it — which is a proof's context and nothing else's.
+Checking a proof has already paid for all of that, so unifying twenty-five
+candidates there is nearly free, while doing it behind a browse would put a system
+build on a GET that invites being called repeatedly.
+
+So the system route narrows and the proof route decides, and neither pretends to
+be the other. A candidate is not an answer, and the schema says which it is.
+
+### Two pools, bounded differently
+
+A system's **rules** are few, so every one is tried — no retrieval needed or
+wanted. Its **library** is unbounded, so it is narrowed first and only the
+survivors are unified. That asymmetry is the whole design: the prefilter exists
+because one of the two pools cannot be enumerated, not because unification is
+slow.
+
+Both are confirmed identically, because a promoted theorem *is* cited as a rule
+(`PromotedTheorem.as_rule`). The `source` field records where a suggestion came
+from and nothing about how it was checked.
+
+### What had to change in the engine, and why
+
+`InferenceRule.check` **recorded its verdict on the line** — `valid = True`, the
+inference, a dependency edge on every antecedent. That is right for a checker,
+which asks once, and wrong for a search, which asks a hundred times and keeps one
+answer. Split into `applies` (the verdict, returned) and `check` (the verdict,
+recorded); `check_discharge` split the same way into `discharges`. A search that
+merely *asked* what could justify a hole would otherwise have filled it in, and
+left every rejected candidate's bookkeeping behind on the way.
+
+Added beside them: `concludes`, the conclusion-side twin of `slot_admits`, which
+is the filter the search runs before any antecedent work — a rule that cannot
+conclude the goal cannot justify it however its slots are filled.
+
+### Two pools of *lines*, which is not obvious
+
+An ordinary rule cites antecedents; a discharge rule cites a subproof's **opener**.
+An opener lives *inside* the subproof it opens, so a line below cannot cite it as
+an antecedent — and discharging it is exactly what it can do instead. Neither pool
+contains the other (`accessible_lines`, `dischargeable_openers`), and conflating
+them either offers citations the checker refuses or hides every discharge — which,
+in a natural-deduction system, is every rule that closes a subproof.
+
+### A rule that justifies everything
+
+A hypothesis rule has no antecedents and a bare metavariable for a conclusion, so
+it applies to every line in the system. `[HYP]` is a true answer to "what could
+justify this?" and an uninformative one, and it would have headed every result on
+needing no premises. Reported, flagged (`assumption`), ranked last —
+`concludes_anything`. Not dropped: assuming the line is sometimes what an author
+means to do, and a search that hid a legal move would be lying about the system.
+
+Note the criterion is *both* halves. Modus ponens also concludes a bare
+metavariable — everything it tells you is in its premises — so specificity of the
+conclusion alone would have demoted the most useful rule in the system.
+
+### What the filter cannot see, and says so
+
+A theorem whose `statement_term_id` is NULL has no constructor to filter on. That
+is a cache miss and not an absence — but retrieval is the one reader that cannot
+pay a re-parse to recover from it, because it is choosing *which* theorems to look
+at at all. So the count is reported (`unindexed`) rather than the rows being
+quietly missing: a short list must not read as a complete one.
+
+The same reasoning covers a **renamed** layer. A related system may spell the
+goal's production differently, so the goal's constructor is inverted into each
+layer's own names before its rows are asked (`Translation.stored_name`, whose
+inverse is well-defined precisely because `translation_errors` refuses a map that
+collapses two source names into one). Asking every layer about the citing system's
+spelling would have returned nothing from exactly the edges a rename exists to
+cross — a false negative, and the kind nobody would ever notice.
+
+### Depth one, and honestly so
+
+A suggestion justifies a line **from lines that already stand**. It does not prove
+a gap: "here is my next step, find the four lemmas between it and what I have" is
+a search over sequences of steps, which is elaboration (§3's option D) and remains
+a different piece of work. What this supports is the step a caller has already
+stated — which, in an imported corpus, is the overwhelming majority of what a
+proof is made of.
+
+### What this is not, and what would sharpen it
+
+The prefilter is a **head-symbol** filter, which is the cheapest useful one and
+deliberately not the best. A discrimination tree over the whole term
+([search-and-embeddings-roadmap.md](search-and-embeddings-roadmap.md) Phase 1)
+prunes far harder — `(A ∧ B) → C` against every stored implication is still a lot
+of implications. The reason to do this one first is that it needs no new
+representation and no new storage, only columns that already exist, and it sits
+behind the same interface a term net would: candidates in, unification confirms.
+Replacing `conclusion_candidates` is a local change when that index arrives.
+
+## 9e. Driving the loop on a corpus — *done*
 
 Everything in §7–§9c was exercised by three-line synthetic proofs. Nobody had run
 the loop against `set.mm`, and that is where the remaining risk sat: corpus proofs

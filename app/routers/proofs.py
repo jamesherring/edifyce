@@ -64,6 +64,7 @@ from app.db import (
     PendingLibrary,
     load_definition_terms,
     load_proof_for_check,
+    load_citable_theorems,
     load_proof_lines,
     load_schema_terms,
     load_theorems,
@@ -79,8 +80,9 @@ from app.db.descriptions_mapping import load_description
 from app.db.models import User
 from app.db.notations_mapping import load_notation, render_stored
 from app.db.proofs_mapping import failure_from_row
+from app.db.retrieval import conclusion_candidates
 from app.db.terms import TermRow
-from app.db.terms_mapping import digest_term, prefetch_terms
+from app.db.terms_mapping import alpha_digest, digest_term, prefetch_terms
 from app.db.promoted_theorems import PromotedTheoremRow
 from app.routers._invalidation import (
     clear_verdicts,
@@ -99,6 +101,13 @@ from app.routers.systems import load_effective, load_system
 from website.logical.formal_system.diagnostics import numbers
 from website.logical.formal_system.proof import Proof as EngineProof
 from website.logical.formal_system.proof import citation_text
+from website.logical.formal_system.retrieval import (
+    Application,
+    accessible_lines,
+    applications,
+    dischargeable_openers,
+    discharges,
+)
 from website.logical.formal_system.proposals import (
     Proposal,
     ProposalError,
@@ -109,6 +118,8 @@ from website.logical.rendering import render
 from app.schemas import (
     CitationOutcome,
     CitationProposal,
+    CitationSearch,
+    CitationSuggestion,
     LineOutcome,
     LineProposal,
     TermProposalIn,
@@ -135,6 +146,7 @@ from app.schemas import (
     VerifyProofResponse,
 )
 from website.logical.declarative import build_spec
+from website.logical.kernel.terms import Node
 from website.logical.graphs import topological_order
 from website.logical.promotion import proved_theorem, schematic_theorem
 
@@ -2205,3 +2217,203 @@ def _broken_by_insert(
         if row.valid and (line is None or not line.valid):
             return moved
     return None
+
+
+def _suggestion(
+    application: Application,
+    source: str,
+    *,
+    exact: bool = False,
+    assumption: bool = False,
+) -> CitationSuggestion:
+    # A found application, in the shape `/cite` takes back. `citation` is composed
+    # by the engine rather than formatted here, so what a caller is shown is
+    # exactly what applying it would write (see `FormalSystem.cite`).
+    numbers_cited = application.numbers
+    return CitationSuggestion(
+        rule=application.rule.label,
+        antecedents=numbers_cited,
+        citation=citation_text(application.rule.label, numbers_cited),
+        source=source,
+        discharge=application.discharge,
+        exact=exact,
+        assumption=assumption,
+    )
+
+
+@router.get("/{proof_id}/lines/{number}/citations", response_model=CitationSearch)
+async def find_citations(
+    proof_id: uuid.UUID,
+    number: int,
+    limit: int = Query(
+        10, ge=1, le=50, description="How many confirmed suggestions to return."
+    ),
+    candidates: int = Query(
+        25,
+        ge=0,
+        le=50,
+        description=(
+            "How many library candidates the prefilter may offer for "
+            "unification. Zero searches the system's own rules only."
+        ),
+    ),
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> CitationSearch:
+    """What could justify this line — proposals that have already been checked.
+
+    The move the loop was missing (docs/authoring-and-ingestion-roadmap.md §9d).
+    `/verify` says a line is a hole and `/cite` says whether a *named*
+    justification works; between them sat the question neither answered — **which
+    justification to name** — and on a library of 47,589 theorems a caller had no
+    way to guess. Every suggestion here comes back in `CitationProposal`'s own
+    shape, so acting on one is a copy into `POST /proofs/{id}/cite` rather than a
+    translation.
+
+    Two pools, searched differently because they are differently bounded. The
+    system's **rules** are few, so every one is tried. Its **library** is not —
+    an imported corpus contributes tens of thousands — so it is narrowed first by
+    the root production of the goal's statement (`app/db/retrieval.py`) and only
+    the survivors are unified. Both are confirmed the same way in the end: by the
+    check a verify runs, against the lines that actually stand above the goal.
+
+    **Confirmed, not guessed.** A suggestion here applies. That is what makes the
+    endpoint worth its cost, and the cost is why it lives on a proof rather than
+    on a system: checking the proof has already built the system, so unifying a
+    candidate against a real goal in a real scope adds almost nothing.
+
+    What bounds the work is the ladder rather than a budget. `candidates` caps how
+    many library entries are offered at all, and each is met first by `concludes`
+    — one unification against the goal — so only the few that could actually
+    conclude it go on to pay `admissibility`, which is the term that scales with
+    the proof's length. The verify above dominates either way.
+
+    Depth one. This finds the rule that justifies a line **from lines that
+    already stand** — it does not prove a gap, which is a search over sequences
+    of steps and a different piece of work. Nothing is written: like `/cite`'s
+    dry run, asking what could justify a line must never fill it in.
+    """
+    proof = await _get_readable_or_404(session, proof_id, user)
+
+    # Checked rather than read: the search runs against live proof lines — their
+    # scopes, their terms, their order — and a stored row carries no `ProofLine`
+    # to unify with. Never persisted, because a read must not write, and an
+    # anonymous caller's transaction is rolled back anyway.
+    verification = await _verify_with_references(session, proof, persist=False)
+    checked = verification.engine_proof
+    if checked is None or verification.compiled_system is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=verification.response.errors
+            or ["This proof could not be checked, so nothing can be proposed for it."],
+        )
+
+    goal = _numbered_line(checked, number)
+    if goal is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"This proof has no line {number}.",
+        )
+    # The same three refusals `/cite` makes, and for the same reason: a line whose
+    # citation the checker never resolves cannot be justified by one, so proposing
+    # a justification for it would be proposing something that means nothing.
+    if goal.opened_scope is not None or (
+        goal.line_type is not None and goal.line_type.behaviour != "logical"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Line {number} is not justified by a citation: it "
+                + (
+                    "opens a subproof, which is granted rather than proved."
+                    if goal.opened_scope is not None
+                    else "is not an ordinary logical line."
+                )
+            ),
+        )
+    if goal.formula_term is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Line {number} states no formula this system could read, so there "
+                "is no goal to search for."
+            ),
+        )
+
+    compiled = verification.compiled_system
+    context = term_context(compiled)
+    pool = accessible_lines(goal)
+    openers = dischargeable_openers(goal)
+
+    found: list[CitationSuggestion] = []
+    for rule in compiled.inference_rules:
+        for application in (
+            discharges(rule, goal, openers, context)
+            if rule.is_discharge
+            else applications(rule, goal, pool, context)
+        ):
+            found.append(
+                _suggestion(
+                    application,
+                    "rule",
+                    assumption=rule.concludes_anything(context),
+                )
+            )
+
+    # The library, narrowed before it is unified. A rule's label wins a clash, so
+    # a theorem sharing one is left out rather than proposed under a name that
+    # resolves to something else.
+    rule_labels = [rule.label for rule in compiled.inference_rules]
+    root = goal.formula_term
+    prefiltered = None
+    if candidates and isinstance(root, Node) and verification.effective is not None:
+        prefiltered = await session.run_sync(
+            lambda sync: conclusion_candidates(
+                sync,
+                verification.effective.library,
+                root.constructor.name,
+                alpha_digest=alpha_digest(root),
+                limit=candidates,
+                exclude=rule_labels,
+            )
+        )
+        exact_labels = {c.label for c in prefiltered.candidates if c.exact}
+        promoted = await session.run_sync(
+            lambda sync: load_citable_theorems(
+                sync,
+                verification.effective.library,
+                [c.label for c in prefiltered.candidates],
+                compiled,
+                context,
+            )
+        )
+        for label, theorem in promoted.items():
+            for application in applications(theorem.as_rule(), goal, pool, context):
+                found.append(
+                    _suggestion(application, "theorem", exact=label in exact_labels)
+                )
+
+    # A rule that justifies every line is true of this one and says nothing about
+    # it, so it goes last however few premises it needs — otherwise `[HYP]` would
+    # head every answer. Then exact matches, then the justification needing the
+    # fewest premises found for it, then the system's own rules before its
+    # library, then by label: a stable order whose front is what to try first.
+    found.sort(
+        key=lambda s: (
+            s.assumption,
+            not s.exact,
+            len(s.antecedents),
+            s.source != "rule",
+            s.rule,
+        )
+    )
+
+    return CitationSearch(
+        line=number,
+        suggestions=found[:limit],
+        rules_tried=len(rule_labels),
+        candidates_tried=0 if prefiltered is None else len(prefiltered.candidates),
+        unindexed=0 if prefiltered is None else prefiltered.unindexed,
+        unfiltered=0 if prefiltered is None else prefiltered.unfiltered,
+        truncated=len(found) > limit or (prefiltered is not None and prefiltered.truncated),
+    )

@@ -225,7 +225,7 @@ Five rounds, selected with `--rounds`:
 `--label` drives one by name. The `probe` round prints what each kind of wrong
 citation was told, which is a measurement rather than a pass/fail: it is how the
 "antecedent order carries no information" and "no antecedents means the lines
-above" facts in `docs/authoring-and-ingestion-roadmap.md` §9d were established.
+above" facts in `docs/authoring-and-ingestion-roadmap.md` §9e were established.
 
 ## Running the API tests against Postgres
 

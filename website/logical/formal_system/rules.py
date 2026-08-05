@@ -141,32 +141,39 @@ class InferenceRule:
         # Whether this rule discharges a subproof rather than citing lines.
         return self.subproof_schema is not None
 
-    def check(
+    def applies(
         self,
         antecedents: Sequence[ProofLine],
         extra_antecedents: Sequence[ProofLine],
         deduction: ProofLine,
         context: Context,
-    ) -> bool:
-        # Check to see if the proposed proof lines are valid under this inference rule
+    ) -> Inference | None:
+        """The inference this citation makes, or ``None`` if it makes none.
 
+        The whole verdict :meth:`check` reaches, and **nothing recorded**: no
+        line is marked valid, no dependency edge is added. Split out because a
+        search *probes* — retrieval tries many rules against one line to find the
+        ones that could justify it (`website/logical/retrieval.py`) — and a probe
+        that marked its subject valid would leave the losers' bookkeeping behind
+        on the line it rejected.
+        """
         # Check the number of antecedents matches
         if not len(antecedents) == len(self.antecedents):
-            return False
+            return None
 
         if type(deduction) is not ProofLine:
             # Deduction doesn't point to a valid proof line
-            return False
+            return None
 
         # Deduction must be after the antecedents
         for ant in (*antecedents, *extra_antecedents):
             if type(ant) is not ProofLine:
                 # antecedent isn't a proof line
-                return False
+                return None
 
             # Deduction in the same proof must come after the antecedents
             if deduction.proof is ant.proof and deduction.index() <= ant.index():
-                return False
+                return None
 
         # Create an inference instance
         inference = Inference(self, antecedents, extra_antecedents, deduction)
@@ -177,7 +184,7 @@ class InferenceRule:
             # found by associative matching (splitting/concatenation the term
             # unifier cannot do). No kernel side-conditions on this path.
             if not self._string_binding_exists(antecedents, deduction, context):
-                return False
+                return None
         else:
             # Structural check over terms (the graph representation): the
             # deduction and every logical antecedent must match their schemas
@@ -187,18 +194,33 @@ class InferenceRule:
             binding = self._term_binding(antecedents, deduction, context)
             if binding is None:
                 # No consistent match
-                return False
+                return None
 
             # Kernel side-conditions: soundness-critical provisos (freshness,
             # $d, atomicity, equality) checked structurally against that binding.
             if not self._side_conditions_hold(binding, context):
-                return False
+                return None
 
             # Kept for schematic promotion, which restates these very conditions
             # over it; see `Inference.binding`.
             inference.binding = binding
 
-        # Otherwise ok
+        return inference
+
+    def check(
+        self,
+        antecedents: Sequence[ProofLine],
+        extra_antecedents: Sequence[ProofLine],
+        deduction: ProofLine,
+        context: Context,
+    ) -> bool:
+        # Check to see if the proposed proof lines are valid under this inference
+        # rule, and record it on the line when it is: the verdict is
+        # `applies`, and this is the half that commits to it.
+        inference = self.applies(antecedents, extra_antecedents, deduction, context)
+        if inference is None:
+            return False
+
         deduction.inference_rule = self
         deduction.inference = inference
         deduction.valid = True
@@ -209,9 +231,17 @@ class InferenceRule:
 
         return True
 
-    def check_discharge(self, subproof: Subproof, deduction: ProofLine, context: Context) -> bool:
-        # Check that `deduction` follows by discharging `subproof` under this
-        # rule. Discharge rules consume a whole subproof as a unit (conditional
+    def discharges(
+        self, subproof: Subproof, deduction: ProofLine, context: Context
+    ) -> bool:
+        """Whether ``deduction`` follows by discharging ``subproof``, recorded nowhere.
+
+        :meth:`check_discharge` without the bookkeeping, for the same reason
+        :meth:`applies` exists: a retrieval search probes every discharge rule
+        against every completed subproof in scope, and all but the winner are
+        rejections that must leave no trace on the line.
+        """
+        # Discharge rules consume a whole subproof as a unit (conditional
         # proof, reductio, universal generalisation) rather than citing lines.
 
         schema = self.subproof_schema
@@ -270,6 +300,17 @@ class InferenceRule:
         # hypothesis still in force around the subproof (checked structurally on
         # kernel terms by Subproof.eigenvariable_is_fresh).
         if schema.fresh is not None and not subproof.eigenvariable_is_fresh(context):
+            return False
+
+        return True
+
+    def check_discharge(
+        self, subproof: Subproof, deduction: ProofLine, context: Context
+    ) -> bool:
+        # Check that `deduction` follows by discharging `subproof` under this
+        # rule, and record it on the line when it does. The verdict is
+        # `discharges`; this is the half that commits to it.
+        if not self.discharges(subproof, deduction, context):
             return False
 
         deduction.inference_rule = self
@@ -343,6 +384,56 @@ class InferenceRule:
         as strings — the string-rewriting analogue of :meth:`_term_binding`."""
         pairs = self._string_pairs(antecedents, deduction)
         return pairs is not None and joint_binding_exists(pairs, context)
+
+    def concludes(self, line: ProofLine, context: Context) -> bool:
+        """Whether this rule's *conclusion* could be ``line``, ignoring its premises.
+
+        The conclusion-side twin of :meth:`slot_admits`, and the filter retrieval
+        runs first: a rule whose conclusion cannot be the goal cannot justify it
+        however its slots are filled, so this rejects the overwhelming majority of
+        a library before any antecedent search is attempted. Necessary and not
+        sufficient — the premises still have to be found, and a proviso can still
+        block — so a caller confirms with :meth:`applies`.
+
+        For a rule with no antecedents it is *nearly* the whole verdict, missing
+        only the side conditions, which is why the search confirms even those.
+        """
+        if self.matching == "string":
+            # No antecedents: `_string_pairs` reduces to the conclusion alone.
+            return self._string_binding_exists((), line, context)
+
+        if line.formula_term is None:
+            return False
+
+        return (
+            match_all(
+                [(self._schema_term(self.deduction, 0, context), line.formula_term)],
+                context,
+            )
+            is not None
+        )
+
+    def concludes_anything(self, context: Context) -> bool:
+        """Whether this rule justifies *every* goal, so finding it says nothing.
+
+        A hypothesis rule has no antecedents and a bare metavariable for a
+        conclusion, so it applies to any line in the system — `[HYP]` is how one
+        states an assumption. A search that surfaces it has found a true answer
+        and an uninformative one: it is a fact about the system, not about the
+        goal, and it would otherwise sort ahead of every real justification on
+        having no premises to find.
+
+        Both halves are required. A rule with a bare-metavariable conclusion but
+        real antecedents is perfectly informative — modus ponens concludes `q`,
+        which matches anything, and everything it tells you is in its premises.
+        """
+        if self.antecedents or self.is_discharge:
+            return False
+        if self.matching == "string":
+            # A string schema constrains by its literal parts; "anything" is not a
+            # shape this projection can see, so it is left to the search.
+            return False
+        return isinstance(self._schema_term(self.deduction, 0, context), Var)
 
     def slot_admits(self, slot: int, line: ProofLine, context: Context) -> bool:
         """Whether ``line`` could fill antecedent ``slot`` on its own.

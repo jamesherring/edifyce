@@ -57,6 +57,7 @@ from app.routers._common import (
 from app.db.descriptions_mapping import load_description
 from app.db.models import Proof, ProofFolder, User
 from app.db.notations_mapping import load_notation, notation_names, render_each
+from app.db.retrieval import conclusion_candidates
 from app.db.terms import TermRow
 from app.db.terms_mapping import prefetch_terms, term_digests, walk_subgraph
 from app.db.side_conditions import SideConditionRow
@@ -82,6 +83,8 @@ from app.schemas import (
     TermChildOut,
     TermGraphOut,
     TermNodeOut,
+    TheoremCandidate,
+    TheoremMatches,
     Axiom,
     DefinitionBinder,
     DefinitionBinders,
@@ -1298,4 +1301,107 @@ async def get_term_subgraph(
             )
             for node in nodes
         ],
+    )
+
+
+@router.get("/{system_id}/theorems/matching", response_model=TheoremMatches)
+async def find_matching_theorems(
+    system_id: uuid.UUID,
+    term: uuid.UUID = Query(
+        ...,
+        description=(
+            "The goal, as a stored term of this system — a proof line's "
+            "statement, or any node `GET /formal-systems/{id}/terms/{id}` "
+            "returned."
+        ),
+    ),
+    limit: int = Query(25, ge=1, le=200),
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> TheoremMatches:
+    """Which of this system's theorems could conclude a goal.
+
+    The move a caller had no way to make (docs/authoring-and-ingestion-roadmap.md
+    §9d). `slot-unsatisfied` names the premise that is missing and a hole names
+    what is left to prove; on a library of 47,589 entries neither is actionable,
+    because nothing answers "here are the twelve theorems that could conclude
+    that".
+
+    **A filter, and only a filter.** Candidates are narrowed by the root
+    production of their conclusion — a column, indexed per system — and ranked by
+    whether the α-digest says the conclusion already *is* the goal. Every one of
+    them still has to unify, and this route does not build the system to find
+    out. `GET /proofs/{id}/lines/{n}/citations` does, because a proof has been
+    checked and therefore built already, so confirming there costs nothing extra;
+    doing it here would put a system build behind a browse.
+
+    Served against the **system** for the same reason the term subgraph is: a
+    library belongs to a system and is resolved through its inheritance chain,
+    not through any one proof. The chain is why this loads the system rather than
+    only its id — the answer includes an ancestor's theorems, and a related
+    system may spell the goal's production differently.
+    """
+    system = await _get_readable_or_404(session, system_id, user)
+
+    row = (
+        await session.execute(
+            select(
+                TermRow.formal_system_id, TermRow.constructor, TermRow.alpha_digest
+            ).where(TermRow.id == term)
+        )
+    ).first()
+    if row is None or row.formal_system_id != system.id:
+        # Also the not-found case, and deliberately the same answer: a caller
+        # holding an id from another system has made a mistake worth hearing
+        # about, and it is not this system's business which system it came from.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="This system has no term with that id.",
+        )
+    if row.constructor is None:
+        # A metavariable or a bound index. It has no head symbol, so nothing can
+        # be narrowed by it — and every theorem in the library would "match",
+        # which is the answer that made retrieval necessary in the first place.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "That term is a variable, not a statement: it names no production, "
+                "so there is nothing to narrow a search by."
+            ),
+        )
+
+    effective = await load_effective(session, system)
+    if effective.errors:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=effective.errors)
+
+    found = await session.run_sync(
+        lambda sync: conclusion_candidates(
+            sync,
+            effective.library,
+            row.constructor,
+            alpha_digest=row.alpha_digest,
+            limit=limit,
+        )
+    )
+
+    return TheoremMatches(
+        formal_system_id=system.id,
+        term_id=term,
+        constructor=row.constructor,
+        candidates=[
+            TheoremCandidate(
+                label=candidate.label,
+                formal_system_id=candidate.system_id,
+                statement_term_id=candidate.statement_term_id,
+                statement=candidate.statement,
+                primitive=candidate.primitive,
+                premise_count=candidate.premise_count,
+                exact=candidate.exact,
+            )
+            for candidate in found.candidates
+        ],
+        matched=found.matched,
+        truncated=found.truncated,
+        unindexed=found.unindexed,
+        unfiltered=found.unfiltered,
     )
