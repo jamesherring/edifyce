@@ -6,6 +6,7 @@
 | `import_metamath.py` | Import a Metamath `.mm` database — system, proofs, line graphs, terms |
 | `check_layering.py` | Assert that importing a corpus as a **spine** changes nothing about the import |
 | `check_boundary_provisos.py` | Assert that a `$d` still refuses a capture when the citation crosses a layer |
+| `check_provenance.py` | Report, per layer, how much of its mathematics actually comes from lower down |
 | `restore_proofs.py` | Blank a corpus proof's justifications and drive the authoring loop to restore them |
 
 ## `edifyce-dev` — run the whole app with one command
@@ -187,6 +188,38 @@ Needs no database; exits non-zero if any case goes the wrong way.
 
 `tests/test_cross_system_citation.py` pins the mechanism on a fixture (§4's R2);
 this is where that meets the real corpus (relationships roadmap, §8's D5).
+
+## `check_provenance.py` — where does a layer's mathematics come from?
+
+A plan files a theorem by **subject matter**: the section header it sits under.
+That is not the same as what it depends on, and the gap between the two is the
+check on whether the boundaries were drawn in the right place. Following the
+citation graph transitively, a first-order theorem that touches nothing above
+propositional calculus *is* a propositional theorem.
+
+```bash
+uv run python scripts/check_provenance.py set.mm --limit 2676
+```
+
+Prints a row per layer: how many of its theorems use its own axioms, how many
+bottom out in a shallower layer's, and how many cite nothing that needs this
+layer at all. Those last two are different questions — a lemma from this layer
+pins a proof in place even when the axioms it rests on are all shallower — so
+both are reported, and `--examples` names the theorems behind the count.
+
+Neither is a count of theorems that could be **moved**. A theorem is pinned by
+the grammar it is stated in as well as by what it cites, and this reads only the
+citation graph: `set.mm`'s `sptruw` is `( A. x ph -> ph )` proved from `a1i`
+alone, so nothing it cites needs first-order logic and `A.` still does.
+
+Three things are hard failures rather than measurements: a theorem depending on a
+layer *deeper* than its own (which no positional plan can produce and no proof
+could verify), a spine of one system (which makes every depth zero), and a report
+that changes when the proof source is blanked — since this is meant to be a graph
+query over rows, and the run proves it by blanking the text and re-reading.
+
+`tests/test_provenance.py` pins the same properties on a fixture; this is the
+corpus half (relationships roadmap, §5.5 and §8's D6).
 
 ## `restore_proofs.py` — drive the authoring loop against a corpus
 

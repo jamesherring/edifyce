@@ -32,6 +32,7 @@ evolve it.
 | `app/db/schema_terms.py` | `store_schema_terms` / `load_schema_terms`: a rule's schema templates as composed kernel terms, so a build need not re-parse them |
 | `app/db/definition_terms.py` | `store_definition_terms` / `load_definition_terms`: the same for a definition's two surface forms |
 | `app/db/proof_lines.py` | Proof structure: a checked proof's lines + the justification edges between them |
+| `app/db/provenance.py` | Which layer a proof's dependencies actually reach, against the one it was filed in — the citation graph followed transitively, over rows alone |
 | `app/db/proofs_mapping.py` | `store_proof_lines`: project a checked engine `Proof` into those rows |
 | `app/db/metamath_store.py` | `import_corpus`: walk a Metamath `.mm` database and store the system, its proofs, and their line graphs |
 | `app/db/session.py` | Lazy async engine + `get_session` FastAPI dependency |
