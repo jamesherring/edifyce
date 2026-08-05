@@ -2942,3 +2942,23 @@ def test_a_dotted_lemma_citation_does_not_count_as_naming_a_line(client, db):
     assert proofs_router._cites("MP, 1, 2", 2) is True
     assert proofs_router._cites("HYP", 2) is False
     assert proofs_router._cites(None, 2) is False
+
+
+def test_the_removed_line_comes_back_exactly_as_it_stood(client, db):
+    # `display` is stored stripped and `indent` as a count of columns, so putting
+    # the two back together turns a tab into spaces and drops trailing space. The
+    # contract is that a caller can restore what was here — a re-spelling is not
+    # that.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner)
+    odd = "x ∈ y [HYP]\n\t(x ∈ y → x = y) [HYP]  "
+    created = client.post(
+        "/api/proofs",
+        json={"name": "P", "formal_system_id": system_id, "source": odd},
+    ).json()
+    proof_id = created["id"]
+    assert client.post(f"/api/proofs/{proof_id}/verify").json()["success"] is True
+
+    body = client.post(f"/api/proofs/{proof_id}/lines/remove", json={"line": 2}).json()
+
+    assert body["removed"] == odd.split("\n")[1]

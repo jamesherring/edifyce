@@ -718,6 +718,45 @@ def test_two_unnamed_rules_spelling_one_shape_still_collide() -> None:
     ]
 
 
+def test_a_rule_a_regex_leaf_would_also_match_collides() -> None:
+    """A regex leaf accepts a *language*, so it is never in the shape index.
+
+    The production pass asks it separately; the rule pass has to as well.
+    Reachable because a rule may pin **every** slot of its root —
+    `applicable_rules` counts a pinned slot as accounted for — and then render a
+    bare literal, which is exactly the shape a leaf can swallow.
+    """
+    system = build_system(SystemSpec(name="c", productions=[
+        Production(sort="formula", name="var", regex="[p-r]"),
+        Production(sort="formula", name="root", atom_value="SQ",
+                   denotes_constant=True),
+        Production(sort="formula", name="app", template="( F ` A )",
+                   bindings=[("F", "formula"), ("A", "formula")]),
+    ], lines=[LINE]))
+    constructors = notation_constructors(system.build_context, system.definitions)
+
+    # Both of `app`'s slots pinned, so nothing is left to render as a slot and
+    # `applicable_rules` is satisfied — the spelling is one bare literal.
+    both_pinned = Rule(
+        name="constant",
+        constructor="app",
+        pins={"F": "root", "A": "var"},
+        pieces=(("lit", "p"),),
+    )
+    assert applicable_rules([both_pinned], constructors) == [both_pinned]
+
+    derived = projection_for(system.build_context, {"SQ": "√"}, name="latex")
+    clash = with_rules(derived, [both_pinned])
+    report = notation_report(
+        system.build_context, {"SQ": "√"}, templates=clash.templates, rules=clash.rules
+    )
+
+    # `p` is in `var`'s language, so the text denotes both the rule's shape and
+    # the leaf. Reported without this, the notation would read collision-free.
+    (collision,) = report.collisions
+    assert set(collision.productions) == {"rule:constant", "var"}
+
+
 def test_rules_that_spell_distinctly_are_not_reported() -> None:
     # The case that must stay quiet — and the case `set.mm`'s own table is in: its
     # seven latex rules introduce no collision against the whole corpus grammar.

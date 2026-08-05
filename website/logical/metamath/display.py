@@ -646,7 +646,7 @@ def notation_report(
                     productions=tuple(sorted(clashing)),
                 )
             )
-    collisions.extend(_rule_collisions(rules, placed, grouped, tokens, spellings))
+    collisions.extend(_rule_collisions(rules, placed, grouped, regexes))
     return NotationReport(
         unmapped=tuple(sorted(unmapped)),
         collisions=tuple(sorted(collisions, key=lambda c: (c.sort, c.spelling))),
@@ -657,8 +657,7 @@ def _rule_collisions(
     rules: Iterable[Rule],
     placed: Sequence[tuple[str, Constructor]],
     grouped: Mapping[tuple[str, str], list[Constructor]],
-    tokens: Mapping[str, str],
-    spellings: Mapping[str, tuple[Piece, ...]],
+    regexes: Mapping[str, list[Constructor]],
 ) -> list[Collision]:
     """Spellings the ``rules`` half of a projection introduces, against everything.
 
@@ -690,6 +689,17 @@ def _rule_collisions(
         # Both directions at once: two rules spelling one shape, and a rule
         # spelling what a production already does.
         clashing = set(names) | {c.name for c in grouped.get((sort, skeleton), ())}
+        # And the third, which the production pass has to ask separately too: a
+        # regex leaf accepts a *language* rather than a spelling, so it is not in
+        # `grouped` and has to be asked whether it would match. Reachable because
+        # a rule may pin **every** slot of its root — `applicable_rules` counts a
+        # pinned slot as accounted for — and then render a bare literal.
+        if "\x00" not in skeleton:
+            clashing.update(
+                leaf.name
+                for leaf in regexes.get(sort, ())
+                if _matches_regex(leaf, skeleton)
+            )
         if len(clashing) < 2:
             continue
         found.append(

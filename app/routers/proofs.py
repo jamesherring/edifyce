@@ -2304,7 +2304,12 @@ async def remove_line(
 
     outcome = LineRemovalOutcome(
         line=payload.line,
-        removed=" " * going.indent + going.display,
+        # The source line itself, not `indent` and `display` put back together:
+        # `display` is stored stripped and the indent as a count of columns, so
+        # rebuilding one turns a tab into spaces and drops trailing whitespace.
+        # The contract is that a caller can restore what was here, which a
+        # re-spelling of it is not.
+        removed=lines[going.position],
         renumbered=[row.number - 1 for row in rows if row.number > payload.line],
     )
     if not (payload.apply and owned):
