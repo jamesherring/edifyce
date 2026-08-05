@@ -865,23 +865,30 @@ silently dead, which is what a table carried to another library would be.
 The API and the frontend need no change: rules ride in on the stored projection
 that `GET /proofs/{id}/structure?notation=…` already loads.
 
-What this still does not check is a **collision a rule introduces**.
-`notation_report` compares surface templates per production and a rule is not one;
-two rules spelling the same shape alike, or a rule colliding with a template,
-would not be reported. As a display that is the cosmetic case the report's own
-docstring already disclaims, and as a *source* it joins the 19 constant/variable
-pairs §4.2a refused Unicode-as-source over.
+A **collision a rule introduces** is now checked too, and was not when rules were
+added: `notation_report` compared surface templates per production, and a rule is
+not one — two rules spelling a shape alike, or a rule spelling what a template
+already does, went unreported. It takes `rules=` and reports either, naming the
+rule as `rule:<name>` so a curator knows which of the two tables to edit. A rule is
+compared by **shape alone**, without the slot-overlap test two productions get: a
+rule's slots are paths into a pinned shape, so their sorts are not readable off one
+constructor, and a curated table of seven is somewhere a false positive costs a
+glance where the derived grammar's two thousand is not. Measured against the whole
+of `set.mm`: the seven `latex` rules introduce **no** collision.
 
-The 19 remaining collisions are all a constant against a class *variable* of the
-same spelling (`+` is both `caddc` and a variable named `.+`). As a display that is
-cosmetic — `set.mm`'s own HTML tells them apart by colour, which `as_text` drops by
-policy — and as a *source* it would be a correctness bug, which is why §4.2a
-refused Unicode-as-source.
+The 19 remaining collisions are **two problems, not one** — eleven a constant
+against a class *variable* of the same spelling (`+` is both `caddc` and a variable
+named `.+`), and eight two distinct *constants* that `set.mm`'s own `latexdef` maps
+alike (`S.1` and `S.2` both declare `\int_2`; 39 of its 1,794 tokens share a
+spelling with another). As a display both are cosmetic — `set.mm`'s HTML tells the
+first eleven apart by colour, which `as_text` drops by policy — and as a *source*
+both are correctness bugs, which is why §4.2a refused Unicode-as-source. Only the
+first eleven would yield to a policy; see the authoring roadmap's §2 for the split.
 
 `scripts/notation_report.py` prints all three lists for a file, so the table stays
 driven by a list rather than by discovering breakage — and it reports collisions
-against the notation *as overridden*, since an override replaces a template
-wholesale and a collision one introduces is the only kind curating can create.
+against the notation **as adopted**, overrides and rules both, since each is a way
+curating can create a collision the token map says nothing about.
 
 `set.mm`'s own table is *passed to* the import rather than reached for by it
 (`import_corpus(overrides=…)`, as `corpus_spec` already takes the binder table),

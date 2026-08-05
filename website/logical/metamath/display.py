@@ -52,9 +52,7 @@ from ..rendering import Projection, Rule
 from .typesetting import as_text
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping, Sequence
 
     from ..build_context import FormalSystemContext
     from ..formal_system import FormalSystem
@@ -400,11 +398,21 @@ def projection_for(
 
 @dataclass(frozen=True)
 class Collision:
-    """Two or more productions of one sort that a notation spells the same."""
+    """Two or more productions of one sort that a notation spells the same.
+
+    A ``rules``-introduced spelling appears here under its rule's name prefixed
+    with ``rule:``, since a rule is not a production and a curator reading this
+    needs to know which of the two tables to edit.
+    """
 
     sort: str
     spelling: str
     productions: tuple[str, ...]
+
+
+# How a rule's name is written into `Collision.productions`. A rule and a
+# production can share a name, and the two live in different tables.
+RULE_PREFIX = "rule:"
 
 
 @dataclass(frozen=True)
@@ -545,6 +553,7 @@ def notation_report(
     tokens: Mapping[str, str],
     notations: Iterable[DefinedNotation] = (),
     templates: Mapping[str, tuple[Piece, ...]] | None = None,
+    rules: Iterable[Rule] = (),
 ) -> NotationReport:
     """Check ``tokens`` against ``context``'s grammar before adopting it.
 
@@ -567,8 +576,21 @@ def notation_report(
     what ``tokens`` derives — pass ``projection.templates`` after applying
     overrides. Without it this reports the *derived* notation, and an override is
     invisible: it replaces a template wholesale, so a collision one introduces is
-    the only kind a curator can create and exactly the kind a token-level check
-    cannot see.
+    exactly the kind a token-level check cannot see.
+
+    ``rules`` is the other half of a projection, and the other way a curator
+    creates a spelling. A rule re-spells a *shape*, so what it writes is a string
+    no production's template contains — `( sqrt \\` A )` becomes ``\\sqrt{A}`` —
+    and until it is passed here nothing checks that against the rest of the
+    notation. Pass ``projection.rules``.
+
+    A rule is compared by **shape alone**, without asking whether the slots could
+    take the same text — unlike two productions, which are only reported once
+    :func:`_slots_overlap` says so. That is a deliberate asymmetry rather than an
+    omission: a rule's slots are *paths* into a pinned shape, so their sorts are
+    not readable off one constructor, and a curated table is a handful of entries
+    where a false positive costs a glance. The derived grammar is thousands, where
+    it would bury the real ones.
 
     See :class:`NotationReport` on what an empty result does not establish.
     """
@@ -624,9 +646,62 @@ def notation_report(
                     productions=tuple(sorted(clashing)),
                 )
             )
+    collisions.extend(_rule_collisions(rules, placed, grouped, tokens, spellings))
     return NotationReport(
-        unmapped=tuple(sorted(unmapped)), collisions=tuple(collisions)
+        unmapped=tuple(sorted(unmapped)),
+        collisions=tuple(sorted(collisions, key=lambda c: (c.sort, c.spelling))),
     )
+
+
+def _rule_collisions(
+    rules: Iterable[Rule],
+    placed: Sequence[tuple[str, Constructor]],
+    grouped: Mapping[tuple[str, str], list[Constructor]],
+    tokens: Mapping[str, str],
+    spellings: Mapping[str, tuple[Piece, ...]],
+) -> list[Collision]:
+    """Spellings the ``rules`` half of a projection introduces, against everything.
+
+    A rule competes for a reading in every sort its **root** production is placed
+    at: it renders a term built by that production, so wherever one of those can
+    be parsed, so can this. Its own pieces are already in the target notation —
+    a rule is authored, not derived — so unlike a production's they are not mapped
+    through ``tokens``.
+    """
+    # (sort, skeleton) -> the rules spelling it, and the sorts each rule sits in.
+    by_shape: dict[tuple[str, str], list[str]] = {}
+    for rule in rules:
+        skeleton = "".join(
+            text if kind == "lit" else "\x00" for kind, text in rule.pieces
+        )
+        if not skeleton:
+            continue
+        for sort in {s for s, c in placed if c.name == rule.constructor}:
+            by_shape.setdefault((sort, skeleton), []).append(
+                f"{RULE_PREFIX}{rule.name or rule.constructor}"
+            )
+
+    found: list[Collision] = []
+    for (sort, skeleton), names in sorted(by_shape.items()):
+        # Both directions at once: two rules spelling one shape, and a rule
+        # spelling what a production already does.
+        clashing = set(names) | {c.name for c in grouped.get((sort, skeleton), ())}
+        if len(clashing) < 2:
+            continue
+        found.append(
+            Collision(
+                sort=sort,
+                spelling=_readable(skeleton),
+                productions=tuple(sorted(clashing)),
+            )
+        )
+    return found
+
+
+def _readable(skeleton: str) -> str:
+    # A skeleton's slots are NULs so they compare equal whatever they are called;
+    # a collision is a user-facing record and has to survive a terminal.
+    return skeleton.replace("\x00", "<>")
 
 
 def unicode_projection(system: FormalSystem, typesetting: Typesetting) -> Projection:

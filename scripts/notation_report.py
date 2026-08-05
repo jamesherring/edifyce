@@ -20,10 +20,12 @@ grammar can take.
 **unmapped** — tokens the map does not spell. Cosmetic: the token renders as
 itself and the result is mixed but readable.
 
-**collisions** — productions the notation spells alike. As a display that is a
+**collisions** — things the notation spells alike. As a display that is a
 presentation flaw; as a *source* it would be a correctness bug, since text would
-no longer determine the term. Finding none is not proof of none — see
-:class:`~website.logical.metamath.display.NotationReport`.
+no longer determine the term. Both halves of a curated projection are checked: a
+per-production override, and a *rule*, whose spelling appears in no production's
+template at all and is listed as `rule:<name>`. Finding none is not proof of none
+— see :class:`~website.logical.metamath.display.NotationReport`.
 
 Touches no database: this is a question about a file and a grammar.
 """
@@ -133,15 +135,16 @@ def main() -> int:
         else applicable_rules(DISPLAY_RULES.get(arguments.notation, ()), constructors)
     )
     projection = with_rules(projection, rules)
-    # Against the projection actually being adopted, not the raw map: an override
-    # replaces a template wholesale, so a collision one introduces is invisible to
-    # a token-level check — and that is the only kind curating this table can
-    # create.
+    # Against the projection actually being adopted, not the raw map: **both**
+    # halves of curating it can create a collision a token-level check cannot see.
+    # An override replaces a production's template wholesale; a rule writes a
+    # spelling that appears in no production's template at all.
     report = notation_report(
         system.build_context,
         tokens,
         system.context.definitions,
         templates=projection.templates,
+        rules=rules,
     )
 
     print(f"{arguments.source} — {arguments.notation}")
@@ -164,7 +167,7 @@ def main() -> int:
         print(f"    {token}")
     _elided(len(report.unmapped), arguments.limit)
 
-    print(f"\n  collisions — {len(report.collisions)} spellings shared by two productions")
+    print(f"\n  collisions — {len(report.collisions)} spellings shared by two things")
     for collision in report.collisions[: arguments.limit]:
         shared = ", ".join(collision.productions)
         print(f"    {collision.sort}: {collision.spelling!r} — {shared}")

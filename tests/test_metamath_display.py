@@ -625,6 +625,105 @@ def test_a_rule_pinning_a_production_the_grammar_lacks_is_dropped() -> None:
     assert applicable_rules([absent], constructors) == []
 
 
+# The same generic application, plus a *unary* class production — so a rule on
+# `cfv` (whose operator slot is pinned and consumed, leaving one slot rendered)
+# and a declared production can end up the same shape, which is what a collision
+# between the two halves of a projection looks like.
+UNARY = r"""
+$c |- wff class ( ) ` sqrt abs neg $.
+$v A F $.
+cA $f class A $.
+cF $f class F $.
+csqrt $a class sqrt $.
+cabs $a class abs $.
+cneg $a class neg A $.
+cfv $a class ( F ` A ) $.
+"""
+
+_ROOT = (("lit", r"\sqrt{"), ("slot", "A"), ("lit", "}"))
+
+
+def unary() -> tuple[FormalSystem, dict[str, str]]:
+    system = build_system(build_spec(parse(UNARY), name="t"))
+    return system, {"sqrt": r"\surd", "abs": r"\mathrm{abs}", "neg": "-"}
+
+
+def _rule(pins: dict[str, str], name: str, pieces: tuple = _ROOT) -> Rule:
+    return Rule(name=name, constructor="cfv", pins=pins, pieces=pieces)
+
+
+def test_a_collision_a_rule_introduces_is_reported() -> None:
+    # The *other* way curating a projection creates a collision, and the one
+    # nothing checked until now. A rule writes a spelling that appears in no
+    # production's template at all — that is what it is for — so neither the token
+    # map nor the templates say anything about it.
+    system, tokens = unary()
+    derived = projection_for(system.build_context, tokens, name="latex")
+    # `cneg` re-spelled as a radical, and a rule that spells `( sqrt ` A )` the
+    # same way: two different terms, one string.
+    clash = with_rules(
+        with_overrides(derived, {"cneg": _ROOT}), [_rule({"F": "csqrt"}, "sqrt")]
+    )
+
+    report = notation_report(
+        system.build_context, tokens, templates=clash.templates, rules=clash.rules
+    )
+    assert [set(c.productions) for c in report.collisions] == [{"cneg", "rule:sqrt"}]
+
+    # And with the same templates but no rules, nothing is reported — which is the
+    # whole point of passing them.
+    assert not notation_report(
+        system.build_context, tokens, templates=clash.templates
+    ).collisions
+
+
+def test_two_rules_spelling_one_shape_collide() -> None:
+    # Same root, different pins, one spelling: the text cannot say which pin held.
+    # Nothing outside this check would notice, since `with_rules` deliberately
+    # adds rather than replaces — several rules sharing a root is the idiom.
+    system, tokens = unary()
+    derived = projection_for(system.build_context, tokens, name="latex")
+    both = with_rules(
+        derived, [_rule({"F": "csqrt"}, "one"), _rule({"F": "cabs"}, "two")]
+    )
+
+    report = notation_report(
+        system.build_context, tokens, templates=both.templates, rules=both.rules
+    )
+    assert [set(c.productions) for c in report.collisions] == [
+        {"rule:one", "rule:two"}
+    ]
+
+
+def test_rules_that_spell_distinctly_are_not_reported() -> None:
+    # The case that must stay quiet — and the case `set.mm`'s own table is in: its
+    # seven latex rules introduce no collision against the whole corpus grammar.
+    system, tokens = unary()
+    derived = projection_for(system.build_context, tokens, name="latex")
+    fine = with_rules(
+        derived,
+        [
+            _rule({"F": "csqrt"}, "one"),
+            _rule({"F": "cabs"}, "two", (("lit", "|"), ("slot", "A"), ("lit", "|"))),
+        ],
+    )
+
+    assert not notation_report(
+        system.build_context, tokens, templates=fine.templates, rules=fine.rules
+    ).collisions
+
+
+def test_a_report_given_no_rules_reads_the_templates_alone() -> None:
+    # The default every existing caller means.
+    system, tokens = unary()
+    derived = projection_for(system.build_context, tokens, name="latex")
+    assert notation_report(
+        system.build_context, tokens, templates=derived.templates
+    ) == notation_report(
+        system.build_context, tokens, templates=derived.templates, rules=()
+    )
+
+
 def test_with_rules_adds_rather_than_replaces() -> None:
     # Unlike an override, which is keyed by name and wins outright: several rules
     # legitimately share a root, since fixing a different operand in the same
