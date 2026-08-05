@@ -1966,9 +1966,29 @@ system can reach the state. Verified by moving a stored ZF proof one layer up,
 where the check names it exactly — `zf-thm (in 'First-order logic') cites
 'ax-ext', declared in 'ZF set theory'`.
 
-- **Bound variables at corpus scale:** spot-check that a `$d`-carrying theorem
-  imported into FOL still refuses a capturing citation from ZFC — the R2 test,
-  run against real `set.mm` data rather than a fixture. **Still open.**
+**Bound variables at corpus scale — the groundwork is measured, the check is
+still open.** R2 pinned this on a fixture: FOL's `ax-5` carries
+`not occurs(x, ph)`, cited in ZFC at `ph := (x ∈ y)` is refused and at
+`ph := (z ∈ y)` is accepted. D5 asks for the same against real data, and the
+first question is whether the corpus even carries what the check needs. It does:
+
+| | |
+|---|---|
+| `ax-5` is filed in | **First-order logic**, statement `( ph -> A. x ph )` |
+| metavariables | `ph : wff`, `x : setvar` |
+| its `$d x ph` survives as | an `and` over three `disjoint` provisos — one per variable sort, `wff_var` / `setvar_var` / `class_var` |
+| from the **ZF** layer | resolves, and its terms are **cached** |
+
+The three-way expansion is what a Metamath `$d` over a `wff` metavariable means:
+`x` must not occur in `ph` as a variable of *any* sort. And the `wff_var` one is
+the proviso that `_effective_symbols` exists for — declared in the propositional
+layer, needed by a first-order theorem, which is the shape that refused 354
+promotions before D4 found it.
+
+So the boundary carries the constraint. What is not yet written is the citation
+itself: a ZF-layer proof citing `ax-5` at a capturing instantiation and being
+refused, at a non-capturing one and being accepted. Both directions in one test,
+for the reason R2 gives — either alone is passed by a check that is not running.
 
 #### D6 — the provenance report
 
