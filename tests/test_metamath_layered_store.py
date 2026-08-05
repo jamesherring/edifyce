@@ -725,6 +725,38 @@ def test_a_proof_moved_out_of_reach_of_its_citation_is_caught(
 
     caught = unreachable_citations(session)
     assert [(u.proof, u.label, u.declared_in) for u in caught] == [
-        ("zf-thm", "ax-ext", "ZF set theory")
+        ("zf-thm", "ax-ext", ("ZF set theory",))
     ]
     assert caught[0].filed_in == "First-order logic"
+
+
+def test_a_label_declared_in_two_layers_is_reachable_from_either(
+    session: Session, database: Database
+) -> None:
+    # A label is unique per *system*, not per database — `_nearest` exists
+    # because a spine may declare one twice — so "where is this label declared?"
+    # has more than one answer, and a citation is stranded only when the chain
+    # reaches *none* of them. Keyed by label alone the guard answers with
+    # whichever row the query returned last, which invents a failure as readily
+    # as it hides one (found in review).
+    import_corpus(session, database, name="Corpus", plan=LAYERS)
+    spine = systems(session)
+
+    # `fol-thm` cites `ax-4`, which its own layer declares. Promote a second
+    # `ax-4` in the *leaf*, which the first-order layer cannot see: the citation
+    # is still reachable through FOL's own copy, and calling it stranded because
+    # a descendant happens to share the spelling would be a false alarm.
+    own = session.scalar(
+        select(PromotedTheoremRow).where(PromotedTheoremRow.label == "ax-4")
+    )
+    session.add(
+        PromotedTheoremRow(
+            system_id=spine[-1].id,
+            label=own.label,
+            statement=own.statement,
+            primitive=own.primitive,
+        )
+    )
+    session.flush()
+
+    assert unreachable_citations(session) == ()

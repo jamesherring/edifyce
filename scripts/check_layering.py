@@ -138,7 +138,12 @@ class Unreachable:
     proof: str
     filed_in: str
     label: str
-    declared_in: str
+    # Every system that declares this label, not one of them. A label is unique
+    # per *system*, not per database — that is the whole reason `_nearest`
+    # exists — so a label promoted in two layers has two homes, and the citation
+    # is out of reach only if the chain reaches neither. Collapsing them to one
+    # would both invent failures and hide them, depending which row won.
+    declared_in: tuple[str, ...]
 
 
 @dataclass
@@ -272,26 +277,34 @@ def unreachable_citations(session: Session) -> tuple[Unreachable, ...]:
             system_id = parent[system_id]
         return seen
 
-    declared = {
-        row.label: row.system_id
-        for row in session.scalars(select(PromotedTheoremRow))
-    }
+    declared: dict[str, set[uuid.UUID]] = {}
+    for label, system_id in session.execute(
+        select(PromotedTheoremRow.label, PromotedTheoremRow.system_id)
+    ):
+        declared.setdefault(label, set()).add(system_id)
+    # Columns rather than ORM objects: this runs over the whole corpus, and
+    # loading every line as an entity would fill the identity map the import's
+    # `_checkpoint` batching exists to keep empty. Only these two are read.
     references: dict[uuid.UUID, list[str | None]] = {}
-    for line in session.scalars(select(ProofLineRow)):
-        references.setdefault(line.proof_id, []).append(line.reference)
+    for proof_id, reference in session.execute(
+        select(ProofLineRow.proof_id, ProofLineRow.reference)
+    ):
+        references.setdefault(proof_id, []).append(reference)
 
     found: list[Unreachable] = []
-    for proof in session.scalars(select(Proof)):
-        reachable = visible(proof.formal_system_id)
-        for label in cited_labels(references.get(proof.id, ())):
-            home = declared.get(label)
-            if home is not None and home not in reachable:
+    for proof_id, proof_name, filed_in in session.execute(
+        select(Proof.id, Proof.name, Proof.formal_system_id)
+    ):
+        reachable = visible(filed_in)
+        for label in cited_labels(references.get(proof_id, ())):
+            homes = declared.get(label, set())
+            if homes and not homes & reachable:
                 found.append(
                     Unreachable(
-                        proof=proof.name,
-                        filed_in=names[proof.formal_system_id],
+                        proof=proof_name,
+                        filed_in=names[filed_in],
                         label=label,
-                        declared_in=names[home],
+                        declared_in=tuple(sorted(names[home] for home in homes)),
                     )
                 )
     return tuple(found)
@@ -411,7 +424,8 @@ def compare(flat: Run, spined: Run, expected: Mapping[str, str]) -> Comparison:
                 what="a citation the citing proof's chain cannot reach",
                 detail=(
                     f"{stranded.proof} (in {stranded.filed_in!r}) cites "
-                    f"{stranded.label!r}, declared in {stranded.declared_in!r}"
+                    f"{stranded.label!r}, declared in "
+                    f"{', '.join(repr(name) for name in stranded.declared_in)}"
                 ),
             )
         )
@@ -422,9 +436,17 @@ def compare(flat: Run, spined: Run, expected: Mapping[str, str]) -> Comparison:
                 detail=f"{len(spined.unreachable)} in all; first five above",
             )
         )
-    # And the flat run has one system, so nothing there can be out of reach —
-    # if it ever were, the comparison below would be against a broken baseline.
-    result.require("unreachable in the flat run", (), flat.unreachable)
+    # And the flat run has one system, so nothing there can be out of reach — if
+    # it ever were, the comparison below would be against a broken baseline. Not
+    # `require`, whose detail reads "flat=… spined=…": this is a fact about one
+    # run, and phrasing it as a disagreement between the two misnames it.
+    if flat.unreachable:
+        result.differences.append(
+            Difference(
+                what="a citation out of reach in the *flat* run",
+                detail=f"{len(flat.unreachable)}, e.g. {flat.unreachable[0]}",
+            )
+        )
 
     result.require("checked", flat.checked, spined.checked)
     result.require("verified", flat.verified, spined.verified)
