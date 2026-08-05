@@ -98,7 +98,7 @@ from app.routers._common import (
 from app.routers.systems import load_effective, load_system
 from website.logical.formal_system.diagnostics import numbers
 from website.logical.formal_system.proof import Proof as EngineProof
-from website.logical.formal_system.proof import citation_text
+from website.logical.formal_system.proof import CITATION_SEPARATOR, citation_text
 from website.logical.formal_system.proposals import (
     Proposal,
     ProposalError,
@@ -2221,7 +2221,6 @@ async def remove_line(
             select(ProofLineRow)
             .where(ProofLineRow.proof_id == proof.id, ProofLineRow.number.is_not(None))
             .order_by(ProofLineRow.number)
-            .options(selectinload(ProofLineRow.antecedents))
         )
     ).all()
     if not rows:
@@ -2239,12 +2238,14 @@ async def remove_line(
             detail=f"This proof has no line {payload.line}.",
         )
 
-    # Refused before any build: this is a fact about the stored edges.
+    # Read off the **citation text**, not the justification edges. An edge is
+    # written only where the rule applied, so a line that cites this one and does
+    # not currently check has none — and would sail past this guard and have its
+    # citation quietly retargeted by the renumbering below. The text is what
+    # `renumber` rewrites, so asking it the same question is the only way the two
+    # cannot disagree.
     cited_by = sorted(
-        row.number
-        for row in rows
-        for edge in row.antecedents
-        if edge.antecedent_line_id == going.id
+        row.number for row in rows if _cites(row.reference, payload.line)
     )
     if cited_by:
         raise HTTPException(
@@ -2324,6 +2325,22 @@ async def remove_line(
             "holes": verification.response.holes,
             "only_holes": verification.response.only_holes,
         }
+    )
+
+
+def _cites(reference: str | None, number: int) -> bool:
+    """Whether a stored citation names line ``number``.
+
+    Exactly `FormalSystem.renumber`'s rule for what a line number *is*: a bare
+    integer among the citation's parts. A rule's label, the definitional and hole
+    keywords and a dotted lemma reference (`[MP, A.2]`, whose `2` is a line of
+    another proof) are none, and neither shifts nor counts here.
+    """
+    if reference is None:
+        return False
+    return any(
+        part.isdigit() and int(part) == number
+        for part in reference.split(CITATION_SEPARATOR)
     )
 
 

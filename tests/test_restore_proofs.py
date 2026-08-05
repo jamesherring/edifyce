@@ -167,6 +167,24 @@ def test_a_driven_proof_is_left_as_the_corpus_wrote_it(corpus):
         assert tally.passed + tally.skipped == 4
 
 
+def test_a_refused_removal_still_leaves_the_proof_as_it_was(corpus, monkeypatch):
+    # The `apply` round takes its inserted line back out through `/lines/remove`.
+    # If that refuses, returning the failure and stopping would leave the proof
+    # carrying a hole — and so *invalid*, which the selection reads as "not a
+    # proof to drive". The failure would then quietly shrink the next run.
+    before = {key.label: key.source for key in restore._keys(corpus, None, 10, longest=False)}
+
+    async def _refuse(sessions, owner, proof_id, line, apply=True):
+        return restore.Call(status=409, detail="nope")
+
+    monkeypatch.setattr(restore, "_remove", _refuse)
+    tallies, _ = _run(corpus, ["apply"])
+
+    assert [r.ok for r in tallies["apply"].results if not r.skipped] == [False] * 4
+    after = {key.label: key.source for key in restore._keys(corpus, None, 10, longest=False)}
+    assert after == before
+
+
 def test_a_target_that_already_holds_systems_is_not_silently_dropped(corpus):
     # The natural thing to hand `--database-url` is whatever `DATABASE_URL` is
     # already set to, and this run drops every table and reassigns every proof's

@@ -2903,3 +2903,42 @@ def test_a_line_added_and_removed_leaves_the_proof_as_it_was(client, db):
     )
 
     assert client.get(f"/api/proofs/{proof_id}").json()["source"] == _THREE
+
+
+def test_a_failing_line_that_cites_the_removed_one_still_blocks_it(client, db):
+    """The guard reads the citation, not the justification edges.
+
+    An edge is written only where the rule *applied*, so a line that cites this
+    one and does not currently check has none. Reading edges let such a line sail
+    past and had its citation silently retargeted by the renumbering — `[MP, 1, 2]`
+    came back as `[MP, 1, 1]`, naming a different premise. Nothing downstream
+    catches that: `_broken_by_removal` only looks at lines that were valid before.
+    """
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner)
+    # The MP line does not follow — `x = z` is not the consequent — so it stores
+    # no antecedent edges, though its citation plainly names lines 1 and 2.
+    source = "x ∈ y [HYP]\n(x ∈ y → x = y) [HYP]\nx = z [MP, 1, 2]"
+    created = client.post(
+        "/api/proofs",
+        json={"name": "P", "formal_system_id": system_id, "source": source},
+    ).json()
+    proof_id = created["id"]
+    assert client.post(f"/api/proofs/{proof_id}/verify").json()["success"] is False
+
+    res = client.post(
+        f"/api/proofs/{proof_id}/lines/remove", json={"line": 1, "apply": True}
+    )
+
+    assert res.status_code == 409, res.text
+    assert "cited by 3" in res.json()["detail"]
+    assert client.get(f"/api/proofs/{proof_id}").json()["source"] == source
+
+
+def test_a_dotted_lemma_citation_does_not_count_as_naming_a_line(client, db):
+    # `[MP, A.2]`'s `2` is a line of *another* proof, which `renumber` leaves
+    # alone — so the guard must not read it as naming line 2 here either.
+    assert proofs_router._cites("MP, A.2", 2) is False
+    assert proofs_router._cites("MP, 1, 2", 2) is True
+    assert proofs_router._cites("HYP", 2) is False
+    assert proofs_router._cites(None, 2) is False

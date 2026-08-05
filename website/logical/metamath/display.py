@@ -670,16 +670,20 @@ def _rule_collisions(
     """
     # (sort, skeleton) -> the rules spelling it, and the sorts each rule sits in.
     by_shape: dict[tuple[str, str], list[str]] = {}
-    for rule in rules:
+    for index, rule in enumerate(rules):
         skeleton = "".join(
             text if kind == "lit" else "\x00" for kind, text in rule.pieces
         )
         if not skeleton:
             continue
+        # `Rule.name` is optional and nothing dispatches on it, so two rules can
+        # share one — and two *unnamed* rules on one root share the empty string.
+        # The identity has to stay distinct or the pair being reported would
+        # deduplicate itself away, which is the collision going quiet at exactly
+        # the moment it is found.
+        identity = f"{RULE_PREFIX}{rule.name or f'{rule.constructor}#{index}'}"
         for sort in {s for s, c in placed if c.name == rule.constructor}:
-            by_shape.setdefault((sort, skeleton), []).append(
-                f"{RULE_PREFIX}{rule.name or rule.constructor}"
-            )
+            by_shape.setdefault((sort, skeleton), []).append(identity)
 
     found: list[Collision] = []
     for (sort, skeleton), names in sorted(by_shape.items()):

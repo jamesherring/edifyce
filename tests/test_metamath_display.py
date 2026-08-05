@@ -695,6 +695,29 @@ def test_two_rules_spelling_one_shape_collide() -> None:
     ]
 
 
+def test_two_unnamed_rules_spelling_one_shape_still_collide() -> None:
+    # `Rule.name` is optional and nothing dispatches on it, so two unnamed rules
+    # on one root share the empty string. Identifying them by it collapsed the
+    # pair to one entry and the collision went quiet — at exactly the moment it
+    # was found.
+    system, tokens = unary()
+    derived = projection_for(system.build_context, tokens, name="latex")
+    both = with_rules(
+        derived,
+        [
+            Rule(constructor="cfv", pins={"F": "csqrt"}, pieces=_ROOT),
+            Rule(constructor="cfv", pins={"F": "cabs"}, pieces=_ROOT),
+        ],
+    )
+
+    report = notation_report(
+        system.build_context, tokens, templates=both.templates, rules=both.rules
+    )
+    assert [set(c.productions) for c in report.collisions] == [
+        {"rule:cfv#0", "rule:cfv#1"}
+    ]
+
+
 def test_rules_that_spell_distinctly_are_not_reported() -> None:
     # The case that must stay quiet — and the case `set.mm`'s own table is in: its
     # seven latex rules introduce no collision against the whole corpus grammar.

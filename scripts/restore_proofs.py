@@ -560,11 +560,13 @@ async def round_apply(
     fine on the way in and is wrong on the way out, and only reading the rows back
     against the answer key says so.
 
-    The proof is put back afterwards, through the ordinary edit route rather than
-    by writing the row: a `--keep` re-run must find the corpus as it was, and a
-    proof left carrying a hole is not merely different — it is *invalid*, and the
-    selection only takes proofs that verify, so it would quietly disappear from
-    every subsequent run.
+    The proof is put back afterwards through ``/lines/remove``, which makes the
+    restore a *test* rather than a cleanup: insert and remove are inverse
+    renumberings and `_settled` demands the corpus's own bytes back. Whether that
+    works or not the proof **is** put back — by the edit route if the removal
+    would not — because a `--keep` re-run must find the corpus as it was, and a
+    proof left carrying a hole is not merely different but *invalid*, which the
+    selection reads as "not a proof to drive" and drops silently.
     """
     total = len(key.steps)
     if total < 2:
@@ -626,6 +628,11 @@ async def round_apply(
     counter[0] += 1
     removed = await _remove(sessions, owner, key.proof_id, at)
     if not removed.ok:
+        # Reported *and* undone. Returning here would leave the proof holed and so
+        # invalid, and the selection would drop it from every later `--keep` run —
+        # a failure quietly shrinking the next run's coverage.
+        counter[0] += 1
+        await _rewrite(sessions, owner, key.proof_id, key.source)
         return Result(
             key.label,
             "apply",
