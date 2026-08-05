@@ -34,10 +34,11 @@ from sqlalchemy import select
 
 from app.db.models import FormalSystem, Proof
 from app.db.proof_lines import ProofLineRow
-from app.db.promoted_theorems import PromotedTheoremRow
+from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
+from app.db.systems import RuleRow
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping, Sequence
+    from collections.abc import AbstractSet, Iterable, Mapping, Sequence
 
     from sqlalchemy.orm import Session
 
@@ -251,6 +252,7 @@ def _cited(
     chain: Sequence[uuid.UUID],
     library: Mapping[tuple[uuid.UUID, str], _Entry],
     elsewhere: Mapping[tuple[uuid.UUID, str], _Entry],
+    explained: AbstractSet[str],
 ) -> tuple[_Citation, ...]:
     """The entries a proof in ``chain`` means by those labels.
 
@@ -267,12 +269,23 @@ def _cited(
     proof was filed away from its dependency, so the check would have been one
     that cannot fail — found by the test written to make it fail.
 
-    **Keyed by the tree's root, not by label alone.** ``proof_lines.rule`` holds
-    whatever justified the line, which for an ordinary inference rule is a name
-    like ``MP`` that any system may declare. A database-wide index therefore
-    resolved one corpus's rule name to another corpus's theorem and invented a
-    dependency out of a coincidence of spelling — enough, on a shared database,
-    to fire the misfiled hard failure (found in review).
+    **Keyed by the tree's root, and only for a label the chain cannot otherwise
+    explain.** ``proof_lines.rule`` holds whatever justified the line, which for
+    an ordinary inference rule is a name like ``MP`` that any system may declare.
+    Two rounds of review on that:
+
+    - a *database-wide* index resolved one corpus's rule name to another
+      corpus's theorem, inventing a dependency out of a coincidence of spelling.
+      Hence the root;
+    - the root alone still lets two **siblings** collide, since a proof in one
+      branch citing its own rule ``R`` found a promoted ``R`` in the other and
+      was called misfiled for it. Hence ``explained`` — the labels the proof's
+      own chain accounts for as something that is *not* a library entry: a rule
+      it declares, or a hypothesis of the theorem being proved. Those resolve to
+      no layer and drop out, rather than falling through to a stranger.
+
+    What is left for the fallback is a label the citing chain explains in no way
+    at all, which is the shape a misfiled proof has and nothing else does.
     """
     root = chain[0]
     found: list[_Citation] = []
@@ -283,10 +296,42 @@ def _cited(
                 found.append(_Citation(entry, reachable=True))
                 break
         else:
-            stray = elsewhere.get((root, label))
+            stray = None if label in explained else elsewhere.get((root, label))
             if stray is not None:
                 found.append(_Citation(stray, reachable=False))
     return tuple(found)
+
+
+def _rule_labels(session: Session) -> dict[uuid.UUID, set[str]]:
+    """Per system, every spelling by which a citation could name one of its rules.
+
+    Both ``label`` and ``name``, because a rule citation resolves through either
+    and the cost of over-collecting is nil here: everything this set holds is
+    dropped from the provenance graph, and a rule is not a dependency on a
+    *layer* whichever of its two names was written.
+    """
+    found: dict[uuid.UUID, set[str]] = {}
+    for system_id, label, name in session.execute(
+        select(RuleRow.system_id, RuleRow.label, RuleRow.name)
+    ):
+        found.setdefault(system_id, set()).update({label, name})
+    return found
+
+
+def _premise_labels(session: Session) -> dict[uuid.UUID, set[str]]:
+    """Per promoted theorem, the labels its *own* proof cites its hypotheses by.
+
+    A `$e` is citable only from inside the block that declares it, so it is a
+    column on the theorem rather than a library entry — and a proof citing one is
+    not depending on any layer. Excluded for the same reason a rule is.
+    """
+    found: dict[uuid.UUID, set[str]] = {}
+    for theorem_id, label in session.execute(
+        select(PromotedTheoremPremiseRow.theorem_id, PromotedTheoremPremiseRow.label)
+        .where(PromotedTheoremPremiseRow.label.is_not(None))
+    ):
+        found.setdefault(theorem_id, set()).add(label)
+    return found
 
 
 def _deeper(
@@ -431,11 +476,21 @@ def provenance(session: Session) -> tuple[Provenance, ...]:
         if held is None or depths[entry.system_id] > depths[held.system_id]:
             elsewhere[key] = entry
 
+    rules = _rule_labels(session)
+    premises = _premise_labels(session)
     deps = {
         proof_id: _cited(
-            cited_labels.get(proof_id, ()), chains[system_id], library, elsewhere
+            cited_labels.get(proof_id, ()),
+            chains[system_id],
+            library,
+            elsewhere,
+            # What this proof's own chain accounts for without any library entry:
+            # a rule any of its systems declares, and the hypotheses of the very
+            # theorem it proves.
+            {name for system in chains[system_id] for name in rules.get(system, ())}
+            | premises.get(theorem_id, set()),
         )
-        for proof_id, _, system_id, _ in rows
+        for proof_id, _, system_id, theorem_id in rows
     }
 
     memo: dict[uuid.UUID, _Reach] = {}

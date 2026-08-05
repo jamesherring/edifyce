@@ -2090,13 +2090,21 @@ filed lower*. So a citation carries whether the citing proof's chain could
 resolve it, and `misfiled` is that fact. It is the same defect
 `check_layering.unreachable_citations` reports, in the vocabulary of provenance.
 
-*And the fallback that finds those citations is keyed by the tree's root.*
+*And the fallback that finds those citations took two rounds of review to scope.*
 `proof_lines.rule` holds whatever justified the line, which for an ordinary
-inference rule is a name like `MP` that any system may declare. Indexed
-database-wide, the fallback resolved one corpus's rule name to another corpus's
-theorem — inventing a dependency out of a coincidence of spelling, and firing
-the misfiled hard failure on a database holding more than one system. Both found
-in review, and both pinned.
+inference rule is a name like `MP` that any system may declare — so a citation of
+a rule and a citation of a theorem are the same column, and the fallback has to
+tell them apart by something else. Indexed **database-wide**, it resolved one
+corpus's rule name to another corpus's theorem, inventing a dependency out of a
+coincidence of spelling and firing the misfiled hard failure. Keyed by the
+tree's **root**, two *sibling branches* still collided the same way: a proof
+citing its own rule `R` found a sibling's promoted `R` beneath the shared root.
+
+What settles it is asking what the citing chain explains **without** any library
+entry — a rule one of its systems declares, or a hypothesis of the theorem being
+proved, neither of which is a dependency on a layer. Those drop out, and what is
+left for the fallback is a label the chain accounts for in no way at all, which
+is the shape a misfiled proof has and nothing else does. All three pinned.
 
 *What the query reads, against what §5.5 guessed it would.* Not
 `proof_line_antecedents` — those edges are line-to-line *within* one proof, so

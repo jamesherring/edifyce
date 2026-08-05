@@ -34,8 +34,9 @@ from sqlalchemy.orm import Session
 from app.db import Base
 from app.db.metamath_store import import_corpus
 from app.db.models import FormalSystem, Proof
-from app.db.promoted_theorems import PromotedTheoremRow
+from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
 from app.db.provenance import Provenance, by_layer, provenance
+from app.db.systems import RuleRow
 from website.logical.metamath import parse
 from website.logical.metamath.setmm import LAYERS
 
@@ -271,6 +272,77 @@ def test_a_label_another_corpus_declares_is_not_a_dependency(
     assert report.axioms == ()
     assert report.deepest_axiom is None
     assert not report.misfiled
+
+
+def test_a_rule_of_the_proofs_own_chain_is_not_a_citation_of_a_sibling(
+    imported: Session,
+) -> None:
+    # **From review, the second round.** Keying the fallback by the tree's root
+    # stops one corpus reaching another, and leaves two *branches of one tree*
+    # colliding: a proof citing its own inference rule `R` found a sibling's
+    # promoted `R` under the same root and was called misfiled for it. A rule
+    # its chain declares resolves to no layer and drops out instead.
+    spine = list(
+        imported.scalars(select(FormalSystem).order_by(FormalSystem.created_at))
+    )
+    imported.add(
+        RuleRow(
+            system_id=spine[0].id, position=99, label="R", name="R",
+            deduction="|- ph",
+        )
+    )
+    sibling = FormalSystem(
+        name="A sibling branch", slug="sibling", inherits_from_id=spine[0].id
+    )
+    imported.add(sibling)
+    imported.flush()
+    imported.add(
+        PromotedTheoremRow(
+            system_id=sibling.id, label="R", statement="|- ph", primitive=True
+        )
+    )
+    cites_its_rule = imported.scalar(select(Proof).where(Proof.name == "fol-via-ax4"))
+    for line in cites_its_rule.line_rows:
+        line.rule = "R"
+    imported.flush()
+
+    report = reports(imported)["fol-via-ax4"]
+    assert not report.misfiled
+    assert (report.deepest_cited, report.axioms) == (None, ())
+
+
+def test_a_hypothesis_of_the_theorem_being_proved_is_not_a_citation(
+    imported: Session,
+) -> None:
+    # The other thing a chain explains without any library entry. A Metamath `$e`
+    # is citable only from inside the block declaring it, so it is a column on
+    # the theorem rather than an entry of its own — and a proof citing one
+    # depends on no layer. Left in, it would fall through to the fallback on the
+    # same coincidence of spelling a rule does.
+    spine = list(
+        imported.scalars(select(FormalSystem).order_by(FormalSystem.created_at))
+    )
+    proof = imported.scalar(select(Proof).where(Proof.name == "fol-via-ax4"))
+    imported.add(
+        PromotedTheoremPremiseRow(
+            theorem_id=proof.theorem_id, position=0, statement="|- ph", label="hyp.1"
+        )
+    )
+    sibling = FormalSystem(
+        name="A sibling branch", slug="sibling", inherits_from_id=spine[0].id
+    )
+    imported.add(sibling)
+    imported.flush()
+    imported.add(
+        PromotedTheoremRow(
+            system_id=sibling.id, label="hyp.1", statement="|- ph", primitive=True
+        )
+    )
+    for line in proof.line_rows:
+        line.rule = "hyp.1"
+    imported.flush()
+
+    assert not reports(imported)["fol-via-ax4"].misfiled
 
 
 def test_the_reports_come_back_in_a_stable_order(imported: Session) -> None:
