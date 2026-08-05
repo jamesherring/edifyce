@@ -5,6 +5,7 @@
 | `edifyce-dev` | Run the whole app (Postgres, migrations, API, SPA) with one command |
 | `import_metamath.py` | Import a Metamath `.mm` database — system, proofs, line graphs, terms |
 | `check_layering.py` | Assert that importing a corpus as a **spine** changes nothing about the import |
+| `restore_proofs.py` | Blank a corpus proof's justifications and drive the authoring loop to restore them |
 
 ## `edifyce-dev` — run the whole app with one command
 
@@ -160,6 +161,45 @@ After a run the corpus is queryable in plain SQL, with nothing recompiled:
 select rule, count(*) from proof_lines where rule is not null
 group by rule order by 2 desc limit 10;
 ```
+
+## `restore_proofs.py` — drive the authoring loop against a corpus
+
+The structured write path (`/proofs/{id}/cite`, `/proofs/{id}/lines`, holes,
+structured failures) is exercised in the test suite by three-line synthetic
+proofs. This drives the same loop against **real** proofs, using the corpus as an
+answer key: blank a step's citation and the right answer is already known, so
+success is exact and needs no search.
+
+```bash
+uv run python scripts/restore_proofs.py set.mm --limit 3000 --proofs 20 --longest
+```
+
+Needs no database of its own — it imports into a throwaway SQLite file beside the
+`.mm` (or `--database-url`), gives the imported proofs an owner so the owner-only
+apply path is reachable, and exits non-zero if any round fails. `--keep` reuses an
+already-imported file, which is what you want while iterating: the import is the
+slow part, and a run puts every proof it drove back the way it found it.
+
+A target that already holds systems is **refused** rather than rebuilt (pass
+`--recreate` to mean it). This run drops every table and then takes ownership of
+every proof it finds, and the obvious thing to hand `--database-url` is whatever
+`DATABASE_URL` already points at.
+
+Five rounds, selected with `--rounds`:
+
+| round | what it drives |
+|---|---|
+| `cite` | blank every step to `[?]` bottom-up, restore top-down; the source must come back byte-identical |
+| `insert` | dry-run a line *before* an existing one, checking what renumbered |
+| `state` | restate a step's formula as a constructor tree and require the corpus's own spelling back |
+| `probe` | offer wrong citations and require a structured refusal (§7's vocabulary) |
+| `apply` | really insert a line mid-proof, then read the stored structure back |
+
+`--longest` takes the proofs with the most lines rather than a spread of them, and
+`--label` drives one by name. The `probe` round prints what each kind of wrong
+citation was told, which is a measurement rather than a pass/fail: it is how the
+"antecedent order carries no information" and "no antecedents means the lines
+above" facts in `docs/authoring-and-ingestion-roadmap.md` §9d were established.
 
 ## Running the API tests against Postgres
 
