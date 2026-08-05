@@ -718,11 +718,16 @@ Which makes the fix simpler than a cache: **build once per request.** `/cite` an
 verify nothing, so it loaded and built the whole system a second time — 2 builds,
 26 queries, 2 `build_spec`s for one call. `_Built` is now one object carrying the
 loaded system, its effective spec, the cached terms and the compiled system, and
-`_verify_with_references` takes one instead of making one. Both routes take the
-system lock *before* they build, so the grammar they compose against is the
-grammar the check runs against; that was not previously true of the build used to
-rewrite the line. `_require_publishable` takes one too, which is what an applied
-`/cite` on a published proof re-gates through.
+`_verify_with_references` takes one instead of making one. `_require_publishable`
+takes one too, which is what an applied `/cite` on a published proof re-gates
+through — after its two cheap gates, so a publish refused for a draft system still
+pays nothing for a compile it would throw away.
+
+**Every build is now inside the system lock**, which the build used to rewrite a
+line was not: `/cite` and `/lines` take it before they compose, and the publish
+gate takes it on the one path that holds none of its own (`PATCH` with only
+`published`). That matters beyond tidiness — the grammar a line is composed
+against is now provably the grammar the check runs against.
 
 Structural, so it is pinned structurally:
 `test_a_citation_compiles_the_system_once` counts `build_spec` calls rather than

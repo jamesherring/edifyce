@@ -848,13 +848,23 @@ async def _require_publishable(
     """
     # ``built`` is the caller's own build of this system, when it has one: an
     # applied `/cite` on a published proof re-gates it here, and the grammar has
-    # not moved between the two — the *proof* changed, not the system.
+    # not moved between the two — the *proof* changed, not the system. That caller
+    # holds the system lock already; the path that does not (`PATCH` with only
+    # `published`) takes it here, because everything below reads the system and
+    # then writes a verdict derived from it.
     if built is None:
-        built = await _build_system(session, proof.formal_system_id)
-    system = built.system
+        await lock_system(session, proof.formal_system_id)
+    system = (
+        built.system
+        if built is not None
+        else await load_system(session, proof.formal_system_id)
+    )
     if system is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "The proof's system no longer exists.")
 
+    # The two cheap gates first, and deliberately: both are answerable from the
+    # system row and the reference links, and a publish they refuse should not pay
+    # for a compile it is going to throw away.
     if system.published_at is None:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -868,6 +878,9 @@ async def _require_publishable(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "Every referenced proof must be published before this proof can be.",
         )
+
+    if built is None:
+        built = await _build_system(session, proof.formal_system_id, system)
 
     # Verify with references resolved, so a proof that leans on a lemma is gated
     # on the lemma actually proving it. Reuse the build made above.

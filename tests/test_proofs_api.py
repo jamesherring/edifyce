@@ -1137,6 +1137,53 @@ def locked(monkeypatch) -> list:
     return taken
 
 
+def test_publishing_locks_the_system_before_it_compiles_it(client, db, locked, monkeypatch):
+    # `PATCH {"published": true}` is the one publish path that holds no lock of
+    # its own — `update_proof` only locks on a *source* change. The gate then
+    # compiles the system and writes a verdict derived from it, so the compile has
+    # to be inside the critical section, not before it.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid, published=True)
+    pid = _create_proof(client, sid, "P", source=VALID_PROOF)
+
+    order: list[str] = []
+    real_lock = _common.lock_system
+
+    async def note_lock(session, system_id):
+        order.append("lock")
+        return await real_lock(session, system_id)
+
+    real_build = proofs_router.build_spec
+
+    def note_build(*args, **kwargs):
+        order.append("build")
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(_common, "lock_system", note_lock)
+    monkeypatch.setattr(proofs_router, "lock_system", note_lock)
+    monkeypatch.setattr(proofs_router, "build_spec", note_build)
+
+    res = client.patch(f"/api/proofs/{pid}", json={"published": True})
+    assert res.status_code == 200, res.text
+    assert order and order[0] == "lock", order
+    assert "build" in order
+
+
+def test_a_publish_refused_on_a_cheap_gate_does_not_compile(client, db, monkeypatch):
+    # Both early gates are answerable from the system row alone. A publish they
+    # refuse used to pay a full compile — ~54 ms on a corpus system — and throw it
+    # away.
+    uid = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, uid)  # a draft system: the first gate refuses
+    pid = _create_proof(client, sid, "P", source=VALID_PROOF)
+
+    builds = _builds(monkeypatch)
+    res = client.patch(f"/api/proofs/{pid}", json={"published": True})
+    assert res.status_code == 400, res.text
+    assert "unpublished draft" in res.json()["detail"]
+    assert builds == [0]
+
+
 def test_verification_takes_the_system_lock_before_reading(client, db, locked):
     # The point of the whole exercise: a verify trusts its lemmas' stored rows,
     # so the read and the write must be one critical section. Locking just before
