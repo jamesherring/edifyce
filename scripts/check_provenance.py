@@ -23,9 +23,9 @@ first-order layer, and `A.` does.
 
 Three things are hard failures rather than measurements:
 
-- a theorem depending on a layer *deeper* than the one holding it. A positional
-  plan over a corpus in dependency order cannot produce one, and such a proof
-  could not verify, so it means the rows disagree with the plan;
+- a theorem depending on something its own chain cannot reach. A positional plan
+  over a corpus in dependency order cannot produce one, and such a proof could
+  not verify, so it means the rows disagree with the plan;
 - a run whose spine is one system, or whose theorems all sit at depth zero —
   either makes every comparison here trivially true;
 - a report that changes when the proof *source* is blanked, which would mean it
@@ -120,12 +120,16 @@ def main() -> int:
                 "plan's second section."
             )
         print()
+        # `misfiled` is a column and not only a failure below, because the four
+        # axiom buckets are exhaustive and a reader checking that they sum to
+        # `proofs` needs to see all four (found in review).
         print(f"  {'layer':<26}{'proofs':>8}{'own axioms':>12}"
-              f"{'shallower':>11}{'no axioms':>11}{'only lower':>12}")
+              f"{'shallower':>11}{'no axioms':>11}{'misfiled':>10}"
+              f"{'only lower':>12}")
         for layer in layers:
             print(f"  {layer.name:<26}{layer.proofs:>8}{layer.own_axioms:>12}"
                   f"{layer.lower_axioms:>11}{layer.no_axioms:>11}"
-                  f"{layer.only_shallower:>12}")
+                  f"{layer.misfiled:>10}{layer.only_shallower:>12}")
 
         for layer in layers[1:]:
             movable = examples(reports, layer.name)
@@ -145,7 +149,7 @@ def main() -> int:
     print()
     misfiled = [report for report in reports if report.misfiled]
     if misfiled:
-        print(f"{len(misfiled)} theorem(s) depend on a layer deeper than their own:")
+        print(f"{len(misfiled)} theorem(s) cite what their own chain cannot reach:")
         for report in misfiled[:shown]:
             print(f"  ! {report.proof} (in {report.filed_in}) reaches "
                   f"{report.deepest_cited}")

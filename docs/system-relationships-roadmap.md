@@ -2082,6 +2082,22 @@ derives, written by hand. And `pm11.07`'s stored proof is literally `( ) B`: an
 empty citation list over a hypothesis, which is why it reports as citing nothing
 at all rather than as bottoming out in PC.
 
+*Misfiled is decided by reachability, not by depth.* "Deeper than the layer that
+filed it" is the right test down one spine and means nothing across two branches
+of a tree, where the sibling holding the citation may sit at any depth including
+a shallower one — and a citation off the chain read there as a clean *could be
+filed lower*. So a citation carries whether the citing proof's chain could
+resolve it, and `misfiled` is that fact. It is the same defect
+`check_layering.unreachable_citations` reports, in the vocabulary of provenance.
+
+*And the fallback that finds those citations is keyed by the tree's root.*
+`proof_lines.rule` holds whatever justified the line, which for an ordinary
+inference rule is a name like `MP` that any system may declare. Indexed
+database-wide, the fallback resolved one corpus's rule name to another corpus's
+theorem — inventing a dependency out of a coincidence of spelling, and firing
+the misfiled hard failure on a database holding more than one system. Both found
+in review, and both pinned.
+
 *What the query reads, against what §5.5 guessed it would.* Not
 `proof_line_antecedents` — those edges are line-to-line *within* one proof, so
 none of them crosses a layer. The cross-layer edge is `proof_lines.rule`, the

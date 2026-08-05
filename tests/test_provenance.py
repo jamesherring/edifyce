@@ -201,7 +201,17 @@ def test_a_proof_moved_below_its_dependency_is_reported_as_misfiled(
     report = reports(imported)["zf-via-ext"]
     assert report.misfiled
     assert (report.filed_in, report.deepest_cited) == (FOL, ZF)
-    assert by_layer(provenance(imported))[1].misfiled == 1
+    # Not "could be filed lower": what it cites is reachable from nowhere on its
+    # chain, shallower least of all.
+    assert not report.depends_only_on_shallower
+
+    fol = by_layer(provenance(imported))[1]
+    assert fol.misfiled == 1
+    # **From review.** A misfiled proof used to fall through every axiom bucket,
+    # so the layer printed three proofs whose columns summed to two.
+    assert fol.own_axioms + fol.lower_axioms + fol.no_axioms + fol.misfiled == (
+        fol.proofs
+    )
 
 
 def test_a_label_shadowed_by_a_nearer_layer_resolves_to_the_nearer_one(
@@ -235,6 +245,53 @@ def test_a_label_shadowed_by_a_nearer_layer_resolves_to_the_nearer_one(
     assert reports(imported)["pc-thm"].deepest_axiom == PC
 
 
+def test_a_label_another_corpus_declares_is_not_a_dependency(
+    imported: Session,
+) -> None:
+    # **From review, and the worst of what it found.** `proof_lines.rule` holds
+    # whatever justified the line, which for an ordinary inference rule is a name
+    # like `MP` that any system may declare. Resolving the out-of-chain fallback
+    # database-wide turned that coincidence of spelling into a dependency on an
+    # unrelated corpus — and, since that corpus is off the chain, into a misfiled
+    # hard failure. The fallback is keyed by the tree's root for exactly this.
+    stranger = FormalSystem(name="Someone else's logic", slug="stranger")
+    imported.add(stranger)
+    imported.flush()
+    imported.add(
+        PromotedTheoremRow(
+            system_id=stranger.id, label="MP", statement="|- ph", primitive=True
+        )
+    )
+    cites_a_rule = imported.scalar(select(Proof).where(Proof.name == "pc-thm"))
+    for line in cites_a_rule.line_rows:
+        line.rule = "MP"  # a rule of its own system, not a promoted theorem
+    imported.flush()
+
+    report = reports(imported)["pc-thm"]
+    assert report.axioms == ()
+    assert report.deepest_axiom is None
+    assert not report.misfiled
+
+
+def test_the_reports_come_back_in_a_stable_order(imported: Session) -> None:
+    # **From review.** Callers compare whole reports for equality — the assertion
+    # below, and `scripts/check_provenance.py` — across a bulk `UPDATE proofs`.
+    # An unordered scan is stable on SQLite's rowid and is not on Postgres, where
+    # the update reorders it and the comparison fails for a reason that has
+    # nothing to do with what it claims to test.
+    # Corpus order, which `position` records — so the order is also the one a
+    # reader expects rather than merely a repeatable one.
+    assert [report.proof for report in provenance(imported)] == [
+        name
+        for name, in imported.execute(
+            select(Proof.name).order_by(Proof.position, Proof.id)
+        )
+    ]
+    assert [report.proof for report in provenance(imported)] == [
+        "pc-thm", "fol-via-pc", "fol-via-ax4", "zf-via-fol", "zf-via-ext"
+    ]
+
+
 def test_the_report_never_reads_proof_source(imported: Session) -> None:
     # §7.2's D6: the report is a graph query over rows. Blanking the source (and
     # the stored verdict blob beside it) must change nothing — an assertion about
@@ -261,9 +318,11 @@ def test_the_per_layer_report_counts_each_theorem_once(imported: Session) -> Non
     assert [layer.own_axioms for layer in layers] == [1, 1, 1]
     assert [layer.lower_axioms for layer in layers] == [0, 1, 1]
     assert [layer.only_shallower for layer in layers] == [0, 1, 1]
-    # Every theorem falls in exactly one of the three axiom buckets.
+    # Every theorem falls in exactly one bucket, misfiled included.
     for layer in layers:
-        assert layer.own_axioms + layer.lower_axioms + layer.no_axioms == layer.proofs
+        assert layer.own_axioms + layer.lower_axioms + layer.no_axioms + (
+            layer.misfiled
+        ) == layer.proofs
 
 
 def test_a_proof_that_cites_no_library_entry_reaches_nothing(

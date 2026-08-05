@@ -67,18 +67,28 @@ class Provenance:
     # axioms does this theorem rest on" is the question a provenance report
     # exists to answer; bounded by the corpus's axiom count.
     axioms: tuple[str, ...]
+    # Did the closure touch an entry this proof's own chain cannot resolve? The
+    # defect :attr:`misfiled` reports, carried as a fact rather than inferred
+    # from a depth comparison that only means anything down a single spine.
+    unreachable: bool = False
 
     @property
     def misfiled(self) -> bool:
-        """Does it depend on a layer *deeper* than the one it was filed in?
+        """Does it depend on something its own chain cannot reach?
 
         Impossible for a positional plan over a corpus in dependency order — and
         impossible to *verify*, since the citation would not resolve — so a true
-        here means the rows disagree with the plan. The reachability half of the
-        same fact is `scripts/check_layering.unreachable_citations`; this is the
-        provenance half, and states it in the vocabulary of depth.
+        here means the rows disagree with the plan. The same fact
+        `scripts/check_layering.unreachable_citations` reports, in the vocabulary
+        of provenance.
+
+        Reachability and not depth. "Deeper than the layer that filed it" is the
+        right test down one spine and says nothing across two branches of a tree,
+        where the sibling holding the citation may sit at any depth at all —
+        including a shallower one, which read as a clean *could be filed lower*
+        (found in review).
         """
-        return self.cited_depth is not None and self.cited_depth > self.filed
+        return self.unreachable
 
     @property
     def depends_only_on_shallower(self) -> bool:
@@ -98,8 +108,11 @@ class Provenance:
         False at the root whatever it cites, since there is no shallower layer at
         all. Without that, a root theorem citing nothing counted here and the
         root's column read 2 on a `set.mm` slice whose right answer is 0.
+
+        False for a misfiled proof too: what it cites is not reachable from
+        anywhere on its chain, shallower least of all.
         """
-        if self.filed == 0:
+        if self.filed == 0 or self.unreachable:
             return False
         return self.cited_depth is None or self.cited_depth < self.filed
 
@@ -120,17 +133,24 @@ class LayerProvenance:
     own_axioms: int
     # Bottoms out in the axioms of a strictly shallower layer.
     lower_axioms: int
-    # Reaches no promoted entry at all — cites only its own hypotheses, or
-    # nothing. Counted apart rather than folded into `lower`, since "depends on
-    # nothing" and "depends on something shallower" are different facts.
+    # Reaches no *primitive* — cites only derived entries whose proofs this
+    # database does not hold, its own hypotheses, or nothing at all. Counted
+    # apart rather than folded into `lower_axioms`, since "rests on no
+    # assumption we can see" and "rests on a shallower one" are different facts.
+    # (It is not "cites nothing": a citation resolving to a derived entry with no
+    # stored proof lands here too, and the comment used to say otherwise.)
     no_axioms: int
     # Every citation reachable from somewhere shallower — nothing it cites needs
     # this layer. A superset of `lower_axioms` by construction, and *not* a count
     # of theorems that could be moved: see `Provenance.depends_only_on_shallower`
     # for the grammar that pins some of them anyway.
     only_shallower: int
-    # Depends on something the plan filed *deeper*. Always zero on a run worth
-    # trusting; see :attr:`Provenance.misfiled`.
+    # Depends on something its chain cannot reach. Always zero on a run worth
+    # trusting; see :attr:`Provenance.misfiled`. Its own bucket rather than a
+    # fourth reading of the axiom columns, because a citation off the chain has
+    # no comparable depth — and because with nowhere to put them, a misfiled
+    # proof fell through all three and the columns stopped summing to `proofs`
+    # (found in review, on this module's own misfiled test).
     misfiled: int
 
 
@@ -148,17 +168,31 @@ class _Entry:
 
 
 @dataclass(frozen=True)
+class _Citation:
+    """One resolved citation, and whether the citing proof could reach it.
+
+    Reachability belongs here rather than on :class:`_Entry` because it is a
+    fact about the *pair*: the same library row is in reach of one proof's chain
+    and out of another's, and `library` interns each row once.
+    """
+
+    entry: _Entry
+    reachable: bool
+
+
+@dataclass(frozen=True)
 class _Reach:
     """The closure below one proof, as system ids rather than depths.
 
-    Ids, because a depth is an index into a *chain* and a misfiled dependency
-    sits in no chain the citing proof has — the one case this exists to report
-    is exactly the one an index could not name.
+    Ids, because a depth is an index into a *chain* and an out-of-reach
+    dependency sits in no chain the citing proof has — the one case this exists
+    to report is exactly the one an index could not name.
     """
 
     cited: uuid.UUID | None
     axioms: uuid.UUID | None
     axiom_labels: tuple[str, ...]
+    unreachable: bool
 
 
 def _chains(
@@ -216,33 +250,42 @@ def _cited(
     labels: Iterable[str],
     chain: Sequence[uuid.UUID],
     library: Mapping[tuple[uuid.UUID, str], _Entry],
-    elsewhere: Mapping[str, _Entry],
-) -> tuple[_Entry, ...]:
+    elsewhere: Mapping[tuple[uuid.UUID, str], _Entry],
+) -> tuple[_Citation, ...]:
     """The entries a proof in ``chain`` means by those labels.
 
     Nearest first, matching `LibraryChain`: a label declared twice down a chain
     resolves to the closest system that has it, and an ancestor's entry is
-    shadowed rather than ambiguous. A label naming nothing anywhere resolves to
-    nothing and is dropped — it is a rule of the system, or one of the theorem's
-    own hypotheses, and neither is a dependency on a *layer*.
+    shadowed rather than ambiguous. A label naming nothing resolves to nothing
+    and is dropped — it is a rule of the system, or one of the theorem's own
+    hypotheses, and neither is a dependency on a *layer*.
 
-    A label the chain cannot reach but some *other* system declares falls back to
-    ``elsewhere``, and that fallback is what makes :attr:`Provenance.misfiled`
-    reportable at all. Chain-relative resolution alone drops exactly the citation
-    that proves a proof was filed above its dependency, so the check would have
-    been one that cannot fail — found by the test written to make it fail.
+    A label the chain cannot reach, but which some system **of the same tree**
+    declares, falls back to ``elsewhere`` and is marked unreachable. That
+    fallback is what makes :attr:`Provenance.misfiled` reportable at all:
+    chain-relative resolution alone drops exactly the citation that proves a
+    proof was filed away from its dependency, so the check would have been one
+    that cannot fail — found by the test written to make it fail.
+
+    **Keyed by the tree's root, not by label alone.** ``proof_lines.rule`` holds
+    whatever justified the line, which for an ordinary inference rule is a name
+    like ``MP`` that any system may declare. A database-wide index therefore
+    resolved one corpus's rule name to another corpus's theorem and invented a
+    dependency out of a coincidence of spelling — enough, on a shared database,
+    to fire the misfiled hard failure (found in review).
     """
-    found: list[_Entry] = []
+    root = chain[0]
+    found: list[_Citation] = []
     for label in labels:
         for system_id in reversed(chain):
             entry = library.get((system_id, label))
             if entry is not None:
-                found.append(entry)
+                found.append(_Citation(entry, reachable=True))
                 break
         else:
-            unreachable = elsewhere.get(label)
-            if unreachable is not None:
-                found.append(unreachable)
+            stray = elsewhere.get((root, label))
+            if stray is not None:
+                found.append(_Citation(stray, reachable=False))
     return tuple(found)
 
 
@@ -251,10 +294,10 @@ def _deeper(
 ) -> uuid.UUID | None:
     """Whichever of two systems sits further from its root.
 
-    Compares across chains, which a spine makes meaningful and a forest would
-    not. A corpus import builds one spine, and the only cross-chain comparison
-    this ever makes is against a *misfiled* dependency — where "deeper than the
-    layer that cites it" is precisely the finding.
+    Meaningful down one spine, which is what a corpus import builds. Across two
+    branches of a tree it is arbitrary, and so is only ever a *label* on the
+    report — :attr:`Provenance.misfiled` is decided by reachability, not by the
+    depth this returns.
     """
     if left is None:
         return right
@@ -266,7 +309,7 @@ def _deeper(
 def _reach(
     proof_id: uuid.UUID,
     depths: Mapping[uuid.UUID, int],
-    deps: Mapping[uuid.UUID, Sequence[_Entry]],
+    deps: Mapping[uuid.UUID, Sequence[_Citation]],
     memo: dict[uuid.UUID, _Reach],
 ) -> _Reach:
     """The transitive closure below one proof, memoised across the corpus.
@@ -292,15 +335,19 @@ def _reach(
                 continue
             open_.add(current)
             stack.append((current, True))
-            for entry in deps.get(current, ()):
-                if entry.proof_id is not None and entry.proof_id not in open_:
-                    stack.append((entry.proof_id, False))
+            for citation in deps.get(current, ()):
+                below = citation.entry.proof_id
+                if below is not None and below not in open_:
+                    stack.append((below, False))
             continue
 
         cited: uuid.UUID | None = None
         axioms: uuid.UUID | None = None
         labels: set[str] = set()
-        for entry in deps.get(current, ()):
+        unreachable = False
+        for citation in deps.get(current, ()):
+            entry = citation.entry
+            unreachable |= not citation.reachable
             cited = _deeper(cited, entry.system_id, depths)
             if entry.primitive:
                 axioms = _deeper(axioms, entry.system_id, depths)
@@ -313,7 +360,11 @@ def _reach(
                 cited = _deeper(cited, below.cited, depths)
                 axioms = _deeper(axioms, below.axioms, depths)
                 labels |= set(below.axiom_labels)
-        memo[current] = _Reach(cited, axioms, tuple(sorted(labels)))
+                # A cited proof that cannot reach its own dependencies makes this
+                # one's provenance unreadable too: the closure it contributes is
+                # missing whatever it could not resolve.
+                unreachable |= below.unreachable
+        memo[current] = _Reach(cited, axioms, tuple(sorted(labels)), unreachable)
         open_.discard(current)
     return memo[proof_id]
 
@@ -328,9 +379,22 @@ def provenance(session: Session) -> tuple[Provenance, ...]:
     names, chains = _chains(session)
     depths = {system_id: chain.index(system_id) for system_id, chain in chains.items()}
 
+    # Ordered, because callers compare whole reports for equality — the "reads no
+    # source" assertion here and in `scripts/check_provenance.py` both do. An
+    # unordered scan happens to be stable on SQLite's rowid and is not on
+    # Postgres, where a bulk UPDATE between two reads reorders the seq scan and
+    # the comparison fails for a reason that has nothing to do with the claim
+    # (found in review).
+    #
+    # By `position` rather than by id, since it costs the same and a report a
+    # person reads should come back in the order the corpus declares things. The
+    # id breaks ties, so the order is total for rows that carry no position of
+    # their own (an authored proof rather than an imported one).
     rows = list(
         session.execute(
-            select(Proof.id, Proof.name, Proof.formal_system_id, Proof.theorem_id)
+            select(
+                Proof.id, Proof.name, Proof.formal_system_id, Proof.theorem_id
+            ).order_by(Proof.position, Proof.id)
         )
     )
     proofs_by_theorem = {
@@ -355,14 +419,17 @@ def provenance(session: Session) -> tuple[Provenance, ...]:
     ):
         cited_labels.setdefault(proof_id, []).append(rule)
 
-    # The deepest declarer of each label, for the fallback in `_cited`. Deepest
-    # because the fallback only ever runs for a citation no chain reaches, and
-    # the finding there is how far out of reach it is.
-    elsewhere: dict[str, _Entry] = {}
+    # The deepest declarer of each label *within each tree*, for the fallback in
+    # `_cited`. Keyed by the root so a rule name shared by two unrelated corpora
+    # cannot resolve across them; deepest within the tree because the fallback
+    # only runs for a citation no chain reaches, and the finding is how far out
+    # of reach it is.
+    elsewhere: dict[tuple[uuid.UUID, str], _Entry] = {}
     for entry in library.values():
-        held = elsewhere.get(entry.label)
+        key = (chains[entry.system_id][0], entry.label)
+        held = elsewhere.get(key)
         if held is None or depths[entry.system_id] > depths[held.system_id]:
-            elsewhere[entry.label] = entry
+            elsewhere[key] = entry
 
     deps = {
         proof_id: _cited(
@@ -385,6 +452,7 @@ def provenance(session: Session) -> tuple[Provenance, ...]:
                 deepest_axiom=names[reach.axioms] if reach.axioms is not None else None,
                 axiom_depth=depths[reach.axioms] if reach.axioms is not None else None,
                 axioms=reach.axiom_labels,
+                unreachable=reach.unreachable,
             )
         )
     return tuple(found)
@@ -401,16 +469,19 @@ def by_layer(reports: Sequence[Provenance]) -> tuple[LayerProvenance, ...]:
     for report in reports:
         tally = counts.setdefault((report.filed, report.filed_in), [0, 0, 0, 0, 0, 0])
         tally[0] += 1
-        if report.axiom_depth is None:
+        # Exhaustive, and in this order: a misfiled proof's axiom depth is not
+        # comparable with its own, so it is counted here rather than measured
+        # against a chain it is not on.
+        if report.misfiled:
+            tally[5] += 1
+        elif report.axiom_depth is None:
             tally[3] += 1
         elif report.needs_its_own_axioms:
             tally[1] += 1
-        elif report.axiom_depth < report.filed:
+        else:
             tally[2] += 1
         if report.depends_only_on_shallower:
             tally[4] += 1
-        if report.misfiled:
-            tally[5] += 1
     return tuple(
         LayerProvenance(
             name=name,
