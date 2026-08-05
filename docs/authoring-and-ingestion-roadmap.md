@@ -601,10 +601,30 @@ The consequence is that a proof with no ordinary logical line has nothing to cop
 and says so. A scope opener is refused as a template for the same reason `/cite`
 refuses one as a target: it states nothing checkable.
 
+### Taking a line back out — *done*
+
+`POST /proofs/{id}/lines/remove` is `/lines` inverted, and the same renumbering
+run backwards: everything below the removed line closes up by one, and a citation
+naming one of those lines has to follow it or it silently names another.
+`FormalSystem.renumber` grew a `by` rather than a second copy of itself.
+
+The guard is the same one and for the same reason — **no line that was valid
+before may be invalid after** — with the removed line itself excepted, since it is
+meant to be gone.
+
+What is *not* symmetric is a line another line **cites**. An insertion can always
+be undone by not making it; a removal that orphans its dependents has no answer to
+give them, so it is refused with their numbers rather than applied. That is
+decided from the stored edges, before anything is built.
+
 ### What is still not here
 
-Deleting a line, and moving one. Both are the same renumbering problem in reverse
-and neither is needed to *build* a proof, which is what the loop does.
+Moving a line. Unlike a removal it is not one shift: the lines between the old and
+the new position move by one and everything else stays, so the rewrite is a
+permutation rather than an offset — and a move that crosses a citation is a
+reordering of the proof's dependencies, which is a different question from
+renumbering it. Neither it nor removal is needed to *build* a proof, which is what
+the loop does; removal is here because undoing a step the loop tried is.
 
 ## 9d. Driving the loop on a corpus — *done*
 

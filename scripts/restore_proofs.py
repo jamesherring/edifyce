@@ -34,9 +34,10 @@ mutations are measurements rather than assertions: whether a *swapped* citation 
 refused says whether antecedent order carries information, and whether one with no
 antecedents at all is says how far the checker will infer.
 
-**apply** — actually insert a line mid-proof and read the stored structure back,
-which is the one thing the dry runs cannot reach: a renumbered proof persisted and
-then re-checked from its rows.
+**apply** — actually insert a line mid-proof, read the stored structure back, and
+take it out again with `/lines/remove`. Two things the dry runs cannot reach: a
+renumbered proof persisted and then re-checked from its rows, and insert-and-remove
+as a genuine round trip, since the proof has to come back byte-identical.
 
 Everything is throwaway: the import lands in a SQLite file (or ``--database-url``)
 and the corpus proofs are given an owner so the owner-only apply path is reachable.
@@ -84,6 +85,7 @@ from app.db.terms_mapping import StoredTerm, prefetch_terms, walk_subgraph  # no
 from app.routers.proofs import (  # noqa: E402
     propose_citation,
     propose_line,
+    remove_line,
     update_proof,
     verify_stored_proof,
 )
@@ -92,6 +94,8 @@ from app.schemas import (  # noqa: E402
     CitationProposal,
     LineOutcome,
     LineProposal,
+    LineRemoval,
+    LineRemovalOutcome,
     ProofDetail,
     ProofUpdate,
     TermProposalIn,
@@ -115,7 +119,13 @@ ROUNDS = ("cite", "insert", "state", "probe", "apply")
 
 # What one of these endpoints answers with. Named because `Call` carries whichever
 # of them the route it wrapped returns, and `object` would say nothing.
-Outcome = CitationOutcome | LineOutcome | ProofDetail | VerifyProofResponse
+Outcome = (
+    CitationOutcome
+    | LineOutcome
+    | LineRemovalOutcome
+    | ProofDetail
+    | VerifyProofResponse
+)
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +301,21 @@ async def _line(
         lambda session, user: propose_line(
             proof_id, payload, user=user, session=session
         ),
+    )
+
+
+async def _remove(
+    sessions: async_sessionmaker[AsyncSession],
+    owner: uuid.UUID,
+    proof_id: uuid.UUID,
+    line: int,
+    apply: bool = True,
+) -> Call:
+    payload = LineRemoval(line=line, apply=apply)
+    return await _call(
+        sessions,
+        owner,
+        lambda session, user: remove_line(proof_id, payload, user=user, session=session),
     )
 
 
@@ -594,15 +619,28 @@ async def round_apply(
         )
     verdict = _shifted(key, stored, at)
 
+    # Taken back out through the loop's own operation rather than by rewriting the
+    # source, which makes the restore a *test* instead of a cleanup: insert and
+    # remove are inverse renumberings, and `_settled` below requires the corpus's
+    # own bytes back, so anything either of them gets wrong shows up here.
     counter[0] += 1
-    restored = await _rewrite(sessions, owner, key.proof_id, key.source)
-    if not restored.ok:
+    removed = await _remove(sessions, owner, key.proof_id, at)
+    if not removed.ok:
         return Result(
             key.label,
             "apply",
             False,
-            f"the inserted line could not be taken back out: "
-            f"{restored.status} {restored.detail}",
+            f"the inserted line would not come back out: "
+            f"{removed.status} {removed.detail}",
+        )
+    moved = [step.number for step in key.steps if step.number >= at]
+    if removed.outcome.renumbered != moved:
+        return Result(
+            key.label,
+            "apply",
+            False,
+            f"removing line {at} renumbered {removed.outcome.renumbered}, "
+            f"expected {moved}",
         )
     return verdict if not verdict.ok else await _settled(sessions, owner, key, "apply")
 
