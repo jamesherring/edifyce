@@ -5,6 +5,7 @@
 | `edifyce-dev` | Run the whole app (Postgres, migrations, API, SPA) with one command |
 | `import_metamath.py` | Import a Metamath `.mm` database — system, proofs, line graphs, terms |
 | `check_layering.py` | Assert that importing a corpus as a **spine** changes nothing about the import |
+| `check_boundary_provisos.py` | Assert that a `$d` still refuses a capture when the citation crosses a layer |
 | `restore_proofs.py` | Blank a corpus proof's justifications and drive the authoring loop to restore them |
 
 ## `edifyce-dev` — run the whole app with one command
@@ -161,6 +162,31 @@ After a run the corpus is queryable in plain SQL, with nothing recompiled:
 select rule, count(*) from proof_lines where rule is not null
 group by rule order by 2 desc limit 10;
 ```
+
+## `check_boundary_provisos.py` — does a `$d` survive the boundary?
+
+A side condition is stated where a theorem is *declared* and enforced where it is
+*cited*, and layering puts a system boundary between the two. `set.mm`'s `ax-5`
+is `( ph -> A. x ph )` carrying `$d x ph`, and a layered import files it in the
+first-order layer; a ZF-layer proof citing it must still be refused where the
+instance would capture.
+
+```bash
+uv run python scripts/check_boundary_provisos.py set.mm --limit 2676
+```
+
+Two citations, one capturing and one not, because either direction alone is
+passed by a check that is not running. Before believing the verdicts the run
+asserts that the chain has more than one system, that `ax-5` is filed in an
+**ancestor** of the system the citations are parsed in, that its entry is
+digest-fresh — so the proviso comes from the stored term rather than a re-parse —
+and that it arrived carrying side conditions at all. A third citation is the
+control: `ax-5` re-promoted without its provisos must *accept* the capture, since
+`ax-5 does not apply` is also what a citation that simply fails to unify is told.
+Needs no database; exits non-zero if any case goes the wrong way.
+
+`tests/test_cross_system_citation.py` pins the mechanism on a fixture (§4's R2);
+this is where that meets the real corpus (relationships roadmap, §8's D5).
 
 ## `restore_proofs.py` — drive the authoring loop against a corpus
 
