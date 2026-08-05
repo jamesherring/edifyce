@@ -77,6 +77,11 @@ $( {SECTION}
 wal $a wff A. x ph $.
 ax-4 $a |- ( A. x ph -> ph ) $.
 fol-thm $p |- ( A. x ph -> ph ) $= ( ax-4 ) ABC $.
+$( A first-order theorem whose proof cites a *propositional* one, so a citation
+   in this fixture crosses a layer boundary. Without it `LibraryChain`'s
+   ancestor resolution is never reached and a test claiming to pin it does not
+   (found in review). $)
+fol-cites-pc $p |- ( ph -> ( ps -> ph ) ) $= ( ax-1 ) ABC $.
 
 $( {PART}
    SET THEORY
@@ -230,7 +235,7 @@ def test_a_limit_short_of_a_layer_drops_it() -> None:
 
     assert len(corpus_specs(database, limit=1, plan=LAYERS)) == 1
     assert len(corpus_specs(database, limit=2, plan=LAYERS)) == 2
-    assert len(corpus_specs(database, limit=3, plan=LAYERS)) == 3
+    assert len(corpus_specs(database, limit=4, plan=LAYERS)) == 3
 
 
 def test_a_limited_split_still_layers_back_to_the_limited_whole() -> None:

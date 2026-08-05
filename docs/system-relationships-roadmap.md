@@ -1888,6 +1888,53 @@ fallback* — green, and testing the opposite of what it claims. That is the fif
 time in this track that a check would have been satisfied by the thing it was
 meant to rule out.
 
+**A citation resolves through the chain and hits its cache — done.** The first
+thing to read D3's per-layer digests *back*. `_Layers` writes each layer's
+effective digest and the read path recomputes its own from the rows, so until
+something compared the two there was nothing to notice a disagreement with;
+`read_library`'s `fresh` is exactly the set whose stored digest still matches,
+and anything outside it re-parses.
+
+Measured on `set.mm` at N = 2,676: **8,581 citations resolved through the
+spine**, of which **0 were cached before `symbols.inclusion_position` and all
+8,581 after**. Broken down 4,704 / 3,874 / 3 by the citing layer — and **1,486
+of them cross a boundary**: 1,484 first-order proofs citing a propositional
+theorem, and two from ZF. That is the case a per-layer digest exists for and the
+one a corpus-wide digest would get wrong, so it is the number that matters, and
+it is counted rather than assumed.
+
+*From review, and it is the same lesson again.* The fixture had no cross-layer
+citation at all — every proof cited a label in its own layer — so the test
+pinning "resolves through the chain" reached `LibraryChain`'s ancestor
+resolution never. The corpus claim was true and the guard for it was not.
+`fol-cites-pc` is a first-order theorem whose proof cites `ax-1`, and the test
+now asserts that some citation crosses. Two smaller ones from the same review:
+the labels were taken from `proof_lines.rule`, which is not what the read path
+resolves (`cited_labels` over `reference`, and `rule` is null for a definitional
+step), and `hypotheses_of` was omitted, so a theorem's own `$e` labels went
+unresolved.
+
+**Re-verification from rows, and determinism — done.** The pinned pair. A
+layered import's proofs are stored against their own layers and their citations
+reach across the spine, so re-checking one from its rows exercises the whole read
+path at once: the effective spec built from the chain's parts, the lines rebuilt
+from `proof_lines`, and the library resolved nearest-first with each layer's own
+digest guarding its own terms. Every layer's proof re-checks to the verdict the
+import gave it.
+
+Worth being exact about what that is worth, because it is the fifth trap of the
+same family. **Against a digest that never matched, this test would still have
+passed** — the citations would have re-parsed and reached the same answer, which
+is precisely what makes a cache's failure silent. A green result here only says
+what it appears to say *after* `inclusion_position`, and the citation-cache
+measurement above is what says so. The re-check is also verified non-vacuous
+directly: with `resolve_citations` removed the proofs come back invalid, so the
+library is load-bearing rather than incidental.
+
+Determinism is the cheap one and holds: the same slice imported twice gives the
+same partition and the same per-layer counts, asserted on names because the ids
+differ between runs by construction.
+
 - *Invalid, each a hard failure of the run:* a deliberately misfiled plan
   (`ax-mp` assigned to ZFC) must fail loudly rather than quietly dropping the
   theorems that cite it; a synthesised forward-layer citation must be caught;
