@@ -45,6 +45,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from sqlalchemy import bindparam
+from sqlalchemy import or_ as sa_or
 from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
@@ -476,15 +478,39 @@ def _link_proofs_to_theorems(
     """
     if not ids:
         return
-    for name, theorem_id in ids.items():
-        session.execute(
-            sa_update(Proof)
-            .where(
-                Proof.formal_system_id.in_(system_ids),
-                Proof.name == name,
-            )
-            .values(theorem_id=theorem_id)
+    # One statement carrying every pair, rather than one statement per pair. The
+    # *deferral* above is necessary; issuing it a theorem at a time was not, and
+    # on a corpus that is one round trip per `$p` — the cost of a remote database
+    # being latency rather than work.
+    #
+    # Against the **table** rather than the mapped class: handed an ORM entity
+    # and a list of parameter sets, SQLAlchemy reads the call as a bulk update by
+    # primary key and ignores the criteria above. The Core form keeps the WHERE
+    # and still goes out as one `executemany`.
+    #
+    # The system scope is spelled as an `OR` of equalities rather than `IN`: an
+    # `IN` compiles to an *expanding* parameter, which `executemany` cannot carry.
+    # A spine is a handful of layers, so the two are the same query.
+    table = Proof.__table__
+    session.execute(
+        sa_update(table)
+        .where(
+            sa_or(*(table.c.formal_system_id == sid for sid in system_ids)),
+            table.c.name == bindparam("linked_name"),
         )
+        .values(theorem_id=bindparam("linked_theorem_id")),
+        [
+            {"linked_name": name, "linked_theorem_id": theorem_id}
+            for name, theorem_id in ids.items()
+        ],
+    )
+    # A Core update leaves the identity map alone, so the synchronisation the
+    # per-statement ORM version did for free is done here instead of lost. It
+    # matters because an unbatched import never commits — the transaction is the
+    # caller's — so a `Proof` already loaded would keep a stale `theorem_id`.
+    for loaded in list(session.identity_map.values()):
+        if isinstance(loaded, Proof):
+            session.expire(loaded, ["theorem_id"])
 
 
 class _Layers:

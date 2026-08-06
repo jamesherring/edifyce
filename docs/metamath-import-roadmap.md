@@ -104,6 +104,48 @@ is ever walked at several times this size.
 The parse is no longer thrown away: the walk stores the system, each proof, its
 line graph and its interned terms (§1.3).
 
+### 1.1a What the writes cost, and why it is round trips
+
+The figures above are a *local* database, where a statement costs almost nothing
+and the split is 65% engine to 35% database. Against a remote one that inverts,
+because what a remote database charges for is **round trips**, and the import used
+to make ~27 per theorem.
+
+Three of them were avoidable, and one cause produced two:
+
+- `store_term` interned **one** term per call, so a proof paid a `SELECT` per line
+  for an answer whose size does not depend on how much is asked. `store_terms`
+  asks once for the whole proof; `store_term` is now a wrapper on it.
+- That `SELECT` **autoflushed**, and it ran between the `ProofLineRow`s being
+  created — so each line flushed alone (an `INSERT` per line rather than one
+  `executemany`) *and* became persistent, which made the later `.antecedents`
+  assignment load the empty collection it was about to replace. Interning every
+  formula first, then building the rows under `no_autoflush`, fixes both.
+- `_link_proofs_to_theorems` issued one `UPDATE` per `$p`. The *deferral* is
+  necessary — a proof cannot point at a theorem promoted after it — but the loop
+  was not.
+
+Measured on 800 theorems against local Postgres, and on 300 with a 2 ms
+per-statement delay standing in for a remote one:
+
+| | statements | wall (local) | wall (+2 ms/stmt) |
+|---|---|---|---|
+| before | 21,445 | 33.4 s | 34.7 s¹ |
+| after | 11,585 | 19.5 s | 18.9 s¹ |
+
+¹ the latency columns are the 300-theorem run (8,114 → 4,278 statements).
+
+Statements roughly halve, and so does wall clock once latency is real. **The rows
+are unchanged**: importing 400 theorems before and after gives byte-identical
+content digests across proofs, lines, antecedent edges, terms, term children,
+promoted theorems, premises and theorem links — which is the check a performance
+change to a storage path actually needs.
+
+What is left is inherent or cheap: `INSERT proofs` is one row per proof, and the
+2 savepoints per theorem are what buy per-theorem error isolation. For a *remote*
+target none of this beats `pg_dump`/`pg_restore` of a locally-built import, which
+is one stream rather than thousands of round trips.
+
 ### 1.2 The token collisions, and the shape they shared
 
 Getting from the first whole-corpus pass (97.8%) to 100% took four fixes. All four

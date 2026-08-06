@@ -41,13 +41,13 @@ from app.db.proof_lines import (
     ProofLineRow,
 )
 from app.db.terms import TermRow
-from app.db.terms_mapping import TermGraph, prefetch_terms, store_term
+from app.db.terms_mapping import TermGraph, prefetch_terms, store_terms
 from website.logical.formal_system.diagnostics import Failure, SlotReport
 from website.logical.formal_system.proof import Proof as EngineProof
 from website.logical.formal_system.proof import ProofLine as EngineProofLine
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Sequence
+    from collections.abc import Callable, Iterator, Mapping, Sequence
 
     from app.db.models import FormalSystem, Proof
     from website.logical.formal_system import FormalSystem as EngineSystem
@@ -134,6 +134,33 @@ def store_proof_lines(
     definition_ids = {
         (row.higher, row.symbol.name): row.id for row in system.definitions
     }
+    # Every formula interned **first**, in one lookup for the whole proof, and
+    # before any line row exists. Both halves of that matter:
+    #
+    # * one lookup rather than one per line — `store_terms` asks about every
+    #   digest at once, and the round trip is the cost, not the answer's size;
+    # * *before*, because the lookup autoflushes. Interleaved with row creation
+    #   it flushed each `ProofLineRow` on its own — an INSERT per line instead of
+    #   one `executemany` — and left it persistent, so assigning `.antecedents`
+    #   below then had to load the (empty) collection it was about to replace.
+    #   That was a second wasted round trip per line.
+    line_terms = _line_terms(session, system, engine_proof.proof_lines)
+
+    # Nothing in the build below queries, so nothing in it needs the pending rows
+    # on the wire. Holding the flush back is what lets them go as one statement.
+    with session.no_autoflush:
+        return _line_rows(session, engine_proof, proof, line_terms, definition_ids, cited)
+
+
+def _line_rows(
+    session: Session,
+    engine_proof: EngineProof,
+    proof: Proof,
+    line_terms: Sequence[TermRow | None],
+    definition_ids: Mapping[tuple[str, str], uuid.UUID],
+    cited: Mapping[int, uuid.UUID],
+) -> list[ProofLineRow]:
+    """One row per engine line, wired to each other. Adds them unflushed."""
     rows: list[ProofLineRow] = []
     # Engine lines are identified by object id: `ProofLine` has no natural key,
     # and `list.index` on `proof_lines` would be quadratic (and wrong for two
@@ -155,7 +182,7 @@ def store_proof_lines(
             reference=line.reference_string_display,
             rule=line.inference_rule.label if line.inference_rule is not None else None,
             definition_id=_definition_id(line, definition_ids),
-            term=_line_term(session, system, line),
+            term=line_terms[position],
             valid=bool(line.valid),
             invalid_message=line.invalid_message,
             failure_code=line.failure.code if line.failure is not None else None,
@@ -490,21 +517,28 @@ def _definition_id(
     return definition_ids.get((higher.to_string(), sort_name))
 
 
-def _line_term(
-    session: Session, system: FormalSystem, line: ProofLine
-) -> TermRow | None:
-    """The line's formula as an interned term row, or ``None`` if it bears none.
+def _line_terms(
+    session: Session, system: FormalSystem, lines: Sequence[ProofLine]
+) -> list[TermRow | None]:
+    """Each line's formula as an interned term row, aligned to ``lines``.
 
     A blank line, commentary, and a line that matched no line type all have no
-    formula — those are stored with a null term rather than skipped, so the rows
-    still reconstruct the source line for line.
+    formula — those get ``None`` rather than being skipped, so the result indexes
+    by position and the rows still reconstruct the source line for line.
 
-    The line already holds its kernel term: the parser hands the parse to the
+    The lines already hold their kernel terms: the parser hands each parse to the
     kernel as it goes, so there is no ``Match`` left here to project.
+
+    Interned for the whole proof in **one** call. A proof's lines share subterms
+    heavily — that is what interning is for — so asking per line both repeats the
+    round trip and asks about digests the previous line already settled.
     """
-    if line.formula_term is None:
-        return None
-    return store_term(session, system, line.formula_term)
+    carried = [line for line in lines if line.formula_term is not None]
+    if not carried:
+        return [None] * len(lines)
+    stored = store_terms(session, system, [line.formula_term for line in carried])
+    by_line = dict(zip((id(line) for line in carried), stored))
+    return [by_line.get(id(line)) for line in lines]
 
 
 def _antecedent_rows(

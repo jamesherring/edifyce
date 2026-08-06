@@ -292,11 +292,36 @@ def store_term(
     Computing it per row is ``O(rows × subterm)``; bounded and fine for
     statement-sized terms, and the alternative — root-only — is available if a
     profile ever shows it matters (subterm α-search would then need a backfill).
+
+    One term, one lookup. A caller with several in hand should use
+    :func:`store_terms` instead — the lookup is a round trip, and it is the same
+    round trip whether it asks about one digest or a hundred.
+    """
+    return store_terms(session, system, [term], is_free)[0]
+
+
+def store_terms(
+    session: Session,
+    system: FormalSystem,
+    terms: Sequence[Term],
+    is_free: FreeIdentity | None = None,
+) -> list[TermRow]:
+    """Persist several terms' DAGs at once, returning a row per term in order.
+
+    Identical to :func:`store_term` in what it writes; the difference is that the
+    "which of these digests do we already have" question is asked **once** for the
+    whole set rather than once per term. That question is a `SELECT`, and a
+    `SELECT` is a round trip, so an import storing a proof's lines one at a time
+    pays one per line for an answer that is the same size either way.
+
+    The interning itself is unchanged and has to be: a subterm shared between two
+    of ``terms`` must still resolve to one row, which it does because they are
+    collected into a single digest-keyed postorder before anything is created.
     """
     digest_memo: dict[int, str] = {}
-    root_digest = digest_term(term, digest_memo)
 
-    # One representative Term per digest, in bottom-up (children-first) order.
+    # One representative Term per digest, in bottom-up (children-first) order —
+    # across every root, so a subterm two of them share is collected once.
     postorder: dict[str, Term] = {}
 
     def collect(t: Term) -> None:
@@ -308,7 +333,8 @@ def store_term(
                 collect(child)
         postorder[digest] = t
 
-    collect(term)
+    for term in terms:
+        collect(term)
 
     # The dedup lookup needs the system's id, and needs earlier (possibly
     # pending) rows visible: flush an unsaved system so its id exists, and let
@@ -349,7 +375,7 @@ def store_term(
         session.add(row)
         rows[digest] = row
 
-    return rows[root_digest]
+    return [rows[digest_term(term, digest_memo)] for term in terms]
 
 
 @dataclass(frozen=True)

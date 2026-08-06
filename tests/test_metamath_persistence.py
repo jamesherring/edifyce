@@ -20,6 +20,7 @@ the verbatim compressed proofs — so what is imported is the real thing.
 
 from __future__ import annotations
 
+import re
 from copy import copy
 
 import pytest
@@ -758,3 +759,84 @@ def test_a_hypothesis_is_reachable_only_through_the_theorem_that_owns_it(
     assert all(h.antecedents == () for h in hypotheses.values())
     # The owner itself is read for its hypotheses, not made citable by it.
     assert "mp2" not in hypotheses
+
+
+# ---------------------------------------------------------------------------
+# Write batching: the round trips an import makes, not just the rows it writes
+# ---------------------------------------------------------------------------
+
+
+def _statements(engine) -> list[tuple[str, int]]:
+    """Every statement this engine issues, as (shape, rows carried).
+
+    Counted rather than timed. "One statement per line" versus "one statement for
+    the lines" is exact, and a wall-clock assertion would be flaky about a fact
+    that is not.
+    """
+    seen: list[tuple[str, int]] = []
+
+    @event.listens_for(engine, "after_cursor_execute")
+    def record(conn, cursor, statement, parameters, context, executemany):
+        head = " ".join(statement.split())
+        verb = head.split(" ", 1)[0].upper()
+        match = re.search(r"(?:INTO|FROM|UPDATE)\s+([a-z_]+)", head, re.I)
+        rows = len(parameters) if executemany and parameters is not None else 1
+        seen.append((f"{verb} {match.group(1) if match else ''}".strip(), rows))
+
+    return seen
+
+
+def _count(seen: list[tuple[str, int]], shape: str) -> tuple[int, int]:
+    """How many statements of this shape were issued, and how many rows they carried."""
+    matching = [rows for kind, rows in seen if kind == shape]
+    return len(matching), sum(matching)
+
+
+def test_a_proof_s_lines_are_written_in_one_statement(database):
+    """A line per statement is a round trip per line, and a remote database is
+    latency rather than work.
+
+    The lines used to flush one at a time because interning a formula issues a
+    `SELECT`, that `SELECT` autoflushed, and it ran *between* the rows being
+    created. Interning every formula first is what lets them go together.
+    """
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine, tables=_TABLES)
+    seen = _statements(engine)
+    with Session(engine) as session:
+        report = import_corpus(session, database, name="P")
+        session.commit()
+
+    statements, rows = _count(seen, "INSERT proof_lines")
+    assert rows == report.lines
+    # One per *proof*, not one per line — four proofs in the fragment.
+    assert statements == len(IMPORTED)
+
+
+def test_writing_a_proof_never_reads_back_the_edges_it_is_about_to_write(database):
+    # A freshly created row's antecedent collection is empty by construction, but
+    # assigning to it on a *persistent* row makes SQLAlchemy load the collection
+    # it is about to replace. That was a wasted round trip per line.
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine, tables=_TABLES)
+    seen = _statements(engine)
+    with Session(engine) as session:
+        import_corpus(session, database, name="P")
+        session.commit()
+
+    assert _count(seen, "SELECT proof_line_antecedents") == (0, 0)
+
+
+def test_theorem_links_are_one_statement_for_the_whole_corpus(database):
+    # The link has to be deferred — a proof cannot point at a theorem promoted
+    # after it — but it does not have to be issued a theorem at a time.
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine, tables=_TABLES)
+    seen = _statements(engine)
+    with Session(engine) as session:
+        import_corpus(session, database, name="P")
+        session.commit()
+
+    statements, rows = _count(seen, "UPDATE proofs")
+    assert statements == 1
+    assert rows >= len(IMPORTED)
