@@ -2082,7 +2082,7 @@ def test_a_citation_compiles_the_system_once(client, db, monkeypatch):
     # `/cite` needs the grammar to rewrite the line *before* it can check the
     # result, and used to build a second system inside the verify to do the
     # checking — the single largest thing the route did, on a corpus system
-    # (docs/authoring-and-ingestion-roadmap.md §9d).
+    # (docs/authoring-and-ingestion-roadmap.md §9e).
     owner = _register_login(client, "ada@example.com")
     _system_id, proof_id = _holed_proof(client, db, owner)
 
@@ -2759,6 +2759,209 @@ def test_a_referenced_term_the_grammar_has_outgrown_is_refused(client, db):
 
     assert res.status_code == 422, res.text
     assert "no longer has" in res.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Removing a line: the inverse of /lines, and the same renumbering backwards
+# ---------------------------------------------------------------------------
+
+
+_THREE = "x ∈ y [HYP]\n(x ∈ y → x = y) [HYP]\nx = y [MP, 1, 2]"
+
+
+def _three_line_proof(client: TestClient, db_path, owner: str) -> tuple[str, str]:
+    system_id = _seed_system(db_path, owner)
+    created = client.post(
+        "/api/proofs",
+        json={"name": "P", "formal_system_id": system_id, "source": _THREE},
+    ).json()
+    assert client.post(f"/api/proofs/{created['id']}/verify").json()["success"] is True
+    return system_id, created["id"]
+
+
+def test_removing_a_line_moves_the_citations_below_it_up(client, db):
+    # The mirror of inserting: everything below closes up by one, and a citation
+    # that named one of those lines has to follow it or it silently names another.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _three_line_proof(client, db, owner)
+    # A fourth line nothing cites, above the MP — so removing it shifts the MP's
+    # own number and leaves its premises where they were.
+    client.post(
+        f"/api/proofs/{proof_id}/lines",
+        json={
+            "statement": {
+                "constructor": "membership",
+                "slots": {
+                    "s": {"constructor": "variable", "literal": "y"},
+                    "t": {"constructor": "variable", "literal": "x"},
+                },
+            },
+            "before": 3,
+            "apply": True,
+        },
+    )
+    assert client.get(f"/api/proofs/{proof_id}").json()["source"].splitlines()[3] == (
+        "x = y [MP, 1, 2]"
+    )
+
+    body = client.post(
+        f"/api/proofs/{proof_id}/lines/remove", json={"line": 3, "apply": True}
+    ).json()
+
+    assert body["line"] == 3
+    assert body["removed"] == "y ∈ x [?]"
+    assert body["renumbered"] == [3]
+    assert client.get(f"/api/proofs/{proof_id}").json()["source"] == _THREE
+    assert body["valid"] is True
+    assert body["holes"] == []
+
+
+def test_removing_a_cited_line_is_refused_and_names_the_dependents(client, db):
+    # There is no answer to give the lines that cited it — unlike an insertion,
+    # which can always be undone by not making it. Naming them is more use than a
+    # broken proof.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _three_line_proof(client, db, owner)
+
+    res = client.post(
+        f"/api/proofs/{proof_id}/lines/remove", json={"line": 1, "apply": True}
+    )
+
+    assert res.status_code == 409, res.text
+    assert "cited by 3" in res.json()["detail"]
+    assert client.get(f"/api/proofs/{proof_id}").json()["source"] == _THREE
+
+
+def test_removing_a_line_is_a_dry_run_by_default(client, db):
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _three_line_proof(client, db, owner)
+
+    body = client.post(f"/api/proofs/{proof_id}/lines/remove", json={"line": 3}).json()
+
+    assert body["applied"] is False
+    assert body["removed"] == "x = y [MP, 1, 2]"
+    assert body["valid"] is None
+    assert client.get(f"/api/proofs/{proof_id}").json()["source"] == _THREE
+
+
+def test_removing_a_line_is_owner_only(client, db):
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner, published=True)
+    created = client.post(
+        "/api/proofs",
+        json={"name": "P", "formal_system_id": system_id, "source": _THREE},
+    ).json()
+    proof_id = created["id"]
+    assert client.patch(
+        f"/api/proofs/{proof_id}", json={"published": True}
+    ).status_code == 200
+    _register_login(client, "grace@example.com")
+
+    # Readable as a dry run, like the other two proposals; owner-only to apply.
+    assert client.post(
+        f"/api/proofs/{proof_id}/lines/remove", json={"line": 3}
+    ).status_code == 200
+    assert client.post(
+        f"/api/proofs/{proof_id}/lines/remove", json={"line": 3, "apply": True}
+    ).status_code == 403
+
+
+def test_removing_a_line_a_proof_does_not_have_is_refused(client, db):
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _three_line_proof(client, db, owner)
+
+    res = client.post(f"/api/proofs/{proof_id}/lines/remove", json={"line": 9})
+    assert res.status_code == 409, res.text
+    assert "no line 9" in res.json()["detail"]
+
+
+def test_a_line_added_and_removed_leaves_the_proof_as_it_was(client, db):
+    # The round trip the loop actually needs: park a step, decide against it, put
+    # the proof back. Byte-identical, not merely equivalent.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _three_line_proof(client, db, owner)
+
+    added = client.post(
+        f"/api/proofs/{proof_id}/lines",
+        json={
+            "statement": {
+                "constructor": "membership",
+                "slots": {
+                    "s": {"constructor": "variable", "literal": "y"},
+                    "t": {"constructor": "variable", "literal": "x"},
+                },
+            },
+            "before": 2,
+            "apply": True,
+        },
+    ).json()
+    assert client.get(f"/api/proofs/{proof_id}").json()["source"] != _THREE
+
+    client.post(
+        f"/api/proofs/{proof_id}/lines/remove",
+        json={"line": added["line"], "apply": True},
+    )
+
+    assert client.get(f"/api/proofs/{proof_id}").json()["source"] == _THREE
+
+
+def test_a_failing_line_that_cites_the_removed_one_still_blocks_it(client, db):
+    """The guard reads the citation, not the justification edges.
+
+    An edge is written only where the rule *applied*, so a line that cites this
+    one and does not currently check has none. Reading edges let such a line sail
+    past and had its citation silently retargeted by the renumbering — `[MP, 1, 2]`
+    came back as `[MP, 1, 1]`, naming a different premise. Nothing downstream
+    catches that: `_broken_by_removal` only looks at lines that were valid before.
+    """
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner)
+    # The MP line does not follow — `x = z` is not the consequent — so it stores
+    # no antecedent edges, though its citation plainly names lines 1 and 2.
+    source = "x ∈ y [HYP]\n(x ∈ y → x = y) [HYP]\nx = z [MP, 1, 2]"
+    created = client.post(
+        "/api/proofs",
+        json={"name": "P", "formal_system_id": system_id, "source": source},
+    ).json()
+    proof_id = created["id"]
+    assert client.post(f"/api/proofs/{proof_id}/verify").json()["success"] is False
+
+    res = client.post(
+        f"/api/proofs/{proof_id}/lines/remove", json={"line": 1, "apply": True}
+    )
+
+    assert res.status_code == 409, res.text
+    assert "cited by 3" in res.json()["detail"]
+    assert client.get(f"/api/proofs/{proof_id}").json()["source"] == source
+
+
+def test_a_dotted_lemma_citation_does_not_count_as_naming_a_line(client, db):
+    # `[MP, A.2]`'s `2` is a line of *another* proof, which `renumber` leaves
+    # alone — so the guard must not read it as naming line 2 here either.
+    assert proofs_router._cites("MP, A.2", 2) is False
+    assert proofs_router._cites("MP, 1, 2", 2) is True
+    assert proofs_router._cites("HYP", 2) is False
+    assert proofs_router._cites(None, 2) is False
+
+
+def test_the_removed_line_comes_back_exactly_as_it_stood(client, db):
+    # `display` is stored stripped and `indent` as a count of columns, so putting
+    # the two back together turns a tab into spaces and drops trailing space. The
+    # contract is that a caller can restore what was here — a re-spelling is not
+    # that.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner)
+    odd = "x ∈ y [HYP]\n\t(x ∈ y → x = y) [HYP]  "
+    created = client.post(
+        "/api/proofs",
+        json={"name": "P", "formal_system_id": system_id, "source": odd},
+    ).json()
+    proof_id = created["id"]
+    assert client.post(f"/api/proofs/{proof_id}/verify").json()["success"] is True
+
+    body = client.post(f"/api/proofs/{proof_id}/lines/remove", json={"line": 2}).json()
+
+    assert body["removed"] == odd.split("\n")[1]
 
 
 # ---------------------------------------------------------------------------

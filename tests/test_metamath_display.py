@@ -625,6 +625,167 @@ def test_a_rule_pinning_a_production_the_grammar_lacks_is_dropped() -> None:
     assert applicable_rules([absent], constructors) == []
 
 
+# The same generic application, plus a *unary* class production — so a rule on
+# `cfv` (whose operator slot is pinned and consumed, leaving one slot rendered)
+# and a declared production can end up the same shape, which is what a collision
+# between the two halves of a projection looks like.
+UNARY = r"""
+$c |- wff class ( ) ` sqrt abs neg $.
+$v A F $.
+cA $f class A $.
+cF $f class F $.
+csqrt $a class sqrt $.
+cabs $a class abs $.
+cneg $a class neg A $.
+cfv $a class ( F ` A ) $.
+"""
+
+_ROOT = (("lit", r"\sqrt{"), ("slot", "A"), ("lit", "}"))
+
+
+def unary() -> tuple[FormalSystem, dict[str, str]]:
+    system = build_system(build_spec(parse(UNARY), name="t"))
+    return system, {"sqrt": r"\surd", "abs": r"\mathrm{abs}", "neg": "-"}
+
+
+def _rule(pins: dict[str, str], name: str, pieces: tuple = _ROOT) -> Rule:
+    return Rule(name=name, constructor="cfv", pins=pins, pieces=pieces)
+
+
+def test_a_collision_a_rule_introduces_is_reported() -> None:
+    # The *other* way curating a projection creates a collision, and the one
+    # nothing checked until now. A rule writes a spelling that appears in no
+    # production's template at all — that is what it is for — so neither the token
+    # map nor the templates say anything about it.
+    system, tokens = unary()
+    derived = projection_for(system.build_context, tokens, name="latex")
+    # `cneg` re-spelled as a radical, and a rule that spells `( sqrt ` A )` the
+    # same way: two different terms, one string.
+    clash = with_rules(
+        with_overrides(derived, {"cneg": _ROOT}), [_rule({"F": "csqrt"}, "sqrt")]
+    )
+
+    report = notation_report(
+        system.build_context, tokens, templates=clash.templates, rules=clash.rules
+    )
+    assert [set(c.productions) for c in report.collisions] == [{"cneg", "rule:sqrt"}]
+
+    # And with the same templates but no rules, nothing is reported — which is the
+    # whole point of passing them.
+    assert not notation_report(
+        system.build_context, tokens, templates=clash.templates
+    ).collisions
+
+
+def test_two_rules_spelling_one_shape_collide() -> None:
+    # Same root, different pins, one spelling: the text cannot say which pin held.
+    # Nothing outside this check would notice, since `with_rules` deliberately
+    # adds rather than replaces — several rules sharing a root is the idiom.
+    system, tokens = unary()
+    derived = projection_for(system.build_context, tokens, name="latex")
+    both = with_rules(
+        derived, [_rule({"F": "csqrt"}, "one"), _rule({"F": "cabs"}, "two")]
+    )
+
+    report = notation_report(
+        system.build_context, tokens, templates=both.templates, rules=both.rules
+    )
+    assert [set(c.productions) for c in report.collisions] == [
+        {"rule:one", "rule:two"}
+    ]
+
+
+def test_two_unnamed_rules_spelling_one_shape_still_collide() -> None:
+    # `Rule.name` is optional and nothing dispatches on it, so two unnamed rules
+    # on one root share the empty string. Identifying them by it collapsed the
+    # pair to one entry and the collision went quiet — at exactly the moment it
+    # was found.
+    system, tokens = unary()
+    derived = projection_for(system.build_context, tokens, name="latex")
+    both = with_rules(
+        derived,
+        [
+            Rule(constructor="cfv", pins={"F": "csqrt"}, pieces=_ROOT),
+            Rule(constructor="cfv", pins={"F": "cabs"}, pieces=_ROOT),
+        ],
+    )
+
+    report = notation_report(
+        system.build_context, tokens, templates=both.templates, rules=both.rules
+    )
+    assert [set(c.productions) for c in report.collisions] == [
+        {"rule:cfv#0", "rule:cfv#1"}
+    ]
+
+
+def test_a_rule_a_regex_leaf_would_also_match_collides() -> None:
+    """A regex leaf accepts a *language*, so it is never in the shape index.
+
+    The production pass asks it separately; the rule pass has to as well.
+    Reachable because a rule may pin **every** slot of its root —
+    `applicable_rules` counts a pinned slot as accounted for — and then render a
+    bare literal, which is exactly the shape a leaf can swallow.
+    """
+    system = build_system(SystemSpec(name="c", productions=[
+        Production(sort="formula", name="var", regex="[p-r]"),
+        Production(sort="formula", name="root", atom_value="SQ",
+                   denotes_constant=True),
+        Production(sort="formula", name="app", template="( F ` A )",
+                   bindings=[("F", "formula"), ("A", "formula")]),
+    ], lines=[LINE]))
+    constructors = notation_constructors(system.build_context, system.definitions)
+
+    # Both of `app`'s slots pinned, so nothing is left to render as a slot and
+    # `applicable_rules` is satisfied — the spelling is one bare literal.
+    both_pinned = Rule(
+        name="constant",
+        constructor="app",
+        pins={"F": "root", "A": "var"},
+        pieces=(("lit", "p"),),
+    )
+    assert applicable_rules([both_pinned], constructors) == [both_pinned]
+
+    derived = projection_for(system.build_context, {"SQ": "√"}, name="latex")
+    clash = with_rules(derived, [both_pinned])
+    report = notation_report(
+        system.build_context, {"SQ": "√"}, templates=clash.templates, rules=clash.rules
+    )
+
+    # `p` is in `var`'s language, so the text denotes both the rule's shape and
+    # the leaf. Reported without this, the notation would read collision-free.
+    (collision,) = report.collisions
+    assert set(collision.productions) == {"rule:constant", "var"}
+
+
+def test_rules_that_spell_distinctly_are_not_reported() -> None:
+    # The case that must stay quiet — and the case `set.mm`'s own table is in: its
+    # seven latex rules introduce no collision against the whole corpus grammar.
+    system, tokens = unary()
+    derived = projection_for(system.build_context, tokens, name="latex")
+    fine = with_rules(
+        derived,
+        [
+            _rule({"F": "csqrt"}, "one"),
+            _rule({"F": "cabs"}, "two", (("lit", "|"), ("slot", "A"), ("lit", "|"))),
+        ],
+    )
+
+    assert not notation_report(
+        system.build_context, tokens, templates=fine.templates, rules=fine.rules
+    ).collisions
+
+
+def test_a_report_given_no_rules_reads_the_templates_alone() -> None:
+    # The default every existing caller means.
+    system, tokens = unary()
+    derived = projection_for(system.build_context, tokens, name="latex")
+    assert notation_report(
+        system.build_context, tokens, templates=derived.templates
+    ) == notation_report(
+        system.build_context, tokens, templates=derived.templates, rules=()
+    )
+
+
 def test_with_rules_adds_rather_than_replaces() -> None:
     # Unlike an override, which is keyed by name and wins outright: several rules
     # legitimately share a root, since fixing a different operand in the same

@@ -100,7 +100,7 @@ from app.routers._common import (
 from app.routers.systems import load_effective, load_system
 from website.logical.formal_system.diagnostics import numbers
 from website.logical.formal_system.proof import Proof as EngineProof
-from website.logical.formal_system.proof import citation_text
+from website.logical.formal_system.proof import CITATION_SEPARATOR, citation_text
 from website.logical.formal_system.retrieval import (
     Application,
     accessible_lines,
@@ -122,6 +122,8 @@ from app.schemas import (
     CitationSuggestion,
     LineOutcome,
     LineProposal,
+    LineRemoval,
+    LineRemovalOutcome,
     TermProposalIn,
     FailureOut,
     Attribution,
@@ -464,7 +466,7 @@ async def _verify_with_references(
     line. Pass ``built`` to reuse a system this caller has already compiled —
     `/cite` and `/lines` need the grammar before they can rewrite a line, and
     building it a second time here was the largest single thing either route did
-    (roadmap §9d). Otherwise it is built here, under the lock.
+    (roadmap §9e). Otherwise it is built here, under the lock.
 
     ``persist=False`` for a caller whose transaction will be rolled back — an
     anonymous viewer verifying a published proof. The verdict is the same either
@@ -1826,7 +1828,7 @@ async def propose_citation(
     # Built once and reused by the verify below. Rewriting a line needs the
     # grammar to *read* it, so this route needs the system before it checks — and
     # building it a second time inside the verify was the single largest thing a
-    # call of this route did (roadmap §9d).
+    # call of this route did (roadmap §9e).
     #
     # Under the system lock, which the verify would otherwise be the first to
     # take: a build made outside it could be against a grammar that has changed
@@ -2201,6 +2203,180 @@ async def propose_line(
             "only_holes": verification.response.only_holes,
         }
     )
+
+
+@router.post("/{proof_id}/lines/remove", response_model=LineRemovalOutcome)
+async def remove_line(
+    proof_id: uuid.UUID,
+    payload: LineRemoval,
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> LineRemovalOutcome:
+    """Take a line back out, closing the gap its number leaves.
+
+    The inverse of `/lines`, and the operation a loop working top-down needs to
+    undo a step it has decided against (§9c). Renumbering is the same problem in
+    reverse: everything below moves *up*, and a citation naming one of those lines
+    silently names the wrong one afterwards.
+
+    A line **another line cites** is refused rather than removed. Its dependents
+    would lose their justification, and there is no answer to give them — unlike
+    an insertion, which can always be undone by not making it. Naming them is more
+    use than a broken proof.
+
+    A dry run unless ``apply``; applying is owner-only, as the other two are.
+    """
+    proof = await _get_readable_or_404(session, proof_id, user)
+
+    rows = (
+        await session.scalars(
+            select(ProofLineRow)
+            .where(ProofLineRow.proof_id == proof.id, ProofLineRow.number.is_not(None))
+            .order_by(ProofLineRow.number)
+        )
+    ).all()
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This proof has no numbered lines to remove. Verify it first: a "
+                "line is addressed by the citation number its structure gives it."
+            ),
+        )
+    going = next((row for row in rows if row.number == payload.line), None)
+    if going is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"This proof has no line {payload.line}.",
+        )
+
+    # Read off the **citation text**, not the justification edges. An edge is
+    # written only where the rule applied, so a line that cites this one and does
+    # not currently check has none — and would sail past this guard and have its
+    # citation quietly retargeted by the renumbering below. The text is what
+    # `renumber` rewrites, so asking it the same question is the only way the two
+    # cannot disagree.
+    cited_by = sorted(
+        row.number for row in rows if _cites(row.reference, payload.line)
+    )
+    if cited_by:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Line {payload.line} is cited by "
+                f"{', '.join(str(n) for n in cited_by)}; removing it would leave "
+                "them unjustified. Re-cite or remove those first."
+            ),
+        )
+
+    await lock_system(session, proof.formal_system_id)
+    built = await _build_system(session, proof.formal_system_id)
+    _require_a_built_system(built)
+
+    lines = proof.source.split("\n")
+    if not 0 <= going.position < len(lines):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This proof's stored structure is stale. Verify it first.",
+        )
+    # Everything below closes up by one. `at` is the number *after* the one going,
+    # so the removed line's own citation — which is about to be dropped — is not
+    # rewritten on the way out.
+    moved = built.compiled.renumber(lines, payload.line + 1, by=-1)
+    if moved is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This proof's citations could not be renumbered to close the gap; "
+                "no line was removed."
+            ),
+        )
+    del moved[going.position]
+    source = "\n".join(moved)
+
+    owned = user is not None and proof.owner_id == user.id
+    if payload.apply and not owned:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the owner can remove a line from this proof.",
+        )
+
+    verification = await _verify_with_references(
+        session, proof, persist=payload.apply and owned, source=source, built=built
+    )
+    broken = _broken_by_removal(rows, verification.engine_proof, payload.line)
+    if broken:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Removing this line would break line {broken}, which stood "
+                "before; no line was removed."
+            ),
+        )
+
+    outcome = LineRemovalOutcome(
+        line=payload.line,
+        # The source line itself, not `indent` and `display` put back together:
+        # `display` is stored stripped and the indent as a count of columns, so
+        # rebuilding one turns a tab into spaces and drops trailing whitespace.
+        # The contract is that a caller can restore what was here, which a
+        # re-spelling of it is not.
+        removed=lines[going.position],
+        renumbered=[row.number - 1 for row in rows if row.number > payload.line],
+    )
+    if not (payload.apply and owned):
+        return outcome
+
+    proof.source = source
+    await _discard_check(session, proof)
+    await _invalidate_dependents(session, proof.id, proof.formal_system_id)
+    await _retire_promotion(session, proof)
+    if proof.published_at is not None:
+        await _require_publishable(session, proof, built=built)
+    await _record_verdict(session, proof, verification)
+    await session.commit()
+    return outcome.model_copy(
+        update={
+            "applied": True,
+            "valid": verification.valid,
+            "holes": verification.response.holes,
+            "only_holes": verification.response.only_holes,
+        }
+    )
+
+
+def _cites(reference: str | None, number: int) -> bool:
+    """Whether a stored citation names line ``number``.
+
+    Exactly `FormalSystem.renumber`'s rule for what a line number *is*: a bare
+    integer among the citation's parts. A rule's label, the definitional and hole
+    keywords and a dotted lemma reference (`[MP, A.2]`, whose `2` is a line of
+    another proof) are none, and neither shifts nor counts here.
+    """
+    if reference is None:
+        return False
+    return any(
+        part.isdigit() and int(part) == number
+        for part in reference.split(CITATION_SEPARATOR)
+    )
+
+
+def _broken_by_removal(
+    before: Sequence[ProofLineRow], checked: EngineProof | None, at: int
+) -> int | None:
+    # The first line that was valid before the removal and is not after it, by its
+    # new number. The removed line itself is skipped — it is *meant* to be gone.
+    if checked is None:
+        return None
+    after = {line.number: line for line in checked.proof_lines if line.number is not None}
+    for row in before:
+        if row.number == at:
+            continue
+        moved = row.number - 1 if row.number > at else row.number
+        line = after.get(moved)
+        if row.valid and (line is None or not line.valid):
+            return moved
+    return None
 
 
 def _broken_by_insert(

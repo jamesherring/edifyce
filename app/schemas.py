@@ -885,6 +885,35 @@ class LineOutcome(BaseModel):
     only_holes: bool = False
 
 
+class LineRemoval(BaseModel):
+    """Take a line back out, renumbering what follows.
+
+    The inverse of `LineProposal`, and the one editing operation the structured
+    loop was missing: a caller working top-down parks a goal, tries a step, and
+    needs to undo it when the step turns out not to be the one
+    (docs/authoring-and-ingestion-roadmap.md §9c).
+
+    A dry run unless ``apply``, as the other two are, and owner-only to apply.
+    """
+
+    line: int = Field(ge=1)
+    apply: bool = False
+
+
+class LineRemovalOutcome(BaseModel):
+    """What removing a line would do, or did."""
+
+    line: int
+    # The line as it stood, so a caller can put it back without having kept it.
+    removed: str
+    # Lines whose citations moved up to close the gap, by their *new* number.
+    renumbered: list[int] = Field(default_factory=list)
+    applied: bool = False
+    valid: bool | None = None
+    holes: list[int] = Field(default_factory=list)
+    only_holes: bool = False
+
+
 class CitationOutcome(BaseModel):
     """What a proposed justification would do, or did."""
 

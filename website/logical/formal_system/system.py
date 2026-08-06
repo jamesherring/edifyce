@@ -245,14 +245,23 @@ class FormalSystem:
         return spliced
 
     def renumber(
-        self, lines: list[str], at: int, context: Context | None = None
+        self,
+        lines: list[str],
+        at: int,
+        context: Context | None = None,
+        by: int = 1,
     ) -> list[str] | None:
-        """``lines`` with every cited line number ``>= at`` shifted up by one.
+        """``lines`` with every cited line number ``>= at`` shifted by ``by``.
 
-        What inserting a line costs. Citation numbers are positional, so a line
-        added at ``at`` moves everything below it and every citation that named
-        one of those lines now names the wrong one — silently, because the old
-        number still resolves.
+        What editing the *shape* of a proof costs. Citation numbers are
+        positional, so adding or removing a line moves everything below it and
+        every citation that named one of those lines now names the wrong one —
+        silently, because the old number still resolves.
+
+        ``by`` is ``+1`` for an insertion at ``at`` and ``-1`` for the removal of
+        the line *above* ``at``. Removing is the caller's harder case, not this
+        one's: a citation naming the removed line has nothing to shift *to*, and
+        deciding what that means is the caller's (`/lines` refuses it).
 
         Only bare integers shift. A rule's label, the definitional keyword, the
         hole keyword and a dotted lemma reference (`[MP, A.2]`, whose `2` is a
@@ -274,7 +283,7 @@ class FormalSystem:
                 shifted.append(text)
                 continue
             parts = [
-                str(int(part) + 1)
+                str(int(part) + by)
                 if part.isdigit() and int(part) >= at
                 else part
                 for part in reference.split(CITATION_SEPARATOR)

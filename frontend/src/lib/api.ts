@@ -161,6 +161,31 @@ export interface LineOutcome {
 	only_holes: boolean;
 }
 
+/** Take a line back out, closing the gap its number leaves. Mirrors
+ *  `LineRemoval`.
+ *
+ *  The inverse of `LineProposal`, and what a caller working top-down needs to
+ *  undo a step it has decided against. A line another line *cites* is refused
+ *  rather than removed: its dependents would lose their justification, and there
+ *  is no answer to give them. A dry run unless `apply` is set. */
+export interface LineRemoval {
+	line: number;
+	apply?: boolean;
+}
+
+/** What removing a line would do, or did. Mirrors `LineRemovalOutcome`. */
+export interface LineRemovalOutcome {
+	line: number;
+	/** The line as it stood, so a caller can put it back without having kept it. */
+	removed: string;
+	/** Lines whose citations moved up to close the gap, by their *new* number. */
+	renumbered: number[];
+	applied: boolean;
+	valid: boolean | null;
+	holes: number[];
+	only_holes: boolean;
+}
+
 /** One edge below a term node: the slot it fills, and what sits there. */
 export interface TermChild {
 	slot: string;
@@ -1297,6 +1322,15 @@ export const api = {
 			request<LineOutcome>(`/proofs/${id}/lines`, {
 				method: 'POST',
 				body: JSON.stringify(proposal)
+			}),
+		/** Take a line back out, renumbering what follows up to close the gap.
+		 * Refused when another line cites it — the dependents would lose their
+		 * justification, and the response names them. A dry run unless `apply` is
+		 * set; applying is owner-only. */
+		removeLine: (id: string, removal: LineRemoval) =>
+			request<LineRemovalOutcome>(`/proofs/${id}/lines/remove`, {
+				method: 'POST',
+				body: JSON.stringify(removal)
 			}),
 		/** Replace this proof's outgoing references (lemmas it cites) wholesale. */
 		setReferences: (id: string, references: ProofReferenceInput[]) =>

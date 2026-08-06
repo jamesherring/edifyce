@@ -194,11 +194,16 @@ DISPLAY_OVERRIDES: dict[str, dict[str, tuple[tuple[str, str], ...]]] = {
 # pinned operand is *consumed* — there is no `\surd` left in `\sqrt{2}` — which is
 # exactly why this cannot be a template for either production alone.
 #
-# Six, chosen because in each the mathematical notation is genuinely
+# Seven, chosen because in each the mathematical notation is genuinely
 # two-dimensional or fenced and the linear form is a transcription of it rather
-# than the thing. `+`, `x.` and the rest read correctly as `( A + B )` and are
-# left alone. As with `DISPLAY_OVERRIDES` this is `latex` only: the `unicode`
-# reading exists to be faithful to how `set.mm` itself writes things.
+# than the thing — six of those, plus `factorial-of-factorial`, which exists to
+# disambiguate one of them rather than to improve it. `+`, `x.` and the rest read
+# correctly as `( A + B )` and are left alone. As with `DISPLAY_OVERRIDES` this is
+# `latex` only: the `unicode` reading exists to be faithful to how `set.mm` itself
+# writes things.
+#
+# They introduce no collision, against the whole corpus grammar — which
+# `notation_report(rules=…)` is what checks.
 DISPLAY_RULES: dict[str, tuple[Rule, ...]] = {
     "latex": (
         # `( sqrt ` A )`, where `sqrt` maps to `\surd` — the symbol, not the

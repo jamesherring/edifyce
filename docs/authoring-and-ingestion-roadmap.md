@@ -40,11 +40,25 @@ is offered `∈` and must type `e.`.
 Three obstacles, all measurable rather than aesthetic.
 
 **A notation is not injective.** `notation_report` finds **19** collisions in
-`set.mm`'s LaTeX reading, each a constant against a class *variable* of the same
-spelling (`+` is both `caddc` and a variable named `.+`). As a display that is
-cosmetic; as a *source* it means text no longer determines the term. The report
-also explicitly does not certify absence, so an empty result would not settle it
-either.
+`set.mm`'s LaTeX reading. As a display that is cosmetic; as a *source* it means
+text no longer determines the term. The report also explicitly does not certify
+absence, so an empty result would not settle it either.
+
+They are **two problems, not one**, and only the first is the one this section
+used to describe:
+
+| | | what would settle it |
+|---|---|---|
+| **11** | a constant against a class *variable* of the same spelling — `+` is both `caddc` and a variable named `.+`; also `-`, `/`, `0`, `1`, `<`, `R_1`, `\cdot`, `\le`, `\perp`, `\uparrow` | a policy: spell class variables distinctly, once, for all of them |
+| **8** | two distinct *constants* sharing a spelling — `citg1` and `citg2` both read `\int_2`; also `+\infty`, `-\infty`, `\Lambda`, `\mathrm{O}`, `\simeq_r`, `\times_s`, and `Se` (two `wff` productions of identical shape, `w-bnj13` being the Bernays section re-declaring it) | per-token editorial judgement — there is no rule to apply |
+
+The second kind is upstream: `set.mm`'s own `latexdef` map is not injective, with
+**39 spellings shared by two or more of its 1,794 tokens** (`S.1` and `S.2` both
+declare `\int_2`). No amount of namespace work fixes those — one of each pair is
+simply mis-spelled, and deciding which is a reading of the mathematics.
+
+That split is why "decide the 19 pairs" is not one task. Ten minutes of policy
+covers eleven of them; the other eight are eight separate judgements.
 
 **A rule has no production form.** `Production` builds exactly one `Constructor`;
 nothing constructs a two-node term. A `rendering.Rule` *consumes* what it pins —
@@ -166,10 +180,12 @@ is not done yet".
 5. **A** whenever convenient. Cheap, and it fixes a live papercut.
 6. **Not B for the imported corpus**, unless and until the 19 pairs are decided by
    a curated table of disambiguated input spellings — the `DISPLAY_OVERRIDES`
-   mechanism aimed at input instead of display. `set.mm` itself distinguishes those
-   pairs *by colour* in `htmldef`, which `as_text` drops by policy; colour is not
-   typeable, so that does not rescue the source case, but it does mean the
-   ambiguity is partly ours rather than theirs.
+   mechanism aimed at input instead of display. `set.mm` itself distinguishes the
+   *variable* half of them (§2's eleven) **by colour** in `htmldef`, which
+   `as_text` drops by policy; colour is not typeable, so that does not rescue the
+   source case, but it does mean that much of the ambiguity is ours rather than
+   theirs. It does not extend to §2's other eight, where two constants share a
+   spelling in `latexdef` itself and colour would not tell them apart either.
 
 ### Foreclosure check
 
@@ -588,10 +604,30 @@ The consequence is that a proof with no ordinary logical line has nothing to cop
 and says so. A scope opener is refused as a template for the same reason `/cite`
 refuses one as a target: it states nothing checkable.
 
+### Taking a line back out — *done*
+
+`POST /proofs/{id}/lines/remove` is `/lines` inverted, and the same renumbering
+run backwards: everything below the removed line closes up by one, and a citation
+naming one of those lines has to follow it or it silently names another.
+`FormalSystem.renumber` grew a `by` rather than a second copy of itself.
+
+The guard is the same one and for the same reason — **no line that was valid
+before may be invalid after** — with the removed line itself excepted, since it is
+meant to be gone.
+
+What is *not* symmetric is a line another line **cites**. An insertion can always
+be undone by not making it; a removal that orphans its dependents has no answer to
+give them, so it is refused with their numbers rather than applied. That is
+decided from the stored edges, before anything is built.
+
 ### What is still not here
 
-Deleting a line, and moving one. Both are the same renumbering problem in reverse
-and neither is needed to *build* a proof, which is what the loop does.
+Moving a line. Unlike a removal it is not one shift: the lines between the old and
+the new position move by one and everything else stays, so the rewrite is a
+permutation rather than an offset — and a move that crosses a citation is a
+reordering of the proof's dependencies, which is a different question from
+renumbering it. Neither it nor removal is needed to *build* a proof, which is what
+the loop does; removal is here because undoing a step the loop tried is.
 
 ## 9d. Retrieval — the loop, driveable — *done*
 
