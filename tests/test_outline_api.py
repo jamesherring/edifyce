@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -59,23 +60,20 @@ def client(db, monkeypatch) -> Iterator[TestClient]:
         yield test_client
 
 
-def seed(db_path, publish_proofs: bool = False) -> str:
-    """Import the sectioned fixture, published so an anonymous read reaches it.
+def seed(db_path, draft_proofs: bool = False) -> str:
+    """Import the sectioned fixture. An import publishes the system and every
+    proof that verified, so an anonymous read reaches them as they stand.
 
-    ``publish_proofs`` is separate because an import leaves every proof a draft:
-    a corpus is ownerless and unpublished, which is exactly the case the counts
-    have to get right.
+    ``draft_proofs`` puts the proofs back to drafts — a system published over
+    proofs that are not, which is the case the counts have to get right.
     """
     engine = create_engine(db_path)
     try:
         with Session(engine) as session:
             report = import_corpus(session, parse(SOURCE), name="t")
-            session.commit()
-            proofs = list(session.scalars(select(Proof)))
-            proofs[0].formal_system.published_at = proofs[0].created_at
-            if publish_proofs:
-                for proof in proofs:
-                    proof.published_at = proof.created_at
+            if draft_proofs:
+                for proof in session.scalars(select(Proof)):
+                    proof.published_at = None
             session.commit()
             return str(report.system_id)
     finally:
@@ -100,7 +98,7 @@ def test_a_folder_counts_the_proofs_directly_in_it(client, db):
     # Directly, not cumulatively: a corpus's part-level node holds nothing itself
     # and thousands beneath it, and a subtree total would make every ancestor look
     # equally full.
-    system_id = seed(db, publish_proofs=True)
+    system_id = seed(db)
 
     (part,) = client.get(f"/api/formal-systems/{system_id}/folders").json()
     assert part["proofs"] == 0
@@ -110,11 +108,11 @@ def test_a_folder_counts_the_proofs_directly_in_it(client, db):
 
 
 def test_a_count_omits_proofs_the_reader_cannot_read(client, db):
-    # The same rule a single proof read applies. An import is ownerless and every
-    # proof in it is a draft, so a published system would otherwise advertise
-    # counts for proofs `/proofs/public` omits and `GET /proofs/{id}` 404s on —
-    # a disclosure of drafts, and a number nobody can act on.
-    system_id = seed(db)
+    # The same rule a single proof read applies: a published system must not
+    # advertise counts for proofs `/proofs/public` omits and `GET /proofs/{id}`
+    # 404s on — a disclosure of drafts, and a number nobody can act on. An import
+    # no longer produces that state on its own, so it is made here.
+    system_id = seed(db, draft_proofs=True)
 
     (part,) = client.get(f"/api/formal-systems/{system_id}/folders").json()
     identity = part["children"][0]["children"][0]["children"][0]
@@ -173,3 +171,98 @@ def test_the_outline_of_a_draft_is_owner_only(client, db):
 
     assert client.post("/api/auth/logout").status_code == 204
     assert client.get(f"/api/formal-systems/{draft}/folders").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Reading the proofs a node of the outline holds
+# ---------------------------------------------------------------------------
+#
+# The tree names sections and counts them; this is what turns one of those counts
+# into the proofs behind it. Without it the outline is a table of contents for a
+# book with no pages: the only public listing is every published proof at once,
+# which for a corpus is 47,000 of them in one order nobody asked for.
+
+
+def _folder_named(client, system_id: str, name: str) -> str:
+    """The id of the outline node called ``name``, wherever it sits."""
+    def walk(nodes):
+        for node in nodes:
+            if node["name"] == name:
+                return node["id"]
+            found = walk(node["children"])
+            if found is not None:
+                return found
+        return None
+
+    found = walk(client.get(f"/api/formal-systems/{system_id}/folders").json())
+    assert found is not None, name
+    return found
+
+
+def test_the_public_listing_scopes_to_one_folder(client, db):
+    system_id = seed(db)
+    identity = _folder_named(client, system_id, "The identity")
+
+    page = client.get("/api/proofs/public", params={"folder_id": identity})
+    assert page.status_code == 200
+    assert [p["name"] for p in page.json()["items"]] == ["id"]
+    # `total` describes the scoped set, not the whole shelf — it is what pages the
+    # list, so a count of everything would offer pages that come back empty.
+    assert page.json()["total"] == 1
+
+    # And the sibling section holds the other one, rather than both showing both.
+    afterwards = _folder_named(client, system_id, "Afterwards")
+    page = client.get("/api/proofs/public", params={"folder_id": afterwards})
+    assert [p["name"] for p in page.json()["items"]] == ["id2"]
+
+
+def test_a_system_scope_is_the_whole_corpus_in_file_order(client, db):
+    # Position, not publication recency: an import publishes every proof at one
+    # instant, so ordering by it falls through to `created_at DESC` and hands back
+    # a corpus backwards. `id` precedes `id2` in the file and must here too.
+    system_id = seed(db)
+
+    # Stamped apart, and in import order, so the two orderings genuinely disagree
+    # — a fixture whose rows share a timestamp would pass either way. Under SQLite
+    # they do share one: its CURRENT_TIMESTAMP has second precision.
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            for offset, proof in enumerate(
+                session.scalars(select(Proof).order_by(Proof.position))
+            ):
+                proof.created_at = datetime(2026, 1, 1, tzinfo=UTC) + timedelta(hours=offset)
+            session.commit()
+    finally:
+        engine.dispose()
+
+    page = client.get("/api/proofs/public", params={"formal_system_id": system_id})
+    assert [p["name"] for p in page.json()["items"]] == ["id", "id2"]
+    # The unscoped list is the one that leads with the newest.
+    page = client.get("/api/proofs/public")
+    assert [p["name"] for p in page.json()["items"]] == ["id2", "id"]
+
+
+def test_a_scoped_listing_still_omits_drafts(client, db):
+    # The scope narrows the published list; it does not become a way into it.
+    system_id = seed(db, draft_proofs=True)
+    identity = _folder_named(client, system_id, "The identity")
+
+    page = client.get("/api/proofs/public", params={"folder_id": identity})
+    assert page.status_code == 200
+    assert page.json()["items"] == [] and page.json()["total"] == 0
+
+
+def test_an_imported_proof_is_readable_without_signing_in(client, db):
+    # The point of publishing an import: the rows were always there, and nothing
+    # could open them. Ownerless still — which is what keeps a verify from writing
+    # back over the imported structure.
+    system_id = seed(db)
+    identity = _folder_named(client, system_id, "The identity")
+    (listed,) = client.get("/api/proofs/public", params={"folder_id": identity}).json()["items"]
+
+    detail = client.get(f"/api/proofs/{listed['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["name"] == "id"
+    assert detail.json()["owner"] is None
+    assert client.get(f"/api/formal-systems/{system_id}").status_code == 200

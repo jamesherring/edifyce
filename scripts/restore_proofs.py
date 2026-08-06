@@ -1023,7 +1023,8 @@ def _holds_data(url: str) -> bool:
 
 
 def _own(url: str, email: str) -> uuid.UUID:
-    """Give the corpus an owner, so the owner-only apply path is reachable.
+    """Give the corpus an owner and take it back to drafts, so the apply path is
+    reachable.
 
     An import is deliberately ownerless (`app.db.metamath_store`), which is right
     for a library and wrong for a harness: ``/cite`` and ``/lines`` refuse to
@@ -1031,6 +1032,14 @@ def _own(url: str, email: str) -> uuid.UUID:
     preferable to copying them, because a proof's own ``$e`` hypotheses are
     citable from the proof that establishes its library entry and nowhere else —
     a copy could not cite them, and a corpus proof's first steps usually do.
+
+    Unpublished for a second reason with the same shape. An import publishes what
+    verified, and a *published* proof may not be edited into a state that does not
+    verify (`_require_publishable`, re-run on every applied edit) — which is
+    exactly what this harness does on purpose, since punching a hole in a proof is
+    the first half of every round. Right for a library, wrong here. The systems
+    stay published: they are read, not edited, and a draft system would refuse the
+    proofs' own publication anyway.
     """
     engine = create_engine(url)
     try:
@@ -1046,7 +1055,9 @@ def _own(url: str, email: str) -> uuid.UUID:
             )
             session.add(user)
             session.flush()
-            session.execute(sa_update(Proof).values(owner_id=user.id))
+            session.execute(
+                sa_update(Proof).values(owner_id=user.id, published_at=None)
+            )
             session.commit()
             return user.id
     finally:

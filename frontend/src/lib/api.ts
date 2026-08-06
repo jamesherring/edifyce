@@ -1262,9 +1262,22 @@ export const api = {
 			request<Page<ProofSummary>>(
 				`/proofs${listQuery(params, { formal_system_id: formalSystemId })}`
 			),
-		/** The shared master list: every published proof, any owner, no auth. */
-		listPublic: (params?: ListParams) =>
-			request<Page<ProofSummary>>(`/proofs/public${listQuery(params)}`),
+		/** The shared master list: every published proof, any owner, no auth.
+		 *
+		 * Scope it to a system, or to one folder of that system's outline, to
+		 * browse an imported corpus: unscoped it is 47,000 theorems in publication
+		 * order, and an import publishes them all at once. A scoped page comes back
+		 * in the proofs' own order within the system instead. */
+		listPublic: (
+			params?: ListParams,
+			scope: { formalSystemId?: string; folderId?: string } = {}
+		) =>
+			request<Page<ProofSummary>>(
+				`/proofs/public${listQuery(params, {
+					formal_system_id: scope.formalSystemId,
+					folder_id: scope.folderId
+				})}`
+			),
 		/** A single proof. Published ones are public; drafts are owner-only. */
 		get: (id: string) => request<ProofDetail>(`/proofs/${id}`),
 		create: (payload: ProofCreate) =>
