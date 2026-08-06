@@ -5,7 +5,8 @@ of R4, and the edge CRUD an author reaches them through. **Track S is delivered
 too**, bar the conditional S4: S1 declares a sequent calculus and needed no
 engine change, S2 adds the statement template and carries a Hilbert library
 across into it, S2a puts a sequent calculus on top of a tower — including an
-imported one — and S3 is answered by S1's measurements. **Track D has started:**
+imported one — and S3 is answered by S1's measurements. **Track D is delivered
+too**, D1 through D6:
 D1 and D2 are done — the outline is kept, the partition is measured against the
 real `set.mm`, and `setmm.LAYERS` carries the plan those numbers justify — and
 **D3 is built, both halves**: `corpus_specs` returns one `SystemSpec` per layer
@@ -21,7 +22,11 @@ of the first 2,676 promotions. **D5 is done**: every citation resolves through
 the chain and hits its cache, a stored proof re-verifies from rows alone and does
 so identically twice, the three invalid cases are each refused by name, and a
 `$d` written in the `.mm` file still refuses a capture two layer boundaries away
-(`scripts/check_boundary_provisos.py`). **D6 is still design.**
+(`scripts/check_boundary_provisos.py`). **D6 is done too, and answers the
+question the whole track was for:** following the citation graph transitively,
+892 of the first-order layer's 902 theorems really do assume first-order logic,
+so the boundary is drawn where the mathematics divides — and the ten that do not
+are named (`scripts/check_provenance.py`). **Track D is complete.**
 
 One correction this note owes its reader, since §6.3 and §8's S2 both imply
 otherwise: **an edge and a layer are not two ways to do the same thing.** An edge
@@ -488,6 +493,17 @@ following the transitive citation graph — a graph question, answered on the gr
 (§3.3). A ZFC proof that touches nothing above PC *is* a PC proof, and should say
 so. Run over an imported corpus it also validates (d): a theorem the layer plan
 puts in FOL that depends on a ZFC axiom is a misfiled theorem, and this finds it.
+
+**Built** — `app/db/provenance.py`, measured in §8's D6, with two corrections to
+the paragraph above. The join is not to `proof_line_antecedents`: those edges are
+line-to-line *within* one proof, so none of them crosses a layer. The cross-layer
+edge is `proof_lines.rule`, the label of the rule that justified the line, which
+for a citation of a promoted theorem is that theorem's label. And "the deepest
+layer it uses" is two questions rather than one — the deepest layer it cites
+anything from, and the deepest whose *axioms* it reaches — which come apart
+exactly when a lemma from a deeper layer rests on shallower assumptions. Neither
+is quite "could be filed lower", since a theorem is pinned by the grammar it is
+stated in too.
 
 ---
 
@@ -2031,6 +2047,76 @@ a precondition.
 - *Pinned:* the report is computed from `proof_line_antecedents` and
   `promoted_theorems` — a graph query (§3.3) — and a test asserts it never reads
   proof *source*.
+
+**Done.** `app/db/provenance.py` follows the citation graph transitively and says
+which layer each stored proof reaches; `scripts/check_provenance.py` runs it over
+a corpus and `tests/test_provenance.py` pins it on a fixture. At the 2,676 slice:
+
+| layer | proofs | own axioms | shallower axioms | no axioms | cites nothing needing this layer |
+|---|---|---|---|---|---|
+| Propositional calculus | 1,773 | 1,771 | 0 | 2 | 0 |
+| First-order logic | 902 | **892** | 9 | 1 | 10 |
+| ZF set theory | 1 | 1 | 0 | 0 | 0 |
+
+**So the boundary is in the right place**, which is the question D6 was asked:
+98.9% of the first-order layer genuinely assumes first-order logic. Nothing is
+filed above what it depends on, so the invalid case is produced by moving a
+stored proof rather than by any plan.
+
+*The correction the corpus made to the report's own claim.* The ten exceptions
+are named, and three of them are not what the column first said they were.
+`sptruw` is `( A. x ph -> ph )` proved from `a1i` alone — set.mm's own comment
+says "Instance of `a1i`. Uses only Tarski's FOL axiom schemes" — so **no citation**
+holds it in the first-order layer, and `A.` does. A theorem is pinned by the
+grammar it is stated in as well as by what it cites, and this reads only the
+citation graph. So the count is "cites nothing that needs this layer", not "could
+be moved": `sptruw`, `ax11dgen` and `ax13dgen4` all state something first-order
+and prove it propositionally. The other seven — `axia1`–`axia3`, `axin1`,
+`axin2`, `axio`, `pm11.07` — are propositional statements in the first-order
+section, and could really move.
+
+Two corroborations worth recording, since a report nothing checks is a report
+nothing trusts. `set.mm` hand-annotates `ax11dgen` and `ax13dgen4` with
+`$j usage … avoids 'ax-8' 'ax-9' 'ax-10' 'ax-11' 'ax-12'` — the same fact this
+derives, written by hand. And `pm11.07`'s stored proof is literally `( ) B`: an
+empty citation list over a hypothesis, which is why it reports as citing nothing
+at all rather than as bottoming out in PC.
+
+*Misfiled is decided by reachability, not by depth.* "Deeper than the layer that
+filed it" is the right test down one spine and means nothing across two branches
+of a tree, where the sibling holding the citation may sit at any depth including
+a shallower one — and a citation off the chain read there as a clean *could be
+filed lower*. So a citation carries whether the citing proof's chain could
+resolve it, and `misfiled` is that fact. It is the same defect
+`check_layering.unreachable_citations` reports, in the vocabulary of provenance.
+
+*And the fallback that finds those citations took two rounds of review to scope.*
+`proof_lines.rule` holds whatever justified the line, which for an ordinary
+inference rule is a name like `MP` that any system may declare — so a citation of
+a rule and a citation of a theorem are the same column, and the fallback has to
+tell them apart by something else. Indexed **database-wide**, it resolved one
+corpus's rule name to another corpus's theorem, inventing a dependency out of a
+coincidence of spelling and firing the misfiled hard failure. Keyed by the
+tree's **root**, two *sibling branches* still collided the same way: a proof
+citing its own rule `R` found a sibling's promoted `R` beneath the shared root.
+
+What settles it is asking what the citing chain explains **without** any library
+entry — a rule one of its systems declares, or a hypothesis of the theorem being
+proved, neither of which is a dependency on a layer. Those drop out, and what is
+left for the fallback is a label the chain accounts for in no way at all, which
+is the shape a misfiled proof has and nothing else does. All three pinned.
+
+*What the query reads, against what §5.5 guessed it would.* Not
+`proof_line_antecedents` — those edges are line-to-line *within* one proof, so
+none of them crosses a layer. The cross-layer edge is `proof_lines.rule`, the
+label of the rule that actually justified the line, which for a citation of a
+promoted theorem is that theorem's label. `rule` rather than `reference` for the
+same reason: the reference is what the author typed and the rule is what the
+checker resolved, and over-collecting from the text — right for D5's reachability
+guard, where a missed label costs a citation — would invent dependencies here.
+Then `promoted_theorems` for the layer and `proofs.theorem_id` for the proof
+behind it, and the traversal recurses. Blanking `proofs.source` changes nothing,
+which both the test and the corpus run assert.
 
 ---
 
