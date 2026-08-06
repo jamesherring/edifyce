@@ -21,7 +21,8 @@ pytest.importorskip("sqlalchemy")
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
-from app.db import alpha_digest, digest_term, store_term
+from app.db import alpha_digest, digest_term, store_term, store_terms
+from app.db import terms_mapping
 from app.db.base import Base
 from app.db.models import FormalSystem
 from app.db.terms import TermChildRow, TermRow
@@ -302,3 +303,52 @@ def test_alpha_digest_buckets_group_the_corpus(session, system_row, context):
         ).all()
     )
     assert sorted(counts.values()) == [1, 3]
+
+
+# ---------------------------------------------------------------------------
+# Batched interning: one lookup for many terms, and the bound on how many
+# ---------------------------------------------------------------------------
+
+
+def test_storing_many_terms_interns_them_as_one_graph(session, system_row, context):
+    # `store_terms` collects every root into *one* digest-keyed postorder before
+    # creating anything, so a subterm two of them share is still one row — the
+    # property that makes batching safe rather than merely faster.
+    shared = "(x ∈ y → x ∈ z)"
+    rows = store_terms(
+        session,
+        system_row,
+        [term_of(context, shared), term_of(context, shared), term_of(context, "x ∈ y")],
+    )
+
+    assert len(rows) == 3
+    assert rows[0] is rows[1]
+    # And the third is a subterm of the first, so it is the row already made for it.
+    session.flush()
+    child = session.scalars(
+        select(TermRow).where(TermRow.digest == rows[2].digest)
+    ).all()
+    assert len(child) == 1
+
+
+def test_the_dedup_lookup_is_chunked(session, system_row, context, monkeypatch):
+    """A proof-sized set of digests must not become a proof-sized `IN` list.
+
+    Postgres binds one parameter per digest and refuses past 65,535, and an
+    import catches broadly per theorem — so a set large enough would be recorded
+    as a *failed theorem* rather than as a limit reached.
+
+    Driven with a chunk of one, so the boundary is exercised on a small fixture
+    rather than by building a proof with thousands of subterms.
+    """
+    monkeypatch.setattr(terms_mapping, "_LOOKUP_CHUNK", 1)
+    formulas = ["x ∈ y", "x ∈ z", "y ∈ z", "(x ∈ y → x ∈ z)"]
+
+    rows = store_terms(session, system_row, [term_of(context, f) for f in formulas])
+    session.flush()
+
+    assert len({row.digest for row in rows}) == len(formulas)
+    # Stored once each, chunking or not — and re-asking finds them rather than
+    # making a second copy, which is what a mis-chunked lookup would do.
+    again = store_terms(session, system_row, [term_of(context, f) for f in formulas])
+    assert [row.id for row in again] == [row.id for row in rows]

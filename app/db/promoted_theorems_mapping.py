@@ -41,7 +41,7 @@ from app.db.promoted_theorems import (
 from app.db.side_conditions import SideConditionRow
 from app.db.side_conditions_mapping import build_theorem_side_conditions, proviso_lines
 from app.db.systems import SymbolRow
-from app.db.terms_mapping import prefetch_terms, store_term
+from app.db.terms_mapping import prefetch_terms, store_terms
 from website.logical.kernel.terms import Node
 from website.logical.matching import StringPattern
 from website.logical.promotion import TheoremSpec, promote_spec
@@ -127,6 +127,20 @@ def store_theorem(
             "store_theorem needs the digest that guards the terms it is caching."
         )
 
+    # The conclusion and every premise interned together: each is a `SELECT` and
+    # a flush, and a theorem's own schemas share subterms with each other as
+    # surely as a proof's lines do.
+    schemas: list[Pattern | None] = [
+        None if promoted is None else promoted.deduction,
+        *(
+            None
+            if promoted is None or index >= len(promoted.antecedents)
+            else promoted.antecedents[index]
+            for index in range(len(spec.premises))
+        ),
+    ]
+    term_ids = _term_ids(session, system, schemas)
+
     row = PromotedTheoremRow(
         system_id=system.id,
         position=position,
@@ -136,10 +150,7 @@ def store_theorem(
         matching=spec.matching,
         proved_by_id=proved_by_id,
         schema_digest=digest if promoted is not None else None,
-        statement_term_id=(
-            None if promoted is None
-            else _term_id(session, system, promoted.deduction)
-        ),
+        statement_term_id=term_ids[0],
     )
     for index, premise in enumerate(spec.premises):
         row.premises.append(
@@ -150,11 +161,7 @@ def store_theorem(
                     premise_labels[index]
                     if index < len(premise_labels) else None
                 ),
-                term_id=(
-                    None
-                    if promoted is None or index >= len(promoted.antecedents)
-                    else _term_id(session, system, promoted.antecedents[index])
-                ),
+                term_id=term_ids[index + 1],
             )
         )
     for index, (var, sort) in enumerate(spec.metavariables.items()):
@@ -175,18 +182,36 @@ def store_theorem(
     return row
 
 
-def _term_id(
-    session: Session, system: FormalSystem, pattern: Pattern | None
-) -> uuid.UUID | None:
-    # Only a `StringPattern` carries a composed term; a schema that resolved to a
-    # declared grammar pattern has none and needs none (see schema_terms._term_id
-    # for the same reasoning on the rule side).
-    if not isinstance(pattern, StringPattern) or pattern.schema_term is None:
-        return None
-    stored = store_term(session, system, pattern.schema_term)
-    if stored.id is None:
+def _term_ids(
+    session: Session, system: FormalSystem, patterns: Sequence[Pattern | None]
+) -> list[uuid.UUID | None]:
+    """Stored ids for several schema patterns, aligned to ``patterns``.
+
+    Only a `StringPattern` carries a composed term; a schema that resolved to a
+    declared grammar pattern has none and needs none (see schema_terms._term_id
+    for the same reasoning on the rule side), so those come back ``None``.
+
+    One lookup and at most one flush for the lot. Asking per pattern cost a round
+    trip each — and the flush was per *new* term, since a pending row has no id
+    until one happens.
+    """
+    carried = [
+        pattern
+        for pattern in patterns
+        if isinstance(pattern, StringPattern) and pattern.schema_term is not None
+    ]
+    if not carried:
+        return [None] * len(patterns)
+    stored = store_terms(session, system, [p.schema_term for p in carried])
+    if any(row.id is None for row in stored):
         session.flush()
-    return stored.id
+    # Keyed by identity: a pattern object may legitimately appear twice, and two
+    # equal-looking schemas are still one row if their terms agree.
+    rows = dict(zip((id(p) for p in carried), stored))
+    return [
+        rows[id(pattern)].id if id(pattern) in rows else None
+        for pattern in patterns
+    ]
 
 
 @dataclass(frozen=True)
@@ -841,7 +866,7 @@ def _require_nothing_was_composed(
         if term(term_id) is not None:
             continue
         # Only a `StringPattern` carries a composed term at all — the same test
-        # `_term_id` makes on the way in.
+        # `_term_ids` makes on the way in.
         if isinstance(pattern, StringPattern) and pattern.schema_term is not None:
             raise LookupError(
                 f"Theorem {entry.label!r} is inherited from another system and one "
