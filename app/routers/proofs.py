@@ -1177,9 +1177,20 @@ async def list_public_proofs(
     every one of them at the same instant.
 
     Which is also why a scoped page orders by **position** — the proof's place in
-    its system, the walk order for an import and the author's for anything else —
-    rather than by recency. Recency cannot order rows that share a timestamp, and
-    the fallback to `created_at DESC` would hand back a section backwards.
+    its system, which for an import is the walk order — rather than by recency.
+    Recency cannot order rows that share a timestamp, and the fallback to
+    `created_at DESC` would hand back a section backwards. Nothing authors a
+    position interactively yet, so for a hand-authored system it is a constant and
+    this reads as `created_at` ascending.
+
+    **`id` last, on both orderings**, because this is the one listing whose rows
+    an import writes in bulk and every key above it can tie: a corpus publishes at
+    a single instant by construction, and `created_at` defaults to `now()`, which
+    under Postgres is the *transaction's* timestamp — so a batch of proofs shares
+    that too. Ordering a tied block is then the planner's choice, and it need not
+    make the same one twice: offset paging over it repeats some proofs and drops
+    others. The interactive lists need no such key, since they write one row per
+    transaction.
     """
     scope = _scoped(formal_system_id, folder_id)
     return await paginate_summaries(
@@ -1188,9 +1199,9 @@ async def list_public_proofs(
         User,
         base_conditions=[Proof.published_at.is_not(None), *scope],
         default_order=(
-            [Proof.position, Proof.created_at]
+            [Proof.position, Proof.created_at, Proof.id]
             if scope
-            else [Proof.published_at.desc(), Proof.created_at.desc()]
+            else [Proof.published_at.desc(), Proof.created_at.desc(), Proof.id]
         ),
         params=params,
         summarize=_summary,

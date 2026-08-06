@@ -208,7 +208,9 @@
 					section headers its source draws; the number beside a folder is the proofs
 					it holds directly. Pick one to read them.
 				</p>
-				<div class="grid gap-4 md:grid-cols-2">
+				<!-- Two columns only once there is a second thing to put in one: an
+				     outline nobody has picked from should have the card's whole width. -->
+				<div class={['grid gap-4', selectedFolder && 'md:grid-cols-2']}>
 					<OutlineTree
 						folders={outline}
 						open

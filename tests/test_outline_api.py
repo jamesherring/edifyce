@@ -243,6 +243,38 @@ def test_a_system_scope_is_the_whole_corpus_in_file_order(client, db):
     assert [p["name"] for p in page.json()["items"]] == ["id2", "id"]
 
 
+def test_a_page_is_cut_by_a_unique_key_when_the_order_ties(client, db):
+    # An import gives every proof one `published_at` and — under Postgres, where
+    # `created_at` defaults to the *transaction's* `now()` — one `created_at` per
+    # batch. With nothing unique last in the ORDER BY the database may cut that
+    # tied block differently per query, so paging repeats rows and skips others.
+    # Forced here by tying every key the listings sort on.
+    system_id = seed(db)
+
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            for proof in session.scalars(select(Proof)):
+                proof.position = 0
+                proof.created_at = datetime(2026, 1, 1, tzinfo=UTC)
+            session.commit()
+            by_id = [
+                proof.name
+                for proof in session.scalars(select(Proof).order_by(Proof.id))
+            ]
+    finally:
+        engine.dispose()
+
+    def page(offset: int, **scope) -> list[str]:
+        response = client.get(
+            "/api/proofs/public", params={"limit": 1, "offset": offset, **scope}
+        )
+        return [p["name"] for p in response.json()["items"]]
+
+    for scope in ({}, {"formal_system_id": system_id}):
+        assert [page(0, **scope), page(1, **scope)] == [[by_id[0]], [by_id[1]]]
+
+
 def test_a_scoped_listing_still_omits_drafts(client, db):
     # The scope narrows the published list; it does not become a way into it.
     system_id = seed(db, draft_proofs=True)

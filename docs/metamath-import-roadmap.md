@@ -1742,7 +1742,11 @@ was a table of contents for a book with no pages. `/proofs/public` now takes
 `formal_system_id` and `folder_id`, and a scoped page orders by **position** —
 file order for an import — rather than by publication recency, which cannot order
 rows that all published at the same instant and would otherwise fall through to
-`created_at DESC` and hand back a section backwards.
+`created_at DESC` and hand back a section backwards. Both orderings end in `id`,
+because an import is also the one writer whose rows tie on every other key:
+`created_at` defaults to `now()`, which under Postgres is the *transaction's*
+timestamp, so a whole batch shares it — and a tied block ordered at the planner's
+discretion is a list that repeats and skips rows as it is paged.
 
 Publishing an imported proof meets the same three conditions `_require_publishable`
 asks of the interactive path, which is why it is safe rather than a special case:

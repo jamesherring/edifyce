@@ -9,7 +9,10 @@
 
 	let proofs = $state<ProofSummary[]>([]);
 	let total = $state(0);
-	let loading = $state(false);
+	// True from the start: the first fetch is queued by the effect below, which
+	// runs after this render, so a `false` here paints "nothing in this section"
+	// for a frame over a section that has plenty.
+	let loading = $state(true);
 	let error = $state<string | null>(null);
 
 	// Monotonic, so a slow page for a folder the reader has since left cannot
@@ -54,15 +57,25 @@
 		</span>
 	</div>
 
+	<!-- Beside the rows rather than in place of them: a failed *later* page must
+	     not throw away the pages that arrived, since the only way back to them
+	     would be to reselect the folder. -->
 	{#if error}
-		<p class="px-3 py-2 text-sm text-destructive">{error}</p>
-	{:else if loading && proofs.length === 0}
+		<p class="border-b px-3 py-2 text-sm text-destructive">{error}</p>
+	{/if}
+
+	{#if loading && proofs.length === 0}
 		<LoadingSpinner message="Loading proofs…" />
 	{:else if proofs.length === 0}
-		<!-- The outline counts only proofs the reader may open, so a folder offered
-		     here holds at least one. Reaching this means they were unpublished
-		     between the two requests. -->
-		<p class="px-3 py-2 text-sm text-muted-foreground">Nothing published in this section.</p>
+		<!-- The outline's count and this listing agree only where they ask the same
+		     question. They do for an imported corpus — ownerless, so every count is
+		     of published proofs — but a signed-in owner's count includes their own
+		     drafts, which this omits. So this says what it found, not why. -->
+		{#if !error}
+			<p class="px-3 py-2 text-sm text-muted-foreground">
+				Nothing published in this section.
+			</p>
+		{/if}
 	{:else}
 		<ul class="divide-y">
 			{#each proofs as proof (proof.id)}
