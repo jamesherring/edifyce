@@ -275,6 +275,19 @@ def alpha_digest(term: Term, is_free: FreeIdentity | None = None) -> str:
     return _alpha_hash(term, resolve, numbering, {})
 
 
+# How many digests one dedup lookup may ask about. Postgres binds a parameter per
+# digest and refuses past 65,535 of them, so a large enough set of terms would take
+# the `SELECT` down — and an import wraps each theorem in a savepoint that catches
+# broadly, so it would be filed as a *failed theorem* rather than as a limit
+# reached. That is the kind of failure that hides.
+#
+# Far above anything real: the largest proof in `set.mm`'s first 14,000 theorems
+# asks about 1,161 distinct subterms. The point of the bound is that "far above"
+# stops being load-bearing — the corpus runs to 47,546, and the deep ones are
+# deeper than any of these.
+_LOOKUP_CHUNK = 4096
+
+
 def store_term(
     session: Session,
     system: FormalSystem,
@@ -344,15 +357,18 @@ def store_terms(
     session.add(system)
     if system.id is None:
         session.flush()
-    rows: dict[str, TermRow] = {
-        row.digest: row
-        for row in session.scalars(
-            select(TermRow).where(
-                TermRow.formal_system_id == system.id,
-                TermRow.digest.in_(postorder),
+    rows: dict[str, TermRow] = {}
+    digests = list(postorder)
+    for start in range(0, len(digests), _LOOKUP_CHUNK):
+        rows.update(
+            (row.digest, row)
+            for row in session.scalars(
+                select(TermRow).where(
+                    TermRow.formal_system_id == system.id,
+                    TermRow.digest.in_(digests[start : start + _LOOKUP_CHUNK]),
+                )
             )
         )
-    }
 
     for digest, t in postorder.items():
         if digest in rows:

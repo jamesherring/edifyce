@@ -107,6 +107,7 @@ from app.db.terms_mapping import (
     digest_term,
     prefetch_terms,
     store_term,
+    store_terms,
     term_context,
 )
 
@@ -193,6 +194,7 @@ __all__ = [
     "digest_term",
     "prefetch_terms",
     "store_term",
+    "store_terms",
     "term_context",
     # Rule-schema term cache (app/db/schema_terms.py).
     "SchemaTermCache",

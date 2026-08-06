@@ -866,7 +866,7 @@ def _require_nothing_was_composed(
         if term(term_id) is not None:
             continue
         # Only a `StringPattern` carries a composed term at all — the same test
-        # `_term_id` makes on the way in.
+        # `_term_ids` makes on the way in.
         if isinstance(pattern, StringPattern) and pattern.schema_term is not None:
             raise LookupError(
                 f"Theorem {entry.label!r} is inherited from another system and one "
