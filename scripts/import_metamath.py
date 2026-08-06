@@ -18,15 +18,21 @@ import argparse
 import asyncio
 import sys
 import time
-from collections.abc import Callable
+import uuid
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 # The script lives under `scripts/`, so the repo root is not on the path when it
 # is run directly (`python scripts/import_metamath.py`).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from sqlalchemy import func, select  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
+
 from app.db.metamath_store import ImportReport, import_corpus  # noqa: E402
+from app.db.models import FormalSystem, User  # noqa: E402
 from app.db.session import get_engine, get_sessionmaker  # noqa: E402
+from app.db.systems_mapping import system_slug  # noqa: E402
 from website.logical.metamath import CheckedTheorem, parse  # noqa: E402
 from website.logical.metamath.setmm import (  # noqa: E402
     DISPLAY_OVERRIDES,
@@ -65,6 +71,18 @@ def _arguments() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--owner",
+        metavar="EMAIL",
+        default=None,
+        help=(
+            "hand the import to this registered user — every system and every "
+            "proof. Ownerless by default, which is what a shared library wants. "
+            "An owned import is reachable by the owner-scoped routes, so a verify "
+            "on one of its proofs will write its verdict back over the imported "
+            "structure; that is the trade, and it is why this is opt-in"
+        ),
+    )
+    parser.add_argument(
         "--setmm-layers",
         action="store_true",
         help=(
@@ -75,6 +93,64 @@ def _arguments() -> argparse.Namespace:
         ),
     )
     return parser.parse_args()
+
+
+async def _owner(session: AsyncSession, email: str | None) -> uuid.UUID | None:
+    """Resolve ``--owner`` to a user id, before a single row is written.
+
+    Looked up rather than created: handing a corpus to an address nobody has
+    registered would silently produce an owner who cannot sign in, and the
+    mistake would not surface until someone went looking for 47,000 proofs that
+    are not in anyone's list. Matched case-insensitively, since that is how
+    fastapi-users stores and compares an address.
+    """
+    if email is None:
+        return None
+    # The id alone, not the row: `User` eagerly joins its OAuth accounts, and an
+    # ownership assignment wants neither them nor the password hash.
+    owner = (
+        await session.scalars(
+            select(User.id).where(func.lower(User.email) == email.strip().lower())
+        )
+    ).first()
+    if owner is None:
+        raise LookupError(
+            f"No registered user with the address {email!r}. "
+            "Register the account first, or drop --owner to import ownerless."
+        )
+    return owner
+
+
+async def _refuse_a_slug_collision(
+    session: AsyncSession, owner: uuid.UUID | None, names: Sequence[str]
+) -> None:
+    """Stop an owned import that would collide with the owner's own systems.
+
+    `formal_systems` is uniquely indexed on (owner, slug) for owned rows, so a
+    corpus whose layer names slugify onto systems this user already has raises an
+    integrity error out of `layered_systems`' first flush. That is seconds in
+    rather than minutes, so nothing is lost — but a stack trace is a poor way to
+    say "you already have one of these", and unlike the parse above it costs
+    nothing to ask first.
+    """
+    if owner is None:
+        return
+    wanted = {system_slug(name) for name in names}
+    taken = set(
+        (
+            await session.scalars(
+                select(FormalSystem.slug).where(
+                    FormalSystem.owner_id == owner, FormalSystem.slug.in_(wanted)
+                )
+            )
+        ).all()
+    )
+    if taken:
+        raise LookupError(
+            "This user already owns a system at "
+            + ", ".join(repr(slug) for slug in sorted(taken))
+            + ". Rename with --name, or import ownerless and assign it later."
+        )
 
 
 def _reporter(total: int | None) -> Callable[[ImportReport, CheckedTheorem], None]:
@@ -117,6 +193,23 @@ async def main() -> int:
     started = time.monotonic()
     progress = None if arguments.quiet else _reporter(arguments.limit)
     async with get_sessionmaker()() as session:
+        try:
+            owner = await _owner(session, arguments.owner)
+            # The names the run will create, which is the plan's when there is one
+            # — an unlayered import makes exactly one system, called `--name`. A
+            # plan whose layers this file does not open makes fewer, so this can
+            # refuse a collision the import would not have reached; that is the
+            # safe direction for a check whose whole job is to fail early.
+            await _refuse_a_slug_collision(
+                session,
+                owner,
+                [layer.name for layer in LAYERS] if arguments.setmm_layers
+                else [arguments.name],
+            )
+        except LookupError as refused:
+            print(f"\n{refused}", file=sys.stderr)
+            await get_engine().dispose()
+            return 2
         report = await session.run_sync(
             lambda sync: import_corpus(
                 sync,
@@ -132,6 +225,7 @@ async def main() -> int:
                 overrides=DISPLAY_OVERRIDES if arguments.setmm_overrides else None,
                 rules=DISPLAY_RULES if arguments.setmm_overrides else None,
                 plan=LAYERS if arguments.setmm_layers else (),
+                owner=owner,
             )
         )
     await get_engine().dispose()

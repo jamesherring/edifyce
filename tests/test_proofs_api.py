@@ -1473,7 +1473,7 @@ def test_verify_stores_every_line_with_its_kernel_term(client, db):
     assert lines[0]["term"]["id"] == lines[2]["term"]["id"]
 
 
-def test_an_anonymous_verify_of_a_published_proof_writes_nothing(client, db):
+def test_a_strangers_verify_of_a_published_proof_writes_nothing(client, db):
     # A non-owner's transaction is never committed: the verdict comes back and
     # the stored state does not move. Verify now writes the schema-term cache as
     # well as the verdict, so this pins the contract over that too — cleared
@@ -1492,13 +1492,48 @@ def test_an_anonymous_verify_of_a_published_proof_writes_nothing(client, db):
             session.execute(sa_update(RuleRow).values(schema_digest=None))
             session.commit()
 
+        # Signed in, and not the owner — which is now the weakest caller that
+        # reaches this route at all.
         _logout(client)
+        _register_login(client, "grace@example.com")
         assert client.post(f"/api/proofs/{pid}/verify").json()["success"] is True
 
         with Session(engine) as session:
             assert session.scalars(select(RuleRow.schema_digest)).all() == [None, None]
     finally:
         engine.dispose()
+
+
+def test_checking_a_published_proof_still_needs_an_account(client, db):
+    # Reading a published proof is open; *checking* one is not, and the split is
+    # deliberate. Every route here rebuilds the proof's whole system and re-checks
+    # it against the grammar, with no cache in front of the build — so once an
+    # ownerless corpus is published, leaving them open would let an unauthenticated
+    # request compile a 1,441-production grammar on any of 47,546 proofs. Nothing
+    # durable came of it either way, which is what makes it worth refusing: the
+    # work is real and the result is discarded.
+    owner = _register_login(client, "ada@example.com")
+    sid = _seed_system(db, owner, published=True)
+    pid = _create_proof(client, sid, "Public", source=VALID_PROOF)
+    assert client.patch(f"/api/proofs/{pid}", json={"published": True}).status_code == 200
+    _logout(client)
+
+    # Readable, as it was.
+    assert client.get(f"/api/proofs/{pid}").status_code == 200
+    assert client.get(f"/api/proofs/{pid}/structure").status_code == 200
+
+    # Checkable, as it was not.
+    assert client.post(f"/api/proofs/{pid}/verify").status_code == 401
+    assert client.post(
+        f"/api/proofs/{pid}/cite", json={"line": 1, "rule": "MP", "antecedents": []}
+    ).status_code == 401
+    assert client.post(
+        f"/api/proofs/{pid}/lines", json={"after": 0, "formula": "x = x"}
+    ).status_code == 401
+    assert client.post(
+        f"/api/proofs/{pid}/lines/remove", json={"line": 1}
+    ).status_code == 401
+    assert client.get(f"/api/proofs/{pid}/lines/1/citations").status_code == 401
 
 
 def test_stored_terms_are_interned_per_system_not_per_line(client, db):
@@ -3064,9 +3099,11 @@ def test_a_line_nothing_can_justify_gets_an_empty_list(client, db):
     assert body["unindexed"] == 0
 
 
-def test_the_search_is_readable_by_anyone_on_a_published_proof(client, db):
+def test_the_search_is_open_to_any_signed_in_reader_of_a_published_proof(client, db):
     # A dry run over someone else's published proof, exactly as `/cite`'s is: it
-    # writes nothing, so there is nothing to own.
+    # writes nothing, so there is nothing to own. An account is still wanted,
+    # because the search runs a full check — see
+    # `test_checking_a_published_proof_still_needs_an_account`.
     owner = _register_login(client, "ada@example.com")
     system_id = _seed_system(db, owner, published=True)
     proof_id = _create_proof(client, system_id, "P", source=VALID_PROOF)
@@ -3074,6 +3111,7 @@ def test_the_search_is_readable_by_anyone_on_a_published_proof(client, db):
         f"/api/proofs/{proof_id}", json={"published": True}
     ).status_code == 200
     _logout(client)
+    _register_login(client, "grace@example.com")
 
     res = client.get(f"/api/proofs/{proof_id}/lines/1/citations")
 

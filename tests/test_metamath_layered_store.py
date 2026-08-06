@@ -184,6 +184,37 @@ def test_a_completed_batched_import_publishes_what_verified(tmp_path, database) 
     engine.dispose()
 
 
+def test_an_owned_import_hands_over_the_systems_and_the_proofs(
+    session, database
+) -> None:
+    # `--owner`: a corpus stops being a shared library and becomes somebody's.
+    # Every layer and every proof, since a spine half-owned would be half in the
+    # owner's lists — and the folders deliberately not, because an owned folder
+    # reads as a user's private one and an outline is the file's structure.
+    owner = uuid.uuid4()
+    import_corpus(session, database, name="Corpus", plan=LAYERS, owner=owner)
+
+    assert [system.owner_id for system in systems(session)] == [owner] * 3
+    proofs = list(session.scalars(select(Proof)))
+    assert proofs and all(proof.owner_id == owner for proof in proofs)
+    assert all(
+        folder.owner_id is None for folder in session.scalars(select(ProofFolder))
+    )
+    # Publication is orthogonal: an owned corpus is still published, so it reads
+    # the same to everyone else and appears in its owner's lists as well.
+    assert all((p.published_at is not None) == bool(p.valid) for p in proofs)
+
+
+def test_an_import_is_ownerless_unless_asked(session, database) -> None:
+    # The default, asserted beside the override so the two cannot drift: what
+    # ownerlessness buys is in `app.db.metamath_store`'s docstring, and giving it
+    # up has to be a positive act.
+    import_corpus(session, database, name="Corpus", plan=LAYERS)
+
+    assert all(system.owner_id is None for system in systems(session))
+    assert all(p.owner_id is None for p in session.scalars(select(Proof)))
+
+
 def test_an_unlayered_import_is_still_one_system(session, database) -> None:
     # The contract that keeps this additive, asserted rather than assumed.
     report = import_corpus(session, database, name="Corpus")

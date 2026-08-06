@@ -470,10 +470,10 @@ async def _verify_with_references(
     building it a second time here was the largest single thing either route did
     (roadmap §9e). Otherwise it is built here, under the lock.
 
-    ``persist=False`` for a caller whose transaction will be rolled back — an
-    anonymous viewer verifying a published proof. The verdict is the same either
-    way; what it skips is warming the schema-term cache, whose inserts would be
-    discarded with everything else.
+    ``persist=False`` for a caller whose transaction will be rolled back — a
+    reader verifying someone else's published proof. The verdict is the same
+    either way; what it skips is warming the schema-term cache, whose inserts
+    would be discarded with everything else.
     """
     # Before anything is read. A verify now trusts the lemmas' stored rows
     # instead of re-checking them, so the read and the write must sit inside one
@@ -1786,18 +1786,39 @@ async def get_proof_structure(
     )
 
 
+# ---------------------------------------------------------------------------
+# Checking, on a stored proof
+# ---------------------------------------------------------------------------
+#
+# The five routes below all **rebuild the proof's whole system and re-check it**,
+# and that is why they require a signed-in caller where the reads around them do
+# not. A published proof is readable by anyone, so once an ownerless corpus is
+# published these would otherwise let an anonymous request compile a 1,441-
+# production grammar and check a proof against it, on any of 47,546 proofs, with
+# no cache in front of it (`_build_system`). Nothing durable came of it — a
+# non-owner's transaction is never committed — which is exactly what makes it
+# worth refusing: the work is real and the result is thrown away.
+#
+# What this costs a legitimate caller is nothing. Applying already requires
+# ownership, and an owner is signed in by definition; the dry runs are an
+# authoring aid, and authoring starts from an account. What it removes is
+# unauthenticated compute, and that is the whole of the intent — so a later route
+# of this shape belongs on this list rather than beside the reads.
+
+
 @router.post("/{proof_id}/verify", response_model=VerifyProofResponse)
 async def verify_stored_proof(
     proof_id: uuid.UUID,
-    user: User | None = Depends(current_active_user_optional),
+    user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
 ) -> VerifyProofResponse:
     proof = await _get_readable_or_404(session, proof_id, user)
 
-    # Only the owner's transaction is committed (an anonymous viewer of a
-    # published proof gets the result but leaves the stored snapshot untouched),
-    # so a non-owner's verify must not do write work that will be rolled back.
-    owned = user is not None and proof.owner_id == user.id
+    # Only the owner's transaction is committed (a signed-in reader of someone
+    # else's published proof gets the result but leaves the stored snapshot
+    # untouched), so a non-owner's verify must not do write work that will be
+    # rolled back.
+    owned = proof.owner_id == user.id
     verification = await _verify_with_references(session, proof, persist=owned)
 
     # Record the verdict and the structure behind it, so a client can render the
@@ -1813,7 +1834,7 @@ async def verify_stored_proof(
 async def propose_citation(
     proof_id: uuid.UUID,
     payload: CitationProposal,
-    user: User | None = Depends(current_active_user_optional),
+    user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
 ) -> CitationOutcome:
     """Justify a line by naming a rule and the lines it uses — no text.
@@ -1908,7 +1929,7 @@ async def propose_citation(
     lines[row.position] = rewritten
     source = "\n".join(lines)
 
-    owned = user is not None and proof.owner_id == user.id
+    owned = proof.owner_id == user.id
     if payload.apply and not owned:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -2011,7 +2032,7 @@ def _referenced(payload: TermProposalIn) -> list[uuid.UUID]:
 async def propose_line(
     proof_id: uuid.UUID,
     payload: LineProposal,
-    user: User | None = Depends(current_active_user_optional),
+    user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
 ) -> LineOutcome:
     """Add a line stating a proposed term — structure in, no surface syntax.
@@ -2178,7 +2199,7 @@ async def propose_line(
         renumbered = [r.number + 1 for r in rows if r.number >= number]
     source = "\n".join(lines)
 
-    owned = user is not None and proof.owner_id == user.id
+    owned = proof.owner_id == user.id
     if payload.apply and not owned:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -2259,7 +2280,7 @@ async def propose_line(
 async def remove_line(
     proof_id: uuid.UUID,
     payload: LineRemoval,
-    user: User | None = Depends(current_active_user_optional),
+    user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
 ) -> LineRemovalOutcome:
     """Take a line back out, closing the gap its number leaves.
@@ -2344,7 +2365,7 @@ async def remove_line(
     del moved[going.position]
     source = "\n".join(moved)
 
-    owned = user is not None and proof.owner_id == user.id
+    owned = proof.owner_id == user.id
     if payload.apply and not owned:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -2483,7 +2504,7 @@ async def find_citations(
             "unification. Zero searches the system's own rules only."
         ),
     ),
-    user: User | None = Depends(current_active_user_optional),
+    user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
 ) -> CitationSearch:
     """What could justify this line — proposals that have already been checked.
@@ -2523,8 +2544,8 @@ async def find_citations(
 
     # Checked rather than read: the search runs against live proof lines — their
     # scopes, their terms, their order — and a stored row carries no `ProofLine`
-    # to unify with. Never persisted, because a read must not write, and an
-    # anonymous caller's transaction is rolled back anyway.
+    # to unify with. Never persisted, because a read must not write, and a
+    # non-owner's transaction is rolled back anyway.
     verification = await _verify_with_references(session, proof, persist=False)
     checked = verification.engine_proof
     if checked is None or verification.compiled_system is None:

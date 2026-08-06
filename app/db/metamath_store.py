@@ -198,6 +198,7 @@ def import_corpus(
     rules: Mapping[str, Sequence[Rule]] | None = None,
     *,
     plan: Sequence[Layer] = (),
+    owner: uuid.UUID | None = None,
 ) -> ImportReport:
     """Import ``database``'s first ``limit`` theorems into ``session``.
 
@@ -226,7 +227,22 @@ def import_corpus(
     proof sources do not change — which is the whole of "preserving references".
     Empty by default, which is exactly today's single system.
 
-    The system is created ownerless; see this module's docstring for why.
+    ``owner`` hands the whole import — every layer and every proof — to one user,
+    and is how a corpus stops being a shared library and becomes somebody's. It
+    defaults to none, which is the case this module's docstring argues for and
+    still the right one for a public corpus.
+
+    Passing it **gives up the guard that ownerlessness is**. The owner-scoped
+    routes can then reach the import, so `POST /proofs/{id}/verify` will re-check
+    an imported proof and write the verdict back — and a verify that comes out
+    `False` calls `store_proof_lines`, whose first act is to drop the imported
+    structure. That is a deliberate trade (`scripts/restore_proofs.py` makes it on
+    purpose, to reach the owner-only apply path), not an oversight, and it is why
+    this is an argument rather than a default.
+
+    Folders stay ownerless either way: an outline is the file's structure, and
+    `get_system_folders` reads an *owned* folder as a user's private one — the
+    system's own ownership already says who may see the tree.
     """
     if batch is not None and batch < 1:
         raise ValueError(f"batch must be at least 1 if given, not {batch}.")
@@ -242,7 +258,7 @@ def import_corpus(
     # rather than smeared across the twenty-odd minutes it takes to write — which
     # matters because `/proofs/public` orders by it.
     published = datetime.now(tz=UTC)
-    spine = layered_systems(session, specs, published=published)
+    spine = layered_systems(session, specs, published=published, owner=owner)
     # The **deepest** layer is the system this import is "of": it is the one a
     # citation resolves from, since its chain reaches every layer above it, and
     # for an unlayered import it is the only one there is.
@@ -272,7 +288,9 @@ def import_corpus(
     report.sections = layers.sections
 
     for position, checked in enumerate(walk(database, limit, name, library.store)):
-        owner = layers.index_of(checked.label)
+        # `layer`, not `owner`: this is which system of the spine the label
+        # belongs to. The import's *owner* is a user, and is the argument above.
+        layer = layers.index_of(checked.label)
         report.checked += 1
         if checked.proof is None:
             _record_failure(report, checked.label, checked.error or "")
@@ -290,11 +308,12 @@ def import_corpus(
                 with session.begin_nested():
                     stored = _store(
                         session,
-                        layers.system_at(owner),
+                        layers.system_at(layer),
                         position,
                         checked,
                         descriptions,
-                        layers.folder_for(owner, checked.label),
+                        layers.folder_for(layer, checked.label),
+                        owner,
                     )
             except Exception as exc:  # noqa: BLE001 - reported, not fatal
                 _record_failure(report, checked.label, str(exc))
@@ -303,7 +322,7 @@ def import_corpus(
                 report.rejected += not stored.valid
                 report.lines += stored.lines
                 report.formulas += stored.formulas
-                report.layers[owner].proofs += 1
+                report.layers[layer].proofs += 1
 
         if progress is not None:
             progress(report, checked)
@@ -333,6 +352,7 @@ def layered_systems(
     specs: Sequence[SystemSpec],
     *,
     published: datetime | None = None,
+    owner: uuid.UUID | None = None,
 ) -> list[FormalSystem]:
     """One ``formal_systems`` row per layer, wired into a spine, root first.
 
@@ -359,8 +379,9 @@ def layered_systems(
     all. The same "its grammar cannot move" argument applies to it, so it is
     published on the same terms as the rest.
 
-    Ownerless, like the single-system import and for the reason this module's
-    docstring gives: nobody owns the corpus.
+    Ownerless by default, like the single-system import and for the reason this
+    module's docstring gives: nobody owns the corpus. ``owner`` overrides that for
+    the whole spine — see `import_corpus` for what handing it over costs.
     """
     published = published or datetime.now(tz=UTC)
     spine: list[FormalSystem] = []
@@ -368,6 +389,7 @@ def layered_systems(
         system = spec_to_system(spec)
         system.inherits_from_id = spine[-1].id if spine else None
         system.published_at = published
+        system.owner_id = owner
         session.add(system)
         # Per layer rather than once at the end: the next layer needs this one's
         # id to inherit from, which only exists after a flush.
@@ -910,6 +932,7 @@ def _store(
     checked: CheckedTheorem,
     descriptions: Mapping[str, Description],
     folder_id: uuid.UUID | None,
+    owner: uuid.UUID | None,
 ) -> _Stored:
     engine_proof = checked.proof
     valid = bool(engine_proof.valid)
@@ -917,6 +940,9 @@ def _store(
 
     proof = Proof(
         formal_system_id=system.id,
+        # Null unless the caller asked for an owned import; `import_corpus` says
+        # what that gives up.
+        owner_id=owner,
         # The Metamath label is the identity here, so it is both the display name
         # and the slug — imported labels are already URL-safe (letters, digits,
         # `-_.`) and unique across the database, which is what a slug wants.

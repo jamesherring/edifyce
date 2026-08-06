@@ -1768,6 +1768,34 @@ fails anywhere leaves everything a draft. The systems cannot be deferred the sam
 way — a child's terms intern against a chain that has to exist before the walk
 reaches it — which is why the two are decided separately.
 
+**What publishing an ownerless corpus opened, and what closed it.** `_is_readable`
+grants a published proof to anyone, so publication also made `POST
+/proofs/{id}/verify`, the dry-run `/cite`, `/lines` and `/lines/remove`, and the
+citation search reachable without an account — on every imported proof. Each of
+those rebuilds the proof's whole system and re-checks it, with no cache in front
+of the build, which on `set.mm` is a 1,441-production grammar compiled per
+request across 47,546 proofs. Nothing durable came of it (a non-owner's
+transaction is never committed), and that is exactly what makes it worth
+refusing: the work is real and the result is thrown away. All five now require a
+signed-in caller. It costs a legitimate caller nothing — applying already
+required ownership, and an owner is signed in by definition — and the *reads*
+beside them (`GET /proofs/{id}`, `/structure`) are unchanged, which is the line:
+reading a published proof is open, checking one is not.
+
+**`--owner EMAIL` for the case where a corpus is somebody's.** Ownerlessness is
+right for a shared library and wrong when a person wants the import in their own
+lists, so `scripts/import_metamath.py --owner` hands every layer and every proof
+to one registered user. It is opt-in because it gives up the guard ownerlessness
+*is*: the owner-scoped routes can then reach the import, so a verify on one of
+its proofs writes its verdict back — and a verdict of `False` calls
+`store_proof_lines`, whose first act is to drop the imported structure.
+(`scripts/restore_proofs.py` makes that trade deliberately, to reach the
+owner-only apply path.) Folders stay ownerless either way: an outline is the
+file's structure, and `get_system_folders` reads an owned folder as a user's
+private one. The address is looked up rather than created, and the layer names
+are checked against the owner's existing slugs first, because `formal_systems` is
+uniquely indexed on (owner, slug) for owned rows.
+
 ---
 
 ### Tier B — the human-altitude layer

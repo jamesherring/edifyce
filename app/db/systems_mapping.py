@@ -16,7 +16,6 @@ round-trip — is unchanged by the unified storage.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
 
 from website.logical.declarative import (
@@ -34,6 +33,7 @@ from website.logical.declarative import (
 
 from app.db.models import FormalSystem
 from app.db.promoted_theorems_mapping import LibraryChain, LibraryLayer
+from app.db.slugs import slugify
 from app.db.side_conditions_mapping import (
     build_definition_provisos,
     build_rule_side_conditions,
@@ -59,8 +59,15 @@ from app.db.systems import (
 )
 
 
-def _slug(name: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "system"
+def system_slug(name: str) -> str:
+    """The slug `spec_to_system` will store for a system called ``name``.
+
+    Public, and delegating rather than re-implementing, because `formal_systems`
+    is uniquely indexed on (owner, slug) for owned rows — so anything that wants
+    to know whether an import would collide has to predict this exactly, and a
+    second copy of the rule is a second thing to drift.
+    """
+    return slugify(name, fallback="system")
 
 
 def _named_sorts(spec: SystemSpec) -> list[str]:
@@ -114,7 +121,7 @@ def spec_to_system(spec: SystemSpec) -> FormalSystem:
     """Build the ORM graph for ``spec`` (unsaved; add it to a session to persist)."""
 
     system = FormalSystem(
-        name=spec.name, slug=_slug(spec.name), token_separated=spec.token_separated
+        name=spec.name, slug=system_slug(spec.name), token_separated=spec.token_separated
     )
 
     for i, (opening, closing) in enumerate(spec.brackets):
