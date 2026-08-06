@@ -1713,6 +1713,54 @@ look equally full. The system page renders it as a collapsible tree.
 
 ---
 
+### 4.7 What the reader is shown — *done*
+
+Everything above is about what an import *stores*. This is the page it lands on,
+and four things about it were wrong once a real corpus was on it.
+
+**One view, not two.** The proof page showed a source pane beside a verification
+pane. Authoring, those differ — one is editable text, the other is what the
+checker made of it. *Browsing*, they are the same lines twice. The browse page now
+shows a single verification-style list and the editor keeps the pair.
+
+**The notation switch belongs to the checked lines.** It used to re-spell a
+separate `<pre>`, so choosing `unicode` changed one pane and left the diagnostics
+next to ASCII in the other. The rows now come from the **stored structure**
+(`GET /proofs/{id}/structure`) rather than from `ProofDetail.result`, which is
+what puts a re-spelled term and the verdict on it in the same row. `result` is
+still what the overall badge and the cross-proof errors are read from — it is a
+report about the *check*, not about a line.
+
+**A `latex` reading is typeset.** Showing `\sqrt{2} \in \mathbb{R}` as text is
+strictly worse than the `unicode` reading, which is the thing LaTeX-as-display was
+for (§4.2a). The frontend sets it with KaTeX. What decides that a reading is TeX
+is its **name**, which is the same judgement the importer makes when it turns
+`latexdef` into the notation called `latex` (`display.py`) — there is no per-
+notation format stored, and inventing one would mean a column on a table that is
+thousands of rows of template pieces. A reading KaTeX will not parse falls back to
+its source rather than to KaTeX's red error: a projection is derived per production
+from a token map nobody checked against a TeX parser, so a miss is ordinary, and a
+line set in red says "this proof is wrong", which is not what happened.
+
+**The label is not the title.** §4.5 gave a `$p` a title and the page put it
+*under* `name`, which reads as `setind` with a caption. A citation spells the
+label and a human reads the sentence, so the sentence is the heading and the label
+sits beside it as what the rest of the library refers to. The description and the
+attributions move above the proof for the same reason: what a theorem says and who
+proved it is what a reader wants first, and 30 lines of Hilbert-style plumbing is
+a long way to scroll for it.
+
+**And where the whole thing came from.** An imported proof has no author to
+credit; the library it came from is the credit, and nothing on the page said so.
+`formal_systems.provenance` is one sentence recorded by the import
+(`metamath_store.metamath_provenance`), on **every layer of the spine** rather
+than on the leaf — a theorem is filed in the layer its own section falls in, so a
+propositional lemma sits on the root and came from the same file. On the system
+rather than on its proofs because it is a fact about the corpus: one row instead
+of 47,000 copies, and a reader of a proof already fetches its system.
+
+---
+
 ### Tier B — the human-altitude layer
 
 **B1. Tactic / elaboration framework.** A tactic takes a goal + context and **emits

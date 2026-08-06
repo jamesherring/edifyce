@@ -188,6 +188,7 @@ def import_corpus(
     rules: Mapping[str, Sequence[Rule]] | None = None,
     *,
     plan: Sequence[Layer] = (),
+    source: str | None = None,
 ) -> ImportReport:
     """Import ``database``'s first ``limit`` theorems into ``session``.
 
@@ -216,6 +217,11 @@ def import_corpus(
     proof sources do not change — which is the whole of "preserving references".
     Empty by default, which is exactly today's single system.
 
+    ``source`` names the `.mm` file, for the provenance sentence every layer
+    carries (:func:`metamath_provenance`). It is the only thing about the origin
+    a `Database` does not already hold, and an import is the one moment it is
+    known — a reader has rows.
+
     The system is created ownerless; see this module's docstring for why.
     """
     if batch is not None and batch < 1:
@@ -228,7 +234,7 @@ def import_corpus(
     # `build_spec` is the expensive half of an import and `corpus_specs`
     # guarantees the two declare the same thing.
     spec = specs[0] if len(specs) == 1 else layered_spec(list(specs))
-    spine = layered_systems(session, specs)
+    spine = layered_systems(session, specs, metamath_provenance(source))
     # The **deepest** layer is the system this import is "of": it is the one a
     # citation resolves from, since its chain reaches every layer above it, and
     # for an unlayered import it is the only one there is.
@@ -312,8 +318,21 @@ def import_corpus(
     return report
 
 
+def metamath_provenance(source: str | None = None) -> str:
+    """The sentence an import records on every system it writes.
+
+    Composed here rather than asked of the caller because it is the same fact
+    every time: the rows came out of a `.mm` file, and a reader of one of the
+    47,000 proofs has no other way to learn that. ``source`` is the file's name
+    when the caller knows it — a corpus is identified by which database it is
+    (`set.mm`, `iset.mm`), and the parse itself carries no name.
+    """
+    library = f"{source} library" if source else "library"
+    return f"Imported from Metamath's {library}. See https://us.metamath.org/"
+
+
 def layered_systems(
-    session: Session, specs: Sequence[SystemSpec]
+    session: Session, specs: Sequence[SystemSpec], provenance: str | None = None
 ) -> list[FormalSystem]:
     """One ``formal_systems`` row per layer, wired into a spine, root first.
 
@@ -343,11 +362,17 @@ def layered_systems(
 
     Ownerless, like the single-system import and for the reason this module's
     docstring gives: nobody owns the corpus.
+
+    ``provenance`` lands on **every** layer rather than on the leaf, because a
+    theorem is filed in the layer its own section falls in: a proof of a
+    propositional-calculus lemma sits on the root, and it came from the same
+    file as one on the leaf.
     """
     published = datetime.now(tz=UTC)
     spine: list[FormalSystem] = []
     for index, spec in enumerate(specs):
         system = spec_to_system(spec)
+        system.provenance = provenance
         system.inherits_from_id = spine[-1].id if spine else None
         if index + 1 < len(specs):
             system.published_at = published

@@ -1426,6 +1426,7 @@ async def main() -> int:
                     batch=50,
                     overrides=DISPLAY_OVERRIDES,
                     rules=DISPLAY_RULES,
+                    source=arguments.source.name,
                 )
                 session.commit()
         finally:

@@ -494,6 +494,15 @@ def test_the_spine_is_wired_root_to_leaf(session, database) -> None:
     assert all(system.owner_id is None for system in spine)
 
 
+def test_provenance_reaches_every_layer_not_just_the_leaf(session, database) -> None:
+    # A theorem is filed in the layer its own section falls in, so a proof of a
+    # propositional lemma sits on the root — and came from the same file as one
+    # on the leaf. The sentence follows the proofs, not the spine's tip.
+    spine = layered_systems(session, corpus_specs(database, plan=LAYERS), "from set.mm")
+
+    assert [system.provenance for system in spine] == ["from set.mm"] * len(spine)
+
+
 def test_a_citation_resolves_through_the_chain_and_hits_its_cache(
     session: Session, database: Database
 ) -> None:
