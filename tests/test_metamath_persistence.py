@@ -369,14 +369,20 @@ def test_an_import_is_ownerless_so_no_verify_can_overwrite_it(session, imported)
     # write `valid=False` and call `store_proof_lines`, whose first act is to drop
     # the imported structure.
     #
-    # Ownerlessness is the guard. `POST /proofs/{id}/verify` writes back only for
-    # `user is not None and proof.owner_id == user.id`, and reads at all only for
-    # a published proof or its owner — neither of which an import produces.
+    # Ownerlessness is the guard, and it is the whole of it: `POST
+    # /proofs/{id}/verify` writes back only for `user is not None and
+    # proof.owner_id == user.id`. Publication decides who may *read*, which is a
+    # separate question and one an import now answers yes to — so this asserts the
+    # two apart rather than leaning on a draft to keep readers out.
     system = session.scalars(select(FormalSystem)).one()
     assert system.owner_id is None
-    assert system.published_at is None
-    assert all(p.owner_id is None for p in session.scalars(select(Proof)))
-    assert all(p.published_at is None for p in session.scalars(select(Proof)))
+    assert system.published_at is not None
+    proofs = list(session.scalars(select(Proof)))
+    assert all(p.owner_id is None for p in proofs)
+    # Published exactly when it verified: publishing a rejected proof would put a
+    # world-readable proof of nothing on the shelf.
+    assert all((p.published_at is not None) == bool(p.valid) for p in proofs)
+    assert any(p.published_at is not None for p in proofs)
 
     # The gap itself, pinned so §3.2 closing it is a visible change: the stored
     # system carries the grammar and nothing citable.

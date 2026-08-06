@@ -126,26 +126,28 @@ def test_a_layered_import_stores_one_system_per_layer(session, database) -> None
     assert report.system_id == spine[-1].id
 
 
-def test_a_layer_is_published_exactly_when_something_inherits_from_it(
-    session, database
-) -> None:
-    # §5.1's rule, not a new one: a parent must be frozen before a child builds
-    # on it. The deepest layer has no child, which is also what makes an
-    # unlayered import — one system, no children — behave as it did before.
+def test_every_layer_is_published_including_the_deepest(session, database) -> None:
+    # The layers that are inherited from must be published by §5.1 — a parent is
+    # frozen before a child builds on it. The deepest has no child, and used to be
+    # left a draft on those grounds; but publication is also what makes a system
+    # readable, and an import is ownerless, so a draft leaf is a layer nobody can
+    # open. It holds the bulk of a corpus, so that is most of the corpus.
     import_corpus(session, database, name="Corpus", plan=LAYERS)
 
     spine = systems(session)
-    assert all(system.published_at is not None for system in spine[:-1])
-    assert spine[-1].published_at is None
+    assert len(spine) > 1
+    assert all(system.published_at is not None for system in spine)
+    # One instant for the run, not one per layer.
+    assert len({system.published_at for system in spine}) == 1
 
 
-def test_an_unlayered_import_is_still_one_unpublished_system(session, database) -> None:
+def test_an_unlayered_import_is_still_one_system(session, database) -> None:
     # The contract that keeps this additive, asserted rather than assumed.
     report = import_corpus(session, database, name="Corpus")
 
     stored = list(session.scalars(select(FormalSystem)))
     assert len(stored) == 1
-    assert stored[0].published_at is None and stored[0].inherits_from_id is None
+    assert stored[0].published_at is not None and stored[0].inherits_from_id is None
     assert report.system_ids == [report.system_id]
 
 

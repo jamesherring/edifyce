@@ -155,6 +155,8 @@ from website.logical.promotion import proved_theorem, schematic_theorem
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from sqlalchemy import ColumnElement
+
     from app.db import DefinitionTermCache, SchemaTermCache
     from app.db.descriptions import LabelDescriptionRow
 
@@ -1117,28 +1119,48 @@ async def _detail(
 @router.get("", response_model=Page[ProofSummary])
 async def list_proofs(
     formal_system_id: uuid.UUID | None = None,
+    folder_id: uuid.UUID | None = None,
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
     params: PageParams = Depends(page_params),
 ) -> Page[ProofSummary]:
-    base = [Proof.owner_id == user.id]
-    # Optional scope to one system, so an editor can list just that system's proofs.
-    if formal_system_id is not None:
-        base.append(Proof.formal_system_id == formal_system_id)
     return await paginate_summaries(
         session,
         Proof,
         User,
-        base_conditions=base,
+        base_conditions=[
+            Proof.owner_id == user.id,
+            *_scoped(formal_system_id, folder_id),
+        ],
         default_order=[Proof.created_at],
         params=params,
         summarize=_summary,
     )
 
 
+def _scoped(
+    formal_system_id: uuid.UUID | None, folder_id: uuid.UUID | None
+) -> list[ColumnElement[bool]]:
+    """Narrow a proof listing to one system, or to one folder within it.
+
+    Shared by the owner-scoped and public listings so "which proofs are in this
+    section" reads the same either side of publication. A folder belongs to
+    exactly one system, so naming one is already a system scope and the other
+    filter is redundant rather than conflicting.
+    """
+    conditions: list[ColumnElement[bool]] = []
+    if formal_system_id is not None:
+        conditions.append(Proof.formal_system_id == formal_system_id)
+    if folder_id is not None:
+        conditions.append(Proof.folder_id == folder_id)
+    return conditions
+
+
 # Declared before `/{proof_id}` so "public" isn't parsed as a proof id.
 @router.get("/public", response_model=Page[ProofSummary])
 async def list_public_proofs(
+    formal_system_id: uuid.UUID | None = None,
+    folder_id: uuid.UUID | None = None,
     session: AsyncSession = Depends(get_session),
     params: PageParams = Depends(page_params),
 ) -> Page[ProofSummary]:
@@ -1146,13 +1168,30 @@ async def list_public_proofs(
 
     Drafts (``published_at IS NULL``) are excluded; unpublishing removes a proof
     from this list. Newest publications first, unless the client asks to sort.
+
+    ``formal_system_id`` and ``folder_id`` narrow it, which is what makes an
+    imported corpus browsable: `GET /formal-systems/{id}/folders` draws the
+    outline the `.mm` file's section headers describe, and this returns the
+    proofs filed under one of its nodes. Without it the only public view of
+    47,000 theorems is a flat list in publication order, and a corpus publishes
+    every one of them at the same instant.
+
+    Which is also why a scoped page orders by **position** — the proof's place in
+    its system, the walk order for an import and the author's for anything else —
+    rather than by recency. Recency cannot order rows that share a timestamp, and
+    the fallback to `created_at DESC` would hand back a section backwards.
     """
+    scope = _scoped(formal_system_id, folder_id)
     return await paginate_summaries(
         session,
         Proof,
         User,
-        base_conditions=[Proof.published_at.is_not(None)],
-        default_order=[Proof.published_at.desc(), Proof.created_at.desc()],
+        base_conditions=[Proof.published_at.is_not(None), *scope],
+        default_order=(
+            [Proof.position, Proof.created_at]
+            if scope
+            else [Proof.published_at.desc(), Proof.created_at.desc()]
+        ),
         params=params,
         summarize=_summary,
     )

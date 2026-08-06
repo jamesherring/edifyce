@@ -1711,6 +1711,46 @@ size — with a per-folder count of the proofs sitting *directly* in it, since a
 part-level node holds nothing itself and a subtree total would make every ancestor
 look equally full. The system page renders it as a collapsible tree.
 
+### 4.7 An import nobody could read — *done*
+
+The first real import to a deployed database landed 10,000 theorems and showed
+none of them. Everything had stored correctly; every proof was `valid`; all of it
+was invisible. Three causes, and they are worth recording because each looked
+locally right.
+
+**A corpus was ownerless *and* unpublished, and those are two different things.**
+Ownerlessness is a statement about provenance, and it is the guard that stops
+`POST /proofs/{id}/verify` writing `valid=False` over imported structure — it
+reads `owner_id`. Publication is what makes a row *readable* by someone who does
+not own it, and an import set neither. So `/proofs` (owner-scoped) could not see
+them and `/proofs/public` (`published_at IS NOT NULL`) omitted them: 10,000
+verified proofs reachable by nobody, `GET /proofs/{id}` 404 for everyone. The two
+are now decided separately — published as written, still ownerless — and the
+write-back guard is untouched.
+
+**The deepest layer stayed a draft.** `layered_systems` published a layer "exactly
+when something inherits from it", which reads as a tidy consequence of §5.1 and in
+practice hides most of a corpus: the leaf holds the bulk of it (7,325 of the first
+10,000 theorems), and being ownerless too, nobody could open it at all. The
+argument that justified publishing the others — an imported layer's grammar is
+fixed by the file the moment it is written, so there is no draft period to protect
+— applies to the leaf identically. Every layer is now published, at one instant.
+
+**And there was nowhere to browse to.** `/proofs` is owner-scoped, `/proofs/public`
+is a flat global list; neither could answer "what is in this section". The outline
+was a table of contents for a book with no pages. `/proofs/public` now takes
+`formal_system_id` and `folder_id`, and a scoped page orders by **position** —
+file order for an import — rather than by publication recency, which cannot order
+rows that all published at the same instant and would otherwise fall through to
+`created_at DESC` and hand back a section backwards.
+
+Publishing an imported proof meets the same three conditions `_require_publishable`
+asks of the interactive path, which is why it is safe rather than a special case:
+the system is published, the proof verifies (a rejected one stays a draft), and it
+has no reference links that might still be drafts — a corpus cites through
+`promoted_theorems`, not proof-to-proof. The frontend makes a folder holding proofs
+selectable and lists them beside the tree.
+
 ---
 
 ### Tier B — the human-altitude layer

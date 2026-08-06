@@ -33,6 +33,15 @@ was missing — the owner-scoped proof routes could not reach an import, so
 drop the imported structure. It is now a statement about provenance rather than a
 guard: a corpus belongs to no user. ``test_metamath_persistence`` pins it.
 
+Ownerless but **published**, and the two have to be said separately because
+ownerlessness is what once made them one. Publication is the only thing that
+makes a system or a proof readable by someone who does not own it, so an import
+that leaves it unset writes a corpus no reader can open — every layer a draft
+nobody owns, every verified proof invisible to the listings and 404 on its own
+route. So the systems and the proofs that verified are published as they are
+written. The write-back guard is unaffected: it reads ``owner_id``, which is
+still null.
+
 Synchronous, like the rest of the mapping layer; an async caller reaches it
 through ``AsyncSession.run_sync`` (see ``scripts/import_metamath.py``).
 """
@@ -228,7 +237,11 @@ def import_corpus(
     # `build_spec` is the expensive half of an import and `corpus_specs`
     # guarantees the two declare the same thing.
     spec = specs[0] if len(specs) == 1 else layered_spec(list(specs))
-    spine = layered_systems(session, specs)
+    # One instant for the whole run, so a corpus reads as published at a moment
+    # rather than smeared across the twenty-odd minutes it takes to write — which
+    # matters because `/proofs/public` orders by it.
+    published = datetime.now(tz=UTC)
+    spine = layered_systems(session, specs, published=published)
     # The **deepest** layer is the system this import is "of": it is the one a
     # citation resolves from, since its chain reaches every layer above it, and
     # for an unlayered import it is the only one there is.
@@ -281,6 +294,7 @@ def import_corpus(
                         checked,
                         descriptions,
                         layers.folder_for(owner, checked.label),
+                        published,
                     )
             except Exception as exc:  # noqa: BLE001 - reported, not fatal
                 _record_failure(report, checked.label, str(exc))
@@ -313,7 +327,10 @@ def import_corpus(
 
 
 def layered_systems(
-    session: Session, specs: Sequence[SystemSpec]
+    session: Session,
+    specs: Sequence[SystemSpec],
+    *,
+    published: datetime | None = None,
 ) -> list[FormalSystem]:
     """One ``formal_systems`` row per layer, wired into a spine, root first.
 
@@ -323,34 +340,32 @@ def layered_systems(
     proved in propositional calculus is citable in a first-order proof by §5.2
     and nothing else has to be said.
 
-    **A layer is published exactly when something inherits from it**, which is
-    the rule §5.1 already states — a parent must be frozen before a child builds
-    on it — rather than a new one. Two consequences worth being explicit about.
+    **Every layer is published**, at creation rather than "on completion" as §7.2
+    sketched. Completion is too late for the layers that are inherited from: a
+    child's terms are interned against its own chain from the first theorem
+    stored, so the chain has to exist and be readable before the walk reaches the
+    child at all. And nothing is lost by publishing early, since an imported
+    layer's grammar is fixed by the file the moment it is written — there is no
+    draft period during which it could still move, which is the thing the flag
+    protects against.
 
-    It happens at creation rather than "on completion" as §7.2 sketched, because
-    completion is too late: a child's terms are interned against its own chain
-    from the first theorem stored, so the chain has to exist and be readable
-    before the walk reaches the child at all. Nothing is lost by publishing
-    early, since an imported layer's grammar is fixed by the file the moment it
-    is written — there is no draft period during which it could still move, which
-    is the thing the flag protects against.
-
-    And the **deepest layer stays unpublished**, because nothing inherits from
-    it. That is not a special case bolted on: it is what makes an unlayered
-    import — one system, no children — behave exactly as it did before this
-    existed, which `test_an_import_is_ownerless_so_no_verify_can_overwrite_it`
-    pins.
+    The deepest layer used to be left a draft on the grounds that nothing
+    inherits from it, which reads as a tidy consequence of §5.1 and is in
+    practice how a corpus disappears: publication is also what makes a system
+    *readable*, an import is ownerless, and so the layer holding the bulk of the
+    corpus (7,325 of `set.mm`'s first 10,000 theorems) was visible to nobody at
+    all. The same "its grammar cannot move" argument applies to it, so it is
+    published on the same terms as the rest.
 
     Ownerless, like the single-system import and for the reason this module's
     docstring gives: nobody owns the corpus.
     """
-    published = datetime.now(tz=UTC)
+    published = published or datetime.now(tz=UTC)
     spine: list[FormalSystem] = []
-    for index, spec in enumerate(specs):
+    for spec in specs:
         system = spec_to_system(spec)
         system.inherits_from_id = spine[-1].id if spine else None
-        if index + 1 < len(specs):
-            system.published_at = published
+        system.published_at = published
         session.add(system)
         # Per layer rather than once at the end: the next layer needs this one's
         # id to inherit from, which only exists after a flush.
@@ -846,6 +861,7 @@ def _store(
     checked: CheckedTheorem,
     descriptions: Mapping[str, Description],
     folder_id: uuid.UUID | None,
+    published: datetime,
 ) -> _Stored:
     engine_proof = checked.proof
     valid = bool(engine_proof.valid)
@@ -870,6 +886,20 @@ def _store(
         source=checked.source,
         position=position,
         valid=valid,
+        # Published, which for a proof is what "world-readable" is spelled as —
+        # the owner-scoped listing cannot reach an ownerless corpus, so without
+        # this an import stores tens of thousands of verified proofs nobody can
+        # open. It satisfies the same three conditions `_require_publishable`
+        # asks of the interactive path: the system is published (`layered_systems`
+        # publishes every layer), the proof verifies, and it has no reference
+        # links that could still be drafts — a corpus cites through
+        # `promoted_theorems`, not proof-to-proof.
+        #
+        # A rejected proof stays a draft, for the middle of those reasons.
+        # Ownerlessness is untouched, and it is ownerlessness rather than this
+        # flag that stops `POST /proofs/{id}/verify` writing back over the
+        # imported structure.
+        published_at=published if valid else None,
         # Stored for the same reason the verify route stores it: `valid`,
         # `result` and the line rows are one artefact of one check, and a row
         # carrying two of the three is a state nothing else in the schema makes.
