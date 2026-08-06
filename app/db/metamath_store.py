@@ -501,7 +501,10 @@ def _link_proofs_to_theorems(
     ``theorem_id`` null (found in review). One system for an unlayered import,
     where this is the filter it always was.
     """
-    if not ids:
+    if not ids or not system_ids:
+        # `system_ids` too, and not only for symmetry: an empty `sa_or()` compiles
+        # away entirely, so the scope would silently widen to every system rather
+        # than narrow to none, which is how the `.in_()` this replaced degraded.
         return
     # One statement carrying every pair, rather than one statement per pair. The
     # *deferral* above is necessary; issuing it a theorem at a time was not, and

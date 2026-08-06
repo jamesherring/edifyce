@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/svelte';
 import Page from './+page.svelte';
 import { auth } from '$lib/auth.svelte';
 import { api } from '$lib/api';
-import type { ProofDetail, ProofStructure, ProofStructureLine } from '$lib/api';
+import type { ProofDetail, ProofLine, ProofStructure, ProofStructureLine } from '$lib/api';
 
 vi.mock('$app/navigation', () => ({ goto: vi.fn(), beforeNavigate: vi.fn() }));
 vi.mock('$app/state', () => ({ page: { params: { id: 'p1' } } }));
@@ -56,6 +56,24 @@ function structureLine(over: Partial<ProofStructureLine> = {}): ProofStructureLi
 
 function structure(lines: ProofStructureLine[], notation: string | null = null): ProofStructure {
 	return { proof_id: 'p1', stored: true, notation, lines };
+}
+
+/** One line of `ProofDetail.result` — the display snapshot of the last check,
+ *  which is what a proof verified before the structure store existed still has. */
+function payloadLine(over: Partial<ProofLine> = {}): ProofLine {
+	return {
+		valid: true,
+		number: 1,
+		behaviour: null,
+		name: 'Derivation',
+		invalid_message: null,
+		warning_message: null,
+		reference: 'HYP',
+		label: null,
+		display: '( sqrt ` 2 ) e. RR',
+		indent: 0,
+		...over
+	};
 }
 
 /** A system whose only interesting features are its notations and where it came
@@ -246,5 +264,72 @@ describe('the proof detail page', () => {
 		// `.katex-html` is the rendering; the TeX stays in the DOM beside it, in
 		// KaTeX's MathML annotation, which is what a screen reader reads.
 		await waitFor(() => expect(document.querySelector('.katex-html')).not.toBeNull());
+	});
+
+	it('typesets by the reading on screen, not the one being fetched', async () => {
+		// The rows deliberately stay up while the next reading loads, so keying the
+		// typesetter off the *selection* would show a latex reading as raw source
+		// for the round trip back to Source (and feed a unicode one to KaTeX on the
+		// way out, which mostly parses rather than falling back).
+		apiMock.proofs.get.mockResolvedValue(detail());
+		apiMock.systems.get.mockResolvedValue(system({ notations: ['latex'] }));
+		apiMock.proofs.structure.mockImplementation(async (_id: string, name?: string) =>
+			name === 'latex'
+				? structure([structureLine({ rendered: '\\sqrt{2} \\in \\mathbb{R}' })], 'latex')
+				: structure([structureLine()])
+		);
+		render(Page);
+
+		(await screen.findByRole('button', { name: 'latex' })).click();
+		await waitFor(() => expect(document.querySelector('.katex-html')).not.toBeNull());
+
+		// Switch back, with the source reading never arriving.
+		apiMock.proofs.structure.mockImplementation(() => new Promise(() => {}));
+		(await screen.findByRole('button', { name: 'Source' })).click();
+
+		// The card's description follows the selection, so it marks the window the
+		// rows are still the previous reading's.
+		await waitFor(() =>
+			expect(screen.getByText('The proof source, checked line by line.')).toBeInTheDocument()
+		);
+		expect(document.querySelector('.katex-html')).not.toBeNull();
+	});
+
+	it('drops the previous check’s lines when a new verdict arrives', async () => {
+		// The badge is `result`'s and the rows were the structure's, so leaving the
+		// structure up across a verify puts a fresh "Valid" over stale red rows.
+		apiMock.proofs.get.mockResolvedValue(detail());
+		apiMock.proofs.structure.mockResolvedValueOnce(
+			structure([structureLine({ valid: false, invalid_message: 'MP does not apply.' })])
+		);
+		apiMock.proofs.verify.mockResolvedValue({
+			success: true,
+			errors: [],
+			proof: { indicator: 'ok', lines: [payloadLine({ display: 'x = x' })] }
+		});
+		render(Page);
+
+		await waitFor(() => expect(screen.getByText('MP does not apply.')).toBeInTheDocument());
+
+		// The re-read never lands, so what is on screen is what the verify itself
+		// returned — which is the point: fresh, not stale.
+		apiMock.proofs.structure.mockImplementation(() => new Promise(() => {}));
+		screen.getByRole('button', { name: /Verify/ }).click();
+
+		await waitFor(() => expect(screen.getByText('x = x')).toBeInTheDocument());
+		expect(screen.queryByText('MP does not apply.')).toBeNull();
+	});
+
+	it('shows a cached verdict’s lines instead of the source beside them', async () => {
+		// A proof checked before the structure store existed has a payload and no
+		// rows to project. Falling back to it in *both* places would render the
+		// line list and the source block together — the pair this change removes.
+		apiMock.proofs.get.mockResolvedValue(
+			detail({ result: { indicator: 'ok', lines: [payloadLine()] } })
+		);
+		render(Page);
+
+		await waitFor(() => expect(screen.getByText('( sqrt ` 2 ) e. RR')).toBeInTheDocument());
+		expect(screen.queryByText('As written; verify it to see it line by line.')).toBeNull();
 	});
 });

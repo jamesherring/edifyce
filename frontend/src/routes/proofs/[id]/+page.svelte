@@ -19,7 +19,7 @@
 		type ProofStructure,
 		type VerifyResponse
 	} from '$lib/api';
-	import { readLines } from '$lib/reading';
+	import { readLines, resultLines } from '$lib/reading';
 	import { isTeX } from '$lib/math';
 	import { auth } from '$lib/auth.svelte';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
@@ -137,10 +137,22 @@
 		}
 	}
 
-	// Null until a check has stored terms to project: a proof checked before this
-	// store existed, or never checked at all, has nothing to read and falls back
-	// to the source it was written in.
-	const rows = $derived(readLines(structure));
+	// The rows to show, decided here rather than left to `ProofResults`: this page
+	// also decides whether to show the source instead, and the two must agree or a
+	// proof with a cached verdict and no stored structure renders both.
+	//
+	// The structure is preferred because it is what a notation re-spells; the
+	// payload is the fallback for a proof checked before that store existed, and
+	// carries the source spelling, so no notation applies to it.
+	const rows = $derived(
+		readLines(structure) ?? (result?.proof ? resultLines(result.proof.lines) : null)
+	);
+
+	// The notation the rows *on screen* were read through, which is not the one
+	// selected until the fetch lands. Keying the typesetter off the selection
+	// would set a unicode reading as TeX for a round trip, and show a latex one as
+	// source for the round trip back.
+	const readingTeX = $derived(structure !== null && isTeX(structure.notation));
 
 	// `name` is what a citation spells and what the slug is built from; `title` is
 	// the sentence a human reads. Lead with the sentence where there is one — on
@@ -172,7 +184,11 @@
 			if (seq !== verifySeq) return;
 			result = res;
 			// A check rewrites the structure the rows are read from, so what is on
-			// screen is the previous check's.
+			// screen is the previous check's — and dropping it before the refetch is
+			// what stops a fresh verdict badge sitting over stale line verdicts. The
+			// rows fall back to this check's own payload meanwhile, which is right
+			// rather than merely blank.
+			structure = null;
 			void readIn(notation);
 		} catch (err) {
 			if (seq !== verifySeq) return;
@@ -271,7 +287,7 @@
 			{result}
 			{requestError}
 			lines={rows}
-			tex={isTeX(notation)}
+			tex={readingTeX}
 			title="Proof"
 			description={notation === null
 				? 'The proof source, checked line by line.'
@@ -316,9 +332,10 @@
 		</ProofResults>
 
 		{#if rows === null && proof.source.trim()}
-			<!-- No stored structure: a proof never checked, or checked before the
-			     store existed. Its source is still the proof, so show that rather
-			     than nothing. -->
+			<!-- Nothing checked to show — no stored structure and no cached verdict,
+			     so a proof that has never been verified. Its source is still the
+			     proof; the same condition drives the card above, so the two can never
+			     both be on screen. -->
 			<Card.Root>
 				<Card.Header>
 					<Card.Title>Source</Card.Title>
