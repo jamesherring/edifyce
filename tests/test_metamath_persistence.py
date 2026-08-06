@@ -833,9 +833,12 @@ def test_writing_a_proof_never_reads_back_the_edges_it_is_about_to_write(databas
     assert _count(seen, "SELECT proof_line_antecedents") == (0, 0)
 
 
-def test_theorem_links_are_one_statement_for_the_whole_corpus(database):
-    # The link has to be deferred — a proof cannot point at a theorem promoted
-    # after it — but it does not have to be issued a theorem at a time.
+def test_the_deferred_proof_writes_do_not_grow_with_the_corpus(database):
+    # Two writes to `proofs` happen after the walk rather than during it, for
+    # different reasons — the theorem link because a proof cannot point at a
+    # theorem promoted after it, publication because a batched run must not make a
+    # partial corpus visible. Neither has to be issued a theorem at a time, and
+    # this is what says so: a constant number of statements, whatever the corpus.
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine, tables=_TABLES)
     seen = _statements(engine)
@@ -844,5 +847,7 @@ def test_theorem_links_are_one_statement_for_the_whole_corpus(database):
         session.commit()
 
     statements, rows = _count(seen, "UPDATE proofs")
-    assert statements == 1
+    assert statements == 2
+    # The link carries a parameter set per `$p`; publication is one statement over
+    # the lot, so the executed-row count is dominated by the former either way.
     assert rows >= len(IMPORTED)

@@ -141,6 +141,49 @@ def test_every_layer_is_published_including_the_deepest(session, database) -> No
     assert len({system.published_at for system in spine}) == 1
 
 
+def test_an_interrupted_batched_import_publishes_nothing(tmp_path, database) -> None:
+    # A batched run commits every `batch` theorems, so publishing as each proof is
+    # written would make each batch world-visible the moment it lands — and a run
+    # that then dies leaves a *partial* corpus published, its proofs not yet
+    # pointed at the library entries they establish. A committed batch cannot be
+    # rolled back, so the only defence is to publish nothing until there is
+    # something whole to publish.
+    engine = create_engine(f"sqlite:///{tmp_path / 'interrupted.db'}")
+    Base.metadata.create_all(engine, tables=_STORE_TABLES)
+
+    def die(report, _checked):
+        if report.checked == 2:
+            raise RuntimeError("the run dies here")
+
+    with Session(engine) as writing:
+        with pytest.raises(RuntimeError, match="the run dies here"):
+            import_corpus(writing, database, name="Corpus", batch=1, progress=die)
+
+    # A separate session, because the question is what *committed* — the dead
+    # run's own transaction is gone.
+    with Session(engine) as reading:
+        proofs = list(reading.scalars(select(Proof)))
+        assert proofs, "the checkpoint before the failure should have committed"
+        assert all(proof.published_at is None for proof in proofs)
+    engine.dispose()
+
+
+def test_a_completed_batched_import_publishes_what_verified(tmp_path, database) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'completed.db'}")
+    Base.metadata.create_all(engine, tables=_STORE_TABLES)
+
+    with Session(engine) as writing:
+        import_corpus(writing, database, name="Corpus", batch=1)
+
+    with Session(engine) as reading:
+        proofs = list(reading.scalars(select(Proof)))
+        assert proofs
+        # Published exactly where it verified, and at one instant for the run.
+        assert all((p.published_at is not None) == bool(p.valid) for p in proofs)
+        assert len({p.published_at for p in proofs if p.valid}) == 1
+    engine.dispose()
+
+
 def test_an_unlayered_import_is_still_one_system(session, database) -> None:
     # The contract that keeps this additive, asserted rather than assumed.
     report = import_corpus(session, database, name="Corpus")

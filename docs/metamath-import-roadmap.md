@@ -1755,6 +1755,19 @@ has no reference links that might still be drafts — a corpus cites through
 `promoted_theorems`, not proof-to-proof. The frontend makes a folder holding proofs
 selectable and lists them beside the tree.
 
+**When** publication happens is its own decision, and the obvious answer is wrong.
+Setting it as each proof is written looks natural and breaks a batched run:
+`_checkpoint` commits every `batch` theorems, so each batch becomes world-visible
+as it lands, and an import that dies partway leaves a *partial* corpus published —
+its proofs not yet pointed at the library entries they establish, since
+`theorem_id` is written below the walk rather than in it. A committed batch cannot
+be rolled back, so the only defence is not to publish until there is something
+whole to publish. It is one statement over rows already written, issued after the
+theorem links, so deferring it costs a round trip and buys atomicity: a run that
+fails anywhere leaves everything a draft. The systems cannot be deferred the same
+way — a child's terms intern against a chain that has to exist before the walk
+reaches it — which is why the two are decided separately.
+
 ---
 
 ### Tier B — the human-altitude layer

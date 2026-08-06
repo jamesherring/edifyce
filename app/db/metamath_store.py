@@ -38,9 +38,10 @@ ownerlessness is what once made them one. Publication is the only thing that
 makes a system or a proof readable by someone who does not own it, so an import
 that leaves it unset writes a corpus no reader can open — every layer a draft
 nobody owns, every verified proof invisible to the listings and 404 on its own
-route. So the systems and the proofs that verified are published as they are
-written. The write-back guard is unaffected: it reads ``owner_id``, which is
-still null.
+route. The systems are published as they are created (`layered_systems` says
+why it cannot wait); the proofs are published in one step once the run is
+complete (`_publish` says why it must). The write-back guard is unaffected: it
+reads ``owner_id``, which is still null.
 
 Synchronous, like the rest of the mapping layer; an async caller reaches it
 through ``AsyncSession.run_sync`` (see ``scripts/import_metamath.py``).
@@ -294,7 +295,6 @@ def import_corpus(
                         checked,
                         descriptions,
                         layers.folder_for(owner, checked.label),
-                        published,
                     )
             except Exception as exc:  # noqa: BLE001 - reported, not fatal
                 _record_failure(report, checked.label, str(exc))
@@ -321,6 +321,8 @@ def import_corpus(
     report.notation = _store_notation(
         session, database, spec, report.system_ids[0], overrides or {}, rules or {}
     )
+    # Last, so nothing is readable until everything above it has landed.
+    _publish(session, report.system_ids, published)
     if batch is not None:
         session.commit()
     return report
@@ -526,6 +528,53 @@ def _link_proofs_to_theorems(
     for loaded in list(session.identity_map.values()):
         if isinstance(loaded, Proof):
             session.expire(loaded, ["theorem_id"])
+
+
+def _publish(
+    session: Session, system_ids: Sequence[uuid.UUID], published: datetime
+) -> None:
+    """Publish every proof of this import that verified — once, at the end.
+
+    Publication is what makes a proof readable by someone who does not own it,
+    and an import owns nothing, so without this a corpus stores tens of thousands
+    of verified proofs nobody can open. It satisfies the same three conditions
+    `_require_publishable` asks of the interactive path: the system is published
+    (`layered_systems` publishes every layer), the proof verifies — a rejected one
+    is left out by the filter here — and it has no reference links that could
+    still be drafts, since a corpus cites through `promoted_theorems` rather than
+    proof-to-proof.
+
+    **At the end, and not as each proof is written**, which is where it started
+    and is wrong for a batched run: `_checkpoint` commits every ``batch``
+    theorems, so a publishing `_store` makes each batch world-visible as it lands
+    — and an import that then dies leaves a *partial* corpus published, its proofs
+    not yet pointed at the library entries they establish (`theorem_id` is set
+    below the walk, not in it). Committed batches cannot be rolled back, so the
+    only defence is not to publish until there is something whole to publish
+    (found in review). Publication is one statement over rows that are already
+    written, so deferring it costs a single round trip and buys atomicity: a run
+    that fails anywhere leaves everything a draft, which is the safe state.
+
+    Ordered after `_link_proofs_to_theorems` for the same reason — a proof becomes
+    readable only once it is complete.
+
+    Ownerlessness is untouched, and it is ownerlessness rather than this flag that
+    stops `POST /proofs/{id}/verify` writing back over the imported structure.
+    """
+    table = Proof.__table__
+    session.execute(
+        sa_update(table)
+        .where(
+            sa_or(*(table.c.formal_system_id == sid for sid in system_ids)),
+            table.c.valid.is_(True),
+        )
+        .values(published_at=published)
+    )
+    # Core again, so the identity map needs the same hand-synchronisation
+    # `_link_proofs_to_theorems` explains.
+    for loaded in list(session.identity_map.values()):
+        if isinstance(loaded, Proof):
+            session.expire(loaded, ["published_at"])
 
 
 class _Layers:
@@ -861,7 +910,6 @@ def _store(
     checked: CheckedTheorem,
     descriptions: Mapping[str, Description],
     folder_id: uuid.UUID | None,
-    published: datetime,
 ) -> _Stored:
     engine_proof = checked.proof
     valid = bool(engine_proof.valid)
@@ -886,20 +934,8 @@ def _store(
         source=checked.source,
         position=position,
         valid=valid,
-        # Published, which for a proof is what "world-readable" is spelled as —
-        # the owner-scoped listing cannot reach an ownerless corpus, so without
-        # this an import stores tens of thousands of verified proofs nobody can
-        # open. It satisfies the same three conditions `_require_publishable`
-        # asks of the interactive path: the system is published (`layered_systems`
-        # publishes every layer), the proof verifies, and it has no reference
-        # links that could still be drafts — a corpus cites through
-        # `promoted_theorems`, not proof-to-proof.
-        #
-        # A rejected proof stays a draft, for the middle of those reasons.
-        # Ownerlessness is untouched, and it is ownerlessness rather than this
-        # flag that stops `POST /proofs/{id}/verify` writing back over the
-        # imported structure.
-        published_at=published if valid else None,
+        # Written as a draft, and published by `_publish` once the run finishes;
+        # see there for why the two are not one step.
         # Stored for the same reason the verify route stores it: `valid`,
         # `result` and the line rows are one artefact of one check, and a row
         # carrying two of the three is a state nothing else in the schema makes.
