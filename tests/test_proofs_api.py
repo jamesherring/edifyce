@@ -3417,3 +3417,37 @@ def test_a_cited_lemma_is_linked_to_the_proof_that_establishes_it(client, db):
 
     assert body["label"] == "mylem"
     assert body["proof_id"] == lemma
+
+
+def test_the_link_prefers_the_published_proof_of_a_shared_name(client, db):
+    # `proofs.name` carries no uniqueness constraint, so a draft may share a
+    # promoted proof's name. Without an order the link points at whichever row
+    # the planner returned — and a draft is not what a reader following a
+    # citation is being sent to.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner, published=True)
+    lemma = _create_proof(client, system_id, "mylem", source=_LEMMA_SRC)
+    client.patch(f"/api/proofs/{lemma}", json={"published": True})
+    client.post(f"/api/proofs/{lemma}/promote", json={"label": "mylem"})
+    _create_proof(client, system_id, "mylem", source=_LEMMA_SRC)
+
+    goal = _create_proof(client, system_id, "Goal", source="(x ∈ y → x = y) [mylem]")
+    assert client.post(f"/api/proofs/{goal}/verify").json()["success"] is True
+
+    assert _justification(client, goal, 1)["proof_id"] == lemma
+
+
+def test_a_definitional_step_is_not_given_another_labels_prose(client, db):
+    # An unlabelled definition reports no label, and looking prose or a proof up
+    # by a stand-in like `Def` would attach something unrelated to the card.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner)
+    proof_id = _create_proof(
+        client, system_id, "P", source="x ⊆ y [HYP]\n(x = y → x = y) [Def, 1]"
+    )
+    assert client.post(f"/api/proofs/{proof_id}/verify").json()["success"] is True
+
+    body = _justification(client, proof_id, 2)
+
+    assert body["kind"] == "definition"
+    assert (body["label"], body["title"], body["proof_id"]) == ("", None, None)

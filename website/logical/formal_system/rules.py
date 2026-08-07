@@ -22,6 +22,18 @@ if TYPE_CHECKING:
     Binding = dict[str, Term]
 
 
+# What marks a metavariable the *rule* never named: a bare-sort slot renamed apart
+# per occurrence by `InferenceRule._schema_term`. NUL because no grammar can
+# produce it, so the renamed name cannot collide with an author's own.
+#
+# Named here because two things need to agree about it. The rename makes two
+# `formula` slots independent premises rather than one shared binding, which is
+# the point; and anything *showing* a binding to a reader has to leave those out,
+# since `formula\x000` names nothing the reader can find in the schemas beside it
+# (`formal_system.justification`).
+ANONYMOUS = "\x00"
+
+
 def statement_term(pattern: Pattern) -> Term:
     """The kernel term a schema pattern is unified as, metavariables shared.
 
@@ -519,7 +531,7 @@ class InferenceRule:
 
         term = from_pattern(pattern)
         renames = {
-            name: Var(f"{name}\x00{occurrence}", sort)
+            name: Var(f"{name}{ANONYMOUS}{occurrence}", sort)
             for name, sort in term.free_vars().items()
         }
         return term.substitute(renames, context) if renames else term

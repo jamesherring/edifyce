@@ -44,8 +44,16 @@ function told(over: Partial<LineJustification> = {}): LineJustification {
 	};
 }
 
-beforeEach(() => apiMock.proofs.justification.mockResolvedValue(told()));
-afterEach(() => vi.clearAllMocks());
+// Braced, not a concise body: `mockResolvedValue` returns the mock, and Vitest
+// reads a function returned from a hook as a *teardown* callback — so an implicit
+// return calls the mock after every test, which hangs on any that leaves a
+// deliberately pending promise.
+beforeEach(() => {
+	apiMock.proofs.justification.mockResolvedValue(told());
+});
+afterEach(() => {
+	vi.clearAllMocks();
+});
 
 describe('a citation that can be expanded', () => {
 	it('asks for nothing until it is opened', async () => {
@@ -117,5 +125,29 @@ describe('reaching the card without a mouse', () => {
 
 		await user.tab();
 		expect(trigger).toHaveFocus();
+	});
+});
+
+describe('switching notation while the card is up', () => {
+	it('drops the previous reading rather than showing it under the new heading', async () => {
+		const { rerender } = render(JustificationCard, {
+			props: { proofId: 'p1', number: 3, citation: 'MP, 1, 2' }
+		});
+		await user.hover(screen.getByRole('button', { name: /MP, 1, 2/ }));
+		await waitFor(() => expect(screen.getByText('y ∈ x')).toBeInTheDocument());
+
+		// Held open until asserted on, so the window between the switch and the
+		// new reading landing is the thing under test.
+		let land: (found: LineJustification) => void = () => {};
+		apiMock.proofs.justification.mockImplementation(
+			() => new Promise<LineJustification>((resolve) => (land = resolve))
+		);
+		await rerender({ proofId: 'p1', number: 3, citation: 'MP, 1, 2', notation: 'latex' });
+
+		await waitFor(() => expect(screen.queryByText('y ∈ x')).toBeNull());
+		expect(apiMock.proofs.justification).toHaveBeenLastCalledWith('p1', 3, 'latex');
+
+		land(told({ assignments: [{ variable: 'q', stands_for: '\\varphi' }] }));
+		await waitFor(() => expect(screen.getByText('\\varphi')).toBeInTheDocument());
 	});
 });

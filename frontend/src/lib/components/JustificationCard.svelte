@@ -49,6 +49,12 @@
 
 	async function load() {
 		if (!proofId || number === null || fetched === key) return;
+		// Dropped before the fetch, not after it: the held record is of another
+		// reading, and leaving it up would show the previous notation's
+		// substitution under the new one's heading for the whole round trip —
+		// exactly the staleness the key exists to catch.
+		told = null;
+		fetched = null;
 		loading = true;
 		error = null;
 		const asked = key;
@@ -73,7 +79,10 @@
 		}
 	}
 
+	// On `key` as well as on `open`: the notation can change while the card is up,
+	// and re-reading is what a switch means.
 	$effect(() => {
+		key;
 		if (open) void load();
 	});
 </script>
@@ -98,7 +107,9 @@
 				<div class="flex flex-col gap-3 text-left">
 					<div class="flex flex-col gap-1">
 						<div class="flex items-baseline justify-between gap-2">
-							<code class="font-mono text-sm font-medium">{told.label}</code>
+							<!-- An unlabelled definition reports no label: `Def` is how a
+							     citation reaches one, not a name it has. -->
+							<code class="font-mono text-sm font-medium">{told.label || 'definition'}</code>
 							{#if told.kind === 'definition'}
 								<Badge variant="outline">definition</Badge>
 							{:else if told.name && told.name !== told.label}

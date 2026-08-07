@@ -30,7 +30,7 @@ from website.logical.declarative import (
     build_system,
 )
 from website.logical.formal_system.definitions import DefinitionError, parse_definition
-from website.logical.kernel.terms import _bound_label
+from website.logical.kernel.terms import bound_label
 from website.logical.kernel import (
     check_definitional_step,
     constructor_for,
@@ -397,8 +397,8 @@ def test_two_binders_of_different_sorts_may_be_named_apart():
                   names={"z": term_of("setvar", "w")}) is None
     renamed = unfold(
         definition, term("(a ⊆ b)"), context,
-        names={_bound_label(0): term_of("classvar", "Q"),
-               _bound_label(1): term_of("setvar", "w")},
+        names={bound_label(0): term_of("classvar", "Q"),
+               bound_label(1): term_of("setvar", "w")},
     )
     assert renamed is not None
     assert renamed.to_string() == "(∃Q.(Q ⋴ b) → ∀w.(w ∈ a))"

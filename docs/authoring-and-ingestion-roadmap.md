@@ -952,3 +952,23 @@ would give one, but rendering it means inventing a phrasing for each of the
 kernel's predicates, and a proviso in the author's own words (`x not free in phi`)
 beside the assignments it names already says the same thing without a phrasing
 layer of ours to keep in step with the kernel's.
+
+**Two names a reader must never be shown**, both found in review, and both the
+same mistake: serving a *reserved* name as though it were the author's.
+
+A bare-sort slot (`formula` meaning "any formula") has no name to share by, so
+`_schema_term` renames each occurrence apart — `formula\x000`. That is what makes
+two `formula` premises independent rather than one shared binding, and it names
+nothing in the schemas or provisos shown beside it, so those assignments are left
+out; the premise row already says which line filled the slot. The separator is
+`rules.ANONYMOUS` now rather than a literal, since two modules have to agree
+about it.
+
+And a defining form stores its binders abstractly, by index, because an unfold's
+*consumer* chooses each name. A reader is not that consumer, so `df-subset` read
+as `∀⟨0⟩ (⟨0⟩ ∈ x → ⟨0⟩ ∈ y)`. `FreshBinder.default` is exactly "the leaf its
+declared name denotes", so the fix is to put it back — through a new `spellings`
+argument to `rendering.render`, which re-spells **leaves by name**. A separate
+argument rather than more entries in the projection because it answers a
+different question: a projection maps a *production* to render steps and has
+nothing to say about a `Var`, whose name is its whole surface form.

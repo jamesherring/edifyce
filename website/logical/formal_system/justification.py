@@ -39,7 +39,9 @@ from typing import TYPE_CHECKING
 
 from ..kernel.definitions import Definition
 from ..kernel.side_conditions import references
+from ..kernel.terms import bound_label
 from ..rendering import render
+from .rules import ANONYMOUS
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -218,11 +220,18 @@ def _assignments(
 ) -> tuple[Assignment, ...]:
     if not binding:
         return ()
-    # By name, so the same rule reads the same way on every step that uses it —
-    # the binding's own order is whatever unification happened to reach first.
+    # Named metavariables only. A bare-sort slot (`formula` meaning "any formula")
+    # has no name to share by, so the schema projection renames each occurrence
+    # apart — `formula\x000` — and that name appears in no schema and no proviso
+    # the reader is shown beside it. What filled such a slot is the premise row,
+    # which names the line.
+    #
+    # By name, so the same rule reads the same way on every step that uses it: the
+    # binding's own order is whatever unification happened to reach first.
     return tuple(
         Assignment(variable=name, stands_for=render(binding[name], projection))
         for name in sorted(binding)
+        if ANONYMOUS not in name
     )
 
 
@@ -257,15 +266,31 @@ def _discharged(rule: InferenceRule) -> str | None:
 def _definitional(
     definition: Definition, projection: Projection | None
 ) -> Justification:
-    # A definitional step is checked against the *kernel* definition, whose two
-    # forms are terms rather than the strings a declared definition carries — so
-    # this is the one place a schema is rendered rather than quoted, and the one
-    # place the notation reaches a schema at all.
-    label = definition.label or "Def"
+    """The definition a `[Def, n]` step applied, as its two forms read.
+
+    A definitional step is checked against the *kernel* definition, whose forms
+    are terms rather than the strings a declared definition carries — so this is
+    the one place a schema is rendered rather than quoted.
+
+    The defining form stores its binders **abstractly**, by index, because an
+    unfold's consumer chooses each one's concrete name. A reader is not that
+    consumer, so the declared name goes back where the index sits; without it
+    `x ⊆ y` reads as `∀⟨0⟩ (⟨0⟩ ∈ x → ⟨0⟩ ∈ y)`, which names nothing.
+
+    ``label`` is empty for an unlabelled definition rather than a stand-in like
+    "Def": that keyword is how a *citation* reaches one, and putting it here would
+    hand a caller a label to look prose or a proof up by that names no definition
+    at all.
+    """
+    binders = {
+        bound_label(index): render(binder.default, projection)
+        for index, binder in enumerate(definition.fresh)
+    }
+    label = definition.label or ""
     return Justification(
         kind="definition",
         label=label,
         name=label,
         conclusion=f"{render(definition.higher, projection)} ≝ "
-        f"{render(definition.lower, projection)}",
+        f"{render(definition.lower, projection, binders)}",
     )

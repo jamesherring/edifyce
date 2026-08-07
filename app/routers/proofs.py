@@ -465,6 +465,7 @@ async def _verify_with_references(
     persist: bool = True,
     source: str | None = None,
     built: _Built | None = None,
+    lock: bool = True,
 ) -> _Verification:
     """Verify a stored proof, resolving the lemmas it cites from other proofs.
 
@@ -483,12 +484,23 @@ async def _verify_with_references(
     anonymous viewer verifying a published proof. The verdict is the same either
     way; what it skips is warming the schema-term cache, whose inserts would be
     discarded with everything else.
+
+    ``lock=False`` drops the system lock, which is only sound for a caller that
+    writes nothing *and* can live with a torn read. The lock protects the
+    read-then-write below (see the note on it), so a check that never writes has
+    nothing for it to protect; what it costs to keep is serialisation, and on a
+    read fired by hovering a citation (`/lines/{n}/justification`) that would
+    make every reader queue behind every verify on the system. What it buys is a
+    consistent view across the queries this makes, so it stays on by default and
+    is dropped only where a stale record is a cosmetic answer rather than a
+    wrong one.
     """
     # Before anything is read. A verify now trusts the lemmas' stored rows
     # instead of re-checking them, so the read and the write must sit inside one
     # critical section: otherwise an invalidation can commit between them and
     # this transaction writes a valid snapshot back over it. See lock_system.
-    await lock_system(session, proof.formal_system_id)
+    if lock:
+        await lock_system(session, proof.formal_system_id)
 
     # A build handed in was made *before* this lock — the caller needed the
     # grammar to compose a line — so it is only safe to reuse if the caller took
@@ -2639,6 +2651,12 @@ async def _proof_of_label(
     None when there is no such proof (the label is a primitive, or a rule the
     system declares) or when the viewer may not read the one there is — which is
     the same answer to a client either way: there is nothing to link to.
+
+    **Published first, then oldest.** `proofs.name` carries no uniqueness
+    constraint, so a draft may share a promoted proof's name; ordering is what
+    stops the link pointing at whichever row the planner happened to return, and
+    what makes the bound below cut the *least* likely candidates rather than an
+    arbitrary set.
     """
     found = await session.scalars(
         select(Proof)
@@ -2646,6 +2664,7 @@ async def _proof_of_label(
             Proof.formal_system_id.in_([s.id for s in chain]),
             Proof.name == label,
         )
+        .order_by(Proof.published_at.is_(None), Proof.created_at)
         .limit(_LABEL_PROOF_CANDIDATES)
     )
     for proof in found:
@@ -2688,7 +2707,15 @@ async def explain_line(
     """
     proof = await _get_readable_or_404(session, proof_id, user)
 
-    verification = await _verify_with_references(session, proof, persist=False)
+    # Unlocked, unlike `/citations`: this is fired by hovering a citation, and a
+    # reader sweeping a column would otherwise take the system's exclusive lock
+    # once per step and queue behind every verify and import on it. Nothing here
+    # writes, so the lock protects nothing; the cost is that a record read across
+    # a concurrent edit may describe the grammar either side of it, which is a
+    # cosmetic answer on a display-only endpoint.
+    verification = await _verify_with_references(
+        session, proof, persist=False, lock=False
+    )
     checked = verification.engine_proof
     if checked is None or verification.effective is None:
         raise HTTPException(
@@ -2754,7 +2781,16 @@ async def explain_line(
             for p in told.provisos
         ],
         discharges=told.discharges,
-        title=await _label_title(session, chain, told.label),
-        proof_id=await _proof_of_label(session, chain, told.label, user),
+        # Only for a label that names something. An unlabelled definition reports
+        # none, and looking one up by a stand-in would attach another label's
+        # prose — or another proof — to a card about this step.
+        title=(
+            await _label_title(session, chain, told.label) if told.label else None
+        ),
+        proof_id=(
+            await _proof_of_label(session, chain, told.label, user)
+            if told.label
+            else None
+        ),
         notation=notation,
     )

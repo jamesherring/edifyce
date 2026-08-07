@@ -23,11 +23,15 @@ from tests.spec_helpers import (
     hyp_rule,
     implication_prod,
     mp_rule,
+    membership_prod,
     regex_prod,
     reiteration_rule,
     rule,
     statement_line,
+    subset_def,
     template_prod,
+    universal_prod,
+    variable_prod,
 )
 
 
@@ -192,4 +196,91 @@ def test_a_definitional_step_names_the_definition_that_applied(system):
     assert told is not None
     assert told.kind == "definition"
     assert told.label == "df-refl"
+    assert told.conclusion == "refl p ≝ (p → p)"
+
+
+def test_a_slot_the_rule_never_named_is_not_reported_as_an_assignment(system):
+    # A bare-sort slot (`formula` meaning "any formula") has no name to share by,
+    # so the schema projection renames each occurrence apart — `formula\x000`.
+    # That name appears in no schema and no proviso beside it, so reporting it
+    # would be reporting the machinery. The premise row already names the line.
+    built = build_system(
+        SystemSpec(
+            name="Pairs",
+            brackets=brackets(),
+            productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+            lines=[statement_line()],
+            rules=[hyp_rule(), rule("PAIR", "pair", ["formula", "formula"], "p", pq())],
+        )
+    )
+    proof = built.parse("a [HYP]\nb [HYP]\nc [PAIR, 1, 2]")
+    assert proof.valid is True
+
+    told = justification(line_of(proof, 3))
+
+    assert [a.variable for a in told.assignments] == ["p"]
+    assert [(p.schema, p.number) for p in told.premises] == [
+        ("formula", 1),
+        ("formula", 2),
+    ]
+
+
+def test_a_definitions_binders_are_shown_by_the_name_they_were_declared_with():
+    # A defining form stores its binders abstractly, by index, because an unfold's
+    # consumer chooses each one's name. A reader is not that consumer: without the
+    # declared name put back, `x ⊆ y` reads as `∀⟨0⟩ (⟨0⟩ ∈ x → …)`.
+    built = build_system(
+        SystemSpec(
+            name="Sets",
+            brackets=brackets(),
+            productions=[
+                variable_prod(),
+                membership_prod(),
+                implication_prod(),
+                universal_prod(),
+                template_prod(
+                    "formula", "subset", "x ⊆ y", [("x", "variable"), ("y", "variable")]
+                ),
+            ],
+            lines=[statement_line()],
+            definitions=[subset_def()],
+            rules=[hyp_rule()],
+        )
+    )
+    proof = built.parse("a ⊆ b [HYP]\n∀z (z ∈ a → z ∈ b) [Def, 1]")
+    assert proof.valid is True, [
+        (line.display, line.invalid_message) for line in proof.proof_lines
+    ]
+
+    told = justification(line_of(proof, 2))
+
+    assert told.conclusion == "x ⊆ y ≝ ∀z (z ∈ x → z ∈ y)"
+
+
+def test_an_unlabelled_definition_reports_no_label_rather_than_a_stand_in():
+    # `Def` is how a *citation* reaches a definition, not a name one has. Putting
+    # it here would hand a caller a label to look prose or a proof up by that
+    # names no definition at all.
+    built = build_system(
+        SystemSpec(
+            name="Unlabelled",
+            brackets=brackets(),
+            productions=[
+                regex_prod("formula", "atom", "[a-z]"),
+                implication_prod(),
+                template_prod("formula", "self_implies", "refl p", [("p", "formula")]),
+            ],
+            lines=[statement_line()],
+            definitions=[
+                defn("formula", "refl", "refl p", "(p → p)", [("p", "formula")])
+            ],
+            rules=[hyp_rule()],
+        )
+    )
+    proof = built.parse("refl a [HYP]\n(a → a) [Def, 1]")
+    assert proof.valid is True
+
+    told = justification(line_of(proof, 2))
+
+    assert told.label == ""
     assert told.conclusion == "refl p ≝ (p → p)"
