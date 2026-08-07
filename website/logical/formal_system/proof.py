@@ -1126,9 +1126,6 @@ class ProofLine:
         # This line may be an axiom
         self.is_axiom = False
 
-        # The axiom this line uses (if any)
-        self.axiom = None
-
         # The inference instance with this line as the deduction
         self.inference = None
 
