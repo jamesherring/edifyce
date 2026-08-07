@@ -286,6 +286,9 @@ class FormalSystemSummary(BaseModel):
     name: str
     slug: str
     description: str | None = None
+    # Where the system came from, when it was not authored here — an import's own
+    # sentence, so a reader of one of its proofs can be told whose library it is.
+    provenance: str | None = None
     inherits_from_id: uuid.UUID | None = None
     published_at: datetime | None = None
     created_at: datetime

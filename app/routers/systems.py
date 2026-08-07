@@ -598,6 +598,7 @@ def _summary(system: FormalSystem) -> FormalSystemSummary:
         name=system.name,
         slug=system.slug,
         description=system.description,
+        provenance=system.provenance,
         inherits_from_id=system.inherits_from_id,
         published_at=system.published_at,
         created_at=system.created_at,

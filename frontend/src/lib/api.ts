@@ -487,6 +487,9 @@ export interface FormalSystemSummary {
 	name: string;
 	slug: string;
 	description: string | null;
+	/** Where the system came from, when it was not authored here — an import's
+	 * own sentence, recorded once per corpus rather than on each of its proofs. */
+	provenance: string | null;
 	inherits_from_id: string | null;
 	published_at: string | null;
 	created_at: string;

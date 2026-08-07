@@ -199,6 +199,7 @@ def import_corpus(
     *,
     plan: Sequence[Layer] = (),
     owner: uuid.UUID | None = None,
+    source: str | None = None,
 ) -> ImportReport:
     """Import ``database``'s first ``limit`` theorems into ``session``.
 
@@ -243,6 +244,11 @@ def import_corpus(
     Folders stay ownerless either way: an outline is the file's structure, and
     `get_system_folders` reads an *owned* folder as a user's private one — the
     system's own ownership already says who may see the tree.
+
+    ``source`` names the `.mm` file, for the provenance sentence every layer
+    carries (:func:`metamath_provenance`). It is the only thing about the origin
+    a `Database` does not already hold, and an import is the one moment it is
+    known — a reader has rows.
     """
     if batch is not None and batch < 1:
         raise ValueError(f"batch must be at least 1 if given, not {batch}.")
@@ -258,7 +264,13 @@ def import_corpus(
     # rather than smeared across the twenty-odd minutes it takes to write — which
     # matters because `/proofs/public` orders by it.
     published = datetime.now(tz=UTC)
-    spine = layered_systems(session, specs, published=published, owner=owner)
+    spine = layered_systems(
+        session,
+        specs,
+        metamath_provenance(source),
+        published=published,
+        owner=owner,
+    )
     # The **deepest** layer is the system this import is "of": it is the one a
     # citation resolves from, since its chain reaches every layer above it, and
     # for an unlayered import it is the only one there is.
@@ -347,9 +359,23 @@ def import_corpus(
     return report
 
 
+def metamath_provenance(source: str | None = None) -> str:
+    """The sentence an import records on every system it writes.
+
+    Composed here rather than asked of the caller because it is the same fact
+    every time: the rows came out of a `.mm` file, and a reader of one of the
+    47,000 proofs has no other way to learn that. ``source`` is the file's name
+    when the caller knows it — a corpus is identified by which database it is
+    (`set.mm`, `iset.mm`), and the parse itself carries no name.
+    """
+    library = f"{source} library" if source else "library"
+    return f"Imported from Metamath's {library}. See https://us.metamath.org/"
+
+
 def layered_systems(
     session: Session,
     specs: Sequence[SystemSpec],
+    provenance: str | None = None,
     *,
     published: datetime | None = None,
     owner: uuid.UUID | None = None,
@@ -382,11 +408,17 @@ def layered_systems(
     Ownerless by default, like the single-system import and for the reason this
     module's docstring gives: nobody owns the corpus. ``owner`` overrides that for
     the whole spine — see `import_corpus` for what handing it over costs.
+
+    ``provenance`` lands on **every** layer rather than on the leaf, because a
+    theorem is filed in the layer its own section falls in: a proof of a
+    propositional-calculus lemma sits on the root, and it came from the same
+    file as one on the leaf.
     """
     published = published or datetime.now(tz=UTC)
     spine: list[FormalSystem] = []
     for spec in specs:
         system = spec_to_system(spec)
+        system.provenance = provenance
         system.inherits_from_id = spine[-1].id if spine else None
         system.published_at = published
         system.owner_id = owner
@@ -515,7 +547,10 @@ def _link_proofs_to_theorems(
     ``theorem_id`` null (found in review). One system for an unlayered import,
     where this is the filter it always was.
     """
-    if not ids:
+    if not ids or not system_ids:
+        # `system_ids` too, and not only for symmetry: an empty `sa_or()` compiles
+        # away entirely, so the scope would silently widen to every system rather
+        # than narrow to none, which is how the `.in_()` this replaced degraded.
         return
     # One statement carrying every pair, rather than one statement per pair. The
     # *deferral* above is necessary; issuing it a theorem at a time was not, and

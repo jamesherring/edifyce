@@ -1,38 +1,70 @@
 /**
  * Reading a checked proof through one of its system's notations.
  *
- * The server renders each line's *term* — that is what a notation re-spells — so
- * what comes back is narrower than the line the author wrote: no citation, no
- * indentation. Both are structure the checker already stored separately, so this
- * puts them back rather than asking the server for a second rendering of them.
- */
-
-import type { ProofStructure, ProofStructureLine } from '$lib/api';
-
-/** One line as the chosen notation reads it, indent and citation restored.
+ * The rows a proof is shown as come from its **stored structure**, not from the
+ * cached verification payload: a notation re-spells *terms*, and the structure is
+ * where a term lives beside the checker's verdict on the line holding it. That is
+ * the whole of why the notation switch reaches the checked view — one row carries
+ * both.
  *
- * A line the notation cannot read keeps the source it was written in, whole: a
- * line bearing no term (a blank, a comment, a scope opener) has nothing to
- * re-spell, and one whose constructor the notation does not name renders empty.
- * `display` already carries its own citation, so the two cases are one — either
- * the term was read and this writes the citation, or the source line stands as
- * the author wrote it.
+ * What the server renders is narrower than the line the author wrote: it is the
+ * term alone, so it carries no citation and no indentation. Both are structure
+ * the checker stored separately, and the row puts them back.
  */
-export function readProofLine(line: ProofStructureLine): string {
-	// Indentation is a count of leading spaces (`ProofLine.indent`), which is how
-	// the source line is reconstructed server-side too.
-	const indent = ' '.repeat(line.indent);
-	if (!line.rendered) return indent + line.display;
-	return indent + (line.reference ? `${line.rendered} [${line.reference}]` : line.rendered);
+
+import type { ProofLine, ProofStructure, ProofStructureLine } from '$lib/api';
+
+/**
+ * A line ready to display: the verification payload's shape, plus whether its
+ * `display` is the notation's reading or the source it was written in.
+ *
+ * The flag is what a TeX reading needs. A notation re-spells terms, so a line
+ * bearing none keeps its source however the reading is set — and handing that
+ * source to a typesetter would set an author's prose as mathematics.
+ */
+export type ReadLine = ProofLine & { typeset: boolean };
+
+/** The verification payload's own lines, which are always the source spelling. */
+export function resultLines(lines: ProofLine[]): ReadLine[] {
+	return lines.map((line) => ({ ...line, typeset: false }));
 }
 
-/** The whole proof read that way, or null when there is nothing stored to read.
+/**
+ * What a line reads as, and whether that is the notation talking.
  *
- * Null rather than an empty string: a proof checked before the structure store
- * existed, or never checked at all, has no terms to project, and a caller should
- * say so rather than show a blank page where the proof was.
+ * Empty counts as nothing to say, not as an empty formula: the server
+ * distinguishes "no notation asked for" (null) from "this notation names the
+ * line's constructor nothing" (`''`), and a blank row where a formula was is
+ * worse than the source in the wrong spelling.
  */
-export function readProof(structure: ProofStructure | null): string | null {
+function reading(line: ProofStructureLine): { display: string; typeset: boolean } {
+	if (!line.rendered) return { display: line.display, typeset: false };
+	return { display: line.rendered, typeset: true };
+}
+
+/**
+ * The stored structure as display rows, or null when nothing is stored.
+ *
+ * Null rather than an empty list: a proof never checked, or checked before this
+ * store existed, has no rows to show and a caller should fall back to its source
+ * rather than render an empty proof.
+ */
+export function readLines(structure: ProofStructure | null): ReadLine[] | null {
 	if (!structure || !structure.stored) return null;
-	return structure.lines.map(readProofLine).join('\n');
+	return structure.lines.map((line) => ({
+		valid: line.valid,
+		number: line.number,
+		behaviour: line.behaviour,
+		// The matched line type's name — `ProofLine.name` under another spelling,
+		// since the row stores what the checker determined and the payload stores
+		// what it displayed.
+		name: line.line_type,
+		invalid_message: line.invalid_message,
+		failure: line.failure,
+		warning_message: line.warning_message,
+		reference: line.reference,
+		label: line.label,
+		indent: line.indent,
+		...reading(line)
+	}));
 }

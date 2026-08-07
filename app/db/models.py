@@ -140,6 +140,13 @@ class FormalSystem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(256))
     slug: Mapped[str] = mapped_column(String(256), index=True)
     description: Mapped[str | None] = mapped_column(Text)
+    # Where the system came from, when it was not authored here — one sentence,
+    # recorded by whatever built it. On the system rather than on its proofs
+    # because it is a fact about the corpus: an import writes it once instead of
+    # copying it onto 47,000 rows, and every proof filed against the system (or
+    # against a layer of its spine) reads the same one. Null for anything a user
+    # wrote themselves.
+    provenance: Mapped[str | None] = mapped_column(Text)
     # System inheritance (the old `inherits_from` self-FK). SET NULL so deleting a
     # base system orphans rather than cascades away its descendants.
     inherits_from_id: Mapped[uuid.UUID | None] = mapped_column(

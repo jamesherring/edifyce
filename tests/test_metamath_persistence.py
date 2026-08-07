@@ -361,6 +361,30 @@ def test_equal_subterms_are_one_row_across_the_whole_corpus(session, imported):
     assert len(ph) == 1
 
 
+def test_an_import_records_where_it_came_from(session, database):
+    # On the system, once, rather than on each of its proofs: 47,000 copies of
+    # one sentence is what the column exists to avoid. A reader of a proof
+    # already fetches its system, so it costs no request there either.
+    import_corpus(session, database, name="Propositional", source="set.mm")
+
+    system = session.scalars(select(FormalSystem)).one()
+    assert system.provenance == (
+        "Imported from Metamath's set.mm library. See https://us.metamath.org/"
+    )
+
+
+def test_provenance_names_the_library_only_when_the_caller_knows_it(session, database):
+    # A `Database` is a parse and carries no file name, so an in-memory import —
+    # every test here, and the diagnostic scripts — still says where the rows
+    # came from without inventing which database it was.
+    import_corpus(session, database, name="Propositional")
+
+    system = session.scalars(select(FormalSystem)).one()
+    assert system.provenance == (
+        "Imported from Metamath's library. See https://us.metamath.org/"
+    )
+
+
 def test_an_import_is_ownerless_so_no_verify_can_overwrite_it(session, imported):
     # A stored system holds a grammar, definitions, axioms and rules — it has
     # nowhere to hold a *promoted theorem*, which is what the Metamath library is
