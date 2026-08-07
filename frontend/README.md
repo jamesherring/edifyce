@@ -29,6 +29,25 @@ sends automatically. Requests go through `src/lib/api.ts` with
 from `GET /api/auth/providers`; clicking one sends the browser to the provider's
 authorization URL and the backend completes the flow on its callback.
 
+## Reading a proof
+
+`/proofs/[id]` shows **one** view of a proof, not a source pane beside a
+verification pane: browsing a proof, the two said the same thing. The rows come
+from the proof's *stored structure* (`GET /api/proofs/{id}/structure`) rather
+than from the cached verification payload, because that is where a term
+re-spelled through a notation lives — so the notation switch changes the very
+lines the checker's verdicts are attached to. A proof with no stored structure
+(never verified, or verified before the store existed) falls back to showing its
+source as written. The editor keeps the two-pane layout, where the panes are an
+editable source and its results and genuinely differ.
+
+A notation named `latex` is **typeset** rather than shown as source
+(`components/Typeset.svelte`, KaTeX). The name is the whole of the judgement, and
+it is the same one the importer makes when it derives a projection from a `.mm`
+file's `$t` block. A reading KaTeX will not parse falls back to its source: the
+projection is derived per production from a token map nobody checked against a
+TeX parser, so a miss is expected rather than exceptional.
+
 ## Development
 
 Requires Node 20+.

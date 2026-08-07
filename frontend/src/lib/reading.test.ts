@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { readProof, readProofLine } from './reading';
-import type { ProofStructure, ProofStructureLine } from './api';
+import { readLines, resultLines } from './reading';
+import type { ProofLine, ProofStructure, ProofStructureLine } from './api';
 
 function line(over: Partial<ProofStructureLine> = {}): ProofStructureLine {
 	return {
@@ -32,60 +32,81 @@ function structure(over: Partial<ProofStructure> = {}): ProofStructure {
 	return { proof_id: 'p-1', stored: true, notation: 'equiv', lines: [line()], ...over };
 }
 
-describe('readProofLine', () => {
-	it('puts the citation back on the rendered term', () => {
-		// The server renders the line's term, which carries no citation - so a
-		// reading that showed only `rendered` would silently drop every
-		// justification the proof states.
-		expect(readProofLine(line())).toBe('x ≡ x [HYP]');
+describe('readLines', () => {
+	it('shows the term the notation re-spelled', () => {
+		const [row] = readLines(structure())!;
+
+		expect(row.display).toBe('x ≡ x');
+		expect(row.typeset).toBe(true);
 	});
 
-	it('leaves a line with no citation uncited', () => {
-		expect(readProofLine(line({ reference: null }))).toBe('x ≡ x');
+	it('carries the checker’s verdict on the same row as the reading', () => {
+		// The point of reading the structure rather than the verification payload:
+		// a re-spelled line and the diagnostics about it are one row, so a notation
+		// cannot leave the two disagreeing.
+		const [row] = readLines(
+			structure({
+				lines: [line({ valid: false, invalid_message: 'MP does not apply.', number: 3 })]
+			})
+		)!;
+
+		expect(row.valid).toBe(false);
+		expect(row.invalid_message).toBe('MP does not apply.');
+		expect(row.number).toBe(3);
+		expect(row.reference).toBe('HYP');
 	});
 
 	it('keeps the source of a line that bears no term', () => {
-		// A blank, a comment or a scope opener has nothing to re-spell. Falling back
-		// to `display` keeps the proof the same shape in both readings.
-		expect(readProofLine(line({ rendered: null, display: '-- lemma', reference: null }))).toBe(
-			'-- lemma'
-		);
-	});
+		// A blank, a comment or a scope opener has nothing to re-spell, and its
+		// source is not mathematics to typeset.
+		const [row] = readLines(
+			structure({ lines: [line({ rendered: null, display: '-- lemma', reference: null })] })
+		)!;
 
-	it('keeps the whole source line, citation included, when it falls back', () => {
-		// `display` is the authored line and already carries its citation, so the
-		// fallback must not append a second one.
-		expect(readProofLine(line({ rendered: null }))).toBe('x = x [HYP]');
+		expect(row).toMatchObject({ display: '-- lemma', typeset: false });
 	});
 
 	it('falls back when the notation names nothing for the line', () => {
-		// A notation missing the line's constructor renders empty rather than null
-		// (the server distinguishes "not asked for" from "nothing to say"), and an
-		// empty formula with a citation hung off it is worse than the source.
-		expect(readProofLine(line({ rendered: '' }))).toBe('x = x [HYP]');
+		// The server distinguishes "not asked for" (null) from "nothing to say"
+		// (empty), and a blank row where a formula was is worse than the source.
+		const [row] = readLines(structure({ lines: [line({ rendered: '' })] }))!;
+
+		expect(row).toMatchObject({ display: 'x = x [HYP]', typeset: false });
 	});
 
-	it('restores the indentation a subproof was written with', () => {
-		// `indent` is a count of leading *spaces*, which is how the server rebuilds
-		// the source line too — not a nesting depth to expand.
-		expect(readProofLine(line({ indent: 4 }))).toBe('    x ≡ x [HYP]');
-	});
-});
+	it('keeps the line type under the name the payload gives it', () => {
+		// `ProofLine.name` is the matched line type, which the row stores as
+		// `line_type`; the badge reads one field whichever source the rows came from.
+		const [row] = readLines(structure({ lines: [line({ line_type: 'Derivation' })] }))!;
 
-describe('readProof', () => {
-	it('joins the lines in order', () => {
-		const read = readProof(
-			structure({
-				lines: [line({ id: 'a' }), line({ id: 'b', rendered: '(x ≡ x → x ≡ x)', reference: 'MP' })]
-			})
-		);
-		expect(read).toBe('x ≡ x [HYP]\n(x ≡ x → x ≡ x) [MP]');
+		expect(row.name).toBe('Derivation');
 	});
 
 	it('reads nothing when no structure is stored', () => {
-		// Null, not "": a proof that was never checked has no terms to project, and
-		// the caller must say so rather than show an empty proof.
-		expect(readProof(structure({ stored: false, lines: [] }))).toBeNull();
-		expect(readProof(null)).toBeNull();
+		// Null, not an empty list: a proof never checked has nothing to show, and
+		// the caller falls back to its source rather than rendering an empty proof.
+		expect(readLines(structure({ stored: false, lines: [] }))).toBeNull();
+		expect(readLines(null)).toBeNull();
+	});
+});
+
+describe('resultLines', () => {
+	it('never claims the payload is a notation’s reading', () => {
+		// `ProofDetail.result` is the source spelling by construction — it is what
+		// the checker displayed — so nothing in it is TeX to typeset.
+		const payload: ProofLine = {
+			valid: true,
+			number: 1,
+			behaviour: null,
+			name: 'statement',
+			invalid_message: null,
+			warning_message: null,
+			reference: 'HYP',
+			label: null,
+			display: 'x = x',
+			indent: 0
+		};
+
+		expect(resultLines([payload])).toEqual([{ ...payload, typeset: false }]);
 	});
 });

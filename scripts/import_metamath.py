@@ -132,6 +132,9 @@ async def main() -> int:
                 overrides=DISPLAY_OVERRIDES if arguments.setmm_overrides else None,
                 rules=DISPLAY_RULES if arguments.setmm_overrides else None,
                 plan=LAYERS if arguments.setmm_layers else (),
+                # The file's name, which the parse does not carry: it is what
+                # names the library in the provenance every system records.
+                source=arguments.source.name,
             )
         )
     await get_engine().dispose()

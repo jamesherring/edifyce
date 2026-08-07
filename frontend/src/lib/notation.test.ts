@@ -8,6 +8,7 @@ function system(parts: Partial<FormalSystemDetail> = {}): FormalSystemDetail {
 		name: 'Test system',
 		slug: 'test-system',
 		description: null,
+		provenance: null,
 		inherits_from_id: null,
 		token_separated: false,
 		published_at: null,

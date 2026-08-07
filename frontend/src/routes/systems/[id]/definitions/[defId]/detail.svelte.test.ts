@@ -35,6 +35,7 @@ function system(definitions: Definition[]): FormalSystemDetail {
 		name: 'Set theory',
 		slug: 'set-theory',
 		description: null,
+		provenance: null,
 		inherits_from_id: null,
 		token_separated: false,
 		published_at: '2026-01-01T00:00:00Z',

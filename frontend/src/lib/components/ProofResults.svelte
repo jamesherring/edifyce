@@ -45,8 +45,11 @@
 	import * as Card from '$lib/components/ui/card';
 	import * as Alert from '$lib/components/ui/alert';
 	import { Badge } from '$lib/components/ui/badge';
+	import Typeset from '$lib/components/Typeset.svelte';
 	import type { VerifyResponse } from '$lib/api';
+	import { resultLines, type ReadLine } from '$lib/reading';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
+	import type { Snippet } from 'svelte';
 
 	type Props = {
 		result: VerifyResponse | null;
@@ -56,27 +59,53 @@
 		/** When set, each line row becomes a button that reports its 0-based index —
 		 *  lets the caller jump the editor to the matching line. */
 		onLineClick?: (index: number) => void;
+		/** The rows to show, when they are not the ones `result` carries — a proof
+		 *  read through a notation comes off the *stored structure* instead, which
+		 *  is where a re-spelled term lives. Falls back to the payload's own. */
+		lines?: ReadLine[] | null;
+		/** Whether a re-spelled line is TeX to typeset rather than text to show. */
+		tex?: boolean;
+		title?: string;
+		description?: string;
+		/** Beside the verdict badge — the browse view's Verify button. */
+		actions?: Snippet;
+		/** Under the description — the browse view's notation switch. */
+		controls?: Snippet;
 	};
 
 	let {
 		result,
 		requestError = null,
 		idleMessage = 'Verify the proof to see line-by-line results here.',
-		onLineClick
+		onLineClick,
+		lines = null,
+		tex = false,
+		title = 'Verification',
+		description = 'Each proof line and its diagnostics.',
+		actions,
+		controls
 	}: Props = $props();
+
+	// The payload's lines are the fallback, not the default: a caller passing
+	// `lines` has already decided what the rows are (and where they came from).
+	const rows = $derived(lines ?? (result?.proof ? resultLines(result.proof.lines) : null));
 </script>
 
 <Card.Root>
 	<Card.Header>
 		<div class="flex items-center justify-between gap-2">
-			<Card.Title>Verification</Card.Title>
-			{#if result?.proof}
-				{@const meta = TONE[indicatorTone(result.proof.indicator)]}
-				{@const Icon = meta.icon}
-				<Badge variant={meta.badge}><Icon /> {meta.text}</Badge>
-			{/if}
+			<Card.Title>{title}</Card.Title>
+			<div class="flex shrink-0 items-center gap-2">
+				{#if result?.proof}
+					{@const meta = TONE[indicatorTone(result.proof.indicator)]}
+					{@const Icon = meta.icon}
+					<Badge variant={meta.badge}><Icon /> {meta.text}</Badge>
+				{/if}
+				{#if actions}{@render actions()}{/if}
+			</div>
 		</div>
-		<Card.Description>Each proof line and its diagnostics.</Card.Description>
+		<Card.Description>{description}</Card.Description>
+		{#if controls}{@render controls()}{/if}
 	</Card.Header>
 	<Card.Content class="flex flex-col gap-4">
 		{#if requestError}
@@ -87,11 +116,10 @@
 					<span class="whitespace-pre-wrap">{requestError}</span>
 				</Alert.Description>
 			</Alert.Root>
-		{:else if result === null}
-			<p class="py-8 text-center text-sm text-muted-foreground">{idleMessage}</p>
-		{:else if !result.proof}
+		{:else if result !== null && !result.proof}
 			<!-- The system compiled but the checker raised (structured error);
-			     `proof` is null only on that path. -->
+			     `proof` is null only on that path. Ahead of the rows, since the last
+			     check produced none and any it replaced are stale. -->
 			<Alert.Root variant="destructive">
 				<TriangleAlert />
 				<Alert.Title>Proof could not be checked</Alert.Title>
@@ -103,7 +131,9 @@
 					</div>
 				</Alert.Description>
 			</Alert.Root>
-		{:else if result.proof.lines.length === 0}
+		{:else if rows === null}
+			<p class="py-8 text-center text-sm text-muted-foreground">{idleMessage}</p>
+		{:else if rows.length === 0}
 			<p class="py-6 text-center text-sm text-muted-foreground">
 				The proof is empty — add some lines.
 			</p>
@@ -111,7 +141,7 @@
 			<!-- A checked proof can still carry errors that explain the check rather
 			     than replace it: a cited lemma that has not been verified leaves its
 			     citation unresolved, and without this the line just looks wrong. -->
-			{#if result.errors.length > 0}
+			{#if result && result.errors.length > 0}
 				<Alert.Root variant="destructive">
 					<TriangleAlert />
 					<Alert.Title>A cited proof could not be used</Alert.Title>
@@ -125,7 +155,7 @@
 				</Alert.Root>
 			{/if}
 			<ol class="flex flex-col gap-2">
-				{#each result.proof.lines as line, i (i)}
+				{#each rows as line, i (i)}
 					{@const tone = lineTone(line)}
 					{@const meta = TONE[tone]}
 					{@const Icon = meta.icon}
@@ -152,10 +182,14 @@
 							</span>
 							<div class="min-w-0 flex-1">
 								<div
-									class="font-mono text-sm break-words"
+									class={['text-sm break-words', !(tex && line.typeset) && 'font-mono']}
 									style={`padding-left: ${line.indent * 1.25}rem`}
 								>
-									{line.display || ' '}
+									{#if tex && line.typeset && line.display}
+										<Typeset tex={line.display} />
+									{:else}
+										{line.display || ' '}
+									{/if}
 								</div>
 
 								<div class="mt-1.5 flex flex-wrap items-center gap-1.5">
