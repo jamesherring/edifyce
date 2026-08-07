@@ -1711,6 +1711,91 @@ size — with a per-folder count of the proofs sitting *directly* in it, since a
 part-level node holds nothing itself and a subtree total would make every ancestor
 look equally full. The system page renders it as a collapsible tree.
 
+### 4.7 An import nobody could read — *done*
+
+The first real import to a deployed database landed 10,000 theorems and showed
+none of them. Everything had stored correctly; every proof was `valid`; all of it
+was invisible. Three causes, and they are worth recording because each looked
+locally right.
+
+**A corpus was ownerless *and* unpublished, and those are two different things.**
+Ownerlessness is a statement about provenance, and it is the guard that stops
+`POST /proofs/{id}/verify` writing `valid=False` over imported structure — it
+reads `owner_id`. Publication is what makes a row *readable* by someone who does
+not own it, and an import set neither. So `/proofs` (owner-scoped) could not see
+them and `/proofs/public` (`published_at IS NOT NULL`) omitted them: 10,000
+verified proofs reachable by nobody, `GET /proofs/{id}` 404 for everyone. The two
+are now decided separately — published as written, still ownerless — and the
+write-back guard is untouched.
+
+**The deepest layer stayed a draft.** `layered_systems` published a layer "exactly
+when something inherits from it", which reads as a tidy consequence of §5.1 and in
+practice hides most of a corpus: the leaf holds the bulk of it (7,325 of the first
+10,000 theorems), and being ownerless too, nobody could open it at all. The
+argument that justified publishing the others — an imported layer's grammar is
+fixed by the file the moment it is written, so there is no draft period to protect
+— applies to the leaf identically. Every layer is now published, at one instant.
+
+**And there was nowhere to browse to.** `/proofs` is owner-scoped, `/proofs/public`
+is a flat global list; neither could answer "what is in this section". The outline
+was a table of contents for a book with no pages. `/proofs/public` now takes
+`formal_system_id` and `folder_id`, and a scoped page orders by **position** —
+file order for an import — rather than by publication recency, which cannot order
+rows that all published at the same instant and would otherwise fall through to
+`created_at DESC` and hand back a section backwards. Both orderings end in `id`,
+because an import is also the one writer whose rows tie on every other key:
+`created_at` defaults to `now()`, which under Postgres is the *transaction's*
+timestamp, so a whole batch shares it — and a tied block ordered at the planner's
+discretion is a list that repeats and skips rows as it is paged.
+
+Publishing an imported proof meets the same three conditions `_require_publishable`
+asks of the interactive path, which is why it is safe rather than a special case:
+the system is published, the proof verifies (a rejected one stays a draft), and it
+has no reference links that might still be drafts — a corpus cites through
+`promoted_theorems`, not proof-to-proof. The frontend makes a folder holding proofs
+selectable and lists them beside the tree.
+
+**When** publication happens is its own decision, and the obvious answer is wrong.
+Setting it as each proof is written looks natural and breaks a batched run:
+`_checkpoint` commits every `batch` theorems, so each batch becomes world-visible
+as it lands, and an import that dies partway leaves a *partial* corpus published —
+its proofs not yet pointed at the library entries they establish, since
+`theorem_id` is written below the walk rather than in it. A committed batch cannot
+be rolled back, so the only defence is not to publish until there is something
+whole to publish. It is one statement over rows already written, issued after the
+theorem links, so deferring it costs a round trip and buys atomicity: a run that
+fails anywhere leaves everything a draft. The systems cannot be deferred the same
+way — a child's terms intern against a chain that has to exist before the walk
+reaches it — which is why the two are decided separately.
+
+**What publishing an ownerless corpus opened, and what closed it.** `_is_readable`
+grants a published proof to anyone, so publication also made `POST
+/proofs/{id}/verify`, the dry-run `/cite`, `/lines` and `/lines/remove`, and the
+citation search reachable without an account — on every imported proof. Each of
+those rebuilds the proof's whole system and re-checks it, with no cache in front
+of the build, which on `set.mm` is a 1,441-production grammar compiled per
+request across 47,546 proofs. Nothing durable came of it (a non-owner's
+transaction is never committed), and that is exactly what makes it worth
+refusing: the work is real and the result is thrown away. All five now require a
+signed-in caller. It costs a legitimate caller nothing — applying already
+required ownership, and an owner is signed in by definition — and the *reads*
+beside them (`GET /proofs/{id}`, `/structure`) are unchanged, which is the line:
+reading a published proof is open, checking one is not.
+
+**`--owner EMAIL` for the case where a corpus is somebody's.** Ownerlessness is
+right for a shared library and wrong when a person wants the import in their own
+lists, so `scripts/import_metamath.py --owner` hands every layer and every proof
+to one registered user. It is opt-in because it gives up the guard ownerlessness
+*is*: the owner-scoped routes can then reach the import, so a verify on one of
+its proofs writes its verdict back — and a verdict of `False` calls
+`store_proof_lines`, whose first act is to drop the imported structure.
+(`scripts/restore_proofs.py` makes that trade deliberately, to reach the
+owner-only apply path.) Folders stay ownerless either way: an outline is the
+file's structure, and `get_system_folders` reads an owned folder as a user's
+private one. The address is looked up rather than created, and the layer names
+are checked against the owner's existing slugs first, because `formal_systems` is
+uniquely indexed on (owner, slug) for owned rows.
+
 ---
 
 ### 4.7 What the reader is shown — *done*

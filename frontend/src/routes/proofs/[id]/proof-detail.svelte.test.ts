@@ -106,6 +106,20 @@ function detail(over: Partial<ProofDetail> = {}): ProofDetail {
 	};
 }
 
+/** Sign a reader in. Verifying a proof needs an account — it rebuilds the whole
+ *  system and re-checks against it — so a test that clicks Verify has to. */
+async function signIn() {
+	apiMock.me.mockResolvedValue({
+		id: 'u1',
+		email: 'a@b.c',
+		is_active: true,
+		is_superuser: false,
+		is_verified: true,
+		display_name: 'Ada'
+	});
+	await auth.refresh();
+}
+
 beforeEach(async () => {
 	apiMock.logout.mockResolvedValue(undefined);
 	apiMock.me.mockRejectedValue(new Error('anonymous'));
@@ -295,6 +309,19 @@ describe('the proof detail page', () => {
 		expect(document.querySelector('.katex-html')).not.toBeNull();
 	});
 
+	it('offers a signed-out reader the sign-in rather than the check', async () => {
+		// Reading a published proof is open; re-checking one is not, since it rebuilds
+		// the whole system and checks against it. Better a missing button than a 401
+		// after the click.
+		apiMock.proofs.get.mockResolvedValue(detail());
+		render(Page);
+
+		await waitFor(() =>
+			expect(screen.getByRole('link', { name: /Sign in to verify/ })).toBeInTheDocument()
+		);
+		expect(screen.queryByRole('button', { name: 'Verify' })).toBeNull();
+	});
+
 	it('drops the previous check’s lines when a new verdict arrives', async () => {
 		// The badge is `result`'s and the rows were the structure's, so leaving the
 		// structure up across a verify puts a fresh "Valid" over stale red rows.
@@ -307,6 +334,7 @@ describe('the proof detail page', () => {
 			errors: [],
 			proof: { indicator: 'ok', lines: [payloadLine({ display: 'x = x' })] }
 		});
+		await signIn();
 		render(Page);
 
 		await waitFor(() => expect(screen.getByText('MP does not apply.')).toBeInTheDocument());
@@ -314,7 +342,7 @@ describe('the proof detail page', () => {
 		// The re-read never lands, so what is on screen is what the verify itself
 		// returned — which is the point: fresh, not stale.
 		apiMock.proofs.structure.mockImplementation(() => new Promise(() => {}));
-		screen.getByRole('button', { name: /Verify/ }).click();
+		screen.getByRole('button', { name: 'Verify' }).click();
 
 		await waitFor(() => expect(screen.getByText('x = x')).toBeInTheDocument());
 		expect(screen.queryByText('MP does not apply.')).toBeNull();

@@ -79,9 +79,16 @@ def _order_by(
 
     Returns the ordering plus whether it references the owner (so the caller
     joins ``user_model`` for the ``author`` sort). Unknown/blank sort keys fall
-    back to ``default`` untouched (its own creation-order tiebreak is already
-    deterministic). For an explicit sort, ``model.id`` is appended so pages don't
-    shuffle rows that share the sorted value.
+    back to ``default`` untouched. For an explicit sort, ``model.id`` is appended
+    so pages don't shuffle rows that share the sorted value.
+
+    A default that can tie has to carry its own last key rather than take one
+    here, because the right one depends on what the tie means. Ties are a
+    *bulk-write* phenomenon: ``created_at`` defaults to ``now()``, which under
+    Postgres is the transaction's timestamp, so rows written together share it —
+    which is one row per request for the interactive lists (where creation order
+    is therefore already total) and a whole batch for an import. See
+    ``proofs.list_public_proofs``, the listing an import feeds.
     """
     columns: dict[str, ColumnElement[Any]] = {
         "name": model.name,

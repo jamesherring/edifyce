@@ -160,6 +160,12 @@
 	// source for the round trip back.
 	const readAs = $derived(structure?.notation ?? null);
 
+	// Expanding a citation re-checks the proof, so it sits behind the same gate
+	// the Verify button does (`app/routers/proofs.py`, the note above
+	// `verify_stored_proof`): a signed-out reader gets a plain citation rather
+	// than a 401 on hover.
+	const explainable = $derived(auth.user ? (proof?.id ?? null) : null);
+
 	// `name` is what a citation spells and what the slug is built from; `title` is
 	// the sentence a human reads. Lead with the sentence where there is one — on
 	// an imported corpus `name` is an opaque label — and keep the label beside it,
@@ -294,7 +300,7 @@
 			{requestError}
 			lines={rows}
 			notation={readAs}
-			proofId={proof.id}
+			proofId={explainable}
 			{primaryLineType}
 			verdicts={false}
 			title="Proof"
@@ -304,13 +310,23 @@
 			idleMessage="Verify the proof to see it line by line."
 		>
 			{#snippet actions()}
-				<Button onclick={verify} disabled={verifying} size="sm">
-					{#if verifying}
-						<LoaderCircle class="size-4 animate-spin" /> Verifying…
-					{:else}
-						<Play class="size-4" /> Verify
-					{/if}
-				</Button>
+				<!-- Reading a published proof is open; re-checking one is not, since it
+				     rebuilds the whole system and checks against it. Offered only to a
+				     signed-in reader, so the refusal is a missing button rather than a
+				     401 after the click. -->
+				{#if auth.user}
+					<Button onclick={verify} disabled={verifying} size="sm">
+						{#if verifying}
+							<LoaderCircle class="size-4 animate-spin" /> Verifying…
+						{:else}
+							<Play class="size-4" /> Verify
+						{/if}
+					</Button>
+				{:else}
+					<Button href="/login" variant="outline" size="sm">
+						<Play class="size-4" /> Sign in to verify
+					</Button>
+				{/if}
 			{/snippet}
 			{#snippet controls()}
 				{#if notations.length > 0}

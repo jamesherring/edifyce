@@ -67,6 +67,49 @@ describe('the outline tree', () => {
 });
 
 
+describe('picking a section to read', () => {
+	it('offers a folder holding proofs, and reports which was picked', async () => {
+		const picked: string[] = [];
+		render(OutlineTree, {
+			folders: TREE,
+			open: true,
+			onselect: (f) => picked.push(f.name)
+		});
+
+		await user.click(screen.getByRole('button', { name: 'Implication' }));
+		expect(picked).toEqual(['Implication']);
+	});
+
+	it('leaves a folder holding none unclickable', () => {
+		// The count is what the listing behind it would return, so a node with no
+		// proofs of its own opens an empty panel. The part-level nodes of a corpus
+		// are all like this.
+		render(OutlineTree, { folders: TREE, open: true, onselect: () => {} });
+		expect(screen.queryByRole('button', { name: 'LOGIC' })).not.toBeInTheDocument();
+	});
+
+	it('stays a plain tree when nobody is listening', () => {
+		// The outline is rendered read-only elsewhere; a button that does nothing
+		// would be worse than a label.
+		render(OutlineTree, { folders: TREE, open: true });
+		expect(screen.queryByRole('button', { name: 'Implication' })).not.toBeInTheDocument();
+	});
+
+	it('marks the folder being read', () => {
+		render(OutlineTree, {
+			folders: TREE,
+			open: true,
+			selected: 'Implication',
+			onselect: () => {}
+		});
+		expect(screen.getByRole('button', { name: 'Implication' })).toHaveAttribute(
+			'aria-current',
+			'true'
+		);
+		expect(screen.getByRole('button', { name: 'Afterwards' })).not.toHaveAttribute('aria-current');
+	});
+});
+
 describe('a long description', () => {
 	it('is clamped and offered whole on hover', () => {
 		// set.mm's part-level descriptions run to 27,820 characters between them and
