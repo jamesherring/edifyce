@@ -33,7 +33,7 @@ from .patterns import (
     UnionPattern,
 )
 from .definitions import DefinedNotation
-from .rewriting import iter_bindings, iter_joint, joint_binding_exists
+from .rewriting import iter_bindings, iter_joint, joint_binding, joint_binding_exists
 
 __all__ = [
     "AbstractPattern",
@@ -47,5 +47,6 @@ __all__ = [
     "UnionPattern",
     "iter_bindings",
     "iter_joint",
+    "joint_binding",
     "joint_binding_exists",
 ]

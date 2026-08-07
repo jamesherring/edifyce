@@ -972,3 +972,32 @@ argument to `rendering.render`, which re-spells **leaves by name**. A separate
 argument rather than more entries in the projection because it answers a
 different question: a projection maps a *production* to render steps and has
 nothing to say about a `Var`, whose name is its whole surface form.
+
+**And four more from a second review, all the same species: a record that
+describes something other than the step the checker took.**
+
+*Rewriting steps had no substitution at all.* `applies` validates a
+`matching="string"` step through `joint_binding_exists`, which threw away the
+binding the associative matcher found — so every MIU-style step reported an empty
+assignment list, which is exactly the half a semi-Thue citation cannot say.
+`joint_binding` returns it, `Inference.string_binding` holds it, and it is held
+**apart** from `binding` because these are surface strings and everything reading
+that field (schematic promotion, `restate`) means terms. The predicate form stays,
+because the assignment search asks it far more often than anything wants the
+answer.
+
+*A premise from a cited lemma reported that lemma's line number as this proof's.*
+`[alias.1]` names line 1 of the lemma; printing "line 1" points a reader at an
+unrelated local step. The `Premise` docstring already promised None there —
+`_local_number` is the code catching up with it.
+
+*Two lookups ignored nearest-layer shadowing.* Where a child and an ancestor both
+declare a label, a citation resolves to the child (`LibraryChain`, "nearest
+first") — so an unordered `IN (…)` could describe the ancestor's theorem beside a
+step that applied the child's. `_nearest_first` ranks the chain once and both
+lookups take the minimum.
+
+*And the proof link matched `proofs.name`.* A citation names a *theorem*, and
+`proofs.theorem_id` is the edge an import and a promotion both write. Matching the
+name was wrong twice over: a proof promoted under a different label was not found,
+and an unrelated proof merely *called* `imbi12d` was linked in its place.

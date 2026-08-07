@@ -15,6 +15,7 @@ from website.logical.declarative import SystemSpec, build_system
 from website.logical.formal_system.justification import justification
 from website.logical.rendering import Projection
 
+from tests.miu_system import miu_spec
 from tests.spec_helpers import (
     assumption_line,
     brackets,
@@ -284,3 +285,20 @@ def test_an_unlabelled_definition_reports_no_label_rather_than_a_stand_in():
 
     assert told.label == ""
     assert told.conclusion == "refl p ≝ (p → p)"
+
+
+def test_a_rewriting_step_says_what_its_variables_matched():
+    # A semi-Thue rule binds surface *strings* by associative matching, and the
+    # checker keeps that substitution apart from the term one so nothing meaning
+    # terms can read it. To a reader it is the same question — and it is the one
+    # thing a rewriting rule's citation cannot say.
+    built = build_system(miu_spec())
+    proof = built.parse("MI\nMII [R2, 1]")
+    assert proof.valid is True, [
+        (line.display, line.invalid_message) for line in proof.proof_lines
+    ]
+
+    told = justification(line_of(proof, 2))
+
+    assert told is not None
+    assert [(a.variable, a.stands_for) for a in told.assignments] == [("x", "I")]

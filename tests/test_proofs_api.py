@@ -3419,22 +3419,46 @@ def test_a_cited_lemma_is_linked_to_the_proof_that_establishes_it(client, db):
     assert body["proof_id"] == lemma
 
 
-def test_the_link_prefers_the_published_proof_of_a_shared_name(client, db):
-    # `proofs.name` carries no uniqueness constraint, so a draft may share a
-    # promoted proof's name. Without an order the link points at whichever row
-    # the planner returned — and a draft is not what a reader following a
-    # citation is being sent to.
+def test_the_link_goes_through_the_library_entry_not_the_proofs_name(client, db):
+    # A citation names a *theorem*, and `proofs.theorem_id` is the edge a
+    # promotion writes — so the entry the citation resolved to identifies its
+    # proof exactly. Matching `proofs.name` gets it wrong twice over, and both
+    # ways are here: the proof that proved it is called something else, and an
+    # unrelated proof *is* called `mylem`.
     owner = _register_login(client, "ada@example.com")
     system_id = _seed_system(db, owner, published=True)
-    lemma = _create_proof(client, system_id, "mylem", source=_LEMMA_SRC)
-    client.patch(f"/api/proofs/{lemma}", json={"published": True})
-    client.post(f"/api/proofs/{lemma}/promote", json={"label": "mylem"})
-    _create_proof(client, system_id, "mylem", source=_LEMMA_SRC)
+    proved = _create_proof(client, system_id, "Groundwork", source=_LEMMA_SRC)
+    client.patch(f"/api/proofs/{proved}", json={"published": True})
+    client.post(f"/api/proofs/{proved}/promote", json={"label": "mylem"})
+    impostor = _create_proof(client, system_id, "mylem", source=_LEMMA_SRC)
 
     goal = _create_proof(client, system_id, "Goal", source="(x ∈ y → x = y) [mylem]")
     assert client.post(f"/api/proofs/{goal}/verify").json()["success"] is True
 
-    assert _justification(client, goal, 1)["proof_id"] == lemma
+    linked = _justification(client, goal, 1)["proof_id"]
+    assert linked == proved
+    assert linked != impostor
+
+
+def test_a_premise_from_a_cited_lemma_carries_no_local_number(client, db):
+    # `[alias.1]` names line 1 *of that lemma*. Reporting the number would point
+    # a reader at this proof's line 1, which is some unrelated step.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner)
+    lemma = _create_proof(client, system_id, "Lemma", source=_LEMMA_SRC)
+    assert client.post(f"/api/proofs/{lemma}/verify").json()["success"] is True
+    goal = _create_proof(client, system_id, "Main", source=_USER_SRC)
+    _set_refs(client, goal, [{"referenced_proof_id": lemma, "alias": "A"}])
+    assert client.post(f"/api/proofs/{goal}/verify").json()["success"] is True
+
+    premises = _justification(client, goal, 2)["premises"]
+
+    # `A.1` fills the implication slot and is numbered in *its* proof; line 1 is
+    # this proof's and keeps its number.
+    assert [(p["number"], p["statement"]) for p in premises] == [
+        (1, "x ∈ y"),
+        (None, "(x ∈ y → x = y)"),
+    ]
 
 
 def test_a_definitional_step_is_not_given_another_labels_prose(client, db):

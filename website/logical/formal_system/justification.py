@@ -46,11 +46,10 @@ from .rules import ANONYMOUS
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from ..kernel.terms import Term
     from ..matching import Pattern
     from ..rendering import Projection
     from .proof import ProofLine
-    from .rules import InferenceRule
+    from .rules import Inference, InferenceRule
 
 
 @dataclass(frozen=True)
@@ -148,14 +147,13 @@ def justification(
         return None
 
     inference = line.inference
-    binding = None if inference is None else inference.binding
     return Justification(
         kind="rule",
         label=rule.label,
         name=rule.name,
         conclusion=rule.schema_text(rule.deduction),
         premises=_premises(rule, line, projection),
-        assignments=_assignments(binding, projection),
+        assignments=_assignments(inference, projection),
         provisos=_provisos(rule),
         discharges=_discharged(rule),
     )
@@ -171,7 +169,7 @@ def _premises(
         Premise(
             position=position,
             schema=rule.schema_text(pattern),
-            number=cited.number if cited is not None else None,
+            number=_local_number(cited, line),
             statement=_statement(cited, projection),
         )
         for position, (pattern, cited) in enumerate(
@@ -182,13 +180,26 @@ def _premises(
         Premise(
             position=len(declared) + offset,
             schema="",
-            number=cited.number,
+            number=_local_number(cited, line),
             statement=_statement(cited, projection),
             extra=True,
         )
         for offset, cited in enumerate(line.extra_antecedents)
     ]
     return tuple(declared + extras)
+
+
+def _local_number(cited: ProofLine | None, deduction: ProofLine) -> int | None:
+    """The citation number ``deduction``'s own reader can follow, or None.
+
+    A premise may be filled from a **cited lemma** (`[alias.1]`), whose lines are
+    numbered within that proof and not this one. Reporting its number would point
+    a reader at this proof's line of that number, which is some unrelated step —
+    so a premise from elsewhere carries the statement and no number.
+    """
+    if cited is None or cited.proof is not deduction.proof:
+        return None
+    return cited.number
 
 
 def _statement(line: ProofLine | None, projection: Projection | None) -> str | None:
@@ -216,21 +227,38 @@ def _paired(
 
 
 def _assignments(
-    binding: dict[str, Term] | None, projection: Projection | None
+    inference: Inference | None, projection: Projection | None
 ) -> tuple[Assignment, ...]:
-    if not binding:
+    """What the rule's metavariables stood for, whichever kind of match it was.
+
+    A **term** step binds terms, which a notation re-spells. A **string-rewriting**
+    step (MIU and its kind) binds surface strings by associative matching, and the
+    checker keeps that substitution apart from the term one precisely so nothing
+    meaning terms reads it — but it is the same question to a reader, and the one
+    thing a rewriting rule's citation cannot say. A string is already its own
+    surface form, so no projection applies to it.
+
+    Named metavariables only. A bare-sort slot (`formula` meaning "any formula")
+    has no name to share by, so the schema projection renames each occurrence
+    apart — `formula\x000` — and that name appears in no schema and no proviso the
+    reader is shown beside it. What filled such a slot is the premise row, which
+    names the line.
+
+    By name, so the same rule reads the same way on every step that uses it: a
+    binding's own order is whatever the match happened to reach first.
+    """
+    if inference is None:
         return ()
-    # Named metavariables only. A bare-sort slot (`formula` meaning "any formula")
-    # has no name to share by, so the schema projection renames each occurrence
-    # apart — `formula\x000` — and that name appears in no schema and no proviso
-    # the reader is shown beside it. What filled such a slot is the premise row,
-    # which names the line.
-    #
-    # By name, so the same rule reads the same way on every step that uses it: the
-    # binding's own order is whatever unification happened to reach first.
+    if inference.binding:
+        read = {
+            name: render(term, projection)
+            for name, term in inference.binding.items()
+        }
+    else:
+        read = dict(inference.string_binding or {})
     return tuple(
-        Assignment(variable=name, stands_for=render(binding[name], projection))
-        for name in sorted(binding)
+        Assignment(variable=name, stands_for=read[name])
+        for name in sorted(read)
         if ANONYMOUS not in name
     )
 

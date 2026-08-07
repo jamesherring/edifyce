@@ -171,12 +171,6 @@ if TYPE_CHECKING:
 
 router = APIRouter(prefix="/proofs", tags=["proofs"])
 
-# How many same-named proofs a label lookup will look past before giving up. A
-# label names one proof in the system that declares it, and the chain declares
-# each label once — so more than one means a draft and its published twin, or a
-# name reused across layers, and neither is worth a scan.
-_LABEL_PROOF_CANDIDATES = 5
-
 
 async def _unique_slug(
     session: AsyncSession,
@@ -2618,21 +2612,36 @@ async def find_citations(
     )
 
 
+def _nearest_first(chain: Sequence[FormalSystem]) -> dict[uuid.UUID, int]:
+    """Each layer's *nearness* to the citing system; lower wins a label.
+
+    A citation resolves to the closest layer declaring the label, shadowing an
+    ancestor's rather than being ambiguous (`LibraryChain`). `chain` is root
+    first, ending in the system being built, so nearness is its reverse — and
+    everything answering a question *about* a citation has to rank the same way,
+    or it describes the entry the check did not use.
+    """
+    return {system.id: rank for rank, system in enumerate(reversed(chain))}
+
+
 async def _label_title(
     session: AsyncSession, chain: Sequence[FormalSystem], label: str
 ) -> str | None:
     # Across the chain rather than the proof's own system: a citation resolves up
     # the spine, so an imported theorem's prose sits on whichever layer declared
-    # it. One query, since a chain is a handful of systems.
-    row = await session.scalar(
-        select(LabelDescriptionRow)
-        .where(
-            LabelDescriptionRow.formal_system_id.in_([s.id for s in chain]),
+    # it. One query, since a chain is a handful of systems, and the nearest of
+    # what comes back is the one the citation meant.
+    nearness = _nearest_first(chain)
+    rows = await session.scalars(
+        select(LabelDescriptionRow).where(
+            LabelDescriptionRow.formal_system_id.in_(list(nearness)),
             LabelDescriptionRow.label == label,
         )
-        .limit(1)
     )
-    return None if row is None else row.title
+    described = min(
+        rows, key=lambda row: nearness[row.formal_system_id], default=None
+    )
+    return None if described is None else described.title
 
 
 async def _proof_of_label(
@@ -2643,34 +2652,37 @@ async def _proof_of_label(
 ) -> uuid.UUID | None:
     """The proof establishing ``label``, when the viewer may read it.
 
-    By name, which is the join an import already makes: a Metamath `$p` becomes
-    both a proof and a library entry from one label, so `proofs.name` *is* the
-    theorem's label. Across the chain for the same reason a citation resolves
-    across it.
+    **Through the library entry, not by name.** A citation names a *theorem*, and
+    `proofs.theorem_id` is the edge an import and a promotion both write — so the
+    entry the citation resolved to identifies its proof exactly. Matching
+    `proofs.name` instead gets it wrong twice over: a proof promoted under a
+    label other than its own name would not be found, and an unrelated proof that
+    merely happens to be *called* `imbi12d` would be linked in its place.
 
-    None when there is no such proof (the label is a primitive, or a rule the
-    system declares) or when the viewer may not read the one there is — which is
-    the same answer to a client either way: there is nothing to link to.
+    Resolved **nearest layer first**, the way a citation resolves: where a child
+    and an ancestor both declare a label, the child's entry is the one the check
+    used, and linking the ancestor's proof would send a reader to a theorem the
+    step did not apply.
 
-    **Published first, then oldest.** `proofs.name` carries no uniqueness
-    constraint, so a draft may share a promoted proof's name; ordering is what
-    stops the link pointing at whichever row the planner happened to return, and
-    what makes the bound below cut the *least* likely candidates rather than an
-    arbitrary set.
+    None when there is no such entry (the label is a rule the system declares
+    rather than a theorem), when the entry has no proof (an imported primitive,
+    a `$a`), or when the viewer may not read the proof there is — which is the
+    same answer to a client either way: there is nothing to link to.
     """
-    found = await session.scalars(
-        select(Proof)
-        .where(
-            Proof.formal_system_id.in_([s.id for s in chain]),
-            Proof.name == label,
+    nearness = _nearest_first(chain)
+    entries = await session.scalars(
+        select(PromotedTheoremRow).where(
+            PromotedTheoremRow.system_id.in_(list(nearness)),
+            PromotedTheoremRow.label == label,
         )
-        .order_by(Proof.published_at.is_(None), Proof.created_at)
-        .limit(_LABEL_PROOF_CANDIDATES)
     )
-    for proof in found:
-        if _is_readable(proof, user):
-            return proof.id
-    return None
+    entry = min(entries, key=lambda row: nearness[row.system_id], default=None)
+    if entry is None:
+        return None
+    proof = await session.scalar(select(Proof).where(Proof.theorem_id == entry.id))
+    if proof is None or not _is_readable(proof, user):
+        return None
+    return proof.id
 
 
 @router.get(
