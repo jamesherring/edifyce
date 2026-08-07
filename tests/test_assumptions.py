@@ -283,6 +283,27 @@ def test_the_public_register_ranks_by_what_rests_on_each(db, client):
     assert items[0]["formal_system_name"]
 
 
+def test_the_register_counts_entries_that_rest_on_it_transitively(db, client):
+    # What "rests on" means in the register, asserted through the register.
+    # `pa2` cites `pa` and nothing else — the assumption is two hops away and
+    # named nowhere in its proof — so a count of *direct* citers would say one
+    # here, and the register would rank a debt by how visible it is rather than
+    # by how much has been built on it.
+    pc, _fol, _zfc = tower(db, client, "assume-transitive-count@example.com")
+    assert assume(client, pc)[0] == 201
+
+    first = proved_and_published(client, pc, "(((A → B) → A) → A) [peirce]")
+    assert promote(client, first, "pa")[0] == 201
+    second = proved_and_published(client, pc, "(((A → B) → A) → A) [pa]")
+    assert promote(client, second, "pa2")[0] == 201
+
+    items = client.get("/api/assumptions/public").json()["items"]
+    assert [(item["label"], item["dependents"]) for item in items] == [("peirce", 2)]
+
+    detail = client.get(f"/api/formal-systems/{pc}/assumptions/peirce").json()
+    assert sorted(detail["dependent_labels"]) == ["pa", "pa2"]
+
+
 def test_the_register_is_readable_without_an_account(db, client):
     # A published system's gaps are public: a reader deciding whether to rest on
     # this development needs them, and they are not the owner's to withhold.

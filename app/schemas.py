@@ -747,10 +747,13 @@ class AssumptionOut(BaseModel):
     source: str | None = None
     formal_system_id: uuid.UUID
     formal_system_name: str
-    # Library entries that transitively rest on it. The blast radius, and the
-    # ranking that says which gap is worth closing first. Counts *entries*: a
-    # proof that rests on this and has not been promoted is nobody's dependency
-    # yet, so it is not counted here.
+    # Library entries that rest on it **transitively** — an entry three hops
+    # away, naming it nowhere, counts. The blast radius, and the ranking that
+    # says which gap is worth closing first; a count of direct citers would rank
+    # a debt by how visible it is rather than by how much has been built on it.
+    #
+    # Counts *entries*: a proof that rests on this and has not been promoted is
+    # nobody's dependency yet, so it is not counted here.
     dependents: int = 0
     created_at: datetime
 

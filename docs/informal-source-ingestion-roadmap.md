@@ -184,7 +184,11 @@ two **partition** the primitives reached: a corpus that adopts no assumptions
 reports `axioms` exactly as it did before.
 
 **The register is public.** `GET /assumptions/public` lists every assumption in a
-published system, ordered by how many library entries rest on it. That ordering
+published system, ordered by how many library entries rest on it — **transitively**,
+which is the whole reason the closure is stored rather than the direct edges: an
+entry three hops away that names the assumption nowhere still counts, and a count
+of direct citers would rank a debt by how visible it is rather than by how much
+has been built on it. That ordering
 is the point rather than a nicety: a theorem everyone knows is true and Edifyce
 cannot yet justify is the most useful thing this database can say about its own
 gaps, and the count says which gap closing pays for most. Ordered in the database
