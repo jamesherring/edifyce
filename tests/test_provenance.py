@@ -36,7 +36,8 @@ from app.db.metamath_store import import_corpus
 from app.db.models import FormalSystem, Proof
 from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
 from app.db.provenance import Provenance, by_layer, provenance
-from app.db.systems import RuleRow
+from app.db.systems import DefinitionRow, RuleRow, SymbolRow
+from app.db.terms import TermRow
 from website.logical.metamath import parse
 from website.logical.metamath.setmm import LAYERS
 
@@ -218,6 +219,47 @@ def test_a_proof_pinned_by_a_lemma_is_not_movable_either(imported: Session) -> N
     assert (report.deepest_cited, report.deepest_grammar) == (FOL, PC)
     assert report.could_be_filed_lower
     assert report.cited_depth == 1
+
+
+def test_notation_a_definition_introduces_pins_a_proof_too(
+    imported: Session,
+) -> None:
+    # **From review.** A defined form's constructor is `f"{sort}:{higher}"`, and
+    # the `:` is deliberate — a declared production's name is forced to
+    # `[A-Za-z0-9_]+`, so the pair keeps defined notation out of the productions'
+    # namespace. A lookup against `symbols` alone therefore never matches one,
+    # and the walk fell back to the *sort*, declared at the root: a proof written
+    # in a deep layer's own abbreviation reported as movable all the way down.
+    spine = list(
+        imported.scalars(select(FormalSystem).order_by(FormalSystem.created_at))
+    )
+    sort = imported.scalar(
+        select(SymbolRow).where(
+            SymbolRow.system_id == spine[1].id, SymbolRow.name == "wff"
+        )
+    )
+    imported.add(
+        DefinitionRow(
+            system_id=spine[1].id,
+            position=0,
+            symbol_id=sort.id,
+            name="subset",
+            higher="A C_ A",
+            lower="A e. A",
+        )
+    )
+    # `fol-via-pc` cites only propositional theorems, so nothing but the notation
+    # can hold it in first-order logic — and now a line of it is written in that
+    # layer's own abbreviation.
+    written = imported.scalar(select(Proof).where(Proof.name == "fol-via-pc"))
+    line = next(row for row in written.line_rows if row.term_id is not None)
+    imported.get(TermRow, line.term_id).constructor = f"{sort.name}:A C_ A"
+    imported.flush()
+
+    report = reports(imported)["fol-via-pc"]
+    assert report.deepest_grammar == FOL
+    assert report.depends_only_on_shallower
+    assert not report.could_be_filed_lower
 
 
 def test_nothing_in_a_corpus_in_dependency_order_is_misfiled(imported: Session) -> None:

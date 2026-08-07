@@ -2089,6 +2089,16 @@ corpus does not (`zf-grammar-pinned`, stated with ZF's own `e.` and proved from 
 propositional axiom), so the mechanism is pinned even where `set.mm` never
 exercises it.
 
+*Notation a **definition** introduces counts too*, and nearly did not. A defined
+form's constructor is `f"{sort}:{higher}"`, and the `:` is deliberate — a
+declared production's name is forced to `[A-Za-z0-9_]+`, so the pair keeps
+defined notation out of the productions' namespace
+(`matching/definitions.py`). A lookup against `symbols` alone therefore matches
+none of them, and the walk fell back to the *sort*, which is declared at the
+root: a proof written in a deep layer's own abbreviation reported as movable all
+the way down, silently, in exactly the class of case this half exists to catch.
+Found in review; the `definitions` table is now indexed beside `symbols`.
+
 Two corroborations worth recording, since a report nothing checks is a report
 nothing trusts. `set.mm` hand-annotates `ax11dgen` and `ax13dgen4` with
 `$j usage … avoids 'ax-8' 'ax-9' 'ax-10' 'ax-11' 'ax-12'` — the same fact this

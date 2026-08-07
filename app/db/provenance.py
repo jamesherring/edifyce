@@ -51,7 +51,7 @@ from sqlalchemy import select
 from app.db.models import FormalSystem, Proof
 from app.db.proof_lines import ProofLineRow
 from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
-from app.db.systems import RuleRow, SymbolRow
+from app.db.systems import DefinitionRow, RuleRow, SymbolRow
 from app.db.terms import TermChildRow, TermRow
 
 if TYPE_CHECKING:
@@ -355,11 +355,27 @@ def _declared_in(
     `term`, and a layer declaring neither still needs rows for both, so no row
     ever references another system's namespace) — and a layer can only mention a
     sort that already exists, so the shallowest occurrence is the declaration
-    there too. One rule, both cases.
+    there too. One rule, all three cases, definitions included.
     """
     held: dict[uuid.UUID, set[str]] = {}
     for system_id, name in session.execute(select(SymbolRow.system_id, SymbolRow.name)):
         held.setdefault(system_id, set()).add(name)
+
+    # Notation a **definition** introduces, which no symbol row spells. A defined
+    # form's constructor is `f"{sort}:{higher}"` and the `:` is deliberate — a
+    # declared production's name is forced to `[A-Za-z0-9_]+`, so the pair keeps
+    # defined notation out of the productions' namespace
+    # (`matching/definitions.py`). Which means a lookup against `symbols` alone
+    # can never match one, and the walk fell back to the *sort* — declared at the
+    # root — so a proof written in a deep layer's own abbreviation reported as
+    # movable to the root. Exactly the class the grammar half exists to catch,
+    # failing silently (found in review).
+    for system_id, sort, higher in session.execute(
+        select(DefinitionRow.system_id, SymbolRow.name, DefinitionRow.higher).join(
+            SymbolRow, DefinitionRow.symbol_id == SymbolRow.id
+        )
+    ):
+        held.setdefault(system_id, set()).add(f"{sort}:{higher}")
 
     found: dict[uuid.UUID, dict[str, uuid.UUID]] = {}
     for system_id, chain in chains.items():
@@ -412,18 +428,26 @@ def _grammar_systems(
         # usually shallow, and a statement that nests deeply is not worth
         # gambling the interpreter's stack on.
         stack: list[tuple[uuid.UUID, bool]] = [(root, False)]
+        # And guarded like `_reach` too. `store_term` interns by digest, so a
+        # term cannot become its own subterm and a cycle is unreachable — but a
+        # walk that assumes that and is wrong grows the stack without bound
+        # rather than failing, and this one cited `_reach` as its model while
+        # leaving the guard out (found in review).
+        open_: set[uuid.UUID] = set()
         while stack:
             current, expanded = stack.pop()
             if current in found:
                 continue
             if not expanded:
+                open_.add(current)
                 stack.append((current, True))
                 stack.extend(
                     (child, False)
                     for child in children.get(current, ())
-                    if child not in found
+                    if child not in found and child not in open_
                 )
                 continue
+            open_.discard(current)
             system_id, constructor, sort = nodes[current]
             where = declared_in.get(system_id, {})
             deepest: uuid.UUID | None = None
