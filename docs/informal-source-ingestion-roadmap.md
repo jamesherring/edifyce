@@ -88,7 +88,7 @@ to be done into a much smaller list.
 Six gaps, in dependency order. The first two are the honesty machinery and
 everything else produces artifacts that would otherwise quietly lie.
 
-### 4.1 Assumptions, as first-class citable entries
+### 4.1 Assumptions, as first-class citable entries — *done*
 
 A translation cannot proceed top-down without citing results it has not proved.
 Today the only two ways to do that are both wrong: promote something unproved
@@ -96,21 +96,46 @@ Today the only two ways to do that are both wrong: promote something unproved
 a hole (which blocks every dependent step, so nothing downstream can be
 translated until everything upstream is finished).
 
-What is needed is a third library kind. `promoted_theorems.primitive` already
-distinguishes an axiom from a derived theorem; this adds **`assumed`** — an entry
-with a statement, no proof, and an explicit reason.
+What is needed is a third move: an entry with a statement, no proof, and an
+explicit reason. This section first proposed it as a third value beside
+`promoted_theorems.primitive`; it is not, and why not is under "what it turned
+out to be" below.
 
 *Engine:* almost nothing. An assumed entry is cited exactly as any other
 (`PromotedTheorem.as_rule`), and the kernel must not learn the distinction — a
 proof citing one is a perfectly good proof *of a conditional*. The difference is
 entirely bookkeeping.
 
-*API:* `POST /formal-systems/{id}/assumptions` (statement as a term proposal, plus
-a required prose justification and a source citation), and the gating below.
+*API:* `POST /formal-systems/{id}/assumptions`, with the statement written as
+source text in the system's own grammar — the form
+`promotion.promote_from_source` already reads, so an imported theorem and an
+assumed one arrive the same way. A structured (constructor-vocabulary)
+alternative waits on §4.4 rather than being guessed at now. `reason` is required;
+`source` is free text, because structuring a citation is §4.3's job.
 
 *Consumer:* decides what to assume, and what the assumption's informal source is.
 
-### 4.2 Provenance extended to assumptions, and exposed
+**What it turned out to be.** Almost nothing, which is the sign the modelling was
+right. The entry is a promoted theorem with `primitive` set and `proved_by_id`
+NULL — exactly what it is to a citation — and the debt is a side table beside it
+(`app/db/assumptions.py`). `primitive` answers "does this system assert this
+without proving it", a question about *checking*; "foundation or debt" is a
+question about the *development*, and only the second is ever paid down. The
+kernel, unification and `promoted_theorems_mapping` learn nothing.
+
+Adding one changes what a label resolves to, which is the same event as promoting
+a theorem — so it takes the system lock and runs the same `invalidate_citations`.
+Withdrawing one is the mirror. What withdrawal deliberately does **not** do is
+retire the promotions of the proofs that cited it: those proofs are unchecked
+rather than disproved, and that is the shape retiring any entry already has
+rather than a new cascade invented here.
+
+One limit worth recording: a *ground* statement the grammar cannot read is
+refused, and a *schematic* one is not. That is the engine's settled position — a
+schema that parses nothing yields a theorem that never applies, exactly as an
+authored rule's does — and this route does not overrule it.
+
+### 4.2 Provenance extended to assumptions, and exposed — *done*
 
 `app/db/provenance.py` already walks the citation graph transitively and reports
 the deepest layer and the axioms reached. It is not on any route — it is a
@@ -131,6 +156,40 @@ never smaller than the union of its citations'.**
 
 This is the single highest-value item here, and it is worth having even if no
 ingestion pipeline is ever built.
+
+**The closure is stored per library entry, not walked.** `theorem_assumptions`
+holds what each entry transitively rests on, written when the entry is promoted
+as the union of its citations' closures — so each promotion does *one hop*, and
+reading a proof's debts is one hop as well, at any citation depth, in either
+direction. An assumption carries a self-edge, so unioning the closures of the
+entries a proof cites needs no special case for citing one directly. Ids and not
+labels throughout, since a relation edge may rename a label across systems.
+
+Two properties this buys that a walk would not. The **reverse** direction is a
+single indexed count, which is what makes the public register below rank
+anything. And an entry promoted before the table existed reads as an empty
+closure, which is the *right* answer rather than a missing one — nothing can rest
+on an assumption that did not exist when it was promoted.
+
+`GET /proofs/{id}/provenance` reads it, and reports `unresolved`: a cited label
+that names no library entry, no rule of the chain and no hypothesis of the
+theorem being proved. A report that dropped those would read as "rests on
+nothing" when the truth is "rests on something I could not follow" — the same
+reasoning `retrieval.py`'s `unindexed` already applies. A proof that has never
+been verified has no resolved citations to read and is told to verify, rather
+than told it assumes nothing.
+
+The batch `app/db/provenance.py` report gained `assumes` beside `axioms`, and the
+two **partition** the primitives reached: a corpus that adopts no assumptions
+reports `axioms` exactly as it did before.
+
+**The register is public.** `GET /assumptions/public` lists every assumption in a
+published system, ordered by how many library entries rest on it. That ordering
+is the point rather than a nicety: a theorem everyone knows is true and Edifyce
+cannot yet justify is the most useful thing this database can say about its own
+gaps, and the count says which gap closing pays for most. Ordered in the database
+rather than per page, since a ranking that only held within twenty arbitrary rows
+would mean nothing.
 
 ### 4.3 The formalization record: source, claim, glossary
 
@@ -271,7 +330,7 @@ halfway. Three properties the current surface does not have and will need:
 
 | | why here |
 |---|---|
-| 1. **Assumptions + provenance closure + `GET /proofs/{id}/provenance`** (§4.1, §4.2) | the honesty machinery; everything after it produces artifacts that would otherwise misreport what they rest on |
+| 1. **Assumptions + provenance closure + `GET /proofs/{id}/provenance`** (§4.1, §4.2) — *done* | the honesty machinery; everything after it produces artifacts that would otherwise misreport what they rest on |
 | 2. **Goal-first statements** (§4.4) | the first call any translation makes, and the single path from vocabulary to stored term |
 | 3. **Formalization record** (§4.3) | pure storage, no engine reach; makes fidelity reviewable rather than assumed |
 | 4. **Lexical prose search** (§4.5) | cheap, and it is what alignment actually runs on |

@@ -5,6 +5,18 @@ reads the models in this package as the source of truth.
 """
 
 from app.db.base import Base
+from app.db.assumptions import (
+    Assumed,
+    AssumptionRow,
+    RestsOn,
+    TheoremAssumptionRow,
+    closure_of,
+    dependent_counts,
+    dependent_entries,
+    record_closure,
+    rests_on,
+    resolve_labels,
+)
 from app.db.models import (
     EMBEDDING_DIMENSIONS,
     FormalSystem,
@@ -112,7 +124,17 @@ from app.db.terms_mapping import (
 )
 
 __all__ = [
+    "Assumed",
+    "AssumptionRow",
     "Base",
+    "RestsOn",
+    "TheoremAssumptionRow",
+    "closure_of",
+    "dependent_counts",
+    "dependent_entries",
+    "record_closure",
+    "rests_on",
+    "resolve_labels",
     "EMBEDDING_DIMENSIONS",
     "FormalSystem",
     "OAuthAccount",

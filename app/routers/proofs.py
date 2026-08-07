@@ -54,7 +54,10 @@ from sqlalchemy.orm import Session, selectinload
 from app.auth import current_active_user, current_active_user_optional
 from app.db import (
     FormalSystem,
+    RestsOn,
     cited_labels,
+    record_closure,
+    rests_on,
     Proof,
     ProofLineRow,
     ProofReference,
@@ -97,7 +100,7 @@ from app.routers._common import (
     paginate_summaries,
     unique_slug,
 )
-from app.routers.systems import load_effective, load_system
+from app.routers.systems import EffectiveSystem, load_effective, load_system
 from website.logical.formal_system.diagnostics import numbers
 from website.logical.formal_system.proof import Proof as EngineProof
 from website.logical.formal_system.proof import CITATION_SEPARATOR, citation_text
@@ -116,6 +119,7 @@ from website.logical.formal_system.proposals import (
 )
 from website.logical.rendering import render
 from app.schemas import (
+    AssumedOut,
     CitationOutcome,
     CitationProposal,
     CitationSearch,
@@ -136,6 +140,7 @@ from app.schemas import (
     ProofReferenceOut,
     ProofReferencesUpdate,
     ProofPromotionRequest,
+    ProofProvenance,
     ProofReferrerOut,
     ProofStructure,
     ProofSummary,
@@ -354,7 +359,7 @@ class _Verification:
 
 
 @dataclass(frozen=True)
-class _Built:
+class BuiltSystem:
     """A system read from its rows, resolved against its ancestors, and compiled.
 
     One object because it is one *cost*: thirteen queries to hydrate the parts,
@@ -379,11 +384,11 @@ class _Built:
     errors: list[str] = field(default_factory=list)
 
 
-async def _build_system(
+async def build_system(
     session: AsyncSession,
     system_id: uuid.UUID,
     system: FormalSystem | None = None,
-) -> _Built:
+) -> BuiltSystem:
     """Load, resolve and compile a system — the shared half of a verify.
 
     Extracted so a route that needs the built system *before* it verifies can hand
@@ -394,7 +399,7 @@ async def _build_system(
     if system is None:
         system = await load_system(session, system_id)
     if system is None:
-        return _Built(errors=["The proof's system no longer exists."])
+        return BuiltSystem(errors=["The proof's system no longer exists."])
 
     # Against the system's whole inheritance chain: a child is only a system at
     # all once its ancestors' parts are in front of its own, so the spec that is
@@ -402,7 +407,7 @@ async def _build_system(
     # row (app.db.effective_spec).
     effective = await load_effective(session, system)
     if effective.errors:
-        return _Built(system=system, effective=effective, errors=effective.errors)
+        return BuiltSystem(system=system, effective=effective, errors=effective.errors)
 
     # The rules' schema templates are parsed against the grammar to get the terms
     # the checker unifies with, which is about half of a build and the same
@@ -425,8 +430,8 @@ async def _build_system(
         spec, schema_terms=schema_terms, definition_terms=definition_terms
     )
     if "errors" in build:
-        return _Built(system=system, effective=effective, errors=build["errors"])
-    return _Built(
+        return BuiltSystem(system=system, effective=effective, errors=build["errors"])
+    return BuiltSystem(
         system=system,
         effective=effective,
         compiled=build["system"],
@@ -435,7 +440,7 @@ async def _build_system(
     )
 
 
-def _require_a_built_system(built: _Built) -> None:
+def require_a_built_system(built: BuiltSystem) -> None:
     """Raise the answer a *route* owes for a system it cannot build.
 
     A verify reshapes both of these into a verdict instead; a route that needs the
@@ -455,7 +460,7 @@ async def _verify_with_references(
     proof: Proof,
     persist: bool = True,
     source: str | None = None,
-    built: _Built | None = None,
+    built: BuiltSystem | None = None,
 ) -> _Verification:
     """Verify a stored proof, resolving the lemmas it cites from other proofs.
 
@@ -486,7 +491,7 @@ async def _verify_with_references(
     # the lock itself first, which `/cite` and `/lines` do for exactly this
     # reason. Rebuilt here otherwise.
     if built is None:
-        built = await _build_system(session, proof.formal_system_id)
+        built = await build_system(session, proof.formal_system_id)
     if built.compiled is None:
         return _Verification(
             VerifyProofResponse(
@@ -844,7 +849,7 @@ async def _has_published_dependents(session: AsyncSession, proof_id: uuid.UUID) 
 
 
 async def _require_publishable(
-    session: AsyncSession, proof: Proof, built: _Built | None = None
+    session: AsyncSession, proof: Proof, built: BuiltSystem | None = None
 ) -> None:
     """Reject a publish that would expose an unverified or dangling public proof.
 
@@ -896,7 +901,7 @@ async def _require_publishable(
         )
 
     if built is None:
-        built = await _build_system(session, proof.formal_system_id, system)
+        built = await build_system(session, proof.formal_system_id, system)
 
     # Verify with references resolved, so a proof that leans on a lemma is gated
     # on the lemma actually proving it. Reuse the build made above.
@@ -1596,6 +1601,13 @@ async def promote_proof(
     # it is set because the link is what says which proof "this one" is, and a
     # schematic promotion with premises will need it (see `hypotheses_of`).
     proof.theorem_id = row.id
+
+    # What this entry rests on that nobody proved, settled here rather than
+    # walked later. The debts of the entries this proof cites are already stored
+    # against *those* entries, so this is one hop — and doing it at promotion is
+    # what keeps it one hop for everything promoted on top of this in turn
+    # (app/db/assumptions.py).
+    assumed = await _record_assumptions(session, proof, row.id, effective)
     await session.commit()
     return PromotedTheoremOut(
         id=row.id,
@@ -1603,6 +1615,96 @@ async def promote_proof(
         statement=row.statement,
         formal_system_id=system_id,
         proved_by_id=proof.id,
+        assumes=[entry.label for entry in assumed.assumptions],
+    )
+
+
+async def _record_assumptions(
+    session: AsyncSession,
+    proof: Proof,
+    theorem_id: uuid.UUID,
+    effective: EffectiveSystem,
+) -> RestsOn:
+    """Store, and return, the assumptions an entry transitively rests on.
+
+    Read from the proof's stored lines — the resolved labels the verification
+    that just ran recorded — against the library order a citation actually
+    resolves in (`LibraryChain.system_ids`, nearest first, edges included).
+    """
+    proof_id, theorem = proof.id, proof.theorem_id
+    systems = effective.library.system_ids
+    found = await session.run_sync(
+        lambda sync: rests_on(sync, proof_id, systems, theorem)
+    )
+    ids = [entry.theorem_id for entry in found.assumptions]
+    await session.run_sync(lambda sync: record_closure(sync, theorem_id, ids))
+    return found
+
+
+@router.get("/{proof_id}/provenance", response_model=ProofProvenance)
+async def read_proof_provenance(
+    proof_id: uuid.UUID,
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> ProofProvenance:
+    """What this proof rests on that nobody has proved.
+
+    §4.2 of docs/informal-source-ingestion-roadmap.md. A proof citing an
+    assumption — or citing a theorem that cites one, at any depth — is a proof of
+    a *conditional*, and that is a legitimate thing to have. What it must not be
+    is silent, so this is the surface that says so, and it is readable by anyone
+    who can read the proof: a published proof's debts are exactly what a reader
+    resting on it needs to know.
+
+    **From rows, and only rows.** The citations are the labels the last
+    verification resolved (`proof_lines.rule`), and each cited entry's own
+    closure was settled when it was promoted — so nothing here parses, re-checks,
+    or walks a citation graph. A proof that has never been verified has no
+    resolved citations to read, and is told to verify rather than told it assumes
+    nothing.
+    """
+    proof = await _get_readable_or_404(session, proof_id, user)
+    checked = await session.scalar(
+        select(func.count())
+        .select_from(ProofLineRow)
+        .where(ProofLineRow.proof_id == proof.id)
+    )
+    if not checked:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This proof has no stored structure, so what it cites is unknown. "
+            "Verify it first.",
+        )
+
+    system = await load_system(session, proof.formal_system_id)
+    if system is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "The proof's system no longer exists."
+        )
+    effective = await load_effective(session, system)
+    if effective.errors:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=effective.errors)
+
+    systems = effective.library.system_ids
+    theorem = proof.theorem_id
+    found = await session.run_sync(
+        lambda sync: rests_on(sync, proof_id, systems, theorem)
+    )
+    return ProofProvenance(
+        proof_id=proof_id,
+        assumes=[
+            AssumedOut(
+                theorem_id=entry.theorem_id,
+                formal_system_id=entry.system_id,
+                label=entry.label,
+                statement=entry.statement,
+                reason=entry.reason,
+                source=entry.source,
+            )
+            for entry in found.assumptions
+        ],
+        unresolved=list(found.unresolved),
+        complete=found.complete,
     )
 
 
@@ -1795,7 +1897,7 @@ async def get_proof_structure(
 # not. A published proof is readable by anyone, so once an ownerless corpus is
 # published these would otherwise let an anonymous request compile a 1,441-
 # production grammar and check a proof against it, on any of 47,546 proofs, with
-# no cache in front of it (`_build_system`). Nothing durable came of it — a
+# no cache in front of it (`build_system`). Nothing durable came of it — a
 # non-owner's transaction is never committed — which is exactly what makes it
 # worth refusing: the work is real and the result is thrown away.
 #
@@ -1905,8 +2007,8 @@ async def propose_citation(
     # take: a build made outside it could be against a grammar that has changed
     # by the time the check runs.
     await lock_system(session, proof.formal_system_id)
-    built = await _build_system(session, proof.formal_system_id)
-    _require_a_built_system(built)
+    built = await build_system(session, proof.formal_system_id)
+    require_a_built_system(built)
 
     citation = citation_text(payload.rule, payload.antecedents)
     lines = proof.source.split("\n")
@@ -2096,8 +2198,8 @@ async def propose_line(
     # for the same reason: this route needs the grammar to resolve the proposal
     # and render it, long before anything is checked.
     await lock_system(session, proof.formal_system_id)
-    built = await _build_system(session, proof.formal_system_id)
-    _require_a_built_system(built)
+    built = await build_system(session, proof.formal_system_id)
+    require_a_built_system(built)
     system = built.system
     compiled = built.compiled
     context = term_context(compiled)
@@ -2341,8 +2443,8 @@ async def remove_line(
         )
 
     await lock_system(session, proof.formal_system_id)
-    built = await _build_system(session, proof.formal_system_id)
-    _require_a_built_system(built)
+    built = await build_system(session, proof.formal_system_id)
+    require_a_built_system(built)
 
     lines = proof.source.split("\n")
     if not 0 <= going.position < len(lines):
