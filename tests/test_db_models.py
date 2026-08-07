@@ -38,9 +38,11 @@ def test_expected_tables_present():
         "notation_rules",
         "notation_rule_pins",
         "notation_rule_pieces",
-        # What a system says about the labels it names, and who wrote them.
+        # What a system says about the labels it names, who wrote them, and what
+        # its prose points at.
         "label_descriptions",
         "label_attributions",
+        "label_references",
         "definitions",
         "definition_bindings",
         "definition_fresh",

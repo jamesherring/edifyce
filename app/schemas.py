@@ -715,6 +715,37 @@ class Attribution(BaseModel):
     dated: str
 
 
+class LabelReference(BaseModel):
+    """One ``~ target`` the prose points at, and where it sits in it.
+
+    ``start``/``end`` index ``LabelDescription.text``, so a client renders the
+    reference as a link by **slicing the prose** — it never has to know what a
+    Metamath comment looks like. That is why the offsets cross the wire: the
+    markup rule lives in the engine, and re-implementing it in the browser would
+    be a second copy to keep in step.
+
+    ``proof_id`` is set when the target names a proof in this system and the
+    viewer may read it, which is what makes the link navigable; ``title`` is that
+    target's own first sentence, for a hover. Both null for a URL, for a label
+    naming something that is not a proof (a definition, an axiom), and for the 451
+    of set.mm's references that resolve to nothing at all.
+    """
+
+    target: str
+    start: int
+    end: int
+    proof_id: uuid.UUID | None = None
+    title: str | None = None
+
+
+class LabelMention(BaseModel):
+    """A label whose prose points at the one being read — a reference, backwards."""
+
+    label: str
+    proof_id: uuid.UUID | None = None
+    title: str | None = None
+
+
 class LabelDescription(BaseModel):
     """What a system says about one of the labels it names.
 
@@ -727,6 +758,17 @@ class LabelDescription(BaseModel):
     title: str | None = None
     text: str = ""
     attributions: list[Attribution] = Field(default_factory=list)
+    # Where this prose points, in order of appearance.
+    references: list[LabelReference] = Field(default_factory=list)
+    # And what points back — capped, with `mentioned_by_total` saying how many
+    # there really are. See `app.db.descriptions_mapping.mentions_of` on the cap.
+    mentioned_by: list[LabelMention] = Field(default_factory=list)
+    mentioned_by_total: int = 0
+    # `(New usage is discouraged.)` / `(Proof modification is discouraged.)` —
+    # markers the corpus puts on a statement, lifted out of the prose so a reader
+    # gets a badge rather than a sentence.
+    discouraged_usage: bool = False
+    discouraged_modification: bool = False
 
 
 class ProofSummary(BaseModel):

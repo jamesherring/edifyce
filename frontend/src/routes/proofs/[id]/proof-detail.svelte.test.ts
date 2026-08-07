@@ -3,7 +3,13 @@ import { render, screen, waitFor } from '@testing-library/svelte';
 import Page from './+page.svelte';
 import { auth } from '$lib/auth.svelte';
 import { api } from '$lib/api';
-import type { ProofDetail, ProofLine, ProofStructure, ProofStructureLine } from '$lib/api';
+import type {
+	LabelDescription,
+	ProofDetail,
+	ProofLine,
+	ProofStructure,
+	ProofStructureLine
+} from '$lib/api';
 
 vi.mock('$app/navigation', () => ({ goto: vi.fn(), beforeNavigate: vi.fn() }));
 vi.mock('$app/state', () => ({ page: { params: { id: 'p1' } } }));
@@ -106,6 +112,22 @@ function detail(over: Partial<ProofDetail> = {}): ProofDetail {
 	};
 }
 
+/** A corpus record, with the parts a test does not care about defaulted. */
+function documentation(over: Partial<LabelDescription> = {}): LabelDescription {
+	return {
+		label: 'sqrt2irr',
+		title: 'The square root of 2 is irrational.',
+		text: '',
+		attributions: [],
+		references: [],
+		mentioned_by: [],
+		mentioned_by_total: 0,
+		discouraged_usage: false,
+		discouraged_modification: false,
+		...over
+	};
+}
+
 /** Sign a reader in. Verifying a proof needs an account — it rebuilds the whole
  *  system and re-checks against it — so a test that clicks Verify has to. */
 async function signIn() {
@@ -192,12 +214,10 @@ describe('the proof detail page', () => {
 		apiMock.proofs.get.mockResolvedValue(
 			detail({
 				title: 'The square root of 2 is irrational.',
-				documentation: {
-					label: 'sqrt2irr',
-					title: 'The square root of 2 is irrational.',
+				documentation: documentation({
 					text: 'Theorem 1.10 of [Apostol] p. 28.',
 					attributions: [{ kind: 'Contributed', who: 'NM', dated: '20-Aug-2001' }]
-				}
+				})
 			})
 		);
 		render(Page);

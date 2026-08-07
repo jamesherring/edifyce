@@ -1844,6 +1844,55 @@ propositional lemma sits on the root and came from the same file. On the system
 rather than on its proofs because it is a fact about the corpus: one row instead
 of 47,000 copies, and a reader of a proof already fetches its system.
 
+### 4.8 The markup inside a comment — *partly done*
+
+A survey of what `set.mm` carries and the import did not keep, counted rather than
+guessed. Two of the findings are shipped; the rest is recorded here so the size of
+each is known before it is picked up.
+
+**Cross-references — shipped.** A comment writes `~ label` to point at another
+statement, and the file does this **21,787 times across 12,389 comments**: 21,336
+naming a statement, 242 a URL, 32 a page of the Metamath website, 177 resolving to
+nothing. Kept verbatim in the prose it was punctuation — a reader saw `~ ax-13` and
+could do nothing with it — and the *reverse* question, "what was built on this",
+could not be asked at all. `label_references` makes it both a link and an index.
+
+Three details are measured rather than assumed, and each would have been got wrong
+by the obvious reading:
+
+- **`~~` is an escape**, not two references. 84 of them, every one inside a URL,
+  where the naive read turns `…/~~hirstjl/primer` into a reference to `hirstjl`.
+- **Targets are whitespace-delimited and nothing else.** Stripping trailing
+  punctuation resolves *zero* further labels, and four of set.mm's labels genuinely
+  end in a `.` — so the tidying rule costs accuracy and buys nothing.
+- **The span is stored, not just the target.** `start_offset`/`end_offset` index
+  the stored prose, so rendering a reference as a link is a slice. The alternative
+  is the markup rule implemented in the engine, again in the API, and again in the
+  browser.
+
+**The discouragement markers — shipped.** `(New usage is discouraged.)` (5,169)
+and `(Proof modification is discouraged.)` (1,787) are decisions about the
+statement wearing the costume of a sentence. As two booleans a reader gets a badge
+and an authoring tool gets a filter. Two things here were also measured: 43 of the
+modification markers are **hard-wrapped mid-clause**, so matching before the
+unwrap undercounts (the survey's own first figure, 1,744, was wrong for exactly
+this reason); and a recogniser loose enough to catch the corpus's one typo
+(`New usaged`) must still be tight enough to refuse its one prose aside, a TODO
+note whose sentence happens to contain "is discouraged".
+
+**What is still dropped**, with the count that says how much it is worth:
+
+| | count | note |
+|---|---|---|
+| `$j` markup directives | 1,215 in 1,203 blocks | `usage` 1,136, `restatement` 29, `primitive` 11, `congruence` 6, `syntax` 4, and singletons including `definition`, `justification`, `bound`, `free_var`. **`setmm.py` hardcodes tables these state declaratively** — the binder table and the definition classification — so parsing them replaces one library's hand-written facts with any library's own. The largest of these and the one with real soundness content. |
+| comments on non-assertion statements | 1,621 | 606 before a `$c` ("Absolute value function." — what a *symbol* means, and nothing else in the file says it), 432 before a `${`, 302 before an `$e`, 123 before a `$f`, 74 before a `$v`, 66 before a `$}`, 18 before a `$d`. `$e`/`$f` are labels and would key into `label_descriptions` unchanged; `$c`/`$v` declare tokens and need a token key. |
+| `[Author]` bibliography refs | 5,271 across 139 works | Needs a works table and the `htmlbibliography` target to link out. |
+| `$t` non-definition directives | 12 kinds | `htmlvarcolor`, `htmltitle`, `htmlhome`, `exthtml*`, `htmldir`, `htmlcss`, `htmlfont`. Only `htmlvarcolor` has content value — the typecode-to-colour legend, which `althtmldef`'s `<SPAN>`s already encode per token. |
+| front matter and dormant blocks | 56 + ~60 | Including commented-out mathematics, the largest 26 KB. |
+| `proof_references` for an import | — | `proof_lines.rule` is stored and indexed, so "which proofs cite X" is answerable; but the proof-level rollup is written only by the interactive route, so `ProofDetail.referenced_by` is empty for every imported proof. |
+
+Total prose the import still drops: **374,876 characters**.
+
 ---
 
 ### Tier B — the human-altitude layer

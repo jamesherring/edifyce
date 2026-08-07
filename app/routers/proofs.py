@@ -90,6 +90,7 @@ from app.routers._invalidation import (
     invalidate_citations,
     invalidate_warranted_edges,
 )
+from app.routers._documentation import documentation_out
 from app.routers._common import (
     PageParams,
     lock_system,
@@ -126,8 +127,6 @@ from app.schemas import (
     LineRemovalOutcome,
     TermProposalIn,
     FailureOut,
-    Attribution,
-    LabelDescription,
     Page,
     ProofCreate,
     ProofDetail,
@@ -158,7 +157,6 @@ if TYPE_CHECKING:
     from sqlalchemy import ColumnElement
 
     from app.db import DefinitionTermCache, SchemaTermCache
-    from app.db.descriptions import LabelDescriptionRow
 
     from app.routers.systems import EffectiveSystem
     from website.logical.formal_system import FormalSystem as EngineSystem
@@ -1072,25 +1070,6 @@ def _theorem_out(proof: Proof) -> PromotedTheoremOut | None:
     )
 
 
-def _documentation_out(row: LabelDescriptionRow | None) -> LabelDescription | None:
-    """The system's record for a proof's label, or None if it keeps none.
-
-    None for every hand-authored proof, which is the common case: a system
-    describes the labels it was *imported* with, and a proof created through the
-    API carries its own title and description instead.
-    """
-    if row is None:
-        return None
-    return LabelDescription(
-        label=row.label,
-        title=row.title,
-        text=row.text,
-        attributions=[
-            Attribution(kind=a.kind, who=a.who, dated=a.dated) for a in row.attributions
-        ],
-    )
-
-
 async def _detail(
     session: AsyncSession, proof: Proof, viewer: User | None
 ) -> ProofDetail:
@@ -1110,8 +1089,11 @@ async def _detail(
         references=_references_out(proof, viewer),
         referenced_by=_referenced_by_out(proof, viewer),
         theorem=_theorem_out(proof),
-        documentation=_documentation_out(
-            await load_description(session, proof.formal_system_id, proof.name)
+        documentation=await documentation_out(
+            session,
+            proof.formal_system_id,
+            await load_description(session, proof.formal_system_id, proof.name),
+            viewer,
         ),
     )
 

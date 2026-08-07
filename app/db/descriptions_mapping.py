@@ -5,9 +5,11 @@ The write side is synchronous and the read side async, for the reason
 description is an import, and an import is synchronous; a reader has rows.
 
 Nothing here parses. :func:`website.logical.metamath.comments.read_comment` is
-what turns a ``$( … $)`` body into prose and attributions, and it needs Metamath's
-comment syntax to do it — so the parse happens where the file is, and these rows
-are the result.
+what turns a ``$( … $)`` body into prose, attributions and markup, and it needs
+Metamath's comment syntax to do it — so the parse happens where the file is, and
+these rows are the result. A cross-reference is stored with the *span* it occupies
+in the prose for the same reason: so that rendering it as a link is a slice rather
+than a second parser.
 """
 
 from __future__ import annotations
@@ -15,10 +17,14 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import delete, insert, select
+from sqlalchemy import delete, distinct, func, insert, select
 from sqlalchemy.orm import selectinload
 
-from app.db.descriptions import LabelAttributionRow, LabelDescriptionRow
+from app.db.descriptions import (
+    LabelAttributionRow,
+    LabelDescriptionRow,
+    LabelReferenceRow,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -45,10 +51,10 @@ def store_descriptions(
     is not: two of `set.mm`'s comments are nothing but a ``(Contributed by …)``,
     and authorship with no prose is still authorship.
 
-    Written as two Core inserts rather than through the ORM, with the ids minted
-    here so the children can point at their parents without a round trip. `set.mm`
-    lands 50,550 descriptions and 60,661 attributions in one call, and building
-    111,000 ORM instances at the end of a run would undo the care
+    Written as Core inserts rather than through the ORM, with the ids minted here
+    so the children can point at their parents without a round trip. `set.mm` lands
+    50,550 descriptions, 60,661 attributions and 21,787 references in one call, and
+    building 133,000 ORM instances at the end of a run would undo the care
     :func:`~app.db.metamath_store.import_corpus` takes to keep memory flat.
     """
     session.execute(
@@ -59,6 +65,7 @@ def store_descriptions(
 
     rows: list[dict[str, object]] = []
     attributions: list[dict[str, object]] = []
+    references: list[dict[str, object]] = []
     for label, description in descriptions.items():
         if not description.text and not description.attributions:
             continue
@@ -72,7 +79,20 @@ def store_descriptions(
                 # the whole of nothing, and null says that better than "".
                 "title": description.title or None,
                 "text": description.text,
+                "discouraged_usage": description.discouraged_usage,
+                "discouraged_modification": description.discouraged_modification,
             }
+        )
+        references.extend(
+            {
+                "id": uuid.uuid4(),
+                "description_id": description_id,
+                "position": position,
+                "target": reference.target,
+                "start_offset": reference.start,
+                "end_offset": reference.end,
+            }
+            for position, reference in enumerate(description.references)
         )
         attributions.extend(
             {
@@ -90,13 +110,15 @@ def store_descriptions(
         session.execute(insert(LabelDescriptionRow), rows)
     if attributions:
         session.execute(insert(LabelAttributionRow), attributions)
+    if references:
+        session.execute(insert(LabelReferenceRow), references)
     return len(rows)
 
 
 async def load_description(
     session: AsyncSession, system_id: uuid.UUID, label: str
 ) -> LabelDescriptionRow | None:
-    """One label's description, attributions loaded, or None if it has none.
+    """One label's description, its attributions and references, or None.
 
     Not layered through the inheritance chain, unlike a notation: a description is
     about a label *this* system declares, and a child that redeclares nothing
@@ -110,7 +132,10 @@ async def load_description(
             LabelDescriptionRow.formal_system_id == system_id,
             LabelDescriptionRow.label == label,
         )
-        .options(selectinload(LabelDescriptionRow.attributions))
+        .options(
+            selectinload(LabelDescriptionRow.attributions),
+            selectinload(LabelDescriptionRow.references),
+        )
     )
 
 
@@ -121,6 +146,11 @@ async def load_descriptions(
 
     One query for a page's worth, so listing proofs beside their titles does not
     become a query per row.
+
+    Attributions come along; **references do not**. A listing wants a title and an
+    author, and an imported corpus averages nearly half a reference per label —
+    fetching 21,787 spans to render 20 rows of titles is work for nothing. The
+    single-label read is where they are wanted, and where they are loaded.
     """
     wanted = list(dict.fromkeys(labels))
     if not wanted:
@@ -157,3 +187,45 @@ async def contributions(
     if kind is not None:
         query = query.where(LabelAttributionRow.kind == kind)
     return [(label, found) for label, found in await session.execute(query)]
+
+
+async def mentions_of(
+    session: AsyncSession, system_id: uuid.UUID, target: str, limit: int
+) -> tuple[list[str], int]:
+    """The labels whose prose points at ``target``, and how many there are.
+
+    The reverse of a reference, and the reason they are rows rather than
+    punctuation: "what builds on this" is the question a reader of a foundational
+    theorem actually has, and `set.mm` answers it 656 times for ``ax-13``.
+
+    Capped, with the true count beside it, because that distribution has a long
+    head: returning every mention would put hundreds of labels on the page for the
+    handful that matter most, and a count says "and 600 more" in one integer.
+    Ordered by label so the cap takes the same slice twice.
+    """
+    where = (
+        LabelDescriptionRow.formal_system_id == system_id,
+        LabelReferenceRow.target == target,
+    )
+    # Distinct: a comment may point at the same label twice (set.mm's `idi` and
+    # `a1ii` each reference the other from two sentences), and a reader wants the
+    # statement once.
+    labels = (
+        await session.scalars(
+            select(LabelDescriptionRow.label)
+            .join(LabelReferenceRow.description)
+            .where(*where)
+            .distinct()
+            .order_by(LabelDescriptionRow.label)
+            .limit(limit)
+        )
+    ).all()
+    if len(labels) < limit:
+        return list(labels), len(labels)
+    total = await session.scalar(
+        select(func.count(distinct(LabelDescriptionRow.label)))
+        .select_from(LabelReferenceRow)
+        .join(LabelReferenceRow.description)
+        .where(*where)
+    )
+    return list(labels), total or 0

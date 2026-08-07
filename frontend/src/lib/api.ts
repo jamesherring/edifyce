@@ -833,6 +833,39 @@ export interface LabelDescription {
 	title: string | null;
 	text: string;
 	attributions: Attribution[];
+	/** Where this prose points, in order of appearance. */
+	references: LabelReference[];
+	/** And what points back — capped; `mentioned_by_total` is the real number. */
+	mentioned_by: LabelMention[];
+	mentioned_by_total: number;
+	/** `(New usage is discouraged.)` — the statement exists, do not build on it. */
+	discouraged_usage: boolean;
+	/** `(Proof modification is discouraged.)` — the proof is as it is on purpose. */
+	discouraged_modification: boolean;
+}
+
+/** One `~ target` the prose points at, and the span of `text` it occupies.
+ *
+ * `start`/`end` are why this needs no parser here: the markup rule is Metamath's,
+ * it lives in the engine, and the renderer slices the prose at these offsets. See
+ * `renderProse` in `$lib/prose`.
+ *
+ * `proof_id` is set when the target names a proof of this system the viewer may
+ * open — null for a URL, for a label that is a definition or an axiom rather than
+ * a proof, and for a target that resolves to nothing. */
+export interface LabelReference {
+	target: string;
+	start: number;
+	end: number;
+	proof_id: string | null;
+	title: string | null;
+}
+
+/** A label whose prose points at the one being read — a reference, backwards. */
+export interface LabelMention {
+	label: string;
+	proof_id: string | null;
+	title: string | null;
 }
 
 // The stored structure of a checked proof — mirrors the ProofStructure models in

@@ -30,7 +30,7 @@ from app.db.models import Proof
 from app.db.session import get_session
 from app.main import app
 from tests.database import async_url, create_tables, database_url, enable_foreign_keys
-from tests.test_descriptions_store import SOURCE
+from tests.test_descriptions_store import MARKED, SOURCE
 from tests.test_proofs_api import _TABLES
 from tests.test_systems_api import _register_login
 from website.logical.metamath import parse
@@ -174,3 +174,100 @@ def test_a_title_can_be_cleared(client, db):
     ).json()["id"]
 
     assert client.patch(f"/api/proofs/{proof_id}", json={"title": None}).json()["title"] is None
+
+
+# ---------------------------------------------------------------------------
+# Cross-references, resolved
+# ---------------------------------------------------------------------------
+
+
+def seed_marked(db_path) -> tuple[str, dict[str, str]]:
+    """Import the cross-referencing fixture; every proof of it readable."""
+    engine = create_engine(db_path)
+    try:
+        with Session(engine) as session:
+            report = import_corpus(session, parse(MARKED), name="m")
+            session.commit()
+            proofs = list(session.scalars(select(Proof)))
+            for proof in proofs:
+                proof.published_at = proof.created_at
+            proofs[0].formal_system.published_at = proofs[0].created_at
+            session.commit()
+            return str(report.system_id), {p.name: str(p.id) for p in proofs}
+    finally:
+        engine.dispose()
+
+
+def test_a_reference_comes_back_with_the_span_it_occupies(client, db):
+    # The contract the offsets exist for: slicing the prose at them yields the
+    # markup, so a client renders a link without parsing a Metamath comment.
+    _, proofs = seed_marked(db)
+
+    doc = client.get(f"/api/proofs/{proofs['id']}").json()["documentation"]
+
+    assert [r["target"] for r in doc["references"]] == ["ax-1", "wi"]
+    for reference in doc["references"]:
+        assert doc["text"][reference["start"] : reference["end"]] == (
+            f"~ {reference['target']}"
+        )
+
+
+def test_a_reference_to_a_readable_proof_carries_its_id(client, db):
+    # What makes the link navigable. `ax-1` is a `$a` and has no proof, so it
+    # resolves to a target and nothing else; `wi` likewise.
+    system_id, proofs = seed_marked(db)
+
+    doc = client.get(f"/api/proofs/{proofs['id2']}").json()["documentation"]
+
+    (reference,) = doc["references"]
+    assert reference["target"] == "ax-1"
+    assert reference["proof_id"] is None  # a `$a`: documented, but not a proof
+
+    # And one that *is* a proof resolves, from the system's own label route.
+    body = client.get(f"/api/formal-systems/{system_id}/labels/ax-1").json()
+    mentioned = {m["label"]: m for m in body["mentioned_by"]}
+    assert mentioned["id"]["proof_id"] == proofs["id"]
+    assert mentioned["id"]["title"] == "Principle of identity."
+
+
+def test_what_points_at_a_label_comes_back_with_it(client, db):
+    # The reverse direction, which the file itself cannot answer: `ax-1` says
+    # nothing about what uses it, and two statements say they use it.
+    system_id, _ = seed_marked(db)
+
+    body = client.get(f"/api/formal-systems/{system_id}/labels/ax-1").json()
+
+    assert [m["label"] for m in body["mentioned_by"]] == ["id", "id2"]
+    assert body["mentioned_by_total"] == 2
+
+
+def test_a_reference_to_a_draft_resolves_to_no_link(client, db):
+    # The reference still shows — the corpus does say the word — but its id is
+    # withheld, which is the same rule a single proof read applies.
+    system_id, proofs = seed_marked(db)
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            for proof in session.scalars(select(Proof)):
+                proof.published_at = None
+            session.commit()
+    finally:
+        engine.dispose()
+
+    body = client.get(f"/api/formal-systems/{system_id}/labels/ax-1").json()
+
+    assert [m["label"] for m in body["mentioned_by"]] == ["id", "id2"]
+    assert all(m["proof_id"] is None for m in body["mentioned_by"])
+
+
+def test_the_discouragement_markers_come_back_as_flags(client, db):
+    _, proofs = seed_marked(db)
+
+    doc = client.get(f"/api/proofs/{proofs['id']}").json()["documentation"]
+
+    assert doc["discouraged_usage"] and doc["discouraged_modification"]
+    # Out of the prose, so a reader gets a badge rather than a stray sentence.
+    assert "discouraged" not in doc["text"]
+
+    other = client.get(f"/api/proofs/{proofs['id2']}").json()["documentation"]
+    assert not other["discouraged_usage"] and not other["discouraged_modification"]

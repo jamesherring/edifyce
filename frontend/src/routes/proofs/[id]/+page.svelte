@@ -8,6 +8,7 @@
 	import CheckBadge from '$lib/components/CheckBadge.svelte';
 	import LoadingSpinner from '$lib/components/LoadingSpinner.svelte';
 	import ProofResults from '$lib/components/ProofResults.svelte';
+	import Documentation from '$lib/components/Documentation.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
@@ -166,9 +167,16 @@
 	const ownDescription = $derived(
 		proof?.description && proof.description !== proof.title ? proof.description : null
 	);
+	// A record worth a card is one with something in it. The markers count: a
+	// comment that is only `(New usage is discouraged.)` leaves no prose and no
+	// attribution, and it is still the most important thing the corpus says.
 	const documentation = $derived(
 		proof?.documentation &&
-			(proof.documentation.text || proof.documentation.attributions.length > 0)
+			(proof.documentation.text ||
+				proof.documentation.attributions.length > 0 ||
+				proof.documentation.mentioned_by.length > 0 ||
+				proof.documentation.discouraged_usage ||
+				proof.documentation.discouraged_modification)
 			? proof.documentation
 			: null
 	);
@@ -225,6 +233,18 @@
 				{/if}
 				<StatusBadge status={proof?.published_at ? 'published' : 'draft'} />
 				<CheckBadge valid={proof?.valid ?? null} />
+				<!-- In the header as well as on the card, because it is a warning about
+				     acting on the proof rather than a note about it: a reader deciding
+				     whether to cite this should not have to scroll to find out. -->
+				{#if documentation?.discouraged_usage}
+					<Badge
+						variant="outline"
+						class="border-amber-500/40 text-amber-700 dark:text-amber-500"
+						title="The corpus asks that new work not be built on this statement."
+					>
+						New usage discouraged
+					</Badge>
+				{/if}
 				{#if proof?.owner?.display_name}
 					<span class="text-xs text-muted-foreground">by {proof.owner.display_name}</span>
 				{/if}
@@ -260,19 +280,8 @@
 					{#if ownDescription}
 						<p class="whitespace-pre-line text-sm leading-relaxed">{ownDescription}</p>
 					{/if}
-					{#if documentation?.text}
-						<!-- Paragraphs survive storage as blank lines, which is how a
-						     comment marks them; `whitespace-pre-line` is what shows them. -->
-						<p class="whitespace-pre-line text-sm leading-relaxed">{documentation.text}</p>
-					{/if}
-					{#if documentation && documentation.attributions.length > 0}
-						<ul class="flex flex-col gap-1 border-t pt-3">
-							{#each documentation.attributions as credit, i (i)}
-								<li class="text-xs text-muted-foreground">
-									<span class="font-medium">{credit.kind}</span> by {credit.who}, {credit.dated}
-								</li>
-							{/each}
-						</ul>
+					{#if documentation}
+						<Documentation {documentation} />
 					{/if}
 					{#if provenance}
 						<!-- The system's, shown on every proof of it: an imported proof has
