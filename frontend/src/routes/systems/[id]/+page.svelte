@@ -11,6 +11,7 @@
 	import * as Alert from '$lib/components/ui/alert';
 	import SystemParts from './SystemParts.svelte';
 	import OutlineTree from '$lib/components/OutlineTree.svelte';
+	import FolderProofs from './FolderProofs.svelte';
 	import { auth } from '$lib/auth.svelte';
 	import {
 		api,
@@ -37,6 +38,8 @@
 	// `.mm` file draws with section headers; a hand-authored system has none, and
 	// the card simply does not appear.
 	let outline = $state<Folder[]>([]);
+	// Which section of it is being read, or null for none picked yet.
+	let selectedFolder = $state<Folder | null>(null);
 
 	// Bumped on every load so late responses from a previous id (system or
 	// validation) are dropped instead of overwriting the current one.
@@ -48,6 +51,7 @@
 		error = null;
 		validation = null;
 		outline = [];
+		selectedFolder = null;
 		let detail: FormalSystemDetail;
 		try {
 			detail = await api.systems.get(id);
@@ -202,9 +206,21 @@
 				<p class="mb-3 text-sm text-muted-foreground">
 					How this system's proofs are filed. An imported corpus takes this from the
 					section headers its source draws; the number beside a folder is the proofs
-					it holds directly.
+					it holds directly. Pick one to read them.
 				</p>
-				<OutlineTree folders={outline} open />
+				<!-- Two columns only once there is a second thing to put in one: an
+				     outline nobody has picked from should have the card's whole width. -->
+				<div class={['grid gap-4', selectedFolder && 'md:grid-cols-2']}>
+					<OutlineTree
+						folders={outline}
+						open
+						selected={selectedFolder?.id ?? null}
+						onselect={(folder) => (selectedFolder = folder)}
+					/>
+					{#if selectedFolder}
+						<FolderProofs systemId={system.id} folder={selectedFolder} />
+					{/if}
+				</div>
 			</SectionCard>
 		{/if}
 

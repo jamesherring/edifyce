@@ -126,26 +126,102 @@ def test_a_layered_import_stores_one_system_per_layer(session, database) -> None
     assert report.system_id == spine[-1].id
 
 
-def test_a_layer_is_published_exactly_when_something_inherits_from_it(
-    session, database
-) -> None:
-    # §5.1's rule, not a new one: a parent must be frozen before a child builds
-    # on it. The deepest layer has no child, which is also what makes an
-    # unlayered import — one system, no children — behave as it did before.
+def test_every_layer_is_published_including_the_deepest(session, database) -> None:
+    # The layers that are inherited from must be published by §5.1 — a parent is
+    # frozen before a child builds on it. The deepest has no child, and used to be
+    # left a draft on those grounds; but publication is also what makes a system
+    # readable, and an import is ownerless, so a draft leaf is a layer nobody can
+    # open. It holds the bulk of a corpus, so that is most of the corpus.
     import_corpus(session, database, name="Corpus", plan=LAYERS)
 
     spine = systems(session)
-    assert all(system.published_at is not None for system in spine[:-1])
-    assert spine[-1].published_at is None
+    assert len(spine) > 1
+    assert all(system.published_at is not None for system in spine)
+    # One instant for the run, not one per layer.
+    assert len({system.published_at for system in spine}) == 1
 
 
-def test_an_unlayered_import_is_still_one_unpublished_system(session, database) -> None:
+def test_an_interrupted_batched_import_publishes_nothing(tmp_path, database) -> None:
+    # A batched run commits every `batch` theorems, so publishing as each proof is
+    # written would make each batch world-visible the moment it lands — and a run
+    # that then dies leaves a *partial* corpus published, its proofs not yet
+    # pointed at the library entries they establish. A committed batch cannot be
+    # rolled back, so the only defence is to publish nothing until there is
+    # something whole to publish.
+    engine = create_engine(f"sqlite:///{tmp_path / 'interrupted.db'}")
+    Base.metadata.create_all(engine, tables=_STORE_TABLES)
+
+    def die(report, _checked):
+        if report.checked == 2:
+            raise RuntimeError("the run dies here")
+
+    with Session(engine) as writing:
+        with pytest.raises(RuntimeError, match="the run dies here"):
+            import_corpus(writing, database, name="Corpus", batch=1, progress=die)
+
+    # A separate session, because the question is what *committed* — the dead
+    # run's own transaction is gone.
+    with Session(engine) as reading:
+        proofs = list(reading.scalars(select(Proof)))
+        assert proofs, "the checkpoint before the failure should have committed"
+        assert all(proof.published_at is None for proof in proofs)
+    engine.dispose()
+
+
+def test_a_completed_batched_import_publishes_what_verified(tmp_path, database) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'completed.db'}")
+    Base.metadata.create_all(engine, tables=_STORE_TABLES)
+
+    with Session(engine) as writing:
+        import_corpus(writing, database, name="Corpus", batch=1)
+
+    with Session(engine) as reading:
+        proofs = list(reading.scalars(select(Proof)))
+        assert proofs
+        # Published exactly where it verified, and at one instant for the run.
+        assert all((p.published_at is not None) == bool(p.valid) for p in proofs)
+        assert len({p.published_at for p in proofs if p.valid}) == 1
+    engine.dispose()
+
+
+def test_an_owned_import_hands_over_the_systems_and_the_proofs(
+    session, database
+) -> None:
+    # `--owner`: a corpus stops being a shared library and becomes somebody's.
+    # Every layer and every proof, since a spine half-owned would be half in the
+    # owner's lists — and the folders deliberately not, because an owned folder
+    # reads as a user's private one and an outline is the file's structure.
+    owner = uuid.uuid4()
+    import_corpus(session, database, name="Corpus", plan=LAYERS, owner=owner)
+
+    assert [system.owner_id for system in systems(session)] == [owner] * 3
+    proofs = list(session.scalars(select(Proof)))
+    assert proofs and all(proof.owner_id == owner for proof in proofs)
+    assert all(
+        folder.owner_id is None for folder in session.scalars(select(ProofFolder))
+    )
+    # Publication is orthogonal: an owned corpus is still published, so it reads
+    # the same to everyone else and appears in its owner's lists as well.
+    assert all((p.published_at is not None) == bool(p.valid) for p in proofs)
+
+
+def test_an_import_is_ownerless_unless_asked(session, database) -> None:
+    # The default, asserted beside the override so the two cannot drift: what
+    # ownerlessness buys is in `app.db.metamath_store`'s docstring, and giving it
+    # up has to be a positive act.
+    import_corpus(session, database, name="Corpus", plan=LAYERS)
+
+    assert all(system.owner_id is None for system in systems(session))
+    assert all(p.owner_id is None for p in session.scalars(select(Proof)))
+
+
+def test_an_unlayered_import_is_still_one_system(session, database) -> None:
     # The contract that keeps this additive, asserted rather than assumed.
     report = import_corpus(session, database, name="Corpus")
 
     stored = list(session.scalars(select(FormalSystem)))
     assert len(stored) == 1
-    assert stored[0].published_at is None and stored[0].inherits_from_id is None
+    assert stored[0].published_at is not None and stored[0].inherits_from_id is None
     assert report.system_ids == [report.system_id]
 
 

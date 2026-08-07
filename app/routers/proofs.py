@@ -155,6 +155,8 @@ from website.logical.promotion import proved_theorem, schematic_theorem
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from sqlalchemy import ColumnElement
+
     from app.db import DefinitionTermCache, SchemaTermCache
     from app.db.descriptions import LabelDescriptionRow
 
@@ -468,10 +470,10 @@ async def _verify_with_references(
     building it a second time here was the largest single thing either route did
     (roadmap §9e). Otherwise it is built here, under the lock.
 
-    ``persist=False`` for a caller whose transaction will be rolled back — an
-    anonymous viewer verifying a published proof. The verdict is the same either
-    way; what it skips is warming the schema-term cache, whose inserts would be
-    discarded with everything else.
+    ``persist=False`` for a caller whose transaction will be rolled back — a
+    reader verifying someone else's published proof. The verdict is the same
+    either way; what it skips is warming the schema-term cache, whose inserts
+    would be discarded with everything else.
     """
     # Before anything is read. A verify now trusts the lemmas' stored rows
     # instead of re-checking them, so the read and the write must sit inside one
@@ -1117,28 +1119,48 @@ async def _detail(
 @router.get("", response_model=Page[ProofSummary])
 async def list_proofs(
     formal_system_id: uuid.UUID | None = None,
+    folder_id: uuid.UUID | None = None,
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
     params: PageParams = Depends(page_params),
 ) -> Page[ProofSummary]:
-    base = [Proof.owner_id == user.id]
-    # Optional scope to one system, so an editor can list just that system's proofs.
-    if formal_system_id is not None:
-        base.append(Proof.formal_system_id == formal_system_id)
     return await paginate_summaries(
         session,
         Proof,
         User,
-        base_conditions=base,
+        base_conditions=[
+            Proof.owner_id == user.id,
+            *_scoped(formal_system_id, folder_id),
+        ],
         default_order=[Proof.created_at],
         params=params,
         summarize=_summary,
     )
 
 
+def _scoped(
+    formal_system_id: uuid.UUID | None, folder_id: uuid.UUID | None
+) -> list[ColumnElement[bool]]:
+    """Narrow a proof listing to one system, or to one folder within it.
+
+    Shared by the owner-scoped and public listings so "which proofs are in this
+    section" reads the same either side of publication. A folder belongs to
+    exactly one system, so naming one is already a system scope and the other
+    filter is redundant rather than conflicting.
+    """
+    conditions: list[ColumnElement[bool]] = []
+    if formal_system_id is not None:
+        conditions.append(Proof.formal_system_id == formal_system_id)
+    if folder_id is not None:
+        conditions.append(Proof.folder_id == folder_id)
+    return conditions
+
+
 # Declared before `/{proof_id}` so "public" isn't parsed as a proof id.
 @router.get("/public", response_model=Page[ProofSummary])
 async def list_public_proofs(
+    formal_system_id: uuid.UUID | None = None,
+    folder_id: uuid.UUID | None = None,
     session: AsyncSession = Depends(get_session),
     params: PageParams = Depends(page_params),
 ) -> Page[ProofSummary]:
@@ -1146,13 +1168,41 @@ async def list_public_proofs(
 
     Drafts (``published_at IS NULL``) are excluded; unpublishing removes a proof
     from this list. Newest publications first, unless the client asks to sort.
+
+    ``formal_system_id`` and ``folder_id`` narrow it, which is what makes an
+    imported corpus browsable: `GET /formal-systems/{id}/folders` draws the
+    outline the `.mm` file's section headers describe, and this returns the
+    proofs filed under one of its nodes. Without it the only public view of
+    47,000 theorems is a flat list in publication order, and a corpus publishes
+    every one of them at the same instant.
+
+    Which is also why a scoped page orders by **position** — the proof's place in
+    its system, which for an import is the walk order — rather than by recency.
+    Recency cannot order rows that share a timestamp, and the fallback to
+    `created_at DESC` would hand back a section backwards. Nothing authors a
+    position interactively yet, so for a hand-authored system it is a constant and
+    this reads as `created_at` ascending.
+
+    **`id` last, on both orderings**, because this is the one listing whose rows
+    an import writes in bulk and every key above it can tie: a corpus publishes at
+    a single instant by construction, and `created_at` defaults to `now()`, which
+    under Postgres is the *transaction's* timestamp — so a batch of proofs shares
+    that too. Ordering a tied block is then the planner's choice, and it need not
+    make the same one twice: offset paging over it repeats some proofs and drops
+    others. The interactive lists need no such key, since they write one row per
+    transaction.
     """
+    scope = _scoped(formal_system_id, folder_id)
     return await paginate_summaries(
         session,
         Proof,
         User,
-        base_conditions=[Proof.published_at.is_not(None)],
-        default_order=[Proof.published_at.desc(), Proof.created_at.desc()],
+        base_conditions=[Proof.published_at.is_not(None), *scope],
+        default_order=(
+            [Proof.position, Proof.created_at, Proof.id]
+            if scope
+            else [Proof.published_at.desc(), Proof.created_at.desc(), Proof.id]
+        ),
         params=params,
         summarize=_summary,
     )
@@ -1736,18 +1786,39 @@ async def get_proof_structure(
     )
 
 
+# ---------------------------------------------------------------------------
+# Checking, on a stored proof
+# ---------------------------------------------------------------------------
+#
+# The five routes below all **rebuild the proof's whole system and re-check it**,
+# and that is why they require a signed-in caller where the reads around them do
+# not. A published proof is readable by anyone, so once an ownerless corpus is
+# published these would otherwise let an anonymous request compile a 1,441-
+# production grammar and check a proof against it, on any of 47,546 proofs, with
+# no cache in front of it (`_build_system`). Nothing durable came of it — a
+# non-owner's transaction is never committed — which is exactly what makes it
+# worth refusing: the work is real and the result is thrown away.
+#
+# What this costs a legitimate caller is nothing. Applying already requires
+# ownership, and an owner is signed in by definition; the dry runs are an
+# authoring aid, and authoring starts from an account. What it removes is
+# unauthenticated compute, and that is the whole of the intent — so a later route
+# of this shape belongs on this list rather than beside the reads.
+
+
 @router.post("/{proof_id}/verify", response_model=VerifyProofResponse)
 async def verify_stored_proof(
     proof_id: uuid.UUID,
-    user: User | None = Depends(current_active_user_optional),
+    user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
 ) -> VerifyProofResponse:
     proof = await _get_readable_or_404(session, proof_id, user)
 
-    # Only the owner's transaction is committed (an anonymous viewer of a
-    # published proof gets the result but leaves the stored snapshot untouched),
-    # so a non-owner's verify must not do write work that will be rolled back.
-    owned = user is not None and proof.owner_id == user.id
+    # Only the owner's transaction is committed (a signed-in reader of someone
+    # else's published proof gets the result but leaves the stored snapshot
+    # untouched), so a non-owner's verify must not do write work that will be
+    # rolled back.
+    owned = proof.owner_id == user.id
     verification = await _verify_with_references(session, proof, persist=owned)
 
     # Record the verdict and the structure behind it, so a client can render the
@@ -1763,7 +1834,7 @@ async def verify_stored_proof(
 async def propose_citation(
     proof_id: uuid.UUID,
     payload: CitationProposal,
-    user: User | None = Depends(current_active_user_optional),
+    user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
 ) -> CitationOutcome:
     """Justify a line by naming a rule and the lines it uses — no text.
@@ -1858,7 +1929,7 @@ async def propose_citation(
     lines[row.position] = rewritten
     source = "\n".join(lines)
 
-    owned = user is not None and proof.owner_id == user.id
+    owned = proof.owner_id == user.id
     if payload.apply and not owned:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1961,7 +2032,7 @@ def _referenced(payload: TermProposalIn) -> list[uuid.UUID]:
 async def propose_line(
     proof_id: uuid.UUID,
     payload: LineProposal,
-    user: User | None = Depends(current_active_user_optional),
+    user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
 ) -> LineOutcome:
     """Add a line stating a proposed term — structure in, no surface syntax.
@@ -2128,7 +2199,7 @@ async def propose_line(
         renumbered = [r.number + 1 for r in rows if r.number >= number]
     source = "\n".join(lines)
 
-    owned = user is not None and proof.owner_id == user.id
+    owned = proof.owner_id == user.id
     if payload.apply and not owned:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -2209,7 +2280,7 @@ async def propose_line(
 async def remove_line(
     proof_id: uuid.UUID,
     payload: LineRemoval,
-    user: User | None = Depends(current_active_user_optional),
+    user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
 ) -> LineRemovalOutcome:
     """Take a line back out, closing the gap its number leaves.
@@ -2294,7 +2365,7 @@ async def remove_line(
     del moved[going.position]
     source = "\n".join(moved)
 
-    owned = user is not None and proof.owner_id == user.id
+    owned = proof.owner_id == user.id
     if payload.apply and not owned:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -2433,7 +2504,7 @@ async def find_citations(
             "unification. Zero searches the system's own rules only."
         ),
     ),
-    user: User | None = Depends(current_active_user_optional),
+    user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_session),
 ) -> CitationSearch:
     """What could justify this line — proposals that have already been checked.
@@ -2473,8 +2544,8 @@ async def find_citations(
 
     # Checked rather than read: the search runs against live proof lines — their
     # scopes, their terms, their order — and a stored row carries no `ProofLine`
-    # to unify with. Never persisted, because a read must not write, and an
-    # anonymous caller's transaction is rolled back anyway.
+    # to unify with. Never persisted, because a read must not write, and a
+    # non-owner's transaction is rolled back anyway.
     verification = await _verify_with_references(session, proof, persist=False)
     checked = verification.engine_proof
     if checked is None or verification.compiled_system is None:

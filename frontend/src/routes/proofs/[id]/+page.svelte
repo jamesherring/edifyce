@@ -295,13 +295,23 @@
 			idleMessage="Verify the proof to see it line by line."
 		>
 			{#snippet actions()}
-				<Button onclick={verify} disabled={verifying} size="sm">
-					{#if verifying}
-						<LoaderCircle class="size-4 animate-spin" /> Verifying…
-					{:else}
-						<Play class="size-4" /> Verify
-					{/if}
-				</Button>
+				<!-- Reading a published proof is open; re-checking one is not, since it
+				     rebuilds the whole system and checks against it. Offered only to a
+				     signed-in reader, so the refusal is a missing button rather than a
+				     401 after the click. -->
+				{#if auth.user}
+					<Button onclick={verify} disabled={verifying} size="sm">
+						{#if verifying}
+							<LoaderCircle class="size-4 animate-spin" /> Verifying…
+						{:else}
+							<Play class="size-4" /> Verify
+						{/if}
+					</Button>
+				{:else}
+					<Button href="/login" variant="outline" size="sm">
+						<Play class="size-4" /> Sign in to verify
+					</Button>
+				{/if}
 			{/snippet}
 			{#snippet controls()}
 				{#if notations.length > 0}

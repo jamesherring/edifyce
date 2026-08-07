@@ -8,8 +8,18 @@
 		folders,
 		/** Roots start open so the shape is visible without a click; deeper levels
 		 *  start closed, since a corpus has hundreds of them. */
-		open: openByDefault = false
-	}: { folders: Folder[]; open?: boolean } = $props();
+		open: openByDefault = false,
+		/** Id of the folder currently being read, for the highlight. */
+		selected = null,
+		/** Given, a folder holding proofs becomes a button that asks for them.
+		 *  Omitted, the tree is the read-only shape it has always been. */
+		onselect
+	}: {
+		folders: Folder[];
+		open?: boolean;
+		selected?: string | null;
+		onselect?: (folder: Folder) => void;
+	} = $props();
 
 	let opened = $state<Record<string, boolean>>({});
 
@@ -39,7 +49,21 @@
 				{:else}
 					<span class="size-4 shrink-0" aria-hidden="true"></span>
 				{/if}
-				<span class="text-sm">{folder.name}</span>
+				{#if onselect && folder.proofs > 0}
+					<button
+						type="button"
+						class={[
+							'rounded px-1 text-left text-sm hover:underline',
+							selected === folder.id && 'bg-accent font-medium text-accent-foreground'
+						]}
+						aria-current={selected === folder.id ? 'true' : undefined}
+						onclick={() => onselect(folder)}
+					>
+						{folder.name}
+					</button>
+				{:else}
+					<span class="text-sm">{folder.name}</span>
+				{/if}
 				{#if folder.proofs > 0}
 					<span class="shrink-0 text-xs text-muted-foreground">{folder.proofs}</span>
 				{/if}
@@ -59,7 +83,7 @@
 			{/if}
 			{#if folder.children.length > 0 && isOpen(folder)}
 				<div class="ml-5.5 mt-0.5 border-l pl-2">
-					<Self folders={folder.children} />
+					<Self folders={folder.children} {selected} {onselect} />
 				</div>
 			{/if}
 		</li>
