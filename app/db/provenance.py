@@ -91,17 +91,28 @@ class Provenance:
     # wherever it is filed, whatever its citations say.
     deepest_grammar: str | None
     grammar_depth: int | None
+    # The deepest layer declaring an inference **rule** or **definition** it
+    # cites. A third pin, and neither of the other two: a rule is not a library
+    # entry (a citation of one resolves to no `promoted_theorems` row, which is
+    # why `_cited` drops it) and not notation, and yet a proof cannot be checked
+    # in a layer that does not declare it (found in review).
+    deepest_rule: str | None
+    rule_depth: int | None
     # Did the closure touch an entry this proof's own chain cannot resolve? The
     # defect :attr:`misfiled` reports, carried as a fact rather than inferred
     # from a depth comparison that only means anything down a single spine.
     unreachable: bool = False
+    # The same, for the machinery rather than the citations: notation, a rule or
+    # a definition the proof needs and its chain does not reach. Separate from
+    # `unreachable` only in provenance; :attr:`misfiled` is their disjunction.
+    unreachable_machinery: bool = False
 
     @property
     def misfiled(self) -> bool:
-        """Does it depend on something its own chain cannot reach?
+        """Is anything it needs out of reach of the layer it was filed in?
 
         Impossible for a positional plan over a corpus in dependency order — and
-        impossible to *verify*, since the citation would not resolve — so a true
+        impossible to *verify*, since the proof would not rebuild — so a true
         here means the rows disagree with the plan. The same fact
         `scripts/check_layering.unreachable_citations` reports, in the vocabulary
         of provenance.
@@ -111,8 +122,13 @@ class Provenance:
         where the sibling holding the citation may sit at any depth at all —
         including a shallower one, which read as a clean *could be filed lower*
         (found in review).
+
+        **Citations and machinery both.** A proof filed above the layer declaring
+        its own notation cannot be rebuilt there either, and reporting that only
+        by suppressing `could_be_filed_lower` left the run exiting 0 on a proof
+        that does not stand where it sits (also found in review).
         """
-        return self.unreachable
+        return self.unreachable or self.unreachable_machinery
 
     @property
     def depends_only_on_shallower(self) -> bool:
@@ -155,7 +171,10 @@ class Provenance:
         """
         if not self.depends_only_on_shallower:
             return False
-        return self.grammar_depth is None or self.grammar_depth < self.filed
+        return all(
+            depth is None or depth < self.filed
+            for depth in (self.grammar_depth, self.rule_depth)
+        )
 
     @property
     def needs_its_own_axioms(self) -> bool:
@@ -666,11 +685,49 @@ def provenance(session: Session) -> tuple[Provenance, ...]:
         if system_id is not None:
             grammar[proof_id] = _deeper(grammar.get(proof_id), system_id, depths)
 
+    # And the machinery half. A rule and a definition are each a justification
+    # the *layer* supplies and no `promoted_theorems` row holds, so `_cited`
+    # drops both — correctly, since neither is a citation — and neither was
+    # pinning anything until review pointed out that a proof cannot be checked
+    # in a layer that does not declare them.
+    filed_in = {proof_id: system_id for proof_id, _, system_id, _ in rows}
+    machinery: dict[uuid.UUID, uuid.UUID] = {}
+    for proof_id, label in session.execute(
+        select(ProofLineRow.proof_id, ProofLineRow.rule).where(
+            ProofLineRow.rule.is_not(None)
+        )
+    ):
+        # The **shallowest** declaring layer, since that is the shallowest the
+        # proof could move to and still resolve the rule — the question this
+        # feeds. (`_cited` reads nearest-first instead, because that is what the
+        # checker did.)
+        for system_id in chains.get(filed_in[proof_id], ()):
+            if label in rules.get(system_id, ()):
+                machinery[proof_id] = _deeper(
+                    machinery.get(proof_id), system_id, depths
+                )
+                break
+    for proof_id, definition_system in session.execute(
+        select(ProofLineRow.proof_id, DefinitionRow.system_id).join(
+            DefinitionRow, ProofLineRow.definition_id == DefinitionRow.id
+        )
+    ):
+        machinery[proof_id] = _deeper(
+            machinery.get(proof_id), definition_system, depths
+        )
+
     memo: dict[uuid.UUID, _Reach] = {}
     found: list[Provenance] = []
     for proof_id, name, system_id, _ in rows:
         reach = _reach(proof_id, depths, deps, memo)
-        written = grammar.get(proof_id)
+        written, needs = grammar.get(proof_id), machinery.get(proof_id)
+        # Machinery its chain does not hold is the same defect an unreachable
+        # citation is — the proof does not rebuild where it sits — and saying so
+        # only by suppressing `could_be_filed_lower` let a run exit 0 on it.
+        chain = chains[system_id]
+        stranded = any(
+            held is not None and held not in chain for held in (written, needs)
+        )
         found.append(
             Provenance(
                 proof=name,
@@ -683,7 +740,10 @@ def provenance(session: Session) -> tuple[Provenance, ...]:
                 axioms=reach.axiom_labels,
                 deepest_grammar=names[written] if written is not None else None,
                 grammar_depth=depths[written] if written is not None else None,
+                deepest_rule=names[needs] if needs is not None else None,
+                rule_depth=depths[needs] if needs is not None else None,
                 unreachable=reach.unreachable,
+                unreachable_machinery=stranded,
             )
         )
     return tuple(found)

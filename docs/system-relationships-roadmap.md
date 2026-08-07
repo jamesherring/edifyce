@@ -2089,6 +2089,16 @@ corpus does not (`zf-grammar-pinned`, stated with ZF's own `e.` and proved from 
 propositional axiom), so the mechanism is pinned even where `set.mm` never
 exercises it.
 
+*Two more pins that review had to point out, both in the new column.* A proof
+also needs the **rules** and **definitions** its lines cite, and neither is a
+library entry — `_cited` drops a rule label rightly, since it resolves to no
+`promoted_theorems` row — so a proof justified by a rule its own layer declares
+was reported movable into a layer that does not have it. And a proof filed
+*above* the layer declaring its notation cannot be rebuilt where it sits, which
+is the same defect an unreachable citation is; saying so only by suppressing
+"could be moved" left the run exiting 0 on it. `misfiled` is now the disjunction
+over citations and machinery alike.
+
 *Notation a **definition** introduces counts too*, and nearly did not. A defined
 form's constructor is `f"{sort}:{higher}"`, and the `:` is deliberate — a
 declared production's name is forced to `[A-Za-z0-9_]+`, so the pair keeps

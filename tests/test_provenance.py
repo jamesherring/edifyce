@@ -262,6 +262,55 @@ def test_notation_a_definition_introduces_pins_a_proof_too(
     assert not report.could_be_filed_lower
 
 
+def test_a_rule_its_own_layer_declares_pins_a_proof(imported: Session) -> None:
+    # **From review.** A rule is neither a library entry nor notation: `_cited`
+    # drops its label (rightly — a citation of one resolves to no promoted row),
+    # and the grammar walk never sees it. So a proof whose formulas are all
+    # propositional but whose justification is a rule its own layer declares was
+    # reported movable into a layer where that rule does not exist.
+    spine = list(
+        imported.scalars(select(FormalSystem).order_by(FormalSystem.created_at))
+    )
+    imported.add(
+        RuleRow(
+            system_id=spine[1].id, position=99, label="local", name="local",
+            deduction="|- ph",
+        )
+    )
+    written = imported.scalar(select(Proof).where(Proof.name == "fol-via-pc"))
+    for line in written.line_rows:
+        line.rule = "local"
+    imported.flush()
+
+    report = reports(imported)["fol-via-pc"]
+    assert report.deepest_rule == FOL
+    assert report.rule_depth == report.filed
+    assert not report.could_be_filed_lower
+    # Still not *misfiled*: the rule is declared by the layer holding the proof,
+    # so it is reachable — just not from anywhere shallower.
+    assert not report.misfiled
+
+
+def test_a_proof_filed_above_its_own_notation_is_misfiled(imported: Session) -> None:
+    # **From review.** Moving a proof above the layer declaring its notation
+    # leaves it unrebuildable where it sits — the same defect an unreachable
+    # citation is. Reporting it only by suppressing `could_be_filed_lower` let
+    # `check_provenance.py` exit 0 on a proof that does not stand.
+    spine = list(
+        imported.scalars(select(FormalSystem).order_by(FormalSystem.created_at))
+    )
+    stranded = imported.scalar(
+        select(Proof).where(Proof.name == "zf-grammar-pinned")
+    )
+    stranded.formal_system_id = spine[1].id  # into FOL, above the `e.` it uses
+    imported.flush()
+
+    report = reports(imported)["zf-grammar-pinned"]
+    assert report.deepest_grammar == ZF
+    assert report.misfiled
+    assert not report.could_be_filed_lower
+
+
 def test_nothing_in_a_corpus_in_dependency_order_is_misfiled(imported: Session) -> None:
     # `set.mm` declares a label before the proof citing it and every boundary is
     # a position in the file, so a positional plan cannot file a proof above what
