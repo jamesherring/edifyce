@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from ..kernel.definitions import Definition as KernelDefinition
 from ..kernel.constructors import constructor_for
 from ..kernel.terms import from_match
-from ..matching import Context, Match, Pattern, StringPattern, UnionPattern
+from ..matching import Context, Match, Pattern
 from .promotion import PromotedTheorem
 from .proof import CITATION_SEPARATOR, Proof, ProofLine
 from .proposals import ProposalError, grammar_index
@@ -102,45 +102,10 @@ class FormalSystem:
         # definition registered against one is refused on.
         self.primitive_schemas: Callable[[], _SchemaScan] | None = None
 
-        # A pattern dictionary of all the patterns used in build context
-        self.pattern_dictionary = {}
-
         # Default proof context
         self.context = Context(
             logical=context if context is not None else {}
         )
-
-    def build_pattern_dictionary(self):
-        # Build the pattern dictionary using items included in the build context
-
-        if self.build_context is None:
-            return
-
-        def add_pattern(dct, pattern):
-            # Add a pattern to the dictionary
-
-            if pattern.url_id in dct:
-                return
-
-            # Add the pattern to the dictionary
-            dct[pattern.url_id] = pattern
-
-            # Look for subpatterns
-            if isinstance(pattern, StringPattern):
-                for sub_pattern in pattern.variables.values():
-                    add_pattern(dct, sub_pattern)
-
-            elif isinstance(pattern, UnionPattern):
-                for sub_pattern in pattern.patterns:
-                    add_pattern(dct, sub_pattern)
-
-        # Look in the build dictionary variables for patterns
-        for item in self.build_context.variables.values():
-            if not isinstance(item, Pattern):
-                continue
-
-            # Add the pattern
-            add_pattern(self.pattern_dictionary, item)
 
     def parse(
         self, text: str, proof: Proof | None = None, context: Context | None = None
