@@ -93,6 +93,10 @@ $( Cites a first-order lemma, so it is pinned to FOL — and that lemma rests on
    here and nowhere else in this fixture. $)
 zf-via-fol $p |- ( ph -> ( ps -> ph ) ) $= ( fol-via-pc ) ABC $.
 zf-via-ext $p |- ( A e. A -> A e. A ) $= ( ax-ext ) AB $.
+$( Proved from a *propositional* axiom and yet stated with ZF's own `e.`, so
+   nothing it cites needs this layer and its notation does. `set.mm`'s `sptruw`
+   is this shape, and the citation graph alone calls it movable. $)
+zf-grammar-pinned $p |- ( A e. A -> ( ph -> A e. A ) ) $= ( wcel ax-1 ) BCAD $.
 """
 
 
@@ -125,6 +129,7 @@ def test_the_fixture_is_the_three_layers_it_claims_to_be(imported: Session) -> N
         "fol-via-ax4": FOL,
         "zf-via-fol": ZF,
         "zf-via-ext": ZF,
+        "zf-grammar-pinned": ZF,
     }
 
 
@@ -176,6 +181,43 @@ def test_the_deepest_citation_and_the_deepest_axiom_are_different_questions(
     assert report.depends_only_on_shallower
     assert report.cited_depth == 1
     assert report.axiom_depth == 0
+
+
+def test_notation_pins_a_proof_its_citations_would_let_go(imported: Session) -> None:
+    # The grammar half, and the case the citation graph alone gets wrong.
+    # `zf-grammar-pinned` is proved from a propositional axiom, so nothing it
+    # cites needs ZF — and it is *stated* with `e.`, which ZF declares, so it
+    # cannot be filed anywhere shallower. `set.mm`'s `sptruw` is this shape.
+    report = reports(imported)["zf-grammar-pinned"]
+
+    assert report.deepest_cited == PC
+    assert report.depends_only_on_shallower
+    assert report.deepest_grammar == ZF
+    assert report.grammar_depth == report.filed
+    assert not report.could_be_filed_lower
+
+
+def test_a_proof_shallow_in_both_can_really_move(imported: Session) -> None:
+    # The contrast, so the assertion above is about *notation* and not about
+    # every proof: `fol-via-pc` is propositional in what it cites and in what it
+    # is written in, and moving it to PC would leave nothing behind.
+    report = reports(imported)["fol-via-pc"]
+
+    assert (report.deepest_cited, report.deepest_grammar) == (PC, PC)
+    assert report.could_be_filed_lower
+
+
+def test_a_proof_pinned_by_a_lemma_is_not_movable_either(imported: Session) -> None:
+    # And the third way to be held in place, which neither of the two above is:
+    # `zf-via-fol` is written in propositional notation and rests on a
+    # propositional axiom, but cites a *first-order* lemma. It can leave ZF; it
+    # cannot reach PC, which is why `could_be_filed_lower` is about the layer
+    # below rather than about the root.
+    report = reports(imported)["zf-via-fol"]
+
+    assert (report.deepest_cited, report.deepest_grammar) == (FOL, PC)
+    assert report.could_be_filed_lower
+    assert report.cited_depth == 1
 
 
 def test_nothing_in_a_corpus_in_dependency_order_is_misfiled(imported: Session) -> None:
@@ -360,7 +402,8 @@ def test_the_reports_come_back_in_a_stable_order(imported: Session) -> None:
         )
     ]
     assert [report.proof for report in provenance(imported)] == [
-        "pc-thm", "fol-via-pc", "fol-via-ax4", "zf-via-fol", "zf-via-ext"
+        "pc-thm", "fol-via-pc", "fol-via-ax4", "zf-via-fol", "zf-via-ext",
+        "zf-grammar-pinned",
     ]
 
 
@@ -375,7 +418,7 @@ def test_the_report_never_reads_proof_source(imported: Session) -> None:
 
     assert provenance(imported) == before
     # And the report was not empty, so "unchanged" is not "nothing either way".
-    assert len(before) == 5
+    assert len(before) == 6
 
 
 def test_the_per_layer_report_counts_each_theorem_once(imported: Session) -> None:
@@ -386,10 +429,13 @@ def test_the_per_layer_report_counts_each_theorem_once(imported: Session) -> Non
     assert [(layer.name, layer.depth) for layer in layers] == [
         (PC, 0), (FOL, 1), (ZF, 2)
     ]
-    assert [layer.proofs for layer in layers] == [1, 2, 2]
+    assert [layer.proofs for layer in layers] == [1, 2, 3]
     assert [layer.own_axioms for layer in layers] == [1, 1, 1]
-    assert [layer.lower_axioms for layer in layers] == [0, 1, 1]
-    assert [layer.only_shallower for layer in layers] == [0, 1, 1]
+    assert [layer.lower_axioms for layer in layers] == [0, 1, 2]
+    assert [layer.only_shallower for layer in layers] == [0, 1, 2]
+    # And the notation half: of ZF's two whose citations are all shallower, one
+    # is held there by its own `e.` and cannot actually move.
+    assert [layer.could_be_lower for layer in layers] == [0, 1, 1]
     # Every theorem falls in exactly one bucket, misfiled included.
     for layer in layers:
         assert layer.own_axioms + layer.lower_axioms + layer.no_axioms + (

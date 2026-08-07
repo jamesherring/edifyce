@@ -499,11 +499,13 @@ the paragraph above. The join is not to `proof_line_antecedents`: those edges ar
 line-to-line *within* one proof, so none of them crosses a layer. The cross-layer
 edge is `proof_lines.rule`, the label of the rule that justified the line, which
 for a citation of a promoted theorem is that theorem's label. And "the deepest
-layer it uses" is two questions rather than one — the deepest layer it cites
-anything from, and the deepest whose *axioms* it reaches — which come apart
-exactly when a lemma from a deeper layer rests on shallower assumptions. Neither
-is quite "could be filed lower", since a theorem is pinned by the grammar it is
-stated in too.
+layer it uses" is three questions rather than one — the deepest layer it cites
+anything from, the deepest whose *axioms* it reaches, and the deepest declaring
+notation its own lines are **written in**. The first two come apart exactly when
+a lemma from a deeper layer rests on shallower assumptions; the third is
+independent of both, since a theorem stating something a shallower layer cannot
+spell could not move there however propositional its proof. "Could be filed
+lower" is the first and the third together.
 
 ---
 
@@ -2052,28 +2054,40 @@ a precondition.
 which layer each stored proof reaches; `scripts/check_provenance.py` runs it over
 a corpus and `tests/test_provenance.py` pins it on a fixture. At the 2,676 slice:
 
-| layer | proofs | own axioms | shallower axioms | no axioms | cites nothing needing this layer |
-|---|---|---|---|---|---|
-| Propositional calculus | 1,773 | 1,771 | 0 | 2 | 0 |
-| First-order logic | 902 | **892** | 9 | 1 | 10 |
-| ZF set theory | 1 | 1 | 0 | 0 | 0 |
+| layer | proofs | own axioms | shallower axioms | no axioms | cites nothing needing this layer | could be moved |
+|---|---|---|---|---|---|---|
+| Propositional calculus | 1,773 | 1,771 | 0 | 2 | 0 | 0 |
+| First-order logic | 902 | **892** | 9 | 1 | 10 | 10 |
+| ZF set theory | 1 | 1 | 0 | 0 | 0 | 0 |
 
 **So the boundary is in the right place**, which is the question D6 was asked:
 98.9% of the first-order layer genuinely assumes first-order logic. Nothing is
 filed above what it depends on, so the invalid case is produced by moving a
 stored proof rather than by any plan.
 
-*The correction the corpus made to the report's own claim.* The ten exceptions
-are named, and three of them are not what the column first said they were.
-`sptruw` is `( A. x ph -> ph )` proved from `a1i` alone — set.mm's own comment
-says "Instance of `a1i`. Uses only Tarski's FOL axiom schemes" — so **no citation**
-holds it in the first-order layer, and `A.` does. A theorem is pinned by the
-grammar it is stated in as well as by what it cites, and this reads only the
-citation graph. So the count is "cites nothing that needs this layer", not "could
-be moved": `sptruw`, `ax11dgen` and `ax13dgen4` all state something first-order
-and prove it propositionally. The other seven — `axia1`–`axia3`, `axin1`,
-`axin2`, `axio`, `pm11.07` — are propositional statements in the first-order
-section, and could really move.
+*A theorem is pinned by two independent things*, and the report answers both: the
+entries it **cites**, and the productions its own lines are **written in**. A
+theorem stating something the shallower layer cannot spell could not move there
+however propositional its proof, so the last column is the conjunction and is the
+one to read as "could be moved".
+
+*And the second half is what corrected this section's own first answer.* It
+originally recorded that three of the ten — `sptruw`, `ax11dgen`, `ax13dgen4` —
+were held in first-order logic by their notation, since each states something
+with `A.` and proves it propositionally. **That was wrong, and measuring it is
+what showed so.** `set.mm` declares `wal` at line 12,249 and opens the
+first-order layer at 14,785: the quantifier's *syntax* belongs to the
+propositional layer, and only the quantifier **axioms** to the first-order one.
+So `A.` is grammatical in PC, the grammar half binds none of the ten, and all ten
+really can move. `wceq`, `wi` and `wn` are propositional too; of the corpus's
+notation only `wcel` is first-order.
+
+The lesson is the one this track keeps relearning in a new costume: what a layer
+declares is a fact about the file, and reading "∀ is first-order notation" off
+what the symbol *means* is not measuring it. The fixture carries the case the
+corpus does not (`zf-grammar-pinned`, stated with ZF's own `e.` and proved from a
+propositional axiom), so the mechanism is pinned even where `set.mm` never
+exercises it.
 
 Two corroborations worth recording, since a report nothing checks is a report
 nothing trusts. `set.mm` hand-annotates `ax11dgen` and `ax13dgen4` with
