@@ -1102,6 +1102,78 @@ class CitationSearch(BaseModel):
     truncated: bool = False
 
 
+class JustifyingPremise(BaseModel):
+    """One antecedent of the rule, and the line that filled it.
+
+    ``schema_form`` is the rule's own — what it demands of that slot — and the
+    rest is what the step supplied. Empty for a line the rule did not ask for and
+    tolerated (``extra``), which fills no slot.
+    """
+
+    position: int
+    schema_form: str = ""
+    number: int | None = None
+    statement: str | None = None
+    extra: bool = False
+
+
+class JustifyingAssignment(BaseModel):
+    """What one of the rule's metavariables stood for on this step."""
+
+    variable: str
+    stands_for: str
+
+
+class JustifyingProviso(BaseModel):
+    """A side-condition the step had to satisfy, in the author's own words.
+
+    ``variables`` are the metavariables it mentions, so a reader can find them
+    among the assignments and see what it was about. The instantiated condition
+    is deliberately not composed — see `website.logical.formal_system.justification`.
+    """
+
+    source: str
+    variables: list[str] = Field(default_factory=list)
+
+
+class LineJustification(BaseModel):
+    """Why one line follows, as a reader can check it.
+
+    `Failure` says why a line did *not* check; this is the other half, and the
+    citation on the line — `[imbi12d, 2, 3]` — is all a reader had of it. What
+    the checker established is the rule the label resolved to, that rule's own
+    schemas, which cited line filled which premise, and the substitution the
+    match derived.
+
+    ``proof_id`` is the proof establishing the cited theorem, when the viewer may
+    read one: a library citation names a label, and the proof of that label is a
+    row away but is not something a client can find by itself.
+    """
+
+    line: int
+    citation: str | None = None
+    # "rule" — an inference rule or a promoted theorem, which are one shape to
+    # the checker — or "definition" for a definitional step, which cites neither.
+    kind: str
+    label: str
+    name: str
+    conclusion: str
+    premises: list[JustifyingPremise] = Field(default_factory=list)
+    assignments: list[JustifyingAssignment] = Field(default_factory=list)
+    provisos: list[JustifyingProviso] = Field(default_factory=list)
+    # The subproof a discharge rule consumed, as its schema reads; null for every
+    # other kind of step.
+    discharges: str | None = None
+    # The corpus's own one-line summary of the cited label, where it documents
+    # one — on an import the label is opaque and this is the readable name.
+    title: str | None = None
+    proof_id: uuid.UUID | None = None
+    # The notation the terms here were read through, echoed as `ProofStructure`
+    # echoes it: a client showing a proof in one spelling must be able to tell a
+    # served rendering from a silently ignored request.
+    notation: str | None = None
+
+
 class ProofLineAntecedentOut(BaseModel):
     """One justification edge: a line this line was derived from.
 

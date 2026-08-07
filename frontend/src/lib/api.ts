@@ -902,6 +902,56 @@ export interface ProofStructureLine {
 	antecedents: ProofStructureAntecedent[];
 }
 
+/** One antecedent of the rule, and the line that filled it. `schema_form` is the
+ * rule's own — what it demands of the slot — and empty for a surplus line an
+ * `allow_extra_antecedents` rule tolerated, which fills none. */
+export interface JustifyingPremise {
+	position: number;
+	schema_form: string;
+	number: number | null;
+	statement: string | null;
+	extra: boolean;
+}
+
+/** What one of the rule's metavariables stood for on this step. */
+export interface JustifyingAssignment {
+	variable: string;
+	stands_for: string;
+}
+
+/** A side-condition the step had to satisfy, in the author's own words, and the
+ * metavariables it mentions — which is how a reader finds it among the
+ * assignments and sees what it was actually about. */
+export interface JustifyingProviso {
+	source: string;
+	variables: string[];
+}
+
+/** Why one line follows, as a reader can check it.
+ *
+ * `Failure` says why a line did *not* check; this is the other half, and the
+ * citation on the line was all a reader had of it. */
+export interface LineJustification {
+	line: number;
+	citation: string | null;
+	/** 'rule' — an inference rule or a promoted theorem, which are one shape to
+	 * the checker — or 'definition' for a definitional step, which cites neither. */
+	kind: string;
+	label: string;
+	name: string;
+	conclusion: string;
+	premises: JustifyingPremise[];
+	assignments: JustifyingAssignment[];
+	provisos: JustifyingProviso[];
+	/** The subproof a discharge rule consumed, as its schema reads. */
+	discharges: string | null;
+	/** The corpus's own one-line summary of the cited label, where it has one. */
+	title: string | null;
+	/** The proof establishing the cited theorem, when the viewer may read it. */
+	proof_id: string | null;
+	notation: string | null;
+}
+
 export interface ProofStructure {
 	proof_id: string;
 	/** Whether a structure is materialised. Never "derived nothing" (an empty
@@ -1287,6 +1337,19 @@ export const api = {
 		structure: (id: string, notation?: string) =>
 			request<ProofStructure>(
 				`/proofs/${id}/structure${notation ? `?notation=${encodeURIComponent(notation)}` : ''}`
+			),
+		/** Why a line follows: the rule its citation resolved to, that rule's own
+		 * schemas, which cited line filled which premise, and the substitution the
+		 * match derived. Re-checks the proof — the substitution is derived, not
+		 * stored — so this is a request to make on demand, not per line.
+		 *
+		 * 404 for a line no citation justifies (a hole, a scope opener, a comment),
+		 * which is not an error: which kind of unjustified it is belongs to the
+		 * line's own `failure`. */
+		justification: (id: string, number: number, notation?: string) =>
+			request<LineJustification>(
+				`/proofs/${id}/lines/${number}/justification` +
+					(notation ? `?notation=${encodeURIComponent(notation)}` : '')
 			),
 		/** Justify a line by naming a rule and the lines it uses — no citation
 		 * syntax crosses the wire. A dry run unless `apply` is set; applying is

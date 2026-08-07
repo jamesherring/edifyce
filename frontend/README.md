@@ -41,6 +41,25 @@ lines the checker's verdicts are attached to. A proof with no stored structure
 source as written. The editor keeps the two-pane layout, where the panes are an
 editable source and its results and genuinely differ.
 
+Each row reads **statement left, justification right**: a proof is a column of
+statements, and putting the citation under each one doubles the height of every
+row to say what a reader scans for in a second column. Browsing shows a marker
+only where something is off — a tick on every line of a valid proof repeats what
+the card's own badge already says — while the editor keeps one per line, where a
+tick appearing as you type *is* the feedback. An open goal (`failure.code ===
+'hole'`) gets a mark of its own rather than a cross: it is work left, not a
+mistake. And the line-type badge is suppressed for the system's *primary* line
+type, since every ordinary line carries it; `assume`, `fresh` and comment lines
+keep theirs, which is where the type is the interesting thing.
+
+The citation itself expands (`components/JustificationCard.svelte`): hovering or
+focusing it asks `GET /api/proofs/{id}/lines/{n}/justification` for the rule the
+label resolved to, that rule's own schemas, which cited line filled which
+premise, **what its metavariables stood for on this step**, the provisos that had
+to hold, and a link to the proof of the cited theorem. Fetched on open and once —
+the substitution is derived by a re-check, so asking for every line up front would
+be one re-check per line for cards nobody may open.
+
 A notation named `latex` is **typeset** rather than shown as source
 (`components/Typeset.svelte`, KaTeX). The name is the whole of the judgement, and
 it is the same one the importer makes when it derives a projection from a `.mm`

@@ -76,6 +76,7 @@ from app.db import (
     term_context,
     theorem_digest,
 )
+from app.db.descriptions import LabelDescriptionRow
 from app.db.descriptions_mapping import load_description
 from app.db.models import User
 from app.db.notations_mapping import load_notation, render_stored
@@ -99,6 +100,7 @@ from app.routers._common import (
 )
 from app.routers.systems import load_effective, load_system
 from website.logical.formal_system.diagnostics import numbers
+from website.logical.formal_system.justification import justification
 from website.logical.formal_system.proof import Proof as EngineProof
 from website.logical.formal_system.proof import CITATION_SEPARATOR, citation_text
 from website.logical.formal_system.retrieval import (
@@ -120,12 +122,16 @@ from app.schemas import (
     CitationProposal,
     CitationSearch,
     CitationSuggestion,
+    LineJustification,
     LineOutcome,
     LineProposal,
     LineRemoval,
     LineRemovalOutcome,
     TermProposalIn,
     FailureOut,
+    JustifyingAssignment,
+    JustifyingPremise,
+    JustifyingProviso,
     Attribution,
     LabelDescription,
     Page,
@@ -156,7 +162,6 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from app.db import DefinitionTermCache, SchemaTermCache
-    from app.db.descriptions import LabelDescriptionRow
 
     from app.routers.systems import EffectiveSystem
     from website.logical.formal_system import FormalSystem as EngineSystem
@@ -165,6 +170,12 @@ if TYPE_CHECKING:
     from website.logical.matching.context import Context
 
 router = APIRouter(prefix="/proofs", tags=["proofs"])
+
+# How many same-named proofs a label lookup will look past before giving up. A
+# label names one proof in the system that declares it, and the chain declares
+# each label once — so more than one means a draft and its published twin, or a
+# name reused across layers, and neither is worth a scan.
+_LABEL_PROOF_CANDIDATES = 5
 
 
 async def _unique_slug(
@@ -2592,4 +2603,158 @@ async def find_citations(
         unindexed=0 if prefiltered is None else prefiltered.unindexed,
         unfiltered=0 if prefiltered is None else prefiltered.unfiltered,
         truncated=len(found) > limit or (prefiltered is not None and prefiltered.truncated),
+    )
+
+
+async def _label_title(
+    session: AsyncSession, chain: Sequence[FormalSystem], label: str
+) -> str | None:
+    # Across the chain rather than the proof's own system: a citation resolves up
+    # the spine, so an imported theorem's prose sits on whichever layer declared
+    # it. One query, since a chain is a handful of systems.
+    row = await session.scalar(
+        select(LabelDescriptionRow)
+        .where(
+            LabelDescriptionRow.formal_system_id.in_([s.id for s in chain]),
+            LabelDescriptionRow.label == label,
+        )
+        .limit(1)
+    )
+    return None if row is None else row.title
+
+
+async def _proof_of_label(
+    session: AsyncSession,
+    chain: Sequence[FormalSystem],
+    label: str,
+    user: User | None,
+) -> uuid.UUID | None:
+    """The proof establishing ``label``, when the viewer may read it.
+
+    By name, which is the join an import already makes: a Metamath `$p` becomes
+    both a proof and a library entry from one label, so `proofs.name` *is* the
+    theorem's label. Across the chain for the same reason a citation resolves
+    across it.
+
+    None when there is no such proof (the label is a primitive, or a rule the
+    system declares) or when the viewer may not read the one there is — which is
+    the same answer to a client either way: there is nothing to link to.
+    """
+    found = await session.scalars(
+        select(Proof)
+        .where(
+            Proof.formal_system_id.in_([s.id for s in chain]),
+            Proof.name == label,
+        )
+        .limit(_LABEL_PROOF_CANDIDATES)
+    )
+    for proof in found:
+        if _is_readable(proof, user):
+            return proof.id
+    return None
+
+
+@router.get(
+    "/{proof_id}/lines/{number}/justification", response_model=LineJustification
+)
+async def explain_line(
+    proof_id: uuid.UUID,
+    number: int,
+    notation: str | None = Query(
+        None,
+        description=(
+            "Read the terms in this record through one of the system's stored "
+            "notations, as `/structure` does. Omit for the source spelling."
+        ),
+    ),
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> LineJustification:
+    """Why this line follows — the step's own rule, substitution and provisos.
+
+    `[imbi12d, 2, 3]` names a step without explaining it. On a corpus of 47,589
+    theorems a reader does not know what `imbi12d` says, let alone what it was
+    applied *to*, and everything that would tell them is something the checker
+    already worked out and threw away.
+
+    **Checked rather than read**, like `/lines/{n}/citations` and for the same
+    reason: the substitution is derived by the match, and no stored row carries
+    it. Storing one per citation was the alternative and is the wrong trade — a
+    whole-corpus import would write tens of millions of rows for a record only
+    ever read one line at a time, and on the hover that asks for it.
+
+    Nothing is written. A read must not write, and an anonymous caller's
+    transaction is rolled back anyway.
+    """
+    proof = await _get_readable_or_404(session, proof_id, user)
+
+    verification = await _verify_with_references(session, proof, persist=False)
+    checked = verification.engine_proof
+    if checked is None or verification.effective is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=verification.response.errors
+            or ["This proof could not be checked, so no step of it can be explained."],
+        )
+
+    line = _numbered_line(checked, number)
+    if line is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"This proof has no line {number}.",
+        )
+
+    projection = None
+    if notation is not None:
+        projection = await load_notation(session, proof.formal_system_id, notation)
+        if projection is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"This proof's system has no notation named '{notation}'.",
+            )
+
+    told = justification(line, projection)
+    if told is None:
+        # Not an error: a hole, a scope opener, a comment and a line whose check
+        # failed are all lines a citation never resolved for. Which one it is is
+        # `Failure`'s question, and answering it here would be a second, weaker
+        # copy of `diagnostics`.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Line {number} is not justified by a rule, so there is nothing "
+                "to explain: it opens a scope, states a hole, or did not check."
+            ),
+        )
+
+    chain = verification.effective.chain
+    return LineJustification(
+        line=number,
+        citation=line.reference_string_display,
+        kind=told.kind,
+        label=told.label,
+        name=told.name,
+        conclusion=told.conclusion,
+        premises=[
+            JustifyingPremise(
+                position=premise.position,
+                schema_form=premise.schema,
+                number=premise.number,
+                statement=premise.statement,
+                extra=premise.extra,
+            )
+            for premise in told.premises
+        ],
+        assignments=[
+            JustifyingAssignment(variable=a.variable, stands_for=a.stands_for)
+            for a in told.assignments
+        ],
+        provisos=[
+            JustifyingProviso(source=p.source, variables=list(p.variables))
+            for p in told.provisos
+        ],
+        discharges=told.discharges,
+        title=await _label_title(session, chain, told.label),
+        proof_id=await _proof_of_label(session, chain, told.label, user),
+        notation=notation,
     )

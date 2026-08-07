@@ -525,7 +525,7 @@ class InferenceRule:
         return term.substitute(renames, context) if renames else term
 
     @staticmethod
-    def _schema_text(pattern: Pattern) -> str:
+    def schema_text(pattern: Pattern | None) -> str:
         """A slot's schema as a reader would write it.
 
         `str(pattern)` is the class-prefixed repr (`StringPattern: antecedent`),
@@ -533,7 +533,14 @@ class InferenceRule:
         its own surface form in `display_pattern` — `( p -> q )`, which is the
         thing a caller has to go and prove — and anything else is named by the
         sort it draws from.
+
+        Public because it is the rule's *native* form, which is what a reader
+        being shown why a step follows has to be given
+        (:mod:`~.justification`); `""` for the pattern a rule has not been
+        compiled with yet, since a schema nobody has parsed reads as nothing.
         """
+        if pattern is None:
+            return ""
         if isinstance(pattern, StringPattern):
             return pattern.display_pattern
         return pattern.name
@@ -573,7 +580,7 @@ class InferenceRule:
         than about one being unreachable.
         """
         return tuple(
-            SlotReport(index=slot, schema=self._schema_text(self.antecedents[slot]))
+            SlotReport(index=slot, schema=self.schema_text(self.antecedents[slot]))
             for slot in range(len(self.antecedents))
             if not adjacency.get(slot)
         )
@@ -590,7 +597,7 @@ class InferenceRule:
         return tuple(
             SlotReport(
                 index=slot,
-                schema=self._schema_text(self.antecedents[slot]),
+                schema=self.schema_text(self.antecedents[slot]),
                 candidates=numbers([lines[j] for j in adjacency.get(slot, ())]),
             )
             for slot in range(len(self.antecedents))

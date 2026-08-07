@@ -912,3 +912,43 @@ whole corpus — that import is a solved thing (metamath-import-roadmap §1.1) �
 these runs imported into SQLite, where 14,000 theorems already takes 27 minutes and
 half a gigabyte, so the ceiling reached here is the throwaway database's rather
 than the engine's. A whole-corpus run wants Postgres and a longer budget.
+
+---
+
+## 9f. The other half of a diagnosis: why a line *did* check — *done*
+
+`diagnostics` (§9b, `Failure`) answers "why did this line not check", in a closed
+vocabulary a caller branches on. Nothing answered the question a *valid* line
+raises, and on an imported corpus that is the harder one: a line carries
+`[imbi12d, 2, 3]` and a reader who does not already know `imbi12d` — which is
+every reader, at 47,546 theorems — learns from it only that something applied.
+
+**Everything needed was already computed and thrown away.** A rule is a schema
+and a step is an instance of it, so "why does this follow" is answered by *what
+the metavariables stood for here* — the binding `InferenceRule.applies` derives
+and keeps for schematic promotion. Beside it sit the rule's own schemas, which
+cited line filled which slot (the assignment search's own output, aligned to the
+rule's slots), and the provisos checked over that binding.
+`formal_system/justification.py` assembles those; it computes nothing, and like
+`diagnostics` and `rendering` it is display, so a wrong record misleads a reader
+and cannot make a false proof check.
+
+**Served checked, not read** (`GET /proofs/{id}/lines/{n}/justification`), which
+is the one real cost and the same trade `/lines/{n}/citations` already makes: the
+substitution is derived by the match and no stored row carries it. Storing one per
+citation was the alternative and is the wrong trade at this scale — set.mm's
+proofs make roughly 4M citations, so a row per bound metavariable is tens of
+millions of rows written on import for a record read one line at a time, on a
+hover. The endpoint is asked once per card opened.
+
+**Two steps carry less, and say so.** A discharge rule consumes a subproof rather
+than cited lines and `check_discharge` keeps no binding, so its record names the
+block and offers no assignments. A definitional step cites no rule at all — the
+checker searches the definitions in scope — so its record is the definition that
+applied, which is the one thing a generic `[Def, n]` citation cannot tell anyone.
+
+**What is deliberately not composed** is the *instantiated* proviso. `restate`
+would give one, but rendering it means inventing a phrasing for each of the
+kernel's predicates, and a proviso in the author's own words (`x not free in phi`)
+beside the assignments it names already says the same thing without a phrasing
+layer of ours to keep in step with the kernel's.
