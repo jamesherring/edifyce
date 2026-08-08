@@ -308,7 +308,7 @@ stable to point at and that its absence is visible.
 
 *Engine:* nothing. This layer never reaches `website/logical/`.
 
-### 4.4 Goal-first: state a theorem before proving it
+### 4.4 Goal-first: state a theorem before proving it — *done*
 
 Every structured write today is *inside* a proof — `POST /proofs/{id}/lines`
 needs a proof, and a template line within it to inherit shape from. An ingestion
@@ -325,10 +325,44 @@ proved, and only then open a proof aimed at it.
   statements through, so there is one path from a constructor vocabulary to a
   stored term and it is round-trip checked exactly once.
 
-*Engine:* small. `proposals.resolve` already composes a term against a built
-system; what it lacks is a caller that is not a proof line. The round-trip check
-(§9c) is currently entangled with `restate`/`recite` line composition and needs
-lifting out so a bare statement can be checked the same way.
+*Engine:* nothing, as it turned out. `proposals.resolve` already composed a term
+against a built system and needed only a caller that is not a proof line; the
+round-trip check was the part entangled with `restate`/`recite`, and lifting it
+out is `app/routers/_proposals.py` — shared now by the line route and this one,
+since the only difference between them is *where* the round trip is checked.
+
+**A bare statement has no line to splice into**, so it is read back at the
+system's **logical sorts** — the sorts a proof line is read at, and how a
+promoted theorem's ground statement is already composed. Same guarantee, same
+refusal: the statement is rejected unless the term that comes back is the term
+that went in.
+
+**A dry run unless `store`.** Asking whether something is proved is a question
+and a question should not write rows; storing is what hands back the usable
+`term_id` and is therefore the owner's. That split is load-bearing rather than
+tidy — it is what lets *anyone* ask the question of an imported corpus, which is
+ownerless by construction and where the question is worth most.
+
+The search is the same head-symbol filter §9d built, and is a filter here too —
+including its `exact` flag.
+
+**Nothing in the response says "proved", and that is a correction.** This section
+originally specified an "α-digest exact hit" as the answer to "is this already
+proved?", and the first cut shipped it as a `proved` property. Review caught it,
+and the reason is sharper than the bug: **no digest settles the question at
+all**. The search policy renames regex leaves, so it over-reports in a grammar
+whose numerals are a `matches` production; the identity policy a discharge
+compares by would *under*-report, because a schematic theorem instantiates rather
+than renames, and instantiation is unification. What settles it is
+`InferenceRule.concludes`, which takes a `ProofLine` — a proof's context, and
+exactly why §9d put the confirm on the proof route and the filter on the system's.
+
+So the two α policies stay right for their own questions — the coarser bucket for
+"which theorems could conclude this", the identity one for "is this the same
+theorem" — and *neither* is promoted to a verdict. `exact_is_approximate` reports
+when this system's grammar is one the search policy over-reports on, since a
+caller that cannot tell which case it is in has to distrust the ranking
+everywhere.
 
 ### 4.5 Alignment tools: prose search, and the notation direction
 

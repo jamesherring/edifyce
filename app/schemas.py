@@ -1143,6 +1143,16 @@ class TheoremCandidate(BaseModel):
     variables, so citing it needs no instantiation at all. ``premise_count`` is
     what a caller ranks by after that: a theorem with none can close the goal on
     its own, and one with two needs two standing lines found for it first.
+
+    ``exact`` is a **ranking hint and not a verdict**, for two reasons that both
+    matter to a caller tempted to read it as "already proved". It compares the
+    stored ``terms.alpha_digest``, whose policy renames every regex leaf — so in
+    a grammar whose numerals are a ``matches`` production it reads `2 = 5` and
+    `7 = 9` as one statement (`tests/test_alpha_digest.py` pins it); the callers
+    that can tell whether their system is one of those report it. And a
+    *schematic* theorem that genuinely proves a ground goal is **not** exact,
+    since instantiation is unification rather than renaming. Only unification
+    against a line in a real scope settles either way.
     """
 
     label: str
@@ -1186,6 +1196,67 @@ class TheoremMatches(BaseModel):
     # restates what it carries, or one whose rename leaves this system's
     # production without a pre-image there.
     unfiltered: int = 0
+
+
+class StatementProposal(BaseModel):
+    """A statement named structurally, before there is a proof to put it in.
+
+    §4.4 of docs/informal-source-ingestion-roadmap.md. Every other structured
+    write is *inside* a proof; a translation from an informal source needs the
+    opposite order — state the target, ask whether it is already proved, and only
+    then open a proof aimed at it.
+
+    A **dry run unless ``store``**, as `/cite` and `/lines` are: asking "is this
+    proved?" is a question, and a question should not write rows. ``store``
+    interns the term and hands back an id — which is what makes it usable as a
+    `ref` elsewhere — and is therefore owner-only.
+    """
+
+    statement: TermProposalIn
+    store: bool = False
+    limit: int = Field(25, ge=1, le=200)
+
+
+class StatementOutcome(BaseModel):
+    """A resolved statement, and whether the library already concludes it.
+
+    ``rendered`` is the system's own source spelling, exact by construction: a
+    production's render steps *are* its source template. It is what a caller
+    would have had to write, handed back after the fact rather than trusted
+    before it.
+
+    ``term_id`` is present only when ``store`` was set. Everything else answers
+    without writing anything.
+    """
+
+    formal_system_id: uuid.UUID
+    term_id: uuid.UUID | None = None
+    rendered: str
+    # The goal's root production — what a search is narrowed by. Null for a
+    # statement whose root is a leaf, which names no production and so narrows
+    # nothing; ``matches`` is then empty and ``unfiltered`` says the whole library
+    # went unasked.
+    constructor: str | None = None
+    digest: str
+    alpha_digest: str
+    # Theorems that could conclude it, by the same filter
+    # `GET /formal-systems/{id}/theorems/matching` runs — candidates, never a
+    # verdict, including the ``exact`` ones. Confirming that one of these really
+    # does prove the statement is unification against a line standing in a real
+    # scope (`GET /proofs/{id}/lines/{n}/citations`), which is a proof's context
+    # and is why no field here says "proved".
+    matches: list[TheoremCandidate] = Field(default_factory=list)
+    matched: int = 0
+    truncated: bool = False
+    unindexed: int = 0
+    unfiltered: int = 0
+    # Whether ``exact`` over-reports in *this* system: true when the grammar
+    # declares a regex production whose tokens denote constants, since the stored
+    # α-digest renames every regex leaf and so reads `2 = 5` and `7 = 9` as one
+    # statement. False for every system that declares none, where `exact` means
+    # what it says. Reported rather than left to a caveat, because a caller that
+    # cannot tell the two cases apart has to distrust the ranking everywhere.
+    exact_is_approximate: bool = False
 
 
 class CitationSuggestion(BaseModel):
