@@ -32,6 +32,7 @@ from app.db.session import get_session
 from app.main import app
 from tests.database import async_url, create_tables, database_url, enable_foreign_keys
 from tests.test_descriptions_store import MARKED, SOURCE
+from tests.test_metamath_persistence import PROPOSITIONAL
 from tests.test_metamath_layered_specs import CORPUS
 from tests.test_proofs_api import _TABLES
 from tests.test_systems_api import _register_login
@@ -415,3 +416,49 @@ def test_a_label_with_neither_prose_nor_declarations_is_still_a_404(client, db):
     system_id, _ = seed_avoiding(db)
 
     assert client.get(f"/api/formal-systems/{system_id}/labels/nosuch").status_code == 404
+
+
+def seed_propositional(db_path) -> tuple[str, str]:
+    """Import the fixture whose `mp2` proves under three *labelled* hypotheses."""
+    engine = create_engine(db_path)
+    try:
+        with Session(engine) as session:
+            report = import_corpus(session, parse(PROPOSITIONAL), name="p")
+            session.commit()
+            mp2 = session.scalars(select(Proof).where(Proof.name == "mp2")).one()
+            for row in session.scalars(select(Proof)):
+                row.published_at = row.created_at
+            mp2.formal_system.published_at = mp2.created_at
+            session.commit()
+            return str(report.system_id), str(mp2.id)
+    finally:
+        engine.dispose()
+
+
+def test_a_theorems_own_hypothesis_resolves_through_the_proof_citing_it(client, db):
+    # A `$e` is citable from inside the block that declares it and nowhere else,
+    # which is why it is a column on its theorem rather than a library entry. So
+    # a system-wide lookup cannot see it, and a step of `mp2` citing `mp2.1`
+    # would come back as a citation of nothing.
+    system_id, proof_id = seed_propositional(db)
+
+    res = client.get(
+        f"/api/formal-systems/{system_id}/library/mp2.1", params={"proof": proof_id}
+    )
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    # Granted here rather than established: it is what `mp2` is proved *under*.
+    assert body["kind"] == "hypothesis"
+    assert body["conclusion"] == "ph"
+    assert body["proof_id"] is None
+
+
+def test_a_hypothesis_is_invisible_without_the_proof_that_may_cite_it(client, db):
+    # The reach half of the same rule. Answering this globally would make a bare
+    # `|- ph` citable by anyone, which is the thing the column exists to prevent.
+    system_id, _proof_id = seed_propositional(db)
+
+    assert (
+        client.get(f"/api/formal-systems/{system_id}/library/mp2.1").status_code == 404
+    )

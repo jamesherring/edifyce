@@ -1049,6 +1049,28 @@ export interface ProofStructureLine {
 	antecedents: ProofStructureAntecedent[];
 }
 
+/** What a citation's label names, read from rows alone — the cheap half of a
+ * `LineJustification`. That record re-checks the proof (the substitution it
+ * reports is derived), which is why it is signed-in only; this is what a citation
+ * *says*, and is a handful of row reads, so any reader of the system gets it. */
+export interface LibraryEntry {
+	label: string;
+	/** The rule's own name where it has one; empty for a library entry, which is
+	 * named by its label alone. */
+	name: string;
+	/** 'rule' (a primitive this system declares), 'axiom' or 'theorem'. */
+	kind: string;
+	conclusion: string;
+	premises: string[];
+	discharges: string | null;
+	title: string | null;
+	proof_id: string | null;
+	/** The notation the schemas were read through, echoed as `ProofStructure`
+	 * echoes it: a client showing a proof in one spelling must be able to tell a
+	 * served rendering from a silently ignored request. */
+	notation: string | null;
+}
+
 /** One antecedent of the rule, and the line that filled it. `schema_form` is the
  * rule's own — what it demands of the slot — and empty for a surplus line an
  * `allow_extra_antecedents` rule tolerated, which fills none. */
@@ -1357,6 +1379,24 @@ export const api = {
 	// --- Formal systems (stored CRUD) ---------------------------------------
 
 	systems: {
+		/** What a citation's label names, from rows — no re-check, so any reader of
+		 * the system may ask. `proofs.justification` is the same thing plus the
+		 * substitution, and costs a re-check for it. */
+		libraryEntry: (
+			systemId: string,
+			label: string,
+			options: { notation?: string; proof?: string } = {}
+		) => {
+			const query = new URLSearchParams();
+			if (options.notation) query.set('notation', options.notation);
+			// Only a label local to the citing proof needs it — a hypothesis of the
+			// theorem that proof establishes, which no system-wide index can see.
+			if (options.proof) query.set('proof', options.proof);
+			const suffix = query.size ? `?${query}` : '';
+			return request<LibraryEntry>(
+				`/formal-systems/${systemId}/library/${encodeURIComponent(label)}${suffix}`
+			);
+		},
 		/** The signed-in user's own systems (drafts included). Requires auth. */
 		list: (params?: ListParams) =>
 			request<Page<FormalSystemSummary>>(`/formal-systems${listQuery(params)}`),

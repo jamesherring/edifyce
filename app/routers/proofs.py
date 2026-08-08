@@ -112,7 +112,12 @@ from app.routers._common import (
     paginate_summaries,
     unique_slug,
 )
-from app.routers.systems import EffectiveSystem, load_effective, load_system
+from app.routers.systems import (
+    EffectiveSystem,
+    load_effective,
+    load_system,
+    nearest_first,
+)
 from website.logical.formal_system.diagnostics import numbers
 from website.logical.formal_system.justification import justification
 from website.logical.formal_system.proof import Proof as EngineProof
@@ -2902,18 +2907,6 @@ async def find_citations(
     )
 
 
-def _nearest_first(chain: Sequence[FormalSystem]) -> dict[uuid.UUID, int]:
-    """Each layer's *nearness* to the citing system; lower wins a label.
-
-    A citation resolves to the closest layer declaring the label, shadowing an
-    ancestor's rather than being ambiguous (`LibraryChain`). `chain` is root
-    first, ending in the system being built, so nearness is its reverse — and
-    everything answering a question *about* a citation has to rank the same way,
-    or it describes the entry the check did not use.
-    """
-    return {system.id: rank for rank, system in enumerate(reversed(chain))}
-
-
 async def _label_title(
     session: AsyncSession, chain: Sequence[FormalSystem], label: str
 ) -> str | None:
@@ -2921,7 +2914,7 @@ async def _label_title(
     # the spine, so an imported theorem's prose sits on whichever layer declared
     # it. One query, since a chain is a handful of systems, and the nearest of
     # what comes back is the one the citation meant.
-    nearness = _nearest_first(chain)
+    nearness = nearest_first(chain)
     rows = await session.scalars(
         select(LabelDescriptionRow).where(
             LabelDescriptionRow.formal_system_id.in_(list(nearness)),
@@ -2959,7 +2952,7 @@ async def _proof_of_label(
     a `$a`), or when the viewer may not read the proof there is — which is the
     same answer to a client either way: there is nothing to link to.
     """
-    nearness = _nearest_first(chain)
+    nearness = nearest_first(chain)
     entries = await session.scalars(
         select(PromotedTheoremRow).where(
             PromotedTheoremRow.system_id.in_(list(nearness)),

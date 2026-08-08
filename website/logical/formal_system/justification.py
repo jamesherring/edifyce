@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING
 from ..kernel.definitions import Definition
 from ..kernel.side_conditions import references
 from ..kernel.terms import bound_label
+from ..matching import StringPattern
 from ..rendering import render
 from .rules import ANONYMOUS
 
@@ -132,11 +133,13 @@ def justification(
     and :mod:`~.diagnostics` is where they are said — this answers only the
     question a justified line raises.
 
-    ``projection`` re-spells the terms in the assignments, so a reader looking at
-    a proof through a notation is shown the substitution in that same notation
-    rather than in the source spelling underneath it. The rule's own schemas are
-    left alone: they are stored text in the system's grammar, not terms, and are
-    the "native form" a citation refers to.
+    ``projection`` re-spells **everything the record states in the object
+    language** — the assignments, the premises a step quoted, and the rule's own
+    schemas — so a reader looking at a proof through a notation is never handed
+    half a record in the spelling underneath it. A rule's schema is a term (the
+    one the build composed and the checker unifies with), so it re-spells like any
+    other; what stays as written is a *sort name* (`formula`, standing for "any
+    formula"), which no notation has an opinion about.
     """
     definition = line.applied_definition
     if definition is not None:
@@ -151,11 +154,11 @@ def justification(
         kind="rule",
         label=rule.label,
         name=rule.name,
-        conclusion=rule.schema_text(rule.deduction),
+        conclusion=_schema(rule, rule.deduction, projection),
         premises=_premises(rule, line, projection),
         assignments=_assignments(inference, projection),
         provisos=_provisos(rule),
-        discharges=_discharged(rule),
+        discharges=_discharged(rule, projection),
     )
 
 
@@ -168,7 +171,7 @@ def _premises(
     declared = [
         Premise(
             position=position,
-            schema=rule.schema_text(pattern),
+            schema=_schema(rule, pattern, projection),
             number=_local_number(cited, line),
             statement=_statement(cited, projection),
         )
@@ -274,20 +277,40 @@ def _provisos(rule: InferenceRule) -> tuple[Proviso, ...]:
     )
 
 
-def _discharged(rule: InferenceRule) -> str | None:
+def _schema(
+    rule: InferenceRule, pattern: Pattern | None, projection: Projection | None
+) -> str:
+    """One of the rule's own schemas, read the way the rest of the record is.
+
+    A compound schema carries the *term* the build composed for it, which is the
+    one the checker unifies against — so it re-spells through a notation exactly
+    as a proof line does. Anything else is named by the sort it draws from
+    (`formula`), which is not in the object language and which no notation has a
+    template for, so it stays as `schema_text` writes it.
+    """
+    if (
+        projection is not None
+        and isinstance(pattern, StringPattern)
+        and pattern.schema_term is not None
+    ):
+        return render(pattern.schema_term, projection)
+    return rule.schema_text(pattern)
+
+
+def _discharged(rule: InferenceRule, projection: Projection | None) -> str | None:
     schema = rule.subproof_schema
     if schema is None:
         return None
     # As the engine's own vocabulary writes it — `[assume p ⊢ q]` — which is what
     # the system page already shows for a discharge rule, so the two agree.
     opener = (
-        f"fresh {rule.schema_text(schema.fresh)}"
+        f"fresh {_schema(rule, schema.fresh, projection)}"
         if schema.fresh is not None
-        else f"assume {rule.schema_text(schema.assumption)}"
+        else f"assume {_schema(rule, schema.assumption, projection)}"
         if schema.assumption is not None
         else ""
     )
-    conclusion = rule.schema_text(schema.conclusion)
+    conclusion = _schema(rule, schema.conclusion, projection)
     return f"[{opener} ⊢ {conclusion}]" if opener else f"[{conclusion}]"
 
 
