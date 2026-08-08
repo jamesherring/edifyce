@@ -156,9 +156,14 @@ theory (synonyms merged).
 
 ## What is left
 
-- **Storage** — *in progress on this branch.* A fingerprint per promoted-theorem
-  conclusion, computed at promotion/import time and stored on `promoted_theorems`.
-  This is the first Atlas migration the retrieval work has required.
+- **Storage** — *done.* A fingerprint per promoted-theorem conclusion, computed
+  in `store_theorem` from the conclusion term (`promoted.deduction.schema_term`,
+  under the same `StringPattern` guard as `statement_term_id`, so imports are
+  covered automatically) and stored on `promoted_theorems.conclusion_fingerprint`
+  as `[position-set key, features]` JSON (`app/db/fingerprints.py`). It is present
+  exactly when the cached term is, so a theorem is "indexed" consistently. Existing
+  rows carry NULL until re-indexed — the same "unindexed" state a NULL cached term
+  already has. One Atlas migration (a nullable column add).
 - **Wiring.** `conclusion_candidates` gains a per-position compatibility filter in
   place of the single `constructor` equality; position `()` refines today's
   behaviour (it splits ground leaves by token too), and the deeper positions only
