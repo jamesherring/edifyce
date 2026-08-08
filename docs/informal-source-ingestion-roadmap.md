@@ -419,11 +419,28 @@ lexical one is worth shipping first and alone — on a corpus that names things
 `cbvald` the *title* is what a model can recognise.
 
 The lexical one is built (`app/db/label_search.py`). Every word must appear
-somewhere in one label's record; hits are ranked label, then title, then body,
-and the response says **which** — a ranking a caller cannot account for is one it
-has to trust blindly or ignore, and this one has a knowable weakness (a common
-word deep in a long comment ranks like the same word in the title of the thing
-being looked for).
+somewhere in one label's record; hits are ranked by **the tightest single field
+holding all of them** — label, then title, then prose — and the response says
+which. A ranking a caller cannot account for is one it has to trust blindly or
+ignore, and this one has a knowable weakness (a common word deep in a long
+comment ranks like the same word in the title of the thing being looked for).
+
+There is a fourth answer, `record`, and it is a correction: the first cut had
+three and an `else_`, so a query whose words are split across two fields — `wi`
+the label, "wff" in the title — fell through and reported a *prose* match, which
+is a claim about a body containing neither word. It also paired `matched: "text"`
+with no excerpt, which the schema said could not happen. No single field holds
+those words, and that is its own category rather than the bottom of the list.
+
+Two more the same review found, both of the same kind — an answer true of the
+wrong thing. A hit **is** a row on a known layer, so resolving its proof link or
+its discouragement markers *nearest-first* answers about a different one: two
+systems in a chain may declare one name, and the ancestor's hit carried the
+descendant's proof id. The per-layer map is now the primitive, and the collapse
+to nearest-first lives at the one caller that has a name and no layer — a
+cross-reference target. And the `MAX_TOKENS` cap was silent, so a nine-word query
+was answered more broadly than it was asked with every extra row a false positive
+nobody could identify; `searched` now reports the words that ran.
 
 **Two haystacks, which the section did not say.** A corpus label's prose is a
 `label_descriptions` row; a proof authored through the API carries its own

@@ -74,7 +74,7 @@ from app.db.descriptions import LabelDescriptionRow
 from app.db.models import Proof
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.sql import ColumnElement
@@ -89,12 +89,25 @@ MAX_TOKENS = 8
 # short enough that twenty of them are still a list.
 EXCERPT_WIDTH = 240
 
-# Where the query landed, best first. Ordering by this is the whole ranking: a
-# corpus label is a mnemonic somebody may know outright (`ax-mp`), its title is
-# the sentence a reader recognises, and the body is everything else.
-_EXACT, _LABEL, _TITLE, _TEXT = 0, 1, 2, 3
+# Where the query landed, best first: **the tightest single field that holds
+# every word**, and then everything else. A corpus label is a mnemonic somebody
+# may know outright (`ax-mp`), its title is the sentence a reader recognises, and
+# its prose is where the rest of it is.
+#
+# `_SPREAD` is that "everything else" and it is a category rather than a fallback
+# (found in review, where it did not exist and the last arm was an `else_` that
+# said "text"). A query whose words are split across two fields — `wi wff`, with
+# `wi` the label and "wff" in the title — is in *no* single field, and reporting
+# it as a prose match is a claim about a body that may not contain a word of it.
+_EXACT, _LABEL, _TITLE, _TEXT, _SPREAD = 0, 1, 2, 3, 4
 
-_MATCHED = {_EXACT: "label", _LABEL: "label", _TITLE: "title", _TEXT: "text"}
+_MATCHED = {
+    _EXACT: "label",
+    _LABEL: "label",
+    _TITLE: "title",
+    _TEXT: "text",
+    _SPREAD: "record",
+}
 
 # Which haystack a label came out of, as the tie-break between two rows for one
 # label. The corpus's record wins over a proof's own fields: an import copies the
@@ -135,18 +148,27 @@ class Hit:
 
 @dataclass(frozen=True)
 class Hits:
-    """A page of hits, and how much prose there was to miss.
+    """A page of hits, how much prose there was to miss, and what was asked.
 
     ``documented`` is the count this whole search is judged against. A caller
     seeing nothing needs to tell "the words are not in this corpus" from "this
     system documents nothing", and those are the same empty list — the same
     distinction :class:`app.db.retrieval.Candidates` draws with ``unindexed``,
     for the same reason: a short answer must never read as a complete one.
+
+    ``searched`` is the words actually used, and it exists because the cap in
+    :func:`tokens_of` would otherwise be a silent lie (found in review). The
+    contract is "every word must appear"; drop the ninth word quietly and the
+    answer is to a *broader* question than the one asked, and every extra row is
+    a false positive the caller has no way to identify. Reported rather than
+    refused: a caller pasting a sentence from a paper is doing the reasonable
+    thing, and the useful response is the search plus a note of what it ran on.
     """
 
     hits: list[Hit]
     total: int
     documented: int
+    searched: list[str]
 
 
 def tokens_of(query: str) -> list[str]:
@@ -155,6 +177,9 @@ def tokens_of(query: str) -> list[str]:
     Whitespace only — not a tokenizer. Splitting on punctuation would break
     `df-un` and `ax-mp` into pieces that match half the corpus, and those are
     exactly the strings someone types this query with.
+
+    Capped at :data:`MAX_TOKENS`, which the caller is told about — see
+    :attr:`Hits.searched`.
     """
     return list(dict.fromkeys(query.lower().split()))[:MAX_TOKENS]
 
@@ -215,7 +240,8 @@ def _branch(
         (func.lower(label) == query.strip().lower(), _EXACT),
         (_all_in(label, tokens), _LABEL),
         (_all_in(title, tokens), _TITLE),
-        else_=_TEXT,
+        (_all_in(body, tokens), _TEXT),
+        else_=_SPREAD,
     )
     # A `CASE` over the spine rather than a join: it is a handful of ids, it is
     # already ordered nearest-first, and the alternative is a temporary table to
@@ -246,14 +272,21 @@ def _excerpt(body: str, tokens: Sequence[str]) -> str | None:
 
     # A third of the window ahead of the match, so the sentence it opens is
     # visible rather than the one it closes.
-    start = max(0, min(found) - EXCERPT_WIDTH // 3)
+    at = min(found)
+    start = max(0, at - EXCERPT_WIDTH // 3)
     end = min(len(body), start + EXCERPT_WIDTH)
     if start:
+        # Forward to a word boundary, but **never past the match**: a run of 240
+        # characters with no space in it — a URL, a long `$t` token — put the
+        # first space beyond the word that was searched for, and the excerpt came
+        # back containing none of the query (found in review). Trimming is a
+        # tidiness, and it does not get to cost the thing being excerpted.
         space = body.find(" ", start, end)
-        start = start + 1 if space < 0 else space + 1
+        start = min(space + 1, at) if space >= 0 else start
     if end < len(body):
         space = body.rfind(" ", start, end)
-        if space > start:
+        # Likewise at the far end: never cut back past the start of the match.
+        if space > start and space > at:
             end = space
     return f"{'…' if start else ''}{body[start:end].strip()}{'…' if end < len(body) else ''}"
 
@@ -290,7 +323,12 @@ async def search_labels(
     if not words:
         # A caller who asked for nothing gets nothing, rather than the corpus: an
         # empty `AND` is vacuously true and would page the whole library.
-        return Hits(hits=[], total=0, documented=await _documented(session, spine))
+        return Hits(
+            hits=[],
+            total=0,
+            documented=await _documented(session, spine),
+            searched=[],
+        )
 
     described, rank, source, depth = _branch(
         label=LabelDescriptionRow.label,
@@ -362,8 +400,14 @@ async def search_labels(
     else:
         total = await session.scalar(select(func.count()).select_from(unique)) or 0
 
-    flags = await _flags(session, spine, [row.label for row in rows])
-    links = await proofs_named(session, spine, [row.label for row in rows], viewer)
+    # Both keyed by (layer, label), not by label — a hit *is* a row on a
+    # particular layer, and resolving its link or its markers nearest-first would
+    # answer about a different one. Two layers may declare the same name, so a
+    # `pc-thm` hit reported against the root could otherwise carry the id of a
+    # leaf's unrelated `pc-thm` (found in review, reproduced on Postgres).
+    labels = [row.label for row in rows]
+    flags = await _flags(session, spine, labels)
+    links = await proofs_named(session, spine, labels, viewer)
     return Hits(
         hits=[
             Hit(
@@ -372,15 +416,18 @@ async def search_labels(
                 title=row.title,
                 excerpt=_excerpt(row.body, words),
                 matched=_MATCHED[row.rank],
-                proof_id=links.get(row.label, (None, None))[0],
-                proof_title=links.get(row.label, (None, None))[1],
-                discouraged_usage=flags.get(row.label, (False, False))[0],
-                discouraged_modification=flags.get(row.label, (False, False))[1],
+                proof_id=links.get((row.system_id, row.label), (None, None))[0],
+                proof_title=links.get((row.system_id, row.label), (None, None))[1],
+                discouraged_usage=flags.get((row.system_id, row.label), (False, False))[0],
+                discouraged_modification=flags.get(
+                    (row.system_id, row.label), (False, False)
+                )[1],
             )
             for row in rows
         ],
         total=total,
         documented=await _documented(session, spine),
+        searched=list(words),
     )
 
 
@@ -402,8 +449,8 @@ async def _documented(session: AsyncSession, spine: Sequence[uuid.UUID]) -> int:
 
 async def _flags(
     session: AsyncSession, spine: Sequence[uuid.UUID], labels: Sequence[str]
-) -> dict[str, tuple[bool, bool]]:
-    """The discouragement markers for these labels, nearest layer first.
+) -> dict[tuple[uuid.UUID, str], tuple[bool, bool]]:
+    """The discouragement markers for these labels, per layer.
 
     Read here rather than carried through the union because a hit may have won on
     its *proof* row, which has no such markers — reporting False for a label the
@@ -413,6 +460,10 @@ async def _flags(
 
     They matter more here than anywhere: a search result is what an aligning
     caller picks a citation from, and `set.mm` discourages 5,169 of its own.
+
+    Keyed by ``(layer, label)`` because a caller has a *hit*, which is a row on a
+    known layer, and answering it with a nearer layer's markers for the same name
+    is the same class of mistake as linking it to a nearer layer's proof.
     """
     wanted = list(dict.fromkeys(labels))
     if not wanted:
@@ -428,13 +479,10 @@ async def _flags(
             LabelDescriptionRow.label.in_(wanted),
         )
     )
-    depth = {found: index for index, found in enumerate(spine)}
-    found: dict[str, tuple[bool, bool]] = {}
-    for system_id, label, usage, modification in sorted(
-        rows, key=lambda row: depth[row[0]]
-    ):
-        found.setdefault(label, (usage, modification))
-    return found
+    return {
+        (system_id, label): (usage, modification)
+        for system_id, label, usage, modification in rows
+    }
 
 
 async def proofs_named(
@@ -442,8 +490,8 @@ async def proofs_named(
     spine: Sequence[uuid.UUID],
     labels: Sequence[str],
     viewer: User | None,
-) -> dict[str, tuple[uuid.UUID, str | None]]:
-    """Which of these labels are proofs the viewer may open, nearest layer first.
+) -> dict[tuple[uuid.UUID, str], tuple[uuid.UUID, str | None]]:
+    """Which of these labels are proofs the viewer may open, **per layer**.
 
     What it buys a search is that a hit is *followable*. Half of a corpus's
     labels are `$a`s with no proof at all, so this is null as often as not, and
@@ -452,9 +500,15 @@ async def proofs_named(
 
     Shared with `app.routers._documentation`, which asks it of a
     cross-reference's target and where it used to live. Moved down here when this
-    module wanted the same answer: two copies of a nearest-first resolution is
-    two chances for a hit and the link on it to disagree about which layer they
-    mean, and the rule belongs beside the query either way.
+    module wanted the same answer.
+
+    **Keyed by (layer, label), because the two callers want different collapses
+    of the same rows** — which is exactly why this returns the uncollapsed map
+    rather than picking one (found in review, where it picked nearest-first and
+    the search inherited an answer about the wrong layer). A cross-reference
+    names a label and nothing else, so `_documentation` resolves it nearest-first
+    through :func:`nearest`. A search *hit* already names its layer, so it looks
+    up that pair and gets the proof its own row is about.
 
     One query for the whole set rather than one per name: a single comment can
     carry a dozen references and a page of hits twenty labels, and a round trip
@@ -473,11 +527,28 @@ async def proofs_named(
             or_(*readable),
         )
     )
-    # `Proof.name` is unique per system but not per spine, so the tie is real —
-    # and sorted here rather than left to the `IN`, which returns rows in no
-    # order the chain knows about.
+    return {(system_id, name): (found, title) for system_id, name, found, title in rows}
+
+
+def nearest(
+    resolved: Mapping[tuple[uuid.UUID, str], tuple[uuid.UUID, str | None]],
+    spine: Sequence[uuid.UUID],
+) -> dict[str, tuple[uuid.UUID, str | None]]:
+    """Collapse :func:`proofs_named` to one answer per label, nearest layer first.
+
+    For the caller that has a *name* and no layer — a cross-reference target. A
+    system's own proof is what its own prose meant, so the chain is walked in the
+    order `app.db.lineage.spine_ids` returns it: the system asked about, then what
+    it was built on, then what was built on it.
+
+    Sorted rather than left to the query, which returns rows in no order the
+    chain knows about. `Proof.name` is unique per system but not per spine, so the
+    tie is real.
+    """
     depth = {found: index for index, found in enumerate(spine)}
-    resolved: dict[str, tuple[uuid.UUID, str | None]] = {}
-    for owner, name, found, title in sorted(rows, key=lambda row: depth[row[0]]):
-        resolved.setdefault(name, (found, title))
-    return resolved
+    collapsed: dict[str, tuple[uuid.UUID, str | None]] = {}
+    for (system_id, name), found in sorted(
+        resolved.items(), key=lambda item: depth[item[0][0]]
+    ):
+        collapsed.setdefault(name, found)
+    return collapsed

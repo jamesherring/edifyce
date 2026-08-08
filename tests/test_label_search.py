@@ -33,6 +33,7 @@ from app.db.models import Proof
 from app.db.session import get_session
 from app.main import app
 from tests.database import async_url, create_tables, database_url, enable_foreign_keys
+from app.db.label_search import EXCERPT_WIDTH, _excerpt
 from tests.test_descriptions_api import LAYERED
 from tests.test_descriptions_store import SOURCE
 from tests.test_proofs_api import _TABLES
@@ -158,7 +159,7 @@ def test_a_label_match_outranks_a_title_match_outranks_the_body(client, db):
     assert found["df-neg"] == "title"
     # And the title matches come before anything that only matched in prose.
     kinds = [hit["matched"] for hit in body["items"]]
-    assert kinds == sorted(kinds, key=["label", "title", "text"].index)
+    assert kinds == sorted(kinds, key=["label", "title", "text", "record"].index)
 
 
 def test_matched_says_which_field_the_ranking_used(client, db):
@@ -441,6 +442,105 @@ def test_a_system_the_caller_cannot_read_is_a_404(client, db):
         f"/api/formal-systems/{system_id}/labels", params={"q": "anything"}
     )
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# What the review found: four ways an answer could be true of the wrong thing
+# ---------------------------------------------------------------------------
+
+
+def test_a_hit_links_to_the_proof_on_its_own_layer(client, db):
+    # A hit *is* a row on a known layer, so resolving its link nearest-first
+    # answers about a different one: two systems in a chain may declare the same
+    # name, and the ancestor's hit would carry the descendant's proof id.
+    _register_login(client, "ada@example.com")
+    parent = client.post("/api/formal-systems", json={"name": "Parent"}).json()["id"]
+    theirs = client.post(
+        "/api/proofs",
+        json={
+            "name": "dup",
+            "formal_system_id": parent,
+            "title": "Compactness of the Stone space.",
+        },
+    )
+    assert theirs.status_code == 201, theirs.text
+
+    # A child may only inherit from a published parent.
+    client.patch(f"/api/formal-systems/{parent}", json={"published": True})
+    made = client.post(
+        "/api/formal-systems", json={"name": "Child", "inherits_from_id": parent}
+    )
+    assert made.status_code == 201, made.text
+    child = made.json()["id"]
+
+    mine = client.post(
+        "/api/proofs",
+        json={
+            "name": "dup",
+            "formal_system_id": child,
+            "description": "An unrelated note.",
+        },
+    )
+    assert mine.status_code == 201, mine.text
+
+    # "stone" is only in the parent's title, so the parent's row is the only hit
+    # — and the link on it must be the parent's proof, not the nearer namesake.
+    (hit,) = search(client, child, "stone")["items"]
+    assert hit["formal_system_id"] == parent
+    assert hit["proof_id"] == theirs.json()["id"]
+    assert hit["proof_title"] == "Compactness of the Stone space."
+
+
+def test_words_split_across_fields_are_a_record_match_not_a_prose_one(client, db):
+    # `wi` is the label and "wff" is in the title, so *no single field* holds both
+    # — and calling that a text match is a claim about a body that contains
+    # neither word. It also produced `matched: "text"` beside `excerpt: null`,
+    # which the schema says cannot happen.
+    system_id, _ = seed(db)
+
+    (hit,) = [h for h in search(client, system_id, "wi wff")["items"] if h["label"] == "wi"]
+    assert hit["matched"] == "record"
+
+    # And the invariant that broke: a `text` match always has an excerpt.
+    for word in ("survives", "paragraph"):
+        for found in search(client, system_id, word)["items"]:
+            if found["matched"] == "text":
+                assert found["excerpt"] is not None
+
+
+def test_the_words_actually_searched_come_back(client, db):
+    # The cap would otherwise be a silent lie: the contract is that every word
+    # appears in every hit, so dropping the ninth answers a *broader* question
+    # and every extra row is a false positive nobody can identify.
+    system_id, _ = seed(db)
+
+    body = search(client, system_id, "  Negation   DEFINE negation ")
+    # Lowercased and deduplicated, in the order given.
+    assert body["searched"] == ["negation", "define"]
+
+    long_query = " ".join(f"w{n}" for n in range(12))
+    assert len(search(client, system_id, long_query)["searched"]) == 8
+
+
+def test_an_excerpt_always_contains_what_was_searched_for():
+    # The word-boundary trim is a tidiness and does not get to cost the thing
+    # being excerpted. A run longer than the window with no space in it — a URL,
+    # a long token — put the first space *past* the match, and the excerpt came
+    # back containing none of the query.
+    body = "x" * (EXCERPT_WIDTH * 2) + "needle and then some ordinary prose"
+    found = _excerpt(body, ["needle"])
+    assert found is not None
+    assert "needle" in found
+
+    # The ordinary case is unchanged: a slice on word boundaries, ellipsed.
+    prose = " ".join(["filler"] * 100) + " needle " + " ".join(["more"] * 100)
+    ordinary = _excerpt(prose, ["needle"])
+    assert "needle" in ordinary
+    assert ordinary.startswith("…") and ordinary.endswith("…")
+    assert not ordinary.startswith("…iller")
+
+    # And a word the body does not carry has nothing to point at.
+    assert _excerpt(prose, ["absent"]) is None
 
 
 def test_the_single_label_route_still_resolves(client, db):

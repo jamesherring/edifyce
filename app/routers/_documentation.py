@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 from app.db.avoidances_mapping import avoided_by
 from app.db.descriptions_mapping import mentions_of
-from app.db.label_search import proofs_named
+from app.db.label_search import nearest, proofs_named
 from app.db.lineage import spine_ids
 from app.schemas import Attribution, LabelDescription, LabelMention, LabelReference
 
@@ -62,12 +62,13 @@ async def _linkable(
     word, and the reader cannot follow it.
 
     The resolution itself is :func:`app.db.label_search.proofs_named`, which grew
-    out of this function and now serves the label search too — nearest layer wins,
-    since a system's own proof is what its own prose meant. Kept as a wrapper
-    rather than called directly at both sites so this file stays the place the
-    linking policy is explained.
+    out of this function and now serves the label search too. It answers per
+    layer; **a cross-reference names a label and no layer**, so the collapse is
+    :func:`~app.db.label_search.nearest` and a system's own proof wins, since
+    that is what its own prose meant. A search hit does not take this path — it
+    knows its layer and asks about that one.
     """
-    return await proofs_named(session, spine, list(names), viewer)
+    return nearest(await proofs_named(session, spine, list(names), viewer), spine)
 
 
 async def documentation_out(

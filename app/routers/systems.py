@@ -1186,8 +1186,9 @@ async def search_label_descriptions(
     matches substrings of words, so it has no stemming, no synonyms and no notion
     of a phrase. A query sharing no word with the prose scores nothing however
     well it describes it, which is the ceiling `theorems.embedding` was
-    provisioned to lift. ``documented`` says how much prose there was to miss, so
-    an empty answer is readable as one.
+    provisioned to lift. ``documented`` says how much prose there was to miss and
+    ``searched`` says which words actually ran, so neither an empty answer nor a
+    long query is answered with a silent approximation.
 
     Not on the shared ``page_params``, which carries ``search``/``sort``/``desc``:
     the query here is the route's subject rather than a filter on it, and the
@@ -1221,6 +1222,7 @@ async def search_label_descriptions(
         limit=limit,
         offset=offset,
         documented=found.documented,
+        searched=found.searched,
     )
 
 

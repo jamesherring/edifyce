@@ -891,14 +891,16 @@ class LabelHit(BaseModel):
     formal_system_id: uuid.UUID
     title: str | None = None
     # The prose around the first matched word, ellipsed where it is a slice. Null
-    # when the match was in the label or the title, since there is then nothing in
-    # the body to point at.
+    # when no word landed in the body — always so for a `label` or `title` match,
+    # and possible for a `record` one, whose words are spread across fields.
     excerpt: str | None = None
-    # Which of `label`, `title`, `text` the ranking used. Served because a ranking
-    # a caller cannot account for is one it has to trust blindly or ignore, and
-    # this one has a knowable weakness: a common word deep in a long comment ranks
-    # exactly like the same word in the title of the thing being looked for.
-    matched: Literal["label", "title", "text"]
+    # The tightest single field holding *every* word — or `record` when no one
+    # field holds them all and they are spread across the label, the title and the
+    # prose. Served because a ranking a caller cannot account for is one it has to
+    # trust blindly or ignore, and this one has a knowable weakness: a common word
+    # deep in a long comment ranks exactly like the same word in the title of the
+    # thing being looked for.
+    matched: Literal["label", "title", "text", "record"]
     # Set when the label names a proof the viewer may open. Null for the roughly
     # half of a corpus's labels that are `$a`s and have no proof at all — the
     # label is still citable, there is simply nothing to open.
@@ -912,16 +914,23 @@ class LabelHit(BaseModel):
 
 
 class LabelSearch(Page[LabelHit]):
-    """A page of prose hits, and how much prose there was to miss.
+    """A page of prose hits, how much prose there was to miss, and what was asked.
 
     ``documented`` is the size of the haystack — how many of this system's labels
     carry any prose at all. It is what makes an empty result readable: "the words
     are not in this corpus" and "this corpus is undocumented" are the same empty
     list otherwise, and only one of them means the search is finished. The same
     distinction ``TheoremMatches.unindexed`` draws, for the same reason.
+
+    ``searched`` is the words actually used — lowercased, deduplicated, and
+    capped. The contract is that every one of them appears in every hit, so a
+    query past the cap is answered more broadly than it was asked and each extra
+    row is a false positive; saying which words ran is what keeps that visible
+    rather than silent.
     """
 
     documented: int
+    searched: list[str]
 
 
 class ProofSummary(BaseModel):
