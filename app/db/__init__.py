@@ -9,6 +9,7 @@ from app.db.assumptions import (
     Assumed,
     AssumptionRow,
     RestsOn,
+    Stated,
     TheoremAssumptionRow,
     assumption_labels,
     closure_of,
@@ -18,7 +19,7 @@ from app.db.assumptions import (
     record_closure,
     rests_on,
     resolve_labels,
-    stated_digests,
+    stated,
 )
 from app.db.models import (
     EMBEDDING_DIMENSIONS,
@@ -140,7 +141,8 @@ __all__ = [
     "assumption_labels",
     "closure_of",
     "inherit_closure",
-    "stated_digests",
+    "Stated",
+    "stated",
     "dependent_counts",
     "dependent_entries",
     "record_closure",

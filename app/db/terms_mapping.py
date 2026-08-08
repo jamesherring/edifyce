@@ -169,6 +169,27 @@ def _free_identity(term: Term) -> tuple[str, ...] | None:
     return None
 
 
+def metavariables_only(term: Term) -> tuple[str, ...] | None:
+    """A rename policy for comparing two *theorems*: only a `Var` is renameable.
+
+    :func:`_free_identity`'s regex-leaf rule is right for search — "the same
+    statement up to what the variables are called" — and wrong for asking whether
+    two library entries state the same theorem, in two ways that both matter.
+
+    It renames a leaf that **denotes a constant**: in a grammar whose numerals
+    are a ``matches`` production, `2 = 5` and `7 = 9` collapse into one bucket
+    (`tests/test_alpha_digest.py` pins it). And it renames an object-language
+    variable a theorem did *not* nominate as a metavariable — but an
+    un-nominated leaf is literal, since a promoted theorem justifies exactly its
+    own statement, so `a ∈ b` and `c ∈ d` are two theorems rather than one.
+
+    A metavariable is the only leaf a citation instantiates, so it is the only
+    one whose name carries no information. Needs no grammar to decide, which is
+    what makes this policy safe to apply anywhere the two sides are terms.
+    """
+    return ("var", term.sort.name, term.name) if isinstance(term, Var) else None
+
+
 def _assign_free_indices(
     term: Term,
     resolve: FreeIdentity,

@@ -70,8 +70,9 @@ from app.db.base import Base, TimestampMixin
 from app.db.models import Proof
 from app.db.proof_lines import ProofLineAntecedentRow, ProofLineRow
 from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
+from app.db.side_conditions import SideConditionRow
+from app.db.side_conditions_mapping import proviso_lines
 from app.db.systems import RuleRow
-from app.db.terms import TermRow
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -278,40 +279,62 @@ def inherit_closure(
                 )
 
 
-def stated_digests(
-    session: Session, theorem_id: uuid.UUID
-) -> tuple[str | None, tuple[str | None, ...]]:
-    """A library entry's conclusion and premises, as α-digests.
+@dataclass(frozen=True)
+class Stated:
+    """What a library entry claims, as the rows that hold it.
 
-    What "the same theorem" means when a proof is offered to discharge an
-    assumption. **α** rather than exact: the assumption was written by hand and
-    the proof composes its own variable names, so two statements that differ only
-    in what the metavariables are called are the same claim — which is exactly
-    the invariance `alpha_digest` was built for.
+    The terms rather than any digest of them. Which digest answers "is this the
+    same theorem" is the caller's decision and a delicate one — the stored
+    ``terms.alpha_digest`` is emphatically **not** it, because its default policy
+    renames every regex leaf and so reads `2 = 5` and `7 = 9` as one statement
+    (`tests/test_alpha_digest.py` pins exactly that). So this hands back ids for
+    the caller to rebuild and compare under a policy it chooses.
 
-    A ``None`` is a term the entry does not carry, not a term that digests to
-    nothing. The caller must refuse on one rather than treat it as a match: an
-    entry with no stored conclusion cannot be shown to say what anything else
-    says.
+    ``provisos`` is the entry's distinct-variable conditions as the lines they
+    were written as, because a theorem carrying a proviso its dependents never
+    had to discharge is a *narrower* theorem.
+    """
+
+    conclusion: uuid.UUID | None
+    premises: tuple[uuid.UUID | None, ...]
+    provisos: frozenset[str]
+
+
+def stated(session: Session, theorem_id: uuid.UUID) -> Stated:
+    """What a library entry claims: its terms' ids, and its provisos.
+
+    A ``None`` id is a term the entry does not carry, not a term that compares
+    equal to nothing. A caller deciding whether two entries say the same thing
+    must refuse on one rather than treat it as a match: an entry with no stored
+    conclusion cannot be shown to say what anything else says.
     """
     conclusion = session.scalar(
-        select(TermRow.alpha_digest)
-        .join(
-            PromotedTheoremRow, PromotedTheoremRow.statement_term_id == TermRow.id
+        select(PromotedTheoremRow.statement_term_id).where(
+            PromotedTheoremRow.id == theorem_id
         )
-        .where(PromotedTheoremRow.id == theorem_id)
     )
     premises = tuple(
-        digest
-        for digest, in session.execute(
-            select(TermRow.alpha_digest)
-            .select_from(PromotedTheoremPremiseRow)
-            .outerjoin(TermRow, TermRow.id == PromotedTheoremPremiseRow.term_id)
+        session.scalars(
+            select(PromotedTheoremPremiseRow.term_id)
             .where(PromotedTheoremPremiseRow.theorem_id == theorem_id)
             .order_by(PromotedTheoremPremiseRow.position)
         )
     )
-    return conclusion, premises
+    return Stated(
+        conclusion=conclusion,
+        premises=premises,
+        provisos=frozenset(
+            proviso_lines(
+                list(
+                    session.scalars(
+                        select(SideConditionRow).where(
+                            SideConditionRow.promoted_theorem_id == theorem_id
+                        )
+                    )
+                )
+            )
+        ),
+    )
 
 
 def assumption_labels(

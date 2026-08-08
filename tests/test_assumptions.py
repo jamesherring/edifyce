@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import Session
 
 import app.auth.backend as backend
+import app.routers.proofs as proofs_router
 from app.db.assumptions import AssumptionRow, TheoremAssumptionRow, rests_on
 from app.db.promoted_theorems import PromotedTheoremRow
 from app.db.session import get_session
@@ -788,3 +789,66 @@ def test_a_discharged_assumption_can_then_be_withdrawn_downstream(db, client):
 
     # No longer an assumption at all, so there is nothing left to withdraw.
     assert client.get(f"/api/formal-systems/{pc}/assumptions/triv").status_code == 404
+
+
+# `ax-5` is the tower's one rule with a proviso, so a schematic promotion over a
+# proof that cites it carries `not occurs(...)` into the entry.
+VACUOUS = "(A → ∀y A) [ax-5]"
+
+
+def test_a_warrant_carrying_a_new_proviso_does_not_discharge(db, client):
+    # A distinct-variable condition the debt never had makes the warrant
+    # *narrower*: it refuses instances the assumption allowed, so what lands is
+    # not the theorem the dependents were written against — and after they
+    # inherit its closure they would read as unconditional besides (found in
+    # review).
+    _pc, fol, _zfc = tower(db, client, "discharge-proviso@example.com")
+    assert assume(
+        client,
+        fol,
+        label="vacuous",
+        statement="(P → ∀x P)",
+        metavariables={"P": "formula", "x": "term"},
+    )[0] == 201
+    warrant = proved_and_published(client, fol, VACUOUS)
+
+    status, detail = promote(
+        client, warrant, "vacuous", {"A": "formula", "y": "term"}
+    )
+    assert status == 409, detail
+    assert "carries provisos" in detail["detail"]
+
+    # Nothing moved: the assumption is intact and still the thing citations reach.
+    assert client.get(f"/api/formal-systems/{fol}/assumptions/vacuous").status_code == 200
+
+
+def test_discharging_clears_what_the_assumption_was_standing_in_for(db, client):
+    # An edge's obligation may be discharged by a theorem, and the FK is
+    # ON DELETE SET NULL — so losing this row takes the edge down with it, and
+    # the proofs that resolved *across* it cited the source's labels rather than
+    # this one, which the label walk never reaches. `_retire_promotion` calls
+    # this for exactly that reason; the first cut of discharge did not.
+    #
+    # Pinned by the call rather than by building a tower of related systems: what
+    # went wrong was an omission, and the omission is what this catches.
+    pc, _fol, _zfc = tower(db, client, "discharge-edges@example.com")
+    assert assume(
+        client, pc, label="triv", statement="(P → P)", metavariables={"P": "formula"}
+    )[0] == 201
+    assumption_id = client.get(f"/api/formal-systems/{pc}/assumptions/triv").json()["id"]
+
+    cleared: list[str] = []
+    original = proofs_router.invalidate_warranted_edges
+
+    async def record(session, theorem_id):
+        cleared.append(str(theorem_id))
+        await original(session, theorem_id)
+
+    proofs_router.invalidate_warranted_edges = record
+    try:
+        warrant = proved_and_published(client, pc, IDENTITY_PROOF)
+        assert promote(client, warrant, "triv", {"P": "formula"})[0] == 201
+    finally:
+        proofs_router.invalidate_warranted_edges = original
+
+    assert assumption_id in cleared

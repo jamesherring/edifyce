@@ -60,7 +60,7 @@ from app.db import (
     cited_labels,
     dependent_entries,
     inherit_closure,
-    stated_digests,
+    stated,
     record_closure,
     rests_on,
     Proof,
@@ -91,7 +91,12 @@ from app.db.notations_mapping import load_notation, render_stored
 from app.db.proofs_mapping import failure_from_row
 from app.db.retrieval import conclusion_candidates
 from app.db.terms import TermRow
-from app.db.terms_mapping import alpha_digest, digest_term, prefetch_terms
+from app.db.terms_mapping import (
+    alpha_digest,
+    digest_term,
+    metavariables_only,
+    prefetch_terms,
+)
 from app.db.promoted_theorems import PromotedTheoremRow
 from app.routers._invalidation import (
     clear_verdicts,
@@ -179,8 +184,10 @@ if TYPE_CHECKING:
     from website.logical.formal_system import FormalSystem as EngineSystem
     from website.logical.formal_system.proof import ProofLine as EngineProofLine
     from website.logical.formal_system import PromotedTheorem
+    from website.logical.kernel.terms import Term
     from website.logical.matching.context import Context
     from website.logical.matching.patterns import Pattern
+    from website.logical.promotion import TheoremSpec
 
 router = APIRouter(prefix="/proofs", tags=["proofs"])
 
@@ -1603,7 +1610,7 @@ async def promote_proof(
     inheriting: list[uuid.UUID] = []
     if discharging is not None:
         inheriting = await _discharge(
-            session, proof, discharging, label, promoted, effective
+            session, proof, discharging, label, spec, promoted, compiled, effective
         )
 
     # Replace rather than accumulate. Retiring first also invalidates whatever
@@ -1678,7 +1685,9 @@ async def _discharge(
     proof: Proof,
     assumption_id: uuid.UUID,
     label: str,
+    spec: TheoremSpec,
     promoted: PromotedTheorem,
+    compiled: EngineSystem,
     effective: EffectiveSystem,
 ) -> list[uuid.UUID]:
     """Check that this proof pays the debt off, and say what inherits its own.
@@ -1694,10 +1703,24 @@ async def _discharge(
     citation of the new entry is re-checked either way, because promoting under a
     label invalidates everything that cited it — but an honesty one, and the
     difference a caller most needs told: paying a debt off and replacing an entry
-    with a different claim look identical from here and are opposite things. The
-    comparison is by **α-digest**, so an assumption written by hand and a proof
-    that composed its own variable names still match; and it covers the premises,
-    since a theorem with different hypotheses is a different theorem.
+    with a different claim look identical from here and are opposite things.
+
+    The comparison rebuilds the assumption's stored terms and digests both sides
+    under `metavariables_only`, which is **not** the policy the stored
+    ``terms.alpha_digest`` column carries: that one renames every regex leaf, so
+    in a grammar whose numerals are a ``matches`` production it reads `2 = 5` and
+    `7 = 9` as one statement, and a proof of either would have discharged an
+    assumption of the other (found in review). Only a metavariable is renameable
+    here, which is exactly the leaf a citation instantiates. Premises are covered
+    too, since a theorem with different hypotheses is a different theorem.
+
+    **It must carry no proviso the assumption did not.** A distinct-variable
+    condition the debt never had makes the warrant *narrower* — it refuses
+    instances the assumption allowed — so what lands is not the theorem the
+    dependents were written against, and after they inherit its closure they
+    would read as unconditional besides. The other direction is fine and stays
+    allowed: an assumption with a proviso discharged by a proof needing none is a
+    stronger result, and nothing that cited it can notice.
 
     **It must not rest on the assumption it discharges.** A proof that assumes
     what it claims to prove discharges nothing, and left alone it would resolve
@@ -1708,10 +1731,10 @@ async def _discharge(
     re-point once the warrant's own debts are known. Read here because the row
     cascade takes those edges with the assumption itself.
     """
-    conclusion, premises = await session.run_sync(
-        lambda sync: stated_digests(sync, assumption_id)
-    )
-    if conclusion is None or any(digest is None for digest in premises):
+    claimed = await session.run_sync(lambda sync: stated(sync, assumption_id))
+    if claimed.conclusion is None or any(
+        term_id is None for term_id in claimed.premises
+    ):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"{label!r} names an assumption whose statement is not stored as a "
@@ -1719,15 +1742,32 @@ async def _discharge(
             "Withdraw the assumption first if you mean to replace it.",
         )
 
-    offered = _schema_digest(promoted.deduction)
-    offered_premises = tuple(_schema_digest(p) for p in promoted.antecedents)
-    if offered != conclusion or offered_premises != premises:
+    roots = [claimed.conclusion, *claimed.premises]
+    graph = await session.run_sync(lambda sync: prefetch_terms(sync, roots))
+    context = term_context(compiled)
+    assumed = tuple(_rename_blind(graph.term(root, context)) for root in roots)
+    offered = (
+        _rename_blind(_schema_term(promoted.deduction)),
+        *(_rename_blind(_schema_term(p)) for p in promoted.antecedents),
+    )
+    if offered != assumed:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"{label!r} names an assumption, and this proof does not establish "
             "what it assumes — the statements differ. Discharging replaces a "
             "debt with its warrant; promote this under another label, or "
             "withdraw the assumption if you mean to replace it.",
+        )
+
+    added = frozenset(spec.distinct) - claimed.provisos
+    if added:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"This proof carries provisos {label!r} does not — "
+            + ", ".join(repr(line) for line in sorted(added))
+            + ". That is a narrower theorem than the one assumed, so it refuses "
+            "instances everything resting on the assumption was written against. "
+            "Promote it under another label.",
         )
 
     proof_id = proof.id
@@ -1747,6 +1787,16 @@ async def _discharge(
         )
     ]
 
+    # What the assumption was *standing in for*, before it goes. An edge's
+    # obligation may be discharged by a theorem and the FK is ON DELETE SET NULL,
+    # so losing this row takes the edge down with it — and the proofs that
+    # resolved *across* it cited the source's labels rather than this one, so the
+    # label walk below never reaches them. Exactly `_retire_promotion`'s reason,
+    # and missed here on the first cut (found in review). The obligation is not
+    # re-pointed at the warrant: it named this entry, and whether the warrant
+    # discharges it is the edge author's judgement rather than this route's.
+    await invalidate_warranted_edges(session, assumption_id)
+
     # And the row goes, so the label is free for the warrant to take. Its
     # `AssumptionRow` and every closure edge naming it cascade with it — which is
     # why the dependents are read first: those edges *are* the record being
@@ -1763,17 +1813,21 @@ async def _discharge(
     return inheriting
 
 
-def _schema_digest(pattern: Pattern) -> str | None:
-    # A promoted theorem's statement as the α-digest of the term it composed, or
-    # None where it composed none — the same shape `stated_digests` reads back,
-    # so a missing term compares equal to a missing term and to nothing else.
-    #
-    # Only a `StringPattern` carries a term, exactly as `_term_ids` has it: a
-    # schema that resolved to a declared grammar pattern has none, and the two
-    # sides of the comparison agree about that because both are read the same way.
-    if not isinstance(pattern, StringPattern) or pattern.schema_term is None:
+def _schema_term(pattern: Pattern) -> Term | None:
+    # The term a promoted theorem's schema composed, or None where it composed
+    # none. Only a `StringPattern` carries one, exactly as `_term_ids` has it: a
+    # schema that resolved to a declared grammar pattern has none, and both sides
+    # of a comparison agree about that because both are read the same way.
+    if not isinstance(pattern, StringPattern):
         return None
-    return alpha_digest(pattern.schema_term)
+    return pattern.schema_term
+
+
+def _rename_blind(term: Term | None) -> str | None:
+    # A term as the digest two *theorems* are compared by: renameable in its
+    # metavariables and in nothing else (`metavariables_only`). None stays None,
+    # so a missing term compares equal to a missing term and to nothing else.
+    return None if term is None else alpha_digest(term, metavariables_only)
 
 
 async def _record_assumptions(
