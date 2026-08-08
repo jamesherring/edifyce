@@ -114,11 +114,15 @@
 		 *  comment). Unset suppresses nothing — a caller that has not said which
 		 *  type is the default has not claimed any of them is. */
 		primaryLineType?: string | null;
-		/** The proof these lines belong to, which is what makes a citation
-		 *  expandable: explaining a step means asking the server to re-derive it.
-		 *  Unset leaves citations as plain text — the editor's live results
-		 *  describe text that may not be what is stored. */
+		/** The proof these lines belong to, which is what buys the *substitution*
+		 *  half of a citation's card: deriving it means asking the server to
+		 *  re-check the step, which is signed-in only. Unset still leaves the card,
+		 *  on what the label alone says. */
 		proofId?: string | null;
+		/** The system the citations resolve in. What the rows-only half of a card
+		 *  is looked up in, so a signed-out reader gets one at all. Unset leaves
+		 *  citations as plain text. */
+		systemId?: string | null;
 	};
 
 	let {
@@ -134,7 +138,8 @@
 		controls,
 		verdicts = true,
 		primaryLineType = null,
-		proofId = null
+		proofId = null,
+		systemId = null
 	}: Props = $props();
 
 	// The payload's lines are the fallback, not the default: a caller passing
@@ -267,6 +272,8 @@
 										{#if line.reference}
 											<JustificationCard
 												{proofId}
+												{systemId}
+												label={line.rule}
 												number={line.number ?? null}
 												citation={line.reference}
 												{notation}

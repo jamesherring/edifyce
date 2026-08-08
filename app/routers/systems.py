@@ -55,7 +55,9 @@ from app.routers._common import (
     paginate_summaries,
     unique_slug,
 )
+from app.db.descriptions import LabelDescriptionRow
 from app.db.descriptions_mapping import load_description
+from app.db.promoted_theorems import PromotedTheoremRow
 from app.db.models import Proof, ProofFolder, User
 from app.db.notations_mapping import load_notation, notation_names, render_each
 from app.db.retrieval import conclusion_candidates
@@ -98,6 +100,7 @@ from app.schemas import (
     Folder,
     Justification,
     LabelDescription,
+    LibraryEntry,
     LinePart,
     LineType,
     Page,
@@ -885,6 +888,130 @@ async def get_system_folders(
         parent = nodes.get(row.parent_id) if row.parent_id is not None else None
         (parent.children if parent is not None else roots).append(nodes[row.id])
     return roots
+
+
+def nearest_first(chain: Sequence[FormalSystem]) -> dict[uuid.UUID, int]:
+    """Each layer's *nearness* to the citing system; lower wins a label.
+
+    A citation resolves to the closest layer declaring the label, shadowing an
+    ancestor's rather than being ambiguous (`LibraryChain`). A chain is root
+    first, ending in the system being built, so nearness is its reverse — and
+    everything answering a question *about* a citation has to rank the same way,
+    or it describes the entry the check did not use.
+    """
+    return {system.id: rank for rank, system in enumerate(reversed(chain))}
+
+
+@router.get("/{system_id}/library/{label}", response_model=LibraryEntry)
+async def get_library_entry(
+    system_id: uuid.UUID,
+    label: str,
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> LibraryEntry:
+    """What a citation of ``label`` names — from rows, for anyone who may read it.
+
+    The cheap half of `POST`-free justification. `/proofs/{id}/lines/{n}/justification`
+    re-checks the proof, because the substitution it reports is derived by the
+    match; that is why it is signed-in only. But what a reader most wants from a
+    citation on a corpus of 47,546 theorems is *what `imbi12d` says* — and that,
+    with what it needs, what the corpus records about it, and where its proof is,
+    are all stored. This is a handful of indexed row reads and no build at all,
+    so it is a read like the ones around it.
+
+    Resolved **nearest layer first**, as a citation resolves: a rule this system
+    declares wins over an inherited one, and a child's library entry shadows an
+    ancestor's. Rules before the library, which is `Proof.get_reference`'s own
+    order — a label that names both resolves to the rule.
+    """
+    system = await _get_readable_or_404(session, system_id, user)
+    chain = await load_chain(session, system)
+    nearness = nearest_first(chain)
+
+    rules = (
+        await session.scalars(
+            select(RuleRow)
+            .where(RuleRow.system_id.in_(list(nearness)), RuleRow.label == label)
+            .options(selectinload(RuleRow.antecedents))
+        )
+    ).all()
+    rule = min(rules, key=lambda row: nearness[row.system_id], default=None)
+
+    entries = (
+        await session.scalars(
+            select(PromotedTheoremRow)
+            .where(
+                PromotedTheoremRow.system_id.in_(list(nearness)),
+                PromotedTheoremRow.label == label,
+            )
+            .options(selectinload(PromotedTheoremRow.premises))
+        )
+    ).all()
+    entry = min(entries, key=lambda row: nearness[row.system_id], default=None)
+
+    if rule is None and entry is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Nothing this system can cite is called {label!r}.",
+        )
+
+    described = await _nearest_description(session, nearness, label)
+    if rule is not None:
+        return LibraryEntry(
+            label=rule.label,
+            name=rule.name,
+            kind="rule",
+            conclusion=rule.deduction,
+            premises=[a.pattern for a in sorted(rule.antecedents, key=lambda a: a.position)],
+            discharges=_discharge_schema(rule),
+            title=described,
+            # A declared rule is primitive: it is assumed, not proved, so there is
+            # no proof to send a reader to.
+            proof_id=None,
+        )
+    return LibraryEntry(
+        label=entry.label,
+        kind="axiom" if entry.primitive else "theorem",
+        conclusion=entry.statement,
+        premises=[p.statement for p in sorted(entry.premises, key=lambda p: p.position)],
+        title=described,
+        proof_id=await session.scalar(
+            select(Proof.id).where(Proof.theorem_id == entry.id)
+        ),
+    )
+
+
+def _discharge_schema(rule: RuleRow) -> str | None:
+    """The subproof a discharge rule consumes, as the engine's vocabulary writes it.
+
+    `[assume p ⊢ q]` — the same spelling the system page shows for such a rule,
+    so a citation's card and the rule's own entry agree.
+    """
+    if rule.subproof_derive is None:
+        return None
+    opener = (
+        f"fresh {rule.subproof_fresh}"
+        if rule.subproof_fresh is not None
+        else f"assume {rule.subproof_assume}"
+        if rule.subproof_assume is not None
+        else ""
+    )
+    return f"[{opener} ⊢ {rule.subproof_derive}]" if opener else f"[{rule.subproof_derive}]"
+
+
+async def _nearest_description(
+    session: AsyncSession, nearness: dict[uuid.UUID, int], label: str
+) -> str | None:
+    # A description is stored against the layer that *declares* the label, so it
+    # is found the same way the declaration is.
+    rows = await session.scalars(
+        select(LabelDescriptionRow).where(
+            LabelDescriptionRow.formal_system_id.in_(list(nearness)),
+            LabelDescriptionRow.label == label,
+        )
+    )
+    found = min(rows, key=lambda row: nearness[row.formal_system_id], default=None)
+    return None if found is None else found.title
 
 
 @router.get("/{system_id}/labels/{label}", response_model=LabelDescription)

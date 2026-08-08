@@ -941,6 +941,26 @@ proofs make roughly 4M citations, so a row per bound metavariable is tens of
 millions of rows written on import for a record read one line at a time, on a
 hover. The endpoint is asked once per card opened.
 
+Being a re-check, it is **signed-in only**, under the rule the routes above
+`verify_stored_proof` state. That was very nearly the end of the feature: the
+audience for it is a reader of the *published* corpus, and gating it turned every
+citation back into inert text for exactly them — which is how it shipped, and how
+it was caught, on the deployment rather than in a test.
+
+**So the card has two sources, because only half of it costs anything.**
+`GET /formal-systems/{id}/library/{label}` answers what the citation *says* — the
+rule the label resolved to, its schemas, the corpus's note about it, where its
+proof is — from a handful of indexed row reads and no build, for anyone who may
+read the system. Everything there was already stored: the resolved label is on
+the proof-line row (`ProofLineOut.rule`, which the page already had), the schemas
+are on `rules`/`promoted_theorems`, and the proof is one FK away. Only the
+substitution needed the check, and only the substitution is gated.
+
+That split is worth stating as a rule rather than as a fix: **a record is as
+cheap as its most derived field**, so a display record that mixes stored and
+derived answers should be two endpoints and not one — otherwise the derived half
+sets the access policy for the stored half, which is what happened here.
+
 **Two steps carry less, and say so.** A discharge rule consumes a subproof rather
 than cited lines and `check_discharge` keeps no binding, so its record names the
 block and offers no assignments. A definitional step cites no rule at all — the

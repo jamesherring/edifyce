@@ -22,11 +22,18 @@ import type { ProofLine, ProofStructure, ProofStructureLine } from '$lib/api';
  * bearing none keeps its source however the reading is set — and handing that
  * source to a typesetter would set an author's prose as mathematics.
  */
-export type ReadLine = ProofLine & { typeset: boolean };
+export type ReadLine = ProofLine & {
+	typeset: boolean;
+	/** The rule the checker resolved this line's citation to, where the rows say.
+	 *  What a citation's card is looked up by — the citation text is the author's
+	 *  spelling and may name lines beside the label. Null for a row that carries
+	 *  none, and for every line of the cached payload, which stores no such field. */
+	rule: string | null;
+};
 
 /** The verification payload's own lines, which are always the source spelling. */
 export function resultLines(lines: ProofLine[]): ReadLine[] {
-	return lines.map((line) => ({ ...line, typeset: false }));
+	return lines.map((line) => ({ ...line, typeset: false, rule: null }));
 }
 
 /**
@@ -63,6 +70,7 @@ export function readLines(structure: ProofStructure | null): ReadLine[] | null {
 		failure: line.failure,
 		warning_message: line.warning_message,
 		reference: line.reference,
+		rule: line.rule,
 		label: line.label,
 		indent: line.indent,
 		...reading(line)

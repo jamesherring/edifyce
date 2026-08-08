@@ -6,7 +6,7 @@ import { api } from '$lib/api';
 import type { LineJustification } from '$lib/api';
 
 vi.mock('$lib/api', () => ({
-	api: { proofs: { justification: vi.fn() } },
+	api: { proofs: { justification: vi.fn() }, systems: { libraryEntry: vi.fn() } },
 	ApiError: class ApiError extends Error {
 		status: number;
 		constructor(status: number, message: string) {
@@ -16,7 +16,10 @@ vi.mock('$lib/api', () => ({
 	}
 }));
 
-const apiMock = api as unknown as { proofs: { justification: ReturnType<typeof vi.fn> } };
+const apiMock = api as unknown as {
+	proofs: { justification: ReturnType<typeof vi.fn> };
+	systems: { libraryEntry: ReturnType<typeof vi.fn> };
+};
 const user = userEvent.setup();
 
 function told(over: Partial<LineJustification> = {}): LineJustification {
@@ -50,6 +53,16 @@ function told(over: Partial<LineJustification> = {}): LineJustification {
 // deliberately pending promise.
 beforeEach(() => {
 	apiMock.proofs.justification.mockResolvedValue(told());
+	apiMock.systems.libraryEntry.mockResolvedValue({
+		label: 'imbi12d',
+		name: '',
+		kind: 'theorem',
+		conclusion: '|- ( ph -> ( ps <-> ch ) )',
+		premises: ['|- ( ph -> ( ps <-> th ) )'],
+		discharges: null,
+		title: 'Deduction joining two equivalences.',
+		proof_id: 'p9'
+	});
 });
 afterEach(() => {
 	vi.clearAllMocks();
@@ -103,7 +116,7 @@ describe('a citation that can be expanded', () => {
 		expect(link).toHaveAttribute('target', '_blank');
 	});
 
-	it('stays plain text with no proof to explain it against', () => {
+	it('stays plain text with nothing at all to look up', () => {
 		render(JustificationCard, { props: { citation: 'MP, 1, 2' } });
 
 		expect(screen.getByText(/MP, 1, 2/)).toBeInTheDocument();
@@ -149,5 +162,49 @@ describe('switching notation while the card is up', () => {
 
 		land(told({ assignments: [{ variable: 'q', stands_for: '\\varphi' }] }));
 		await waitFor(() => expect(screen.getByText('\\varphi')).toBeInTheDocument());
+	});
+});
+
+describe('a reader who is not signed in', () => {
+	it('still learns what the citation names, from rows', async () => {
+		// The substitution costs a re-check and a re-check needs an account; what
+		// the label *says* does not, and it is most of what a reader wants on a
+		// corpus of 47,546 theorems.
+		render(JustificationCard, {
+			props: { systemId: 's1', label: 'imbi12d', citation: 'imbi12d, 2, 3' }
+		});
+
+		await user.hover(screen.getByRole('button', { name: /imbi12d/ }));
+
+		await waitFor(() =>
+			expect(screen.getByText('Deduction joining two equivalences.')).toBeInTheDocument()
+		);
+		expect(screen.getByText('|- ( ph -> ( ps <-> ch ) )')).toBeInTheDocument();
+		expect(await screen.findByRole('link', { name: /Open the proof of imbi12d/ })).toBeInTheDocument();
+		// And it asks the cheap endpoint, never the one that re-checks.
+		expect(apiMock.systems.libraryEntry).toHaveBeenCalledWith('s1', 'imbi12d');
+		expect(apiMock.proofs.justification).not.toHaveBeenCalled();
+	});
+
+	it('shows no substitution, because none was derived for it', async () => {
+		render(JustificationCard, {
+			props: { systemId: 's1', label: 'imbi12d', citation: 'imbi12d, 2, 3' }
+		});
+
+		await user.hover(screen.getByRole('button', { name: /imbi12d/ }));
+		await waitFor(() => expect(screen.getByText(/Deduction joining/)).toBeInTheDocument());
+
+		expect(screen.queryByText('Here')).toBeNull();
+	});
+
+	it('asks the re-checking endpoint once there is a proof to ask about', async () => {
+		render(JustificationCard, {
+			props: { systemId: 's1', label: 'MP', proofId: 'p1', number: 3, citation: 'MP, 1, 2' }
+		});
+
+		await user.hover(screen.getByRole('button', { name: /MP, 1, 2/ }));
+
+		await waitFor(() => expect(screen.getByText('Here')).toBeInTheDocument());
+		expect(apiMock.systems.libraryEntry).not.toHaveBeenCalled();
 	});
 });

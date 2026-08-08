@@ -1247,6 +1247,38 @@ class CitationSearch(BaseModel):
     truncated: bool = False
 
 
+class LibraryEntry(BaseModel):
+    """What a citation's label names, read from rows alone.
+
+    The cheap half of `LineJustification`. That record re-checks the proof,
+    because the substitution it reports is derived by the match and no row
+    carries it — which is why it is signed-in only (see `explain_line`). But
+    almost everything a reader wants from a citation is *not* derived: what
+    `imbi12d` says, what it needs, what the corpus records about it and where its
+    proof is are all stored, and asking for them costs a handful of indexed row
+    reads.
+
+    So they are served separately, and to anyone who may read the system. A
+    reader of a published corpus gets the answer to "what is this step citing";
+    what signing in adds is what the metavariables stood for *here*.
+    """
+
+    label: str
+    # The rule's own name where it has one (`modus ponens`); empty for a library
+    # entry, which is named by its label alone.
+    name: str = ""
+    # "rule" — a primitive this system declares — or "theorem", an entry of its
+    # library. `primitive` on a library entry makes the same split within it, and
+    # is reported as "axiom".
+    kind: str
+    conclusion: str
+    premises: list[str] = Field(default_factory=list)
+    # The subproof a discharge rule consumes, as its schema reads.
+    discharges: str | None = None
+    title: str | None = None
+    proof_id: uuid.UUID | None = None
+
+
 class JustifyingPremise(BaseModel):
     """One antecedent of the rule, and the line that filled it.
 
