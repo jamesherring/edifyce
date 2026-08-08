@@ -52,13 +52,32 @@ mistake. And the line-type badge is suppressed for the system's *primary* line
 type, since every ordinary line carries it; `assume`, `fresh` and comment lines
 keep theirs, which is where the type is the interesting thing.
 
-The citation itself expands (`components/JustificationCard.svelte`): hovering or
-focusing it asks `GET /api/proofs/{id}/lines/{n}/justification` for the rule the
-label resolved to, that rule's own schemas, which cited line filled which
-premise, **what its metavariables stood for on this step**, the provisos that had
-to hold, and a link to the proof of the cited theorem. Fetched on open and once —
-the substitution is derived by a re-check, so asking for every line up front would
-be one re-check per line for cards nobody may open.
+The citation itself expands (`components/JustificationCard.svelte`), from **one
+of two sources**, because only half of what it shows costs anything.
+
+What the citation *says* — the rule the label resolved to, its own schemas, the
+corpus's note about it, and where its proof is — is rows, so
+`GET /api/formal-systems/{id}/library/{label}` answers it with no build at all,
+for anyone who may read the system. That is what a signed-out reader of a
+published corpus gets. It takes the citing proof as well, because one kind of
+label is local to it: a `$e` hypothesis of the theorem that proof establishes is
+citable from inside its own block and nowhere else, so no system-wide lookup can
+see one.
+
+**What the metavariables stood for on this step** is not stored: it is derived by
+the match, so `GET /api/proofs/{id}/lines/{n}/justification` re-checks the proof
+for it, and a re-check is signed-in only (see the note above `verify_stored_proof`
+in `app/routers/proofs.py`). A signed-in reader gets that record instead — the
+same card with its *Here* section, the premises tied to the lines that filled
+them, and the provisos.
+
+Either way it is fetched on open and once: asking up front would be one request
+per line for cards nobody may open. And either way the card is read in **the
+notation the proof is** — the schemas as much as the substitution, since a rule's
+schema is the term the build composed and re-spells like a proof line does. Half
+a card in one spelling and half in another is worse than either. What stays as
+written is a *sort name* (`formula`, standing for "any formula"), which is not in
+the object language and which no notation has a template for.
 
 A notation named `latex` is **typeset** rather than shown as source
 (`components/Typeset.svelte`, KaTeX). The name is the whole of the judgement, and

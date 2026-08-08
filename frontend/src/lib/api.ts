@@ -806,6 +806,131 @@ export interface PromotedTheorem {
 	discharged: boolean;
 }
 
+/** A statement named structurally, before there is a proof to put it in —
+ * mirrors `StatementProposal`.
+ *
+ * A dry run unless `store`: asking whether something is proved is a question,
+ * and a question does not write rows. `store` interns the term and hands back an
+ * id — which is what makes it usable as a `ref` elsewhere — and is the owner's. */
+export interface StatementProposal {
+	statement: TermProposal;
+	store?: boolean;
+	limit?: number;
+}
+
+/** A resolved statement and what could conclude it — mirrors `StatementOutcome`.
+ *
+ * `rendered` is the system's own source spelling, exact by construction: a
+ * production's render steps *are* its source template. `term_id` is present only
+ * when `store` was set.
+ *
+ * `matches` are **candidates, never a verdict**, `exact` ones included: that flag
+ * is a ranking hint, and confirming that one really proves the statement is
+ * unification against a line in a real scope (`proofs.citations`). Nothing here
+ * says "proved" — do not add a UI that does. `exact_is_approximate` warns that
+ * this system's grammar makes the flag over-report; `unindexed` and `unfiltered`
+ * are what the filter could not see, and a UI hiding any of the three turns a
+ * short list into a complete-looking one. */
+export interface StatementOutcome {
+	formal_system_id: string;
+	term_id: string | null;
+	rendered: string;
+	constructor: string | null;
+	digest: string;
+	alpha_digest: string;
+	matches: TheoremCandidate[];
+	matched: number;
+	truncated: boolean;
+	unindexed: number;
+	unfiltered: number;
+	exact_is_approximate: boolean;
+}
+
+/** An external work something here claims to formalize — mirrors
+ * `SourceDocumentCreate`. `version` is part of the document's identity, not a
+ * note about it. */
+export interface SourceDocumentCreate {
+	kind: 'arxiv' | 'doi' | 'isbn' | 'url' | 'other';
+	identifier: string;
+	version?: string;
+	title?: string | null;
+	url?: string | null;
+	content_hash?: string | null;
+	licence?: string | null;
+	retrieved_at?: string | null;
+}
+
+export interface SourceDocument extends SourceDocumentCreate {
+	id: string;
+	created_at: string;
+	/** How many claims point at this document. */
+	formalizations: number;
+}
+
+/** One of the paper's notions and what it was read as — mirrors
+ * `GlossaryEntryInput`. At least one of `label` and `term_id`: an entry naming
+ * nothing records only that somebody thought about the word. */
+export interface GlossaryEntryInput {
+	notion: string;
+	label?: string | null;
+	term_id?: string | null;
+	reasoning?: string | null;
+}
+
+export interface GlossaryEntry extends GlossaryEntryInput {
+	id: string;
+}
+
+/** Claim that a term formalizes a result — mirrors `FormalizationCreate`.
+ *
+ * `reasoning` is required and is the point: a claim with no argument is a tick.
+ * `attested_as` names the agent where that was not a person — a model identifier
+ * — recorded *beside* the account rather than instead of it. */
+export interface FormalizationCreate {
+	document_id: string;
+	claim: string;
+	informal_statement: string;
+	formal_system_id: string;
+	statement_term_id: string;
+	proof_id?: string | null;
+	reasoning: string;
+	attested_as?: string | null;
+	glossary?: GlossaryEntryInput[];
+}
+
+/** A second reader's verdict — mirrors `FormalizationReview`. `disputed`
+ * requires a note, since a dispute nobody explained is not a finding. */
+export interface FormalizationReview {
+	verdict: 'confirmed' | 'disputed';
+	note?: string | null;
+}
+
+/** One claim, read back — mirrors `Formalization`.
+ *
+ * The formal side is `statement_term_id` rather than a rendering: read it with
+ * `systems.term(...)`, which renders a stored term through a chosen notation and
+ * carries every subterm's id. `review_verdict` is null until somebody who is not
+ * the attestor has said something — an unreviewed claim is the ordinary state
+ * and a UI should let it look like one rather than hiding it. */
+export interface Formalization {
+	id: string;
+	document: SourceDocument;
+	claim: string;
+	informal_statement: string;
+	formal_system_id: string;
+	statement_term_id: string;
+	proof_id: string | null;
+	reasoning: string;
+	attested_by: SystemOwner | null;
+	attested_as: string | null;
+	attested_at: string;
+	review_verdict: 'confirmed' | 'disputed' | null;
+	review_note: string | null;
+	reviewed_by: SystemOwner | null;
+	reviewed_at: string | null;
+	glossary: GlossaryEntry[];
+}
+
 /** A citable statement nobody has proved — mirrors `AssumptionOut`.
  *
  * `dependents` counts the library entries that rest on it **transitively**, so
@@ -1007,6 +1132,28 @@ export interface ProofStructureLine {
 	 * writes the citation itself, from `reference`. */
 	rendered: string | null;
 	antecedents: ProofStructureAntecedent[];
+}
+
+/** What a citation's label names, read from rows alone — the cheap half of a
+ * `LineJustification`. That record re-checks the proof (the substitution it
+ * reports is derived), which is why it is signed-in only; this is what a citation
+ * *says*, and is a handful of row reads, so any reader of the system gets it. */
+export interface LibraryEntry {
+	label: string;
+	/** The rule's own name where it has one; empty for a library entry, which is
+	 * named by its label alone. */
+	name: string;
+	/** 'rule' (a primitive this system declares), 'axiom' or 'theorem'. */
+	kind: string;
+	conclusion: string;
+	premises: string[];
+	discharges: string | null;
+	title: string | null;
+	proof_id: string | null;
+	/** The notation the schemas were read through, echoed as `ProofStructure`
+	 * echoes it: a client showing a proof in one spelling must be able to tell a
+	 * served rendering from a silently ignored request. */
+	notation: string | null;
 }
 
 /** One antecedent of the rule, and the line that filled it. `schema_form` is the
@@ -1317,6 +1464,24 @@ export const api = {
 	// --- Formal systems (stored CRUD) ---------------------------------------
 
 	systems: {
+		/** What a citation's label names, from rows — no re-check, so any reader of
+		 * the system may ask. `proofs.justification` is the same thing plus the
+		 * substitution, and costs a re-check for it. */
+		libraryEntry: (
+			systemId: string,
+			label: string,
+			options: { notation?: string; proof?: string } = {}
+		) => {
+			const query = new URLSearchParams();
+			if (options.notation) query.set('notation', options.notation);
+			// Only a label local to the citing proof needs it — a hypothesis of the
+			// theorem that proof establishes, which no system-wide index can see.
+			if (options.proof) query.set('proof', options.proof);
+			const suffix = query.size ? `?${query}` : '';
+			return request<LibraryEntry>(
+				`/formal-systems/${systemId}/library/${encodeURIComponent(label)}${suffix}`
+			);
+		},
 		/** The signed-in user's own systems (drafts included). Requires auth. */
 		list: (params?: ListParams) =>
 			request<Page<FormalSystemSummary>>(`/formal-systems${listQuery(params)}`),
@@ -1551,6 +1716,87 @@ export const api = {
 	 * them. Creating and withdrawing are the system owner's; reading a published
 	 * system's is anyone's.
 	 */
+	statements: {
+		/** Compose a statement from the grammar and ask what could conclude it —
+		 * the first call a translation makes, and the one path from a constructor
+		 * vocabulary to a stored term. Readable for any published system; storing
+		 * requires owning it. */
+		propose: (systemId: string, proposal: StatementProposal) =>
+			request<StatementOutcome>(`/formal-systems/${systemId}/statements`, {
+				method: 'POST',
+				body: JSON.stringify(proposal)
+			})
+	},
+
+	/**
+	 * What a formal statement claims to be a formalization *of*. Nothing here is
+	 * checked — the kernel has no opinion on whether a term is Theorem 3.2 of some
+	 * paper — so the surface records the claim, attributes it, and makes its
+	 * absence visible instead.
+	 */
+	formalizations: {
+		/** Register an external work, or return the one already registered.
+		 * Idempotent on (kind, identifier, version) — and a version is part of the
+		 * identity, so a paper's v2 is a different document and a claim made
+		 * against v1 keeps pointing at the v1 its author read. */
+		registerSource: (document: SourceDocumentCreate) =>
+			request<SourceDocument>('/sources', {
+				method: 'POST',
+				body: JSON.stringify(document)
+			}),
+		sources: (
+			filters?: { kind?: string; identifier?: string },
+			params?: ListParams
+		) => request<Page<SourceDocument>>(`/sources${listQuery(params, { ...filters })}`),
+		/** Claim that a term is a formalization of a result in a document. */
+		claim: (claim: FormalizationCreate) =>
+			request<Formalization>('/formalizations', {
+				method: 'POST',
+				body: JSON.stringify(claim)
+			}),
+		/** Claims, filtered. `unreviewed` is the one that matters: an unreviewed
+		 * claim is the ordinary state, and listing them is what makes its absence
+		 * visible rather than merely stated. */
+		list: (
+			filters?: {
+				document_id?: string;
+				formal_system_id?: string;
+				proof_id?: string;
+				unreviewed?: boolean;
+			},
+			params?: ListParams
+		) =>
+			request<Page<Formalization>>(
+				`/formalizations${listQuery(params, {
+					document_id: filters?.document_id,
+					formal_system_id: filters?.formal_system_id,
+					proof_id: filters?.proof_id,
+					// Only when asked: `unreviewed=false` is the default and sending it
+					// is noise, but sending nothing where `true` was meant would return
+					// every claim including the reviewed ones — which is what the
+					// `as ListParams` cast used to do silently for all four (found in
+					// review).
+					unreviewed: filters?.unreviewed ? 'true' : undefined
+				})}`
+			),
+		get: (id: string) => request<Formalization>(`/formalizations/${id}`),
+		/** Pass a verdict on somebody *else's* claim — the attestor is refused,
+		 * since the whole value of "reviewed" is independence. */
+		review: (id: string, review: FormalizationReview) =>
+			request<Formalization>(`/formalizations/${id}/review`, {
+				method: 'POST',
+				body: JSON.stringify(review)
+			}),
+		/** Replace the glossary wholesale. Clears any review: a reviewer agreed
+		 * with a reading of the paper's words, and these are those words. */
+		setGlossary: (id: string, entries: GlossaryEntryInput[]) =>
+			request<Formalization>(`/formalizations/${id}/glossary`, {
+				method: 'PUT',
+				body: JSON.stringify(entries)
+			}),
+		withdraw: (id: string) => request<null>(`/formalizations/${id}`, { method: 'DELETE' })
+	},
+
 	assumptions: {
 		/** What this system asserts without proof, most depended-on first. */
 		list: (systemId: string) =>

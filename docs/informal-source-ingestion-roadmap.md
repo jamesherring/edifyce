@@ -282,7 +282,7 @@ gaps, and the count says which gap closing pays for most. Ordered in the databas
 rather than per page, since a ranking that only held within twenty arbitrary rows
 would mean nothing.
 
-### 4.3 The formalization record: source, claim, glossary
+### 4.3 The formalization record: source, claim, glossary — *done*
 
 The object that does not exist at all. An ingestion run produces a proof, and a
 proof has `title`, `description` and a system — nowhere to put *which paper*,
@@ -306,9 +306,45 @@ timestamp, the informal text as it stood, and the prose reasoning. Fidelity is
 reviewed by people; the API's job is to make sure the review has something
 stable to point at and that its absence is visible.
 
-*Engine:* nothing. This layer never reaches `website/logical/`.
+*Engine:* nothing. This layer never reaches `website/logical/`. The one thing it
+borrows from the formal side is a `terms.id`, which is what §4.4's statements
+route hands out — and the reason that one came first.
 
-### 4.4 Goal-first: state a theorem before proving it
+**Why this is not a closure, unlike §4.1's.** An assumption's debt propagates:
+cite something unproved and your result is conditional, at any depth. A fidelity
+claim does not, and being precise about the difference is what settles the shape.
+A proof citing a term inherits *the term* — not anyone's claim about what the
+term corresponds to. Proving a corollary from a formalized theorem gives you a
+formal corollary; whether it is the paper's Corollary 3.3 is a separate claim,
+attested separately by whoever read the paper. So a formalization is a leaf
+annotation and there is deliberately nothing to close over. Withdrawing one is a
+plain delete for the same reason, where withdrawing an assumption is gated.
+
+**A version is a row.** `source_documents` is unique on (kind, identifier,
+version), so a revision is a different row and an existing claim keeps pointing
+at the one its author read — structural rather than a check somebody has to
+remember. Registering an identity that exists returns it rather than a second
+row, which also makes the write idempotent for a retrying agent. The informal
+statement is copied onto the claim besides, so not even editing a document can
+rewrite what was attested.
+
+**A review is somebody else's.** The attestation carries an author, the agent
+where a model was driving (beside the account, never instead of it — an account
+is accountable and a model is not), and required prose. A review is a second
+person's verdict on it, and the attestor is refused: the entire value of the word
+is independence, and a self-review that reads as reviewed is the silent
+overstatement this whole document is about. Editing the glossary clears any
+review, since a reviewer agreed with a reading of the paper's words and those are
+the words.
+
+**What is not served is a rendering** of the claimed term. `GET
+/formal-systems/{id}/terms/{term_id}` is the route that renders a stored term,
+through a chosen notation and with every subterm's id; a term row carries no
+display, so duplicating a source-spelling rendering here would cost a system
+build per system per listing to serve something lossier than the route that
+already exists.
+
+### 4.4 Goal-first: state a theorem before proving it — *done*
 
 Every structured write today is *inside* a proof — `POST /proofs/{id}/lines`
 needs a proof, and a template line within it to inherit shape from. An ingestion
@@ -325,10 +361,44 @@ proved, and only then open a proof aimed at it.
   statements through, so there is one path from a constructor vocabulary to a
   stored term and it is round-trip checked exactly once.
 
-*Engine:* small. `proposals.resolve` already composes a term against a built
-system; what it lacks is a caller that is not a proof line. The round-trip check
-(§9c) is currently entangled with `restate`/`recite` line composition and needs
-lifting out so a bare statement can be checked the same way.
+*Engine:* nothing, as it turned out. `proposals.resolve` already composed a term
+against a built system and needed only a caller that is not a proof line; the
+round-trip check was the part entangled with `restate`/`recite`, and lifting it
+out is `app/routers/_proposals.py` — shared now by the line route and this one,
+since the only difference between them is *where* the round trip is checked.
+
+**A bare statement has no line to splice into**, so it is read back at the
+system's **logical sorts** — the sorts a proof line is read at, and how a
+promoted theorem's ground statement is already composed. Same guarantee, same
+refusal: the statement is rejected unless the term that comes back is the term
+that went in.
+
+**A dry run unless `store`.** Asking whether something is proved is a question
+and a question should not write rows; storing is what hands back the usable
+`term_id` and is therefore the owner's. That split is load-bearing rather than
+tidy — it is what lets *anyone* ask the question of an imported corpus, which is
+ownerless by construction and where the question is worth most.
+
+The search is the same head-symbol filter §9d built, and is a filter here too —
+including its `exact` flag.
+
+**Nothing in the response says "proved", and that is a correction.** This section
+originally specified an "α-digest exact hit" as the answer to "is this already
+proved?", and the first cut shipped it as a `proved` property. Review caught it,
+and the reason is sharper than the bug: **no digest settles the question at
+all**. The search policy renames regex leaves, so it over-reports in a grammar
+whose numerals are a `matches` production; the identity policy a discharge
+compares by would *under*-report, because a schematic theorem instantiates rather
+than renames, and instantiation is unification. What settles it is
+`InferenceRule.concludes`, which takes a `ProofLine` — a proof's context, and
+exactly why §9d put the confirm on the proof route and the filter on the system's.
+
+So the two α policies stay right for their own questions — the coarser bucket for
+"which theorems could conclude this", the identity one for "is this the same
+theorem" — and *neither* is promoted to a verdict. `exact_is_approximate` reports
+when this system's grammar is one the search policy over-reports on, since a
+caller that cannot tell which case it is in has to distrust the ranking
+everywhere.
 
 ### 4.5 Alignment tools: prose search, and the notation direction
 

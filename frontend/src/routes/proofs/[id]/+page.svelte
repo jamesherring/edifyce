@@ -161,11 +161,12 @@
 	// source for the round trip back.
 	const readAs = $derived(structure?.notation ?? null);
 
-	// Expanding a citation re-checks the proof, so it sits behind the same gate
-	// the Verify button does (`app/routers/proofs.py`, the note above
-	// `verify_stored_proof`): a signed-out reader gets a plain citation rather
-	// than a 401 on hover.
-	const explainable = $derived(auth.user ? (proof?.id ?? null) : null);
+	// Only the *substitution* half of a citation's card re-checks the proof, and a
+	// re-check is signed-in only (`app/routers/proofs.py`, the note above
+	// `verify_stored_proof`). What the citation says is rows, so a signed-out
+	// reader still gets the card — without its "Here" section — rather than a
+	// plain citation or a 401 on hover.
+	const explainable = $derived(!!auth.user);
 
 	// `name` is what a citation spells and what the slug is built from; `title` is
 	// the sentence a human reads. Lead with the sentence where there is one — on
@@ -314,7 +315,9 @@
 			{requestError}
 			lines={rows}
 			notation={readAs}
-			proofId={explainable}
+			proofId={proof.id}
+			explain={explainable}
+			systemId={proof.formal_system_id}
 			{primaryLineType}
 			verdicts={false}
 			title="Proof"

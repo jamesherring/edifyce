@@ -21,6 +21,11 @@ from app.db.assumptions import (
     resolve_labels,
     stated,
 )
+from app.db.formalizations import (
+    FormalizationRow,
+    GlossaryEntryRow,
+    SourceDocumentRow,
+)
 from app.db.models import (
     EMBEDDING_DIMENSIONS,
     FormalSystem,
@@ -140,6 +145,9 @@ __all__ = [
     "Base",
     "RestsOn",
     "TheoremAssumptionRow",
+    "FormalizationRow",
+    "GlossaryEntryRow",
+    "SourceDocumentRow",
     "assumption_labels",
     "closure_of",
     "inherit_closure",

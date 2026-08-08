@@ -19,7 +19,7 @@ can address them.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -55,9 +55,16 @@ from app.routers._common import (
     paginate_summaries,
     unique_slug,
 )
+from app.db.descriptions import LabelDescriptionRow
 from app.db.descriptions_mapping import load_description
+from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
 from app.db.models import Proof, ProofFolder, User
-from app.db.notations_mapping import load_notation, notation_names, render_each
+from app.db.notations_mapping import (
+    load_notation,
+    notation_names,
+    render_each,
+    render_stored,
+)
 from app.db.retrieval import conclusion_candidates
 from app.db.terms import TermRow
 from app.db.terms_mapping import prefetch_terms, term_digests, walk_subgraph
@@ -98,6 +105,7 @@ from app.schemas import (
     Folder,
     Justification,
     LabelDescription,
+    LibraryEntry,
     LinePart,
     LineType,
     Page,
@@ -113,6 +121,7 @@ from app.schemas import (
 )
 from website.logical.formal_system.diagnostics import numbers
 from website.logical.declarative import DeclarativeError, SystemSpec, build_spec
+from website.logical.rendering import Projection
 
 router = APIRouter(prefix="/formal-systems", tags=["formal-systems"])
 
@@ -885,6 +894,255 @@ async def get_system_folders(
         parent = nodes.get(row.parent_id) if row.parent_id is not None else None
         (parent.children if parent is not None else roots).append(nodes[row.id])
     return roots
+
+
+def nearest_first(chain: Sequence[FormalSystem]) -> dict[uuid.UUID, int]:
+    """Each layer's *nearness* to the citing system; lower wins a label.
+
+    A citation resolves to the closest layer declaring the label, shadowing an
+    ancestor's rather than being ambiguous (`LibraryChain`). A chain is root
+    first, ending in the system being built, so nearness is its reverse — and
+    everything answering a question *about* a citation has to rank the same way,
+    or it describes the entry the check did not use.
+    """
+    return {system.id: rank for rank, system in enumerate(reversed(chain))}
+
+
+@router.get("/{system_id}/library/{label}", response_model=LibraryEntry)
+async def get_library_entry(
+    system_id: uuid.UUID,
+    label: str,
+    notation: str | None = Query(
+        None,
+        description=(
+            "Read this entry's schemas through one of the system's stored "
+            "notations, as `/proofs/{id}/structure` reads a proof's lines. Omit "
+            "for the grammar's own spelling."
+        ),
+    ),
+    proof: uuid.UUID | None = Query(
+        None,
+        description=(
+            "The proof whose citation is being resolved. Only needed for a label "
+            "that is local to it — a hypothesis of the theorem it establishes — "
+            "which no system-wide lookup can see."
+        ),
+    ),
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> LibraryEntry:
+    """What a citation of ``label`` names — from rows, for anyone who may read it.
+
+    The cheap half of `POST`-free justification. `/proofs/{id}/lines/{n}/justification`
+    re-checks the proof, because the substitution it reports is derived by the
+    match; that is why it is signed-in only. But what a reader most wants from a
+    citation on a corpus of 47,546 theorems is *what `imbi12d` says* — and that,
+    with what it needs, what the corpus records about it, and where its proof is,
+    are all stored. This is a handful of indexed row reads and no build at all,
+    so it is a read like the ones around it.
+
+    Resolved **nearest layer first**, as a citation resolves: a rule this system
+    declares wins over an inherited one, and a child's library entry shadows an
+    ancestor's. Rules before the library, which is `Proof.get_reference`'s own
+    order — a label that names both resolves to the rule.
+
+    ``notation`` re-spells the schemas, because this is shown *beside* a proof
+    being read in one and half a card in each spelling is worse than either. It
+    costs no build: a schema's composed term is stored (`rules.deduction_term_id`,
+    `promoted_theorems.statement_term_id`), so this is the same row-graph fold a
+    proof's lines already take. A schema with no stored term — one the build never
+    composed — keeps its source, which is the same fallback a line gets.
+    """
+    system = await _get_readable_or_404(session, system_id, user)
+    chain = await load_chain(session, system)
+    nearness = nearest_first(chain)
+
+    rules = (
+        await session.scalars(
+            select(RuleRow)
+            .where(RuleRow.system_id.in_(list(nearness)), RuleRow.label == label)
+            .options(selectinload(RuleRow.antecedents))
+        )
+    ).all()
+    rule = min(rules, key=lambda row: nearness[row.system_id], default=None)
+
+    entries = (
+        await session.scalars(
+            select(PromotedTheoremRow)
+            .where(
+                PromotedTheoremRow.system_id.in_(list(nearness)),
+                PromotedTheoremRow.label == label,
+            )
+            .options(selectinload(PromotedTheoremRow.premises))
+        )
+    ).all()
+    entry = min(entries, key=lambda row: nearness[row.system_id], default=None)
+
+    # A theorem's own `$e` hypotheses are citable **only from inside its proof**
+    # (`read_library`'s `hypotheses_of`), so they are in no system-wide index and
+    # a lookup without the proof cannot see them. Before the library, because a
+    # label local to this proof is what a reader of this proof means by it.
+    hypothesis = None if proof is None else await _own_hypothesis(session, proof, label, user)
+
+    if rule is None and entry is None and hypothesis is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Nothing this system can cite is called {label!r}.",
+        )
+
+    described = await _nearest_description(session, nearness, label)
+    projection = None
+    if notation is not None:
+        projection = await load_notation(session, system.id, notation)
+        if projection is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"This system has no notation named {notation!r}.",
+            )
+
+    if rule is not None:
+        antecedents = sorted(rule.antecedents, key=lambda a: a.position)
+        read = await _readings(
+            session,
+            projection,
+            [
+                rule.deduction_term_id,
+                rule.subproof_derive_term_id,
+                rule.subproof_assume_term_id,
+                rule.subproof_fresh_term_id,
+                *(a.term_id for a in antecedents),
+            ],
+        )
+        return LibraryEntry(
+            label=rule.label,
+            name=rule.name,
+            kind="rule",
+            conclusion=read(rule.deduction_term_id, rule.deduction),
+            premises=[read(a.term_id, a.pattern) for a in antecedents],
+            discharges=_discharge_schema(rule, read),
+            title=described,
+            # A declared rule is primitive: it is assumed, not proved, so there is
+            # no proof to send a reader to.
+            proof_id=None,
+            notation=notation,
+        )
+
+    if hypothesis is not None:
+        read = await _readings(session, projection, [hypothesis.term_id])
+        return LibraryEntry(
+            label=label,
+            # Neither a rule nor a theorem: a premise the theorem being proved is
+            # proved *under*, so it is granted here rather than established.
+            kind="hypothesis",
+            conclusion=read(hypothesis.term_id, hypothesis.statement),
+            title=described,
+            notation=notation,
+        )
+
+    premises = sorted(entry.premises, key=lambda p: p.position)
+    read = await _readings(
+        session,
+        projection,
+        [entry.statement_term_id, *(p.term_id for p in premises)],
+    )
+    return LibraryEntry(
+        label=entry.label,
+        kind="axiom" if entry.primitive else "theorem",
+        conclusion=read(entry.statement_term_id, entry.statement),
+        premises=[read(p.term_id, p.statement) for p in premises],
+        title=described,
+        proof_id=await session.scalar(
+            select(Proof.id).where(Proof.theorem_id == entry.id)
+        ),
+        notation=notation,
+    )
+
+
+async def _readings(
+    session: AsyncSession,
+    projection: Projection | None,
+    term_ids: Sequence[uuid.UUID | None],
+) -> Callable[[uuid.UUID | None, str], str]:
+    """A reader for these schemas: their stored term through ``projection``.
+
+    One sweep of the term graph rather than one per schema, and none at all when
+    no notation was asked for. What comes back falls through to the schema's own
+    source wherever there is no term to fold (a build that never composed one) or
+    the notation names nothing for it — the same fallback a proof line takes.
+    """
+    if projection is None:
+        return lambda _term_id, source: source
+    wanted = [term_id for term_id in term_ids if term_id is not None]
+    if not wanted:
+        return lambda _term_id, source: source
+    graph = await session.run_sync(lambda sync: prefetch_terms(sync, wanted))
+
+    def read(term_id: uuid.UUID | None, source: str) -> str:
+        if term_id is None:
+            return source
+        return render_stored(graph, term_id, projection) or source
+
+    return read
+
+
+def _discharge_schema(
+    rule: RuleRow, read: Callable[[uuid.UUID | None, str], str]
+) -> str | None:
+    """The subproof a discharge rule consumes, as the engine's vocabulary writes it.
+
+    `[assume p ⊢ q]` — the same spelling the system page shows for such a rule,
+    so a citation's card and the rule's own entry agree.
+    """
+    if rule.subproof_derive is None:
+        return None
+    opener = (
+        f"fresh {read(rule.subproof_fresh_term_id, rule.subproof_fresh)}"
+        if rule.subproof_fresh is not None
+        else f"assume {read(rule.subproof_assume_term_id, rule.subproof_assume)}"
+        if rule.subproof_assume is not None
+        else ""
+    )
+    derived = read(rule.subproof_derive_term_id, rule.subproof_derive)
+    return f"[{opener} ⊢ {derived}]" if opener else f"[{derived}]"
+
+
+async def _own_hypothesis(
+    session: AsyncSession, proof_id: uuid.UUID, label: str, user: User | None
+) -> PromotedTheoremPremiseRow | None:
+    """The hypothesis of ``proof_id``'s own theorem that ``label`` names, if any.
+
+    A `$e` is citable from inside the block that declares it and nowhere else —
+    which is why it is a column on the theorem rather than a library entry of its
+    own: registered globally, a bare `|- ph` would prove anything for anyone. So
+    resolving one needs the proof asking, and the proof must be one this caller
+    may read; otherwise the label of a draft's hypothesis would answer.
+    """
+    citing = await session.scalar(select(Proof).where(Proof.id == proof_id))
+    if citing is None or citing.theorem_id is None:
+        return None
+    if citing.published_at is None and (user is None or citing.owner_id != user.id):
+        return None
+    return await session.scalar(
+        select(PromotedTheoremPremiseRow).where(
+            PromotedTheoremPremiseRow.theorem_id == citing.theorem_id,
+            PromotedTheoremPremiseRow.label == label,
+        )
+    )
+
+
+async def _nearest_description(
+    session: AsyncSession, nearness: dict[uuid.UUID, int], label: str
+) -> str | None:
+    # A description is stored against the layer that *declares* the label, so it
+    # is found the same way the declaration is.
+    rows = await session.scalars(
+        select(LabelDescriptionRow).where(
+            LabelDescriptionRow.formal_system_id.in_(list(nearness)),
+            LabelDescriptionRow.label == label,
+        )
+    )
+    found = min(rows, key=lambda row: nearness[row.formal_system_id], default=None)
+    return None if found is None else found.title
 
 
 @router.get("/{system_id}/labels/{label}", response_model=LabelDescription)

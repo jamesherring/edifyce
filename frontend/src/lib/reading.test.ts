@@ -107,6 +107,20 @@ describe('resultLines', () => {
 			indent: 0
 		};
 
-		expect(resultLines([payload])).toEqual([{ ...payload, typeset: false }]);
+		// `rule` too: the payload records what the checker *displayed*, not what it
+		// resolved, so there is no label to look a citation's card up by.
+		expect(resultLines([payload])).toEqual([{ ...payload, typeset: false, rule: null }]);
+	});
+});
+
+describe('the rule a citation resolved to', () => {
+	it('comes off the row, not out of the citation text', () => {
+		// `[MP, 1, 2]` is the author's spelling and names lines beside the label;
+		// the row records what the checker resolved, which is what a card is
+		// looked up by.
+		const [row] = readLines(structure({ lines: [line({ rule: 'MP', reference: 'MP, 1, 2' })] }))!;
+
+		expect(row.rule).toBe('MP');
+		expect(row.reference).toBe('MP, 1, 2');
 	});
 });

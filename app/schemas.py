@@ -1143,6 +1143,16 @@ class TheoremCandidate(BaseModel):
     variables, so citing it needs no instantiation at all. ``premise_count`` is
     what a caller ranks by after that: a theorem with none can close the goal on
     its own, and one with two needs two standing lines found for it first.
+
+    ``exact`` is a **ranking hint and not a verdict**, for two reasons that both
+    matter to a caller tempted to read it as "already proved". It compares the
+    stored ``terms.alpha_digest``, whose policy renames every regex leaf — so in
+    a grammar whose numerals are a ``matches`` production it reads `2 = 5` and
+    `7 = 9` as one statement (`tests/test_alpha_digest.py` pins it); the callers
+    that can tell whether their system is one of those report it. And a
+    *schematic* theorem that genuinely proves a ground goal is **not** exact,
+    since instantiation is unification rather than renaming. Only unification
+    against a line in a real scope settles either way.
     """
 
     label: str
@@ -1186,6 +1196,249 @@ class TheoremMatches(BaseModel):
     # restates what it carries, or one whose rename leaves this system's
     # production without a pre-image there.
     unfiltered: int = 0
+
+
+class StatementProposal(BaseModel):
+    """A statement named structurally, before there is a proof to put it in.
+
+    §4.4 of docs/informal-source-ingestion-roadmap.md. Every other structured
+    write is *inside* a proof; a translation from an informal source needs the
+    opposite order — state the target, ask whether it is already proved, and only
+    then open a proof aimed at it.
+
+    A **dry run unless ``store``**, as `/cite` and `/lines` are: asking "is this
+    proved?" is a question, and a question should not write rows. ``store``
+    interns the term and hands back an id — which is what makes it usable as a
+    `ref` elsewhere — and is therefore owner-only.
+    """
+
+    statement: TermProposalIn
+    store: bool = False
+    limit: int = Field(25, ge=1, le=200)
+
+
+class StatementOutcome(BaseModel):
+    """A resolved statement, and whether the library already concludes it.
+
+    ``rendered`` is the system's own source spelling, exact by construction: a
+    production's render steps *are* its source template. It is what a caller
+    would have had to write, handed back after the fact rather than trusted
+    before it.
+
+    ``term_id`` is present only when ``store`` was set. Everything else answers
+    without writing anything.
+    """
+
+    formal_system_id: uuid.UUID
+    term_id: uuid.UUID | None = None
+    rendered: str
+    # The goal's root production — what a search is narrowed by. Null for a
+    # statement whose root is a leaf, which names no production and so narrows
+    # nothing; ``matches`` is then empty and ``unfiltered`` says the whole library
+    # went unasked.
+    constructor: str | None = None
+    digest: str
+    alpha_digest: str
+    # Theorems that could conclude it, by the same filter
+    # `GET /formal-systems/{id}/theorems/matching` runs — candidates, never a
+    # verdict, including the ``exact`` ones. Confirming that one of these really
+    # does prove the statement is unification against a line standing in a real
+    # scope (`GET /proofs/{id}/lines/{n}/citations`), which is a proof's context
+    # and is why no field here says "proved".
+    matches: list[TheoremCandidate] = Field(default_factory=list)
+    matched: int = 0
+    truncated: bool = False
+    unindexed: int = 0
+    unfiltered: int = 0
+    # Whether ``exact`` over-reports in *this* system: true when the grammar
+    # declares a regex production whose tokens denote constants, since the stored
+    # α-digest renames every regex leaf and so reads `2 = 5` and `7 = 9` as one
+    # statement. False for every system that declares none, where `exact` means
+    # what it says. Reported rather than left to a caveat, because a caller that
+    # cannot tell the two cases apart has to distrust the ranking everywhere.
+    exact_is_approximate: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Formalization records — what a formal statement claims to be a formalization of
+# ---------------------------------------------------------------------------
+
+
+class SourceDocumentCreate(BaseModel):
+    """Register an external work something here claims to formalize.
+
+    ``version`` is part of the document's identity, not a note about it: a
+    paper's v2 may restate the theorem, so a version is a *row* and an existing
+    claim keeps pointing at the one its author read. Registering an identity that
+    already exists returns the existing row rather than a second one.
+    """
+
+    kind: Literal["arxiv", "doi", "isbn", "url", "other"] = "other"
+    identifier: str = Field(..., min_length=1, max_length=512)
+    version: str = Field("", max_length=64)
+    title: str | None = None
+    url: str | None = None
+    # A digest of the bytes the author actually read. Optional, because a DOI
+    # often reaches a paywall rather than a file — and a claim about a paper
+    # nobody can hash is worth less, which is worth being able to see.
+    content_hash: str | None = Field(None, max_length=128)
+    licence: str | None = Field(None, max_length=128)
+    retrieved_at: datetime | None = None
+
+
+class SourceDocument(BaseModel):
+    """A registered work, read back.
+
+    ``kind`` is a plain string here where the create model closes the set. The
+    column is a free ``String(16)``, so a row written by an import or a fixture
+    can carry a kind nobody listed — and a `Literal` on the *output* would fail
+    response validation and take the whole listing down with it, which is the
+    wrong way to learn that (found in review). Closed for a caller, open for
+    data: the same split `Attribution.kind` already makes.
+    """
+
+    id: uuid.UUID
+    kind: str
+    identifier: str
+    version: str = ""
+    title: str | None = None
+    url: str | None = None
+    content_hash: str | None = None
+    licence: str | None = None
+    retrieved_at: datetime | None = None
+    created_at: datetime
+    # How many claims point at this document.
+    formalizations: int = 0
+
+
+class GlossaryEntryInput(BaseModel):
+    """One of the paper's notions, and what it was read as here.
+
+    At least one of ``label`` and ``term_id``: an entry naming nothing records
+    only that somebody thought about it.
+    """
+
+    notion: str = Field(..., min_length=1, max_length=256)
+    label: str | None = Field(None, max_length=128)
+    term_id: uuid.UUID | None = None
+    reasoning: str | None = None
+
+    @field_validator("notion", "label")
+    @classmethod
+    def _blank_is_absent(cls, value: str | None) -> str | None:
+        """Strip, and read a blank as nothing at all.
+
+        `min_length` counts characters rather than content, so `"   "` satisfies
+        it — and an entry whose label is three spaces names exactly as little as
+        one with no label. Normalising here means the invariant below is checked
+        against what the field *says* rather than against whether it was
+        supplied (found in review).
+        """
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    @model_validator(mode="after")
+    def _must_name_something(self) -> "GlossaryEntryInput":
+        if self.notion is None:
+            raise ValueError("A glossary entry must name the notion it is about.")
+        if self.label is None and self.term_id is None:
+            raise ValueError(
+                f"The glossary entry for {self.notion!r} names nothing it was "
+                "read as. Give a label or a term id."
+            )
+        return self
+
+
+class GlossaryEntry(GlossaryEntryInput):
+    id: uuid.UUID
+
+
+class FormalizationCreate(BaseModel):
+    """Claim that a term is a formalization of a result in a document.
+
+    ``reasoning`` is required and is the point: a claim with no argument is a
+    tick, and the one thing this layer exists to refuse is a tick. ``attested_as``
+    names the agent that did the reading where that was not a person — a model
+    identifier — recorded *beside* the account rather than instead of it, since
+    an account is accountable and a model is not.
+    """
+
+    document_id: uuid.UUID
+    claim: str = Field(..., min_length=1, max_length=256)
+    informal_statement: str = Field(..., min_length=1)
+    formal_system_id: uuid.UUID
+    statement_term_id: uuid.UUID
+    proof_id: uuid.UUID | None = None
+    reasoning: str = Field(..., min_length=1)
+    attested_as: str | None = Field(None, max_length=128)
+    glossary: list[GlossaryEntryInput] = Field(default_factory=list)
+
+    @field_validator("claim", "informal_statement", "reasoning")
+    @classmethod
+    def _must_say_something(cls, value: str) -> str:
+        """Content, not characters.
+
+        `min_length` counts the latter, so `"   "` passes it — which would admit
+        exactly the empty attestation this schema exists to refuse, and the
+        disputed-review validator below already knew better (found in review).
+        """
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("This field may not be blank.")
+        return stripped
+
+
+class FormalizationReview(BaseModel):
+    """A second person's verdict on a claim.
+
+    ``disputed`` requires a note, because a dispute nobody explained is not a
+    finding — and a dispute is the more valuable of the two verdicts.
+    """
+
+    verdict: Literal["confirmed", "disputed"]
+    note: str | None = None
+
+    @model_validator(mode="after")
+    def _a_dispute_says_why(self) -> "FormalizationReview":
+        if self.verdict == "disputed" and not (self.note or "").strip():
+            raise ValueError("A disputed review must say what is wrong with the claim.")
+        return self
+
+
+class Formalization(BaseModel):
+    """One claim, read back.
+
+    ``reviewed`` is deliberately not a boolean the row carries: it is null until
+    somebody who is not the attestor has said something, and then it is what they
+    said. An unreviewed claim is the ordinary state and is meant to look like one.
+    """
+
+    id: uuid.UUID
+    document: SourceDocument
+    claim: str
+    informal_statement: str
+    formal_system_id: uuid.UUID
+    statement_term_id: uuid.UUID
+    # Read it with `GET /formal-systems/{id}/terms/{term_id}`, which is the route
+    # that renders a stored term — through a chosen notation, with every subterm's
+    # id beside its reading. Not duplicated here: a term row is structure and
+    # carries no display, so the source spelling needs the system *built*, which
+    # is 55 ms on a corpus grammar and would be paid per system per listing to
+    # serve something lossier than the route that already exists.
+    proof_id: uuid.UUID | None = None
+    reasoning: str
+    attested_by: SystemOwner | None = None
+    attested_as: str | None = None
+    attested_at: datetime
+    # A plain string for the same reason `SourceDocument.kind` is: the column is
+    # free text, and a read must not fail on a value it did not expect.
+    review_verdict: str | None = None
+    review_note: str | None = None
+    reviewed_by: SystemOwner | None = None
+    reviewed_at: datetime | None = None
+    glossary: list[GlossaryEntry] = Field(default_factory=list)
 
 
 class CitationSuggestion(BaseModel):
@@ -1245,6 +1498,42 @@ class CitationSearch(BaseModel):
     # the prefilter matched more candidates than it was allowed to offer. Either
     # way there may be more, which is the only thing a caller can act on.
     truncated: bool = False
+
+
+class LibraryEntry(BaseModel):
+    """What a citation's label names, read from rows alone.
+
+    The cheap half of `LineJustification`. That record re-checks the proof,
+    because the substitution it reports is derived by the match and no row
+    carries it — which is why it is signed-in only (see `explain_line`). But
+    almost everything a reader wants from a citation is *not* derived: what
+    `imbi12d` says, what it needs, what the corpus records about it and where its
+    proof is are all stored, and asking for them costs a handful of indexed row
+    reads.
+
+    So they are served separately, and to anyone who may read the system. A
+    reader of a published corpus gets the answer to "what is this step citing";
+    what signing in adds is what the metavariables stood for *here*.
+    """
+
+    label: str
+    # The rule's own name where it has one (`modus ponens`); empty for a library
+    # entry, which is named by its label alone.
+    name: str = ""
+    # "rule" — a primitive this system declares — or "theorem", an entry of its
+    # library. `primitive` on a library entry makes the same split within it, and
+    # is reported as "axiom".
+    kind: str
+    conclusion: str
+    premises: list[str] = Field(default_factory=list)
+    # The subproof a discharge rule consumes, as its schema reads.
+    discharges: str | None = None
+    title: str | None = None
+    proof_id: uuid.UUID | None = None
+    # The notation the schemas above were read through, echoed as `ProofStructure`
+    # echoes it: a client showing a proof in one spelling must be able to tell a
+    # served rendering from a silently ignored request.
+    notation: str | None = None
 
 
 class JustifyingPremise(BaseModel):

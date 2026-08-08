@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 import app.auth.backend as backend
 from app.db import Base, FormalSystem, SideConditionRow, spec_to_system
+from app.db.notations_mapping import store_notation
 from app.db.promoted_theorems import (
     PromotedTheoremBindingRow,
     PromotedTheoremPremiseRow,
@@ -69,6 +70,7 @@ from tests.spec_helpers import (
     variable_prod,
 )
 from website.logical.declarative import LineSpec, SystemSpec
+from website.logical.rendering import Projection
 
 # Auth tables + the system-decomposition tables (all SQLite-creatable).
 _TABLES = [
@@ -732,3 +734,108 @@ def test_published_system_stays_public_and_cannot_be_unpublished(client, db):
     )
     client.post("/api/auth/logout")
     assert client.get(f"/api/formal-systems/{system_id}").status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# What a citation names (GET /formal-systems/{id}/library/{label})
+#
+# The cheap half of a justification. `/proofs/{id}/lines/{n}/justification`
+# re-checks the proof for the substitution and is signed-in only; what a citation
+# *says* is rows, so any reader of the system gets it.
+# ---------------------------------------------------------------------------
+
+
+def test_a_citation_of_a_declared_rule_says_what_the_rule_is(client, db):
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_spec(db, owner, zfc_spec(), published=True)
+
+    res = client.get(f"/api/formal-systems/{system_id}/library/MP")
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert (body["kind"], body["label"], body["name"]) == ("rule", "MP", "modus ponens")
+    assert body["conclusion"] == "q"
+    assert body["premises"] == ["p", "(p → q)"]
+    # A declared rule is assumed, not proved, so there is nowhere to send a reader.
+    assert body["proof_id"] is None
+
+
+def test_a_reader_of_a_published_system_needs_no_account_for_it(client, db):
+    # The whole point of the split: an anonymous reader of a published corpus can
+    # ask what `imbi12d` says without the re-check a substitution costs.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_spec(db, owner, zfc_spec(), published=True)
+    client.post("/api/auth/logout")
+
+    res = client.get(f"/api/formal-systems/{system_id}/library/MP")
+
+    assert res.status_code == 200, res.text
+    assert res.json()["label"] == "MP"
+
+
+def test_a_draft_systems_library_is_not_readable_by_a_stranger(client, db):
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_zfc(db, owner)
+    client.post("/api/auth/logout")
+
+    assert client.get(f"/api/formal-systems/{system_id}/library/MP").status_code == 404
+
+
+def test_a_label_the_system_cannot_cite_is_a_404(client, db):
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_spec(db, owner, zfc_spec(), published=True)
+
+    res = client.get(f"/api/formal-systems/{system_id}/library/nosuchthing")
+
+    assert res.status_code == 404
+    assert "nosuchthing" in res.json()["detail"]
+
+
+def test_a_schema_no_build_has_composed_keeps_its_source(client, db):
+    # A rule's term is stored by a verify, so a system nothing has been checked
+    # against has none — and the honest reading of a schema with no term is the
+    # schema. The same fallback a proof line takes.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_spec(db, owner, zfc_spec(), published=True)
+
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            store_notation(
+                session,
+                uuid.UUID(system_id),
+                Projection(
+                    name="horseshoe",
+                    templates={
+                        "implication": (
+                            ("lit", "("),
+                            ("slot", "p"),
+                            ("lit", " ⊃ "),
+                            ("slot", "q"),
+                            ("lit", ")"),
+                        )
+                    },
+                ),
+            )
+            session.commit()
+    finally:
+        engine.dispose()
+
+    body = client.get(
+        f"/api/formal-systems/{system_id}/library/MP", params={"notation": "horseshoe"}
+    ).json()
+
+    assert body["premises"] == ["p", "(p → q)"]
+
+
+def test_a_notation_the_system_does_not_have_is_refused(client, db):
+    # Serving the source spelling under another notation's name would be worse
+    # than saying no: a reader would take the reading for that notation's.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_spec(db, owner, zfc_spec(), published=True)
+
+    res = client.get(
+        f"/api/formal-systems/{system_id}/library/MP", params={"notation": "latex"}
+    )
+
+    assert res.status_code == 404
