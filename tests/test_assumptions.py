@@ -560,3 +560,62 @@ def test_a_promotion_stores_a_debt_reached_through_a_lemma(db, client):
     status, entry = promote(client, proof, "viaL")
     assert status == 201, entry
     assert entry["assumes"] == ["peirce"]
+
+
+def test_reading_the_proof_back_still_says_the_theorem_is_conditional(db, client):
+    # `POST /promote` returns the debt; the *detail* read is a different code
+    # path, and `assumes` defaults to empty — so a caller that forgot to fill it
+    # would serialize a conditional theorem as an unconditional one, which is
+    # the one thing this surface exists to prevent (found in review).
+    pc, _fol, _zfc = tower(db, client, "assume-detail-read@example.com")
+    assert assume(client, pc)[0] == 201
+    proof = proved_and_published(client, pc, "(((A → B) → A) → A) [peirce]")
+    assert promote(client, proof, "pa")[0] == 201
+
+    detail = client.get(f"/api/proofs/{proof}").json()
+    assert detail["theorem"]["label"] == "pa"
+    assert detail["theorem"]["assumes"] == ["peirce"]
+
+
+def test_a_proof_establishing_nothing_assumed_reads_back_unconditional(db, client):
+    # The control: the field is a measurement, not a marker.
+    pc, _fol, _zfc = tower(db, client, "assume-detail-clean@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id")[0] == 201
+
+    assert client.get(f"/api/proofs/{proof}").json()["theorem"]["assumes"] == []
+
+
+def test_an_assumption_with_dependents_cannot_be_withdrawn(db, client):
+    # Retiring an ordinary entry invalidates the proofs citing *its* label, which
+    # is the set that rested on it. An assumption's dependents are not that set:
+    # an entry promoted from a proof that cited this is citable under a different
+    # label, so the walk never reaches the proofs resting on it at one remove —
+    # while the row cascade empties that entry's closure, leaving it standing and
+    # reporting itself unconditional (found in review).
+    pc, _fol, _zfc = tower(db, client, "assume-withdraw-blocked@example.com")
+    assert assume(client, pc)[0] == 201
+    proof = proved_and_published(client, pc, "(((A → B) → A) → A) [peirce]")
+    assert promote(client, proof, "pa")[0] == 201
+
+    refused = client.delete(f"/api/formal-systems/{pc}/assumptions/peirce")
+    assert refused.status_code == 409, refused.text
+    assert "'pa'" in refused.json()["detail"]
+
+    # And the debt is still there to be found, rather than half-removed.
+    assert client.get(f"/api/formal-systems/{pc}/assumptions/peirce").json()[
+        "dependent_labels"
+    ] == ["pa"]
+
+
+def test_withdrawing_works_once_the_dependent_entry_is_retired(db, client):
+    # The refusal above is a gate, not a dead end.
+    pc, _fol, _zfc = tower(db, client, "assume-withdraw-after@example.com")
+    assert assume(client, pc)[0] == 201
+    proof = proved_and_published(client, pc, "(((A → B) → A) → A) [peirce]")
+    assert promote(client, proof, "pa")[0] == 201
+
+    retired = client.delete(f"/api/proofs/{proof}/promote")
+    assert retired.status_code == 204, retired.text
+    removed = client.delete(f"/api/formal-systems/{pc}/assumptions/peirce")
+    assert removed.status_code == 204, removed.text

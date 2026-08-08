@@ -55,6 +55,7 @@ from app.auth import current_active_user, current_active_user_optional
 from app.db import (
     FormalSystem,
     RestsOn,
+    assumption_labels,
     cited_labels,
     record_closure,
     rests_on,
@@ -1075,12 +1076,20 @@ def _referenced_by_out(proof: Proof, viewer: User | None) -> list[ProofReferrerO
     return referrers
 
 
-def _theorem_out(proof: Proof) -> PromotedTheoremOut | None:
+def _theorem_out(
+    proof: Proof, assumes: Sequence[str] = ()
+) -> PromotedTheoremOut | None:
     """The library entry this proof establishes, if it establishes one.
 
     Reported for an *imported* entry too, whose `proved_by_id` is then null —
     the proof does establish it, and saying so is what lets a client tell an
     entry it may retire from one it may not.
+
+    ``assumes`` is passed in rather than read here, and it is not optional in
+    spirit: the field defaults to empty on the schema, so a caller that forgot it
+    would serialize a conditional theorem as an unconditional one — which is the
+    single failure this whole surface exists to prevent (found in review). The
+    read is a query, so it belongs with the route's other awaits.
     """
     theorem = proof.theorem
     if theorem is None:
@@ -1091,6 +1100,7 @@ def _theorem_out(proof: Proof) -> PromotedTheoremOut | None:
         statement=theorem.statement,
         formal_system_id=theorem.system_id,
         proved_by_id=theorem.proved_by_id,
+        assumes=list(assumes),
     )
 
 
@@ -1131,7 +1141,16 @@ async def _detail(
         result=proof.result,
         references=_references_out(proof, viewer),
         referenced_by=_referenced_by_out(proof, viewer),
-        theorem=_theorem_out(proof),
+        theorem=_theorem_out(
+            proof,
+            (
+                await session.run_sync(
+                    lambda sync: assumption_labels(sync, [proof.theorem_id])
+                )
+            ).get(proof.theorem_id, ())
+            if proof.theorem_id is not None
+            else (),
+        ),
         documentation=_documentation_out(
             await load_description(session, proof.formal_system_id, proof.name)
         ),

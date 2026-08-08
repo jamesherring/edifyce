@@ -229,6 +229,32 @@ def dependent_counts(
     return {assumption_id: counts.get(assumption_id, 0) for assumption_id in assumption_ids}
 
 
+def assumption_labels(
+    session: Session, theorem_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, list[str]]:
+    """The assumptions each entry rests on, by label, for reading an entry back.
+
+    Labels rather than the whole record, because a reader of a *library entry*
+    wants to know it is conditional and on what; the record itself is the
+    assumption's own route. One query for however many entries are asked about,
+    so a listing pays once.
+    """
+    if not theorem_ids:
+        return {}
+    found: dict[uuid.UUID, list[str]] = {}
+    for theorem_id, label in session.execute(
+        select(TheoremAssumptionRow.theorem_id, PromotedTheoremRow.label)
+        .join(
+            PromotedTheoremRow,
+            PromotedTheoremRow.id == TheoremAssumptionRow.assumption_id,
+        )
+        .where(TheoremAssumptionRow.theorem_id.in_(list(theorem_ids)))
+        .order_by(PromotedTheoremRow.label)
+    ):
+        found.setdefault(theorem_id, []).append(label)
+    return found
+
+
 def dependent_entries(
     session: Session, assumption_id: uuid.UUID
 ) -> list[PromotedTheoremRow]:

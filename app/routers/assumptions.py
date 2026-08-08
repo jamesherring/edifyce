@@ -331,15 +331,43 @@ async def withdraw_assumption(
     it, and letting this route delete one would withdraw a theorem without
     touching the proof that established it.
 
-    Every verdict reached *through* the label goes, exactly as a retirement's
-    does. What this does not do is retire the promotions of the proofs that cited
-    it — those proofs are now unchecked rather than disproved, and re-verifying
-    is what settles whether they still stand. That is the same shape as retiring
-    any other entry, and it is deliberately not a new cascade invented here.
+    **Refused while anything rests on it**, and this is the one guard that is not
+    shared with retiring an ordinary entry. Retiring a theorem invalidates the
+    proofs that cite *its* label, which is exactly the set whose verdicts rested
+    on it. An assumption's dependents are not that set: an entry promoted from a
+    proof that cited this is citable under a **different** label, so the walk
+    never reaches the proofs resting on it at one remove — while the row cascade
+    empties that entry's closure, leaving it standing and reporting itself
+    unconditional. Silently understating a debt is the single thing this feature
+    exists to prevent, so the answer is to refuse and name them (found in
+    review).
+
+    Retire the dependents first, or — the case worth building next — *discharge*
+    the assumption by promoting a proof under the same label, which pays the debt
+    off rather than dropping it
+    (docs/informal-source-ingestion-roadmap.md §4.1).
+
+    With nothing resting on it, withdrawal clears every verdict reached through
+    the label exactly as a retirement does. What it still does not do is retire
+    the promotions of the proofs that cited it — those proofs are unchecked
+    rather than disproved, and re-verifying is what settles whether they stand.
+    That much *is* the shape retiring any other entry already has.
     """
     await owned_system_id_or_404(session, system_id, user.id)
     await lock_system(session, system_id)
     theorem, _ = await _get_assumption_or_404(session, system_id, label)
+
+    resting = await session.run_sync(lambda sync: dependent_entries(sync, theorem.id))
+    if resting:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{label!r} cannot be withdrawn while "
+            + ", ".join(repr(entry.label) for entry in resting)
+            + " rest on it: withdrawing it would leave them citable and reporting "
+            "no assumptions. Retire them first, or prove this and promote it "
+            "under the same label.",
+        )
+
     await session.delete(theorem)
     await session.flush()
     await invalidate_citations(session, system_id, label)
