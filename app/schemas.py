@@ -1188,6 +1188,63 @@ class TheoremMatches(BaseModel):
     unfiltered: int = 0
 
 
+class StatementProposal(BaseModel):
+    """A statement named structurally, before there is a proof to put it in.
+
+    §4.4 of docs/informal-source-ingestion-roadmap.md. Every other structured
+    write is *inside* a proof; a translation from an informal source needs the
+    opposite order — state the target, ask whether it is already proved, and only
+    then open a proof aimed at it.
+
+    A **dry run unless ``store``**, as `/cite` and `/lines` are: asking "is this
+    proved?" is a question, and a question should not write rows. ``store``
+    interns the term and hands back an id — which is what makes it usable as a
+    `ref` elsewhere — and is therefore owner-only.
+    """
+
+    statement: TermProposalIn
+    store: bool = False
+    limit: int = Field(25, ge=1, le=200)
+
+
+class StatementOutcome(BaseModel):
+    """A resolved statement, and whether the library already concludes it.
+
+    ``rendered`` is the system's own source spelling, exact by construction: a
+    production's render steps *are* its source template. It is what a caller
+    would have had to write, handed back after the fact rather than trusted
+    before it.
+
+    ``term_id`` is present only when ``store`` was set. Everything else answers
+    without writing anything.
+    """
+
+    formal_system_id: uuid.UUID
+    term_id: uuid.UUID | None = None
+    rendered: str
+    # The goal's root production — what a search is narrowed by. Null for a
+    # statement whose root is a leaf, which names no production and so narrows
+    # nothing; ``matches`` is then empty and ``unfiltered`` says the whole library
+    # went unasked.
+    constructor: str | None = None
+    digest: str
+    alpha_digest: str
+    # Theorems that could conclude it, by the same filter
+    # `GET /formal-systems/{id}/theorems/matching` runs — candidates, never a
+    # verdict. An ``exact`` one is the answer to "is this already proved?"; the
+    # rest still have to unify, and confirming that needs a proof's context.
+    matches: list[TheoremCandidate] = Field(default_factory=list)
+    matched: int = 0
+    truncated: bool = False
+    unindexed: int = 0
+    unfiltered: int = 0
+
+    @property
+    def proved(self) -> bool:
+        """Is one of the candidates the statement itself?"""
+        return any(candidate.exact for candidate in self.matches)
+
+
 class CitationSuggestion(BaseModel):
     """A justification that **checks**, ready to be sent back to `/cite`.
 

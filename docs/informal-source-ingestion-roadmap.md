@@ -308,7 +308,7 @@ stable to point at and that its absence is visible.
 
 *Engine:* nothing. This layer never reaches `website/logical/`.
 
-### 4.4 Goal-first: state a theorem before proving it
+### 4.4 Goal-first: state a theorem before proving it — *done*
 
 Every structured write today is *inside* a proof — `POST /proofs/{id}/lines`
 needs a proof, and a template line within it to inherit shape from. An ingestion
@@ -325,10 +325,30 @@ proved, and only then open a proof aimed at it.
   statements through, so there is one path from a constructor vocabulary to a
   stored term and it is round-trip checked exactly once.
 
-*Engine:* small. `proposals.resolve` already composes a term against a built
-system; what it lacks is a caller that is not a proof line. The round-trip check
-(§9c) is currently entangled with `restate`/`recite` line composition and needs
-lifting out so a bare statement can be checked the same way.
+*Engine:* nothing, as it turned out. `proposals.resolve` already composed a term
+against a built system and needed only a caller that is not a proof line; the
+round-trip check was the part entangled with `restate`/`recite`, and lifting it
+out is `app/routers/_proposals.py` — shared now by the line route and this one,
+since the only difference between them is *where* the round trip is checked.
+
+**A bare statement has no line to splice into**, so it is read back at the
+system's **logical sorts** — the sorts a proof line is read at, and how a
+promoted theorem's ground statement is already composed. Same guarantee, same
+refusal: the statement is rejected unless the term that comes back is the term
+that went in.
+
+**A dry run unless `store`.** Asking whether something is proved is a question
+and a question should not write rows; storing is what hands back the usable
+`term_id` and is therefore the owner's. That split is load-bearing rather than
+tidy — it is what lets *anyone* ask the question of an imported corpus, which is
+ownerless by construction and where the question is worth most.
+
+The search is the same head-symbol filter §9d built, and is a filter here too. It
+uses the **default** α policy rather than discharge's `metavariables_only`, and
+the two are right for their own questions: "which theorems could conclude this"
+wants the coarser bucket the stored `alpha_digest` column carries, while "is this
+the same theorem" must not rename a constant. Noted because using either one for
+the other's question is exactly the mistake §4.1's review caught.
 
 ### 4.5 Alignment tools: prose search, and the notation direction
 

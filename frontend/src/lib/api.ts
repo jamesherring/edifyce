@@ -806,6 +806,42 @@ export interface PromotedTheorem {
 	discharged: boolean;
 }
 
+/** A statement named structurally, before there is a proof to put it in —
+ * mirrors `StatementProposal`.
+ *
+ * A dry run unless `store`: asking whether something is proved is a question,
+ * and a question does not write rows. `store` interns the term and hands back an
+ * id — which is what makes it usable as a `ref` elsewhere — and is the owner's. */
+export interface StatementProposal {
+	statement: TermProposal;
+	store?: boolean;
+	limit?: number;
+}
+
+/** A resolved statement and what could conclude it — mirrors `StatementOutcome`.
+ *
+ * `rendered` is the system's own source spelling, exact by construction: a
+ * production's render steps *are* its source template. `term_id` is present only
+ * when `store` was set.
+ *
+ * `matches` are **candidates, never a verdict** — each still has to unify, and
+ * confirming that needs a proof's context. An `exact` one is the answer to "is
+ * this already proved?". `unindexed` and `unfiltered` are what the filter could
+ * not see, and a UI hiding them turns a short list into a complete-looking one. */
+export interface StatementOutcome {
+	formal_system_id: string;
+	term_id: string | null;
+	rendered: string;
+	constructor: string | null;
+	digest: string;
+	alpha_digest: string;
+	matches: TheoremCandidate[];
+	matched: number;
+	truncated: boolean;
+	unindexed: number;
+	unfiltered: number;
+}
+
 /** A citable statement nobody has proved — mirrors `AssumptionOut`.
  *
  * `dependents` counts the library entries that rest on it **transitively**, so
@@ -1551,6 +1587,18 @@ export const api = {
 	 * them. Creating and withdrawing are the system owner's; reading a published
 	 * system's is anyone's.
 	 */
+	statements: {
+		/** Compose a statement from the grammar and ask what could conclude it —
+		 * the first call a translation makes, and the one path from a constructor
+		 * vocabulary to a stored term. Readable for any published system; storing
+		 * requires owning it. */
+		propose: (systemId: string, proposal: StatementProposal) =>
+			request<StatementOutcome>(`/formal-systems/${systemId}/statements`, {
+				method: 'POST',
+				body: JSON.stringify(proposal)
+			})
+	},
+
 	assumptions: {
 		/** What this system asserts without proof, most depended-on first. */
 		list: (systemId: string) =>

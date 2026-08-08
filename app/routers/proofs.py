@@ -90,7 +90,6 @@ from app.db.models import User
 from app.db.notations_mapping import load_notation, render_stored
 from app.db.proofs_mapping import failure_from_row
 from app.db.retrieval import conclusion_candidates
-from app.db.terms import TermRow
 from app.db.terms_mapping import (
     alpha_digest,
     digest_term,
@@ -98,6 +97,7 @@ from app.db.terms_mapping import (
     prefetch_terms,
 )
 from app.db.promoted_theorems import PromotedTheoremRow
+from app.routers._proposals import resolve_proposal
 from app.routers._invalidation import (
     clear_verdicts,
     dependent_closure,
@@ -124,12 +124,6 @@ from website.logical.formal_system.retrieval import (
     dischargeable_openers,
     discharges,
 )
-from website.logical.formal_system.proposals import (
-    Proposal,
-    ProposalError,
-    grammar_index,
-    resolve,
-)
 from website.logical.matching.patterns import StringPattern
 from website.logical.rendering import render
 from app.schemas import (
@@ -143,7 +137,6 @@ from app.schemas import (
     LineProposal,
     LineRemoval,
     LineRemovalOutcome,
-    TermProposalIn,
     FailureOut,
     JustifyingAssignment,
     JustifyingPremise,
@@ -2316,29 +2309,6 @@ def _numbered_line(checked: EngineProof | None, number: int) -> EngineProofLine 
     return None
 
 
-def _proposal(payload: TermProposalIn) -> Proposal:
-    # The API shape as the engine's, recursively. Two dataclasses rather than one
-    # shared model because the engine must not depend on Pydantic — and because
-    # `ref` is a caller-facing id here and an opaque string there, which is what
-    # lets `resolve` know nothing about storage.
-    return Proposal(
-        ref=str(payload.ref) if payload.ref is not None else None,
-        constructor=payload.constructor,
-        slots={slot: _proposal(child) for slot, child in payload.slots.items()},
-        literal=payload.literal,
-        sort=payload.sort,
-    )
-
-
-def _referenced(payload: TermProposalIn) -> list[uuid.UUID]:
-    # Every existing term the proposal points at, so they can be swept in one
-    # query rather than one per node.
-    found = [payload.ref] if payload.ref is not None else []
-    for child in payload.slots.values():
-        found.extend(_referenced(child))
-    return found
-
-
 @router.post("/{proof_id}/lines", response_model=LineOutcome)
 async def propose_line(
     proof_id: uuid.UUID,
@@ -2411,55 +2381,10 @@ async def propose_line(
     require_a_built_system(built)
     system = built.system
     compiled = built.compiled
-    context = term_context(compiled)
 
-    # A referenced term must belong to *this* system. Interning is per system, so
-    # a foreign id names a term built over another grammar — and resolving one
-    # would state a formula this system cannot mean.
-    wanted = _referenced(payload.statement)
-    owners = dict(
-        (
-            await session.execute(
-                select(TermRow.id, TermRow.formal_system_id).where(
-                    TermRow.id.in_(wanted)
-                )
-            )
-        ).all()
-    ) if wanted else {}
-    foreign = [str(rid) for rid in wanted if owners.get(rid) != system.id]
-    if foreign:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"This system has no term with id {foreign[0]}.",
-        )
-    graph = await session.run_sync(lambda sync: prefetch_terms(sync, wanted))
-
-    grammar = grammar_index(context)
-    try:
-        term = resolve(
-            _proposal(payload.statement),
-            context,
-            lambda name: compiled.constructor_named(name, context, grammar),
-            lambda ref: graph.term(uuid.UUID(ref), context),
-        )
-    except ProposalError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-        ) from exc
-    except LookupError as exc:
-        # A referenced term whose constructor this grammar no longer has. Term
-        # rows outlive the productions that built them, so the ownership check
-        # above passes and `TermGraph.term` is where it surfaces — as a raise, out
-        # of a rebuild. That is a stale id in a request, not a fault here, and
-        # this route reshapes it as `_verify_with_references` already reshapes the
-        # same raise from a lemma's rows.
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                "A referenced term was built over a grammar this system no longer "
-                f"has, so it cannot be restated here: {exc}"
-            ),
-        ) from exc
+    term, context = await resolve_proposal(
+        session, payload.statement, system.id, compiled
+    )
 
     # Rendered with no projection, which is `to_string` exactly — the source
     # spelling, because a production's render steps are its source template.
