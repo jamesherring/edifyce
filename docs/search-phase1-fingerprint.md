@@ -82,12 +82,88 @@ root, its first two children, and their first two. It is the one knob Phase 1's
 measurements turn: widening it sharpens pruning at the cost of a wider stored
 vector, and never affects recall.
 
+## Why seven — measured on 10k set.mm theorems
+
+Measured against the development corpus: **10,101 theorem conclusions** from a
+layered set.mm import (Propositional ⊂ FOL ⊂ ZF). Recall is a proven 100%, so
+what is measured is *pruning power* — how much each width narrows the library
+before the unifier is asked — over 10 realistic goals spanning the common head
+symbols and a range of sizes. Candidate set as a fraction of the library:
+
+| width | positions | mean candidate set | note |
+|---|---|---|---|
+| W1 (head only) | `{ε}` | **22.2%** | the shipped filter; **63.7%** for an implication goal |
+| W3 | `+ {0, 1}` | **2.2%** | a 10× cut — the root's children are 77–87% concrete symbols |
+| **W7 (shipped)** | `+ {00,01,10,11}` | **1.6%** | halves the deep goals: `2r19.29` 589→294, `ax12wdemo` 580→302 |
+| W15 | `+ depth 3` | **1.6%** | ~1% better; depth-3 positions are ~90% variable/absent markers |
+| full disc-tree | all positions | **1.6%** | within ~1% of W7 |
+
+Two things make the choice. First, **64% of set.mm conclusions are implications**
+(`wi`), so the head-symbol filter (W1) leaves two-thirds of the library for the
+single most common goal shape — it is barely a filter there. Second, the pruning
+is concentrated in the top two levels: at depth 1 positions are 77–87% concrete
+symbols, at depth 2 about half, and by depth 3 only ~5–16% (the rest are shared
+metavariables — `ph`, `ps`, `x` — which fingerprint as "compatible with anything"
+and do not prune). The distinct-fingerprint count says the same: W1 partitions
+the library into 46 buckets (mean 220 theorems each), W3 into 1,784 (mean 5.7),
+**W7 into 5,861 (mean 1.7)**, W15 into 6,698 (mean 1.5).
+
+So **W7 sits at the knee**: W1→W3 is the big win, W3→W7 roughly halves the
+candidate set for the *deep* goals (nested implications, quantified statements —
+exactly the large terms whose `unify` confirm is most expensive), and W7→W15→full
+buys ~1% for a wider or unbounded key. A **full discrimination tree** — a
+variable-length preorder key needing a trie — lands within ~1% of the fixed
+seven-integer fingerprint, which is why fingerprint indexing exists as its own
+technique: the fixed vector a database indexes trivially captures essentially all
+the structural pruning the corpus offers, and the kernel confirm mops up the rest.
+(These figures are the structural filter; the true `unify`-able set is ≤ them, and
+that residual — repeated-variable and sort constraints — is common to every width,
+so it does not move the comparison.)
+
+## Definitions, and the theory boundary
+
+A fingerprint filters for *syntactic* unification, so it does **not** see through
+definitions — and it must not, because neither does the confirm it feeds. A
+definition makes `⊆` (`wss`) its own constructor; the unfolding
+`∀x (x ∈ A → x ∈ B)` (`wal`) is a different term with a different head. On the
+corpus, `df-ss` is stored as the biconditional `( A ⊆ B ↔ ∀x (x ∈ A → x ∈ B) )`,
+and its two sides fingerprint incompatibly at the root:
+
+```
+A ⊆ B                       ε:wss   0:A   1:A    00:B  01:B  10:B     11:B
+∀x ( x ∈ A → x ∈ B )        ε:wal   0:A   1:wi   00:B  01:B  10:wcel  11:wcel
+                            └── clash at ε: wss vs wal — pruned, and the unifier agrees
+```
+
+A `⊆` goal retrieves the 141 `⊆`-headed theorems and none of the 22 `∀`-form
+ones, though some are definitionally equivalent. This is correct: the filter and
+the confirm must stay in lockstep, since recall is defined *relative to the
+confirm*. Making the filter definition-aware without a definition-aware confirm
+would be unsound. Crossing a definition is therefore a **step**, not a match: an
+author applies the definition (a definitional step, or a biconditional rewrite
+citing `df-ss`) to change the goal's head from `wss` to `wal`, and *then*
+retrieval finds the `∀`-form theorems.
+
+Merging synonyms directly is exactly **Phase 2** (theory-aware canonical digest):
+an e-graph over the definitions and equational lemmas normalises each term to a
+canonical representative *before* fingerprinting, so the `⊆`-form and the `∀`-form
+reduce to one normal form and one fingerprint. The fingerprint machinery is
+unchanged — it runs over normalised terms, and the confirm normalises too, so the
+lockstep and the recall guarantee hold, now up to the definitional theory. The
+layered guarantee: Phase 0 recall up to α-renaming, **Phase 1 up to syntactic
+unification** (synonyms distinct), Phase 2 up to the definitional + equational
+theory (synonyms merged).
+
 ## What is left
 
-- **Storage.** A fingerprint per promoted-theorem conclusion, computed at
-  promotion/import time and stored as rows or columns keyed for the per-position
-  compatibility query. This needs an Atlas migration — the first schema change the
-  retrieval work has required.
+- **Storage** — *done.* A fingerprint per promoted-theorem conclusion, computed
+  in `store_theorem` from the conclusion term (`promoted.deduction.schema_term`,
+  under the same `StringPattern` guard as `statement_term_id`, so imports are
+  covered automatically) and stored on `promoted_theorems.conclusion_fingerprint`
+  as `[position-set key, features]` JSON (`app/db/fingerprints.py`). It is present
+  exactly when the cached term is, so a theorem is "indexed" consistently. Existing
+  rows carry NULL until re-indexed — the same "unindexed" state a NULL cached term
+  already has. One Atlas migration (a nullable column add).
 - **Wiring.** `conclusion_candidates` gains a per-position compatibility filter in
   place of the single `constructor` equality; position `()` refines today's
   behaviour (it splits ground leaves by token too), and the deeper positions only
@@ -97,7 +173,6 @@ vector, and never affects recall.
   fingerprint keys on the *signature* — the same distinction the confirm already
   draws, to settle at that step. The kernel-`unify` confirm stays exactly
   as it is — the filter feeds it a shorter list, nothing more.
-- **Measurement.** Recall (must be 100% against a brute-force `unify` oracle) and
-  candidate-set-size reduction over the head-symbol baseline, on a corpus slice —
-  the metrics the roadmap's Phase 1 already names, now with a baseline to beat
-  rather than only the oracle.
+- **Measurement** — *done* (see "Why seven" above): candidate-set-size reduction
+  over the head-symbol baseline on the 10k-theorem corpus, and the width analysis
+  justifying W7 against W3, W15, and a full discrimination tree.

@@ -38,6 +38,7 @@ from app.db.promoted_theorems import (
     PromotedTheoremPremiseRow,
     PromotedTheoremRow,
 )
+from app.db.fingerprints import pattern_fingerprint
 from app.db.side_conditions import SideConditionRow
 from app.db.side_conditions_mapping import build_theorem_side_conditions, proviso_lines
 from app.db.systems import SymbolRow
@@ -151,6 +152,9 @@ def store_theorem(
         proved_by_id=proved_by_id,
         schema_digest=digest if promoted is not None else None,
         statement_term_id=term_ids[0],
+        # From the same conclusion term `term_ids[0]` interns, under the same
+        # StringPattern guard — so it is non-null exactly when the cached term is.
+        conclusion_fingerprint=pattern_fingerprint(schemas[0]),
     )
     for index, premise in enumerate(spec.premises):
         row.premises.append(
