@@ -23,17 +23,24 @@ buys is precision — fewer candidates handed to the unifier — and precision, 
 correctness, is what a larger position set improves. Nothing here is consulted by
 the checker; a wrong fingerprint costs a redundant unify, never a bad proof.
 
-The features, following Schulz. At a sampled position a term has either a
-*symbol* (its constructor, plus the literal for a ground leaf — two atoms of one
-production unify only if their tokens agree), or one of three markers:
+The features, following Schulz — including his letters, so a stored fingerprint
+can be read against the paper. At a sampled position a term has either a *symbol*
+(its constructor, plus the literal for a ground leaf — two atoms of one production
+unify only if their tokens agree), or one of three markers:
 
-* ``VARIABLE`` — a variable sits exactly here. It unifies with any subterm the
-  other side has, so it clashes only with ``ABSENT`` (there is nothing to bind).
-* ``BELOW_VAR`` — this position lies *under* a variable, which subsumes whatever
-  would be here, so it is compatible with everything.
-* ``ABSENT`` — the path runs off the end of the term: a ground leaf or a
+* ``VARIABLE`` (``A``) — a variable sits exactly here. It unifies with any subterm
+  the other side has, so it clashes only with ``ABSENT`` (nothing to bind to).
+* ``BELOW_VAR`` (``B``) — this position lies *under* a variable, which subsumes
+  whatever would be here, so it is compatible with everything.
+* ``ABSENT`` (``N``) — the path runs off the end of the term: a ground leaf or a
   lower-arity node terminates above this position, so no subterm exists here. It
   is compatible only with ``ABSENT`` and ``BELOW_VAR``.
+
+Position ``()`` is the head-symbol filter `app/db/retrieval.py` already ships,
+*refined*: it keys on the constructor (like that filter) but also carries a ground
+leaf's token, so it splits `a` from `b` where the constructor-only filter does not.
+A refinement, not an identity — still recall-safe, since the unifier compares
+literals too.
 """
 
 from __future__ import annotations
@@ -66,11 +73,12 @@ FINGERPRINT_POSITIONS: tuple[Position, ...] = (
     (1, 1),
 )
 
-# The three non-symbol features. Single characters so a stored fingerprint stays
-# compact, and disjoint from any symbol key (which carries a `S`/`L` tag).
+# The three non-symbol features, with Schulz's letters (A = variable here, B =
+# below a variable, N = nonexistent). Single characters so a stored fingerprint
+# stays compact, and disjoint from any symbol key (which carries a `S`/`L` tag).
 VARIABLE = "A"
-BELOW_VAR = "N"
-ABSENT = "B"
+BELOW_VAR = "B"
+ABSENT = "N"
 
 # A feature is one of the markers above, or a symbol key from `_symbol`.
 Feature = str
@@ -145,5 +153,17 @@ def compatible(query: Sequence[Feature], stored: Sequence[Feature]) -> bool:
     ``True`` for every unifiable pair (the recall contract), so a caller filters
     on this and lets the kernel confirm. A single incompatible position is a
     sound rejection; agreement everywhere is only a licence to try the unifier.
+
+    The two must be over the **same** positions. A width mismatch is refused
+    rather than compared on the common prefix — a fingerprint stored under one
+    position set and queried under a wider one would otherwise drop every new
+    position silently, which is a precision regression wearing the mask of a
+    correct answer. Widening :data:`FINGERPRINT_POSITIONS` means re-indexing, and
+    this is what makes forgetting to loud.
     """
+    if len(query) != len(stored):
+        raise ValueError(
+            f"fingerprint width mismatch: {len(query)} vs {len(stored)} — the two "
+            "were computed over different position sets and cannot be compared."
+        )
     return all(features_compatible(q, s) for q, s in zip(query, stored))

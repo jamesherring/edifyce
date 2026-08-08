@@ -31,9 +31,13 @@ per request, or maintaining one as parent-pointer rows, both fight the grain.
 substitution/fingerprint trees, Vampire) is the SQL-native member of the same
 family. Fix a small set of sample positions; record, per indexed term, the
 feature at each. A fingerprint is then a fixed-width vector — columns a database
-stores and compares position by position — and it is a strict generalisation of
-what is already shipped: **position `()` alone is the head-symbol filter.** Adding
-positions sharpens pruning and changes nothing about what matches.
+stores and compares position by position. Position `()` is the head-symbol filter
+that is already shipped, **refined**: it keys on the constructor like that filter,
+but also carries a ground leaf's token, so it splits `a` from `b` where the
+constructor-only filter does not (still recall-safe — the unifier compares
+literals too). So the deeper positions do not replace the head-symbol filter; they
+extend a refinement of it, and adding positions only sharpens pruning — it never
+changes what matches.
 
 The engine primitive is `website/logical/fingerprint.py`, a dependency-free leaf
 utility over kernel terms (beside `graphs.py`, and like the digests in
@@ -48,11 +52,13 @@ when their tokens agree — or one of three markers, following Schulz:
 
 | marker | meaning | compatible with |
 |---|---|---|
-| `A` (`VARIABLE`) | a variable sits exactly here | anything **present** — every symbol, `A`, `N`; **not** `B` |
-| `N` (`BELOW_VAR`) | the position lies under a variable | **everything** — the variable above subsumes it |
-| `B` (`ABSENT`) | the path ran off the end of the term | only `B` and `N` |
+| `A` (`VARIABLE`) | a variable sits exactly here | anything **present** — every symbol, `A`, `B`; **not** `N` |
+| `B` (`BELOW_VAR`) | the position lies under a variable | **everything** — the variable above subsumes it |
+| `N` (`ABSENT`) | the path ran off the end of the term | only `N` and `B` |
 
-Two symbols are compatible iff equal. Everything else follows the table.
+Two symbols are compatible iff equal. Everything else follows the table. The
+letters are Schulz's (`A` variable, `B` below-variable, `N` nonexistent), so a
+stored fingerprint reads against the paper.
 
 ### The contract: 100% recall
 
@@ -83,8 +89,13 @@ vector, and never affects recall.
   compatibility query. This needs an Atlas migration — the first schema change the
   retrieval work has required.
 - **Wiring.** `conclusion_candidates` gains a per-position compatibility filter in
-  place of the single `constructor` equality; position `()` subsumes today's
-  behaviour, so the change is additive. The kernel-`unify` confirm stays exactly
+  place of the single `constructor` equality; position `()` refines today's
+  behaviour (it splits ground leaves by token too), and the deeper positions only
+  narrow further, so the change never keeps a candidate the shipped filter would
+  have dropped. One reconciliation the wiring must make: the shipped filter keys
+  on the constructor *name* (with rename handling via `stored_name`), while a
+  fingerprint keys on the *signature* — the same distinction the confirm already
+  draws, to settle at that step. The kernel-`unify` confirm stays exactly
   as it is — the filter feeds it a shorter list, nothing more.
 - **Measurement.** Recall (must be 100% against a brute-force `unify` oracle) and
   candidate-set-size reduction over the head-symbol baseline, on a corpus slice —

@@ -87,7 +87,9 @@ the SQL-native member of the discrimination-tree family), with the design and th
 The engine primitive (`website/logical/fingerprint.py`) and its soundness suite
 (`tests/test_fingerprint.py`) have landed; storage (an Atlas migration) and the
 wiring into `conclusion_candidates` are the remaining steps. Position `()` of the
-fingerprint *is* the head-symbol filter above, so the change is additive.
+fingerprint is a refinement of the head-symbol filter above (it also splits ground
+leaves by token), and the deeper positions only narrow further — so the wiring
+extends the filter rather than replacing it.
 
 That ordering was deliberate: the cheap filter needs no new representation and no
 new storage, so it could ship behind the same interface a term net will use.

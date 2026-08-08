@@ -115,6 +115,20 @@ def test_absent_clashes_with_any_present_subterm():
     assert not features_compatible(ABSENT, VARIABLE)
 
 
+def test_the_markers_are_schulz_letters():
+    # A stored fingerprint is read against the paper, so the letters must be his:
+    # A variable-here, B below-variable, N nonexistent.
+    assert (VARIABLE, BELOW_VAR, ABSENT) == ("A", "B", "N")
+
+
+def test_comparing_fingerprints_of_different_widths_is_refused():
+    # A width mismatch means the two were computed over different position sets —
+    # comparing the common prefix would silently drop the extra positions, a
+    # precision regression that looks like a correct answer. Loud instead.
+    with pytest.raises(ValueError, match="width mismatch"):
+        compatible((VARIABLE, ABSENT), (VARIABLE,))
+
+
 # ---------------------------------------------------------------------------
 # What feature_at reads
 # ---------------------------------------------------------------------------
