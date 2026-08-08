@@ -824,10 +824,13 @@ export interface StatementProposal {
  * production's render steps *are* its source template. `term_id` is present only
  * when `store` was set.
  *
- * `matches` are **candidates, never a verdict** — each still has to unify, and
- * confirming that needs a proof's context. An `exact` one is the answer to "is
- * this already proved?". `unindexed` and `unfiltered` are what the filter could
- * not see, and a UI hiding them turns a short list into a complete-looking one. */
+ * `matches` are **candidates, never a verdict**, `exact` ones included: that flag
+ * is a ranking hint, and confirming that one really proves the statement is
+ * unification against a line in a real scope (`proofs.citations`). Nothing here
+ * says "proved" — do not add a UI that does. `exact_is_approximate` warns that
+ * this system's grammar makes the flag over-report; `unindexed` and `unfiltered`
+ * are what the filter could not see, and a UI hiding any of the three turns a
+ * short list into a complete-looking one. */
 export interface StatementOutcome {
 	formal_system_id: string;
 	term_id: string | null;
@@ -840,6 +843,7 @@ export interface StatementOutcome {
 	truncated: boolean;
 	unindexed: number;
 	unfiltered: number;
+	exact_is_approximate: boolean;
 }
 
 /** A citable statement nobody has proved — mirrors `AssumptionOut`.

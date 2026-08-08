@@ -343,12 +343,26 @@ and a question should not write rows; storing is what hands back the usable
 tidy — it is what lets *anyone* ask the question of an imported corpus, which is
 ownerless by construction and where the question is worth most.
 
-The search is the same head-symbol filter §9d built, and is a filter here too. It
-uses the **default** α policy rather than discharge's `metavariables_only`, and
-the two are right for their own questions: "which theorems could conclude this"
-wants the coarser bucket the stored `alpha_digest` column carries, while "is this
-the same theorem" must not rename a constant. Noted because using either one for
-the other's question is exactly the mistake §4.1's review caught.
+The search is the same head-symbol filter §9d built, and is a filter here too —
+including its `exact` flag.
+
+**Nothing in the response says "proved", and that is a correction.** This section
+originally specified an "α-digest exact hit" as the answer to "is this already
+proved?", and the first cut shipped it as a `proved` property. Review caught it,
+and the reason is sharper than the bug: **no digest settles the question at
+all**. The search policy renames regex leaves, so it over-reports in a grammar
+whose numerals are a `matches` production; the identity policy a discharge
+compares by would *under*-report, because a schematic theorem instantiates rather
+than renames, and instantiation is unification. What settles it is
+`InferenceRule.concludes`, which takes a `ProofLine` — a proof's context, and
+exactly why §9d put the confirm on the proof route and the filter on the system's.
+
+So the two α policies stay right for their own questions — the coarser bucket for
+"which theorems could conclude this", the identity one for "is this the same
+theorem" — and *neither* is promoted to a verdict. `exact_is_approximate` reports
+when this system's grammar is one the search policy over-reports on, since a
+caller that cannot tell which case it is in has to distrust the ranking
+everywhere.
 
 ### 4.5 Alignment tools: prose search, and the notation direction
 

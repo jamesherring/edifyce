@@ -1143,6 +1143,16 @@ class TheoremCandidate(BaseModel):
     variables, so citing it needs no instantiation at all. ``premise_count`` is
     what a caller ranks by after that: a theorem with none can close the goal on
     its own, and one with two needs two standing lines found for it first.
+
+    ``exact`` is a **ranking hint and not a verdict**, for two reasons that both
+    matter to a caller tempted to read it as "already proved". It compares the
+    stored ``terms.alpha_digest``, whose policy renames every regex leaf — so in
+    a grammar whose numerals are a ``matches`` production it reads `2 = 5` and
+    `7 = 9` as one statement (`tests/test_alpha_digest.py` pins it); the callers
+    that can tell whether their system is one of those report it. And a
+    *schematic* theorem that genuinely proves a ground goal is **not** exact,
+    since instantiation is unification rather than renaming. Only unification
+    against a line in a real scope settles either way.
     """
 
     label: str
@@ -1231,18 +1241,22 @@ class StatementOutcome(BaseModel):
     alpha_digest: str
     # Theorems that could conclude it, by the same filter
     # `GET /formal-systems/{id}/theorems/matching` runs — candidates, never a
-    # verdict. An ``exact`` one is the answer to "is this already proved?"; the
-    # rest still have to unify, and confirming that needs a proof's context.
+    # verdict, including the ``exact`` ones. Confirming that one of these really
+    # does prove the statement is unification against a line standing in a real
+    # scope (`GET /proofs/{id}/lines/{n}/citations`), which is a proof's context
+    # and is why no field here says "proved".
     matches: list[TheoremCandidate] = Field(default_factory=list)
     matched: int = 0
     truncated: bool = False
     unindexed: int = 0
     unfiltered: int = 0
-
-    @property
-    def proved(self) -> bool:
-        """Is one of the candidates the statement itself?"""
-        return any(candidate.exact for candidate in self.matches)
+    # Whether ``exact`` over-reports in *this* system: true when the grammar
+    # declares a regex production whose tokens denote constants, since the stored
+    # α-digest renames every regex leaf and so reads `2 = 5` and `7 = 9` as one
+    # statement. False for every system that declares none, where `exact` means
+    # what it says. Reported rather than left to a caveat, because a caller that
+    # cannot tell the two cases apart has to distrust the ranking everywhere.
+    exact_is_approximate: bool = False
 
 
 class CitationSuggestion(BaseModel):

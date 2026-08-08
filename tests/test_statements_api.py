@@ -152,9 +152,10 @@ def test_two_statements_of_one_term_intern_to_one_row(db, client):
 # ---------------------------------------------------------------------------
 
 
-def test_the_library_answers_whether_it_is_already_proved(db, client):
+def test_the_library_names_what_could_already_prove_it(db, client):
     # The first question any translation asks, and the one that had no answer
-    # short of writing a proof and seeing.
+    # short of writing a proof and seeing. What comes back is *candidates* — the
+    # route says nothing about proof, for the reasons its docstring gives.
     pc, _fol, _zfc = tower(db, client, "state-proved@example.com")
     proof = proved_and_published(client, pc, IDENTITY_PROOF)
     assert promote(client, proof, "id")[0] == 201
@@ -163,6 +164,9 @@ def test_the_library_answers_whether_it_is_already_proved(db, client):
     assert status == 200, body
     assert [m["label"] for m in body["matches"]] == ["id"]
     assert body["matches"][0]["exact"] is True
+    # And no field claims it is proved: `exact` is a ranking hint, and confirming
+    # it is unification against a line in a real scope.
+    assert "proved" not in body
 
 
 def test_a_statement_nothing_proves_says_so(db, client):
@@ -187,6 +191,17 @@ def test_an_ancestors_theorem_answers_a_descendants_question(db, client):
 
     body = state(client, zfc, implication(atom("P"), atom("P")))[1]
     assert [m["label"] for m in body["matches"]] == ["id"]
+
+
+def test_a_grammar_that_renames_constants_says_its_ranking_is_approximate(db, client):
+    # `exact` compares the stored α-digest, whose policy renames every regex leaf
+    # — right for search, and wrong for a production whose tokens denote
+    # constants, where it reads `2 = 5` and `7 = 9` as one statement. The tower
+    # declares no such production, so the flag is off; a caller on a grammar that
+    # does declare one needs telling, or it has to distrust the ranking
+    # everywhere (found in review).
+    pc, _fol, _zfc = tower(db, client, "state-approx@example.com")
+    assert state(client, pc)[1]["exact_is_approximate"] is False
 
 
 # ---------------------------------------------------------------------------

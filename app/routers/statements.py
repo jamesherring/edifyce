@@ -75,9 +75,16 @@ async def propose_statement(
     the question is worth most.
 
     The search is the **same filter** `GET /formal-systems/{id}/theorems/matching`
-    runs, and is a filter there too: candidates, never a verdict. Confirming one
-    needs the goal in a real scope with real lines above it, which is a proof's
-    context and nothing else's.
+    runs, and is a filter here too — including its ``exact`` flag, which is a
+    ranking hint rather than an answer. Nothing here says "proved", and the
+    restraint is deliberate: no digest settles it. The search policy renames
+    regex leaves, so it over-reports in a grammar whose numerals are a ``matches``
+    production (`exact_is_approximate` says when this system is one); the
+    identity policy a discharge compares by would under-report, since a schematic
+    theorem instantiates rather than renames. Only unification against a line
+    standing in a real scope decides, which is `InferenceRule.concludes` and
+    takes a `ProofLine` — a proof's context, and nothing else's
+    (`GET /proofs/{id}/lines/{n}/citations`).
     """
     # Readability first and cheaply: a draft you do not own is a 404 here as it
     # is everywhere, and settling that before a system build means a stranger
@@ -122,8 +129,16 @@ async def propose_statement(
     # The **search** policy, and deliberately not the one a discharge compares by
     # (`metavariables_only`). "Which theorems could conclude this" wants the
     # coarser bucket — a stored conclusion's `alpha_digest` column carries it, so
-    # asking any other way would match nothing.
+    # asking any other way would match nothing. What it must not be used for is a
+    # *verdict*: see the docstring, and `exact_is_approximate` below.
     goal = alpha_digest(term)
+    # Whether that coarseness bites here. A regex production whose tokens denote
+    # constants is the one shape the policy renames wrongly, and it is declared
+    # rather than inferred — so this is a lookup rather than a guess.
+    approximate = any(
+        production.regex is not None and production.denotes_constant
+        for production in effective.spec.productions
+    )
     # A `Node` names a production; a `Var` or a `Bound` names none, and so
     # narrows nothing — the same case `theorems/matching` refuses outright, which
     # this reports instead because resolving and rendering the statement is
@@ -138,6 +153,7 @@ async def propose_statement(
             rendered=rendered,
             digest=digest_term(term),
             alpha_digest=goal,
+            exact_is_approximate=approximate,
         )
 
     found = await session.run_sync(
@@ -174,4 +190,5 @@ async def propose_statement(
         truncated=found.truncated,
         unindexed=found.unindexed,
         unfiltered=found.unfiltered,
+        exact_is_approximate=approximate,
     )
