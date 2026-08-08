@@ -90,7 +90,7 @@ def examples(reports: Sequence[Provenance], layer: str) -> list[str]:
     ]
 
 
-def _holder(report) -> str:  # noqa: ANN001 - a `Provenance`, imported for typing only
+def _holder(report: Provenance) -> str:
     """What actually keeps a theorem where it is, when something does.
 
     `could_be_filed_lower` conjoins *grammar* and *rule* depth, so naming the
