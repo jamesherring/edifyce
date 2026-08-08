@@ -27,11 +27,16 @@ entry** and written when the entry is promoted.
 
 Per entry rather than per proof, because an entry is where the answer is both
 cheap and stable. Cheap: an entry's closure is the union of its citations'
-closures, so each promotion does *one hop* of work and reading a proof's closure
-is one hop as well — no walk, at any depth, in either direction. Stable: an entry
-that stops standing is retired, and retirement already cascades
-(`app/routers/_invalidation.py`), so nothing maintains this that is not already
-maintained.
+closures, so each promotion does *one hop* of work, and reading it back is one
+query however deep the **library** citation graph runs — which on a corpus is
+thousands of theorems. Stable: an entry that stops standing is retired, and
+retirement already cascades (`app/routers/_invalidation.py`), so nothing
+maintains this that is not already maintained.
+
+The one walk left is over **proofs**, not entries: a proof may cite a lemma
+proof's lines directly (``[alias.line]``), which names no label, so
+:func:`reference_closure` follows those edges before any label is read. That
+graph is per-development and acyclic by construction, not corpus-scale.
 
 An entry promoted before this table existed has no rows, which reads as an empty
 closure — and that is the right answer rather than a missing one, since nothing
@@ -55,7 +60,8 @@ from sqlalchemy import ForeignKey, Index, Text, delete, func, select
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
-from app.db.proof_lines import ProofLineRow
+from app.db.models import Proof
+from app.db.proof_lines import ProofLineAntecedentRow, ProofLineRow
 from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
 from app.db.systems import RuleRow
 
@@ -132,20 +138,24 @@ class Assumed:
 class RestsOn:
     """What a proof depends on that nobody has proved — and what went unread.
 
-    ``unresolved`` is the honest half. A cited label that names no library entry,
-    no inference rule of the chain, and no hypothesis of the theorem being proved
-    is a label this report could not account for, and a report that dropped it
-    would read as "rests on nothing" when the truth is "rests on something I
-    could not follow". Same reasoning as `app/db/retrieval.py`'s ``unindexed``:
-    a short list must not read as a complete one.
+    ``unresolved`` and ``unread`` are the honest half, one per door into the
+    library. A cited **label** that names no entry, no inference rule of the
+    chain and no hypothesis of a theorem being proved is one the report could not
+    account for; a cited **lemma proof** holding no line rows is one whose own
+    debts could not be read. Either dropped silently would make this read "rests
+    on nothing" when the truth is "rests on something I could not follow". Same
+    reasoning as `app/db/retrieval.py`'s ``unindexed``: a short list must not read
+    as a complete one.
     """
 
     assumptions: tuple[Assumed, ...]
     unresolved: tuple[str, ...]
+    # Reached lemma proofs with no stored structure, by name.
+    unread: tuple[str, ...] = ()
 
     @property
     def complete(self) -> bool:
-        return not self.unresolved
+        return not self.unresolved and not self.unread
 
 
 def record_closure(
@@ -272,16 +282,16 @@ def resolve_labels(
 
 
 def explained_labels(
-    session: Session, systems: Sequence[uuid.UUID], theorem_id: uuid.UUID | None
+    session: Session, systems: Sequence[uuid.UUID], theorem_ids: Sequence[uuid.UUID]
 ) -> set[str]:
     """The labels a proof's own context accounts for without any library entry.
 
     An **inference rule** the chain declares, by either of its two spellings, and
-    the **hypotheses** of the theorem this proof establishes — a Metamath ``$e``,
+    the **hypotheses** of the theorems these proofs establish — a Metamath ``$e``,
     citable only from inside the block that declares it. Neither is a dependency
     on anything unproved, so both drop out rather than being reported as labels
     the walk could not follow. Exactly `app/db/provenance.py`'s ``explained``,
-    read for one proof instead of for a corpus.
+    read for a proof and the lemmas it cites instead of for a corpus.
     """
     labels: set[str] = set()
     if systems:
@@ -289,11 +299,11 @@ def explained_labels(
             select(RuleRow.label, RuleRow.name).where(RuleRow.system_id.in_(list(systems)))
         ):
             labels.update({label, name})
-    if theorem_id is not None:
+    if theorem_ids:
         labels.update(
             session.scalars(
                 select(PromotedTheoremPremiseRow.label).where(
-                    PromotedTheoremPremiseRow.theorem_id == theorem_id,
+                    PromotedTheoremPremiseRow.theorem_id.in_(list(theorem_ids)),
                     PromotedTheoremPremiseRow.label.is_not(None),
                 )
             )
@@ -301,29 +311,97 @@ def explained_labels(
     return labels
 
 
+def reference_closure(
+    session: Session, proof_id: uuid.UUID
+) -> tuple[list[uuid.UUID], tuple[str, ...]]:
+    """Every proof whose lines this one's citations reach, itself included.
+
+    **The second door into the library, and the one with no label on it.** A
+    proof reaches a theorem two ways: a rule label its lines resolve
+    (`proof_lines.rule`), and a *lemma proof* whose lines it cites as
+    ``[alias.line]``. The second leaves no label behind — the rule recorded is
+    whatever justified the step, and the lemma's own citations are rows on the
+    lemma — so a report reading only the first calls a proof unconditional when
+    every debt it has came through a lemma.
+
+    Followed by **antecedent edge** rather than by `proof_references`, which is
+    the declared set: a reference no line cites is not a dependency, and
+    `app/db/provenance.py` makes the same choice one level down for the same
+    reason. A breadth-first walk rather than one hop, because a lemma may cite a
+    lemma; the reference graph is acyclic by construction (the cycle check on
+    write) and the walk carries its own ``seen`` set regardless.
+
+    The second return is the **unread**: reached proofs holding no line rows, by
+    name. That should be unreachable — invalidating a lemma clears its
+    dependents' verdicts and structure together (`_invalidation.dependent_closure`),
+    so a proof with stored lines implies its lemmas have them — but a closure
+    that quietly skipped one would under-report a debt, which is the one failure
+    this module exists to prevent. Reported rather than trusted.
+    """
+    reached = [proof_id]
+    seen = {proof_id}
+    frontier = [proof_id]
+    while frontier:
+        # Joined through the line: an edge is keyed by the *line* that cites, so
+        # "which proofs does this one reach" is a question about its lines.
+        rows = session.scalars(
+            select(ProofLineAntecedentRow.antecedent_proof_id)
+            .join(ProofLineRow, ProofLineRow.id == ProofLineAntecedentRow.line_id)
+            .where(
+                ProofLineRow.proof_id.in_(frontier),
+                ProofLineAntecedentRow.antecedent_proof_id.is_not(None),
+            )
+            .distinct()
+        )
+        frontier = [found for found in rows if found not in seen]
+        seen.update(frontier)
+        reached.extend(frontier)
+
+    # Which of them actually hold structure. The seed is the caller's business —
+    # a route 409s on it — so only the lemmas can surprise us here.
+    checked = set(
+        session.scalars(
+            select(ProofLineRow.proof_id).where(ProofLineRow.proof_id.in_(reached)).distinct()
+        )
+    )
+    unread = tuple(
+        sorted(
+            name
+            for name, in session.execute(
+                select(Proof.name).where(Proof.id.in_([p for p in reached if p not in checked]))
+            )
+        )
+    )
+    return reached, unread
+
+
 def cited_entries(
-    session: Session,
-    proof_id: uuid.UUID,
-    systems: Sequence[uuid.UUID],
-    theorem_id: uuid.UUID | None,
+    session: Session, proofs: Sequence[uuid.UUID], systems: Sequence[uuid.UUID]
 ) -> tuple[dict[str, uuid.UUID], tuple[str, ...]]:
-    """The library entries one proof's checked lines cite, and what went unread.
+    """The library entries these proofs' checked lines cite, and what went unread.
 
     ``proof_lines.rule`` and not the reference the author typed: the resolved
     label is what the *checker* used, and reporting a label the resolver never
     reached would invent a dependency the proof does not have. The same choice
     `app/db/provenance.py` makes, and for the same reason.
     """
-    labels = [
-        label
-        for label in session.scalars(
+    labels = list(
+        session.scalars(
             select(ProofLineRow.rule)
-            .where(ProofLineRow.proof_id == proof_id, ProofLineRow.rule.is_not(None))
+            .where(ProofLineRow.proof_id.in_(list(proofs)), ProofLineRow.rule.is_not(None))
             .distinct()
+        )
+    )
+    theorem_ids = [
+        theorem_id
+        for theorem_id in session.scalars(
+            select(Proof.theorem_id).where(
+                Proof.id.in_(list(proofs)), Proof.theorem_id.is_not(None)
+            )
         )
     ]
     entries = resolve_labels(session, systems, labels)
-    explained = explained_labels(session, systems, theorem_id)
+    explained = explained_labels(session, systems, theorem_ids)
     unresolved = tuple(
         sorted(label for label in labels if label not in entries and label not in explained)
     )
@@ -331,10 +409,7 @@ def cited_entries(
 
 
 def rests_on(
-    session: Session,
-    proof_id: uuid.UUID,
-    systems: Sequence[uuid.UUID],
-    theorem_id: uuid.UUID | None,
+    session: Session, proof_id: uuid.UUID, systems: Sequence[uuid.UUID]
 ) -> RestsOn:
     """What one proof transitively assumes, from rows alone.
 
@@ -343,11 +418,17 @@ def rests_on(
     settled when *it* was promoted. A proof with no stored lines has never been
     checked, and reports nothing — which its caller should turn into "verify it
     first" rather than into "it assumes nothing".
+
+    ``systems`` covers every proof reached, not only the seed: a proof may
+    reference only proofs in its own system (which is what lets one lock cover a
+    whole reference closure, `_common.lock_system`), so they share a chain.
     """
-    entries, unresolved = cited_entries(session, proof_id, systems, theorem_id)
+    proofs, unread = reference_closure(session, proof_id)
+    entries, unresolved = cited_entries(session, proofs, systems)
     return RestsOn(
         assumptions=hydrate(session, closure_of(session, list(entries.values()))),
         unresolved=unresolved,
+        unread=unread,
     )
 
 

@@ -195,15 +195,23 @@ async def main() -> int:
     async with get_sessionmaker()() as session:
         try:
             owner = await _owner(session, arguments.owner)
-            # The names the run will create, which is the plan's when there is one
-            # — an unlayered import makes exactly one system, called `--name`. A
-            # plan whose layers this file does not open makes fewer, so this can
-            # refuse a collision the import would not have reached; that is the
-            # safe direction for a check whose whole job is to fail early.
+            # The names the run *could* create. An unlayered import makes exactly
+            # one system, called `--name`; a layered one makes the plan's — except
+            # where the file opens none of the plan's sections, which
+            # `corpus_specs` treats as no plan at all and which therefore falls
+            # back to `--name` again. So a layered run checks both rather than the
+            # plan alone, or the one name it would actually use is the one name
+            # unchecked, and the collision this exists to pre-empt arrives as the
+            # IntegrityError instead (found in review).
+            #
+            # Over-approximating is the settled policy here: refusing a collision
+            # the import would not have reached is the safe direction for a check
+            # whose whole job is to fail early.
             await _refuse_a_slug_collision(
                 session,
                 owner,
-                [layer.name for layer in LAYERS] if arguments.setmm_layers
+                [arguments.name, *(layer.name for layer in LAYERS)]
+                if arguments.setmm_layers
                 else [arguments.name],
             )
         except LookupError as refused:

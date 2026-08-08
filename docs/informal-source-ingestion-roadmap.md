@@ -171,13 +171,31 @@ anything. And an entry promoted before the table existed reads as an empty
 closure, which is the *right* answer rather than a missing one — nothing can rest
 on an assumption that did not exist when it was promoted.
 
-`GET /proofs/{id}/provenance` reads it, and reports `unresolved`: a cited label
-that names no library entry, no rule of the chain and no hypothesis of the
-theorem being proved. A report that dropped those would read as "rests on
-nothing" when the truth is "rests on something I could not follow" — the same
-reasoning `retrieval.py`'s `unindexed` already applies. A proof that has never
-been verified has no resolved citations to read and is told to verify, rather
-than told it assumes nothing.
+**A proof reaches the library through two doors**, and the second has no label on
+it. The first is a rule label its lines resolve (`proof_lines.rule`); the second
+is a *lemma proof* whose lines it cites as `[alias.line]`, where the rule
+recorded is whatever justified the step and the lemma's own citations are rows on
+the lemma. Reading only the first calls a proof unconditional when every debt it
+has came through a lemma — caught in review, with a test that reproduced exactly
+that: `assumes: []`, `complete: true`, and an empty closure stored at promotion,
+which would have made the loss permanent for everything built on top.
+
+So `reference_closure` follows the **antecedent edges** first — what the checker
+cited, not what `proof_references` declares, the same choice `provenance.py`
+makes one level down — and the labels are read across the whole closure. That is
+the one walk left, and it is over *proofs*: per-development and acyclic by
+construction, not the corpus-scale library graph the stored closure exists to
+avoid walking.
+
+`GET /proofs/{id}/provenance` reads it, and reports what it could not account for
+— one field per door. `unresolved`: a cited label that names no library entry, no
+rule of the chain and no hypothesis of a theorem being proved. `unread_lemmas`: a
+cited lemma proof holding no stored structure, whose own debts could therefore
+not be read. A report that dropped either would say "rests on nothing" when the
+truth is "rests on something I could not follow" — the same reasoning
+`retrieval.py`'s `unindexed` already applies. A proof that has never been
+verified has no resolved citations to read and is told to verify, rather than
+told it assumes nothing.
 
 The batch `app/db/provenance.py` report gained `assumes` beside `axioms`, and the
 two **partition** the primitives reached: a corpus that adopts no assumptions

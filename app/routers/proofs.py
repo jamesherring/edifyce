@@ -1627,15 +1627,14 @@ async def _record_assumptions(
 ) -> RestsOn:
     """Store, and return, the assumptions an entry transitively rests on.
 
-    Read from the proof's stored lines — the resolved labels the verification
-    that just ran recorded — against the library order a citation actually
-    resolves in (`LibraryChain.system_ids`, nearest first, edges included).
+    Read from the stored lines of this proof **and every lemma proof it cites**
+    — the resolved labels the verification that just ran recorded — against the
+    library order a citation actually resolves in (`LibraryChain.system_ids`,
+    nearest first, edges included).
     """
-    proof_id, theorem = proof.id, proof.theorem_id
+    proof_id = proof.id
     systems = effective.library.system_ids
-    found = await session.run_sync(
-        lambda sync: rests_on(sync, proof_id, systems, theorem)
-    )
+    found = await session.run_sync(lambda sync: rests_on(sync, proof_id, systems))
     ids = [entry.theorem_id for entry in found.assumptions]
     await session.run_sync(lambda sync: record_closure(sync, theorem_id, ids))
     return found
@@ -1686,10 +1685,7 @@ async def read_proof_provenance(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=effective.errors)
 
     systems = effective.library.system_ids
-    theorem = proof.theorem_id
-    found = await session.run_sync(
-        lambda sync: rests_on(sync, proof_id, systems, theorem)
-    )
+    found = await session.run_sync(lambda sync: rests_on(sync, proof_id, systems))
     return ProofProvenance(
         proof_id=proof_id,
         assumes=[
@@ -1704,6 +1700,7 @@ async def read_proof_provenance(
             for entry in found.assumptions
         ],
         unresolved=list(found.unresolved),
+        unread_lemmas=list(found.unread),
         complete=found.complete,
     )
 

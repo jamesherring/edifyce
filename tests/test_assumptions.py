@@ -45,6 +45,7 @@ from tests.test_proof_promotion import (
     make_proof,
     proved_and_published,
     promote,
+    publish,
     verify,
 )
 from tests.test_system_inheritance import seed_tower
@@ -483,7 +484,7 @@ def test_a_citation_the_walk_cannot_follow_is_reported_not_dropped(db, client):
     engine = create_engine(db)
     try:
         with Session(engine) as session:
-            report = rests_on(session, uuid.UUID(proof), systems=[], theorem_id=None)
+            report = rests_on(session, uuid.UUID(proof), systems=[])
             assert report.assumptions == ()
             assert report.unresolved == ("peirce",)
             assert report.complete is False
@@ -503,3 +504,59 @@ def test_a_rule_is_not_reported_as_an_unaccounted_citation(db, client):
     assert status == 200, report
     assert report["unresolved"] == []
     assert report["complete"] is True
+
+
+# ---------------------------------------------------------------------------
+# The other way a proof reaches an assumption: through a cited lemma *proof*
+# ---------------------------------------------------------------------------
+
+# `L.1` is the lemma proof's conclusion; line 1 is `ax-1` over it, and modus
+# ponens closes. Nothing in this source names the assumption.
+VIA_LEMMA = (
+    "((((A → B) → A) → A) → (B → (((A → B) → A) → A))) [ax-1]\n"
+    "(B → (((A → B) → A) → A)) [MP, L.1, 1]"
+)
+
+
+def cite_lemma(client, proof_id: str, lemma_id: str, alias: str = "L") -> None:
+    response = client.put(
+        f"/api/proofs/{proof_id}/references",
+        json={"references": [{"referenced_proof_id": lemma_id, "alias": alias}]},
+    )
+    assert response.status_code == 200, response.text
+
+
+def test_a_debt_reached_through_a_cited_lemma_proof_is_not_lost(db, client):
+    # A proof reaches the library through two doors: a rule label its lines
+    # resolve, and a *lemma proof* whose lines it cites as `[L.1]`. The second
+    # leaves no label behind — `proof_lines.rule` here says `ax-1` and `MP` — so
+    # a report that read only the first would call this proof unconditional.
+    pc, _fol, _zfc = tower(db, client, "assume-via-lemma@example.com")
+    assert assume(client, pc)[0] == 201
+    lemma = proved_and_published(client, pc, "(((A → B) → A) → A) [peirce]")
+
+    proof = make_proof(client, pc, VIA_LEMMA)
+    cite_lemma(client, proof, lemma)
+    assert verify(client, proof)["success"] is True
+
+    status, report = provenance(client, proof)
+    assert status == 200, report
+    assert assumed_labels(report) == ["peirce"]
+    assert report["complete"] is True
+
+
+def test_a_promotion_stores_a_debt_reached_through_a_lemma(db, client):
+    # The consequential half of the case above: the closure is *written* here, so
+    # a miss is permanent — everything promoted on top of this entry would
+    # inherit an empty set and report itself unconditional forever.
+    pc, _fol, _zfc = tower(db, client, "assume-lemma-promote@example.com")
+    assert assume(client, pc)[0] == 201
+    lemma = proved_and_published(client, pc, "(((A → B) → A) → A) [peirce]")
+
+    proof = make_proof(client, pc, VIA_LEMMA)
+    cite_lemma(client, proof, lemma)
+    publish(client, proof)
+
+    status, entry = promote(client, proof, "viaL")
+    assert status == 201, entry
+    assert entry["assumes"] == ["peirce"]

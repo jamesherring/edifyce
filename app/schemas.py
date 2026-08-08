@@ -778,15 +778,18 @@ class AssumedOut(BaseModel):
 class ProofProvenance(BaseModel):
     """What a proof rests on that nobody has proved.
 
-    ``complete`` is the honest half. A cited label this report could not account
-    for — no library entry, no inference rule, no hypothesis of the theorem being
-    proved — leaves the answer partial, and ``unresolved`` names them rather than
-    letting a short list read as a complete one.
+    ``complete`` is the honest half, and there are two ways to lose it — one per
+    door into the library. ``unresolved`` names cited **labels** this report
+    could not account for (no library entry, no inference rule, no hypothesis of
+    a theorem being proved); ``unread_lemmas`` names cited **lemma proofs**
+    holding no stored structure, whose own debts could therefore not be read.
+    Either dropped silently would let a short list read as a complete one.
     """
 
     proof_id: uuid.UUID
     assumes: list[AssumedOut] = Field(default_factory=list)
     unresolved: list[str] = Field(default_factory=list)
+    unread_lemmas: list[str] = Field(default_factory=list)
     complete: bool = True
 
 

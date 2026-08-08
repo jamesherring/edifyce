@@ -76,12 +76,12 @@ class Provenance:
     # that adopts no assumptions has `axioms` exactly as it did before this
     # existed.
     axioms: tuple[str, ...]
-    # Did the closure touch an entry this proof's own chain cannot resolve? The
-    # defect :attr:`misfiled` reports, carried as a fact rather than inferred
-    # from a depth comparison that only means anything down a single spine.
     # The unproved *debts* it rests on, by label. Non-empty means this proof
     # establishes a conditional, whatever its own lines say.
     assumes: tuple[str, ...] = ()
+    # Did the closure touch an entry this proof's own chain cannot resolve? The
+    # defect :attr:`misfiled` reports, carried as a fact rather than inferred
+    # from a depth comparison that only means anything down a single spine.
     unreachable: bool = False
 
     @property
