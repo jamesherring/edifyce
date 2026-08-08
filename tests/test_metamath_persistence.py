@@ -53,6 +53,7 @@ from app.db.promoted_theorems_mapping import LibraryChain, read_theorems
 from app.db import metamath_store
 from app.db.metamath_store import import_corpus
 from app.db.models import FormalSystem, Proof, ProofFolder
+from app.db.avoidances import LabelAvoidanceRow
 from app.db.descriptions import (
     LabelAttributionRow,
     LabelDescriptionRow,
@@ -152,6 +153,7 @@ _TABLES = [
         PromotedTheoremRow, PromotedTheoremPremiseRow, PromotedTheoremBindingRow,
         # And what the file says about each label it names.
         LabelDescriptionRow, LabelAttributionRow, LabelReferenceRow,
+        LabelAvoidanceRow,
     )
 ]
 
@@ -897,3 +899,40 @@ def test_a_comments_cross_reference_lands_beside_the_proof(session):
     (reference,) = row.references
     assert reference.target == "a1i"
     assert row.text[reference.start_offset : reference.end_offset] == "~ a1i"
+
+
+def test_an_avoids_declaration_is_stored_against_the_label_it_names(session):
+    # `$j usage 'X' avoids 'Y';` — a result about the *proof*, and the only place
+    # it is written down: `ax-2` is nowhere in `a1i`'s citations, that being the
+    # point of declaring it.
+    declaring = PROPOSITIONAL + "$( $j usage 'a1i' avoids 'ax-2'; $)\n"
+    report = import_corpus(session, parse(declaring), name="Declaring")
+
+    assert report.avoidances == 1
+    (row,) = session.scalars(select(LabelAvoidanceRow)).all()
+    assert (row.label, row.avoided) == ("a1i", "ax-2")
+
+
+def test_a_file_declaring_none_stores_none(session, imported):
+    # The mechanism is optional and most `.mm` files carry no `$j` at all, so an
+    # import of one behaves exactly as it did before this existed.
+    assert imported.avoidances == 0
+    assert session.scalars(select(LabelAvoidanceRow)).all() == []
+
+
+def test_a_declaration_about_a_label_past_the_horizon_is_not_stored(session):
+    # A `limit` imports a *prefix*, and a directive about a statement past the cut
+    # is about something these rows do not contain.
+    declaring = PROPOSITIONAL + "$( $j usage 'a2i' avoids 'ax-1'; $)\n"
+    report = import_corpus(session, parse(declaring), limit=2, name="Prefix")
+
+    assert report.avoidances == 0
+
+
+def test_a_declaration_naming_a_label_the_file_lacks_is_ignored(session):
+    # A `$j` may name anything; a directive about a label this database does not
+    # declare says nothing about this import, and `position` would raise on it.
+    declaring = PROPOSITIONAL + "$( $j usage 'nosuchlabel' avoids 'ax-1'; $)\n"
+    report = import_corpus(session, parse(declaring), name="Stray")
+
+    assert report.avoidances == 0

@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 import app.auth.backend as backend
 from app.db.metamath_store import import_corpus
+from app.db.descriptions import LabelDescriptionRow
 from app.db.models import Proof
 from app.db.session import get_session
 from app.main import app
@@ -329,3 +330,88 @@ def test_what_points_at_a_label_reaches_the_layers_above_it(client, db):
     assert [m["label"] for m in body["mentioned_by"]] == ["zf-thm"]
     assert body["mentioned_by_total"] == 1
     assert body["mentioned_by"][0]["proof_id"] == proofs["zf-thm"]
+
+
+# ---------------------------------------------------------------------------
+# What a proof is declared to do without
+# ---------------------------------------------------------------------------
+
+AVOIDING = r"""
+$c |- wff ( ) -> $.
+$v ph ps $.
+wph $f wff ph $.
+wps $f wff ps $.
+$( Wff builder. $)
+wi $a wff ( ph -> ps ) $.
+$( Axiom _Simp_. $)
+ax-1 $a |- ( ph -> ( ps -> ph ) ) $.
+$( A second axiom, which the theorem below is proved without. $)
+ax-2 $a |- ( ph -> ( ps -> ph ) ) $.
+$( Principle of identity. $)
+id $p |- ( ph -> ( ps -> ph ) ) $= ( ax-1 ) ABC $.
+$( $j usage 'id' avoids 'ax-2'; $)
+"""
+
+
+def seed_avoiding(db_path) -> tuple[str, str]:
+    engine = create_engine(db_path)
+    try:
+        with Session(engine) as session:
+            report = import_corpus(session, parse(AVOIDING), name="a")
+            session.commit()
+            proof = session.scalars(select(Proof)).one()
+            proof.published_at = proof.created_at
+            proof.formal_system.published_at = proof.created_at
+            session.commit()
+            return str(report.system_id), str(proof.id)
+    finally:
+        engine.dispose()
+
+
+def test_a_proof_reports_what_the_corpus_says_it_avoids(client, db):
+    # `$j usage 'id' avoids 'ax-2';` — a result about the *proof*, and nowhere
+    # else to read it from: `ax-2` is nowhere in `id`'s citations, that being the
+    # point of saying it.
+    _, proof_id = seed_avoiding(db)
+
+    doc = client.get(f"/api/proofs/{proof_id}").json()["documentation"]
+
+    assert doc["avoids"] == ["ax-2"]
+
+
+def test_a_label_the_file_declares_nothing_about_avoids_nothing(client, db):
+    system_id, _ = seed_avoiding(db)
+
+    body = client.get(f"/api/formal-systems/{system_id}/labels/ax-1").json()
+
+    assert body["avoids"] == []
+
+
+def test_an_undocumented_label_still_reports_what_it_avoids(client, db):
+    # A `$j usage … avoids …` names a label whether or not the file also comments
+    # on it — that being why the avoidances are a separate table. Returning None
+    # for a record with no prose would put the two facts back together, which is
+    # what this branch's first cut did (found in review).
+    system_id, _ = seed_avoiding(db)
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            # Take the prose away and leave the declaration standing.
+            for row in session.scalars(select(LabelDescriptionRow)):
+                if row.label == "id":
+                    session.delete(row)
+            session.commit()
+    finally:
+        engine.dispose()
+
+    body = client.get(f"/api/formal-systems/{system_id}/labels/id")
+
+    assert body.status_code == 200, body.text
+    assert body.json()["avoids"] == ["ax-2"]
+    assert body.json()["text"] == ""
+
+
+def test_a_label_with_neither_prose_nor_declarations_is_still_a_404(client, db):
+    system_id, _ = seed_avoiding(db)
+
+    assert client.get(f"/api/formal-systems/{system_id}/labels/nosuch").status_code == 404

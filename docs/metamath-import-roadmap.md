@@ -1884,7 +1884,7 @@ note whose sentence happens to contain "is discouraged".
 
 | | count | note |
 |---|---|---|
-| `$j` markup directives | 1,215 in 1,203 blocks | `usage` 1,136, `restatement` 29, `primitive` 11, `congruence` 6, `syntax` 4, and singletons including `definition`, `justification`, `bound`, `free_var`. **`setmm.py` hardcodes tables these state declaratively** — the binder table and the definition classification — so parsing them replaces one library's hand-written facts with any library's own. The largest of these and the one with real soundness content. |
+| `$j` markup directives | 1,221 in 1,203 blocks | **Read** — see §4.9. |
 | comments on non-assertion statements | 1,621 | 606 before a `$c` ("Absolute value function." — what a *symbol* means, and nothing else in the file says it), 432 before a `${`, 302 before an `$e`, 123 before a `$f`, 74 before a `$v`, 66 before a `$}`, 18 before a `$d`. `$e`/`$f` are labels and would key into `label_descriptions` unchanged; `$c`/`$v` declare tokens and need a token key. |
 | `[Author]` bibliography refs | 5,271 across 139 works | Needs a works table and the `htmlbibliography` target to link out. |
 | `$t` non-definition directives | 12 kinds | `htmlvarcolor`, `htmltitle`, `htmlhome`, `exthtml*`, `htmldir`, `htmlcss`, `htmlfont`. Only `htmlvarcolor` has content value — the typecode-to-colour legend, which `althtmldef`'s `<SPAN>`s already encode per token. |
@@ -1892,6 +1892,63 @@ note whose sentence happens to contain "is discouraged".
 | `proof_references` for an import | — | `proof_lines.rule` is stored and indexed, so "which proofs cite X" is answerable; but the proof-level rollup is written only by the interactive route, so `ProofDetail.referenced_by` is empty for every imported proof. |
 
 Total prose the import still drops: **374,876 characters**.
+
+### 4.9 `$j`, and a claim of §4.8 that was wrong — *done*
+
+`$j` is where a `.mm` file says the things Metamath's language has no keyword for.
+`set.mm` writes **1,221 directives across 1,203 blocks**, and the distribution is
+lopsided: `usage` 1,136, `restatement` 29, `primitive` 11, `congruence` 6,
+`syntax` 4, `garden_path` 4, then a tail of ones and twos.
+
+One shape covers all of them — `keyword arg* (preposition arg*)* ;` — so
+`metamath/markup.py` reads rather than switching per keyword, and nothing there
+interprets. It is the same little language as `$t`, so the scanner both use now
+lives in `metamath/directives.py` instead of in two copies.
+
+**Prepositions are a closed set** (`as`, `avoids`, `for`, `from`, `of`, `with`),
+which is not a tidiness point: `garden_path` is written in *bare math tokens*
+(`garden_path ( A => ( ph ;`), and an open reading takes its `A` and `ph` for
+prepositions and invents clauses nobody wrote.
+
+**The claim in §4.8 that `$j` states what `setmm.py` hardcodes was wrong**, and
+worth correcting rather than quietly dropping. Three of the four tables *are*
+declared, and are now checked against the file
+(`tests/test_setmm_against_its_markup.py`):
+
+| table | what the file says |
+|---|---|
+| `EQUIVALENCES` | `equality 'wb'`, `equality 'wceq'` — exactly the two |
+| `RESTATEMENTS` | `definition 'dfbi1' for 'wb'`, and `justification 'bijust' for 'df-bi'` the other way round |
+| `ASSERTION_TYPECODE` | `syntax '|-' as 'wff'` |
+
+The fourth, `BINDERS`, is **not** derivable from `$j` and `setmm.py` already said
+so. What the file carries is `bound 'setvar'` — which *sort* is bindable, one
+directive — and `free_var`, an **exception list** of two naming slots that look
+like binders and are not. Nothing in `$j` says that the `x` of `A. x ph` scopes
+over `ph` while the `A` of `A. x e. A ph` does not; that is read off each syntax
+axiom's statement, which is where the answer is. The two exceptions do not even
+relate to the table the same way — `wsb` is in it (its `y` is the exception),
+`wcdeq` is absent entirely (nothing about it binds) — which is the sharpest form
+of the point.
+
+Checked, not derived, and deliberately: Edifyce imports any `.mm` and most carry
+no `$j`, so reading one where it exists would make an import's behaviour depend on
+whether the file happened to annotate itself. Agreement is what the directives are
+good for.
+
+**`usage … avoids …` is stored**, being 93% of `$j` by volume and the only part
+carrying content a reader wants: 3,107 edges over 47 avoided statements, headed by
+`ax-12` (435), `ax-10` (431), `ax-11` (398), `ax-13` (373). It records a result
+about the *proof* rather than the theorem — this one is derivable without that
+axiom — and there is nowhere else to read it from, since the avoided statement is
+usually nowhere in the citation graph, that being the point. `label_avoidances`
+gets its own table rather than a column on the description, because a `usage`
+directive is about a label whether or not the file also documents it.
+
+Stored as the file's **claim**. Metamath's own verifier checks these against a
+proof's transitive dependencies; Edifyce does not, and what would is a closure over
+`proof_lines.rule` — which is indexed for exactly that shape of question. Left as
+the next thing rather than implied.
 
 **Upgrading a corpus already imported.** The migration adds an empty table and two
 `false` columns; the prose behind them still has its markup in it, and nothing

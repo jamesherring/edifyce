@@ -60,7 +60,10 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from .directives import read_value, read_word, skip_space
 from .parser import MetamathError
+
+_WHERE = "$t block"
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -115,72 +118,22 @@ def as_text(rendering: str) -> str:
     return html.unescape(_TAG.sub("", rendering)).strip()
 
 
-def _skip_space(text: str, index: int) -> int:
-    # Whitespace and the block's own `/* … */` comments, which may sit anywhere a
-    # space may.
-    while index < len(text):
-        if text[index].isspace():
-            index += 1
-        elif text.startswith("/*", index):
-            end = text.find("*/", index + 2)
-            if end == -1:
-                raise MetamathError("$t block: unterminated /* comment.")
-            index = end + 2
-        else:
-            return index
-    return index
-
-
-def _read_value(text: str, index: int) -> tuple[str, int]:
-    # A run of quoted strings joined by `+`. Metamath doubles a quote to escape it
-    # within a string of the same kind.
-    parts: list[str] = []
-    while True:
-        index = _skip_space(text, index)
-        if index >= len(text) or text[index] not in "\"'":
-            raise MetamathError(f"$t block: expected a quoted string at offset {index}.")
-        quote = text[index]
-        index += 1
-        chunk: list[str] = []
-        while True:
-            end = text.find(quote, index)
-            if end == -1:
-                raise MetamathError("$t block: unterminated string.")
-            chunk.append(text[index:end])
-            if text.startswith(quote * 2, end):
-                chunk.append(quote)
-                index = end + 2
-                continue
-            index = end + 1
-            break
-        parts.append("".join(chunk))
-
-        after = _skip_space(text, index)
-        if after < len(text) and text[after] == "+":
-            index = after + 1
-            continue
-        return "".join(parts), after
-
-
 def parse_typesetting(block: str) -> Typesetting:
     """Read a ``$t`` comment body into its notation maps.
 
     ``block`` is the comment's text, with or without the leading ``$t``.
     """
     typesetting = Typesetting()
-    index = _skip_space(block, 0)
+    index = skip_space(block, 0, _WHERE)
     if block.startswith("$t", index):
         index += 2
 
     while True:
-        index = _skip_space(block, index)
+        index = skip_space(block, index, _WHERE)
         if index >= len(block):
             return typesetting
 
-        start = index
-        while index < len(block) and (block[index].isalnum() or block[index] == "_"):
-            index += 1
-        directive = block[start:index]
+        directive, index = read_word(block, index)
         if not directive:
             raise MetamathError(
                 f"$t block: expected a directive at offset {index}, "
@@ -193,21 +146,19 @@ def parse_typesetting(block: str) -> Typesetting:
         # and is full of them - inside strings, where they are not terminators.
         values: list[str] = []
         while True:
-            index = _skip_space(block, index)
+            index = skip_space(block, index, _WHERE)
             if index >= len(block):
                 raise MetamathError(f"$t block: {directive!r} has no terminating ';'.")
             if block[index] == ";":
                 index += 1
                 break
             if block[index] in "\"'":
-                value, index = _read_value(block, index)
+                value, index = read_value(block, index, _WHERE)
                 values.append(value)
                 continue
             # A bare word - `as`, which separates a `*def`'s two halves.
-            word = index
-            while index < len(block) and (block[index].isalnum() or block[index] == "_"):
-                index += 1
-            if index == word:
+            word, index = read_word(block, index)
+            if not word:
                 raise MetamathError(
                     f"$t block: unexpected {block[index]!r} in {directive!r} "
                     f"at offset {index}."

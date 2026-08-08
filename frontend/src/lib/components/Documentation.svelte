@@ -70,6 +70,23 @@
 	</p>
 {/if}
 
+{#if documentation.avoids.length > 0}
+	<div class="border-t pt-3">
+		<h3 class="mb-1.5 text-xs font-medium text-muted-foreground">Proved without</h3>
+		<!-- A result about the *proof* rather than the theorem: this one is derivable
+		     without those. Nowhere else to read it from — an avoided statement is
+		     usually nowhere in the citation graph, that being the point. Presented as
+		     the corpus's claim, since nothing here re-derives the dependencies. -->
+		<ul class="flex flex-wrap items-center gap-x-2 gap-y-1">
+			{#each documentation.avoids as avoided (avoided)}
+				<li>
+					<code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">{avoided}</code>
+				</li>
+			{/each}
+		</ul>
+	</div>
+{/if}
+
 {#if documentation.mentioned_by.length > 0}
 	<div class="border-t pt-3">
 		<h3 class="mb-1.5 text-xs font-medium text-muted-foreground">

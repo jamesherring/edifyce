@@ -907,6 +907,10 @@ export interface LabelDescription {
 	discouraged_usage: boolean;
 	/** `(Proof modification is discouraged.)` — the proof is as it is on purpose. */
 	discouraged_modification: boolean;
+	/** What the corpus declares this proof does *without* — set.mm's `$j usage …
+	 *  avoids …`, its record that a theorem is derivable from less. The file's
+	 *  claim; nothing re-derives the proof's dependencies to check it. */
+	avoids: string[];
 }
 
 /** One `~ target` the prose points at, and the span of `text` it occupies.

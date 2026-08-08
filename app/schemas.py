@@ -862,6 +862,11 @@ class LabelDescription(BaseModel):
     # gets a badge rather than a sentence.
     discouraged_usage: bool = False
     discouraged_modification: bool = False
+    # What the corpus declares this statement's proof does *without* — `set.mm`'s
+    # `$j usage … avoids …`, which is how it records that a theorem is derivable
+    # from less. The file's claim, not a checked one: nothing here re-derives the
+    # proof's transitive dependencies (app/db/avoidances.py).
+    avoids: list[str] = Field(default_factory=list)
 
 
 class ProofSummary(BaseModel):

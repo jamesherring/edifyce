@@ -905,7 +905,7 @@ async def get_label_description(
     """
     system = await _get_readable_or_404(session, system_id, user)
     found = await documentation_out(
-        session, system.id, await load_description(session, system.id, label), user
+        session, system.id, label, await load_description(session, system.id, label), user
     )
     if found is None:
         raise HTTPException(

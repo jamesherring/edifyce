@@ -14,6 +14,7 @@ function documentation(over: Partial<LabelDescription> = {}): LabelDescription {
 		mentioned_by_total: 0,
 		discouraged_usage: false,
 		discouraged_modification: false,
+		avoids: [],
 		...over
 	};
 }
@@ -108,5 +109,25 @@ describe('a corpus record', () => {
 		render(Documentation, { documentation: documentation({ text: 'Prose.' }) });
 
 		expect(screen.queryByText(/discouraged/)).toBeNull();
+	});
+});
+
+describe('what a proof is declared to do without', () => {
+	it('lists the statements the corpus says it avoids', () => {
+		// A result about the proof rather than the theorem, and nowhere else to read
+		// it from: an avoided statement is usually nowhere in the citation graph.
+		render(Documentation, {
+			documentation: documentation({ avoids: ['ax-11', 'ax-12'] })
+		});
+
+		expect(screen.getByText('Proved without')).toBeInTheDocument();
+		expect(screen.getByText('ax-11')).toBeInTheDocument();
+		expect(screen.getByText('ax-12')).toBeInTheDocument();
+	});
+
+	it('says nothing when the corpus declares nothing', () => {
+		render(Documentation, { documentation: documentation({ text: 'Prose.' }) });
+
+		expect(screen.queryByText('Proved without')).toBeNull();
 	});
 });

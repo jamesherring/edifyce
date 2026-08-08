@@ -165,9 +165,13 @@ class Provenance:
         root's column read 2 on a `set.mm` slice whose right answer is 0.
 
         False for a misfiled proof too: what it cites is not reachable from
-        anywhere on its chain, shallower least of all.
+        anywhere on its chain, shallower least of all. **Misfiled** and not merely
+        unreachable — a proof stranded by its *machinery* is as unable to stand
+        where it sits, and guarding on the narrower of the two let one count as
+        both misfiled and only-shallower, with an off-chain depth then making
+        `could_be_filed_lower` true (found in review).
         """
-        if self.filed == 0 or self.unreachable:
+        if self.filed == 0 or self.misfiled:
             return False
         return self.cited_depth is None or self.cited_depth < self.filed
 
