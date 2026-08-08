@@ -36,7 +36,8 @@ from app.db.metamath_store import import_corpus
 from app.db.models import FormalSystem, Proof
 from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
 from app.db.provenance import Provenance, by_layer, provenance
-from app.db.systems import RuleRow
+from app.db.systems import DefinitionRow, RuleRow, SymbolRow
+from app.db.terms import TermRow
 from website.logical.metamath import parse
 from website.logical.metamath.setmm import LAYERS
 
@@ -93,6 +94,10 @@ $( Cites a first-order lemma, so it is pinned to FOL — and that lemma rests on
    here and nowhere else in this fixture. $)
 zf-via-fol $p |- ( ph -> ( ps -> ph ) ) $= ( fol-via-pc ) ABC $.
 zf-via-ext $p |- ( A e. A -> A e. A ) $= ( ax-ext ) AB $.
+$( Proved from a *propositional* axiom and yet stated with ZF's own `e.`, so
+   nothing it cites needs this layer and its notation does. `set.mm`'s `sptruw`
+   is this shape, and the citation graph alone calls it movable. $)
+zf-grammar-pinned $p |- ( A e. A -> ( ph -> A e. A ) ) $= ( wcel ax-1 ) BCAD $.
 """
 
 
@@ -125,6 +130,7 @@ def test_the_fixture_is_the_three_layers_it_claims_to_be(imported: Session) -> N
         "fol-via-ax4": FOL,
         "zf-via-fol": ZF,
         "zf-via-ext": ZF,
+        "zf-grammar-pinned": ZF,
     }
 
 
@@ -176,6 +182,133 @@ def test_the_deepest_citation_and_the_deepest_axiom_are_different_questions(
     assert report.depends_only_on_shallower
     assert report.cited_depth == 1
     assert report.axiom_depth == 0
+
+
+def test_notation_pins_a_proof_its_citations_would_let_go(imported: Session) -> None:
+    # The grammar half, and the case the citation graph alone gets wrong.
+    # `zf-grammar-pinned` is proved from a propositional axiom, so nothing it
+    # cites needs ZF — and it is *stated* with `e.`, which ZF declares, so it
+    # cannot be filed anywhere shallower. `set.mm`'s `sptruw` is this shape.
+    report = reports(imported)["zf-grammar-pinned"]
+
+    assert report.deepest_cited == PC
+    assert report.depends_only_on_shallower
+    assert report.deepest_grammar == ZF
+    assert report.grammar_depth == report.filed
+    assert not report.could_be_filed_lower
+
+
+def test_a_proof_shallow_in_both_can_really_move(imported: Session) -> None:
+    # The contrast, so the assertion above is about *notation* and not about
+    # every proof: `fol-via-pc` is propositional in what it cites and in what it
+    # is written in, and moving it to PC would leave nothing behind.
+    report = reports(imported)["fol-via-pc"]
+
+    assert (report.deepest_cited, report.deepest_grammar) == (PC, PC)
+    assert report.could_be_filed_lower
+
+
+def test_a_proof_pinned_by_a_lemma_is_not_movable_either(imported: Session) -> None:
+    # And the third way to be held in place, which neither of the two above is:
+    # `zf-via-fol` is written in propositional notation and rests on a
+    # propositional axiom, but cites a *first-order* lemma. It can leave ZF; it
+    # cannot reach PC, which is why `could_be_filed_lower` is about the layer
+    # below rather than about the root.
+    report = reports(imported)["zf-via-fol"]
+
+    assert (report.deepest_cited, report.deepest_grammar) == (FOL, PC)
+    assert report.could_be_filed_lower
+    assert report.cited_depth == 1
+
+
+def test_notation_a_definition_introduces_pins_a_proof_too(
+    imported: Session,
+) -> None:
+    # **From review.** A defined form's constructor is `f"{sort}:{higher}"`, and
+    # the `:` is deliberate — a declared production's name is forced to
+    # `[A-Za-z0-9_]+`, so the pair keeps defined notation out of the productions'
+    # namespace. A lookup against `symbols` alone therefore never matches one,
+    # and the walk fell back to the *sort*, declared at the root: a proof written
+    # in a deep layer's own abbreviation reported as movable all the way down.
+    spine = list(
+        imported.scalars(select(FormalSystem).order_by(FormalSystem.created_at))
+    )
+    sort = imported.scalar(
+        select(SymbolRow).where(
+            SymbolRow.system_id == spine[1].id, SymbolRow.name == "wff"
+        )
+    )
+    imported.add(
+        DefinitionRow(
+            system_id=spine[1].id,
+            position=0,
+            symbol_id=sort.id,
+            name="subset",
+            higher="A C_ A",
+            lower="A e. A",
+        )
+    )
+    # `fol-via-pc` cites only propositional theorems, so nothing but the notation
+    # can hold it in first-order logic — and now a line of it is written in that
+    # layer's own abbreviation.
+    written = imported.scalar(select(Proof).where(Proof.name == "fol-via-pc"))
+    line = next(row for row in written.line_rows if row.term_id is not None)
+    imported.get(TermRow, line.term_id).constructor = f"{sort.name}:A C_ A"
+    imported.flush()
+
+    report = reports(imported)["fol-via-pc"]
+    assert report.deepest_grammar == FOL
+    assert report.depends_only_on_shallower
+    assert not report.could_be_filed_lower
+
+
+def test_a_rule_its_own_layer_declares_pins_a_proof(imported: Session) -> None:
+    # **From review.** A rule is neither a library entry nor notation: `_cited`
+    # drops its label (rightly — a citation of one resolves to no promoted row),
+    # and the grammar walk never sees it. So a proof whose formulas are all
+    # propositional but whose justification is a rule its own layer declares was
+    # reported movable into a layer where that rule does not exist.
+    spine = list(
+        imported.scalars(select(FormalSystem).order_by(FormalSystem.created_at))
+    )
+    imported.add(
+        RuleRow(
+            system_id=spine[1].id, position=99, label="local", name="local",
+            deduction="|- ph",
+        )
+    )
+    written = imported.scalar(select(Proof).where(Proof.name == "fol-via-pc"))
+    for line in written.line_rows:
+        line.rule = "local"
+    imported.flush()
+
+    report = reports(imported)["fol-via-pc"]
+    assert report.deepest_rule == FOL
+    assert report.rule_depth == report.filed
+    assert not report.could_be_filed_lower
+    # Still not *misfiled*: the rule is declared by the layer holding the proof,
+    # so it is reachable — just not from anywhere shallower.
+    assert not report.misfiled
+
+
+def test_a_proof_filed_above_its_own_notation_is_misfiled(imported: Session) -> None:
+    # **From review.** Moving a proof above the layer declaring its notation
+    # leaves it unrebuildable where it sits — the same defect an unreachable
+    # citation is. Reporting it only by suppressing `could_be_filed_lower` let
+    # `check_provenance.py` exit 0 on a proof that does not stand.
+    spine = list(
+        imported.scalars(select(FormalSystem).order_by(FormalSystem.created_at))
+    )
+    stranded = imported.scalar(
+        select(Proof).where(Proof.name == "zf-grammar-pinned")
+    )
+    stranded.formal_system_id = spine[1].id  # into FOL, above the `e.` it uses
+    imported.flush()
+
+    report = reports(imported)["zf-grammar-pinned"]
+    assert report.deepest_grammar == ZF
+    assert report.misfiled
+    assert not report.could_be_filed_lower
 
 
 def test_nothing_in_a_corpus_in_dependency_order_is_misfiled(imported: Session) -> None:
@@ -360,7 +493,8 @@ def test_the_reports_come_back_in_a_stable_order(imported: Session) -> None:
         )
     ]
     assert [report.proof for report in provenance(imported)] == [
-        "pc-thm", "fol-via-pc", "fol-via-ax4", "zf-via-fol", "zf-via-ext"
+        "pc-thm", "fol-via-pc", "fol-via-ax4", "zf-via-fol", "zf-via-ext",
+        "zf-grammar-pinned",
     ]
 
 
@@ -375,7 +509,7 @@ def test_the_report_never_reads_proof_source(imported: Session) -> None:
 
     assert provenance(imported) == before
     # And the report was not empty, so "unchanged" is not "nothing either way".
-    assert len(before) == 5
+    assert len(before) == 6
 
 
 def test_the_per_layer_report_counts_each_theorem_once(imported: Session) -> None:
@@ -386,10 +520,13 @@ def test_the_per_layer_report_counts_each_theorem_once(imported: Session) -> Non
     assert [(layer.name, layer.depth) for layer in layers] == [
         (PC, 0), (FOL, 1), (ZF, 2)
     ]
-    assert [layer.proofs for layer in layers] == [1, 2, 2]
+    assert [layer.proofs for layer in layers] == [1, 2, 3]
     assert [layer.own_axioms for layer in layers] == [1, 1, 1]
-    assert [layer.lower_axioms for layer in layers] == [0, 1, 1]
-    assert [layer.only_shallower for layer in layers] == [0, 1, 1]
+    assert [layer.lower_axioms for layer in layers] == [0, 1, 2]
+    assert [layer.only_shallower for layer in layers] == [0, 1, 2]
+    # And the notation half: of ZF's two whose citations are all shallower, one
+    # is held there by its own `e.` and cannot actually move.
+    assert [layer.could_be_lower for layer in layers] == [0, 1, 1]
     # Every theorem falls in exactly one bucket, misfiled included.
     for layer in layers:
         assert layer.own_axioms + layer.lower_axioms + layer.no_axioms + (

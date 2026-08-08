@@ -202,15 +202,19 @@ uv run python scripts/check_provenance.py set.mm --limit 2676
 ```
 
 Prints a row per layer: how many of its theorems use its own axioms, how many
-bottom out in a shallower layer's, and how many cite nothing that needs this
-layer at all. Those last two are different questions — a lemma from this layer
-pins a proof in place even when the axioms it rests on are all shallower — so
-both are reported, and `--examples` names the theorems behind the count.
+bottom out in a shallower layer's, how many cite nothing that needs this layer at
+all, and how many could really be **moved** to a shallower one. Those are
+different questions — a lemma from this layer pins a proof in place even when the
+axioms it rests on are all shallower, and so does the *notation* it is written in
+— so all of them are reported, and `--examples` names the theorems behind the
+count.
 
-Neither is a count of theorems that could be **moved**. A theorem is pinned by
-the grammar it is stated in as well as by what it cites, and this reads only the
-citation graph: `set.mm`'s `sptruw` is `( A. x ph -> ph )` proved from `a1i`
-alone, so nothing it cites needs first-order logic and `A.` still does.
+On `set.mm` the citation and notation halves agree, which is itself worth
+knowing: `sptruw` is `( A. x ph -> ph )` proved from `a1i` alone and looks like a
+theorem its notation must hold in first-order logic, but the corpus declares
+`wal` in the syntax material that falls in the propositional layer and only the
+quantifier *axioms* in the first-order one. What a layer declares is a fact about
+the file, not about what its symbols mean.
 
 Three things are hard failures rather than measurements: a theorem depending on a
 layer *deeper* than its own (which no positional plan can produce and no proof
