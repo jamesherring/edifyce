@@ -103,6 +103,13 @@ class PromotedTheoremRow(Base):
     # the contract; this is the same one.
     statement_term_id: Mapped[uuid.UUID | None] = _term_fk()
     schema_digest: Mapped[str | None] = mapped_column(String(64))
+    # The conclusion's fingerprint for goal-directed retrieval — a fixed-width
+    # feature vector, serialized with its position-set key (app/db/fingerprints.py,
+    # docs/search-phase1-fingerprint.md). Present exactly when statement_term_id
+    # is: both are derived from the composed conclusion term, so a theorem is
+    # "indexed" for retrieval consistently. A change to FINGERPRINT_POSITIONS makes
+    # the stored key stale and demands a re-index (the key is what says so).
+    conclusion_fingerprint: Mapped[str | None] = mapped_column(Text)
     # The proof whose standing *warrants* this entry, for one promoted from a
     # proof stored here. NULL for an imported entry, whose warrant is the corpus
     # it came from — and that difference is the whole point of the column, since
