@@ -23,12 +23,13 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from app.auth import current_active_user
+from app.auth import current_active_user, current_active_user_optional
 from app.db import (
+    FormalSystem,
     FormalizationRow,
     GlossaryEntryRow,
     Proof,
@@ -37,9 +38,11 @@ from app.db import (
 from app.db.models import User
 from app.db.session import get_session
 from app.db.terms import TermRow
+from app.routers._common import PageParams, page_params
 from app.routers.systems import readable_system_id_or_404
 from app.schemas import (
     Formalization,
+    Page,
     FormalizationCreate,
     FormalizationReview,
     GlossaryEntry,
@@ -150,14 +153,23 @@ async def _document_like(
     )
 
 
-@router.get("/sources", response_model=list[SourceDocument])
+@router.get("/sources", response_model=Page[SourceDocument])
 async def list_sources(
     kind: str | None = None,
     identifier: str | None = None,
     session: AsyncSession = Depends(get_session),
-) -> list[SourceDocument]:
-    """Every registered work, newest first. Public: a claim about a paper is only
-    reviewable by someone who can see which paper it was."""
+    params: PageParams = Depends(page_params),
+) -> Page[SourceDocument]:
+    """Every registered work, newest first.
+
+    Public: a claim about a paper is only reviewable by someone who can see which
+    paper it was, and a document names no system.
+
+    **Paged**, as every other global listing here is. An ingestion run registers
+    a document per paper, so this is unbounded in exactly the use it exists for
+    (found in review). ``id`` breaks the tie on `created_at`, which a batch write
+    gives every row alike under Postgres.
+    """
     conditions = []
     if kind is not None:
         conditions.append(SourceDocumentRow.kind == kind)
@@ -168,10 +180,20 @@ async def list_sources(
             select(SourceDocumentRow)
             .where(*conditions)
             .order_by(SourceDocumentRow.created_at.desc(), SourceDocumentRow.id)
+            .limit(params.limit)
+            .offset(params.offset)
         )
     ).all()
+    total = await session.scalar(
+        select(func.count()).select_from(SourceDocumentRow).where(*conditions)
+    )
     counts = await _claim_counts(session, [row.id for row in rows])
-    return [_document_out(row, counts.get(row.id, 0)) for row in rows]
+    return Page(
+        items=[_document_out(row, counts.get(row.id, 0)) for row in rows],
+        total=total or 0,
+        limit=params.limit,
+        offset=params.offset,
+    )
 
 
 async def _claim_count(session: AsyncSession, document_id: uuid.UUID) -> int:
@@ -268,10 +290,10 @@ async def claim_formalization(
     _set_glossary(row, payload.glossary)
     session.add(row)
     await session.commit()
-    return await _detail(session, row.id)
+    return await _detail(session, row.id, user)
 
 
-@router.get("/formalizations", response_model=list[Formalization])
+@router.get("/formalizations", response_model=Page[Formalization])
 async def list_formalizations(
     document_id: uuid.UUID | None = None,
     formal_system_id: uuid.UUID | None = None,
@@ -279,15 +301,23 @@ async def list_formalizations(
     unreviewed: bool = Query(
         False, description="Only claims nobody has passed a verdict on."
     ),
+    user: User | None = Depends(current_active_user_optional),
     session: AsyncSession = Depends(get_session),
-) -> list[Formalization]:
+    params: PageParams = Depends(page_params),
+) -> Page[Formalization]:
     """Claims, filtered the four ways anyone reads them.
 
     ``unreviewed`` is the one that matters most: an unreviewed claim is the
     ordinary state, and being able to list them is what makes "its absence is
     visible" more than a phrase.
+
+    **Narrowed to systems the viewer may read**, which the first cut was not: a
+    claim carries its system's id, its term, its proof and its prose, so serving
+    one about a draft answered in detail the question `GET /formal-systems/{id}`
+    answers with a 404. Found in review, and the leak the repo's 404-not-403
+    policy exists to prevent.
     """
-    conditions = []
+    conditions = [_readable(user)]
     if document_id is not None:
         conditions.append(FormalizationRow.document_id == document_id)
     if formal_system_id is not None:
@@ -300,21 +330,51 @@ async def list_formalizations(
     rows = (
         await session.scalars(
             _loaded(select(FormalizationRow))
+            .join(FormalSystem, FormalSystem.id == FormalizationRow.formal_system_id)
             .where(*conditions)
             .order_by(FormalizationRow.created_at.desc(), FormalizationRow.id)
+            .limit(params.limit)
+            .offset(params.offset)
         )
     ).all()
-    # The accounts named across the whole page in one query, so a listing is a
-    # fixed number of round trips rather than two per claim.
-    return await _page(session, list(rows))
+    total = await session.scalar(
+        select(func.count())
+        .select_from(FormalizationRow)
+        .join(FormalSystem, FormalSystem.id == FormalizationRow.formal_system_id)
+        .where(*conditions)
+    )
+    # The accounts and claim counts named across the whole page in one query
+    # each, so a listing is a fixed number of round trips rather than three per
+    # claim.
+    return Page(
+        items=await _page(session, list(rows)),
+        total=total or 0,
+        limit=params.limit,
+        offset=params.offset,
+    )
+
+
+def _readable(user: User | None):  # noqa: ANN202 - a SQLAlchemy boolean clause
+    """Published systems are anyone's; drafts are their owner's.
+
+    The same rule `systems._is_readable` applies, as a WHERE clause rather than a
+    predicate because this filters a listing rather than guarding one row.
+    """
+    published = FormalSystem.published_at.is_not(None)
+    if user is None:
+        return published
+    return or_(published, FormalSystem.owner_id == user.id)
 
 
 @router.get("/formalizations/{formalization_id}", response_model=Formalization)
 async def read_formalization(
     formalization_id: uuid.UUID,
+    user: User | None = Depends(current_active_user_optional),
     session: AsyncSession = Depends(get_session),
 ) -> Formalization:
-    return await _detail(session, formalization_id)
+    """One claim. Readable by anyone who may read the system it is about — a
+    claim about a draft is its owner's, for the reason the listing gives."""
+    return await _detail(session, formalization_id, user)
 
 
 @router.post(
@@ -353,7 +413,7 @@ async def review_formalization(
     row.reviewed_by_id = user.id
     row.reviewed_at = datetime.now(timezone.utc)
     await session.commit()
-    return await _detail(session, row.id)
+    return await _detail(session, row.id, user)
 
 
 @router.put(
@@ -380,7 +440,7 @@ async def set_glossary(
     _set_glossary(row, entries)
     _withdraw_review(row)
     await session.commit()
-    return await _detail(session, row.id)
+    return await _detail(session, row.id, user)
 
 
 @router.delete(
@@ -482,9 +542,21 @@ async def _owned_or_404(
     return row
 
 
-async def _detail(session: AsyncSession, formalization_id: uuid.UUID) -> Formalization:
+async def _detail(
+    session: AsyncSession, formalization_id: uuid.UUID, user: User | None
+) -> Formalization:
+    """One claim, serialized — or a 404 if the viewer may not read its system.
+
+    The visibility filter runs on every path, writes included. A writer has
+    already been shown to own the claim, and owning one means the system was
+    readable when it was made — so the filter costs a join and rules out one
+    thing: a row served past a visibility rule because the code path was
+    different.
+    """
     row = await session.scalar(
-        _loaded(select(FormalizationRow)).where(FormalizationRow.id == formalization_id)
+        _loaded(select(FormalizationRow))
+        .join(FormalSystem, FormalSystem.id == FormalizationRow.formal_system_id)
+        .where(FormalizationRow.id == formalization_id, _readable(user))
     )
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Formalization not found.")
@@ -501,7 +573,11 @@ async def _page(
         session,
         {row.attested_by_id for row in rows} | {row.reviewed_by_id for row in rows},
     )
-    return [_out(row, accounts) for row in rows]
+    # The nested document's own claim count, which the first cut left at the
+    # default — so `/sources` reported the real number for a row and a claim
+    # reported zero for the same one (found in review).
+    counts = await _claim_counts(session, [row.document_id for row in rows])
+    return [_out(row, accounts, counts) for row in rows]
 
 
 async def _accounts(
@@ -527,13 +603,15 @@ async def _accounts(
 
 
 def _out(
-    row: FormalizationRow, accounts: dict[uuid.UUID, SystemOwner]
+    row: FormalizationRow,
+    accounts: dict[uuid.UUID, SystemOwner],
+    counts: dict[uuid.UUID, int],
 ) -> Formalization:
     attested_by = accounts.get(row.attested_by_id)
     reviewed_by = accounts.get(row.reviewed_by_id)
     return Formalization(
         id=row.id,
-        document=_document_out(row.document),
+        document=_document_out(row.document, counts.get(row.document_id, 0)),
         claim=row.claim,
         informal_statement=row.informal_statement,
         formal_system_id=row.formal_system_id,

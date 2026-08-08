@@ -24,8 +24,6 @@ from app.db.assumptions import (
 from app.db.formalizations import (
     FormalizationRow,
     GlossaryEntryRow,
-    REVIEW_VERDICTS,
-    SOURCE_KINDS,
     SourceDocumentRow,
 )
 from app.db.models import (
@@ -149,8 +147,6 @@ __all__ = [
     "TheoremAssumptionRow",
     "FormalizationRow",
     "GlossaryEntryRow",
-    "REVIEW_VERDICTS",
-    "SOURCE_KINDS",
     "SourceDocumentRow",
     "assumption_labels",
     "closure_of",

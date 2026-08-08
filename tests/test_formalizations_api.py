@@ -271,7 +271,7 @@ def test_two_readings_of_one_theorem_both_stand(db, client):
     assert claim(client, pc, document, reasoning="A different reading.")[0] == 201
 
     listed = client.get(f"/api/formalizations?document_id={document}").json()
-    assert len(listed) == 2
+    assert listed["total"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +341,7 @@ def test_unreviewed_claims_can_be_listed(db, client):
     client.post(f"/api/formalizations/{reviewed}/review", json={"verdict": "confirmed"})
 
     open_claims = client.get("/api/formalizations?unreviewed=true").json()
-    assert [c["claim"] for c in open_claims] == ["Theorem 3.3"]
+    assert [c["claim"] for c in open_claims["items"]] == ["Theorem 3.3"]
 
 
 def test_editing_the_glossary_withdraws_the_review(db, client):
@@ -479,3 +479,66 @@ def test_a_racing_registration_returns_the_winner(db, client):
 
     assert status == 201, second
     assert second["id"] == first["id"]
+
+
+# ---------------------------------------------------------------------------
+# Who may read a claim
+# ---------------------------------------------------------------------------
+
+
+def test_a_claim_about_a_draft_system_is_its_owners(db, client):
+    # A claim carries its system's id, its term, its proof and its prose, so
+    # serving one about a draft answers in detail the question
+    # `GET /formal-systems/{id}` answers with a 404. The leak the repo's
+    # 404-not-403 policy exists to prevent (found in review).
+    owner = _register_login(client, "form-draft@example.com")
+    pc, _fol, zfc = seed_tower(db, owner, published_top=False)
+    document = register(client)[1]["id"]
+    made = claim(client, zfc, document)[1]["id"]
+
+    # The owner still sees it.
+    assert client.get(f"/api/formalizations/{made}").status_code == 200
+    assert client.get("/api/formalizations").json()["total"] == 1
+
+    _register_login(client, "form-nosy@example.com")
+    assert client.get(f"/api/formalizations/{made}").status_code == 404
+    assert client.get("/api/formalizations").json()["items"] == []
+
+    # And anonymously, which is where an unauthenticated read used to serve it.
+    client.cookies.clear()
+    assert client.get(f"/api/formalizations/{made}").status_code == 404
+    assert client.get("/api/formalizations").json()["items"] == []
+
+
+def test_a_claim_about_a_published_system_is_public(db, client):
+    # The control: publishing is what makes a system's claims reviewable, and a
+    # reviewer needs no account to read one.
+    pc, _fol, _zfc = tower(db, client, "form-public@example.com")
+    document = register(client)[1]["id"]
+    made = claim(client, pc, document)[1]["id"]
+
+    client.cookies.clear()
+    assert client.get(f"/api/formalizations/{made}").status_code == 200
+
+
+def test_a_claim_reports_its_documents_real_count(db, client):
+    # `/sources` reported the true number for a row while a claim reported zero
+    # for the same one (found in review).
+    pc, _fol, _zfc = tower(db, client, "form-count@example.com")
+    document = register(client)[1]["id"]
+    claim(client, pc, document)
+    body = claim(client, pc, document, claim="Theorem 3.3")[1]
+
+    assert body["document"]["formalizations"] == 2
+    listed = client.get("/api/sources").json()["items"]
+    assert listed[0]["formalizations"] == 2
+
+
+def test_the_source_listing_is_paged(db, client):
+    tower(db, client, "form-paged@example.com")
+    register(client)
+    register(client, version="v2")
+
+    page = client.get("/api/sources?limit=1").json()
+    assert page["total"] == 2
+    assert len(page["items"]) == 1

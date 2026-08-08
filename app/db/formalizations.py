@@ -57,16 +57,6 @@ from app.db.base import Base, TimestampMixin, uuid_pk_column
 if TYPE_CHECKING:
     from app.db.terms import TermRow
 
-# How a source is named. Open rather than an enum column, for the reason
-# `label_attributions.kind` is: a corpus of external work will meet a kind nobody
-# listed, and refusing to record it would be worse than recording it loosely.
-SOURCE_KINDS = ("arxiv", "doi", "isbn", "url", "other")
-
-# A review's verdict. Closed, because a caller branches on it — and because the
-# two are not shades of one thing: a dispute is a finding, and the more valuable
-# of the two.
-REVIEW_VERDICTS = ("confirmed", "disputed")
-
 
 class SourceDocumentRow(TimestampMixin, Base):
     """An external work something here claims to formalize."""
@@ -87,6 +77,12 @@ class SourceDocumentRow(TimestampMixin, Base):
     )
 
     id: Mapped[uuid.UUID] = uuid_pk_column()
+    # How the source is named. A plain string rather than an enum, for the reason
+    # `label_attributions.kind` is one: a corpus of external work will meet a
+    # kind nobody listed, and refusing to record it is worse than recording it
+    # loosely. `SourceDocumentCreate` closes the set for a *caller*, to guide
+    # one; `SourceDocument` deliberately does not, so a row written by an import
+    # or a fixture cannot fail a read on its way out.
     kind: Mapped[str] = mapped_column(String(16))
     # The identifier within that kind — `2401.01234`, a DOI, a URL. Verbatim: a
     # normalisation here would be this layer deciding what an upstream identifier
@@ -119,13 +115,12 @@ class SourceDocumentRow(TimestampMixin, Base):
 class FormalizationRow(Base, TimestampMixin):
     """One claim: *this* term is *that* result of *that* document."""
 
+    # "What has been formalized from this paper" and "what does this proof claim
+    # to be" are the two directions anyone reads this from, and both are served
+    # by the column indexes below rather than by a second set beside them: a
+    # single-column `Index` next to `index=True` is two indexes for one question
+    # (found in review).
     __tablename__ = "formalizations"
-    __table_args__ = (
-        # "What has been formalized from this paper", and "what does this proof
-        # claim to be" — the two directions anyone reads this from.
-        Index("ix_formalizations_document", "document_id"),
-        Index("ix_formalizations_proof", "proof_id"),
-    )
 
     id: Mapped[uuid.UUID] = uuid_pk_column()
     document_id: Mapped[uuid.UUID] = mapped_column(

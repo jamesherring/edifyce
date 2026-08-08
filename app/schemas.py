@@ -1286,8 +1286,26 @@ class SourceDocumentCreate(BaseModel):
     retrieved_at: datetime | None = None
 
 
-class SourceDocument(SourceDocumentCreate):
+class SourceDocument(BaseModel):
+    """A registered work, read back.
+
+    ``kind`` is a plain string here where the create model closes the set. The
+    column is a free ``String(16)``, so a row written by an import or a fixture
+    can carry a kind nobody listed — and a `Literal` on the *output* would fail
+    response validation and take the whole listing down with it, which is the
+    wrong way to learn that (found in review). Closed for a caller, open for
+    data: the same split `Attribution.kind` already makes.
+    """
+
     id: uuid.UUID
+    kind: str
+    identifier: str
+    version: str = ""
+    title: str | None = None
+    url: str | None = None
+    content_hash: str | None = None
+    licence: str | None = None
+    retrieved_at: datetime | None = None
     created_at: datetime
     # How many claims point at this document.
     formalizations: int = 0
@@ -1414,7 +1432,9 @@ class Formalization(BaseModel):
     attested_by: SystemOwner | None = None
     attested_as: str | None = None
     attested_at: datetime
-    review_verdict: Literal["confirmed", "disputed"] | None = None
+    # A plain string for the same reason `SourceDocument.kind` is: the column is
+    # free text, and a read must not fail on a value it did not expect.
+    review_verdict: str | None = None
     review_note: str | None = None
     reviewed_by: SystemOwner | None = None
     reviewed_at: datetime | None = None

@@ -47,14 +47,10 @@ CREATE TABLE "formalizations" (
 );
 -- Create index "ix_formalizations_attested_by_id" to table: "formalizations"
 CREATE INDEX "ix_formalizations_attested_by_id" ON "formalizations" ("attested_by_id");
--- Create index "ix_formalizations_document" to table: "formalizations"
-CREATE INDEX "ix_formalizations_document" ON "formalizations" ("document_id");
 -- Create index "ix_formalizations_document_id" to table: "formalizations"
 CREATE INDEX "ix_formalizations_document_id" ON "formalizations" ("document_id");
 -- Create index "ix_formalizations_formal_system_id" to table: "formalizations"
 CREATE INDEX "ix_formalizations_formal_system_id" ON "formalizations" ("formal_system_id");
--- Create index "ix_formalizations_proof" to table: "formalizations"
-CREATE INDEX "ix_formalizations_proof" ON "formalizations" ("proof_id");
 -- Create index "ix_formalizations_proof_id" to table: "formalizations"
 CREATE INDEX "ix_formalizations_proof_id" ON "formalizations" ("proof_id");
 -- Create index "ix_formalizations_reviewed_by_id" to table: "formalizations"

@@ -1704,8 +1704,10 @@ export const api = {
 				method: 'POST',
 				body: JSON.stringify(document)
 			}),
-		sources: (params?: { kind?: string; identifier?: string }) =>
-			request<SourceDocument[]>(`/sources${listQuery(params as ListParams)}`),
+		sources: (
+			filters?: { kind?: string; identifier?: string },
+			params?: ListParams
+		) => request<Page<SourceDocument>>(`/sources${listQuery(params, { ...filters })}`),
 		/** Claim that a term is a formalization of a result in a document. */
 		claim: (claim: FormalizationCreate) =>
 			request<Formalization>('/formalizations', {
@@ -1715,12 +1717,28 @@ export const api = {
 		/** Claims, filtered. `unreviewed` is the one that matters: an unreviewed
 		 * claim is the ordinary state, and listing them is what makes its absence
 		 * visible rather than merely stated. */
-		list: (params?: {
-			document_id?: string;
-			formal_system_id?: string;
-			proof_id?: string;
-			unreviewed?: boolean;
-		}) => request<Formalization[]>(`/formalizations${listQuery(params as ListParams)}`),
+		list: (
+			filters?: {
+				document_id?: string;
+				formal_system_id?: string;
+				proof_id?: string;
+				unreviewed?: boolean;
+			},
+			params?: ListParams
+		) =>
+			request<Page<Formalization>>(
+				`/formalizations${listQuery(params, {
+					document_id: filters?.document_id,
+					formal_system_id: filters?.formal_system_id,
+					proof_id: filters?.proof_id,
+					// Only when asked: `unreviewed=false` is the default and sending it
+					// is noise, but sending nothing where `true` was meant would return
+					// every claim including the reviewed ones — which is what the
+					// `as ListParams` cast used to do silently for all four (found in
+					// review).
+					unreviewed: filters?.unreviewed ? 'true' : undefined
+				})}`
+			),
 		get: (id: string) => request<Formalization>(`/formalizations/${id}`),
 		/** Pass a verdict on somebody *else's* claim — the attestor is refused,
 		 * since the whole value of "reviewed" is independence. */
