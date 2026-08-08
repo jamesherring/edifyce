@@ -21,7 +21,6 @@
 		type VerifyResponse
 	} from '$lib/api';
 	import { readLines, resultLines } from '$lib/reading';
-	import { isTeX } from '$lib/math';
 	import { auth } from '$lib/auth.svelte';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import Play from '@lucide/svelte/icons/play';
@@ -34,6 +33,9 @@
 	// Where the system came from, when it was not authored here. Recorded once per
 	// import rather than on each of its proofs, so it is read off the system.
 	let provenance = $state<string | null>(null);
+	// The system's primary line type. Every ordinary line carries its name, so it
+	// is the one badge worth suppressing — see `ProofResults`.
+	let primaryLineType = $state<string | null>(null);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 
@@ -70,6 +72,7 @@
 		requestError = null;
 		systemName = null;
 		provenance = null;
+		primaryLineType = null;
 		notations = [];
 		notation = null;
 		structure = null;
@@ -108,6 +111,9 @@
 			systemName = system.name;
 			notations = system.notations;
 			provenance = system.provenance;
+			// First-declared, which is what the parser tries first and what a system
+			// with one line type has only one of.
+			primaryLineType = system.lines[0]?.name ?? null;
 		} catch {
 			// Leave the link labelled generically if the system can't be read, and
 			// offer no notations — the source spelling is always readable.
@@ -150,10 +156,16 @@
 	);
 
 	// The notation the rows *on screen* were read through, which is not the one
-	// selected until the fetch lands. Keying the typesetter off the selection
-	// would set a unicode reading as TeX for a round trip, and show a latex one as
+	// selected until the fetch lands. Keying the reading off the selection would
+	// set a unicode reading as TeX for a round trip, and show a latex one as
 	// source for the round trip back.
-	const readingTeX = $derived(structure !== null && isTeX(structure.notation));
+	const readAs = $derived(structure?.notation ?? null);
+
+	// Expanding a citation re-checks the proof, so it sits behind the same gate
+	// the Verify button does (`app/routers/proofs.py`, the note above
+	// `verify_stored_proof`): a signed-out reader gets a plain citation rather
+	// than a 401 on hover.
+	const explainable = $derived(auth.user ? (proof?.id ?? null) : null);
 
 	// `name` is what a citation spells and what the slug is built from; `title` is
 	// the sentence a human reads. Lead with the sentence where there is one — on
@@ -301,7 +313,10 @@
 			{result}
 			{requestError}
 			lines={rows}
-			tex={readingTeX}
+			notation={readAs}
+			proofId={explainable}
+			{primaryLineType}
+			verdicts={false}
 			title="Proof"
 			description={notation === null
 				? 'The proof source, checked line by line.'

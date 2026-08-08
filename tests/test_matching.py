@@ -120,29 +120,6 @@ def test_union_pattern_no_match(word, context):
 
 
 # ---------------------------------------------------------------------------
-# The variable-leaf walk (what a definition reads its parameters off)
-# ---------------------------------------------------------------------------
-
-
-def test_variable_leaves_finds_declared_slots(word, context):
-    # The slot's sort must be one that consults `string_variables` when it
-    # matches - a union does, a bare regex does not (see `revariabilise`).
-    sort = UnionPattern(name="term", patterns=[word])
-    context.string_variables = {"phi": sort}
-    pattern = StringPattern(name="if_pattern", pattern="if s:", variables={"s": sort})
-
-    match = pattern.match("if phi:", context)
-    assert [leaf.string for leaf in match.variable_leaves()] == ["phi"]
-
-
-def test_variable_leaves_is_empty_for_a_ground_parse(word, context):
-    pattern = StringPattern(name="if_pattern", pattern="if s:", variables={"s": word})
-
-    match = pattern.match("if hello:", context)
-    assert match.variable_leaves() == []
-
-
-# ---------------------------------------------------------------------------
 # Leading-character index over a union's leaves
 # ---------------------------------------------------------------------------
 

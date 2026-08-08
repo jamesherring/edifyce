@@ -2,6 +2,7 @@
 	import CircleCheck from '@lucide/svelte/icons/circle-check-big';
 	import CircleX from '@lucide/svelte/icons/circle-x';
 	import CircleAlert from '@lucide/svelte/icons/circle-alert';
+	import CircleDashed from '@lucide/svelte/icons/circle-dashed';
 	import type { Component } from 'svelte';
 	import type { ProofLine } from '$lib/api';
 
@@ -34,6 +35,33 @@
 		return 'ok';
 	}
 
+	/** What a line's marker says, beyond the tone its row is tinted with.
+	 *
+	 * An open goal is not a mistake — `failure.code === 'hole'` is work left, and
+	 * a cross over it reads as a wrong step — so it gets a mark of its own. */
+	export type Marker = Tone | 'hole';
+
+	export const MARKER: Record<Marker, { icon: Component; class: string }> = {
+		ok: { icon: CircleCheck, class: 'text-success' },
+		warning: { icon: CircleAlert, class: 'text-warning' },
+		error: { icon: CircleX, class: 'text-destructive' },
+		hole: { icon: CircleDashed, class: 'text-muted-foreground' }
+	};
+
+	/**
+	 * The marker a line gets, or null when there is nothing worth marking.
+	 *
+	 * A tick on every line of a valid proof is noise: the card's own badge
+	 * already says the proof checked, and repeating it forty times says nothing
+	 * per line. So `verdicts` is for the editor, where a tick appearing as you
+	 * type *is* the feedback; a reader gets a mark only where something is off.
+	 */
+	export function lineMarker(line: ProofLine, verdicts: boolean): Marker | null {
+		if (!line.valid) return line.failure?.code === 'hole' ? 'hole' : 'error';
+		if (line.warning_message) return 'warning';
+		return verdicts ? 'ok' : null;
+	}
+
 	// The overall proof indicator ("ok"/"warning"/"error") maps onto the same tone
 	// vocabulary; fall back to "error" for any unexpected value.
 	export function indicatorTone(indicator: string): Tone {
@@ -46,6 +74,8 @@
 	import * as Alert from '$lib/components/ui/alert';
 	import { Badge } from '$lib/components/ui/badge';
 	import Typeset from '$lib/components/Typeset.svelte';
+	import JustificationCard from '$lib/components/JustificationCard.svelte';
+	import { isTeX } from '$lib/math';
 	import type { VerifyResponse } from '$lib/api';
 	import { resultLines, type ReadLine } from '$lib/reading';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
@@ -63,14 +93,32 @@
 		 *  read through a notation comes off the *stored structure* instead, which
 		 *  is where a re-spelled term lives. Falls back to the payload's own. */
 		lines?: ReadLine[] | null;
-		/** Whether a re-spelled line is TeX to typeset rather than text to show. */
-		tex?: boolean;
+		/** The notation the lines on screen were read through — the *served*
+		 *  reading, not the one being fetched. It decides whether a re-spelled line
+		 *  is TeX to typeset, and it is what a citation's card is read in, so one
+		 *  row is never half in one spelling and half in another. */
+		notation?: string | null;
 		title?: string;
 		description?: string;
 		/** Beside the verdict badge — the browse view's Verify button. */
 		actions?: Snippet;
 		/** Under the description — the browse view's notation switch. */
 		controls?: Snippet;
+		/** Mark every line, valid ones included. For the editor, where a tick
+		 *  appearing as you type is the feedback; a reader is shown only what is
+		 *  off. */
+		verdicts?: boolean;
+		/** The system's primary line type, whose name every ordinary line carries
+		 *  and so says nothing. Lines of any *other* type keep their badge, which
+		 *  is where the type is the interesting thing (`assume`, `fresh`, a
+		 *  comment). Unset suppresses nothing — a caller that has not said which
+		 *  type is the default has not claimed any of them is. */
+		primaryLineType?: string | null;
+		/** The proof these lines belong to, which is what makes a citation
+		 *  expandable: explaining a step means asking the server to re-derive it.
+		 *  Unset leaves citations as plain text — the editor's live results
+		 *  describe text that may not be what is stored. */
+		proofId?: string | null;
 	};
 
 	let {
@@ -79,16 +127,20 @@
 		idleMessage = 'Verify the proof to see line-by-line results here.',
 		onLineClick,
 		lines = null,
-		tex = false,
+		notation = null,
 		title = 'Verification',
 		description = 'Each proof line and its diagnostics.',
 		actions,
-		controls
+		controls,
+		verdicts = true,
+		primaryLineType = null,
+		proofId = null
 	}: Props = $props();
 
 	// The payload's lines are the fallback, not the default: a caller passing
 	// `lines` has already decided what the rows are (and where they came from).
 	const rows = $derived(lines ?? (result?.proof ? resultLines(result.proof.lines) : null));
+	const tex = $derived(isTeX(notation));
 </script>
 
 <Card.Root>
@@ -156,9 +208,9 @@
 			{/if}
 			<ol class="flex flex-col gap-2">
 				{#each rows as line, i (i)}
-					{@const tone = lineTone(line)}
-					{@const meta = TONE[tone]}
-					{@const Icon = meta.icon}
+					{@const meta = TONE[lineTone(line)]}
+					{@const marker = lineMarker(line, verdicts)}
+					{@const Icon = marker === null ? null : MARKER[marker].icon}
 					<li class={['rounded-md border px-3 py-2', meta.row]}>
 						<svelte:element
 							this={onLineClick ? 'button' : 'div'}
@@ -181,35 +233,49 @@
 								{line.number === undefined ? i + 1 : (line.number ?? '')}
 							</span>
 							<div class="min-w-0 flex-1">
-								<div
-									class={['text-sm break-words', !(tex && line.typeset) && 'font-mono']}
-									style={`padding-left: ${line.indent * 1.25}rem`}
-								>
-									{#if tex && line.typeset && line.display}
-										<Typeset tex={line.display} />
-									{:else}
-										{line.display || ' '}
-									{/if}
-								</div>
-
-								<div class="mt-1.5 flex flex-wrap items-center gap-1.5">
-									<Icon
+								<!-- The formula reads left, its justification right: a proof is a
+								     column of statements, and putting the citation under each one
+								     doubles the height of every row to say what a reader scans
+								     for in a second column. -->
+								<div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+									<div
 										class={[
-											'size-3.5',
-											tone === 'ok' && 'text-success',
-											tone === 'warning' && 'text-warning',
-											tone === 'error' && 'text-destructive'
+											'min-w-0 flex-1 text-sm break-words',
+											!(tex && line.typeset) && 'font-mono'
 										]}
-									/>
-									{#if line.name}
-										<Badge variant="outline">{line.name}</Badge>
-									{/if}
-									{#if line.reference}
-										<span class="text-xs text-muted-foreground">by {line.reference}</span>
-									{/if}
-									{#if line.label}
-										<span class="text-xs text-muted-foreground">· {line.label}</span>
-									{/if}
+										style={`padding-left: ${line.indent * 1.25}rem`}
+									>
+										{#if tex && line.typeset && line.display}
+											<Typeset tex={line.display} />
+										{:else}
+											{line.display || ' '}
+										{/if}
+									</div>
+
+									<div
+										class="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
+									>
+										{#if line.name && line.name !== primaryLineType}
+											<!-- Only where the type is the interesting thing. Every
+											     ordinary line carries the system's primary type, so
+											     badging it labels the whole proof `statement`. -->
+											<Badge variant="outline">{line.name}</Badge>
+										{/if}
+										{#if line.label}
+											<span>{line.label}</span>
+										{/if}
+										{#if line.reference}
+											<JustificationCard
+												{proofId}
+												number={line.number ?? null}
+												citation={line.reference}
+												{notation}
+											/>
+										{/if}
+										{#if Icon}
+											<Icon class={['size-3.5 shrink-0', MARKER[marker!].class]} />
+										{/if}
+									</div>
 								</div>
 
 								{#if line.invalid_message}

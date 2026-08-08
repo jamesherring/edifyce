@@ -3322,3 +3322,197 @@ def test_the_limit_reports_what_it_hid(client, db):
     assert len(body["candidates"]) == 2
     assert body["matched"] == 3
     assert body["truncated"] is True
+
+
+# ---------------------------------------------------------------------------
+# Why a line follows (GET /proofs/{id}/lines/{n}/justification)
+#
+# `Failure` says why a line did not check. A line that did carries a citation and
+# nothing else — `[MP, 1, 2]` names the step without explaining it — and what the
+# checker established was going nowhere.
+# ---------------------------------------------------------------------------
+
+
+_JUSTIFIED = "x ∈ y [HYP]\n(x ∈ y → y ∈ x) [HYP]\ny ∈ x [MP, 1, 2]"
+
+
+def _justification(client: TestClient, proof_id: str, number: int, **params) -> dict:
+    res = client.get(
+        f"/api/proofs/{proof_id}/lines/{number}/justification", params=params
+    )
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def _justified_proof(client: TestClient, db_path, owner: str) -> tuple[str, str]:
+    system_id = _seed_system(db_path, owner)
+    proof_id = _create_proof(client, system_id, "P", source=_JUSTIFIED)
+    assert client.post(f"/api/proofs/{proof_id}/verify").json()["success"] is True
+    return system_id, proof_id
+
+
+def test_a_step_is_explained_by_its_rule_and_its_substitution(client, db):
+    # The whole point: the citation says a rule applied, and this says the rule
+    # applied *with p as x ∈ y and q as y ∈ x* — which is what makes the step
+    # checkable by a reader rather than only by the kernel.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _justified_proof(client, db, owner)
+
+    body = _justification(client, proof_id, 3)
+
+    assert (body["kind"], body["label"], body["citation"]) == ("rule", "MP", "MP, 1, 2")
+    assert body["conclusion"] == "q"
+    assert [(a["variable"], a["stands_for"]) for a in body["assignments"]] == [
+        ("p", "x ∈ y"),
+        ("q", "y ∈ x"),
+    ]
+
+
+def test_the_premises_say_which_cited_line_filled_which_slot(client, db):
+    # A citation lists line numbers in the order the author wrote them; the rule
+    # has slots. Which filled which is the checker's answer, not the citation's.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _justified_proof(client, db, owner)
+
+    premises = _justification(client, proof_id, 3)["premises"]
+
+    assert [(p["schema_form"], p["number"], p["statement"]) for p in premises] == [
+        ("p", 1, "x ∈ y"),
+        ("(p → q)", 2, "(x ∈ y → y ∈ x)"),
+    ]
+
+
+def test_explaining_a_line_does_not_rewrite_the_proof(client, db):
+    # A read must not write. The explanation runs the same check a verify does,
+    # and that check is the one that would otherwise record itself.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _justified_proof(client, db, owner)
+
+    _justification(client, proof_id, 3)
+
+    assert client.get(f"/api/proofs/{proof_id}").json()["source"] == _JUSTIFIED
+
+
+def test_a_line_nothing_justified_has_nothing_to_explain(client, db):
+    # A hole is not an error here, it is simply a line no citation resolved for —
+    # and which kind of unjustified it is belongs to `Failure`, not to a second
+    # weaker copy of it.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _holed_proof(client, db, owner)
+
+    res = client.get(f"/api/proofs/{proof_id}/lines/3/justification")
+
+    assert res.status_code == 404
+    assert "not justified by a rule" in res.json()["detail"]
+
+
+def test_a_line_that_does_not_exist_is_a_404(client, db):
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _justified_proof(client, db, owner)
+
+    res = client.get(f"/api/proofs/{proof_id}/lines/99/justification")
+
+    assert res.status_code == 404
+
+
+def test_an_unknown_notation_is_refused_rather_than_ignored(client, db):
+    # Silently serving the source spelling under another notation's name would be
+    # worse than saying no: a reader would take the reading for that notation's.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _justified_proof(client, db, owner)
+
+    res = client.get(
+        f"/api/proofs/{proof_id}/lines/3/justification", params={"notation": "latex"}
+    )
+
+    assert res.status_code == 404
+
+
+def test_explaining_a_step_needs_an_account(client, db):
+    # It rebuilds the proof's whole system and re-checks it, so it belongs with
+    # the routes above `verify_stored_proof` rather than beside the reads — more
+    # so than they do, since a hover is the cheapest way there is to ask for it.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _justified_proof(client, db, owner)
+    client.post("/api/auth/logout")
+
+    res = client.get(f"/api/proofs/{proof_id}/lines/3/justification")
+
+    assert res.status_code == 401
+
+
+def test_a_cited_lemma_is_linked_to_the_proof_that_establishes_it(client, db):
+    # A library citation names a label. The proof of that label is a row away and
+    # is not something a client can find for itself — so a reader following the
+    # step has nowhere to go without this.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner, published=True)
+    lemma = _create_proof(client, system_id, "mylem", source=_LEMMA_SRC)
+    client.patch(f"/api/proofs/{lemma}", json={"published": True})
+    client.post(f"/api/proofs/{lemma}/promote", json={"label": "mylem"})
+
+    goal = _create_proof(client, system_id, "Goal", source="(x ∈ y → x = y) [mylem]")
+    assert client.post(f"/api/proofs/{goal}/verify").json()["success"] is True
+
+    body = _justification(client, goal, 1)
+
+    assert body["label"] == "mylem"
+    assert body["proof_id"] == lemma
+
+
+def test_the_link_goes_through_the_library_entry_not_the_proofs_name(client, db):
+    # A citation names a *theorem*, and `proofs.theorem_id` is the edge a
+    # promotion writes — so the entry the citation resolved to identifies its
+    # proof exactly. Matching `proofs.name` gets it wrong twice over, and both
+    # ways are here: the proof that proved it is called something else, and an
+    # unrelated proof *is* called `mylem`.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner, published=True)
+    proved = _create_proof(client, system_id, "Groundwork", source=_LEMMA_SRC)
+    client.patch(f"/api/proofs/{proved}", json={"published": True})
+    client.post(f"/api/proofs/{proved}/promote", json={"label": "mylem"})
+    impostor = _create_proof(client, system_id, "mylem", source=_LEMMA_SRC)
+
+    goal = _create_proof(client, system_id, "Goal", source="(x ∈ y → x = y) [mylem]")
+    assert client.post(f"/api/proofs/{goal}/verify").json()["success"] is True
+
+    linked = _justification(client, goal, 1)["proof_id"]
+    assert linked == proved
+    assert linked != impostor
+
+
+def test_a_premise_from_a_cited_lemma_carries_no_local_number(client, db):
+    # `[alias.1]` names line 1 *of that lemma*. Reporting the number would point
+    # a reader at this proof's line 1, which is some unrelated step.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner)
+    lemma = _create_proof(client, system_id, "Lemma", source=_LEMMA_SRC)
+    assert client.post(f"/api/proofs/{lemma}/verify").json()["success"] is True
+    goal = _create_proof(client, system_id, "Main", source=_USER_SRC)
+    _set_refs(client, goal, [{"referenced_proof_id": lemma, "alias": "A"}])
+    assert client.post(f"/api/proofs/{goal}/verify").json()["success"] is True
+
+    premises = _justification(client, goal, 2)["premises"]
+
+    # `A.1` fills the implication slot and is numbered in *its* proof; line 1 is
+    # this proof's and keeps its number.
+    assert [(p["number"], p["statement"]) for p in premises] == [
+        (1, "x ∈ y"),
+        (None, "(x ∈ y → x = y)"),
+    ]
+
+
+def test_a_definitional_step_is_not_given_another_labels_prose(client, db):
+    # An unlabelled definition reports no label, and looking prose or a proof up
+    # by a stand-in like `Def` would attach something unrelated to the card.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(db, owner)
+    proof_id = _create_proof(
+        client, system_id, "P", source="x ⊆ y [HYP]\n(x = y → x = y) [Def, 1]"
+    )
+    assert client.post(f"/api/proofs/{proof_id}/verify").json()["success"] is True
+
+    body = _justification(client, proof_id, 2)
+
+    assert body["kind"] == "definition"
+    assert (body["label"], body["title"], body["proof_id"]) == ("", None, None)

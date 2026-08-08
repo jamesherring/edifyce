@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from ..kernel import Var, from_pattern, match_all
 from ..matching import StringPattern
-from ..matching.rewriting import joint_binding_exists
+from ..matching.rewriting import joint_binding, joint_binding_exists
 from .diagnostics import SlotReport, numbers
 from .proof import ProofLine, Subproof
 
@@ -20,6 +20,20 @@ if TYPE_CHECKING:
 
     # A rule match's substitution: schematic variable name -> the Term it binds to.
     Binding = dict[str, Term]
+    # A *rewriting* rule's, which binds surface strings rather than terms.
+    StringBinding = dict[str, str]
+
+
+# What marks a metavariable the *rule* never named: a bare-sort slot renamed apart
+# per occurrence by `InferenceRule._schema_term`. NUL because no grammar can
+# produce it, so the renamed name cannot collide with an author's own.
+#
+# Named here because two things need to agree about it. The rename makes two
+# `formula` slots independent premises rather than one shared binding, which is
+# the point; and anything *showing* a binding to a reader has to leave those out,
+# since `formula\x000` names nothing the reader can find in the schemas beside it
+# (`formal_system.justification`).
+ANONYMOUS = "\x00"
 
 
 def statement_term(pattern: Pattern) -> Term:
@@ -183,8 +197,15 @@ class InferenceRule:
             # match their schemas as *strings* under one shared substitution,
             # found by associative matching (splitting/concatenation the term
             # unifier cannot do). No kernel side-conditions on this path.
-            if not self._string_binding_exists(antecedents, deduction, context):
+            strings = self._string_binding(antecedents, deduction, context)
+            if strings is None:
                 return None
+            # Kept for the same reason the term binding is: it is what the step
+            # *did*, and a reader asking why a rewriting step follows is asking
+            # exactly what `x` matched. Held apart from `binding` because these
+            # are surface strings, and everything reading that one (schematic
+            # promotion, `restate`) means terms.
+            inference.string_binding = strings
         else:
             # Structural check over terms (the graph representation): the
             # deduction and every logical antecedent must match their schemas
@@ -377,11 +398,23 @@ class InferenceRule:
             pairs.append((pattern, ant.formula_string))
         return pairs
 
+    def _string_binding(
+        self, antecedents: Sequence[ProofLine], deduction: ProofLine, context: Context
+    ) -> StringBinding | None:
+        """The substitution making every schema instantiate to its line, as
+        strings — the string-rewriting analogue of :meth:`_term_binding`."""
+        pairs = self._string_pairs(antecedents, deduction)
+        return None if pairs is None else joint_binding(pairs, context)
+
     def _string_binding_exists(
         self, antecedents: Sequence[ProofLine], deduction: ProofLine, context: Context
     ) -> bool:
-        """Whether one substitution makes every schema instantiate to its line,
-        as strings — the string-rewriting analogue of :meth:`_term_binding`."""
+        """Whether such a substitution exists — the predicate the search asks.
+
+        Separate from :meth:`_string_binding` because the search asks it far more
+        often than anything wants the binding: `concludes`, `slot_admits` and
+        `prefix_binding_exists` are rejections.
+        """
         pairs = self._string_pairs(antecedents, deduction)
         return pairs is not None and joint_binding_exists(pairs, context)
 
@@ -519,13 +552,13 @@ class InferenceRule:
 
         term = from_pattern(pattern)
         renames = {
-            name: Var(f"{name}\x00{occurrence}", sort)
+            name: Var(f"{name}{ANONYMOUS}{occurrence}", sort)
             for name, sort in term.free_vars().items()
         }
         return term.substitute(renames, context) if renames else term
 
     @staticmethod
-    def _schema_text(pattern: Pattern) -> str:
+    def schema_text(pattern: Pattern | None) -> str:
         """A slot's schema as a reader would write it.
 
         `str(pattern)` is the class-prefixed repr (`StringPattern: antecedent`),
@@ -533,7 +566,14 @@ class InferenceRule:
         its own surface form in `display_pattern` — `( p -> q )`, which is the
         thing a caller has to go and prove — and anything else is named by the
         sort it draws from.
+
+        Public because it is the rule's *native* form, which is what a reader
+        being shown why a step follows has to be given
+        (:mod:`~.justification`); `""` for the pattern a rule has not been
+        compiled with yet, since a schema nobody has parsed reads as nothing.
         """
+        if pattern is None:
+            return ""
         if isinstance(pattern, StringPattern):
             return pattern.display_pattern
         return pattern.name
@@ -573,7 +613,7 @@ class InferenceRule:
         than about one being unreachable.
         """
         return tuple(
-            SlotReport(index=slot, schema=self._schema_text(self.antecedents[slot]))
+            SlotReport(index=slot, schema=self.schema_text(self.antecedents[slot]))
             for slot in range(len(self.antecedents))
             if not adjacency.get(slot)
         )
@@ -590,7 +630,7 @@ class InferenceRule:
         return tuple(
             SlotReport(
                 index=slot,
-                schema=self._schema_text(self.antecedents[slot]),
+                schema=self.schema_text(self.antecedents[slot]),
                 candidates=numbers([lines[j] for j in adjacency.get(slot, ())]),
             )
             for slot in range(len(self.antecedents))
@@ -666,7 +706,9 @@ class Inference:
     with the theorem. Restating one out of the step's binding is exactly
     :func:`~website.logical.kernel.side_conditions.restate`, and this is where
     the binding to restate over comes from. ``None`` for a string-rewriting step,
-    which binds surface strings rather than terms and carries no kernel proviso.
+    which binds surface strings rather than terms and carries no kernel proviso —
+    that step's substitution is ``string_binding``, kept apart precisely so
+    nothing meaning *terms* can read it by accident.
     """
 
     inference_rule: InferenceRule
@@ -676,3 +718,7 @@ class Inference:
     extra_antecedents: Sequence[ProofLine]
     deduction: ProofLine
     binding: Binding | None = None
+    # The surface-string substitution of a semi-Thue step (MIU and friends), where
+    # `binding` is None. What a reader asking why the step follows needs, and the
+    # one thing a rewriting rule's citation cannot say.
+    string_binding: StringBinding | None = None

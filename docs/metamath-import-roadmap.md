@@ -1893,6 +1893,14 @@ note whose sentence happens to contain "is discouraged".
 
 Total prose the import still drops: **374,876 characters**.
 
+**Upgrading a corpus already imported.** The migration adds an empty table and two
+`false` columns; the prose behind them still has its markup in it, and nothing
+re-reads it. `scripts/rebuild_markup.py` does, and needs no `.mm` file: references
+were always extracted from the assembled prose and their offsets index exactly
+that, so reading `label_descriptions.text` again yields what a fresh import would
+have written. Idempotent by construction — a row it has already fixed has no
+marker left to find, so the flags are OR-ed in and never assigned.
+
 ---
 
 ### Tier B — the human-altitude layer

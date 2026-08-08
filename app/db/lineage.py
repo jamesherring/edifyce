@@ -24,10 +24,21 @@ symbols, lines, definitions, axioms and rules — which is the right trade for a
 route that builds a system and badly wrong for one that wants to add a `WHERE`
 clause.
 
-What a spine never reaches is a **sibling**: two systems sharing a parent are two
-systems, and a reference in one has nothing to do with a proof in the other. That
-is why this walks the edge from the system asked about rather than collecting the
-tree its root sits over.
+What a spine never reaches is a **sibling of the system asked about**: two systems
+sharing its parent are two systems, and a reference in one has nothing to do with
+a proof in the other. That is why this walks the edge from the system asked about
+rather than collecting the tree its root sits over.
+
+It does reach **both branches below a fork**, though, and that is a real limit
+rather than a claim. A system with two children has two descendants that are
+siblings of each other, and if both declare a proof of the same name then a
+reference in the parent's prose names neither in particular — the parent's comment
+predates both. `descendant_ids` orders such a pair by id so the answer is at least
+the same twice, and the caller resolves nearest-first, so an ancestor or the
+system's own row always wins over either. Scoping instead to "the systems one
+import wrote" would settle it properly, and there is nothing recording that today
+(the closest thing is `formal_systems.provenance`, which a spine shares) — so this
+is written down rather than guessed at (raised in review).
 """
 
 from __future__ import annotations
@@ -42,11 +53,17 @@ from app.db.models import FormalSystem
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-# The same ceiling `app.routers.systems.MAX_INHERITANCE_DEPTH` enforces when an
-# edge is written. Restated as a loop bound rather than imported, because the
-# router imports *this* layer and not the other way round — and because what it
-# does here is stop a cycle that should not exist from spinning forever.
-MAX_DEPTH = 8
+# The same bound `systems.MAX_INHERITANCE_DEPTH` applies on the spine, restated
+# here rather than imported: this module is the persistence layer and must not
+# depend on a router (as `notations_mapping` and `system_relations_mapping`
+# already record). A cycle is refused when the edge is stored, so the `seen`
+# checks below are a backstop against data that predates that check.
+#
+# It has to be the *same* number. At a smaller one these walks stop early on a
+# legal chain and silently drop the layers past it — references beyond the bound
+# resolve to nothing and mentions go unreported, with nothing saying so (found in
+# review, where this read 8).
+_MAX_DEPTH = 32
 
 
 async def ancestor_ids(
@@ -55,7 +72,7 @@ async def ancestor_ids(
     """``system_id`` and every system it inherits from, nearest first."""
     chain = [system_id]
     current = system_id
-    for _ in range(MAX_DEPTH):
+    for _ in range(_MAX_DEPTH):
         parent = await session.scalar(
             select(FormalSystem.inherits_from_id).where(FormalSystem.id == current)
         )
@@ -78,12 +95,16 @@ async def descendant_ids(
     """
     found = [system_id]
     frontier = [system_id]
-    for _ in range(MAX_DEPTH):
+    for _ in range(_MAX_DEPTH):
         children = (
             await session.scalars(
-                select(FormalSystem.id).where(
-                    FormalSystem.inherits_from_id.in_(frontier)
-                )
+                select(FormalSystem.id)
+                .where(FormalSystem.inherits_from_id.in_(frontier))
+                # By id, so a fork's two branches come back in the same order
+                # every time. Without it the database is free to reorder them and
+                # a caller breaking a tie by position resolves differently between
+                # two reads of the same rows (raised in review).
+                .order_by(FormalSystem.id)
             )
         ).all()
         frontier = [child for child in children if child not in found]

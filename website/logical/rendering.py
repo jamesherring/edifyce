@@ -240,16 +240,34 @@ def total_projection(
     )
 
 
-def render(term: Term, projection: Projection | None = None) -> str:
+def render(
+    term: Term,
+    projection: Projection | None = None,
+    spellings: Mapping[str, str] | None = None,
+) -> str:
     """``term`` as a string, through ``projection`` where it has an opinion.
 
-    With no projection this is ``term.to_string()`` exactly - which is a property
-    worth relying on, since it means a projection can be introduced without
-    changing what an unprojected caller sees.
+    With neither argument this is ``term.to_string()`` exactly - which is a
+    property worth relying on, since it means a projection can be introduced
+    without changing what an unprojected caller sees.
+
+    ``spellings`` re-spells *leaves by name*, which is a different question from
+    notation and so a separate argument: a projection maps a **production** to
+    render steps and has nothing to say about a ``Var``, whose name is its whole
+    surface form. What needs it is a name a reader cannot be shown - a definition's
+    binders are stored abstractly (``Bound``, by index), so a defining form
+    renders as ``∀⟨0⟩ (⟨0⟩ ∈ x → …)`` unless the declared name is put back.
     """
     if projection is None or not (projection.templates or projection.rules):
-        return term.to_string()
-    return _render(term, projection.templates, rules_by_constructor(projection.rules))
+        if not spellings:
+            return term.to_string()
+        return _render(term, {}, {}, spellings)
+    return _render(
+        term,
+        projection.templates,
+        rules_by_constructor(projection.rules),
+        spellings or {},
+    )
 
 
 def _descend(term: Node, path: str) -> Term | None:
@@ -291,13 +309,14 @@ def _render(
     term: Term,
     templates: Mapping[str, tuple[Piece, ...]],
     rules: Mapping[str, tuple[Rule, ...]] = {},
+    spellings: Mapping[str, str] = {},
 ) -> str:
     if not isinstance(term, Node):
         # A `Var` (and so a `Bound`) renders as its own name: it stands for a term
         # rather than naming a production, so a projection has nothing to say about
         # it. Substituting metavariable *spellings* is a separate question from
-        # notation and is not this map's job.
-        return term.to_string()
+        # notation, which is why it is a separate map.
+        return spellings.get(term.name, term.to_string())
 
     # A rule is tried first and wins outright: it was written *because* the root's
     # own template renders this shape badly, so consulting the template after
@@ -314,7 +333,9 @@ def _render(
         pieces = term.constructor.pieces
     if not pieces:
         if len(term.children) == 1:
-            return _render(next(iter(term.children.values())), templates, rules)
+            return _render(
+                next(iter(term.children.values())), templates, rules, spellings
+            )
         return ""
 
     out: list[str] = []
@@ -330,5 +351,7 @@ def _render(
         # A slot with no child means the template names something this term does
         # not carry - a projection written against a different production. Emit
         # the label, as `to_string` does, rather than raising in a renderer.
-        out.append(_render(child, templates, rules) if child is not None else text)
+        out.append(
+            _render(child, templates, rules, spellings) if child is not None else text
+        )
     return "".join(out)

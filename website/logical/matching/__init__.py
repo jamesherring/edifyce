@@ -25,7 +25,6 @@ this layer parses, and hands the parse straight over (see ``matches``).
 from .context import Context
 from .matches import Match
 from .patterns import (
-    AbstractPattern,
     AtomPattern,
     Pattern,
     RegexPattern,
@@ -33,10 +32,9 @@ from .patterns import (
     UnionPattern,
 )
 from .definitions import DefinedNotation
-from .rewriting import iter_bindings, iter_joint, joint_binding_exists
+from .rewriting import iter_bindings, iter_joint, joint_binding, joint_binding_exists
 
 __all__ = [
-    "AbstractPattern",
     "AtomPattern",
     "Context",
     "DefinedNotation",
@@ -47,5 +45,6 @@ __all__ = [
     "UnionPattern",
     "iter_bindings",
     "iter_joint",
+    "joint_binding",
     "joint_binding_exists",
 ]

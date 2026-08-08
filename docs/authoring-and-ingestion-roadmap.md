@@ -912,3 +912,92 @@ whole corpus — that import is a solved thing (metamath-import-roadmap §1.1) �
 these runs imported into SQLite, where 14,000 theorems already takes 27 minutes and
 half a gigabyte, so the ceiling reached here is the throwaway database's rather
 than the engine's. A whole-corpus run wants Postgres and a longer budget.
+
+---
+
+## 9f. The other half of a diagnosis: why a line *did* check — *done*
+
+`diagnostics` (§9b, `Failure`) answers "why did this line not check", in a closed
+vocabulary a caller branches on. Nothing answered the question a *valid* line
+raises, and on an imported corpus that is the harder one: a line carries
+`[imbi12d, 2, 3]` and a reader who does not already know `imbi12d` — which is
+every reader, at 47,546 theorems — learns from it only that something applied.
+
+**Everything needed was already computed and thrown away.** A rule is a schema
+and a step is an instance of it, so "why does this follow" is answered by *what
+the metavariables stood for here* — the binding `InferenceRule.applies` derives
+and keeps for schematic promotion. Beside it sit the rule's own schemas, which
+cited line filled which slot (the assignment search's own output, aligned to the
+rule's slots), and the provisos checked over that binding.
+`formal_system/justification.py` assembles those; it computes nothing, and like
+`diagnostics` and `rendering` it is display, so a wrong record misleads a reader
+and cannot make a false proof check.
+
+**Served checked, not read** (`GET /proofs/{id}/lines/{n}/justification`), which
+is the one real cost and the same trade `/lines/{n}/citations` already makes: the
+substitution is derived by the match and no stored row carries it. Storing one per
+citation was the alternative and is the wrong trade at this scale — set.mm's
+proofs make roughly 4M citations, so a row per bound metavariable is tens of
+millions of rows written on import for a record read one line at a time, on a
+hover. The endpoint is asked once per card opened.
+
+**Two steps carry less, and say so.** A discharge rule consumes a subproof rather
+than cited lines and `check_discharge` keeps no binding, so its record names the
+block and offers no assignments. A definitional step cites no rule at all — the
+checker searches the definitions in scope — so its record is the definition that
+applied, which is the one thing a generic `[Def, n]` citation cannot tell anyone.
+
+**What is deliberately not composed** is the *instantiated* proviso. `restate`
+would give one, but rendering it means inventing a phrasing for each of the
+kernel's predicates, and a proviso in the author's own words (`x not free in phi`)
+beside the assignments it names already says the same thing without a phrasing
+layer of ours to keep in step with the kernel's.
+
+**Two names a reader must never be shown**, both found in review, and both the
+same mistake: serving a *reserved* name as though it were the author's.
+
+A bare-sort slot (`formula` meaning "any formula") has no name to share by, so
+`_schema_term` renames each occurrence apart — `formula\x000`. That is what makes
+two `formula` premises independent rather than one shared binding, and it names
+nothing in the schemas or provisos shown beside it, so those assignments are left
+out; the premise row already says which line filled the slot. The separator is
+`rules.ANONYMOUS` now rather than a literal, since two modules have to agree
+about it.
+
+And a defining form stores its binders abstractly, by index, because an unfold's
+*consumer* chooses each name. A reader is not that consumer, so `df-subset` read
+as `∀⟨0⟩ (⟨0⟩ ∈ x → ⟨0⟩ ∈ y)`. `FreshBinder.default` is exactly "the leaf its
+declared name denotes", so the fix is to put it back — through a new `spellings`
+argument to `rendering.render`, which re-spells **leaves by name**. A separate
+argument rather than more entries in the projection because it answers a
+different question: a projection maps a *production* to render steps and has
+nothing to say about a `Var`, whose name is its whole surface form.
+
+**And four more from a second review, all the same species: a record that
+describes something other than the step the checker took.**
+
+*Rewriting steps had no substitution at all.* `applies` validates a
+`matching="string"` step through `joint_binding_exists`, which threw away the
+binding the associative matcher found — so every MIU-style step reported an empty
+assignment list, which is exactly the half a semi-Thue citation cannot say.
+`joint_binding` returns it, `Inference.string_binding` holds it, and it is held
+**apart** from `binding` because these are surface strings and everything reading
+that field (schematic promotion, `restate`) means terms. The predicate form stays,
+because the assignment search asks it far more often than anything wants the
+answer.
+
+*A premise from a cited lemma reported that lemma's line number as this proof's.*
+`[alias.1]` names line 1 of the lemma; printing "line 1" points a reader at an
+unrelated local step. The `Premise` docstring already promised None there —
+`_local_number` is the code catching up with it.
+
+*Two lookups ignored nearest-layer shadowing.* Where a child and an ancestor both
+declare a label, a citation resolves to the child (`LibraryChain`, "nearest
+first") — so an unordered `IN (…)` could describe the ancestor's theorem beside a
+step that applied the child's. `_nearest_first` ranks the chain once and both
+lookups take the minimum.
+
+*And the proof link matched `proofs.name`.* A citation names a *theorem*, and
+`proofs.theorem_id` is the edge an import and a promotion both write. Matching the
+name was wrong twice over: a proof promoted under a different label was not found,
+and an unrelated proof merely *called* `imbi12d` was linked in its place.
