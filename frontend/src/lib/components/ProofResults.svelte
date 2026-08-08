@@ -114,11 +114,14 @@
 		 *  comment). Unset suppresses nothing — a caller that has not said which
 		 *  type is the default has not claimed any of them is. */
 		primaryLineType?: string | null;
-		/** The proof these lines belong to, which is what buys the *substitution*
-		 *  half of a citation's card: deriving it means asking the server to
-		 *  re-check the step, which is signed-in only. Unset still leaves the card,
-		 *  on what the label alone says. */
+		/** The proof these lines belong to. It resolves a label local to it — a
+		 *  hypothesis of the theorem it establishes — and, with `explain`, buys the
+		 *  *substitution* half of a citation's card. */
 		proofId?: string | null;
+		/** Whether this reader may pay for that substitution: deriving it means
+		 *  asking the server to re-check the step, which is signed-in only. Without
+		 *  it the card still opens, on what the label alone says. */
+		explain?: boolean;
 		/** The system the citations resolve in. What the rows-only half of a card
 		 *  is looked up in, so a signed-out reader gets one at all. Unset leaves
 		 *  citations as plain text. */
@@ -139,6 +142,7 @@
 		verdicts = true,
 		primaryLineType = null,
 		proofId = null,
+		explain = false,
 		systemId = null
 	}: Props = $props();
 
@@ -272,6 +276,7 @@
 										{#if line.reference}
 											<JustificationCard
 												{proofId}
+												{explain}
 												{systemId}
 												label={line.rule}
 												number={line.number ?? null}

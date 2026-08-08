@@ -166,7 +166,7 @@
 	// `verify_stored_proof`). What the citation says is rows, so a signed-out
 	// reader still gets the card — without its "Here" section — rather than a
 	// plain citation or a 401 on hover.
-	const explainable = $derived(auth.user ? (proof?.id ?? null) : null);
+	const explainable = $derived(!!auth.user);
 
 	// `name` is what a citation spells and what the slug is built from; `title` is
 	// the sentence a human reads. Lead with the sentence where there is one — on
@@ -315,7 +315,8 @@
 			{requestError}
 			lines={rows}
 			notation={readAs}
-			proofId={explainable}
+			proofId={proof.id}
+			explain={explainable}
 			systemId={proof.formal_system_id}
 			{primaryLineType}
 			verdicts={false}

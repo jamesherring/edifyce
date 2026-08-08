@@ -961,6 +961,25 @@ cheap as its most derived field**, so a display record that mixes stored and
 derived answers should be two endpoints and not one — otherwise the derived half
 sets the access policy for the stored half, which is what happened here.
 
+**Both halves are read in the proof's own notation**, schemas included. That was
+not the first answer: a rule's schema was quoted as stored text, on the grounds
+that it is the "native form" a citation refers to. Beside a proof read in LaTeX
+that is simply half a card in each spelling, and the argument was wrong anyway —
+a compound schema *is* a term, the one the build composed and the checker unifies
+against, so it folds through a projection exactly as a proof line does
+(`justification._schema`, and the stored `deduction_term_id` /
+`statement_term_id` on the rows side). What genuinely cannot be re-spelled is a
+**sort name**: `formula` meaning "any formula" is not in the object language, and
+no notation has a template for it.
+
+**And one label no system-wide lookup can see.** A theorem's `$e` hypotheses are
+citable from inside its own block and nowhere else — which is why they are a
+column on the theorem rather than library entries, since a globally registered
+bare `|- ph` would prove anything for anyone (`read_library`'s `hypotheses_of`).
+A proof of `mp2` states them as lines citing `mp2.1`, so the entry lookup takes
+the citing proof as an optional argument and resolves them through it, reporting
+`kind="hypothesis"` — granted here, rather than established.
+
 **Two steps carry less, and say so.** A discharge rule consumes a subproof rather
 than cited lines and `check_discharge` keeps no binding, so its record names the
 block and offers no assignments. A definitional step cites no rule at all — the

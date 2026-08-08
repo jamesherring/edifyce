@@ -29,11 +29,15 @@
 	import ExternalLink from '@lucide/svelte/icons/external-link';
 
 	type Props = {
-		/** The proof the line belongs to, and the line's citation number. Both are
-		 *  needed for the substitution; without them the card still opens, on what
-		 *  the label alone says. */
+		/** The proof the line belongs to. Always worth passing: it resolves a label
+		 *  local to that proof — a hypothesis of the theorem it establishes — which
+		 *  no system-wide lookup can see. */
 		proofId?: string | null;
+		/** The line's citation number, and whether this reader may pay for the
+		 *  substitution. Both are needed for it; without them the card still opens,
+		 *  on what the label alone says. */
 		number?: number | null;
+		explain?: boolean;
 		/** The system the citation resolves in, and the label the checker resolved
 		 *  it to — what the rows-only half is asked by. Without them the citation
 		 *  renders as plain text, since there is nothing to look up. */
@@ -49,6 +53,7 @@
 	let {
 		proofId = null,
 		number = null,
+		explain = false,
 		systemId = null,
 		label = null,
 		citation,
@@ -64,11 +69,13 @@
 	// re-fetched rather than shown stale under the new heading.
 	let fetched = $state<string | null>(null);
 
-	const tex = $derived(told !== null && isTeX(told.notation));
+	// Whichever source answered, its own echo of the notation decides — never the
+	// selection, which may be a fetch ahead of what is on screen.
+	const tex = $derived(isTeX(told?.notation ?? says?.notation ?? null));
 	const key = $derived(`${proofId}:${number}:${systemId}:${label}:${notation ?? ''}`);
-	// The substitution is the only part a re-check buys, so it is the only part
-	// asked for when there is a proof to ask about.
-	const explains = $derived(proofId !== null && number !== null);
+	// The substitution is the only part a re-check buys, so it is asked for only
+	// where a reader may pay for one.
+	const explains = $derived(explain && proofId !== null && number !== null);
 	// One shape either way: the rich record where there is one, the rows where
 	// there is not.
 	const shown = $derived(
@@ -90,8 +97,9 @@
 					provisos: [],
 					discharges: says.discharges,
 					title: says.title,
-					proof_id: says.proof_id
-				} satisfies Omit<LineJustification, 'line' | 'citation' | 'notation'>))
+					proof_id: says.proof_id,
+					notation: says.notation
+				} satisfies Omit<LineJustification, 'line' | 'citation'>))
 	);
 
 	async function load() {
@@ -113,7 +121,10 @@
 				if (asked !== key) return;
 				told = found;
 			} else {
-				const found = await api.systems.libraryEntry(systemId!, label!);
+				const found = await api.systems.libraryEntry(systemId!, label!, {
+					notation: notation ?? undefined,
+					proof: proofId ?? undefined
+				});
 				if (asked !== key) return;
 				says = found;
 			}
@@ -182,7 +193,13 @@
 						{#each shown.premises.filter((p) => !p.extra) as premise (premise.position)}
 							<div class="flex items-baseline gap-2 text-xs">
 								<span class="w-14 shrink-0 text-muted-foreground">premise</span>
-								<span class="min-w-0 flex-1 font-mono break-words">{premise.schema_form}</span>
+								<span class="min-w-0 flex-1 break-words">
+									{#if tex}
+										<Typeset tex={premise.schema_form} />
+									{:else}
+										<span class="font-mono">{premise.schema_form}</span>
+									{/if}
+								</span>
 								{#if premise.number !== null}
 									<span class="shrink-0 text-muted-foreground">line {premise.number}</span>
 								{/if}
@@ -191,14 +208,26 @@
 						{#if shown.discharges}
 							<div class="flex items-baseline gap-2 text-xs">
 								<span class="w-14 shrink-0 text-muted-foreground">subproof</span>
-								<span class="min-w-0 flex-1 font-mono break-words">{shown.discharges}</span>
+								<span class="min-w-0 flex-1 break-words">
+									{#if tex}
+										<Typeset tex={shown.discharges} />
+									{:else}
+										<span class="font-mono">{shown.discharges}</span>
+									{/if}
+								</span>
 							</div>
 						{/if}
 						<div class="flex items-baseline gap-2 text-xs">
 							<span class="w-14 shrink-0 text-muted-foreground">
 								{shown.kind === 'definition' ? 'defines' : 'concludes'}
 							</span>
-							<span class="min-w-0 flex-1 font-mono break-words">{shown.conclusion}</span>
+							<span class="min-w-0 flex-1 break-words">
+								{#if tex}
+									<Typeset tex={shown.conclusion} />
+								{:else}
+									<span class="font-mono">{shown.conclusion}</span>
+								{/if}
+							</span>
 						</div>
 						{#each shown.premises.filter((p) => p.extra) as surplus (surplus.position)}
 							<!-- A line the rule tolerated but did not ask for. Dropping it would

@@ -302,3 +302,52 @@ def test_a_rewriting_step_says_what_its_variables_matched():
 
     assert told is not None
     assert [(a.variable, a.stands_for) for a in told.assignments] == [("x", "I")]
+
+
+def test_the_rules_own_schemas_are_read_through_the_notation_too(system):
+    # Half a record in one spelling and half in another is worse than either. A
+    # rule's schema is the *term* the build composed — the one the checker unifies
+    # against — so it re-spells like a proof line does.
+    proof = system.parse("a [HYP]\n(a → b) [HYP]\nb [MP, 1, 2]")
+    horseshoe = Projection(
+        name="horseshoe",
+        templates={
+            "implication": (("lit", "("), ("slot", "p"), ("lit", " ⊃ "), ("slot", "q"), ("lit", ")"))
+        },
+    )
+
+    told = justification(line_of(proof, 3), horseshoe)
+
+    assert [p.schema for p in told.premises] == ["p", "(p ⊃ q)"]
+    assert told.conclusion == "q"
+
+
+def test_a_discharge_schema_is_read_through_the_notation(system):
+    proof = system.parse("    assume a\n    a [R, 1]\n(a → a) [CP, 1]")
+    horseshoe = Projection(
+        name="horseshoe",
+        templates={
+            "implication": (("lit", "("), ("slot", "p"), ("lit", " ⊃ "), ("slot", "q"), ("lit", ")"))
+        },
+    )
+
+    assert justification(line_of(proof, 3), horseshoe).discharges == "[assume p ⊢ q]"
+
+
+def test_a_sort_name_is_not_something_a_notation_can_re_spell(system):
+    # `formula` means "any formula". It is not in the object language, so no
+    # notation has a template for it and it stays as the rule wrote it.
+    built = build_system(
+        SystemSpec(
+            name="Pairs",
+            brackets=brackets(),
+            productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+            lines=[statement_line()],
+            rules=[hyp_rule(), rule("PAIR", "pair", ["formula", "formula"], "p", pq())],
+        )
+    )
+    proof = built.parse("a [HYP]\nb [HYP]\nc [PAIR, 1, 2]")
+
+    told = justification(line_of(proof, 3), Projection(name="anything"))
+
+    assert [p.schema for p in told.premises] == ["formula", "formula"]

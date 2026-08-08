@@ -1277,6 +1277,10 @@ class LibraryEntry(BaseModel):
     discharges: str | None = None
     title: str | None = None
     proof_id: uuid.UUID | None = None
+    # The notation the schemas above were read through, echoed as `ProofStructure`
+    # echoes it: a client showing a proof in one spelling must be able to tell a
+    # served rendering from a silently ignored request.
+    notation: str | None = None
 
 
 class JustifyingPremise(BaseModel):

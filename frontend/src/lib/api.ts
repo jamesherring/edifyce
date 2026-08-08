@@ -1025,6 +1025,10 @@ export interface LibraryEntry {
 	discharges: string | null;
 	title: string | null;
 	proof_id: string | null;
+	/** The notation the schemas were read through, echoed as `ProofStructure`
+	 * echoes it: a client showing a proof in one spelling must be able to tell a
+	 * served rendering from a silently ignored request. */
+	notation: string | null;
 }
 
 /** One antecedent of the rule, and the line that filled it. `schema_form` is the
@@ -1338,10 +1342,21 @@ export const api = {
 		/** What a citation's label names, from rows — no re-check, so any reader of
 		 * the system may ask. `proofs.justification` is the same thing plus the
 		 * substitution, and costs a re-check for it. */
-		libraryEntry: (systemId: string, label: string) =>
-			request<LibraryEntry>(
-				`/formal-systems/${systemId}/library/${encodeURIComponent(label)}`
-			),
+		libraryEntry: (
+			systemId: string,
+			label: string,
+			options: { notation?: string; proof?: string } = {}
+		) => {
+			const query = new URLSearchParams();
+			if (options.notation) query.set('notation', options.notation);
+			// Only a label local to the citing proof needs it — a hypothesis of the
+			// theorem that proof establishes, which no system-wide index can see.
+			if (options.proof) query.set('proof', options.proof);
+			const suffix = query.size ? `?${query}` : '';
+			return request<LibraryEntry>(
+				`/formal-systems/${systemId}/library/${encodeURIComponent(label)}${suffix}`
+			);
+		},
 		/** The signed-in user's own systems (drafts included). Requires auth. */
 		list: (params?: ListParams) =>
 			request<Page<FormalSystemSummary>>(`/formal-systems${listQuery(params)}`),

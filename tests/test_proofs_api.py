@@ -3516,3 +3516,45 @@ def test_a_definitional_step_is_not_given_another_labels_prose(client, db):
 
     assert body["kind"] == "definition"
     assert (body["label"], body["title"], body["proof_id"]) == ("", None, None)
+
+
+def test_a_cited_rules_schemas_are_read_in_the_proofs_own_notation(client, db):
+    # The card sits beside a proof being read in one spelling, and half a card in
+    # each is worse than either. A rule's schema is the *term* the build composed
+    # — the one the checker unifies against — so it re-spells like a proof line.
+    owner = _register_login(client, "ada@example.com")
+    _system_id, proof_id = _justified_proof(client, db, owner)
+    system_id = client.get(f"/api/proofs/{proof_id}").json()["formal_system_id"]
+
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            store_notation(
+                session,
+                uuid.UUID(system_id),
+                Projection(
+                    name="horseshoe",
+                    templates={
+                        "implication": (
+                            ("lit", "("),
+                            ("slot", "p"),
+                            ("lit", " ⊃ "),
+                            ("slot", "q"),
+                            ("lit", ")"),
+                        )
+                    },
+                ),
+            )
+            session.commit()
+    finally:
+        engine.dispose()
+
+    # Both halves of the card, which are two endpoints and must agree.
+    entry = client.get(
+        f"/api/formal-systems/{system_id}/library/MP", params={"notation": "horseshoe"}
+    ).json()
+    assert entry["premises"] == ["p", "(p ⊃ q)"]
+
+    told = _justification(client, proof_id, 3, notation="horseshoe")
+    assert [p["schema_form"] for p in told["premises"]] == ["p", "(p ⊃ q)"]
+    assert [a["stands_for"] for a in told["assignments"]] == ["x ∈ y", "y ∈ x"]
