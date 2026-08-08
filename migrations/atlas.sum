@@ -1,4 +1,4 @@
-h1:x7jT7aWXL/ypJe1kyYWnSef2ej7qR/LQD81TCdKTMJk=
+h1:l7i5Dyjz1unLn1PI2wEVx848NWyzISJ4kH03PvKOzOs=
 20260715084842_initial_schema.sql h1:li+tGjd1xfzUC+Oet1ytZRgaeJlFFn6zwKJKRRHQR5o=
 20260717121403_normalize_constraint_names.sql h1:VfGJbOd7VWShF/0kWpgvlm+iMJLrutRP+qweQ/rJR4k=
 20260721060312_unify_symbols.sql h1:TEriOjT9h56DIRBgors2hB/rmp9gUzezuiMsaX5Fk8Q=
@@ -39,5 +39,5 @@ h1:x7jT7aWXL/ypJe1kyYWnSef2ej7qR/LQD81TCdKTMJk=
 20260808082201_label_references.sql h1:OlmaaABMQEe/4iuk/WYXPpSFJ3irVsNOiJzp8KLAyMo=
 20260808092025_add_assumptions.sql h1:OCv5cTmSctj8XV13m7Vzib/QDytLYRgiGPuFdF1rh+Q=
 20260808103348_label_avoidances.sql h1:7HJBB4/MmYdZ6sg6g7Z/YZgjw+FtC/bJb78PQ2KD65I=
-20260808121751_add_conclusion_fingerprint.sql h1:Z4l83YHBtaUI6ufoM7oYmHMpsbUfPvHy1FfRbk1LuGg=
-20260808164716_add_formalization_record.sql h1:lAvN+FNKtEx0olPjiPQxA7gBUYMsA07H8+LsfUuoYiM=
+20260808164716_add_formalization_record.sql h1:WoGx6TZpA+ATI1685NKsJYCTQmI2+c4a94gWDsyohqA=
+20260808183327_add_conclusion_fingerprint.sql h1:7IY4gBjrpaV428Q9CkhoG+5WrkcY9qHXcG5kOFfT2Q4=
