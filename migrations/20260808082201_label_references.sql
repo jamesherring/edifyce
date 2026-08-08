@@ -5,7 +5,7 @@ CREATE TABLE "label_references" (
   "id" uuid NOT NULL DEFAULT gen_random_uuid(),
   "description_id" uuid NOT NULL,
   "position" integer NOT NULL DEFAULT 0,
-  "target" character varying(512) NOT NULL,
+  "target" text NOT NULL,
   "start_offset" integer NOT NULL,
   "end_offset" integer NOT NULL,
   CONSTRAINT "pk_label_references" PRIMARY KEY ("id"),

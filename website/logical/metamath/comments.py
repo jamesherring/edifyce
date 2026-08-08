@@ -240,12 +240,21 @@ def read_comment(raw: str) -> Description:
             Attribution(kind=m["kind"], who=m["who"], when=m["when"])
             for m in _ATTRIBUTION.finditer(flat)
         )
-        discouraged.extend(m["what"].lower() for m in _DISCOURAGED.finditer(flat))
-        # Both come out of the prose for the same reason: they are markers about
-        # the statement rather than sentences about the mathematics, and leaving
-        # them in would put them in the title of the 64 comments that open with
-        # one. What they said is kept — as rows, and as the two flags below.
-        prose = _DISCOURAGED.sub(" ", _ATTRIBUTION.sub(" ", flat))
+        # Removed from the prose only where it becomes a flag. The shape admits
+        # more than the two markers — `(Its use here is discouraged.)` fits it —
+        # and deleting one of those would lose a sentence the file wrote and record
+        # it nowhere, which is worse than leaving it in place. What *is* removed is
+        # removed for the reason an attribution is: it is a marker about the
+        # statement rather than a sentence about the mathematics, and 64 comments
+        # open with one, which would otherwise become the title.
+        def flag(match: re.Match[str]) -> str:
+            what = match["what"].lower()
+            if "usage" in what or "modification" in what:
+                discouraged.append(what)
+                return " "
+            return match[0]
+
+        prose = _DISCOURAGED.sub(flag, _ATTRIBUTION.sub(" ", flat))
         prose = " ".join(prose.split())
         if prose:
             paragraphs.append(prose)

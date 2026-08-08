@@ -159,7 +159,12 @@
 	// the sentence a human reads. Lead with the sentence where there is one — on
 	// an imported corpus `name` is an opaque label — and keep the label beside it,
 	// since it is the identity the rest of the library refers to.
-	const heading = $derived(proof?.title ?? proof?.name ?? '');
+	//
+	// `||` rather than `??`: `PATCH /proofs/{id}` accepts an empty title, and the
+	// nullish form treats `''` as a title — leaving a blank heading *and* no label
+	// badge, since the badge only appears when a title is showing beside it (found
+	// in review). The two must agree about what counts as having one.
+	const heading = $derived(proof?.title || proof?.name || '');
 	const label = $derived(proof?.title ? proof.name : null);
 	// A proof may carry both a title and a description, and the header shows one
 	// line; the description gets a place of its own so setting a title never makes

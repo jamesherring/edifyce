@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import delete, distinct, func, insert, select
 from sqlalchemy.orm import selectinload
 
+from app.db.lineage import spine_ids
 from app.db.descriptions import (
     LabelAttributionRow,
     LabelDescriptionRow,
@@ -47,9 +48,12 @@ def store_descriptions(
     dropped a label should drop its prose too rather than leave the old text
     behind under a label the file no longer has.
 
-    A comment that said nothing at all is skipped, but an *attribution-only* one
-    is not: two of `set.mm`'s comments are nothing but a ``(Contributed by …)``,
-    and authorship with no prose is still authorship.
+    A comment that said nothing at all is skipped, but one that said nothing *in
+    prose* is not. Two of `set.mm`'s are only a ``(Contributed by …)``, and
+    authorship with no prose is still authorship — and since the discouragement
+    markers come out of the prose too, a comment that was only
+    ``(New usage is discouraged.)`` would otherwise be dropped along with the
+    warning it exists to carry (found in review).
 
     Written as Core inserts rather than through the ORM, with the ids minted here
     so the children can point at their parents without a round trip. `set.mm` lands
@@ -67,7 +71,13 @@ def store_descriptions(
     attributions: list[dict[str, object]] = []
     references: list[dict[str, object]] = []
     for label, description in descriptions.items():
-        if not description.text and not description.attributions:
+        if not (
+            description.text
+            or description.attributions
+            or description.references
+            or description.discouraged_usage
+            or description.discouraged_modification
+        ):
             continue
         description_id = uuid.uuid4()
         rows.append(
@@ -198,13 +208,21 @@ async def mentions_of(
     punctuation: "what builds on this" is the question a reader of a foundational
     theorem actually has, and `set.mm` answers it 656 times for ``ax-13``.
 
+    Asked of the whole **spine**, because a layered corpus files each statement
+    against the layer its own section falls in — so `ax-1` sits on the
+    propositional root and almost everything citing it sits above. Scoped to one
+    id, a root statement reports a fraction of its mentions and says nothing about
+    the omission (found in review).
+
     Capped, with the true count beside it, because that distribution has a long
     head: returning every mention would put hundreds of labels on the page for the
     handful that matter most, and a count says "and 600 more" in one integer.
     Ordered by label so the cap takes the same slice twice.
     """
     where = (
-        LabelDescriptionRow.formal_system_id == system_id,
+        LabelDescriptionRow.formal_system_id.in_(
+            await spine_ids(session, system_id)
+        ),
         LabelReferenceRow.target == target,
     )
     # Distinct: a comment may point at the same label twice (set.mm's `idi` and

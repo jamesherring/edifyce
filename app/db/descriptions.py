@@ -131,9 +131,13 @@ class LabelReferenceRow(Base):
         ForeignKey("label_descriptions.id", ondelete="CASCADE"), index=True
     )
     position: Mapped[int] = mapped_column(Integer, server_default=text("0"))
-    # A label, a URL, or a page of the Metamath website. Bounded at the width a
-    # label needs plus room for a URL: set.mm's longest target is 118 characters.
-    target: Mapped[str] = mapped_column(String(512))
+    # A label, a URL, or a page of the Metamath website. Unbounded, like the prose
+    # it was cut out of: a target is whatever ran between a `~` and the next space,
+    # and a bound would turn some future file's long URL into an integrity error
+    # thrown at the end of a twenty-minute import (found in review). set.mm's
+    # longest is 118 characters, which is exactly the kind of headroom that stops
+    # being true. Postgres stores a bounded and an unbounded varchar the same.
+    target: Mapped[str] = mapped_column(Text)
     start_offset: Mapped[int] = mapped_column(Integer)
     end_offset: Mapped[int] = mapped_column(Integer)
 

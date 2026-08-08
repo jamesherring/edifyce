@@ -12,6 +12,7 @@ made of it. The first test here is the one that says so.
 
 from __future__ import annotations
 
+
 import pytest
 
 pytest.importorskip("regex")
@@ -28,7 +29,7 @@ from app.db.descriptions import (
 )
 from app.db.descriptions_mapping import store_descriptions
 from app.db.metamath_store import import_corpus
-from app.db.models import Proof
+from app.db.models import FormalSystem, Proof
 from tests.database import enable_foreign_keys
 from website.logical.metamath import parse
 from website.logical.metamath.comments import (
@@ -365,3 +366,22 @@ def test_what_points_at_a_label_is_answerable_backwards() -> None:
         ).all()
 
         assert list(pointing) == ["id", "id2"]
+
+
+def test_a_comment_that_is_only_a_marker_is_still_stored() -> None:
+    # The markers come out of the prose, so a comment that was nothing else leaves
+    # no text and no attribution — and dropping the row would drop the warning it
+    # exists to carry. Found in review.
+    with database() as session:
+        system = FormalSystem(name="S", slug="s")
+        session.add(system)
+        session.flush()
+        store_descriptions(
+            session, system.id, {"old": read_comment("(New usage is discouraged.)")}
+        )
+        session.commit()
+
+        (row,) = session.scalars(select(LabelDescriptionRow)).all()
+        assert row.label == "old"
+        assert row.text == "" and row.attributions == []
+        assert row.discouraged_usage

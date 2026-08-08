@@ -31,9 +31,11 @@ from app.db.session import get_session
 from app.main import app
 from tests.database import async_url, create_tables, database_url, enable_foreign_keys
 from tests.test_descriptions_store import MARKED, SOURCE
+from tests.test_metamath_layered_specs import CORPUS
 from tests.test_proofs_api import _TABLES
 from tests.test_systems_api import _register_login
 from website.logical.metamath import parse
+from website.logical.metamath.setmm import LAYERS
 
 
 @pytest.fixture
@@ -271,3 +273,59 @@ def test_the_discouragement_markers_come_back_as_flags(client, db):
 
     other = client.get(f"/api/proofs/{proofs['id2']}").json()["documentation"]
     assert not other["discouraged_usage"] and not other["discouraged_modification"]
+
+
+# ---------------------------------------------------------------------------
+# A reference that crosses a layer
+# ---------------------------------------------------------------------------
+#
+# A layered corpus files each statement against the layer its own section falls
+# in, so both directions of the reference graph cross the split: a ZF comment
+# points at a propositional theorem, and that theorem's "what points at me" lives
+# on a layer it has never heard of. Scoped to one system id, the forward direction
+# renders dead text and the reverse under-reports in silence (both found in
+# review).
+
+# The shared fixture with one comment added, so the spec and store suites that
+# match it keep the file they expect.
+LAYERED = CORPUS.replace(
+    "zf-thm $p", "$( A set-theoretic theorem, in the manner of ~ pc-thm . $)\nzf-thm $p", 1
+)
+
+
+def seed_layered(db_path) -> tuple[list[str], dict[str, str]]:
+    """Import the three-layer fixture, every layer and proof readable."""
+    engine = create_engine(db_path)
+    try:
+        with Session(engine) as session:
+            report = import_corpus(session, parse(LAYERED), name="c", plan=LAYERS)
+            session.commit()
+            return (
+                [str(found) for found in report.system_ids],
+                {p.name: str(p.id) for p in session.scalars(select(Proof))},
+            )
+    finally:
+        engine.dispose()
+
+
+def test_a_reference_resolves_into_a_layer_below(client, db):
+    system_ids, proofs = seed_layered(db)
+    leaf = system_ids[-1]
+
+    body = client.get(f"/api/formal-systems/{leaf}/labels/zf-thm").json()
+
+    (reference,) = body["references"]
+    assert reference["target"] == "pc-thm"
+    # `pc-thm` is filed against the propositional root, three layers down.
+    assert reference["proof_id"] == proofs["pc-thm"]
+
+
+def test_what_points_at_a_label_reaches_the_layers_above_it(client, db):
+    system_ids, proofs = seed_layered(db)
+    root = system_ids[0]
+
+    body = client.get(f"/api/formal-systems/{root}/labels/pc-thm").json()
+
+    assert [m["label"] for m in body["mentioned_by"]] == ["zf-thm"]
+    assert body["mentioned_by_total"] == 1
+    assert body["mentioned_by"][0]["proof_id"] == proofs["zf-thm"]

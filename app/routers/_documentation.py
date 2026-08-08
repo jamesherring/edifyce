@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import or_, select
 
 from app.db.descriptions_mapping import mentions_of
+from app.db.lineage import spine_ids
 from app.db.models import Proof
 from app.schemas import Attribution, LabelDescription, LabelMention, LabelReference
 
@@ -51,6 +52,14 @@ async def _linkable(
     can carry a dozen, and a corpus read that costs a round trip apiece would make
     the documentation the expensive half of the page.
 
+    Searched across the whole **spine**, not just this system: a layered corpus
+    files a proof against the layer its section falls in, so a ZF statement
+    referencing `ax-mp` points at the propositional root and a root comment saying
+    "see ~ sqrt2irr" points at the leaf. Scoped to one id, every cross-layer
+    reference on a `--setmm-layers` import renders as dead text (found in review).
+    A sibling system is still out of reach, which is right: what it happens to call
+    `ax-mp` is not this one's.
+
     Scoped by the same predicate a single proof read applies — published, or the
     viewer's own — so a reference to someone's draft resolves to nothing rather
     than handing out its id. The reference itself still shows; it is the *link*
@@ -63,14 +72,23 @@ async def _linkable(
     readable = [Proof.published_at.is_not(None)]
     if viewer is not None:
         readable.append(Proof.owner_id == viewer.id)
+    chain = await spine_ids(session, system_id)
     rows = await session.execute(
-        select(Proof.name, Proof.id, Proof.title).where(
-            Proof.formal_system_id == system_id,
+        select(Proof.formal_system_id, Proof.name, Proof.id, Proof.title).where(
+            Proof.formal_system_id.in_(chain),
             Proof.name.in_(wanted),
             or_(*readable),
         )
     )
-    return {name: (found, title) for name, found, title in rows}
+    # Nearest layer wins where two of them declare the label: a system's own proof
+    # is what its own prose meant. `Proof.name` is unique per system but not per
+    # spine, so the tie is real — and sorted here rather than left to the `IN`,
+    # which returns rows in no order the chain knows about.
+    depth = {found: index for index, found in enumerate(chain)}
+    resolved: dict[str, tuple[uuid.UUID, str | None]] = {}
+    for owner, name, found, title in sorted(rows, key=lambda row: depth[row[0]]):
+        resolved.setdefault(name, (found, title))
+    return resolved
 
 
 async def documentation_out(

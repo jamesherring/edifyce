@@ -381,3 +381,13 @@ describe('the proof detail page', () => {
 		expect(screen.queryByText('As written; verify it to see it line by line.')).toBeNull();
 	});
 });
+
+it('falls back to the label when the title is cleared to an empty string', async () => {
+	// `PATCH /proofs/{id}` accepts an empty title, and a nullish fallback treats it
+	// as one — blank heading, and no label badge either, since the badge only
+	// shows when a title is showing beside it. Found in review.
+	apiMock.proofs.get.mockResolvedValue(detail({ title: '', name: 'sqrt2irr' }));
+	render(Page);
+
+	await waitFor(() => expect(screen.getByRole('heading', { name: 'sqrt2irr' })).toBeInTheDocument());
+});

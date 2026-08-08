@@ -287,3 +287,13 @@ def test_a_marker_does_not_become_the_title() -> None:
     assert read_comment("(New usage is discouraged.) The real sentence.").title == (
         "The real sentence."
     )
+
+
+def test_a_discouragement_of_something_else_stays_in_the_prose() -> None:
+    # The shape admits more than the two markers. Deleting one that becomes no
+    # flag would lose a sentence the file wrote and record it nowhere — worse than
+    # leaving it where the author put it.
+    read = read_comment("A theorem. (Its use here is discouraged.) More prose.")
+
+    assert not read.discouraged_usage and not read.discouraged_modification
+    assert read.text == "A theorem. (Its use here is discouraged.) More prose."
