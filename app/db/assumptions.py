@@ -45,6 +45,13 @@ can rest on an assumption that did not exist when it was promoted.
 An assumption carries a **self-edge**, so "the closure of the entries this proof
 cites" needs no special case for citing one directly.
 
+A debt is **discharged** rather than deleted when someone proves it: promoting a
+proof under the assumption's own label replaces it with its warrant, and the
+entries that rested on it inherit what that warrant rests on — the row cascade
+takes the edge to the assumption, and :func:`inherit_closure` puts the warrant's
+own debts in its place. That is the only way to retire an assumption anything
+depends on, since withdrawing one is refused while anything does.
+
 Ids and not labels, throughout. A relation edge may rename a label across systems
 (`website/logical/translation.py`), so the label a citation spells is not a key;
 the entry it resolves to is.
@@ -63,6 +70,8 @@ from app.db.base import Base, TimestampMixin
 from app.db.models import Proof
 from app.db.proof_lines import ProofLineAntecedentRow, ProofLineRow
 from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
+from app.db.side_conditions import SideConditionRow
+from app.db.side_conditions_mapping import proviso_lines
 from app.db.systems import RuleRow
 
 if TYPE_CHECKING:
@@ -227,6 +236,105 @@ def dependent_counts(
     )
     counts = {assumption_id: count for assumption_id, count in rows}
     return {assumption_id: counts.get(assumption_id, 0) for assumption_id in assumption_ids}
+
+
+def inherit_closure(
+    session: Session,
+    theorem_ids: Sequence[uuid.UUID],
+    assumption_ids: Sequence[uuid.UUID],
+) -> None:
+    """Add these assumptions to each entry's closure, keeping what is there.
+
+    What **discharging** a debt costs the rows that recorded it. An entry resting
+    on an assumption that has since been *proved* no longer rests on it — the
+    row cascade takes that edge when the assumed entry goes — but it does now
+    rest on whatever the discharging proof rests on, one hop further down. So the
+    rewrite is `(closure \\ {discharged}) ∪ closure(warrant)`, and this is the
+    second half; the cascade is the first.
+
+    Adds rather than replaces, and that is the whole point: an entry's other
+    debts are none of this transaction's business, and a discharge that reset the
+    closure would pay off every assumption at once.
+    """
+    if not theorem_ids or not assumption_ids:
+        return
+    held = {
+        (theorem_id, assumption_id)
+        for theorem_id, assumption_id in session.execute(
+            select(
+                TheoremAssumptionRow.theorem_id, TheoremAssumptionRow.assumption_id
+            ).where(TheoremAssumptionRow.theorem_id.in_(list(theorem_ids)))
+        )
+    }
+    for theorem_id in theorem_ids:
+        for assumption_id in sorted(set(assumption_ids), key=str):
+            # The pair is the primary key, so re-inserting one is an error rather
+            # than a no-op — and an entry may already rest on this assumption by
+            # a route that has nothing to do with the discharge.
+            if (theorem_id, assumption_id) not in held:
+                session.add(
+                    TheoremAssumptionRow(
+                        theorem_id=theorem_id, assumption_id=assumption_id
+                    )
+                )
+
+
+@dataclass(frozen=True)
+class Stated:
+    """What a library entry claims, as the rows that hold it.
+
+    The terms rather than any digest of them. Which digest answers "is this the
+    same theorem" is the caller's decision and a delicate one — the stored
+    ``terms.alpha_digest`` is emphatically **not** it, because its default policy
+    renames every regex leaf and so reads `2 = 5` and `7 = 9` as one statement
+    (`tests/test_alpha_digest.py` pins exactly that). So this hands back ids for
+    the caller to rebuild and compare under a policy it chooses.
+
+    ``provisos`` is the entry's distinct-variable conditions as the lines they
+    were written as, because a theorem carrying a proviso its dependents never
+    had to discharge is a *narrower* theorem.
+    """
+
+    conclusion: uuid.UUID | None
+    premises: tuple[uuid.UUID | None, ...]
+    provisos: frozenset[str]
+
+
+def stated(session: Session, theorem_id: uuid.UUID) -> Stated:
+    """What a library entry claims: its terms' ids, and its provisos.
+
+    A ``None`` id is a term the entry does not carry, not a term that compares
+    equal to nothing. A caller deciding whether two entries say the same thing
+    must refuse on one rather than treat it as a match: an entry with no stored
+    conclusion cannot be shown to say what anything else says.
+    """
+    conclusion = session.scalar(
+        select(PromotedTheoremRow.statement_term_id).where(
+            PromotedTheoremRow.id == theorem_id
+        )
+    )
+    premises = tuple(
+        session.scalars(
+            select(PromotedTheoremPremiseRow.term_id)
+            .where(PromotedTheoremPremiseRow.theorem_id == theorem_id)
+            .order_by(PromotedTheoremPremiseRow.position)
+        )
+    )
+    return Stated(
+        conclusion=conclusion,
+        premises=premises,
+        provisos=frozenset(
+            proviso_lines(
+                list(
+                    session.scalars(
+                        select(SideConditionRow).where(
+                            SideConditionRow.promoted_theorem_id == theorem_id
+                        )
+                    )
+                )
+            )
+        ),
+    )
 
 
 def assumption_labels(

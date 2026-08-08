@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import Session
 
 import app.auth.backend as backend
+import app.routers.proofs as proofs_router
 from app.db.assumptions import AssumptionRow, TheoremAssumptionRow, rests_on
 from app.db.promoted_theorems import PromotedTheoremRow
 from app.db.session import get_session
@@ -619,3 +620,235 @@ def test_withdrawing_works_once_the_dependent_entry_is_retired(db, client):
     assert retired.status_code == 204, retired.text
     removed = client.delete(f"/api/formal-systems/{pc}/assumptions/peirce")
     assert removed.status_code == 204, removed.text
+
+
+# ---------------------------------------------------------------------------
+# Discharge: promoting a proof under the assumption's own label
+# ---------------------------------------------------------------------------
+#
+# Withdrawal is refused while anything rests on an assumption, which leaves
+# exactly one way to retire a well-used one: prove it. Discharging replaces the
+# debt with its warrant, and the entries that rested on it inherit whatever the
+# warrant rests on — one hop further down — rather than silently losing the
+# record or keeping a pointer to a row that is gone.
+
+def discharging_proof(client, system_id: str, label: str = "peirce") -> str:
+    """A proof of the assumed statement — cheated, and deliberately so.
+
+    The point under test is what *discharge* does to the rows, and deriving
+    Peirce's law from the Łukasiewicz axioms would be ninety lines that test the
+    checker instead. So the warrant is a second assumption under another label,
+    cited once: the proof genuinely stands, genuinely concludes the statement,
+    and genuinely rests on something unproved — which is the *interesting* case,
+    since it is what makes the dependents inherit rather than come out clean.
+    """
+    assert assume(
+        client,
+        system_id,
+        label="peirce-lemma",
+        reason="Stands in for the real derivation; see the module note.",
+    )[0] == 201
+    return proved_and_published(
+        client, system_id, "(((A → B) → A) → A) [peirce-lemma]"
+    )
+
+
+def test_promoting_under_an_assumed_label_discharges_it(db, client):
+    pc, _fol, _zfc = tower(db, client, "discharge-basic@example.com")
+    assert assume(client, pc)[0] == 201
+    warrant = discharging_proof(client, pc)
+
+    status, entry = promote(client, warrant, "peirce", {"A": "formula", "B": "formula"})
+    assert status == 201, entry
+    assert entry["discharged"] is True
+    assert entry["proved_by_id"] == warrant
+
+    # The debt is gone from the register: the label now names a proved theorem.
+    labels = [
+        item["label"]
+        for item in client.get(f"/api/formal-systems/{pc}/assumptions").json()
+    ]
+    assert labels == ["peirce-lemma"]
+
+
+def test_what_rested_on_it_inherits_the_warrants_own_debts(db, client):
+    # The load-bearing case. `pa` rested on `peirce`; `peirce` is now proved, but
+    # by a proof that itself rests on `peirce-lemma`. So `pa` must come out
+    # resting on `peirce-lemma` — not on `peirce` (proved), and not on nothing.
+    pc, _fol, _zfc = tower(db, client, "discharge-inherit@example.com")
+    assert assume(client, pc)[0] == 201
+    resting = proved_and_published(client, pc, "(((A → B) → A) → A) [peirce]")
+    assert promote(client, resting, "pa")[0] == 201
+
+    warrant = discharging_proof(client, pc)
+    assert promote(client, warrant, "peirce", {"A": "formula", "B": "formula"})[0] == 201
+
+    detail = client.get(f"/api/proofs/{resting}").json()
+    assert detail["theorem"]["assumes"] == ["peirce-lemma"]
+
+
+def test_a_discharge_by_an_unconditional_proof_leaves_dependents_clean(db, client):
+    # The control on the case above: when the warrant rests on nothing, the debt
+    # is paid off outright and what rested on it comes back unconditional.
+    pc, _fol, _zfc = tower(db, client, "discharge-clean@example.com")
+    assert assume(
+        client, pc, label="triv", statement="(P → P)", metavariables={"P": "formula"}
+    )[0] == 201
+    resting = proved_and_published(client, pc, "(A → A) [triv]")
+    assert promote(client, resting, "usedit")[0] == 201
+
+    warrant = proved_and_published(client, pc, IDENTITY_PROOF)
+    status, entry = promote(client, warrant, "triv", {"P": "formula"})
+    assert status == 201, entry
+    assert entry["discharged"] is True
+    assert entry["assumes"] == []
+
+    assert client.get(f"/api/proofs/{resting}").json()["theorem"]["assumes"] == []
+    assert client.get("/api/assumptions/public").json()["items"] == []
+
+
+def test_a_proof_of_something_else_does_not_discharge(db, client):
+    # The guard that keeps "paid the debt" and "replaced the entry with a
+    # different claim" apart, since from here they look identical.
+    pc, _fol, _zfc = tower(db, client, "discharge-mismatch@example.com")
+    assert assume(client, pc)[0] == 201
+    other = proved_and_published(client, pc, IDENTITY_PROOF)
+
+    status, detail = promote(client, other, "peirce", {"P": "formula"})
+    assert status == 409, detail
+    assert "does not establish what it assumes" in detail["detail"]
+
+    # And nothing moved: the assumption is intact.
+    assert client.get(f"/api/formal-systems/{pc}/assumptions/peirce").json()["label"] == (
+        "peirce"
+    )
+
+
+def test_a_proof_that_assumes_what_it_claims_does_not_discharge(db, client):
+    # Circular: left alone it would resolve its own citation to the entry
+    # replacing it and record an empty closure, laundering the assumption into an
+    # unconditional theorem.
+    pc, _fol, _zfc = tower(db, client, "discharge-circular@example.com")
+    assert assume(client, pc)[0] == 201
+    circular = proved_and_published(client, pc, "(((A → B) → A) → A) [peirce]")
+
+    status, detail = promote(client, circular, "peirce", {"A": "formula", "B": "formula"})
+    assert status == 409, detail
+    assert "does not discharge it" in detail["detail"]
+
+
+def test_discharging_needs_the_statements_to_match_not_merely_the_shape(db, client):
+    # Held schematic on the assumption and ground on the proof is a *weaker*
+    # theorem under the same label, which every schematic citation of it would
+    # stop resolving against. α-equality covers the naming; it does not paper
+    # over the difference between "for all φ" and "for this one".
+    pc, _fol, _zfc = tower(db, client, "discharge-ground@example.com")
+    assert assume(client, pc)[0] == 201
+    warrant = discharging_proof(client, pc)
+
+    status, detail = promote(client, warrant, "peirce")
+    assert status == 409, detail
+
+
+def test_an_ancestors_assumption_is_shadowed_rather_than_discharged(db, client):
+    # A descendant proving it settles nothing for the ancestor, which still
+    # asserts it and whose other descendants still rest on it. Shadowing is the
+    # existing behaviour and stays exactly that.
+    pc, _fol, zfc = tower(db, client, "discharge-ancestor@example.com")
+    assert assume(client, pc)[0] == 201
+    warrant = proved_and_published(client, zfc, "(((A → B) → A) → A) [peirce]")
+
+    status, entry = promote(client, warrant, "peirce")
+    assert status == 201, entry
+    assert entry["discharged"] is False
+    assert entry["formal_system_id"] == zfc
+
+    # The ancestor's assumption is untouched.
+    assert [
+        item["label"]
+        for item in client.get(f"/api/formal-systems/{pc}/assumptions").json()
+    ] == ["peirce"]
+
+
+def test_a_discharged_assumption_can_then_be_withdrawn_downstream(db, client):
+    # The whole point of the feature, end to end: withdrawal was refused while
+    # anything rested on the assumption, and discharging is the way out that does
+    # not delete anyone's work.
+    pc, _fol, _zfc = tower(db, client, "discharge-endtoend@example.com")
+    assert assume(
+        client, pc, label="triv", statement="(P → P)", metavariables={"P": "formula"}
+    )[0] == 201
+    resting = proved_and_published(client, pc, "(A → A) [triv]")
+    assert promote(client, resting, "usedit")[0] == 201
+
+    refused = client.delete(f"/api/formal-systems/{pc}/assumptions/triv")
+    assert refused.status_code == 409, refused.text
+
+    warrant = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, warrant, "triv", {"P": "formula"})[0] == 201
+
+    # No longer an assumption at all, so there is nothing left to withdraw.
+    assert client.get(f"/api/formal-systems/{pc}/assumptions/triv").status_code == 404
+
+
+# `ax-5` is the tower's one rule with a proviso, so a schematic promotion over a
+# proof that cites it carries `not occurs(...)` into the entry.
+VACUOUS = "(A → ∀y A) [ax-5]"
+
+
+def test_a_warrant_carrying_a_new_proviso_does_not_discharge(db, client):
+    # A distinct-variable condition the debt never had makes the warrant
+    # *narrower*: it refuses instances the assumption allowed, so what lands is
+    # not the theorem the dependents were written against — and after they
+    # inherit its closure they would read as unconditional besides (found in
+    # review).
+    _pc, fol, _zfc = tower(db, client, "discharge-proviso@example.com")
+    assert assume(
+        client,
+        fol,
+        label="vacuous",
+        statement="(P → ∀x P)",
+        metavariables={"P": "formula", "x": "term"},
+    )[0] == 201
+    warrant = proved_and_published(client, fol, VACUOUS)
+
+    status, detail = promote(
+        client, warrant, "vacuous", {"A": "formula", "y": "term"}
+    )
+    assert status == 409, detail
+    assert "carries provisos" in detail["detail"]
+
+    # Nothing moved: the assumption is intact and still the thing citations reach.
+    assert client.get(f"/api/formal-systems/{fol}/assumptions/vacuous").status_code == 200
+
+
+def test_discharging_clears_what_the_assumption_was_standing_in_for(db, client):
+    # An edge's obligation may be discharged by a theorem, and the FK is
+    # ON DELETE SET NULL — so losing this row takes the edge down with it, and
+    # the proofs that resolved *across* it cited the source's labels rather than
+    # this one, which the label walk never reaches. `_retire_promotion` calls
+    # this for exactly that reason; the first cut of discharge did not.
+    #
+    # Pinned by the call rather than by building a tower of related systems: what
+    # went wrong was an omission, and the omission is what this catches.
+    pc, _fol, _zfc = tower(db, client, "discharge-edges@example.com")
+    assert assume(
+        client, pc, label="triv", statement="(P → P)", metavariables={"P": "formula"}
+    )[0] == 201
+    assumption_id = client.get(f"/api/formal-systems/{pc}/assumptions/triv").json()["id"]
+
+    cleared: list[str] = []
+    original = proofs_router.invalidate_warranted_edges
+
+    async def record(session, theorem_id):
+        cleared.append(str(theorem_id))
+        await original(session, theorem_id)
+
+    proofs_router.invalidate_warranted_edges = record
+    try:
+        warrant = proved_and_published(client, pc, IDENTITY_PROOF)
+        assert promote(client, warrant, "triv", {"P": "formula"})[0] == 201
+    finally:
+        proofs_router.invalidate_warranted_edges = original
+
+    assert assumption_id in cleared

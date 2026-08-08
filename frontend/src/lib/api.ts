@@ -799,6 +799,11 @@ export interface PromotedTheorem {
 	 * is a *conditional* result: citable, and resting on something nobody has
 	 * proved. Never leave it out of a display that says the entry stands. */
 	assumes: string[];
+	/** Whether promoting this *discharged* an assumption of the same label —
+	 * replaced a debt with its warrant. Worth surfacing because it is not what
+	 * the caller asked for: it asked to promote, and the label happening to name
+	 * an assumption is what turned that into paying one off. */
+	discharged: boolean;
 }
 
 /** A citable statement nobody has proved — mirrors `AssumptionOut`.
@@ -1521,7 +1526,13 @@ export const api = {
 			}),
 		/** Enter this proof's conclusion in its system's library, so proofs here —
 		 * and in every system inheriting this one — can cite it by `label`. The
-		 * proof must be published; omit `label` to use its slug. */
+		 * proof must be published; omit `label` to use its slug.
+		 *
+		 * A `label` naming an **assumption** of the same system discharges it:
+		 * the debt is replaced by this warrant, and whatever rested on it inherits
+		 * what this proof rests on. Refused with a 409 unless the statements
+		 * match, since paying a debt off and replacing an entry with a different
+		 * claim are opposite things that look identical from the outside. */
 		promote: (id: string, label?: string, metavariables?: Record<string, string>) =>
 			request<PromotedTheorem>(`/proofs/${id}/promote`, {
 				method: 'POST',

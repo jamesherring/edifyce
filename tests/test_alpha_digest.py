@@ -26,7 +26,7 @@ from app.db import terms_mapping
 from app.db.base import Base
 from app.db.models import FormalSystem
 from app.db.terms import TermChildRow, TermRow
-from app.db.terms_mapping import _free_identity
+from app.db.terms_mapping import _free_identity, metavariables_only
 from tests.spec_helpers import (
     brackets,
     equality_prod,
@@ -203,6 +203,45 @@ def test_is_free_override_excludes_constant_like_leaves(numeral_context):
     # ...while genuine variables are still renamed.
     assert alpha_digest(term_of(numeral_context, "a = b"), numerals_are_constants) == \
         alpha_digest(term_of(numeral_context, "c = d"), numerals_are_constants)
+
+
+# ---------------------------------------------------------------------------
+# The theorem-comparison policy
+# ---------------------------------------------------------------------------
+#
+# `metavariables_only` is the policy for asking whether two *library entries*
+# state the same theorem — which is a different question from the search one
+# above, and gets a different answer on exactly the leaves the default heuristic
+# guesses about. Discharging an assumption turns on it
+# (`app/routers/proofs.py::_discharge`), and getting it wrong there means a proof
+# of one statement replacing an entry that claimed another.
+
+
+def test_the_theorem_policy_keeps_constant_like_leaves_apart(numeral_context):
+    # The hazard the default documents and this policy closes: under the regex
+    # heuristic these two collapse (asserted above), so a proof of `7 = 9` would
+    # discharge an assumption of `2 = 5`.
+    assert alpha_digest(
+        term_of(numeral_context, "2 = 5"), metavariables_only
+    ) != alpha_digest(term_of(numeral_context, "7 = 9"), metavariables_only)
+
+
+def test_the_theorem_policy_keeps_unnominated_variables_apart(numeral_context):
+    # And object-language variables the theorem never nominated, which are
+    # literal for the same reason: a promoted theorem justifies its own
+    # statement, so `a = b` and `c = d` are two theorems rather than one.
+    assert alpha_digest(
+        term_of(numeral_context, "a = b"), metavariables_only
+    ) != alpha_digest(term_of(numeral_context, "c = d"), metavariables_only)
+
+
+# The half that has to keep working — a metavariable's name carries no
+# information, so two schemas differing only there are one theorem — is not
+# assertable here: `intern` returns one object for two hand-built terms that
+# differ only in their `Var` names, so the second term cannot be constructed to
+# compare. It is exercised where it happens for real instead, in
+# `tests/test_assumptions.py`, whose discharges nominate `A`/`B` against
+# assumptions stated over `P`/`Q` and are accepted.
 
 
 # ---------------------------------------------------------------------------

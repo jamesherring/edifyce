@@ -702,6 +702,11 @@ class PromotedTheoremOut(BaseModel):
     # ordinary case and the interesting one is not: an entry with something here
     # is citable, and everything that cites it inherits the debt.
     assumes: list[str] = Field(default_factory=list)
+    # Whether this promotion *discharged* an assumption of the same label —
+    # replaced a debt with its warrant. Reported because it is not what the
+    # caller asked for: it asked to promote, and the label happening to name an
+    # assumption is what turned that into paying one off.
+    discharged: bool = False
 
 
 # ---------------------------------------------------------------------------

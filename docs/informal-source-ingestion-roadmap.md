@@ -135,6 +135,75 @@ refused, and a *schematic* one is not. That is the engine's settled position —
 schema that parses nothing yields a theorem that never applies, exactly as an
 authored rule's does — and this route does not overrule it.
 
+#### Discharge — *done*
+
+Paying a debt off, which is the only way to retire an assumption anything
+depends on: withdrawal is refused while anything does, so without this a
+well-used assumption could be neither withdrawn nor settled. **It is not a new
+endpoint.** Promoting a proof under a label that names an assumption of the same
+system *is* the discharge — the entry that lands is an ordinary proved theorem,
+and everything after the guards is the promotion path unchanged.
+
+What is special is the bookkeeping the assumption leaves behind. An entry that
+rested on it no longer rests on it — the row cascade takes that edge — but it
+*does* now rest on whatever the warrant rests on, one hop further down. So the
+rewrite is `(closure \ {discharged}) ∪ closure(warrant)`: the cascade is the
+first half and `inherit_closure` the second, and the dependents have to be read
+*before* the row goes, since those edges are the record being re-pointed. A
+warrant that itself rests on nothing therefore leaves its dependents clean, and
+one that rests on two further assumptions passes both on — both pinned.
+
+Three guards, all refusals rather than repairs.
+
+**It must state the same theorem**, conclusion and every premise. Not a
+soundness requirement — promoting under a label invalidates everything that
+cited it, so a citation is re-checked either way — but the distinction a caller
+most needs told, because *paying a debt off* and *replacing an entry with a
+different claim* look identical from here and are opposite things. A schematic
+assumption is therefore not discharged by a proof of one ground instance, which
+is right: every schematic citation of it would stop resolving.
+
+The comparison is **α up to metavariables only**, and the policy is the load-
+bearing part. The stored `terms.alpha_digest` is not it: its default renames
+every regex leaf, so a grammar whose numerals are a `matches` production reads
+`2 = 5` and `7 = 9` as one statement (`tests/test_alpha_digest.py` has pinned
+that since the column existed), and a proof of either would have discharged an
+assumption of the other. It also renames an object-language variable the theorem
+never nominated — but an un-nominated leaf is literal, since a promoted theorem
+justifies exactly its own statement. So `metavariables_only` renames a `Var` and
+nothing else: a metavariable is the one leaf a citation instantiates, and the
+only one whose name carries no information. Found in review.
+
+**It must carry no proviso the assumption did not.** A distinct-variable
+condition the debt never had makes the warrant *narrower* — it refuses instances
+the assumption allowed — so what lands is not the theorem the dependents were
+written against, and after they inherit its closure they would read as
+unconditional besides. The other direction stays allowed: an assumption with a
+proviso discharged by a proof needing none is a stronger result, and nothing
+that cited it can notice. Also found in review.
+
+**It must not rest on the assumption it discharges.** Left alone, a circular
+proof would resolve its own citation to the entry replacing it and record an
+empty closure — laundering "I assumed it" into an unconditional theorem.
+
+And the delete carries `_retire_promotion`'s companion: an edge's obligation may
+be discharged by a theorem, the FK is `ON DELETE SET NULL`, and the proofs that
+resolved *across* that edge cited the source's labels rather than this one — so
+the label walk never reaches them and `invalidate_warranted_edges` has to. The
+obligation is not re-pointed at the warrant: it named this entry, and whether
+the warrant discharges it is the edge author's judgement rather than this
+route's.
+
+An **ancestor's** assumption is shadowed rather than discharged, as promoting any
+shadowing label already is: the ancestor still asserts it, and every other
+descendant still rests on it.
+
+What this does not attempt is re-verifying the dependents. Their verdicts are
+cleared by the same `invalidate_citations` any promotion under a taken label
+runs, so they are unchecked rather than believed — which is the existing
+contract and the right one, since a statement match is not a promise that every
+proof above still goes through.
+
 ### 4.2 Provenance extended to assumptions, and exposed — *done*
 
 `app/db/provenance.py` already walks the citation graph transitively and reports

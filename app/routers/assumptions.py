@@ -342,10 +342,10 @@ async def withdraw_assumption(
     exists to prevent, so the answer is to refuse and name them (found in
     review).
 
-    Retire the dependents first, or — the case worth building next — *discharge*
-    the assumption by promoting a proof under the same label, which pays the debt
-    off rather than dropping it
-    (docs/informal-source-ingestion-roadmap.md §4.1).
+    Retire the dependents first, or *discharge* the assumption by promoting a
+    proof under the same label (`POST /proofs/{id}/promote`), which pays the debt
+    off rather than dropping it: the entries resting on it inherit what the
+    warrant rests on instead of losing the record.
 
     With nothing resting on it, withdrawal clears every verdict reached through
     the label exactly as a retirement does. What it still does not do is retire
