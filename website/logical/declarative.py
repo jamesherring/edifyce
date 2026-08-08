@@ -935,8 +935,6 @@ def build_system(
         )
         inference_rule.pending_side_conditions = []
 
-    # 10. Index the patterns (the build context was wired at step 8).
-    system.build_pattern_dictionary()
     return system
 
 

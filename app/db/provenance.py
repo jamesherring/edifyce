@@ -7,14 +7,30 @@ deepest layer it reaches. A ZFC proof that touches nothing above propositional
 calculus **is** a PC theorem, and should say so; a theorem the plan puts in FOL
 that depends on a ZFC axiom is misfiled, and this finds it.
 
-**Two questions, not one**, because they come apart and only one of them is the
-one you want. Reaching a *derived* theorem of a layer is enough to pin a proof
-there — re-filing it lower would leave the lemma behind — while reaching that
-layer's *axioms* is what says the layer is doing logical work. A ZF proof citing
-a first-order lemma that itself bottoms out in PC cannot move to PC, and yet
-assumes nothing first-order. So each proof reports both:
-:attr:`Provenance.deepest_cited` is the shallowest layer it could be filed in,
-and :attr:`Provenance.deepest_axiom` the shallowest whose assumptions it uses.
+**Three questions, not one**, because they come apart and each answers something
+the others do not:
+
+- what it **cites** pins it, since re-filing it below a lemma would leave that
+  lemma behind (:attr:`Provenance.deepest_cited`);
+- what its citations **assume** says whether the layer is doing logical work — a
+  ZF proof citing a first-order lemma that itself bottoms out in PC assumes
+  nothing first-order (:attr:`Provenance.deepest_axiom`);
+- and what it is **written in** pins it too, independently of both: a theorem
+  stating something first-order and proving it propositionally still needs `A.`
+  wherever it is filed (:attr:`Provenance.deepest_grammar`).
+
+The conjunction of the first and the last is :attr:`could_be_filed_lower`, the
+one to read as "this could be moved".
+
+*And the grammar half is what disproved the guess that motivated it.* `set.mm`'s
+`sptruw` is `( A. x ph -> ph )` proved from `a1i` alone, which looked like a
+theorem the citation graph would wrongly call movable — first-order notation, so
+surely pinned. It is not: `set.mm` declares `wal` in the *syntax* material that
+falls in the propositional layer and only the quantifier **axioms** in the
+first-order one, so `A.` is grammatical in PC and `sptruw` really can move. Of
+the corpus's 10 exceptions the grammar half binds none. What a layer declares is
+a fact about the file, and reading "∀ is first-order notation" off what the
+symbol *means* got it wrong — which is the whole reason this is measured.
 
 **Read from rows, never from source.** Every edge here is a column: a line's
 resolved rule label (``proof_lines.rule`` — what the *checker* used, not what the
@@ -36,7 +52,8 @@ from app.db.assumptions import AssumptionRow
 from app.db.models import FormalSystem, Proof
 from app.db.proof_lines import ProofLineRow
 from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
-from app.db.systems import RuleRow
+from app.db.systems import DefinitionRow, RuleRow, SymbolRow
+from app.db.terms import TermChildRow, TermRow
 
 if TYPE_CHECKING:
     from collections.abc import AbstractSet, Iterable, Mapping, Sequence
@@ -76,13 +93,31 @@ class Provenance:
     # that adopts no assumptions has `axioms` exactly as it did before this
     # existed.
     axioms: tuple[str, ...]
+    # The deepest layer declaring a production its own lines are *written* in.
+    # A second way to be pinned, and independent of the first: a theorem stating
+    # something first-order and proving it propositionally needs `A.` to exist
+    # wherever it is filed, whatever its citations say.
+    deepest_grammar: str | None
+    grammar_depth: int | None
+    # The deepest layer declaring an inference **rule** or **definition** it
+    # cites. A third pin, and neither of the other two: a rule is not a library
+    # entry (a citation of one resolves to no `promoted_theorems` row, which is
+    # why `_cited` drops it) and not notation, and yet a proof cannot be checked
+    # in a layer that does not declare it (found in review).
+    deepest_rule: str | None
+    rule_depth: int | None
     # The unproved *debts* it rests on, by label. Non-empty means this proof
-    # establishes a conditional, whatever its own lines say.
+    # establishes a conditional, whatever its own lines say. Defaulted, and so
+    # placed after the pins above, which are not.
     assumes: tuple[str, ...] = ()
     # Did the closure touch an entry this proof's own chain cannot resolve? The
     # defect :attr:`misfiled` reports, carried as a fact rather than inferred
     # from a depth comparison that only means anything down a single spine.
     unreachable: bool = False
+    # The same, for the machinery rather than the citations: notation, a rule or
+    # a definition the proof needs and its chain does not reach. Separate from
+    # `unreachable` only in provenance; :attr:`misfiled` is their disjunction.
+    unreachable_machinery: bool = False
 
     @property
     def rests_on_assumptions(self) -> bool:
@@ -91,10 +126,10 @@ class Provenance:
 
     @property
     def misfiled(self) -> bool:
-        """Does it depend on something its own chain cannot reach?
+        """Is anything it needs out of reach of the layer it was filed in?
 
         Impossible for a positional plan over a corpus in dependency order — and
-        impossible to *verify*, since the citation would not resolve — so a true
+        impossible to *verify*, since the proof would not rebuild — so a true
         here means the rows disagree with the plan. The same fact
         `scripts/check_layering.unreachable_citations` reports, in the vocabulary
         of provenance.
@@ -104,8 +139,13 @@ class Provenance:
         where the sibling holding the citation may sit at any depth at all —
         including a shallower one, which read as a clean *could be filed lower*
         (found in review).
+
+        **Citations and machinery both.** A proof filed above the layer declaring
+        its own notation cannot be rebuilt there either, and reporting that only
+        by suppressing `could_be_filed_lower` left the run exiting 0 on a proof
+        that does not stand where it sits (also found in review).
         """
-        return self.unreachable
+        return self.unreachable or self.unreachable_machinery
 
     @property
     def depends_only_on_shallower(self) -> bool:
@@ -115,12 +155,10 @@ class Provenance:
         drawn where the mathematics actually divides. Not a defect: a corpus is
         filed by subject matter and this reads it by dependency.
 
-        **Not the same as "could be moved there", and deliberately narrower.** A
-        theorem is also pinned by the *grammar* it is stated in, which this does
-        not look at: `set.mm`'s `sptruw` is `( A. x ph -> ph )` proved from `a1i`
-        alone, so no citation holds it in the first-order layer while `A.` does.
-        Reported as movable it would have overstated 3 of the 10 this finds. What
-        it says is exactly what it measures — nothing it cites needs its layer.
+        **Citations only, and deliberately so.** A theorem is pinned by the
+        *grammar* it is written in as well as by what it cites, and the two are
+        different facts about it. :attr:`could_be_filed_lower` is the
+        conjunction — the one to read as "could be moved".
 
         False at the root whatever it cites, since there is no shallower layer at
         all. Without that, a root theorem citing nothing counted here and the
@@ -132,6 +170,28 @@ class Provenance:
         if self.filed == 0 or self.unreachable:
             return False
         return self.cited_depth is None or self.cited_depth < self.filed
+
+    @property
+    def could_be_filed_lower(self) -> bool:
+        """Is *everything* it needs — citations and notation both — shallower?
+
+        The honest "this could be moved". A theorem needs two things where it
+        sits: every entry it cites, and every production its own lines are
+        written in. Either alone can overstate — though on `set.mm` at the
+        milestone slice the two agree, since the corpus declares its notation
+        well before the axioms governing it (see the module docstring).
+
+        The notation of a *cited* theorem is not asked about, and does not need
+        to be: it is available wherever that theorem is, and being able to reach
+        the theorem at all is what :attr:`depends_only_on_shallower` already
+        settles.
+        """
+        if not self.depends_only_on_shallower:
+            return False
+        return all(
+            depth is None or depth < self.filed
+            for depth in (self.grammar_depth, self.rule_depth)
+        )
 
     @property
     def needs_its_own_axioms(self) -> bool:
@@ -157,11 +217,13 @@ class LayerProvenance:
     # (It is not "cites nothing": a citation resolving to a derived entry with no
     # stored proof lands here too, and the comment used to say otherwise.)
     no_axioms: int
-    # Every citation reachable from somewhere shallower — nothing it cites needs
-    # this layer. A superset of `lower_axioms` by construction, and *not* a count
-    # of theorems that could be moved: see `Provenance.depends_only_on_shallower`
-    # for the grammar that pins some of them anyway.
+    # Every citation reachable from somewhere shallower — nothing it *cites*
+    # needs this layer. A superset of `lower_axioms` by construction, and of
+    # `could_be_lower`: a theorem is pinned by its notation too.
     only_shallower: int
+    # And everything it needs is shallower, notation included — the count of
+    # theorems that could really be moved.
+    could_be_lower: int
     # Depends on something its chain cannot reach. Always zero on a run worth
     # trusting; see :attr:`Provenance.misfiled`. Its own bucket rather than a
     # fourth reading of the axiom columns, because a citation off the chain has
@@ -322,6 +384,124 @@ def _cited(
             if stray is not None:
                 found.append(_Citation(stray, reachable=False))
     return tuple(found)
+
+
+def _declared_in(
+    session: Session, chains: Mapping[uuid.UUID, Sequence[uuid.UUID]]
+) -> dict[uuid.UUID, dict[str, uuid.UUID]]:
+    """Per system, which layer first declares each grammar name it can see.
+
+    The **shallowest** system on the chain carrying a row for a name, which is
+    the one that declares it. A production has exactly one row and so one answer;
+    a *sort* has a row in every layer that mentions it (`⊆` is a `formula` over
+    `term`, and a layer declaring neither still needs rows for both, so no row
+    ever references another system's namespace) — and a layer can only mention a
+    sort that already exists, so the shallowest occurrence is the declaration
+    there too. One rule, all three cases, definitions included.
+    """
+    held: dict[uuid.UUID, set[str]] = {}
+    for system_id, name in session.execute(select(SymbolRow.system_id, SymbolRow.name)):
+        held.setdefault(system_id, set()).add(name)
+
+    # Notation a **definition** introduces, which no symbol row spells. A defined
+    # form's constructor is `f"{sort}:{higher}"` and the `:` is deliberate — a
+    # declared production's name is forced to `[A-Za-z0-9_]+`, so the pair keeps
+    # defined notation out of the productions' namespace
+    # (`matching/definitions.py`). Which means a lookup against `symbols` alone
+    # can never match one, and the walk fell back to the *sort* — declared at the
+    # root — so a proof written in a deep layer's own abbreviation reported as
+    # movable to the root. Exactly the class the grammar half exists to catch,
+    # failing silently (found in review).
+    for system_id, sort, higher in session.execute(
+        select(DefinitionRow.system_id, SymbolRow.name, DefinitionRow.higher).join(
+            SymbolRow, DefinitionRow.symbol_id == SymbolRow.id
+        )
+    ):
+        held.setdefault(system_id, set()).add(f"{sort}:{higher}")
+
+    found: dict[uuid.UUID, dict[str, uuid.UUID]] = {}
+    for system_id, chain in chains.items():
+        where: dict[str, uuid.UUID] = {}
+        for ancestor in chain:
+            for name in held.get(ancestor, ()):
+                where.setdefault(name, ancestor)
+        found[system_id] = where
+    return found
+
+
+def _grammar_systems(
+    session: Session,
+    declared_in: Mapping[uuid.UUID, Mapping[str, uuid.UUID]],
+    depths: Mapping[uuid.UUID, int],
+) -> dict[uuid.UUID, uuid.UUID]:
+    """Per stored term, the deepest layer declaring anything its tree is built from.
+
+    A system **id** and not a depth, for the reason :class:`_Reach` carries ids:
+    a depth is an index into a chain, and a term interned against one system can
+    be read by a proof filed in another — a misfiled one — whose chain is shorter
+    than that index. Returning a depth walked off the end of it.
+
+    Memoised over the shared DAG rather than walked per proof: `set.mm`'s corpus
+    interns to a few tens of thousands of terms, and a per-proof walk would
+    revisit the same subterm once per theorem mentioning it. Sound to memoise by
+    term id because a term is interned **per system**
+    (``uq_terms_system_digest``) and so are its children, so every node below a
+    term resolves its names through that term's own chain.
+    """
+    nodes: dict[uuid.UUID, tuple[uuid.UUID, str | None, str | None]] = {
+        term_id: (system_id, constructor, sort)
+        for term_id, system_id, constructor, sort in session.execute(
+            select(
+                TermRow.id, TermRow.formal_system_id, TermRow.constructor, TermRow.sort
+            )
+        )
+    }
+    children: dict[uuid.UUID, list[uuid.UUID]] = {}
+    for parent_id, child_id in session.execute(
+        select(TermChildRow.parent_id, TermChildRow.child_id)
+    ):
+        children.setdefault(parent_id, []).append(child_id)
+
+    found: dict[uuid.UUID, uuid.UUID | None] = {}
+    for root in nodes:
+        if root in found:
+            continue
+        # Iterative for the same reason `_reach` is: a corpus term tree is
+        # usually shallow, and a statement that nests deeply is not worth
+        # gambling the interpreter's stack on.
+        stack: list[tuple[uuid.UUID, bool]] = [(root, False)]
+        # And guarded like `_reach` too. `store_term` interns by digest, so a
+        # term cannot become its own subterm and a cycle is unreachable — but a
+        # walk that assumes that and is wrong grows the stack without bound
+        # rather than failing, and this one cited `_reach` as its model while
+        # leaving the guard out (found in review).
+        open_: set[uuid.UUID] = set()
+        while stack:
+            current, expanded = stack.pop()
+            if current in found:
+                continue
+            if not expanded:
+                open_.add(current)
+                stack.append((current, True))
+                stack.extend(
+                    (child, False)
+                    for child in children.get(current, ())
+                    if child not in found and child not in open_
+                )
+                continue
+            open_.discard(current)
+            system_id, constructor, sort = nodes[current]
+            where = declared_in.get(system_id, {})
+            deepest: uuid.UUID | None = None
+            # A node names its production; a variable or bound leaf names only
+            # its sort. Both are grammar the term cannot be written without.
+            for name in (constructor, sort):
+                if name is not None and name in where:
+                    deepest = _deeper(deepest, where[name], depths)
+            for child in children.get(current, ()):
+                deepest = _deeper(deepest, found.get(child), depths)
+            found[current] = deepest
+    return {term: system for term, system in found.items() if system is not None}
 
 
 def _rule_labels(session: Session) -> dict[uuid.UUID, set[str]]:
@@ -525,10 +705,62 @@ def provenance(session: Session) -> tuple[Provenance, ...]:
         for proof_id, _, system_id, theorem_id in rows
     }
 
+    # The grammar half, keyed by the *line* rather than the citation: what a
+    # proof is written in pins it where its citations may not.
+    written_in = _grammar_systems(session, _declared_in(session, chains), depths)
+    grammar: dict[uuid.UUID, uuid.UUID] = {}
+    for proof_id, term_id in session.execute(
+        select(ProofLineRow.proof_id, ProofLineRow.term_id).where(
+            ProofLineRow.term_id.is_not(None)
+        )
+    ):
+        system_id = written_in.get(term_id)
+        if system_id is not None:
+            grammar[proof_id] = _deeper(grammar.get(proof_id), system_id, depths)
+
+    # And the machinery half. A rule and a definition are each a justification
+    # the *layer* supplies and no `promoted_theorems` row holds, so `_cited`
+    # drops both — correctly, since neither is a citation — and neither was
+    # pinning anything until review pointed out that a proof cannot be checked
+    # in a layer that does not declare them.
+    filed_in = {proof_id: system_id for proof_id, _, system_id, _ in rows}
+    machinery: dict[uuid.UUID, uuid.UUID] = {}
+    for proof_id, label in session.execute(
+        select(ProofLineRow.proof_id, ProofLineRow.rule).where(
+            ProofLineRow.rule.is_not(None)
+        )
+    ):
+        # The **shallowest** declaring layer, since that is the shallowest the
+        # proof could move to and still resolve the rule — the question this
+        # feeds. (`_cited` reads nearest-first instead, because that is what the
+        # checker did.)
+        for system_id in chains.get(filed_in[proof_id], ()):
+            if label in rules.get(system_id, ()):
+                machinery[proof_id] = _deeper(
+                    machinery.get(proof_id), system_id, depths
+                )
+                break
+    for proof_id, definition_system in session.execute(
+        select(ProofLineRow.proof_id, DefinitionRow.system_id).join(
+            DefinitionRow, ProofLineRow.definition_id == DefinitionRow.id
+        )
+    ):
+        machinery[proof_id] = _deeper(
+            machinery.get(proof_id), definition_system, depths
+        )
+
     memo: dict[uuid.UUID, _Reach] = {}
     found: list[Provenance] = []
     for proof_id, name, system_id, _ in rows:
         reach = _reach(proof_id, depths, deps, memo)
+        written, needs = grammar.get(proof_id), machinery.get(proof_id)
+        # Machinery its chain does not hold is the same defect an unreachable
+        # citation is — the proof does not rebuild where it sits — and saying so
+        # only by suppressing `could_be_filed_lower` let a run exit 0 on it.
+        chain = chains[system_id]
+        stranded = any(
+            held is not None and held not in chain for held in (written, needs)
+        )
         found.append(
             Provenance(
                 proof=name,
@@ -540,7 +772,12 @@ def provenance(session: Session) -> tuple[Provenance, ...]:
                 axiom_depth=depths[reach.axioms] if reach.axioms is not None else None,
                 axioms=reach.axiom_labels,
                 assumes=reach.assumed_labels,
+                deepest_grammar=names[written] if written is not None else None,
+                grammar_depth=depths[written] if written is not None else None,
+                deepest_rule=names[needs] if needs is not None else None,
+                rule_depth=depths[needs] if needs is not None else None,
                 unreachable=reach.unreachable,
+                unreachable_machinery=stranded,
             )
         )
     return tuple(found)
@@ -555,7 +792,9 @@ def by_layer(reports: Sequence[Provenance]) -> tuple[LayerProvenance, ...]:
     """
     counts: dict[tuple[int, str], list[int]] = {}
     for report in reports:
-        tally = counts.setdefault((report.filed, report.filed_in), [0, 0, 0, 0, 0, 0])
+        tally = counts.setdefault(
+            (report.filed, report.filed_in), [0, 0, 0, 0, 0, 0, 0]
+        )
         tally[0] += 1
         # Exhaustive, and in this order: a misfiled proof's axiom depth is not
         # comparable with its own, so it is counted here rather than measured
@@ -570,6 +809,8 @@ def by_layer(reports: Sequence[Provenance]) -> tuple[LayerProvenance, ...]:
             tally[2] += 1
         if report.depends_only_on_shallower:
             tally[4] += 1
+        if report.could_be_filed_lower:
+            tally[6] += 1
     return tuple(
         LayerProvenance(
             name=name,
@@ -579,6 +820,7 @@ def by_layer(reports: Sequence[Provenance]) -> tuple[LayerProvenance, ...]:
             lower_axioms=tally[2],
             no_axioms=tally[3],
             only_shallower=tally[4],
+            could_be_lower=tally[6],
             misfiled=tally[5],
         )
         for (depth, name), tally in sorted(counts.items())

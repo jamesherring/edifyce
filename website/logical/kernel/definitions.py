@@ -111,7 +111,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from .side_conditions import And, DisjointLeaves
-from .terms import Node, _bound, _bound_label, _node
+from .terms import Node, _bound, bound_label, _node
 from .unify import match, sort_admits
 
 if TYPE_CHECKING:
@@ -396,7 +396,7 @@ def unfold(
     """Apply ``definition`` to ``redex`` once (defined form -> defining form).
 
     ``names`` maps a binder to the leaf it should take in the result, keyed
-    either by its reserved index label (:func:`~website.logical.kernel.terms._bound_label`)
+    either by its reserved index label (:func:`~website.logical.kernel.terms.bound_label`)
     or by its ``fresh`` name - ``{"z": <term w>}`` to unfold
     ``z ⊆ b`` as ``∀w.(w ∈ z → w ∈ b)``. Terms, not strings: naming a binder is a
     choice about the *term*, and reading a name out of a string would put the
@@ -467,7 +467,7 @@ def _condition_binding(
         if any(other.name == binder.name for j, other in enumerate(definition.fresh) if j != index)
     }
     for index, binder in enumerate(definition.fresh):
-        key = _bound_label(index)
+        key = bound_label(index)
         if binder.name not in ambiguous and key in bound_binding:
             named[binder.name] = bound_binding[key]
     return {**named, **binding}
@@ -488,7 +488,7 @@ def _resolve_bound_names(
     """
     resolved: Binding = {}
     for index, binder in enumerate(definition.fresh):
-        key = _bound_label(index)
+        key = bound_label(index)
         chosen = binder.default
         if names is not None:
             # By index first, then by name. Binders are placed per *occurrence*
@@ -566,7 +566,7 @@ def _bounds_are_fresh(
         index for index, binder in enumerate(definition.fresh) if not binder.scoped
     }
     for index, binder in enumerate(definition.fresh):
-        key = _bound_label(index)
+        key = bound_label(index)
         if key not in bound_binding:
             # The step never pinned this binder's concrete name (e.g. a target
             # whose structure did not determine it): nothing to admit.
@@ -586,7 +586,7 @@ def _bounds_are_fresh(
             # generates the same provisos it always did.
             others |= {other for other in unscoped if other < index}
         provisos.extend(
-            DisjointLeaves(key, _bound_label(other), sort=binder.sort)
+            DisjointLeaves(key, bound_label(other), sort=binder.sort)
             for other in sorted(others)
         )
 
@@ -637,7 +637,7 @@ def _unfolds_to(definition: Definition, source: Term, target: Term, context: Con
     # Only the declared binders may be newly determined by the target; anything
     # else newly bound means the match reached past the binders (e.g. an
     # ill-formed defining form with a free parameter), so reject the step.
-    bound_keys = {_bound_label(index) for index in range(len(definition.fresh))}
+    bound_keys = {bound_label(index) for index in range(len(definition.fresh))}
     if set(recovered) - set(binding) - bound_keys:
         return False
     bound_binding = {key: recovered[key] for key in bound_keys if key in recovered}

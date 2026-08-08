@@ -64,22 +64,5 @@ class Match:
         # FormalSystem.parse treats that as "the line has no such field".
         return self.sub_matches[name]
 
-    def variable_leaves(self) -> list[Match]:
-        """Every variable leaf under this match, one entry per occurrence.
-
-        The one structural walk a match still owns, because it answers a question
-        about the *parse* rather than about the formula: which of the ambient
-        string variables this text actually filled a slot with. A definition reads
-        it to learn its defining form's parameters (see
-        :class:`~website.logical.matching.definitions.DefinedNotation`).
-        """
-        if not self.sub_matches:
-            return [self] if self.is_variable else []
-
-        leaves: list[Match] = []
-        for sub in self.sub_matches.values():
-            leaves.extend(sub.variable_leaves())
-        return leaves
-
     def __str__(self) -> str:
         return f"Match for {self.pattern.name}: {self.string}"

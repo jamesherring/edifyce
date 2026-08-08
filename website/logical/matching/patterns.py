@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import random
 from bisect import bisect_left
 from typing import TYPE_CHECKING
 
@@ -180,9 +179,6 @@ class Pattern:
         # immediately (see `build_context.build_schema_pattern`), so invalidating
         # unconditionally would re-flatten the whole grammar once per schema.
         self.union_member = False
-
-        # Arbitrary id for use in URLs
-        self.url_id = "".join(random.SystemRandom().choice("0123456789abcdef") for _ in range(8))
 
     @property
     def respect_brackets(self):
@@ -684,9 +680,6 @@ class StringPattern(Pattern):
 
         # Variables for sub patterns - a dictionary mapping to other StringPatterns or UnionPattern objects
         self.variables = {}
-
-        # Display variables
-        self.display_variables = {}
 
         # Record the variable locations for speed
         self.variable_locations = {}
@@ -1208,8 +1201,6 @@ class StringPattern(Pattern):
     def add_variable(self, name, pattern, use_location="all"):
         # Add a variable
 
-        self.display_variables[name] = pattern
-
         self.variables[name] = pattern
 
         # Get the variable location dict
@@ -1284,29 +1275,6 @@ class StringPattern(Pattern):
         for name, var in variable_dict.items():
             if name in self.pattern:
                 self.add_variable(name, var)
-
-    def reset_variables(self):
-        # Reset the variables on this pattern
-
-        variables = self.variables
-
-        # Clear the variable locations. Non variable locations taken care of automatically
-        self.variables = {}
-        self.variable_locations = {}
-
-        self.display_variables = {}
-
-        # Add the variables
-        self.add_variables(variables)
-
-    def set_pattern(self, pattern):
-        # Reset the pattern string
-
-        self.display_pattern = pattern
-        self.pattern = pattern
-
-        # Reset variables
-        self.reset_variables()
 
     def equivalent(self, other, context, memo=None):
         # Check if two patterns are the same
@@ -1800,53 +1768,4 @@ class UnionPattern(Pattern):
 
     def __str__(self):
         return f"UnionPattern: {self.name}"
-
-
-class AbstractPattern(Pattern):
-    """Abstract string pattern - used only as a variable."""
-
-    def __init__(self, name):
-
-        Pattern.__init__(self, name)
-
-        # Arbitrary infinite certainty
-        self.certainty = 1000000
-
-        self.pattern_type = "AbstractPattern"
-
-    def match(self, s, context, debug=None):
-        # Try to match s in the given context
-
-        # s only matches if there is a string variable of this pattern
-        if s in context.string_variables and self.equivalent(context.string_variables[s], context):
-            return matches.Match(
-                pattern=self,
-                string=s,
-                is_variable=True
-            )
-
-        return None
-
-    def equivalent(self, other, context, memo=None):
-        # Check equivalence - depends only on name
-
-        if memo is None:
-            memo = {}
-
-        if (self, other) in memo:
-            return memo[(self, other)]
-
-        memo[(self, other)] = False
-
-        if not isinstance(other, AbstractPattern):
-            return False
-
-        if not self.name == other.name:
-            return False
-
-        memo[(self, other)] = True
-        return True
-
-    def __str__(self):
-        return f"AbstractPattern: {self.name}"
 

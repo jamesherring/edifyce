@@ -16,10 +16,16 @@ citations is reachable from a shallower layer — nothing they cite needs this o
 **Rests on shallower axioms** counts theorems that assume nothing their own layer
 adds, even where a lemma from it pins them in place. The first is the larger.
 
-Neither is a count of theorems that could be *moved*: a theorem is pinned by the
-grammar it is stated in too, and this reads only the citation graph. `sptruw` is
-`( A. x ph -> ph )` proved from `a1i` alone — no citation holds it in the
-first-order layer, and `A.` does.
+Neither is the count of theorems that could be **moved**, which is the last
+column: a theorem is pinned by the notation it is stated in as well as by what it
+cites, and `can move` is the conjunction.
+
+On `set.mm` the two agree, which is itself the finding. `sptruw` is
+`( A. x ph -> ph )` proved from `a1i` alone and looks like a theorem its notation
+must hold in place — but the corpus declares `wal` in the syntax material that
+falls in the propositional layer and only the quantifier *axioms* in the
+first-order one, so `A.` is grammatical in PC and `sptruw` really can move. What
+a layer declares is a fact about the file, not about what its symbols mean.
 
 Three things are hard failures rather than measurements:
 
@@ -68,11 +74,17 @@ EXAMPLES = 5
 
 
 def examples(reports: Sequence[Provenance], layer: str) -> list[str]:
-    """The theorems of ``layer`` that cite nothing needing it."""
+    """The theorems of ``layer`` that cite nothing needing it, and why they stay.
+
+    Naming the notation that pins one is the point of listing them at all: a
+    reader deciding whether a boundary is in the right place needs to tell "this
+    belongs lower" from "this reads lower and cannot go there".
+    """
     return [
         # A theorem citing nothing at all could go anywhere, which is a different
         # thing from bottoming out in a named layer and reads wrong as "→ None".
         f"{report.proof} → {report.deepest_cited or 'cites nothing'}"
+        + ("" if report.could_be_filed_lower else f" (held by {report.deepest_grammar})")
         for report in reports
         if report.filed_in == layer and report.depends_only_on_shallower
     ]
@@ -125,11 +137,12 @@ def main() -> int:
         # `proofs` needs to see all four (found in review).
         print(f"  {'layer':<26}{'proofs':>8}{'own axioms':>12}"
               f"{'shallower':>11}{'no axioms':>11}{'misfiled':>10}"
-              f"{'only lower':>12}")
+              f"{'cites lower':>13}{'can move':>10}")
         for layer in layers:
             print(f"  {layer.name:<26}{layer.proofs:>8}{layer.own_axioms:>12}"
                   f"{layer.lower_axioms:>11}{layer.no_axioms:>11}"
-                  f"{layer.misfiled:>10}{layer.only_shallower:>12}")
+                  f"{layer.misfiled:>10}{layer.only_shallower:>13}"
+                  f"{layer.could_be_lower:>10}")
 
         for layer in layers[1:]:
             movable = examples(reports, layer.name)
