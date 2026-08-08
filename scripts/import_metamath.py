@@ -34,6 +34,8 @@ from app.db.models import FormalSystem, User  # noqa: E402
 from app.db.session import get_engine, get_sessionmaker  # noqa: E402
 from app.db.systems_mapping import system_slug  # noqa: E402
 from website.logical.metamath import CheckedTheorem, parse  # noqa: E402
+from website.logical.metamath.corpus import corpus_layers  # noqa: E402
+from website.logical.metamath.parser import Database  # noqa: E402
 from website.logical.metamath.setmm import (  # noqa: E402
     DISPLAY_OVERRIDES,
     DISPLAY_RULES,
@@ -153,6 +155,30 @@ async def _refuse_a_slug_collision(
         )
 
 
+def _layer_names(database: Database, arguments: argparse.Namespace) -> list[str]:
+    """The systems this run will actually create, by name.
+
+    Asked of `corpus_layers` rather than of the plan, because they can differ and
+    the difference is not hypothetical: a plan whose boundaries this file never
+    opens — a fragment, or `--limit` cutting before the second section — collapses
+    to **one** layer named `--name`, not to the plan's names (found in review,
+    where `--setmm-layers --limit 5` sailed past the slug check and would have
+    died on the unique index instead).
+
+    `corpus_layers` is the same function `corpus_specs` decides it with, which is
+    the point of asking it: two derivations of "which layers" can disagree, and
+    this one has to match the one that writes the rows.
+    """
+    plan = LAYERS if arguments.setmm_layers else ()
+    layers = corpus_layers(database, arguments.limit, plan=plan)
+    # One layer is the unlayered case, and `corpus_layers` names it from its own
+    # default rather than from `--name` — which is what `corpus_specs` would call
+    # it, so that is what the row will be called.
+    if len(layers) < 2:
+        return [arguments.name]
+    return [name for name, _at in layers]
+
+
 def _reporter(total: int | None) -> Callable[[ImportReport, CheckedTheorem], None]:
     # Rate-limited to twice a second: a whole-corpus run checks tens of thousands
     # of theorems, and redrawing the line for each of them costs more than the
@@ -195,16 +221,8 @@ async def main() -> int:
     async with get_sessionmaker()() as session:
         try:
             owner = await _owner(session, arguments.owner)
-            # The names the run will create, which is the plan's when there is one
-            # — an unlayered import makes exactly one system, called `--name`. A
-            # plan whose layers this file does not open makes fewer, so this can
-            # refuse a collision the import would not have reached; that is the
-            # safe direction for a check whose whole job is to fail early.
             await _refuse_a_slug_collision(
-                session,
-                owner,
-                [layer.name for layer in LAYERS] if arguments.setmm_layers
-                else [arguments.name],
+                session, owner, _layer_names(database, arguments)
             )
         except LookupError as refused:
             print(f"\n{refused}", file=sys.stderr)

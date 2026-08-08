@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING
 from sqlalchemy import delete, insert, select
 
 from app.db.avoidances import LabelAvoidanceRow
-from app.db.lineage import spine_ids
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -61,23 +60,21 @@ def store_avoidances(
 
 
 async def avoided_by(
-    session: AsyncSession, system_id: uuid.UUID, label: str
+    session: AsyncSession, spine: Sequence[uuid.UUID], label: str
 ) -> list[str]:
     """What ``label``'s proof is declared to do without, in the file's order.
 
-    Asked of the whole spine, for the reason :mod:`app.db.lineage` gives: a
-    layered corpus files each statement against the layer its section falls in, so
-    a directive about a ZF theorem is stored against a system a propositional read
-    has never heard of. The label is unique across the spine, so at most one
-    layer answers.
+    ``spine`` is the systems to look in, for the reason :mod:`app.db.lineage`
+    gives: a layered corpus files each statement against the layer its section
+    falls in, so a directive about a ZF theorem is stored against a system a
+    propositional read has never heard of. The label is unique across the spine,
+    so at most one layer answers.
     """
     return list(
         await session.scalars(
             select(LabelAvoidanceRow.avoided)
             .where(
-                LabelAvoidanceRow.formal_system_id.in_(
-                    await spine_ids(session, system_id)
-                ),
+                LabelAvoidanceRow.formal_system_id.in_(spine),
                 LabelAvoidanceRow.label == label,
             )
             .order_by(LabelAvoidanceRow.position)

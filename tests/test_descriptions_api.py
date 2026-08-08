@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 import app.auth.backend as backend
 from app.db.metamath_store import import_corpus
+from app.db.descriptions import LabelDescriptionRow
 from app.db.models import Proof
 from app.db.session import get_session
 from app.main import app
@@ -384,3 +385,33 @@ def test_a_label_the_file_declares_nothing_about_avoids_nothing(client, db):
     body = client.get(f"/api/formal-systems/{system_id}/labels/ax-1").json()
 
     assert body["avoids"] == []
+
+
+def test_an_undocumented_label_still_reports_what_it_avoids(client, db):
+    # A `$j usage … avoids …` names a label whether or not the file also comments
+    # on it — that being why the avoidances are a separate table. Returning None
+    # for a record with no prose would put the two facts back together, which is
+    # what this branch's first cut did (found in review).
+    system_id, _ = seed_avoiding(db)
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            # Take the prose away and leave the declaration standing.
+            for row in session.scalars(select(LabelDescriptionRow)):
+                if row.label == "id":
+                    session.delete(row)
+            session.commit()
+    finally:
+        engine.dispose()
+
+    body = client.get(f"/api/formal-systems/{system_id}/labels/id")
+
+    assert body.status_code == 200, body.text
+    assert body.json()["avoids"] == ["ax-2"]
+    assert body.json()["text"] == ""
+
+
+def test_a_label_with_neither_prose_nor_declarations_is_still_a_404(client, db):
+    system_id, _ = seed_avoiding(db)
+
+    assert client.get(f"/api/formal-systems/{system_id}/labels/nosuch").status_code == 404

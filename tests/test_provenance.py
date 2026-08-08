@@ -571,3 +571,32 @@ def test_a_theorem_that_cites_nothing_can_still_move_off_a_deeper_layer(
     report = reports(session)["fol-via-ax4"]
     assert report.deepest_cited is None
     assert report.depends_only_on_shallower
+
+
+def test_a_machinery_stranded_proof_is_not_counted_as_only_shallower():
+    # `depends_only_on_shallower`'s docstring says a misfiled proof is excluded,
+    # and `misfiled` is unreachable citations *or* unreachable machinery. Guarding
+    # on the narrower of the two let a machinery-stranded proof count as both
+    # misfiled and only-shallower — and its off-chain depths could then make
+    # `could_be_filed_lower` true, which is the opposite of what it means (found
+    # in review).
+    stranded = Provenance(
+        proof="p",
+        filed_in="leaf",
+        filed=2,
+        deepest_cited="root",
+        cited_depth=0,
+        unreachable=False,
+        unreachable_machinery=True,
+        deepest_grammar="elsewhere",
+        grammar_depth=0,
+        deepest_rule=None,
+        rule_depth=None,
+        deepest_axiom=None,
+        axiom_depth=None,
+        axioms=(),
+    )
+
+    assert stranded.misfiled
+    assert not stranded.depends_only_on_shallower
+    assert not stranded.could_be_filed_lower

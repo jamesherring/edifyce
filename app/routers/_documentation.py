@@ -27,7 +27,7 @@ from app.db.models import Proof
 from app.schemas import Attribution, LabelDescription, LabelMention, LabelReference
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Iterable, Mapping, Sequence
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,7 +43,7 @@ MENTION_LIMIT = 20
 
 async def _linkable(
     session: AsyncSession,
-    system_id: uuid.UUID,
+    spine: Sequence[uuid.UUID],
     names: Iterable[str],
     viewer: User | None,
 ) -> Mapping[str, tuple[uuid.UUID, str | None]]:
@@ -53,7 +53,7 @@ async def _linkable(
     can carry a dozen, and a corpus read that costs a round trip apiece would make
     the documentation the expensive half of the page.
 
-    Searched across the whole **spine**, not just this system: a layered corpus
+    ``spine`` is the whole chain, not just this system: a layered corpus
     files a proof against the layer its section falls in, so a ZF statement
     referencing `ax-mp` points at the propositional root and a root comment saying
     "see ~ sqrt2irr" points at the leaf. Scoped to one id, every cross-layer
@@ -73,10 +73,9 @@ async def _linkable(
     readable = [Proof.published_at.is_not(None)]
     if viewer is not None:
         readable.append(Proof.owner_id == viewer.id)
-    chain = await spine_ids(session, system_id)
     rows = await session.execute(
         select(Proof.formal_system_id, Proof.name, Proof.id, Proof.title).where(
-            Proof.formal_system_id.in_(chain),
+            Proof.formal_system_id.in_(spine),
             Proof.name.in_(wanted),
             or_(*readable),
         )
@@ -85,7 +84,7 @@ async def _linkable(
     # is what its own prose meant. `Proof.name` is unique per system but not per
     # spine, so the tie is real — and sorted here rather than left to the `IN`,
     # which returns rows in no order the chain knows about.
-    depth = {found: index for index, found in enumerate(chain)}
+    depth = {found: index for index, found in enumerate(spine)}
     resolved: dict[str, tuple[uuid.UUID, str | None]] = {}
     for owner, name, found, title in sorted(rows, key=lambda row: depth[row[0]]):
         resolved.setdefault(name, (found, title))
@@ -95,25 +94,39 @@ async def _linkable(
 async def documentation_out(
     session: AsyncSession,
     system_id: uuid.UUID,
+    label: str,
     row: LabelDescriptionRow | None,
     viewer: User | None,
 ) -> LabelDescription | None:
     """One label's record, with its references pointed at something.
 
-    None when the system keeps no record, which is every hand-authored proof: a
-    system describes the labels it was *imported* with, and a proof created
-    through the API carries its own title and description instead.
-    """
-    if row is None:
-        return None
+    None when the system records *nothing* about the label, which is every
+    hand-authored proof: a system describes the labels it was imported with, and a
+    proof created through the API carries its own title and description instead.
 
-    mentioned, total = await mentions_of(session, system_id, row.label, MENTION_LIMIT)
-    avoids = await avoided_by(session, system_id, row.label)
+    Nothing is not the same as no prose, which is why ``label`` is an argument
+    rather than read off ``row``. A `$j usage … avoids …` names a label whether or
+    not the file also comments on it — that being why `label_avoidances` is a
+    separate table — so a record with avoidances and no description is a record,
+    and returning None for it would put the two facts back together (found in
+    review).
+    """
+    # Once for the whole read. Three questions below want the same chain, and
+    # each walking it themselves cost a dozen sequential round trips per proof
+    # page on a layered corpus (found in review).
+    spine = await spine_ids(session, system_id)
+    avoids = await avoided_by(session, spine, label)
+    if row is None:
+        if not avoids:
+            return None
+        return LabelDescription(label=label, avoids=avoids)
+
+    mentioned, total = await mentions_of(session, spine, row.label, MENTION_LIMIT)
     # One lookup for both directions, since a label mentioning this one is as
     # likely to be a proof as a label this one mentions.
     linkable = await _linkable(
         session,
-        system_id,
+        spine,
         [*(reference.target for reference in row.references), *mentioned],
         viewer,
     )

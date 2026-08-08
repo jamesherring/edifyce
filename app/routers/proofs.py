@@ -1110,6 +1110,7 @@ async def _detail(
         documentation=await documentation_out(
             session,
             proof.formal_system_id,
+            proof.name,
             await load_description(session, proof.formal_system_id, proof.name),
             viewer,
         ),

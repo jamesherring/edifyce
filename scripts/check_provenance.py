@@ -84,10 +84,35 @@ def examples(reports: Sequence[Provenance], layer: str) -> list[str]:
         # A theorem citing nothing at all could go anywhere, which is a different
         # thing from bottoming out in a named layer and reads wrong as "→ None".
         f"{report.proof} → {report.deepest_cited or 'cites nothing'}"
-        + ("" if report.could_be_filed_lower else f" (held by {report.deepest_grammar})")
+        + ("" if report.could_be_filed_lower else f" (held by {_holder(report)})")
         for report in reports
         if report.filed_in == layer and report.depends_only_on_shallower
     ]
+
+
+def _holder(report) -> str:  # noqa: ANN001 - a `Provenance`, imported for typing only
+    """What actually keeps a theorem where it is, when something does.
+
+    `could_be_filed_lower` conjoins *grammar* and *rule* depth, so naming the
+    grammar unconditionally blames the wrong thing whenever the rule is what pins
+    it — and prints "(held by None)" for a theorem whose notation is all shallower
+    (found in review). Whichever is deepest is the one holding it; both, when they
+    tie at the bottom.
+    """
+    holding = [
+        (depth, name)
+        for depth, name in (
+            (report.grammar_depth, report.deepest_grammar),
+            (report.rule_depth, report.deepest_rule),
+        )
+        if depth is not None and name is not None and depth >= report.filed
+    ]
+    if not holding:
+        return "something off its chain"
+    deepest = max(depth for depth, _name in holding)
+    return " and ".join(
+        sorted({name for depth, name in holding if depth == deepest})
+    )
 
 
 def main() -> int:

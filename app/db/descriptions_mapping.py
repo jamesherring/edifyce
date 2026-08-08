@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING
 from sqlalchemy import delete, distinct, func, insert, select
 from sqlalchemy.orm import selectinload
 
-from app.db.lineage import spine_ids
 from app.db.descriptions import (
     LabelAttributionRow,
     LabelDescriptionRow,
@@ -28,7 +27,7 @@ from app.db.descriptions import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Iterable, Mapping, Sequence
 
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.orm import Session
@@ -200,7 +199,10 @@ async def contributions(
 
 
 async def mentions_of(
-    session: AsyncSession, system_id: uuid.UUID, target: str, limit: int
+    session: AsyncSession,
+    spine: Sequence[uuid.UUID],
+    target: str,
+    limit: int,
 ) -> tuple[list[str], int]:
     """The labels whose prose points at ``target``, and how many there are.
 
@@ -208,11 +210,12 @@ async def mentions_of(
     punctuation: "what builds on this" is the question a reader of a foundational
     theorem actually has, and `set.mm` answers it 656 times for ``ax-13``.
 
-    Asked of the whole **spine**, because a layered corpus files each statement
-    against the layer its own section falls in — so `ax-1` sits on the
-    propositional root and almost everything citing it sits above. Scoped to one
-    id, a root statement reports a fraction of its mentions and says nothing about
-    the omission (found in review).
+    ``spine`` is the systems to look in — `app.db.lineage.spine_ids` of the one
+    being read, and the whole spine rather than that one id because a layered
+    corpus files each statement against the layer its own section falls in: `ax-1`
+    sits on the propositional root and almost everything citing it sits above.
+    Taken as an argument rather than derived here, so a caller asking several of
+    these questions about one system walks the chain once (both found in review).
 
     Capped, with the true count beside it, because that distribution has a long
     head: returning every mention would put hundreds of labels on the page for the
@@ -220,9 +223,7 @@ async def mentions_of(
     Ordered by label so the cap takes the same slice twice.
     """
     where = (
-        LabelDescriptionRow.formal_system_id.in_(
-            await spine_ids(session, system_id)
-        ),
+        LabelDescriptionRow.formal_system_id.in_(spine),
         LabelReferenceRow.target == target,
     )
     # Distinct: a comment may point at the same label twice (set.mm's `idi` and
