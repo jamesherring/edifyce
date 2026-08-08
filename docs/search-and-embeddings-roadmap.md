@@ -81,6 +81,14 @@ confirm are in place and serving two endpoints; the α-exact case is Phase 0's
 digest doing the work. What is *not* built is the index below — the discrimination
 tree that makes the candidate set small rather than merely smaller.
 
+**The deeper index is now in progress** as a *fingerprint index* (Schulz 2012,
+the SQL-native member of the discrimination-tree family), with the design and the
+100%-recall argument in [search-phase1-fingerprint.md](search-phase1-fingerprint.md).
+The engine primitive (`website/logical/fingerprint.py`) and its soundness suite
+(`tests/test_fingerprint.py`) have landed; storage (an Atlas migration) and the
+wiring into `conclusion_candidates` are the remaining steps. Position `()` of the
+fingerprint *is* the head-symbol filter above, so the change is additive.
+
 That ordering was deliberate: the cheap filter needs no new representation and no
 new storage, so it could ship behind the same interface a term net will use.
 Candidates in, unification confirms; `app/db/retrieval.py` is the seam, and
