@@ -460,7 +460,11 @@ def test_a_theorem_that_never_reached_the_kernel_is_reported_not_stored(session)
     assert (report.checked, report.verified, report.failed) == (4, 3, 1)
     assert report.failures[0][0] == "a1i"
     assert "proof concludes" in report.failures[0][1]
-    assert session.scalars(select(Proof.name)).all() == ["mp2", "2a1i", "a2i"]
+    # Ordered by the corpus's own position: the assertion is about *which*
+    # proofs were stored, and an unordered select has no order to rely on.
+    assert session.scalars(
+        select(Proof.name).order_by(Proof.position)
+    ).all() == ["mp2", "2a1i", "a2i"]
 
 
 def test_committing_in_batches_stores_the_same_graph(session, database):
@@ -482,7 +486,9 @@ def test_the_limit_stops_the_walk(session, database):
     report = import_corpus(session, database, limit=2, name="Propositional")
 
     assert report.checked == 2
-    assert session.scalars(select(Proof.name)).all() == ["mp2", "a1i"]
+    assert session.scalars(
+        select(Proof.name).order_by(Proof.position)
+    ).all() == ["mp2", "a1i"]
 
 
 def test_a_nonsense_limit_or_batch_is_refused_before_anything_is_written(
@@ -535,7 +541,11 @@ def test_an_unstorable_theorem_costs_that_theorem_not_the_run(
     assert report.failures == [("a1i", "no room at the inn")]
     # The counters describe what is *stored*, so the failed proof is in neither
     # the tallies nor the tables — while its neighbours in the batch survive.
-    assert session.scalars(select(Proof.name)).all() == ["mp2", "2a1i", "a2i"]
+    # Ordered by the corpus's own position: the assertion is about *which*
+    # proofs were stored, and an unordered select has no order to rely on.
+    assert session.scalars(
+        select(Proof.name).order_by(Proof.position)
+    ).all() == ["mp2", "2a1i", "a2i"]
     assert report.lines == len(session.scalars(select(ProofLineRow)).all())
 
 

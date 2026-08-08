@@ -874,6 +874,56 @@ class LabelDescription(BaseModel):
     avoids: list[str] = Field(default_factory=list)
 
 
+class LabelHit(BaseModel):
+    """One label a prose search matched, and where in it the words landed.
+
+    The listing shape beside :class:`LabelDescription`'s single-label one: a
+    title, a slice of the prose, and enough to follow the hit. The full record —
+    the attributions, the cross-references, what points back — is one read away at
+    ``GET /formal-systems/{id}/labels/{label}``, and a search that carried it
+    would ship a corpus comment and its whole reference graph per row.
+    """
+
+    label: str
+    # The layer the label lives on, which on a layered corpus is not the system
+    # that was searched. It is what the label is stored against, so it is what a
+    # follow-up read has to be addressed to.
+    formal_system_id: uuid.UUID
+    title: str | None = None
+    # The prose around the first matched word, ellipsed where it is a slice. Null
+    # when the match was in the label or the title, since there is then nothing in
+    # the body to point at.
+    excerpt: str | None = None
+    # Which of `label`, `title`, `text` the ranking used. Served because a ranking
+    # a caller cannot account for is one it has to trust blindly or ignore, and
+    # this one has a knowable weakness: a common word deep in a long comment ranks
+    # exactly like the same word in the title of the thing being looked for.
+    matched: Literal["label", "title", "text"]
+    # Set when the label names a proof the viewer may open. Null for the roughly
+    # half of a corpus's labels that are `$a`s and have no proof at all — the
+    # label is still citable, there is simply nothing to open.
+    proof_id: uuid.UUID | None = None
+    proof_title: str | None = None
+    # `(New usage is discouraged.)` / `(Proof modification is discouraged.)`. On a
+    # search result these carry more weight than anywhere else: this is the list a
+    # caller picks a citation from, and `set.mm` discourages 5,169 of its own.
+    discouraged_usage: bool = False
+    discouraged_modification: bool = False
+
+
+class LabelSearch(Page[LabelHit]):
+    """A page of prose hits, and how much prose there was to miss.
+
+    ``documented`` is the size of the haystack — how many of this system's labels
+    carry any prose at all. It is what makes an empty result readable: "the words
+    are not in this corpus" and "this corpus is undocumented" are the same empty
+    list otherwise, and only one of them means the search is finished. The same
+    distinction ``TheoremMatches.unindexed`` draws, for the same reason.
+    """
+
+    documented: int
+
+
 class ProofSummary(BaseModel):
     id: uuid.UUID
     name: str

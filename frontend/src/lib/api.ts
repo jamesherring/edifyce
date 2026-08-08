@@ -1043,6 +1043,43 @@ export interface LabelDescription {
 	avoids: string[];
 }
 
+/** One label a prose search matched, and where in it the words landed.
+ *
+ * The listing shape beside `LabelDescription`'s single-label one: a title, a
+ * slice of the prose, and enough to follow the hit. The full record — the
+ * attributions, the cross-references, what points back — is one `label()` call
+ * away, and a search that carried it would ship a corpus comment and its whole
+ * reference graph per row. */
+export interface LabelHit {
+	label: string;
+	/** The layer the label lives on, which on a layered corpus is not the system
+	 * that was searched — so it is what a follow-up `label()` must be addressed to. */
+	formal_system_id: string;
+	title: string | null;
+	/** The prose around the first matched word, ellipsed where it is a slice. Null
+	 * when the match was in the label or the title, since there is then nothing in
+	 * the body to point at. */
+	excerpt: string | null;
+	/** Which field the ranking used. Served because a ranking a caller cannot
+	 * account for is one it has to trust blindly or ignore. */
+	matched: 'label' | 'title' | 'text';
+	/** Set when the label names a proof the viewer may open — null for the roughly
+	 * half of a corpus's labels that are `$a`s and have no proof at all. */
+	proof_id: string | null;
+	proof_title: string | null;
+	discouraged_usage: boolean;
+	discouraged_modification: boolean;
+}
+
+/** A page of prose hits, and how much prose there was to miss.
+ *
+ * `documented` is what makes an empty result readable: "the words are not in this
+ * corpus" and "this corpus is undocumented" are the same empty list otherwise,
+ * and only one of them means the search is finished. */
+export interface LabelSearch extends Page<LabelHit> {
+	documented: number;
+}
+
 /** One `~ target` the prose points at, and the span of `text` it occupies.
  *
  * `start`/`end` are why this needs no parser here: the markup rule is Metamath's,
@@ -1552,6 +1589,24 @@ export const api = {
 		label: (id: string, label: string) =>
 			request<LabelDescription>(
 				`/formal-systems/${id}/labels/${encodeURIComponent(label)}`
+			),
+		/** Find a label from the words someone used for it — the corpus's own prose
+		 * and proofs' own titles alike, across the whole inheritance spine.
+		 *
+		 * A substring match over words, ranked by where they landed, so it has no
+		 * stemming and no synonyms: a query sharing no *word* with the prose scores
+		 * nothing however well it describes it. `documented` says how much prose it
+		 * looked through, so an empty answer is readable as one. */
+		searchLabels: (
+			id: string,
+			q: string,
+			params?: { limit?: number; offset?: number }
+		) =>
+			request<LabelSearch>(
+				`/formal-systems/${id}/labels${listQuery(
+					{ limit: params?.limit, offset: params?.offset },
+					{ q }
+				)}`
 			)
 	},
 

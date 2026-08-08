@@ -37,6 +37,7 @@ from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text, false,
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, uuid_pk_column
+from app.db.models import _trigram_index
 
 if TYPE_CHECKING:
     from app.db.models import FormalSystem
@@ -51,6 +52,12 @@ class LabelDescriptionRow(Base):
         Index(
             "uq_label_descriptions_system_label", "formal_system_id", "label", unique=True
         ),
+        # What makes `app.db.label_search` a lookup rather than a scan of the
+        # whole corpus. See `models._trigram_index` for why there are three and
+        # why they are Postgres-only.
+        _trigram_index("label_descriptions", "label"),
+        _trigram_index("label_descriptions", "title"),
+        _trigram_index("label_descriptions", "text"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk_column()
