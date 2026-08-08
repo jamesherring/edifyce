@@ -12,6 +12,7 @@ made of it. The first test here is the one that says so.
 
 from __future__ import annotations
 
+
 import pytest
 
 pytest.importorskip("regex")
@@ -21,10 +22,14 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.db import Base
-from app.db.descriptions import LabelAttributionRow, LabelDescriptionRow
+from app.db.descriptions import (
+    LabelAttributionRow,
+    LabelDescriptionRow,
+    LabelReferenceRow,
+)
 from app.db.descriptions_mapping import store_descriptions
 from app.db.metamath_store import import_corpus
-from app.db.models import Proof
+from app.db.models import FormalSystem, Proof
 from tests.database import enable_foreign_keys
 from website.logical.metamath import parse
 from website.logical.metamath.comments import (
@@ -256,3 +261,127 @@ def test_a_prose_sentence_too_long_to_be_an_attribution_is_left_as_prose() -> No
     description = read_comment(f"(Explained by someone, {long_tail}.)")
     assert description.attributions == ()
     assert description.text.startswith("(Explained by someone,")
+
+
+# ---------------------------------------------------------------------------
+# Cross-references and the discouragement markers
+# ---------------------------------------------------------------------------
+
+# `id` points at two things and carries both markers; `ax-1` points at nothing and
+# is pointed at twice, which is what the reverse direction is read from.
+MARKED = r"""
+$c |- wff ( ) -> $.
+$v ph ps $.
+wph $f wff ph $.
+wps $f wff ps $.
+$( Wff builder for implication. $)
+wi $a wff ( ph -> ps ) $.
+$( Axiom _Simp_.  See ~ wi for the notation.  (Contributed by NM, 3-Jan-1993.) $)
+ax-1 $a |- ( ph -> ( ps -> ph ) ) $.
+$( Principle of identity.  Uses ~ ax-1 and the notation of ~ wi .
+   (New usage is discouraged.)  (Proof modification is discouraged.)
+   (Contributed by NM, 4-Apr-1994.) $)
+id $p |- ( ph -> ( ps -> ph ) ) $= ( ax-1 ) ABC $.
+$( Another identity, also from ~ ax-1 .  (Contributed by NM, 5-Apr-1994.) $)
+id2 $p |- ( ph -> ( ps -> ph ) ) $= ( ax-1 ) ABC $.
+"""
+
+
+def marked() -> Session:
+    session = database()
+    import_corpus(session, parse(MARKED), name="M")
+    session.commit()
+    return session
+
+
+def test_a_reference_is_stored_with_the_span_it_occupies() -> None:
+    # The span is the contract: a renderer slices the stored prose and puts a link
+    # in the gap, so it never needs to know what a Metamath comment looks like.
+    with marked() as session:
+        row = described(session)["id"]
+
+        assert [r.target for r in row.references] == ["ax-1", "wi"]
+        for reference in row.references:
+            assert (
+                row.text[reference.start_offset : reference.end_offset]
+                == f"~ {reference.target}"
+            )
+
+
+def test_references_keep_the_order_the_prose_puts_them_in() -> None:
+    with marked() as session:
+        row = described(session)["id"]
+
+        assert [r.position for r in row.references] == [0, 1]
+
+
+def test_a_label_pointing_nowhere_stores_no_reference() -> None:
+    with marked() as session:
+        assert described(session)["wi"].references == []
+
+
+def test_the_discouragement_markers_are_stored_as_flags() -> None:
+    with marked() as session:
+        rows = described(session)
+
+        assert rows["id"].discouraged_usage
+        assert rows["id"].discouraged_modification
+        # And nothing else in the file claims them.
+        assert not rows["ax-1"].discouraged_usage
+        assert not rows["ax-1"].discouraged_modification
+        # The prose is the mathematics, with the markers taken out of it.
+        assert "discouraged" not in rows["id"].text
+
+
+def test_a_rewrite_replaces_the_references_rather_than_adding_to_them() -> None:
+    # `store_descriptions` clears a system's rows before writing, and the
+    # references hang off them by `ON DELETE CASCADE` — so this is really asking
+    # whether the cascade reaches. It would not if the delete loaded the parents
+    # and let the ORM cascade, since `store_descriptions` deliberately does not.
+    with marked() as session:
+        system_id = session.scalars(select(LabelDescriptionRow.formal_system_id)).first()
+        before = len(session.scalars(select(LabelReferenceRow)).all())
+        assert before == 4  # ax-1 -> wi; id -> ax-1, wi; id2 -> ax-1
+
+        store_descriptions(
+            session,
+            system_id,
+            {label: read_comment(comment) for label, comment in
+             (("id", "Uses ~ ax-1 .`"),)},
+        )
+        session.commit()
+
+        assert len(session.scalars(select(LabelReferenceRow)).all()) == 1
+
+
+def test_what_points_at_a_label_is_answerable_backwards() -> None:
+    # The whole reason these are rows rather than punctuation: `ax-1` never says
+    # what uses it, and two statements say they use it.
+    with marked() as session:
+        pointing = session.scalars(
+            select(LabelDescriptionRow.label)
+            .join(LabelReferenceRow.description)
+            .where(LabelReferenceRow.target == "ax-1")
+            .order_by(LabelDescriptionRow.label)
+        ).all()
+
+        assert list(pointing) == ["id", "id2"]
+
+
+def test_a_comment_that_is_only_a_marker_is_still_stored() -> None:
+    # The markers come out of the prose, so a comment that was nothing else leaves
+    # no text and no attribution — and dropping the row would drop the warning it
+    # exists to carry. Found in review.
+    with database() as session:
+        system = FormalSystem(name="S", slug="s")
+        session.add(system)
+        session.flush()
+        store_descriptions(
+            session, system.id, {"old": read_comment("(New usage is discouraged.)")}
+        )
+        session.commit()
+
+        (row,) = session.scalars(select(LabelDescriptionRow)).all()
+        assert row.label == "old"
+        assert row.text == "" and row.attributions == []
+        assert row.discouraged_usage

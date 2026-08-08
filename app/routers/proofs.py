@@ -95,6 +95,7 @@ from app.routers._invalidation import (
     invalidate_citations,
     invalidate_warranted_edges,
 )
+from app.routers._documentation import documentation_out
 from app.routers._common import (
     PageParams,
     lock_system,
@@ -137,8 +138,6 @@ from app.schemas import (
     JustifyingAssignment,
     JustifyingPremise,
     JustifyingProviso,
-    Attribution,
-    LabelDescription,
     Page,
     ProofCreate,
     ProofDetail,
@@ -1104,25 +1103,6 @@ def _theorem_out(
     )
 
 
-def _documentation_out(row: LabelDescriptionRow | None) -> LabelDescription | None:
-    """The system's record for a proof's label, or None if it keeps none.
-
-    None for every hand-authored proof, which is the common case: a system
-    describes the labels it was *imported* with, and a proof created through the
-    API carries its own title and description instead.
-    """
-    if row is None:
-        return None
-    return LabelDescription(
-        label=row.label,
-        title=row.title,
-        text=row.text,
-        attributions=[
-            Attribution(kind=a.kind, who=a.who, dated=a.dated) for a in row.attributions
-        ],
-    )
-
-
 async def _detail(
     session: AsyncSession, proof: Proof, viewer: User | None
 ) -> ProofDetail:
@@ -1151,8 +1131,11 @@ async def _detail(
             if proof.theorem_id is not None
             else (),
         ),
-        documentation=_documentation_out(
-            await load_description(session, proof.formal_system_id, proof.name)
+        documentation=await documentation_out(
+            session,
+            proof.formal_system_id,
+            await load_description(session, proof.formal_system_id, proof.name),
+            viewer,
         ),
     )
 

@@ -83,13 +83,14 @@ def _always() -> list[Table]:
     are. `notation_pieces` joins them for the same reason on the read side: a
     system's detail reports which notations it stores, so every read of one
     queries the table whether the test has heard of notations or not. So do
-    `label_descriptions` / `label_attributions`, which a single proof read
-    consults for the corpus's record of that proof's label. So does
-    `theorem_assumptions`: promoting a theorem records what it rests on that
-    nobody proved, so the table is written on a path no test has to know about
-    (and `assumptions` is read beside it). Added here rather than to each
-    module's own list because "what a system minimally needs" is one fact, and
-    ten copies of it drift.
+    `label_descriptions` / `label_attributions` / `label_references`, which a single
+    proof read consults for the corpus's record of that proof's label — and, since
+    that record carries its cross-references and what points back at it, for both
+    directions of the reference graph. So does `theorem_assumptions`: promoting a
+    theorem records what it rests on that nobody proved, so the table is written
+    on a path no test has to know about (and `assumptions` is read beside it).
+    Added here rather than to each module's own list because "what a system
+    minimally needs" is one fact, and ten copies of it drift.
     """
     from app.db.system_relations import (
         SystemRelationExtraRow,
@@ -99,7 +100,11 @@ def _always() -> list[Table]:
         SystemRelationSymbolRow,
     )
     from app.db.assumptions import AssumptionRow, TheoremAssumptionRow
-    from app.db.descriptions import LabelAttributionRow, LabelDescriptionRow
+    from app.db.descriptions import (
+        LabelAttributionRow,
+        LabelDescriptionRow,
+        LabelReferenceRow,
+    )
     from app.db.systems import (
         NotationPieceRow,
         NotationRulePieceRow,
@@ -119,6 +124,7 @@ def _always() -> list[Table]:
         NotationRulePieceRow.__table__,
         LabelDescriptionRow.__table__,
         LabelAttributionRow.__table__,
+        LabelReferenceRow.__table__,
         AssumptionRow.__table__,
         TheoremAssumptionRow.__table__,
     ]

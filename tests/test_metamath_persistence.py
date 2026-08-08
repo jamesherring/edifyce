@@ -53,7 +53,11 @@ from app.db.promoted_theorems_mapping import LibraryChain, read_theorems
 from app.db import metamath_store
 from app.db.metamath_store import import_corpus
 from app.db.models import FormalSystem, Proof, ProofFolder
-from app.db.descriptions import LabelAttributionRow, LabelDescriptionRow
+from app.db.descriptions import (
+    LabelAttributionRow,
+    LabelDescriptionRow,
+    LabelReferenceRow,
+)
 from app.db.proof_lines import ProofLineAntecedentRow, ProofLineRow
 from app.db.systems import (
     AxiomBindingRow,
@@ -147,7 +151,7 @@ _TABLES = [
         # The citable library an import now writes alongside the proofs.
         PromotedTheoremRow, PromotedTheoremPremiseRow, PromotedTheoremBindingRow,
         # And what the file says about each label it names.
-        LabelDescriptionRow, LabelAttributionRow,
+        LabelDescriptionRow, LabelAttributionRow, LabelReferenceRow,
     )
 ]
 
@@ -875,3 +879,21 @@ def test_the_deferred_proof_writes_do_not_grow_with_the_corpus(database):
     # The link carries a parameter set per `$p`; publication is one statement over
     # the lot, so the executed-row count is dominated by the former either way.
     assert rows >= len(IMPORTED)
+
+
+def test_a_comments_cross_reference_lands_beside_the_proof(session):
+    # The whole path in one go: parse, extract, store, and a span that still cuts
+    # its own markup out of the prose it was stored with. Its own source rather
+    # than the shared fragment, which other tests here match literally.
+    documented = PROPOSITIONAL.replace(
+        "ax-1 $a", "$( Axiom _Simp_, used by ~ a1i . $)\nax-1 $a", 1
+    )
+    import_corpus(session, parse(documented), name="Documented")
+
+    (row,) = session.scalars(
+        select(LabelDescriptionRow).where(LabelDescriptionRow.label == "ax-1")
+    ).all()
+
+    (reference,) = row.references
+    assert reference.target == "a1i"
+    assert row.text[reference.start_offset : reference.end_offset] == "~ a1i"

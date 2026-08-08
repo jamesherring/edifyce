@@ -1,0 +1,112 @@
+import { describe, expect, it } from 'vitest';
+import { render, screen } from '@testing-library/svelte';
+import Documentation from './Documentation.svelte';
+import type { LabelDescription } from '$lib/api';
+
+function documentation(over: Partial<LabelDescription> = {}): LabelDescription {
+	return {
+		label: 'id',
+		title: null,
+		text: '',
+		attributions: [],
+		references: [],
+		mentioned_by: [],
+		mentioned_by_total: 0,
+		discouraged_usage: false,
+		discouraged_modification: false,
+		...over
+	};
+}
+
+describe('a corpus record', () => {
+	it('turns a reference to a readable proof into a link', () => {
+		render(Documentation, {
+			documentation: documentation({
+				text: 'Uses ~ ax-1 for the step.',
+				references: [
+					{ target: 'ax-1', start: 5, end: 11, proof_id: 'p1', title: 'Axiom Simp.' }
+				]
+			})
+		});
+
+		const link = screen.getByRole('link', { name: 'ax-1' });
+		expect(link).toHaveAttribute('href', '/proofs/p1');
+		// The target's own first sentence, so hovering says what it is.
+		expect(link).toHaveAttribute('title', 'Axiom Simp.');
+		expect(screen.getByText(/Uses/)).toBeInTheDocument();
+	});
+
+	it('shows a reference it cannot follow as the label, not as markup', () => {
+		// A definition or an axiom is documented but has no page of its own, and a
+		// draft's id is withheld. `~ df-un` is still worse than `df-un`.
+		render(Documentation, {
+			documentation: documentation({
+				text: 'See ~ df-un .',
+				references: [{ target: 'df-un', start: 4, end: 11, proof_id: null, title: null }]
+			})
+		});
+
+		expect(screen.queryByRole('link', { name: 'df-un' })).toBeNull();
+		expect(screen.getByText('df-un')).toBeInTheDocument();
+	});
+
+	it('opens an external reference in a new tab', () => {
+		render(Documentation, {
+			documentation: documentation({
+				text: 'See ~ https://example.com/p.pdf .',
+				references: [
+					{
+						target: 'https://example.com/p.pdf',
+						start: 4,
+						end: 31,
+						proof_id: null,
+						title: null
+					}
+				]
+			})
+		});
+
+		const link = screen.getByRole('link', { name: 'https://example.com/p.pdf' });
+		expect(link).toHaveAttribute('target', '_blank');
+		expect(link).toHaveAttribute('rel', 'noreferrer');
+	});
+
+	it('shows what points back, and says how many it is not showing', () => {
+		// The direction the file cannot answer. `set.mm` points at `ax-13` from 656
+		// statements, so the list is capped and the count carries the rest.
+		render(Documentation, {
+			documentation: documentation({
+				mentioned_by: [
+					{ label: 'a1i', proof_id: 'p2', title: null },
+					{ label: 'mp2', proof_id: null, title: null }
+				],
+				mentioned_by_total: 42
+			})
+		});
+
+		expect(screen.getByRole('link', { name: 'a1i' })).toHaveAttribute('href', '/proofs/p2');
+		expect(screen.getByText('mp2')).toBeInTheDocument();
+		expect(screen.getByText('and 40 more')).toBeInTheDocument();
+	});
+
+	it('says nothing about back-references when there are none', () => {
+		render(Documentation, { documentation: documentation({ text: 'Prose.' }) });
+
+		expect(screen.queryByText(/Mentioned by/)).toBeNull();
+	});
+
+	it('warns about each discouragement separately', () => {
+		render(Documentation, {
+			documentation: documentation({ discouraged_usage: true, discouraged_modification: true })
+		});
+
+		expect(screen.getByText('New usage is discouraged.')).toBeInTheDocument();
+		expect(screen.getByText('Proof modification is discouraged.')).toBeInTheDocument();
+	});
+
+	it('warns about neither when the corpus says neither', () => {
+		render(Documentation, { documentation: documentation({ text: 'Prose.' }) });
+
+		expect(screen.queryByText(/discouraged/)).toBeNull();
+	});
+});

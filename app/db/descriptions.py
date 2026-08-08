@@ -33,7 +33,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, Index, Integer, String, Text, text
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text, false, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, uuid_pk_column
@@ -67,12 +67,82 @@ class LabelDescriptionRow(Base):
     # for the reason `promoted_theorems.statement` is: some run to thousands of
     # characters, and Postgres stores a bounded and an unbounded varchar the same.
     text: Mapped[str] = mapped_column(Text, server_default="")
+    # `(New usage is discouraged.)` and `(Proof modification is discouraged.)`,
+    # as flags rather than as sentences in the prose. They are markers about the
+    # statement, not statements about the mathematics: a reader wants "do not
+    # build on this" as a badge, and an authoring tool wants to filter on it —
+    # neither is served by a phrase buried in a paragraph. `set.mm` carries 5,169
+    # and 1,787.
+    #
+    # Columns rather than rows, unlike an attribution: there are exactly two, they
+    # are booleans, and nothing about them is verbatim.
+    # `false()` rather than `text("false")`: the column named `text` two lines up
+    # shadows the imported helper inside this class body, and it renders per
+    # dialect besides (`false` on Postgres, `0` on SQLite).
+    discouraged_usage: Mapped[bool] = mapped_column(Boolean, server_default=false())
+    discouraged_modification: Mapped[bool] = mapped_column(
+        Boolean, server_default=false()
+    )
 
     system: Mapped["FormalSystem"] = relationship(back_populates="label_descriptions")
     attributions: Mapped[list["LabelAttributionRow"]] = relationship(
         back_populates="description",
         cascade="all, delete-orphan",
         order_by="LabelAttributionRow.position",
+    )
+    references: Mapped[list["LabelReferenceRow"]] = relationship(
+        back_populates="description",
+        cascade="all, delete-orphan",
+        order_by="LabelReferenceRow.position",
+    )
+
+
+class LabelReferenceRow(Base):
+    """One ``~ target`` cross-reference out of a label's prose.
+
+    Metamath's comments carry a "see also" graph and it is a large one: `set.mm`
+    writes 21,787 references across 12,389 comments, 21,336 of them naming another
+    statement. Left in the prose it is punctuation — a reader sees ``~ ax-13`` and
+    can do nothing with it — and the *reverse* question, "what points at this
+    theorem", cannot be asked at all. As rows it is both a link and an index.
+
+    **The span is stored, not just the target.** ``start_offset``/``end_offset``
+    index :attr:`LabelDescriptionRow.text`, so a renderer slices the prose and
+    substitutes a link without knowing what a Metamath comment is. The alternative
+    is re-parsing the markup in the API and again in the browser, which is two more
+    implementations of a rule that belongs in one place
+    (:class:`website.logical.metamath.comments.Reference` carries the argument).
+
+    ``target`` is what the reference *resolves to*, which for a URL carrying
+    Metamath's ``~~`` escape differs from the text in the span. Whether it names
+    something this system has is deliberately not stored: it is a join, it can
+    change as a corpus grows, and a column would go stale.
+    """
+
+    __tablename__ = "label_references"
+    __table_args__ = (
+        # "What points at this label" — the reverse direction, and the reason
+        # these are rows. set.mm's most-referenced label is cited 656 times.
+        Index("ix_label_references_target", "target"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk_column()
+    description_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("label_descriptions.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    # A label, a URL, or a page of the Metamath website. Unbounded, like the prose
+    # it was cut out of: a target is whatever ran between a `~` and the next space,
+    # and a bound would turn some future file's long URL into an integrity error
+    # thrown at the end of a twenty-minute import (found in review). set.mm's
+    # longest is 118 characters, which is exactly the kind of headroom that stops
+    # being true. Postgres stores a bounded and an unbounded varchar the same.
+    target: Mapped[str] = mapped_column(Text)
+    start_offset: Mapped[int] = mapped_column(Integer)
+    end_offset: Mapped[int] = mapped_column(Integer)
+
+    description: Mapped["LabelDescriptionRow"] = relationship(
+        back_populates="references"
     )
 
 
