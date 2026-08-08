@@ -1497,6 +1497,18 @@ theorem about `x` that the context does not contain. The bridge does real work.
 Plus: contraction of unequal assumptions still rejected; a matcher stress case
 with a context large enough that a naive AC search would not terminate.
 
+**The ergonomic evidence S3 left this waiting on has turned up, and it is
+`set.mm`** ([docs/sequent-rewriting-study.md](sequent-rewriting-study.md)). The
+corpus hand-rolled a sequent calculus — its "deduction form" *is* `Γ ⊢ φ`, with
+`->` for the turnstile and `/\` building the context, declared as such in its own
+`$j natded_init` annotation — and, having no AC context, paid for it with 181
+theorems tagged as natural-deduction machinery, position-indexed names to depth
+12 (`simp-11l`, `ad10antlr`), and a quarter of its logical citations spent moving
+contexts around. That is what an AC matcher's absence costs at scale, measured
+rather than guessed. It does not on its own justify building S4 — Edifyce has no
+large sequent corpus of its own — but it settles what S4 is: not an optimisation
+of a sequent calculus, but the thing that makes one worth having.
+
 ---
 
 ### Track D — the importer
