@@ -76,6 +76,7 @@ from app.db import (
     term_context,
     theorem_digest,
 )
+from app.db.descriptions import LabelDescriptionRow
 from app.db.descriptions_mapping import load_description
 from app.db.models import User
 from app.db.notations_mapping import load_notation, render_stored
@@ -99,6 +100,7 @@ from app.routers._common import (
 )
 from app.routers.systems import load_effective, load_system
 from website.logical.formal_system.diagnostics import numbers
+from website.logical.formal_system.justification import justification
 from website.logical.formal_system.proof import Proof as EngineProof
 from website.logical.formal_system.proof import CITATION_SEPARATOR, citation_text
 from website.logical.formal_system.retrieval import (
@@ -120,12 +122,16 @@ from app.schemas import (
     CitationProposal,
     CitationSearch,
     CitationSuggestion,
+    LineJustification,
     LineOutcome,
     LineProposal,
     LineRemoval,
     LineRemovalOutcome,
     TermProposalIn,
     FailureOut,
+    JustifyingAssignment,
+    JustifyingPremise,
+    JustifyingProviso,
     Attribution,
     LabelDescription,
     Page,
@@ -158,7 +164,6 @@ if TYPE_CHECKING:
     from sqlalchemy import ColumnElement
 
     from app.db import DefinitionTermCache, SchemaTermCache
-    from app.db.descriptions import LabelDescriptionRow
 
     from app.routers.systems import EffectiveSystem
     from website.logical.formal_system import FormalSystem as EngineSystem
@@ -456,6 +461,7 @@ async def _verify_with_references(
     persist: bool = True,
     source: str | None = None,
     built: _Built | None = None,
+    lock: bool = True,
 ) -> _Verification:
     """Verify a stored proof, resolving the lemmas it cites from other proofs.
 
@@ -474,12 +480,23 @@ async def _verify_with_references(
     reader verifying someone else's published proof. The verdict is the same
     either way; what it skips is warming the schema-term cache, whose inserts
     would be discarded with everything else.
+
+    ``lock=False`` drops the system lock, which is only sound for a caller that
+    writes nothing *and* can live with a torn read. The lock protects the
+    read-then-write below (see the note on it), so a check that never writes has
+    nothing for it to protect; what it costs to keep is serialisation, and on a
+    read fired by hovering a citation (`/lines/{n}/justification`) that would
+    make every reader queue behind every verify on the system. What it buys is a
+    consistent view across the queries this makes, so it stays on by default and
+    is dropped only where a stale record is a cosmetic answer rather than a
+    wrong one.
     """
     # Before anything is read. A verify now trusts the lemmas' stored rows
     # instead of re-checking them, so the read and the write must sit inside one
     # critical section: otherwise an invalidation can commit between them and
     # this transaction writes a valid snapshot back over it. See lock_system.
-    await lock_system(session, proof.formal_system_id)
+    if lock:
+        await lock_system(session, proof.formal_system_id)
 
     # A build handed in was made *before* this lock — the caller needed the
     # grammar to compose a line — so it is only safe to reuse if the caller took
@@ -2663,4 +2680,208 @@ async def find_citations(
         unindexed=0 if prefiltered is None else prefiltered.unindexed,
         unfiltered=0 if prefiltered is None else prefiltered.unfiltered,
         truncated=len(found) > limit or (prefiltered is not None and prefiltered.truncated),
+    )
+
+
+def _nearest_first(chain: Sequence[FormalSystem]) -> dict[uuid.UUID, int]:
+    """Each layer's *nearness* to the citing system; lower wins a label.
+
+    A citation resolves to the closest layer declaring the label, shadowing an
+    ancestor's rather than being ambiguous (`LibraryChain`). `chain` is root
+    first, ending in the system being built, so nearness is its reverse — and
+    everything answering a question *about* a citation has to rank the same way,
+    or it describes the entry the check did not use.
+    """
+    return {system.id: rank for rank, system in enumerate(reversed(chain))}
+
+
+async def _label_title(
+    session: AsyncSession, chain: Sequence[FormalSystem], label: str
+) -> str | None:
+    # Across the chain rather than the proof's own system: a citation resolves up
+    # the spine, so an imported theorem's prose sits on whichever layer declared
+    # it. One query, since a chain is a handful of systems, and the nearest of
+    # what comes back is the one the citation meant.
+    nearness = _nearest_first(chain)
+    rows = await session.scalars(
+        select(LabelDescriptionRow).where(
+            LabelDescriptionRow.formal_system_id.in_(list(nearness)),
+            LabelDescriptionRow.label == label,
+        )
+    )
+    described = min(
+        rows, key=lambda row: nearness[row.formal_system_id], default=None
+    )
+    return None if described is None else described.title
+
+
+async def _proof_of_label(
+    session: AsyncSession,
+    chain: Sequence[FormalSystem],
+    label: str,
+    user: User | None,
+) -> uuid.UUID | None:
+    """The proof establishing ``label``, when the viewer may read it.
+
+    **Through the library entry, not by name.** A citation names a *theorem*, and
+    `proofs.theorem_id` is the edge an import and a promotion both write — so the
+    entry the citation resolved to identifies its proof exactly. Matching
+    `proofs.name` instead gets it wrong twice over: a proof promoted under a
+    label other than its own name would not be found, and an unrelated proof that
+    merely happens to be *called* `imbi12d` would be linked in its place.
+
+    Resolved **nearest layer first**, the way a citation resolves: where a child
+    and an ancestor both declare a label, the child's entry is the one the check
+    used, and linking the ancestor's proof would send a reader to a theorem the
+    step did not apply.
+
+    None when there is no such entry (the label is a rule the system declares
+    rather than a theorem), when the entry has no proof (an imported primitive,
+    a `$a`), or when the viewer may not read the proof there is — which is the
+    same answer to a client either way: there is nothing to link to.
+    """
+    nearness = _nearest_first(chain)
+    entries = await session.scalars(
+        select(PromotedTheoremRow).where(
+            PromotedTheoremRow.system_id.in_(list(nearness)),
+            PromotedTheoremRow.label == label,
+        )
+    )
+    entry = min(entries, key=lambda row: nearness[row.system_id], default=None)
+    if entry is None:
+        return None
+    proof = await session.scalar(select(Proof).where(Proof.theorem_id == entry.id))
+    if proof is None or not _is_readable(proof, user):
+        return None
+    return proof.id
+
+
+@router.get(
+    "/{proof_id}/lines/{number}/justification", response_model=LineJustification
+)
+async def explain_line(
+    proof_id: uuid.UUID,
+    number: int,
+    notation: str | None = Query(
+        None,
+        description=(
+            "Read the terms in this record through one of the system's stored "
+            "notations, as `/structure` does. Omit for the source spelling."
+        ),
+    ),
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_session),
+) -> LineJustification:
+    """Why this line follows — the step's own rule, substitution and provisos.
+
+    `[imbi12d, 2, 3]` names a step without explaining it. On a corpus of 47,589
+    theorems a reader does not know what `imbi12d` says, let alone what it was
+    applied *to*, and everything that would tell them is something the checker
+    already worked out and threw away.
+
+    **Checked rather than read**, like `/lines/{n}/citations` and for the same
+    reason: the substitution is derived by the match, and no stored row carries
+    it. Storing one per citation was the alternative and is the wrong trade — a
+    whole-corpus import would write tens of millions of rows for a record only
+    ever read one line at a time, and on the hover that asks for it.
+
+    Which is also why it is **signed-in only**, for all that it reads rather than
+    writes: it rebuilds the proof's whole system and re-checks it, so it is a
+    route of the shape the block comment above `verify_stored_proof` describes,
+    and that comment says such a route belongs on its list rather than beside the
+    reads. More so than the rest of them — this one is fired by *hovering*, so an
+    anonymous reader sweeping a citation column would be the cheapest way there
+    is to spend the server's compute.
+
+    Nothing is written. A read must not write, and a non-owner's transaction is
+    rolled back anyway.
+    """
+    proof = await _get_readable_or_404(session, proof_id, user)
+
+    # Unlocked, unlike `/citations`: this is fired by hovering a citation, and a
+    # reader sweeping a column would otherwise take the system's exclusive lock
+    # once per step and queue behind every verify and import on it. Nothing here
+    # writes, so the lock protects nothing; the cost is that a record read across
+    # a concurrent edit may describe the grammar either side of it, which is a
+    # cosmetic answer on a display-only endpoint.
+    verification = await _verify_with_references(
+        session, proof, persist=False, lock=False
+    )
+    checked = verification.engine_proof
+    if checked is None or verification.effective is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=verification.response.errors
+            or ["This proof could not be checked, so no step of it can be explained."],
+        )
+
+    line = _numbered_line(checked, number)
+    if line is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"This proof has no line {number}.",
+        )
+
+    projection = None
+    if notation is not None:
+        projection = await load_notation(session, proof.formal_system_id, notation)
+        if projection is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"This proof's system has no notation named '{notation}'.",
+            )
+
+    told = justification(line, projection)
+    if told is None:
+        # Not an error: a hole, a scope opener, a comment and a line whose check
+        # failed are all lines a citation never resolved for. Which one it is is
+        # `Failure`'s question, and answering it here would be a second, weaker
+        # copy of `diagnostics`.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Line {number} is not justified by a rule, so there is nothing "
+                "to explain: it opens a scope, states a hole, or did not check."
+            ),
+        )
+
+    chain = verification.effective.chain
+    return LineJustification(
+        line=number,
+        citation=line.reference_string_display,
+        kind=told.kind,
+        label=told.label,
+        name=told.name,
+        conclusion=told.conclusion,
+        premises=[
+            JustifyingPremise(
+                position=premise.position,
+                schema_form=premise.schema,
+                number=premise.number,
+                statement=premise.statement,
+                extra=premise.extra,
+            )
+            for premise in told.premises
+        ],
+        assignments=[
+            JustifyingAssignment(variable=a.variable, stands_for=a.stands_for)
+            for a in told.assignments
+        ],
+        provisos=[
+            JustifyingProviso(source=p.source, variables=list(p.variables))
+            for p in told.provisos
+        ],
+        discharges=told.discharges,
+        # Only for a label that names something. An unlabelled definition reports
+        # none, and looking one up by a stand-in would attach another label's
+        # prose — or another proof — to a card about this step.
+        title=(
+            await _label_title(session, chain, told.label) if told.label else None
+        ),
+        proof_id=(
+            await _proof_of_label(session, chain, told.label, user)
+            if told.label
+            else None
+        ),
+        notation=notation,
     )

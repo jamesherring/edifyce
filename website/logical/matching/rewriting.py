@@ -135,15 +135,29 @@ def iter_joint(
         yield from iter_joint(rest, context, extended)
 
 
+def joint_binding(
+    pairs: list[tuple[StringPattern, str]], context: Context, binding: Binding | None = None
+) -> Binding | None:
+    """The first substitution satisfying every ``(pattern, string)`` pair, or None.
+
+    The string-rewriting counterpart of the term unifier's ``match_all``: the
+    existence of a consistent binding is exactly what makes a rewriting step
+    valid, and *which* binding it is is what a reader asking why the step follows
+    needs (`formal_system.justification`). First rather than only, as on the term
+    side — an associative match may admit several splittings, and the checker
+    commits to the one it reaches.
+    """
+    return next(iter_joint(pairs, context, binding), None)
+
+
 def joint_binding_exists(
     pairs: list[tuple[StringPattern, str]], context: Context, binding: Binding | None = None
 ) -> bool:
     """Whether one substitution satisfies every ``(pattern, string)`` pair.
 
-    This is the string-rewriting counterpart of the term unifier's
-    ``match_all`` — the existence of a consistent binding is exactly what makes a
-    rewriting step valid.
+    The predicate form, kept because the search asks it far more often than it
+    wants the answer: `concludes`, `slot_admits` and `prefix_binding_exists` are
+    rejections, and a caller that only branches should not have to hold a
+    binding to do it.
     """
-    for _ in iter_joint(pairs, context, binding):
-        return True
-    return False
+    return joint_binding(pairs, context, binding) is not None

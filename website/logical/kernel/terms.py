@@ -185,7 +185,13 @@ class Var(Term):
 _BOUND_PREFIX = "\x00bound:"
 
 
-def _bound_label(index: int) -> str:
+def bound_label(index: int) -> str:
+    """The reserved name ``Bound(index)`` carries.
+
+    Public because a *reader* needs it too: a defining form stores its binders
+    abstractly, so anything showing one to a person has to put the declared name
+    back where the index sits (`formal_system.justification`).
+    """
     return f"{_BOUND_PREFIX}{index}"
 
 
@@ -209,7 +215,7 @@ class Bound(Var):
     """
 
     def __init__(self, index: int, sort: Constructor) -> None:
-        super().__init__(_bound_label(index), sort)
+        super().__init__(bound_label(index), sort)
         self.index: int = index
 
     def free_vars(self, acc: FreeVars | None = None) -> FreeVars:
