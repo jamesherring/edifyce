@@ -121,12 +121,19 @@ def test_the_markers_are_schulz_letters():
     assert (VARIABLE, BELOW_VAR, ABSENT) == ("A", "B", "N")
 
 
-def test_comparing_fingerprints_of_different_widths_is_refused():
-    # A width mismatch means the two were computed over different position sets —
-    # comparing the common prefix would silently drop the extra positions, a
-    # precision regression that looks like a correct answer. Loud instead.
-    with pytest.raises(ValueError, match="width mismatch"):
-        compatible((VARIABLE, ABSENT), (VARIABLE,))
+def test_comparing_fingerprints_over_different_positions_is_refused(context):
+    # Width equality is not enough: two position sets of the same width describe
+    # different paths, so comparing their vectors slot by slot is meaningless.
+    # `((), (0,))` and `((), (0, 0))` are both width two — the fingerprint carries
+    # the position-set identity so the mismatch is refused, not misread. (Codex,
+    # on #198.)
+    term = ground(context, "(a -> b)")
+    here = fingerprint(term, positions=[(), (0,)])
+    deeper = fingerprint(term, positions=[(), (0, 0)])
+    assert len(here.features) == len(deeper.features)  # same width…
+    assert here.key != deeper.key                      # …different positions
+    with pytest.raises(ValueError, match="position-set mismatch"):
+        compatible(here, deeper)
 
 
 # ---------------------------------------------------------------------------

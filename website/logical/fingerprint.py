@@ -45,6 +45,8 @@ literals too.
 
 from __future__ import annotations
 
+import hashlib
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .kernel.terms import Node, Var
@@ -72,6 +74,29 @@ FINGERPRINT_POSITIONS: tuple[Position, ...] = (
     (1, 0),
     (1, 1),
 )
+
+
+def positions_key(positions: Sequence[Position]) -> str:
+    """A stable identity for a position set — its order and paths, not its width.
+
+    Two fingerprints are comparable only if they were computed over the *same*
+    positions in the *same* order: position `i` of one must mean the same path as
+    position `i` of the other, or comparing them position by position is
+    meaningless. Width equality does not imply that — `((), (0,))` and
+    `((), (0, 0))` are both width two and describe different paths — so a length
+    check alone would silently compare vectors that disagree about what each
+    slot is (Codex, on #198). This digests the whole set, so a reorder or a
+    same-width replacement changes the key and a stale stored fingerprint is
+    refused rather than misread.
+    """
+    return hashlib.sha256(
+        "|".join(",".join(map(str, position)) for position in positions).encode()
+    ).hexdigest()[:16]
+
+
+# The identity of the shipped position set, stored beside every fingerprint so a
+# comparison across a change to `FINGERPRINT_POSITIONS` fails loudly.
+POSITIONS_KEY = positions_key(FINGERPRINT_POSITIONS)
 
 # The three non-symbol features, with Schulz's letters (A = variable here, B =
 # below a variable, N = nonexistent). Single characters so a stored fingerprint
@@ -118,11 +143,29 @@ def feature_at(term: Term, path: Position) -> Feature:
     return VARIABLE if isinstance(current, Var) else _symbol(current)
 
 
+@dataclass(frozen=True)
+class Fingerprint:
+    """A term's index key: the features, tagged with which positions produced them.
+
+    ``key`` is :func:`positions_key` of the position set, so two fingerprints know
+    whether they are even comparable — the feature tuple alone does not, since
+    two different position sets can yield same-width vectors. Storage persists
+    ``features`` (the vector) and ``key`` (once per index generation), and
+    reconstructs this to compare a stored fingerprint against a live query.
+    """
+
+    key: str
+    features: tuple[Feature, ...]
+
+
 def fingerprint(
     term: Term, positions: Sequence[Position] = FINGERPRINT_POSITIONS
-) -> tuple[Feature, ...]:
-    """The feature at each sampled position — the term's index key."""
-    return tuple(feature_at(term, position) for position in positions)
+) -> Fingerprint:
+    """The feature at each sampled position, tagged with the position set's identity."""
+    return Fingerprint(
+        key=positions_key(positions),
+        features=tuple(feature_at(term, position) for position in positions),
+    )
 
 
 def features_compatible(a: Feature, b: Feature) -> bool:
@@ -147,23 +190,25 @@ def features_compatible(a: Feature, b: Feature) -> bool:
     return False
 
 
-def compatible(query: Sequence[Feature], stored: Sequence[Feature]) -> bool:
+def compatible(query: Fingerprint, stored: Fingerprint) -> bool:
     """Whether two fingerprints permit their terms to unify.
 
     ``True`` for every unifiable pair (the recall contract), so a caller filters
     on this and lets the kernel confirm. A single incompatible position is a
     sound rejection; agreement everywhere is only a licence to try the unifier.
 
-    The two must be over the **same** positions. A width mismatch is refused
-    rather than compared on the common prefix — a fingerprint stored under one
-    position set and queried under a wider one would otherwise drop every new
-    position silently, which is a precision regression wearing the mask of a
-    correct answer. Widening :data:`FINGERPRINT_POSITIONS` means re-indexing, and
-    this is what makes forgetting to loud.
+    The two must be over the **same** position set. A key mismatch is refused
+    rather than compared position by position — a fingerprint stored under one
+    position set and compared against another (a widen, a reorder, a same-width
+    replacement) would otherwise read each slot as a path it does not describe,
+    a recall violation wearing the mask of a correct answer. Changing
+    :data:`FINGERPRINT_POSITIONS` means re-indexing, and the key is what makes
+    forgetting loud.
     """
-    if len(query) != len(stored):
+    if query.key != stored.key:
         raise ValueError(
-            f"fingerprint width mismatch: {len(query)} vs {len(stored)} — the two "
-            "were computed over different position sets and cannot be compared."
+            f"fingerprint position-set mismatch: {query.key} vs {stored.key} — the "
+            "two were computed over different positions and cannot be compared. "
+            "Re-index after changing FINGERPRINT_POSITIONS."
         )
-    return all(features_compatible(q, s) for q, s in zip(query, stored))
+    return all(features_compatible(q, s) for q, s in zip(query.features, stored.features))
