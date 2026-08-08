@@ -618,6 +618,14 @@ def _publish(
     Ownerlessness is untouched, and it is ownerlessness rather than this flag that
     stops `POST /proofs/{id}/verify` writing back over the imported structure.
     """
+    if not system_ids:
+        # The same guard `_link_proofs_to_theorems` makes and for the same reason:
+        # an empty `sa_or()` compiles away, so the scope would silently widen from
+        # none to *every* system — and the widening here publishes every valid
+        # proof in the database rather than leaving some `theorem_id` null.
+        # Unreachable while `corpus_specs` always yields a spec, which is exactly
+        # the kind of invariant a guard is cheap insurance against.
+        return
     table = Proof.__table__
     session.execute(
         sa_update(table)

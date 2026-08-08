@@ -48,6 +48,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
+from app.db.assumptions import AssumptionRow
 from app.db.models import FormalSystem, Proof
 from app.db.proof_lines import ProofLineRow
 from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
@@ -84,6 +85,13 @@ class Provenance:
     # Those primitives, by label. Carried rather than recomputed because "which
     # axioms does this theorem rest on" is the question a provenance report
     # exists to answer; bounded by the corpus's axiom count.
+    #
+    # An **assumption** is a primitive too — asserted with no warrant, which is
+    # what the traversal reads — but it is a debt rather than a foundation, so it
+    # is reported apart (`app/db/assumptions.py`). The two partition the
+    # primitives reached: a label appears in exactly one of them, and a corpus
+    # that adopts no assumptions has `axioms` exactly as it did before this
+    # existed.
     axioms: tuple[str, ...]
     # The deepest layer declaring a production its own lines are *written* in.
     # A second way to be pinned, and independent of the first: a theorem stating
@@ -98,6 +106,10 @@ class Provenance:
     # in a layer that does not declare it (found in review).
     deepest_rule: str | None
     rule_depth: int | None
+    # The unproved *debts* it rests on, by label. Non-empty means this proof
+    # establishes a conditional, whatever its own lines say. Defaulted, and so
+    # placed after the pins above, which are not.
+    assumes: tuple[str, ...] = ()
     # Did the closure touch an entry this proof's own chain cannot resolve? The
     # defect :attr:`misfiled` reports, carried as a fact rather than inferred
     # from a depth comparison that only means anything down a single spine.
@@ -106,6 +118,11 @@ class Provenance:
     # a definition the proof needs and its chain does not reach. Separate from
     # `unreachable` only in provenance; :attr:`misfiled` is their disjunction.
     unreachable_machinery: bool = False
+
+    @property
+    def rests_on_assumptions(self) -> bool:
+        """Does it depend on something nobody has proved anywhere?"""
+        return bool(self.assumes)
 
     @property
     def misfiled(self) -> bool:
@@ -223,6 +240,9 @@ class _Entry:
     system_id: uuid.UUID
     label: str
     primitive: bool
+    # A primitive that is a *debt* rather than a foundation. Never true without
+    # `primitive`, since an assumption is stored as one.
+    assumed: bool
     # The stored proof warranting it, if the corpus proved it here. `None` for a
     # primitive, and for an entry imported without its proof — both of which end
     # the traversal, which is why they are not distinguished.
@@ -254,6 +274,7 @@ class _Reach:
     cited: uuid.UUID | None
     axioms: uuid.UUID | None
     axiom_labels: tuple[str, ...]
+    assumed_labels: tuple[str, ...]
     unreachable: bool
 
 
@@ -297,11 +318,13 @@ def _library(
     Which of them a citation means is the chain's business, settled in
     :func:`_cited`.
     """
+    assumed = set(session.scalars(select(AssumptionRow.theorem_id)))
     return {
         (row.system_id, row.label): _Entry(
             system_id=row.system_id,
             label=row.label,
             primitive=row.primitive,
+            assumed=row.id in assumed,
             proof_id=proofs_by_theorem.get(row.id),
         )
         for row in session.scalars(select(PromotedTheoremRow))
@@ -568,6 +591,7 @@ def _reach(
         cited: uuid.UUID | None = None
         axioms: uuid.UUID | None = None
         labels: set[str] = set()
+        debts: set[str] = set()
         unreachable = False
         for citation in deps.get(current, ()):
             entry = citation.entry
@@ -575,7 +599,9 @@ def _reach(
             cited = _deeper(cited, entry.system_id, depths)
             if entry.primitive:
                 axioms = _deeper(axioms, entry.system_id, depths)
-                labels.add(entry.label)
+                # Partitioned: a debt is a primitive the report names apart, not
+                # a second reading of the same label.
+                (debts if entry.assumed else labels).add(entry.label)
             # A missing memo entry is a cycle's back-edge, already on the stack
             # above us. Skipping it is what breaks the loop; the closure it would
             # have contributed is the one being computed here.
@@ -584,11 +610,18 @@ def _reach(
                 cited = _deeper(cited, below.cited, depths)
                 axioms = _deeper(axioms, below.axioms, depths)
                 labels |= set(below.axiom_labels)
+                debts |= set(below.assumed_labels)
                 # A cited proof that cannot reach its own dependencies makes this
                 # one's provenance unreadable too: the closure it contributes is
                 # missing whatever it could not resolve.
                 unreachable |= below.unreachable
-        memo[current] = _Reach(cited, axioms, tuple(sorted(labels)), unreachable)
+        memo[current] = _Reach(
+            cited,
+            axioms,
+            tuple(sorted(labels)),
+            tuple(sorted(debts)),
+            unreachable,
+        )
         open_.discard(current)
     return memo[proof_id]
 
@@ -738,6 +771,7 @@ def provenance(session: Session) -> tuple[Provenance, ...]:
                 deepest_axiom=names[reach.axioms] if reach.axioms is not None else None,
                 axiom_depth=depths[reach.axioms] if reach.axioms is not None else None,
                 axioms=reach.axiom_labels,
+                assumes=reach.assumed_labels,
                 deepest_grammar=names[written] if written is not None else None,
                 grammar_depth=depths[written] if written is not None else None,
                 deepest_rule=names[needs] if needs is not None else None,

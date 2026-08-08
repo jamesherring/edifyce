@@ -26,6 +26,7 @@ from app.auth.oauth import (
     oauth_backend,
     redirect_url_for,
 )
+from app.routers.assumptions import router as assumptions_router
 from app.routers.proofs import router as proofs_router
 from app.routers.system_parts import router as system_parts_router
 from app.routers.system_relations import router as system_relations_router
@@ -124,6 +125,11 @@ app.include_router(system_relations_router, prefix=API_PREFIX)
 # Owner-scoped CRUD for proofs (stored rows verified against their system).
 # Like systems_router, its routes carry their own /proofs prefix under /api.
 app.include_router(proofs_router, prefix=API_PREFIX)
+# Citable statements nobody has proved, plus the public index of what rests on
+# them. Two path shapes — under a system, and the cross-system `/assumptions`
+# register — so the router carries its paths in full and takes no prefix of its
+# own beyond /api.
+app.include_router(assumptions_router, prefix=API_PREFIX)
 
 # fastapi-users' routers mount as nested routers, so their concrete paths are
 # not APIRoute entries on `app` — the SPA fallback's API-path guard can't find
@@ -138,6 +144,9 @@ _MOUNTED_API_ROUTERS: list[tuple[str, object]] = [
     (API_PREFIX, systems_router),
     # proofs_router likewise carries its /proofs prefix on each route.
     (API_PREFIX, proofs_router),
+    # And the assumptions register, whose `/assumptions/public` is the one
+    # non-parameterized path a browser GET could otherwise reach as the SPA.
+    (API_PREFIX, assumptions_router),
 ]
 
 # Social login: one router per configured provider. `is_verified_by_default`

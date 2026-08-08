@@ -795,6 +795,71 @@ export interface PromotedTheorem {
 	statement: string;
 	formal_system_id: string;
 	proved_by_id: string | null;
+	/** Assumptions this entry transitively rests on, by label. Non-empty means it
+	 * is a *conditional* result: citable, and resting on something nobody has
+	 * proved. Never leave it out of a display that says the entry stands. */
+	assumes: string[];
+}
+
+/** A citable statement nobody has proved — mirrors `AssumptionOut`.
+ *
+ * `dependents` counts the library entries that rest on it **transitively**, so
+ * an entry three hops away naming it nowhere still counts. That is the ranking
+ * the public register uses: it says which gap closing pays for most. */
+export interface Assumption {
+	id: string;
+	label: string;
+	statement: string;
+	reason: string;
+	source: string | null;
+	formal_system_id: string;
+	formal_system_name: string;
+	dependents: number;
+	created_at: string;
+}
+
+/** The same, with the entries resting on it named — mirrors `AssumptionDetail`. */
+export interface AssumptionDetail extends Assumption {
+	dependent_labels: string[];
+}
+
+/** Take a statement on as citable without proving it — mirrors `AssumptionCreate`.
+ *
+ * `statement` is source text in the system's own grammar, as an imported
+ * theorem's is. `reason` is required: an assumption with no reason is an axiom
+ * nobody remembers adopting. */
+export interface AssumptionCreate {
+	label: string;
+	statement: string;
+	premises?: string[];
+	metavariables?: Record<string, string>;
+	distinct?: string[];
+	reason: string;
+	source?: string | null;
+}
+
+/** One assumption as a dependency report names it — mirrors `AssumedOut`. */
+export interface Assumed {
+	theorem_id: string;
+	formal_system_id: string;
+	label: string;
+	statement: string;
+	reason: string;
+	source: string | null;
+}
+
+/** What a proof rests on that nobody has proved — mirrors `ProofProvenance`.
+ *
+ * `complete` is the honest half, and there are two ways to lose it:
+ * `unresolved` names cited labels the report could not account for, and
+ * `unread_lemmas` names cited lemma proofs holding no stored structure. A UI
+ * showing `assumes` without them would present a partial answer as a whole one. */
+export interface ProofProvenance {
+	proof_id: string;
+	assumes: Assumed[];
+	unresolved: string[];
+	unread_lemmas: string[];
+	complete: boolean;
 }
 
 export interface ProofDetail extends ProofSummary {
@@ -1459,7 +1524,45 @@ export const api = {
 				body: JSON.stringify({ label: label ?? null, metavariables: metavariables ?? {} })
 			}),
 		/** Withdraw that entry. A no-op if the proof established none. */
-		retire: (id: string) => request<null>(`/proofs/${id}/promote`, { method: 'DELETE' })
+		retire: (id: string) => request<null>(`/proofs/${id}/promote`, { method: 'DELETE' }),
+		/** What this proof rests on that nobody has proved — itself, and every
+		 * lemma proof and library entry it reaches. 409s if the proof has never
+		 * been verified, since nothing has resolved its citations. */
+		provenance: (id: string) => request<ProofProvenance>(`/proofs/${id}/provenance`)
+	},
+
+	/**
+	 * Citable statements nobody has proved, and the register of what rests on
+	 * them. Creating and withdrawing are the system owner's; reading a published
+	 * system's is anyone's.
+	 */
+	assumptions: {
+		/** What this system asserts without proof, most depended-on first. */
+		list: (systemId: string) =>
+			request<Assumption[]>(`/formal-systems/${systemId}/assumptions`),
+		/** One of them, with the entries resting on it named. */
+		get: (systemId: string, label: string) =>
+			request<AssumptionDetail>(
+				`/formal-systems/${systemId}/assumptions/${encodeURIComponent(label)}`
+			),
+		/** Take one on. Owner only. */
+		create: (systemId: string, assumption: AssumptionCreate) =>
+			request<Assumption>(`/formal-systems/${systemId}/assumptions`, {
+				method: 'POST',
+				body: JSON.stringify(assumption)
+			}),
+		/** Withdraw one, so the label stops resolving. Refused with a 409 while
+		 * any library entry rests on it — withdrawing then would leave those
+		 * entries citable and reporting no assumptions. */
+		withdraw: (systemId: string, label: string) =>
+			request<null>(
+				`/formal-systems/${systemId}/assumptions/${encodeURIComponent(label)}`,
+				{ method: 'DELETE' }
+			),
+		/** Every assumption in a published system, most depended-on first — the
+		 * register of what this database cannot yet justify. Public. */
+		public: (params?: ListParams) =>
+			request<Page<Assumption>>(`/assumptions/public${listQuery(params)}`)
 	},
 
 	/**

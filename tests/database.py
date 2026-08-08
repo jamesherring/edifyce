@@ -86,9 +86,11 @@ def _always() -> list[Table]:
     `label_descriptions` / `label_attributions` / `label_references`, which a single
     proof read consults for the corpus's record of that proof's label — and, since
     that record carries its cross-references and what points back at it, for both
-    directions of the reference graph. Added here rather than
-    to each module's own list because "what a system minimally needs" is one fact,
-    and ten copies of it drift.
+    directions of the reference graph. So does `theorem_assumptions`: promoting a
+    theorem records what it rests on that nobody proved, so the table is written
+    on a path no test has to know about (and `assumptions` is read beside it).
+    Added here rather than to each module's own list because "what a system
+    minimally needs" is one fact, and ten copies of it drift.
     """
     from app.db.system_relations import (
         SystemRelationExtraRow,
@@ -97,6 +99,7 @@ def _always() -> list[Table]:
         SystemRelationSortRow,
         SystemRelationSymbolRow,
     )
+    from app.db.assumptions import AssumptionRow, TheoremAssumptionRow
     from app.db.descriptions import (
         LabelAttributionRow,
         LabelDescriptionRow,
@@ -122,6 +125,8 @@ def _always() -> list[Table]:
         LabelDescriptionRow.__table__,
         LabelAttributionRow.__table__,
         LabelReferenceRow.__table__,
+        AssumptionRow.__table__,
+        TheoremAssumptionRow.__table__,
     ]
 
 

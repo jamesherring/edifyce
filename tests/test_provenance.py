@@ -32,6 +32,7 @@ from sqlalchemy import create_engine, select, update
 from sqlalchemy.orm import Session
 
 from app.db import Base
+from app.db.assumptions import AssumptionRow
 from app.db.metamath_store import import_corpus
 from app.db.models import FormalSystem, Proof
 from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
@@ -142,6 +143,39 @@ def test_a_theorem_reports_the_axiom_it_rests_on_through_a_lemma(
     report = reports(imported)["fol-via-pc"]
 
     assert report.axioms == ("ax-1",)
+    assert report.deepest_axiom == PC
+
+
+def test_a_corpus_that_adopts_no_assumptions_reports_none(imported: Session) -> None:
+    # The control for the test below, and the compatibility claim: an import
+    # takes on no debts, so every `axioms` tuple reads exactly as it did before
+    # assumptions existed.
+    assert all(not report.assumes for report in provenance(imported))
+    assert reports(imported)["fol-via-pc"].axioms == ("ax-1",)
+
+
+def test_a_primitive_that_is_a_debt_is_reported_apart_from_the_axioms(
+    imported: Session,
+) -> None:
+    # An assumption is stored as a primitive, because that is what it is to a
+    # citation — so the traversal reaches it exactly as it reaches `ax-1`, and
+    # what must not happen is the two being reported as one thing. They
+    # partition: `ax-1` moves out of `axioms` and into `assumes`, and it is
+    # still reached transitively, through `pc-thm`, which cites it.
+    entry = imported.scalar(
+        select(PromotedTheoremRow).where(PromotedTheoremRow.label == "ax-1")
+    )
+    imported.add(
+        AssumptionRow(theorem_id=entry.id, reason="Taken on the record, not proved.")
+    )
+    imported.flush()
+
+    report = reports(imported)["fol-via-pc"]
+    assert report.axioms == ()
+    assert report.assumes == ("ax-1",)
+    assert report.rests_on_assumptions is True
+    # Still an unproved thing the layer rests on, so the depth is unchanged: what
+    # moved is which of the two lists names it.
     assert report.deepest_axiom == PC
 
 
