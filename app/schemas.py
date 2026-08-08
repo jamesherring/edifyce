@@ -1305,8 +1305,26 @@ class GlossaryEntryInput(BaseModel):
     term_id: uuid.UUID | None = None
     reasoning: str | None = None
 
+    @field_validator("notion", "label")
+    @classmethod
+    def _blank_is_absent(cls, value: str | None) -> str | None:
+        """Strip, and read a blank as nothing at all.
+
+        `min_length` counts characters rather than content, so `"   "` satisfies
+        it — and an entry whose label is three spaces names exactly as little as
+        one with no label. Normalising here means the invariant below is checked
+        against what the field *says* rather than against whether it was
+        supplied (found in review).
+        """
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
     @model_validator(mode="after")
     def _must_name_something(self) -> "GlossaryEntryInput":
+        if self.notion is None:
+            raise ValueError("A glossary entry must name the notion it is about.")
         if self.label is None and self.term_id is None:
             raise ValueError(
                 f"The glossary entry for {self.notion!r} names nothing it was "
@@ -1338,6 +1356,20 @@ class FormalizationCreate(BaseModel):
     reasoning: str = Field(..., min_length=1)
     attested_as: str | None = Field(None, max_length=128)
     glossary: list[GlossaryEntryInput] = Field(default_factory=list)
+
+    @field_validator("claim", "informal_statement", "reasoning")
+    @classmethod
+    def _must_say_something(cls, value: str) -> str:
+        """Content, not characters.
+
+        `min_length` counts the latter, so `"   "` passes it — which would admit
+        exactly the empty attestation this schema exists to refuse, and the
+        disputed-review validator below already knew better (found in review).
+        """
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("This field may not be blank.")
+        return stripped
 
 
 class FormalizationReview(BaseModel):

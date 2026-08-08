@@ -27,6 +27,7 @@ from sqlalchemy import NullPool
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import app.auth.backend as backend
+import app.routers.formalizations as formalizations_router
 from app.db.session import get_session
 from app.main import app
 from tests.database import async_url, create_tables, database_url, enable_foreign_keys
@@ -388,3 +389,93 @@ def test_withdrawing_a_claim_leaves_the_mathematics_alone(db, client):
     assert client.get(f"/api/formalizations/{body['id']}").status_code == 404
     # The term is untouched and still readable.
     assert client.get(f"/api/formal-systems/{pc}/terms/{term}").status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# What the record says about itself, checked against what it accepts
+# ---------------------------------------------------------------------------
+#
+# Four guards that were stated and not enforced (found in review). Each is a
+# place the schema or the docstring made a promise the code did not keep, which
+# on a surface whose whole job is honest bookkeeping is the failure that matters.
+
+
+def test_a_glossary_term_of_another_system_is_refused(db, client):
+    # The same check `statement_term_id` gets: a term of another system would
+    # leave the glossary pointing outside the system the claim is about, and a
+    # nonexistent one would reach the foreign key and answer 500.
+    pc, _fol, zfc = tower(db, client, "form-gloss-foreign@example.com")
+    document = register(client)[1]["id"]
+    elsewhere = store_statement(client, zfc)
+
+    status, detail = claim(
+        client,
+        pc,
+        document,
+        glossary=[{"notion": "⇒", "term_id": elsewhere}],
+    )
+    assert status == 422, detail
+
+
+def test_replacing_the_glossary_checks_its_terms_too(db, client):
+    # The create path and the replace path have to agree, or the guard is a
+    # detour rather than a rule.
+    pc, _fol, zfc = tower(db, client, "form-gloss-replace@example.com")
+    document = register(client)[1]["id"]
+    made = claim(client, pc, document)[1]["id"]
+    elsewhere = store_statement(client, zfc)
+
+    response = client.put(
+        f"/api/formalizations/{made}/glossary",
+        json=[{"notion": "⇒", "term_id": elsewhere}],
+    )
+    assert response.status_code == 422, response.text
+
+
+def test_whitespace_is_not_an_argument(db, client):
+    # `min_length` counts characters, not content, so a reasoning of three
+    # spaces satisfied it — admitting exactly the empty attestation the schema
+    # says it refuses.
+    pc, _fol, _zfc = tower(db, client, "form-blank@example.com")
+    document = register(client)[1]["id"]
+
+    assert claim(client, pc, document, reasoning="   ")[0] == 422
+    assert claim(client, pc, document, informal_statement=" \t ")[0] == 422
+
+
+def test_a_blank_label_names_nothing(db, client):
+    # An entry whose label is three spaces names exactly as little as one with
+    # no label at all.
+    pc, _fol, _zfc = tower(db, client, "form-blanklabel@example.com")
+    document = register(client)[1]["id"]
+
+    status, _ = claim(client, pc, document, glossary=[{"notion": "⇒", "label": "  "}])
+    assert status == 422
+
+
+def test_a_racing_registration_returns_the_winner(db, client):
+    # The idempotency guarantee is what a retrying agent relies on, and it would
+    # have failed precisely for the concurrent ones: both callers read "no such
+    # row", both inserted, and the loser got a 500 from the unique index. The
+    # index still decides; the loser now gets told what it decided.
+    #
+    # The race is simulated by making the pre-read miss once, which is what the
+    # losing request actually experiences.
+    tower(db, client, "form-race@example.com")
+    first = register(client)[1]
+
+    original = formalizations_router._document_like
+    seen: list[int] = []
+
+    async def miss_once(session, payload):
+        seen.append(1)
+        return None if len(seen) == 1 else await original(session, payload)
+
+    formalizations_router._document_like = miss_once
+    try:
+        status, second = register(client)
+    finally:
+        formalizations_router._document_like = original
+
+    assert status == 201, second
+    assert second["id"] == first["id"]

@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from app.auth import current_active_user
@@ -101,13 +102,7 @@ async def register_source(
     made against v1 keeps pointing at the v1 its author read. That is what makes
     "pinned to a version" structural rather than a rule someone has to remember.
     """
-    held = await session.scalar(
-        select(SourceDocumentRow).where(
-            SourceDocumentRow.kind == payload.kind,
-            SourceDocumentRow.identifier == payload.identifier,
-            SourceDocumentRow.version == payload.version,
-        )
-    )
+    held = await _document_like(session, payload)
     if held is not None:
         # Returned rather than merged: the first registration's metadata stands,
         # since a second caller's title or licence is no more authoritative and
@@ -127,9 +122,32 @@ async def register_source(
         registered_by_id=user.id,
     )
     session.add(row)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Two callers read "no such row" and both inserted. The unique index is
+        # what actually decides, and the loser's answer is the winner's row —
+        # which is the whole idempotency guarantee, and would otherwise fail
+        # precisely for the concurrent agents it exists for (found in review).
+        await session.rollback()
+        winner = await _document_like(session, payload)
+        if winner is None:
+            raise
+        return _document_out(winner, await _claim_count(session, winner.id))
     await session.refresh(row)
     return _document_out(row)
+
+
+async def _document_like(
+    session: AsyncSession, payload: SourceDocumentCreate
+) -> SourceDocumentRow | None:
+    return await session.scalar(
+        select(SourceDocumentRow).where(
+            SourceDocumentRow.kind == payload.kind,
+            SourceDocumentRow.identifier == payload.identifier,
+            SourceDocumentRow.version == payload.version,
+        )
+    )
 
 
 @router.get("/sources", response_model=list[SourceDocument])
@@ -233,6 +251,8 @@ async def claim_formalization(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
                 "That proof is not a proof of the system this claim is about.",
             )
+
+    await _require_terms_of(session, payload.formal_system_id, payload.glossary)
 
     row = FormalizationRow(
         document_id=document.id,
@@ -354,6 +374,7 @@ async def set_glossary(
     the reading that now stands.
     """
     row = await _owned_or_404(session, formalization_id, user)
+    await _require_terms_of(session, row.formal_system_id, entries)
     row.glossary.clear()
     await session.flush()
     _set_glossary(row, entries)
@@ -390,6 +411,40 @@ def _loaded(stmt):  # noqa: ANN001, ANN202 - a Select of FormalizationRow
         selectinload(FormalizationRow.document),
         selectinload(FormalizationRow.glossary),
     )
+
+
+async def _require_terms_of(
+    session: AsyncSession,
+    system_id: uuid.UUID,
+    entries: list[GlossaryEntryInput],
+) -> None:
+    """Every term a glossary points at must belong to the claimed system.
+
+    The same check `statement_term_id` gets, and it was missing here: a term of
+    another system would have committed happily and left the glossary pointing
+    outside the system the claim is about, while a nonexistent one would have
+    reached the foreign key and answered 500 where this answers 422 (found in
+    review).
+    """
+    wanted = [entry.term_id for entry in entries if entry.term_id is not None]
+    if not wanted:
+        return
+    owners = dict(
+        (
+            await session.execute(
+                select(TermRow.id, TermRow.formal_system_id).where(
+                    TermRow.id.in_(wanted)
+                )
+            )
+        ).all()
+    )
+    stray = [term_id for term_id in wanted if owners.get(term_id) != system_id]
+    if stray:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"That system has no term with id {stray[0]}, so the glossary would "
+            "point outside the system this claim is about.",
+        )
 
 
 def _set_glossary(
