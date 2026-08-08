@@ -1502,12 +1502,19 @@ with a context large enough that a naive AC search would not terminate.
 corpus hand-rolled a sequent calculus — its "deduction form" *is* `Γ ⊢ φ`, with
 `->` for the turnstile and `/\` building the context, declared as such in its own
 `$j natded_init` annotation — and, having no AC context, paid for it with 181
-theorems tagged as natural-deduction machinery, position-indexed names to depth
-12 (`simp-11l`, `ad10antlr`), and a quarter of its logical citations spent moving
-contexts around. That is what an AC matcher's absence costs at scale, measured
-rather than guessed. It does not on its own justify building S4 — Edifyce has no
-large sequent corpus of its own — but it settles what S4 is: not an optimisation
-of a sequent calculus, but the thing that makes one worth having.
+theorems tagged as natural-deduction machinery and position-indexed names to
+depth 12 (`simp-11l`, `ad10antlr`). That is what an AC matcher's absence costs at
+scale, measured rather than guessed.
+
+**The cost is in the library, not in proof length**, and the study says so with
+step counts: 83.3% of a Metamath proof is formula construction, only 10–15.5% of
+the remaining logical steps are the bookkeeping a context sort removes, and over
+half of `set.mm` would not shorten by a single step. So S4's case is
+readability and library size — a reader meets the bureaucracy in a quarter of
+the reasoning steps even where it is 2% of the file. None of this on its own
+justifies building S4 — Edifyce has no large sequent corpus of its own — but it
+settles what S4 is: not an optimisation of a sequent calculus, but the thing that
+makes one worth having.
 
 ---
 

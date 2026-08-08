@@ -117,8 +117,15 @@ below):
 | **total** | **228,714** | **25.3%** |
 
 A hand-curated list (rather than prefix matching) gives a stricter lower bound of
-17.9%. Either way: **between a sixth and a quarter of every logical step in
-`set.mm` is moving a context around, not doing mathematics.**
+17.9%.
+
+> **Read this table carefully — it is the one most likely to mislead, and it
+> misled me.** These are `(proof, cited label)` pairs: "how many proofs name this
+> label at least once". They are not steps, and they are not a prediction of how
+> much shorter anything gets. §6 measures actual steps, and the answer there is
+> considerably less flattering: two of the families above (`syl*`, `mp*`) are
+> real inferences that survive any rewrite, and logical steps are only a sixth of
+> a Metamath proof to begin with.
 
 And deduction-form theorems — 3,862 statements, 7.9% of the logical corpus —
 account for **23.0% of all logical citations**. The sequent-shaped fragment is
@@ -258,17 +265,116 @@ of its own, and a rewrite of `set.mm` is not on any track. What it does is settl
 the *shape* of the question: S4 is not an optimisation of a sequent calculus, it
 is the thing that makes one worth having.
 
-### Limits of this study
+---
+
+## 6. So will the proofs be shorter? Measured
+
+The sections above were written from `(proof, label)` pairs, which invites the
+reading "a quarter of every proof is bureaucracy, so proofs get a quarter
+shorter". That reading is wrong twice over. This section decodes every compressed
+proof into actual steps — computing Metamath frames, so step counts are real —
+and the answer is much smaller than §2.2 suggests.
+
+### 6.1 Most of a Metamath proof is not reasoning at all
+
+Across 47,599 proofs, **9,713,929 decoded steps**:
+
+| | steps | share |
+|---|---|---|
+| formula construction | 8,090,245 | **83.3%** |
+| logical inference | 1,623,684 | 16.7% |
+
+The 83.3% is Metamath building the *statements* — `wcel` (∈) alone is 10.5% of
+it, then `co` (operations), `cfv` (function value), `wceq` (=), and bare variable
+references at 26.2%. Reorganising the logic does not touch any of it: `A e. B`
+has to be constructed whether the proof around it is Hilbert or sequent. Only
+7.1% of syntax steps are `wa`/`wi` — the connectives that build contexts — so
+even generous assumptions about implicit contexts recover little here.
+
+**Whatever a sequent rewrite saves, it is bounded by that remaining 16.7%.**
+
+### 6.2 Of the logical steps, what actually vanishes
+
+Step-weighted, over the 1,623,684 logical steps:
+
+| family | step-weighted | (label-weighted, §2.2) | survives a rewrite? |
+|---|---|---|---|
+| `syl*` — cut | 10.3% | 8.6% | **yes** — a real inference |
+| `ad*ant*`/`a1*` — weakening | 10.2% | 5.3% | no |
+| `simp*`/`id` — assumption rule | 6.3% | 5.9% | partly |
+| `mp*` — modus ponens | 3.4% | 4.0% | **yes** — a real inference |
+| `imp*`/`exp*` — deduction theorem | 1.4% | 1.9% | partly |
+| total | 31.5% | 25.6% | |
+
+Step-weighting raises the bureaucracy share from 25.6% to 31.5%, as §5 predicted
+it would. But cut and modus ponens are 13.7 of those 31.5 points and they do not
+go away — a sequent calculus still has cut. What a real context sort removes is:
+
+- **conservative** (weakening only, which an AC/set context makes free):
+  **10.3%** of logical steps;
+- **optimistic** (weakening + assumption positioning + deduction-theorem
+  shuffling): **15.5%**.
+
+As a share of the *whole* proof, that is **1.7% to 2.6%**.
+
+### 6.3 How many proofs, and by how much
+
+| | conservative | optimistic |
+|---|---|---|
+| proofs losing ≥1 step | 19,632 (**41.2%**) | 23,737 (**49.9%**) |
+| proofs unaffected | 27,967 (58.8%) | 23,862 (50.1%) |
+| **median proof, whole corpus** | **0%** | **0%** |
+| mean, whole corpus | 5.9% | 10.3% |
+
+**More than half of `set.mm` contains no structural step at all** and would come
+out byte-for-byte the same length. The median proof is 12 logical steps; the
+median saving across the corpus is zero.
+
+Among the proofs that *are* affected:
+
+| reduction in logical steps | conservative | optimistic |
+|---|---|---|
+| median | 11.6% | 17.1% |
+| mean | 14.2% | 20.5% |
+| p90 | 25.3% | 37.5% |
+| 0–5% shorter | 14.4% | 7.0% |
+| 5–10% | 26.5% | 15.6% |
+| 10–20% | 38.3% | 34.9% |
+| 20–40% | 16.7% | 33.5% |
+| >40% | 4.1% | 9.1% |
+
+### 6.4 The verdict, restated
+
+**No, the majority of proofs will not be shorter.** Roughly half are untouched.
+The affected half loses a median 12–17% of its *visible reasoning* steps and
+about 2% of its total size. A handful — 4–9% of affected proofs — lose 40% or
+more, and those are exactly the deep-context proofs that today spend their steps
+on `ad2antrr` and `simp-11l`.
+
+This does not change §4's conclusion, but it relocates it. **The win was never
+proof length; it is the library.** 181 structural theorems become 3 rules, 2,965
+form-variants lose their reason to exist, and the corpus stops needing a name for
+"the eleventh assumption from the left". A quarter of a proof's *reasoning* steps
+being bookkeeping is a real cost to a reader even when it is 2% of the file, and
+that is the case for sequents — not a shorter corpus.
+
+---
+
+## 7. What I did not do
 
 Stated plainly, because several of the numbers above are easy to over-read:
 
 - **Nothing was implemented.** I measured the corpus and reasoned about the
-  algorithms; I did not write a translator or rewrite a single proof. The
-  size-reduction claim in §3.1 is theoretical and explicitly unmeasured.
-- **The counts are `(proof, cited label)` pairs, not steps.** My reader does not
-  compute Metamath frames, so a label cited five times inside one proof counts
-  once. This *understates* the heavily reused structural theorems — the true
-  bureaucracy share is higher than 25.3%, not lower.
+  algorithms; I did not write a translator or rewrite a single proof. §6 measures
+  what a rewrite would *remove*, assuming it removes exactly the structural steps
+  and adds nothing. A real translator would add steps back — explicit exchanges
+  without an AC matcher (§4), or reconstructed deduction-form variants (§3.2) —
+  so **§6's figures are an upper bound on the saving, not an estimate of it.**
+- The theoretical size argument in §3.1 remains unmeasured: I did not translate a
+  single Hilbert proof through combinators to compare.
+- **A backreference counts as one step.** Metamath's `Z` tags share a subproof;
+  I count the shared subtree once, which is the right model for proof *effort*
+  but understates the fully expanded proof.
 - **The family classification is prefix matching**, so it is approximate in both
   directions. The curated lower bound (17.9%) and the prefix sweep (25.3%) are
   given together for that reason.
