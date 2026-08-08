@@ -69,6 +69,34 @@ _ATTRIBUTION = re.compile(
 # A blank line, which is a paragraph break rather than wrapping.
 _PARAGRAPH = re.compile(r"\n[ \t]*\n")
 
+# A cross-reference: a lone `~` and the whitespace-delimited run after it.
+#
+# Delimited by whitespace and nothing else, which is measured rather than
+# assumed. Stripping trailing punctuation off a target resolves **zero** further
+# labels across `set.mm`'s 21,787 references, and four of its labels genuinely end
+# in a `.` — so a stripping rule would cost accuracy and buy nothing.
+#
+# `~~` is Metamath's escape for a literal tilde and opens no reference: 84 of
+# set.mm's are, every one inside a URL. Matching a lone `~` with a doubled tilde
+# on neither side is what keeps `…/~~hirstjl/primer` one target rather than a
+# reference to `hirstjl`.
+_REFERENCE = re.compile(r"(?<!~)~(?!~)\s*(?P<target>\S+)")
+
+# `(New usage is discouraged.)` and `(Proof modification is discouraged.)`.
+#
+# Bounded in length and confined to letters and spaces, because the loose reading
+# — anything parenthesised containing "is discouraged" — also matches set.mm's
+# one prose aside, `(TODO: ~ dral2 depends on ~ ax-13 , hence its usage during
+# minimizing is discouraged. Check in the long run …)`, which is a note about a
+# dependency rather than a marker on this statement. Requiring `.)` immediately
+# after excludes it, and the charset excludes anything else of that shape.
+#
+# Loose enough to admit the corpus's own typo (`New usaged`, once) for the same
+# reason the attribution recogniser matches by shape: the output here is a flag
+# rather than a verbatim string, so there is nothing to preserve by refusing it,
+# and a marker the file plainly meant should count.
+_DISCOURAGED = re.compile(r"\((?P<what>[A-Z][A-Za-z ]{0,40}?) is discouraged\.\)")
+
 
 @dataclass(frozen=True)
 class Attribution:
@@ -85,11 +113,42 @@ class Attribution:
 
 
 @dataclass(frozen=True)
+class Reference:
+    """One ``~ label`` cross-reference, and the span of the prose it occupies.
+
+    ``start``/``end`` index :attr:`Description.text` — the prose as it will be
+    stored, after unwrapping and after the attributions come out — so a reader can
+    render the reference as a link **without parsing the prose again**. That is
+    the point of carrying them: the markup rule is Metamath's, it lives here, and
+    a second implementation of it in the API or the browser is a second thing to
+    get wrong. A consumer slices.
+
+    ``target`` is the reference as it resolves, which for the 84 URLs carrying
+    Metamath's ``~~`` escape is not the text on the page: the span still reads
+    ``…/~~hirstjl/…`` and the target is the link that works.
+    """
+
+    target: str
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
 class Description:
     """A statement's comment, split into prose and authorship."""
 
     text: str
     attributions: tuple[Attribution, ...] = ()
+    # Where the prose points, in order of appearance. `set.mm` writes 21,787 of
+    # these across 12,389 comments and they are its "see also" graph — 21,336 name
+    # another statement, the rest a URL or a page of the Metamath website.
+    references: tuple[Reference, ...] = ()
+    # `(New usage is discouraged.)` — this statement exists and should not be
+    # built on. 5,169 of set.mm's carry it.
+    discouraged_usage: bool = False
+    # `(Proof modification is discouraged.)` — the proof is the way it is on
+    # purpose. 1,744 carry it.
+    discouraged_modification: bool = False
 
     @property
     def contributors(self) -> tuple[str, ...]:
@@ -169,9 +228,10 @@ def unwrap(text: str) -> str:
 
 
 def read_comment(raw: str) -> Description:
-    """Split a raw ``$( … $)`` body into its prose and its attributions."""
+    """Split a raw ``$( … $)`` body into its prose, authorship and markup."""
     attributions: list[Attribution] = []
     paragraphs: list[str] = []
+    discouraged: list[str] = []
     for part in _PARAGRAPH.split(raw):
         # Unwrap first: an attribution is hard-wrapped like everything else, and
         # 20,875 of set.mm's are split across a line break mid-clause.
@@ -180,7 +240,48 @@ def read_comment(raw: str) -> Description:
             Attribution(kind=m["kind"], who=m["who"], when=m["when"])
             for m in _ATTRIBUTION.finditer(flat)
         )
-        prose = " ".join(_ATTRIBUTION.sub(" ", flat).split())
+        # Removed from the prose only where it becomes a flag. The shape admits
+        # more than the two markers — `(Its use here is discouraged.)` fits it —
+        # and deleting one of those would lose a sentence the file wrote and record
+        # it nowhere, which is worse than leaving it in place. What *is* removed is
+        # removed for the reason an attribution is: it is a marker about the
+        # statement rather than a sentence about the mathematics, and 64 comments
+        # open with one, which would otherwise become the title.
+        def flag(match: re.Match[str]) -> str:
+            what = match["what"].lower()
+            if "usage" in what or "modification" in what:
+                discouraged.append(what)
+                return " "
+            return match[0]
+
+        prose = _DISCOURAGED.sub(flag, _ATTRIBUTION.sub(" ", flat))
+        prose = " ".join(prose.split())
         if prose:
             paragraphs.append(prose)
-    return Description(text="\n\n".join(paragraphs), attributions=tuple(attributions))
+
+    text = "\n\n".join(paragraphs)
+    return Description(
+        text=text,
+        attributions=tuple(attributions),
+        # Read off the assembled prose rather than the raw comment, so the offsets
+        # index what is stored. Anything else would need the reader to redo the
+        # unwrapping to make sense of them.
+        references=_references(text),
+        discouraged_usage=any("usage" in what for what in discouraged),
+        discouraged_modification=any("modification" in what for what in discouraged),
+    )
+
+
+def _references(text: str) -> tuple[Reference, ...]:
+    """Every ``~ target`` in ``text``, with the span each occupies."""
+    return tuple(
+        Reference(
+            # `~~` is a literal tilde, so a target carrying one resolves with it
+            # collapsed — every one of set.mm's is inside a URL, where the doubled
+            # form is a link that 404s.
+            target=match["target"].replace("~~", "~"),
+            start=match.start(),
+            end=match.end(),
+        )
+        for match in _REFERENCE.finditer(text)
+    )

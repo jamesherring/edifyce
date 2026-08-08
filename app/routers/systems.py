@@ -46,6 +46,7 @@ from app.db import (
     term_context,
 )
 from app.db.system_relations import SystemRelationRow
+from app.routers._documentation import documentation_out
 from app.routers._invalidation import invalidate_library_reach
 from app.routers._common import (
     PageParams,
@@ -79,7 +80,6 @@ from app.db.systems import (
     SymbolRow,
 )
 from app.schemas import (
-    Attribution,
     TermChildOut,
     TermGraphOut,
     TermNodeOut,
@@ -904,20 +904,15 @@ async def get_label_description(
     ``df-un``, ``ax-ext`` and the rest are `$a`s and have no proof at all.
     """
     system = await _get_readable_or_404(session, system_id, user)
-    row = await load_description(session, system.id, label)
-    if row is None:
+    found = await documentation_out(
+        session, system.id, await load_description(session, system.id, label), user
+    )
+    if found is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"This system records nothing about {label!r}.",
         )
-    return LabelDescription(
-        label=row.label,
-        title=row.title,
-        text=row.text,
-        attributions=[
-            Attribution(kind=a.kind, who=a.who, dated=a.dated) for a in row.attributions
-        ],
-    )
+    return found
 
 
 @router.patch("/{system_id}", response_model=FormalSystemDetail)

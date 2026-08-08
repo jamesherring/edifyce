@@ -15,11 +15,16 @@ from app.db.models import (
     Theorem,
     User,
 )
-from app.db.descriptions import LabelAttributionRow, LabelDescriptionRow
+from app.db.descriptions import (
+    LabelAttributionRow,
+    LabelDescriptionRow,
+    LabelReferenceRow,
+)
 from app.db.descriptions_mapping import (
     contributions,
     load_description,
     load_descriptions,
+    mentions_of,
     store_descriptions,
 )
 from app.db.metamath_store import ImportReport, import_corpus
@@ -153,10 +158,12 @@ __all__ = [
     "SymbolRow",
     # What a system says about its labels (app/db/descriptions.py).
     "LabelAttributionRow",
+    "LabelReferenceRow",
     "LabelDescriptionRow",
     "contributions",
     "load_description",
     "load_descriptions",
+    "mentions_of",
     "store_descriptions",
     # The citable library (app/db/promoted_theorems.py).
     "PromotedTheoremBindingRow",
