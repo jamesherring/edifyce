@@ -698,6 +698,99 @@ class PromotedTheoremOut(BaseModel):
     # promoted through the API. Null would mean an imported entry, which no route
     # here returns.
     proved_by_id: uuid.UUID | None = None
+    # The assumptions this entry transitively rests on, by label. Empty is the
+    # ordinary case and the interesting one is not: an entry with something here
+    # is citable, and everything that cites it inherits the debt.
+    assumes: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Assumptions
+# ---------------------------------------------------------------------------
+
+
+class AssumptionCreate(BaseModel):
+    """Take on a citable statement nobody here has proved.
+
+    The statement is written as **source text in the system's own grammar** —
+    the same form a corpus import gives a theorem, and the same one
+    `website.logical.promotion.promote_from_source` reads. A structured
+    (constructor-vocabulary) alternative belongs with goal-first statements
+    (docs/informal-source-ingestion-roadmap.md §4.4) and is deliberately not
+    guessed at here.
+    """
+
+    label: str = Field(
+        ..., min_length=1, max_length=THEOREM_LABEL_MAX, pattern=THEOREM_LABEL_PATTERN
+    )
+    statement: str = Field(..., min_length=1)
+    # The hypotheses a citation must supply, and the leaves that stand for any
+    # term of a sort — exactly a promoted theorem's, since that is what this is.
+    premises: list[str] = Field(default_factory=list)
+    metavariables: dict[str, str] = Field(default_factory=dict)
+    # Distinct-variable provisos, each a `disjoint(...)` line.
+    distinct: list[str] = Field(default_factory=list)
+    # Why it is believed true and why it is not proved here. Required: an
+    # assumption with no reason is an axiom nobody remembers adopting.
+    reason: str = Field(..., min_length=1)
+    # Where the claim comes from — an arXiv id, a DOI, a URL, a textbook.
+    source: str | None = None
+
+
+class AssumptionOut(BaseModel):
+    """One assumption, and how far it has spread."""
+
+    id: uuid.UUID
+    label: str
+    statement: str
+    reason: str
+    source: str | None = None
+    formal_system_id: uuid.UUID
+    formal_system_name: str
+    # Library entries that rest on it **transitively** — an entry three hops
+    # away, naming it nowhere, counts. The blast radius, and the ranking that
+    # says which gap is worth closing first; a count of direct citers would rank
+    # a debt by how visible it is rather than by how much has been built on it.
+    #
+    # Counts *entries*: a proof that rests on this and has not been promoted is
+    # nobody's dependency yet, so it is not counted here.
+    dependents: int = 0
+    created_at: datetime
+
+
+class AssumptionDetail(AssumptionOut):
+    """The same, with the entries that rest on it named rather than counted."""
+
+    dependent_labels: list[str] = Field(default_factory=list)
+
+
+class AssumedOut(BaseModel):
+    """One assumption, as a dependency report names it."""
+
+    theorem_id: uuid.UUID
+    formal_system_id: uuid.UUID
+    label: str
+    statement: str
+    reason: str
+    source: str | None = None
+
+
+class ProofProvenance(BaseModel):
+    """What a proof rests on that nobody has proved.
+
+    ``complete`` is the honest half, and there are two ways to lose it — one per
+    door into the library. ``unresolved`` names cited **labels** this report
+    could not account for (no library entry, no inference rule, no hypothesis of
+    a theorem being proved); ``unread_lemmas`` names cited **lemma proofs**
+    holding no stored structure, whose own debts could therefore not be read.
+    Either dropped silently would let a short list read as a complete one.
+    """
+
+    proof_id: uuid.UUID
+    assumes: list[AssumedOut] = Field(default_factory=list)
+    unresolved: list[str] = Field(default_factory=list)
+    unread_lemmas: list[str] = Field(default_factory=list)
+    complete: bool = True
 
 
 class Attribution(BaseModel):
