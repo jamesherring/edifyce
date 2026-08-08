@@ -3,13 +3,17 @@
 §4.4 of docs/informal-source-ingestion-roadmap.md. Every structured write this
 API has is *inside* a proof — `/proofs/{id}/lines` needs a proof, and a template
 line within it to inherit shape from. A translation from an informal source needs
-the opposite order: state the target first, ask whether the library already
-proves it, and only then open a proof aimed at it.
+the opposite order: state the target first, find out what the library already has
+for it, and only then open a proof aimed at it.
 
-That question — **is this already proved?** — is the first one any translation
-asks, and until now the only way to ask it was to write a proof and see. Which is
-absurd for the case it matters most in: a corpus of 47,589 theorems where the
-answer is often yes and the caller has no way to find out.
+**What it does not do is say "proved".** The question a translation wants to ask
+is whether its goal is already a theorem, and no digest answers that: the search
+policy renames regex leaves and so over-reports, the identity policy a discharge
+compares by would under-report, and what settles it is unification against a line
+standing in a real scope. So this narrows and ranks, and `propose_statement` says
+at length why that is the honest stopping point. Before the review that caught it,
+this route served a `proved` field over the same data — the filter was fine and
+the word was not.
 
 **One path from vocabulary to term.** The other thing this is, and the reason it
 comes before the rest of §4: an assumption's statement, a goal, and a proof

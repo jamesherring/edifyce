@@ -102,6 +102,11 @@ def _always() -> list[Table]:
         SystemRelationSymbolRow,
     )
     from app.db.assumptions import AssumptionRow, TheoremAssumptionRow
+    from app.db.formalizations import (
+        FormalizationRow,
+        GlossaryEntryRow,
+        SourceDocumentRow,
+    )
     from app.db.avoidances import LabelAvoidanceRow
     from app.db.descriptions import (
         LabelAttributionRow,
@@ -131,6 +136,9 @@ def _always() -> list[Table]:
         LabelAvoidanceRow.__table__,
         AssumptionRow.__table__,
         TheoremAssumptionRow.__table__,
+        SourceDocumentRow.__table__,
+        FormalizationRow.__table__,
+        GlossaryEntryRow.__table__,
     ]
 
 

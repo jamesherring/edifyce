@@ -28,6 +28,7 @@ from app.auth.oauth import (
 )
 from app.routers.assumptions import router as assumptions_router
 from app.routers.proofs import router as proofs_router
+from app.routers.formalizations import router as formalizations_router
 from app.routers.statements import router as statements_router
 from app.routers.system_parts import router as system_parts_router
 from app.routers.system_relations import router as system_relations_router
@@ -134,6 +135,11 @@ app.include_router(assumptions_router, prefix=API_PREFIX)
 # Stating a theorem before there is a proof to put it in. Fully parameterized
 # (`/formal-systems/{id}/statements`), so the SPA guard needs nothing from it.
 app.include_router(statements_router, prefix=API_PREFIX)
+# What a formal statement claims to be a formalization *of* — source documents,
+# claims, and the reviews of them. Reaches no engine; its `/sources` and
+# `/formalizations` collection paths are non-parameterized, so the SPA guard
+# needs them recorded below.
+app.include_router(formalizations_router, prefix=API_PREFIX)
 
 # fastapi-users' routers mount as nested routers, so their concrete paths are
 # not APIRoute entries on `app` — the SPA fallback's API-path guard can't find
@@ -151,6 +157,9 @@ _MOUNTED_API_ROUTERS: list[tuple[str, object]] = [
     # And the assumptions register, whose `/assumptions/public` is the one
     # non-parameterized path a browser GET could otherwise reach as the SPA.
     (API_PREFIX, assumptions_router),
+    # The formalization record, whose `/sources` and `/formalizations` are the
+    # same shape.
+    (API_PREFIX, formalizations_router),
 ]
 
 # Social login: one router per configured provider. `is_verified_by_default`

@@ -282,7 +282,7 @@ gaps, and the count says which gap closing pays for most. Ordered in the databas
 rather than per page, since a ranking that only held within twenty arbitrary rows
 would mean nothing.
 
-### 4.3 The formalization record: source, claim, glossary
+### 4.3 The formalization record: source, claim, glossary — *done*
 
 The object that does not exist at all. An ingestion run produces a proof, and a
 proof has `title`, `description` and a system — nowhere to put *which paper*,
@@ -306,7 +306,43 @@ timestamp, the informal text as it stood, and the prose reasoning. Fidelity is
 reviewed by people; the API's job is to make sure the review has something
 stable to point at and that its absence is visible.
 
-*Engine:* nothing. This layer never reaches `website/logical/`.
+*Engine:* nothing. This layer never reaches `website/logical/`. The one thing it
+borrows from the formal side is a `terms.id`, which is what §4.4's statements
+route hands out — and the reason that one came first.
+
+**Why this is not a closure, unlike §4.1's.** An assumption's debt propagates:
+cite something unproved and your result is conditional, at any depth. A fidelity
+claim does not, and being precise about the difference is what settles the shape.
+A proof citing a term inherits *the term* — not anyone's claim about what the
+term corresponds to. Proving a corollary from a formalized theorem gives you a
+formal corollary; whether it is the paper's Corollary 3.3 is a separate claim,
+attested separately by whoever read the paper. So a formalization is a leaf
+annotation and there is deliberately nothing to close over. Withdrawing one is a
+plain delete for the same reason, where withdrawing an assumption is gated.
+
+**A version is a row.** `source_documents` is unique on (kind, identifier,
+version), so a revision is a different row and an existing claim keeps pointing
+at the one its author read — structural rather than a check somebody has to
+remember. Registering an identity that exists returns it rather than a second
+row, which also makes the write idempotent for a retrying agent. The informal
+statement is copied onto the claim besides, so not even editing a document can
+rewrite what was attested.
+
+**A review is somebody else's.** The attestation carries an author, the agent
+where a model was driving (beside the account, never instead of it — an account
+is accountable and a model is not), and required prose. A review is a second
+person's verdict on it, and the attestor is refused: the entire value of the word
+is independence, and a self-review that reads as reviewed is the silent
+overstatement this whole document is about. Editing the glossary clears any
+review, since a reviewer agreed with a reading of the paper's words and those are
+the words.
+
+**What is not served is a rendering** of the claimed term. `GET
+/formal-systems/{id}/terms/{term_id}` is the route that renders a stored term,
+through a chosen notation and with every subterm's id; a term row carries no
+display, so duplicating a source-spelling rendering here would cost a system
+build per system per listing to serve something lossier than the route that
+already exists.
 
 ### 4.4 Goal-first: state a theorem before proving it — *done*
 

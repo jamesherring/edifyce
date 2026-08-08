@@ -65,6 +65,11 @@ def test_expected_tables_present():
         # A library entry nobody proved, and what transitively rests on it.
         "assumptions",
         "theorem_assumptions",
+        # What a formal statement claims to be a formalization *of*, and who
+        # said so (app/db/formalizations.py).
+        "source_documents",
+        "formalizations",
+        "glossary_entries",
         # The general edge between two systems, where the spine cannot reach: a
         # second parent, a sort rename, a notation map, and a statement template
         # with the metavariables it introduces (app/db/system_relations.py).

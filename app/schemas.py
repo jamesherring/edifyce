@@ -1259,6 +1259,188 @@ class StatementOutcome(BaseModel):
     exact_is_approximate: bool = False
 
 
+# ---------------------------------------------------------------------------
+# Formalization records — what a formal statement claims to be a formalization of
+# ---------------------------------------------------------------------------
+
+
+class SourceDocumentCreate(BaseModel):
+    """Register an external work something here claims to formalize.
+
+    ``version`` is part of the document's identity, not a note about it: a
+    paper's v2 may restate the theorem, so a version is a *row* and an existing
+    claim keeps pointing at the one its author read. Registering an identity that
+    already exists returns the existing row rather than a second one.
+    """
+
+    kind: Literal["arxiv", "doi", "isbn", "url", "other"] = "other"
+    identifier: str = Field(..., min_length=1, max_length=512)
+    version: str = Field("", max_length=64)
+    title: str | None = None
+    url: str | None = None
+    # A digest of the bytes the author actually read. Optional, because a DOI
+    # often reaches a paywall rather than a file — and a claim about a paper
+    # nobody can hash is worth less, which is worth being able to see.
+    content_hash: str | None = Field(None, max_length=128)
+    licence: str | None = Field(None, max_length=128)
+    retrieved_at: datetime | None = None
+
+
+class SourceDocument(BaseModel):
+    """A registered work, read back.
+
+    ``kind`` is a plain string here where the create model closes the set. The
+    column is a free ``String(16)``, so a row written by an import or a fixture
+    can carry a kind nobody listed — and a `Literal` on the *output* would fail
+    response validation and take the whole listing down with it, which is the
+    wrong way to learn that (found in review). Closed for a caller, open for
+    data: the same split `Attribution.kind` already makes.
+    """
+
+    id: uuid.UUID
+    kind: str
+    identifier: str
+    version: str = ""
+    title: str | None = None
+    url: str | None = None
+    content_hash: str | None = None
+    licence: str | None = None
+    retrieved_at: datetime | None = None
+    created_at: datetime
+    # How many claims point at this document.
+    formalizations: int = 0
+
+
+class GlossaryEntryInput(BaseModel):
+    """One of the paper's notions, and what it was read as here.
+
+    At least one of ``label`` and ``term_id``: an entry naming nothing records
+    only that somebody thought about it.
+    """
+
+    notion: str = Field(..., min_length=1, max_length=256)
+    label: str | None = Field(None, max_length=128)
+    term_id: uuid.UUID | None = None
+    reasoning: str | None = None
+
+    @field_validator("notion", "label")
+    @classmethod
+    def _blank_is_absent(cls, value: str | None) -> str | None:
+        """Strip, and read a blank as nothing at all.
+
+        `min_length` counts characters rather than content, so `"   "` satisfies
+        it — and an entry whose label is three spaces names exactly as little as
+        one with no label. Normalising here means the invariant below is checked
+        against what the field *says* rather than against whether it was
+        supplied (found in review).
+        """
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    @model_validator(mode="after")
+    def _must_name_something(self) -> "GlossaryEntryInput":
+        if self.notion is None:
+            raise ValueError("A glossary entry must name the notion it is about.")
+        if self.label is None and self.term_id is None:
+            raise ValueError(
+                f"The glossary entry for {self.notion!r} names nothing it was "
+                "read as. Give a label or a term id."
+            )
+        return self
+
+
+class GlossaryEntry(GlossaryEntryInput):
+    id: uuid.UUID
+
+
+class FormalizationCreate(BaseModel):
+    """Claim that a term is a formalization of a result in a document.
+
+    ``reasoning`` is required and is the point: a claim with no argument is a
+    tick, and the one thing this layer exists to refuse is a tick. ``attested_as``
+    names the agent that did the reading where that was not a person — a model
+    identifier — recorded *beside* the account rather than instead of it, since
+    an account is accountable and a model is not.
+    """
+
+    document_id: uuid.UUID
+    claim: str = Field(..., min_length=1, max_length=256)
+    informal_statement: str = Field(..., min_length=1)
+    formal_system_id: uuid.UUID
+    statement_term_id: uuid.UUID
+    proof_id: uuid.UUID | None = None
+    reasoning: str = Field(..., min_length=1)
+    attested_as: str | None = Field(None, max_length=128)
+    glossary: list[GlossaryEntryInput] = Field(default_factory=list)
+
+    @field_validator("claim", "informal_statement", "reasoning")
+    @classmethod
+    def _must_say_something(cls, value: str) -> str:
+        """Content, not characters.
+
+        `min_length` counts the latter, so `"   "` passes it — which would admit
+        exactly the empty attestation this schema exists to refuse, and the
+        disputed-review validator below already knew better (found in review).
+        """
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("This field may not be blank.")
+        return stripped
+
+
+class FormalizationReview(BaseModel):
+    """A second person's verdict on a claim.
+
+    ``disputed`` requires a note, because a dispute nobody explained is not a
+    finding — and a dispute is the more valuable of the two verdicts.
+    """
+
+    verdict: Literal["confirmed", "disputed"]
+    note: str | None = None
+
+    @model_validator(mode="after")
+    def _a_dispute_says_why(self) -> "FormalizationReview":
+        if self.verdict == "disputed" and not (self.note or "").strip():
+            raise ValueError("A disputed review must say what is wrong with the claim.")
+        return self
+
+
+class Formalization(BaseModel):
+    """One claim, read back.
+
+    ``reviewed`` is deliberately not a boolean the row carries: it is null until
+    somebody who is not the attestor has said something, and then it is what they
+    said. An unreviewed claim is the ordinary state and is meant to look like one.
+    """
+
+    id: uuid.UUID
+    document: SourceDocument
+    claim: str
+    informal_statement: str
+    formal_system_id: uuid.UUID
+    statement_term_id: uuid.UUID
+    # Read it with `GET /formal-systems/{id}/terms/{term_id}`, which is the route
+    # that renders a stored term — through a chosen notation, with every subterm's
+    # id beside its reading. Not duplicated here: a term row is structure and
+    # carries no display, so the source spelling needs the system *built*, which
+    # is 55 ms on a corpus grammar and would be paid per system per listing to
+    # serve something lossier than the route that already exists.
+    proof_id: uuid.UUID | None = None
+    reasoning: str
+    attested_by: SystemOwner | None = None
+    attested_as: str | None = None
+    attested_at: datetime
+    # A plain string for the same reason `SourceDocument.kind` is: the column is
+    # free text, and a read must not fail on a value it did not expect.
+    review_verdict: str | None = None
+    review_note: str | None = None
+    reviewed_by: SystemOwner | None = None
+    reviewed_at: datetime | None = None
+    glossary: list[GlossaryEntry] = Field(default_factory=list)
+
+
 class CitationSuggestion(BaseModel):
     """A justification that **checks**, ready to be sent back to `/cite`.
 

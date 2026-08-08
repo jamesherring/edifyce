@@ -2,7 +2,7 @@
 
 §4.4 of docs/informal-source-ingestion-roadmap.md. Every other structured write
 is *inside* a proof; a translation from an informal source needs the opposite
-order — state the target, ask whether the library already proves it, and only
+order — state the target, find out what the library already has for it, and only
 then open a proof aimed at it.
 
 The worked example is the PC/FOL/ZFC tower the promotion and assumption tests
@@ -10,7 +10,7 @@ use, so the library this searches is one built by the same routes a caller would
 have used. What the tests turn on is the three things the route promises: the
 statement resolves from the grammar and nothing else, the round trip is checked
 rather than trusted, and the search says *candidate* where a candidate is all it
-has.
+has — never "proved", which no digest settles.
 """
 
 from __future__ import annotations
@@ -148,7 +148,7 @@ def test_two_statements_of_one_term_intern_to_one_row(db, client):
 
 
 # ---------------------------------------------------------------------------
-# Is it already proved?
+# What does the library have for it?
 # ---------------------------------------------------------------------------
 
 
@@ -244,9 +244,9 @@ def test_a_draft_system_is_not_readable_by_a_stranger(db, client):
 
 
 def test_the_question_may_be_asked_without_an_account(db, client):
-    # A published system's library is public, and "is this already proved?" is a
-    # question about it — which is what makes the imported corpus, ownerless by
-    # construction, answerable at all.
+    # A published system's library is public, and "what does this library have
+    # for my goal?" is a question about it — which is what makes the imported
+    # corpus, ownerless by construction, answerable at all.
     pc, _fol, _zfc = tower(db, client, "state-anon@example.com")
     client.cookies.clear()
 
