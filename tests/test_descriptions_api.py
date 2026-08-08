@@ -329,3 +329,58 @@ def test_what_points_at_a_label_reaches_the_layers_above_it(client, db):
     assert [m["label"] for m in body["mentioned_by"]] == ["zf-thm"]
     assert body["mentioned_by_total"] == 1
     assert body["mentioned_by"][0]["proof_id"] == proofs["zf-thm"]
+
+
+# ---------------------------------------------------------------------------
+# What a proof is declared to do without
+# ---------------------------------------------------------------------------
+
+AVOIDING = r"""
+$c |- wff ( ) -> $.
+$v ph ps $.
+wph $f wff ph $.
+wps $f wff ps $.
+$( Wff builder. $)
+wi $a wff ( ph -> ps ) $.
+$( Axiom _Simp_. $)
+ax-1 $a |- ( ph -> ( ps -> ph ) ) $.
+$( A second axiom, which the theorem below is proved without. $)
+ax-2 $a |- ( ph -> ( ps -> ph ) ) $.
+$( Principle of identity. $)
+id $p |- ( ph -> ( ps -> ph ) ) $= ( ax-1 ) ABC $.
+$( $j usage 'id' avoids 'ax-2'; $)
+"""
+
+
+def seed_avoiding(db_path) -> tuple[str, str]:
+    engine = create_engine(db_path)
+    try:
+        with Session(engine) as session:
+            report = import_corpus(session, parse(AVOIDING), name="a")
+            session.commit()
+            proof = session.scalars(select(Proof)).one()
+            proof.published_at = proof.created_at
+            proof.formal_system.published_at = proof.created_at
+            session.commit()
+            return str(report.system_id), str(proof.id)
+    finally:
+        engine.dispose()
+
+
+def test_a_proof_reports_what_the_corpus_says_it_avoids(client, db):
+    # `$j usage 'id' avoids 'ax-2';` — a result about the *proof*, and nowhere
+    # else to read it from: `ax-2` is nowhere in `id`'s citations, that being the
+    # point of saying it.
+    _, proof_id = seed_avoiding(db)
+
+    doc = client.get(f"/api/proofs/{proof_id}").json()["documentation"]
+
+    assert doc["avoids"] == ["ax-2"]
+
+
+def test_a_label_the_file_declares_nothing_about_avoids_nothing(client, db):
+    system_id, _ = seed_avoiding(db)
+
+    body = client.get(f"/api/formal-systems/{system_id}/labels/ax-1").json()
+
+    assert body["avoids"] == []

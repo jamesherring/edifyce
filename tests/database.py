@@ -86,7 +86,8 @@ def _always() -> list[Table]:
     `label_descriptions` / `label_attributions` / `label_references`, which a single
     proof read consults for the corpus's record of that proof's label — and, since
     that record carries its cross-references and what points back at it, for both
-    directions of the reference graph. Added here rather than
+    directions of the reference graph. `label_avoidances` rides along with it: the
+    same read reports what the corpus says a proof does without. Added here rather than
     to each module's own list because "what a system minimally needs" is one fact,
     and ten copies of it drift.
     """
@@ -97,6 +98,7 @@ def _always() -> list[Table]:
         SystemRelationSortRow,
         SystemRelationSymbolRow,
     )
+    from app.db.avoidances import LabelAvoidanceRow
     from app.db.descriptions import (
         LabelAttributionRow,
         LabelDescriptionRow,
@@ -122,6 +124,7 @@ def _always() -> list[Table]:
         LabelDescriptionRow.__table__,
         LabelAttributionRow.__table__,
         LabelReferenceRow.__table__,
+        LabelAvoidanceRow.__table__,
     ]
 
 

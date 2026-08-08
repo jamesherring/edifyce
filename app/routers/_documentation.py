@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import or_, select
 
+from app.db.avoidances_mapping import avoided_by
 from app.db.descriptions_mapping import mentions_of
 from app.db.lineage import spine_ids
 from app.db.models import Proof
@@ -107,6 +108,7 @@ async def documentation_out(
         return None
 
     mentioned, total = await mentions_of(session, system_id, row.label, MENTION_LIMIT)
+    avoids = await avoided_by(session, system_id, row.label)
     # One lookup for both directions, since a label mentioning this one is as
     # likely to be a proof as a label this one mentions.
     linkable = await _linkable(
@@ -141,6 +143,7 @@ async def documentation_out(
             for label in mentioned
         ],
         mentioned_by_total=total,
+        avoids=avoids,
         discouraged_usage=row.discouraged_usage,
         discouraged_modification=row.discouraged_modification,
     )

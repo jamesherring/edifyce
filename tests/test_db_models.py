@@ -43,6 +43,8 @@ def test_expected_tables_present():
         "label_descriptions",
         "label_attributions",
         "label_references",
+        # And what it declares a proof does *without*.
+        "label_avoidances",
         "definitions",
         "definition_bindings",
         "definition_fresh",

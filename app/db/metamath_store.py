@@ -60,6 +60,7 @@ from sqlalchemy import or_ as sa_or
 from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
+from app.db.avoidances_mapping import store_avoidances
 from app.db.descriptions_mapping import store_descriptions
 from app.db.models import FormalSystem, Proof
 from app.db.promoted_theorems_mapping import store_theorem, theorem_digest
@@ -75,6 +76,7 @@ from website.logical.metamath.corpus import (
     walk,
 )
 from website.logical.metamath.comments import read_comment
+from website.logical.metamath.markup import by_keyword, markup_of
 from website.logical.metamath.display import (
     applicable,
     applicable_rules,
@@ -175,6 +177,10 @@ class ImportReport:
     # Folders made from the file's section headers, or 0 for a `.mm` that draws
     # no outline — which is most of them outside a published corpus.
     sections: int = 0
+    # `$j usage … avoids …` edges: how many statements-a-proof-does-without this
+    # run recorded. 3,107 for the whole of `set.mm`, and 0 for a file carrying no
+    # `$j` at all, which is most of them.
+    avoidances: int = 0
     # The citable library this run stored: every assertion the walk promoted,
     # and how many of those are primitives of the imported system.
     # ``theorems_failed`` is counted apart from ``failed`` because it is a
@@ -344,6 +350,7 @@ def import_corpus(
 
     _link_proofs_to_theorems(session, report.system_ids, library.ids)
     report.described = layers.describe(descriptions)
+    report.avoidances = layers.avoid(_avoidances_of(database, limit))
     # On the **root**, not the leaf: a `$t` block is one declaration about the
     # whole file rather than something each layer has its own of, and a notation
     # is read root-first up the chain (`notations_mapping.notation_layers`), so
@@ -451,6 +458,34 @@ def _descriptions_of(
             found[assertion.label] = read_comment(assertion.comment)
         if assertion.label == horizon:
             break
+    return found
+
+
+def _avoidances_of(
+    database: Database, limit: int | None
+) -> dict[str, tuple[str, ...]]:
+    """Each label's ``$j usage … avoids …`` declaration, within the horizon.
+
+    Bounded exactly as the descriptions are, and for the same reason: a `limit` is
+    how a caller imports a *prefix* of a corpus, and a directive about a statement
+    past that point is about something these rows do not contain.
+
+    A `.mm` with no ``$j`` yields nothing, which is most of them — the whole
+    mechanism is optional, so an import of a file that declares none behaves as it
+    did before this existed.
+    """
+    horizon = database.position(theorems(database, limit)[-1].label)
+    found: dict[str, tuple[str, ...]] = {}
+    for directive in by_keyword(markup_of(database.comments), "usage"):
+        label = directive.subject
+        avoided = directive.clause("avoids")
+        # A directive naming a label this database does not declare says nothing
+        # about this import; one past the horizon is outside it. `position` would
+        # raise on the first, so membership is asked before the cut.
+        if label is None or not avoided or label not in database.assertions:
+            continue
+        if database.position(label) <= horizon:
+            found[label] = avoided
     return found
 
 
@@ -782,6 +817,21 @@ class _Layers:
             report.described = store_descriptions(self._session, system_id, share)
             total += report.described
         return total
+
+    def avoid(self, avoidances: Mapping[str, Sequence[str]]) -> int:
+        """Store each `$j usage … avoids …` against the layer that declares it.
+
+        Split by the same rule the prose is, and for the same reason: a read
+        reaches these by system id, so a directive filed against the wrong layer
+        is a directive nobody finds.
+        """
+        split: list[dict[str, Sequence[str]]] = [{} for _ in self._ids]
+        for label, targets in avoidances.items():
+            split[self._of_label(label)][label] = targets
+        return sum(
+            store_avoidances(self._session, system_id, share)
+            for system_id, share in zip(self._ids, split)
+        )
 
 
 class _Routed:
