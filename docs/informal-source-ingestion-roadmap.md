@@ -135,6 +135,51 @@ refused, and a *schematic* one is not. That is the engine's settled position —
 schema that parses nothing yields a theorem that never applies, exactly as an
 authored rule's does — and this route does not overrule it.
 
+#### Discharge — *done*
+
+Paying a debt off, which is the only way to retire an assumption anything
+depends on: withdrawal is refused while anything does, so without this a
+well-used assumption could be neither withdrawn nor settled. **It is not a new
+endpoint.** Promoting a proof under a label that names an assumption of the same
+system *is* the discharge — the entry that lands is an ordinary proved theorem,
+and everything after the guards is the promotion path unchanged.
+
+What is special is the bookkeeping the assumption leaves behind. An entry that
+rested on it no longer rests on it — the row cascade takes that edge — but it
+*does* now rest on whatever the warrant rests on, one hop further down. So the
+rewrite is `(closure \ {discharged}) ∪ closure(warrant)`: the cascade is the
+first half and `inherit_closure` the second, and the dependents have to be read
+*before* the row goes, since those edges are the record being re-pointed. A
+warrant that itself rests on nothing therefore leaves its dependents clean, and
+one that rests on two further assumptions passes both on — both pinned.
+
+Two guards, both refusals rather than repairs.
+
+**It must state the same theorem**, by α-digest of the conclusion and of every
+premise. Not a soundness requirement — promoting under a label invalidates
+everything that cited it, so a citation is re-checked either way — but the
+distinction a caller most needs told, because *paying a debt off* and *replacing
+an entry with a different claim* look identical from here and are opposite
+things. α rather than exact, since the assumption was written by hand and the
+proof composes its own variable names; and covering the premises, since a
+theorem with different hypotheses is a different theorem. A schematic assumption
+is therefore not discharged by a proof of one ground instance, which is right:
+every schematic citation of it would stop resolving.
+
+**It must not rest on the assumption it discharges.** Left alone, a circular
+proof would resolve its own citation to the entry replacing it and record an
+empty closure — laundering "I assumed it" into an unconditional theorem.
+
+An **ancestor's** assumption is shadowed rather than discharged, as promoting any
+shadowing label already is: the ancestor still asserts it, and every other
+descendant still rests on it.
+
+What this does not attempt is re-verifying the dependents. Their verdicts are
+cleared by the same `invalidate_citations` any promotion under a taken label
+runs, so they are unchecked rather than believed — which is the existing
+contract and the right one, since a statement match is not a promise that every
+proof above still goes through.
+
 ### 4.2 Provenance extended to assumptions, and exposed — *done*
 
 `app/db/provenance.py` already walks the citation graph transitively and reports

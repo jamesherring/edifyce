@@ -12,11 +12,13 @@ from app.db.assumptions import (
     TheoremAssumptionRow,
     assumption_labels,
     closure_of,
+    inherit_closure,
     dependent_counts,
     dependent_entries,
     record_closure,
     rests_on,
     resolve_labels,
+    stated_digests,
 )
 from app.db.models import (
     EMBEDDING_DIMENSIONS,
@@ -137,6 +139,8 @@ __all__ = [
     "TheoremAssumptionRow",
     "assumption_labels",
     "closure_of",
+    "inherit_closure",
+    "stated_digests",
     "dependent_counts",
     "dependent_entries",
     "record_closure",

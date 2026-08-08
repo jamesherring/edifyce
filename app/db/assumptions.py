@@ -45,6 +45,13 @@ can rest on an assumption that did not exist when it was promoted.
 An assumption carries a **self-edge**, so "the closure of the entries this proof
 cites" needs no special case for citing one directly.
 
+A debt is **discharged** rather than deleted when someone proves it: promoting a
+proof under the assumption's own label replaces it with its warrant, and the
+entries that rested on it inherit what that warrant rests on — the row cascade
+takes the edge to the assumption, and :func:`inherit_closure` puts the warrant's
+own debts in its place. That is the only way to retire an assumption anything
+depends on, since withdrawing one is refused while anything does.
+
 Ids and not labels, throughout. A relation edge may rename a label across systems
 (`website/logical/translation.py`), so the label a citation spells is not a key;
 the entry it resolves to is.
@@ -64,6 +71,7 @@ from app.db.models import Proof
 from app.db.proof_lines import ProofLineAntecedentRow, ProofLineRow
 from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
 from app.db.systems import RuleRow
+from app.db.terms import TermRow
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -227,6 +235,83 @@ def dependent_counts(
     )
     counts = {assumption_id: count for assumption_id, count in rows}
     return {assumption_id: counts.get(assumption_id, 0) for assumption_id in assumption_ids}
+
+
+def inherit_closure(
+    session: Session,
+    theorem_ids: Sequence[uuid.UUID],
+    assumption_ids: Sequence[uuid.UUID],
+) -> None:
+    """Add these assumptions to each entry's closure, keeping what is there.
+
+    What **discharging** a debt costs the rows that recorded it. An entry resting
+    on an assumption that has since been *proved* no longer rests on it — the
+    row cascade takes that edge when the assumed entry goes — but it does now
+    rest on whatever the discharging proof rests on, one hop further down. So the
+    rewrite is `(closure \\ {discharged}) ∪ closure(warrant)`, and this is the
+    second half; the cascade is the first.
+
+    Adds rather than replaces, and that is the whole point: an entry's other
+    debts are none of this transaction's business, and a discharge that reset the
+    closure would pay off every assumption at once.
+    """
+    if not theorem_ids or not assumption_ids:
+        return
+    held = {
+        (theorem_id, assumption_id)
+        for theorem_id, assumption_id in session.execute(
+            select(
+                TheoremAssumptionRow.theorem_id, TheoremAssumptionRow.assumption_id
+            ).where(TheoremAssumptionRow.theorem_id.in_(list(theorem_ids)))
+        )
+    }
+    for theorem_id in theorem_ids:
+        for assumption_id in sorted(set(assumption_ids), key=str):
+            # The pair is the primary key, so re-inserting one is an error rather
+            # than a no-op — and an entry may already rest on this assumption by
+            # a route that has nothing to do with the discharge.
+            if (theorem_id, assumption_id) not in held:
+                session.add(
+                    TheoremAssumptionRow(
+                        theorem_id=theorem_id, assumption_id=assumption_id
+                    )
+                )
+
+
+def stated_digests(
+    session: Session, theorem_id: uuid.UUID
+) -> tuple[str | None, tuple[str | None, ...]]:
+    """A library entry's conclusion and premises, as α-digests.
+
+    What "the same theorem" means when a proof is offered to discharge an
+    assumption. **α** rather than exact: the assumption was written by hand and
+    the proof composes its own variable names, so two statements that differ only
+    in what the metavariables are called are the same claim — which is exactly
+    the invariance `alpha_digest` was built for.
+
+    A ``None`` is a term the entry does not carry, not a term that digests to
+    nothing. The caller must refuse on one rather than treat it as a match: an
+    entry with no stored conclusion cannot be shown to say what anything else
+    says.
+    """
+    conclusion = session.scalar(
+        select(TermRow.alpha_digest)
+        .join(
+            PromotedTheoremRow, PromotedTheoremRow.statement_term_id == TermRow.id
+        )
+        .where(PromotedTheoremRow.id == theorem_id)
+    )
+    premises = tuple(
+        digest
+        for digest, in session.execute(
+            select(TermRow.alpha_digest)
+            .select_from(PromotedTheoremPremiseRow)
+            .outerjoin(TermRow, TermRow.id == PromotedTheoremPremiseRow.term_id)
+            .where(PromotedTheoremPremiseRow.theorem_id == theorem_id)
+            .order_by(PromotedTheoremPremiseRow.position)
+        )
+    )
+    return conclusion, premises
 
 
 def assumption_labels(

@@ -53,10 +53,14 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.auth import current_active_user, current_active_user_optional
 from app.db import (
+    AssumptionRow,
     FormalSystem,
     RestsOn,
     assumption_labels,
     cited_labels,
+    dependent_entries,
+    inherit_closure,
+    stated_digests,
     record_closure,
     rests_on,
     Proof,
@@ -121,6 +125,7 @@ from website.logical.formal_system.proposals import (
     grammar_index,
     resolve,
 )
+from website.logical.matching.patterns import StringPattern
 from website.logical.rendering import render
 from app.schemas import (
     AssumedOut,
@@ -175,6 +180,7 @@ if TYPE_CHECKING:
     from website.logical.formal_system.proof import ProofLine as EngineProofLine
     from website.logical.formal_system import PromotedTheorem
     from website.logical.matching.context import Context
+    from website.logical.matching.patterns import Pattern
 
 router = APIRouter(prefix="/proofs", tags=["proofs"])
 
@@ -1552,7 +1558,18 @@ async def promote_proof(
             PromotedTheoremRow.proved_by_id.is_distinct_from(proof.id),
         )
     )
-    if taken is not None:
+    # An **assumption** under this label is not a clash: it is the debt this
+    # promotion pays off. Only in the same system — an ancestor's assumption is
+    # shadowed rather than discharged, since the ancestor still asserts it and
+    # every other descendant still rests on it.
+    discharging = (
+        None
+        if taken is None
+        else await session.scalar(
+            select(AssumptionRow.theorem_id).where(AssumptionRow.theorem_id == taken)
+        )
+    )
+    if taken is not None and discharging is None:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"{label!r} already names a theorem in this system's library.",
@@ -1579,6 +1596,15 @@ async def promote_proof(
         # have been caught above; the first is reachable by a proof whose every
         # line is commentary.
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+    # Paying the debt off: the entries that rested on this assumption have to
+    # inherit what its *warrant* rests on, and both halves of that are decided
+    # before the row goes (see `_discharge`).
+    inheriting: list[uuid.UUID] = []
+    if discharging is not None:
+        inheriting = await _discharge(
+            session, proof, discharging, label, promoted, effective
+        )
 
     # Replace rather than accumulate. Retiring first also invalidates whatever
     # cited the old entry, which a re-promotion after an edit needs just as much
@@ -1627,6 +1653,14 @@ async def promote_proof(
     # what keeps it one hop for everything promoted on top of this in turn
     # (app/db/assumptions.py).
     assumed = await _record_assumptions(session, proof, row.id, effective)
+    # And the entries that rested on the assumption this just discharged: their
+    # edge to it went with its row, and what replaces it is the warrant's own
+    # debts, one hop further down.
+    if inheriting:
+        settled = [entry.theorem_id for entry in assumed.assumptions]
+        await session.run_sync(
+            lambda sync: inherit_closure(sync, inheriting, settled)
+        )
     await session.commit()
     return PromotedTheoremOut(
         id=row.id,
@@ -1635,7 +1669,111 @@ async def promote_proof(
         formal_system_id=system_id,
         proved_by_id=proof.id,
         assumes=[entry.label for entry in assumed.assumptions],
+        discharged=discharging is not None,
     )
+
+
+async def _discharge(
+    session: AsyncSession,
+    proof: Proof,
+    assumption_id: uuid.UUID,
+    label: str,
+    promoted: PromotedTheorem,
+    effective: EffectiveSystem,
+) -> list[uuid.UUID]:
+    """Check that this proof pays the debt off, and say what inherits its own.
+
+    Discharging is not a special kind of promotion — the entry that lands is an
+    ordinary proved theorem, and everything after this point is the promotion
+    path unchanged. What is special is the **bookkeeping the assumption leaves
+    behind**, and it has to be read before the row goes.
+
+    Two guards, both refusals rather than repairs.
+
+    **It must state the same theorem.** Not a soundness requirement — a
+    citation of the new entry is re-checked either way, because promoting under a
+    label invalidates everything that cited it — but an honesty one, and the
+    difference a caller most needs told: paying a debt off and replacing an entry
+    with a different claim look identical from here and are opposite things. The
+    comparison is by **α-digest**, so an assumption written by hand and a proof
+    that composed its own variable names still match; and it covers the premises,
+    since a theorem with different hypotheses is a different theorem.
+
+    **It must not rest on the assumption it discharges.** A proof that assumes
+    what it claims to prove discharges nothing, and left alone it would resolve
+    its own citation to the entry replacing it and record an empty closure —
+    laundering a circular argument into an unconditional theorem.
+
+    Returns the entries whose closure named the assumption, for the caller to
+    re-point once the warrant's own debts are known. Read here because the row
+    cascade takes those edges with the assumption itself.
+    """
+    conclusion, premises = await session.run_sync(
+        lambda sync: stated_digests(sync, assumption_id)
+    )
+    if conclusion is None or any(digest is None for digest in premises):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{label!r} names an assumption whose statement is not stored as a "
+            "term, so this proof cannot be shown to state the same thing. "
+            "Withdraw the assumption first if you mean to replace it.",
+        )
+
+    offered = _schema_digest(promoted.deduction)
+    offered_premises = tuple(_schema_digest(p) for p in promoted.antecedents)
+    if offered != conclusion or offered_premises != premises:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{label!r} names an assumption, and this proof does not establish "
+            "what it assumes — the statements differ. Discharging replaces a "
+            "debt with its warrant; promote this under another label, or "
+            "withdraw the assumption if you mean to replace it.",
+        )
+
+    proof_id = proof.id
+    systems = effective.library.system_ids
+    rests = await session.run_sync(lambda sync: rests_on(sync, proof_id, systems))
+    if any(entry.theorem_id == assumption_id for entry in rests.assumptions):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"This proof rests on {label!r} itself, so it does not discharge it. "
+            "A proof of an assumption may not assume it.",
+        )
+
+    inheriting = [
+        entry.id
+        for entry in await session.run_sync(
+            lambda sync: dependent_entries(sync, assumption_id)
+        )
+    ]
+
+    # And the row goes, so the label is free for the warrant to take. Its
+    # `AssumptionRow` and every closure edge naming it cascade with it — which is
+    # why the dependents are read first: those edges *are* the record being
+    # re-pointed, and after this they no longer exist to be read.
+    #
+    # Deleted rather than mutated in place. A promotion writes a fresh row
+    # (`store_theorem`), and reusing this one would mean reconciling premises,
+    # bindings and provisos that belong to the assumption's statement, not the
+    # warrant's — for an id nothing outside this table refers to.
+    await session.execute(
+        sa_delete(PromotedTheoremRow).where(PromotedTheoremRow.id == assumption_id)
+    )
+    await session.flush()
+    return inheriting
+
+
+def _schema_digest(pattern: Pattern) -> str | None:
+    # A promoted theorem's statement as the α-digest of the term it composed, or
+    # None where it composed none — the same shape `stated_digests` reads back,
+    # so a missing term compares equal to a missing term and to nothing else.
+    #
+    # Only a `StringPattern` carries a term, exactly as `_term_ids` has it: a
+    # schema that resolved to a declared grammar pattern has none, and the two
+    # sides of the comparison agree about that because both are read the same way.
+    if not isinstance(pattern, StringPattern) or pattern.schema_term is None:
+        return None
+    return alpha_digest(pattern.schema_term)
 
 
 async def _record_assumptions(
