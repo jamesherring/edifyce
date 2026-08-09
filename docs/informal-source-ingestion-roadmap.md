@@ -406,17 +406,17 @@ Two lookups an aligning model needs and cannot make.
 
 **Prose search.** `label_descriptions` holds `set.mm`'s 50,550 documented
 assertions and is readable **one label at a time**. A model that has just read
-"by the Cantor–Schröder–Bernstein theorem" has a name and needs a label. The
-`theorems.embedding` column (pgvector, 1536, HNSW-indexed) has been provisioned
-and unused since it was added. Wiring description text into it is Phase 4 of
-[search-and-embeddings-roadmap.md](search-and-embeddings-roadmap.md) arriving
-early and cheaply, because the alignment problem needs "aboutness" and structural
-search cannot supply it.
+"by the Cantor–Schröder–Bernstein theorem" has a name and needs a label.
 
-Two endpoints: `GET /formal-systems/{id}/labels?q=` (lexical, immediately, over
-the prose already stored) and the same with `?similar=` once embeddings land. The
-lexical one is worth shipping first and alone — on a corpus that names things
-`cbvald` the *title* is what a model can recognise.
+`GET /formal-systems/{id}/labels?q=` is that lookup — on a corpus that names
+things `cbvald` the *title* is what a model can recognise, and a title is prose.
+
+This section originally called for a second endpoint beside it: `?similar=`, over
+embeddings in the provisioned-and-unused `theorems.embedding` column, "because the
+alignment problem needs aboutness and structural search cannot supply it". **That
+half is now refused, and the aboutness comes from the consumer instead.** The
+reasoning is under "why not embeddings" below, since it is the more interesting
+half of this section.
 
 The lexical one is built (`app/db/label_search.py`). Every word must appear
 somewhere in one label's record; hits are ranked by **the tightest single field
@@ -474,138 +474,60 @@ was doing nothing but blocking the index); and the indexes only bite once the
 table has statistics, so the first searches after a bulk import run at the
 unindexed cost until autovacuum analyses.
 
-What a *lexical* search cannot be is the search with no stemming, no synonyms and
-no phrases. `Schröder` does not find `Schroeder` and a query sharing no word with
-the prose scores nothing however well it describes it. A paper does not quote a
-theorem in a library's vocabulary — that mismatch **is** the alignment problem —
-so the lexical path answers the easy half and stops where the work starts.
+#### Why not embeddings
 
-#### The embedding half
+The ceiling on a lexical search is real and worth stating exactly. Measured
+against Postgres full-text search on this corpus's own vocabulary:
 
-Built beside it (`app/db/label_embeddings.py`): `PUT /formal-systems/{id}/embeddings`
-stores a batch of vectors, `GET` the same path reports coverage, and
-`POST /formal-systems/{id}/labels/similar` searches.
+| | lexical (today) | stemming / BM25 |
+|---|---|---|
+| `compactness` finds `compact` | no | **yes** |
+| `Schröder` finds `Schroeder` | no | no |
+| a query sharing **no word** with the prose | no | **no** |
 
-**The vectors come from the caller**, which is the decision the rest follows
-from. This installation configures no embedding provider; choosing one is an
-operational matter — a key, a vendor, a per-request cost, a network hop on a read
-path — and §2 above gives the API the "smaller and deterministic" work while the
-consumer takes the nuanced. Calling a model is neither small nor deterministic,
-and the consumer this roadmap is written for has an embedding model to hand
-already. A server-side backfill lands behind the same table if anyone wants one,
-without touching the read path.
+That last row is the alignment problem, and nothing lexical touches it: *"every
+infinite subset of a compact space has a limit point"* shares no stem with
+*"Bolzano-Weierstrass theorem"*, and term-frequency weighting can only reweight
+terms that are present. Embeddings are the only thing in that table that crosses
+vocabulary mismatch.
 
-What follows is the part that has to be right: **a vector is only comparable to
-vectors from the same model.** Cosine between an OpenAI vector and a Voyage one
-is a number with no meaning, and nothing about either vector says so. So the
-model is stored beside every vector, stated once per batch (a property of the
-*run*, which is what makes mixing two into one upload impossible by accident), and
-a search is *against a named model* — a vector from another is not a worse
-candidate, it is not a candidate.
+**And the consumer crosses it better.** The caller here is a language model, and
+what it is good at is proposing what a corpus might have called something — given
+"by compactness of X" it can offer "Bolzano-Weierstrass", "finite subcover",
+"Heine-Borel". It does that with knowledge an embedding of the corpus does not
+have, because it knows the theorem's *name*. So the API ranks documents against
+terms and the consumer decides what the terms are, which is §2's split applied
+honestly — where caller-supplied vectors arguably break it, by putting a model
+artifact into API storage.
 
-**The text to embed is composed here and handed out**, by the coverage route's
-`pending` list, rather than left to the caller. A caller free to choose would
-embed the title on Monday and the title plus the prose on Tuesday, and the
-resulting neighbourhoods would be incomparable in a way no column could record.
-The digest of that text is stored beside the vector, so a vector left behind by an
-edit is **detectable** rather than merely old — a re-import replaces a system's
-descriptions wholesale, which would otherwise leave every vector pointing at prose
-that no longer exists. A stale hit is reported, not filtered: the vector is still
-the best evidence available about the label.
+What refusing embeddings avoids is not small. A vector is only comparable to
+vectors from the same model, and nothing about two vectors says they disagree —
+so a stored-vector design has to carry model identity, model *versioning* (a
+vendor silently revising a model is undetectable by name alone), the query/document
+asymmetry that Voyage and Cohere embeddings have, a pinned model per system so a
+later reader knows which to ask for, a retirement path for superseded generations
+(~300 MB per model per corpus), and a pgvector floor of 0.8 for correct recall
+under a filter. Every one of those is a way to be quietly wrong, and none of them
+exists without stored vectors.
 
-**Two departures from what this section sketched**, both forced rather than
-chosen.
+The cost is honest and worth naming: recall now depends on the model guessing a
+name the corpus uses, with no fallback when it does not. That is a worse floor
+than embeddings and a better ceiling, and it is a trade taken deliberately rather
+than by omission.
 
-*Not `theorems.embedding`.* The section says to wire description text into the
-column provisioned there, and that does not survive contact with the key. A
-`theorems` row is a proof and a statement term; a description is keyed by
-`(system, label)` and covers a production, a definition, a primitive theorem or a
-proof alike — `df-un` has no theorem row and never will, and it is exactly the
-kind of label whose prose is worth searching. So the vectors live beside the
-prose, keyed as the prose is. (`theorems.embedding` stays unused, and is still
-right for what it was provisioned for: Phase 3's deterministic fold of the *term*
-DAG, which is a different vector of a different thing.)
+**What the API contributes** is the deterministic half. `q` repeats, so several
+alternatives search as one ranked page rather than N pages the caller merges;
+within an alternative every word must appear, between alternatives it is an `OR`,
+and the rank is the best any alternative achieved rather than the first that hit.
+Each result says **which** alternative found it, which is the feedback half — a
+model that proposed five phrasings learns which one the corpus actually uses, and
+carries that into the next lookup.
 
-*Not `?similar=`.* 1,536 floats do not go in a URL, so the search takes a body.
-It answers **`QUERY`** as well as `POST`, and `QUERY` is the accurate one:
-[draft-ietf-httpbis-safe-method-w-body](https://datatracker.ietf.org/doc/draft-ietf-httpbis-safe-method-w-body/)
-exists for exactly this shape — a search whose parameters need a body — and is
-*safe and idempotent*, which POST is not. This route creates nothing, changes
-nothing, and may be repeated or cached freely, so POST misdescribes it.
-
-POST stays because the method is a **draft**, and the gap between "the server
-supports it" and "the request arrives" is other people's infrastructure: a CDN, a
-proxy or an egress filter that has never heard of `QUERY` may answer 405 or 501,
-and this deployment sits behind an edge whose behaviour cannot be verified from
-here. Both are the same handler, so a caller free of intermediaries should prefer
-`QUERY`; the browser client sends POST, since a page's request crosses whatever
-sits in front of the API and that is not a risk to take on its behalf. `QUERY` is
-kept **out of the OpenAPI document** — a Path Item Object's operation keys are a
-fixed set in OpenAPI 3.1 and `query` is not among them, so emitting one would make
-the published schema invalid and every generator downstream entitled to reject it.
-
-The query-string-shaped half of the idea survives as `label` — "what else is about
-what this is about" — which needs no embedding model at the call site and is
-served by the same route.
-
-**Narrower than the lexical search, on purpose.** That one has two haystacks, the
-corpus's descriptions and proofs' own titles; this has only the first. A
-description belongs to the *system*, so a caller already through the system's gate
-may read every one; a proof is published-or-yours, so the same table would carry
-rows whose visibility differs per reader. Rather than make every vector carry an
-access question, the embedded corpus is the documented one — which is also the
-50,550 rows the problem is actually about.
-
-**`embedded` rides beside `documented`** for the reason `documented` exists at
-all, and covers a case the lexical search has no need of: nearest-neighbour search
-always returns *something*, so the size of what it ranked over is the only thing
-separating "the closest in a well-stocked corpus" from "the only four vectors
-here" — and a corpus can be perfectly well documented and simply not embedded yet.
-
-Review found three ways those numbers lied, and it is worth recording that all
-three were about *counting the wrong set* rather than about the search itself. The
-counts were taken on the leaf system while the ranking spanned the **spine**, so a
-hit found on an ancestor arrived beside "0 embedded". `stale` was counted by
-walking descriptions, which never visits a vector whose description is *gone* —
-exactly what a re-import produces, since `store_descriptions` replaces a system's
-prose wholesale — so coverage reported `stale=0` for a label the search was
-already reporting stale; it is counted from the vector side now, and the two
-halves agree. And `stored` counted batch entries rather than rows, so one label
-named twice reported two stored against one embedded.
-
-Two more of the same kind: a zero-magnitude vector makes pgvector's `<=>` return
-NaN, which serialises to JSON `null` — contradicting the field's declared `float`,
-its documented `[-1, 1]`, and the SQLite branch, which returns 0.0 for the same
-input; and the batch bound sat in the route rather than on the schema, so it was
-announced only after the whole body had been read and turned into floats, which is
-no bound at all on a body meant to be large.
-
-**The index needs pgvector 0.8+**, which review turned into a requirement rather
-than a detail. The HNSW index covers the whole table while a search filters it by
-system, so the approximate scan produces its candidates *before* the filter runs —
-another system's vectors can exhaust it and the search comes back short, or empty,
-with matching rows sitting right there. Silently short is the one thing this layer
-refuses, and `hnsw.iterative_scan` is pgvector's answer to it. It is set per query
-and **probed rather than assumed**: an unknown setting is an error, and an error
-inside a transaction poisons it, so an older server would turn every search into a
-failed transaction instead of a slightly lossy one.
-
-A second pass found three more, and the sharpest is about the digest. Hashing the
-*current* prose at upload time loses the very race the digest exists to catch: a
-description edited between the caller reading its pending text and posting the
-vector was hashed as though the vector were of the new prose, recording a stale
-vector as current. The caller now echoes the digest it was handed and **that** is
-what is stored, so what is recorded is what the vector is actually of — and one
-that arrives already behind the prose reads as stale at once, which is true.
-Beside it: a stale label appeared in the count and nowhere else, leaving a
-re-imported system stuck at `stale > 0` with no way to act, since this route is the
-only place its canonical text can be got — `pending` now lists what has changed
-along with what was never embedded. And a coordinate JSON *can* carry but a vector
-cannot — `1e400`, which parses to `inf` — reached pgvector and became a 500;
-refusing it turned out to need a validation-error handler as well, because FastAPI
-echoes the offending value back and JSON has no literal to echo it with, so the
-422 could not be rendered either. That hole belongs to every float field in the
-API, so it is closed once in `app/main.py`.
+Stemming and BM25-style ranking stay open as an *independent* improvement to this
+route, not as a strategy: true BM25 needs `pg_search`, which managed Postgres does
+not offer, and native `ts_rank` has no corpus-wide IDF — which is the valuable
+part. It would also need care, since `19.21t` tokenises to `19.21` under the
+`english` configuration and two Metamath labels would collide.
 
 **The notation direction.** §3's option B — notation as a second input grammar —
 stays refused, for the reason §4 gives: a LaTeX-shaped input would shorten the
@@ -781,7 +703,7 @@ halfway. Three properties the current surface does not have and will need:
 | 4. **Lexical prose search** (§4.5) — *done* | cheap, and it is what alignment actually runs on |
 | 5. **Scopes in the structured path** (§4.6) — *done* | the first thing a real paper needs that a Metamath corpus never asked for |
 | 6. **Idempotency / batching** (§6) | when call volume proves it, not before |
-| 7. **Embeddings** (§4.5) — *done*, **then elaboration** | the two large ones, both behind interfaces that already exist. The embedding half turned out to be storage and a search rather than a model: the vectors come from the caller, so what shipped is the table, the discipline that a vector is only comparable within its own model, and the honesty about how much of a corpus is embedded |
+| 7. ~~**Embeddings**~~, then **elaboration** | embeddings are **refused** (§4.5): a vector is only comparable within its own model, and carrying that identity, its versioning, the query/document asymmetry and a retirement path is a lot of ways to be quietly wrong — where the consumer, being a language model, supplies the aboutness better by proposing what the corpus might have called something. Elaboration remains, behind an interface that already exists |
 
 ### Foreclosure check
 

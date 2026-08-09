@@ -515,11 +515,11 @@ def test_the_words_actually_searched_come_back(client, db):
     system_id, _ = seed(db)
 
     body = search(client, system_id, "  Negation   DEFINE negation ")
-    # Lowercased and deduplicated, in the order given.
-    assert body["searched"] == ["negation", "define"]
+    # Lowercased and deduplicated, in the order given — one list per alternative.
+    assert body["searched"] == [["negation", "define"]]
 
     long_query = " ".join(f"w{n}" for n in range(12))
-    assert len(search(client, system_id, long_query)["searched"]) == 8
+    assert len(search(client, system_id, long_query)["searched"][0]) == 8
 
 
 def test_an_excerpt_always_contains_what_was_searched_for():
@@ -552,3 +552,89 @@ def test_the_single_label_route_still_resolves(client, db):
     one = client.get(f"/api/formal-systems/{system_id}/labels/df-neg")
     assert one.status_code == 200
     assert one.json()["label"] == "df-neg"
+
+
+# ---------------------------------------------------------------------------
+# Query expansion: several alternatives in one call
+# ---------------------------------------------------------------------------
+#
+# The lexical route's ceiling is that a query sharing no *word* with the prose
+# scores nothing however well it describes it, and no lexical method can lift
+# that — a paper saying "every infinite subset of a compact space has a limit
+# point" shares no stem with "Bolzano-Weierstrass theorem". What can lift it is
+# the caller, which is a language model and knows the name. So the API ranks
+# documents against terms and the consumer decides what the terms are; these
+# cover the API's half of that (§4.5).
+
+
+def search_many(client, system_id: str, queries: list[str], **params) -> dict:
+    response = client.get(
+        f"/api/formal-systems/{system_id}/labels",
+        params=[("q", q) for q in queries] + list(params.items()),
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_alternatives_are_searched_together_as_one_page(client, db):
+    # One call rather than one per guess: the same page, the same total, and the
+    # ranking sees every alternative at once rather than the caller merging N
+    # pages itself.
+    system_id, _ = seed(db)
+
+    body = search_many(client, system_id, ["negation", "implication"])
+
+    found = set(labels(body))
+    assert "df-neg" in found and "wi" in found
+    assert body["total"] == len(body["items"])
+    # One token list per alternative, in the order given.
+    assert body["searched"] == [["negation"], ["implication"]]
+
+
+def test_a_hit_says_which_alternative_found_it(client, db):
+    # The feedback half of expansion: a model that proposed five phrasings learns
+    # which one the corpus actually uses, which is what it carries into the next
+    # lookup.
+    system_id, _ = seed(db)
+
+    body = search_many(client, system_id, ["cohomology", "negation"])
+
+    assert body["searched"] == [["cohomology"], ["negation"]]
+    # Nothing matched the first guess; everything here came from the second.
+    assert {hit["matched_query"] for hit in body["items"]} == {1}
+
+
+def test_an_alternative_that_matches_nothing_costs_nothing(client, db):
+    # Expansion is guessing, so most guesses miss. A miss must not narrow the
+    # result — the alternatives are an `OR`, unlike the words within one.
+    system_id, _ = seed(db)
+
+    alone = labels(search(client, system_id, "negation"))
+    expanded = labels(search_many(client, system_id, ["negation", "cohomology"]))
+
+    assert expanded == alone
+
+
+def test_the_best_alternative_sets_the_rank_not_the_first(client, db):
+    # Ordered by rank rather than by variant, so a weak hit on the caller's first
+    # guess does not outrank a label hit on its second. `wn` is a label; the
+    # word "negation" only reaches it through its title.
+    system_id, _ = seed(db)
+
+    body = search_many(client, system_id, ["negation", "wn"])
+
+    (hit,) = [h for h in body["items"] if h["label"] == "wn"]
+    assert hit["matched"] == "label"
+
+
+def test_a_single_query_still_answers_exactly_as_before(client, db):
+    # The compatibility case: one `q` is one alternative, and nothing about the
+    # single-query surface moved except the shape of `searched`.
+    system_id, _ = seed(db)
+
+    one = search(client, system_id, "negation")
+    same = search_many(client, system_id, ["negation"])
+
+    assert labels(one) == labels(same)
+    assert one["searched"] == same["searched"] == [["negation"]]
+    assert {hit["matched_query"] for hit in one["items"]} == {0}

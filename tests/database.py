@@ -99,13 +99,9 @@ def _always() -> list[Table]:
     so both tables are named by a statement every system delete issues, empty or
     not. `theorems` carries a pgvector column, which SQLite stores as a plain
     declared type — only the HNSW index is Postgres-specific, and that rides a
-    `postgresql_using` other dialects ignore. `label_embeddings` is here for the
-    same reason and creatable for a sharper one: its vector column declares a
-    `JSON` variant off Postgres, so the *storage* works on SQLite and the routes
-    above it are testable without a server — only the `<=>` ordering differs, and
-    `label_embeddings.neighbours` branches on the dialect where it does. Added
-    here rather than to each module's own list because "what a system minimally
-    needs" is one fact, and ten copies of it drift.
+    `postgresql_using` other dialects ignore. Added here rather than to each
+    module's own list because "what a system minimally needs" is one fact, and
+    ten copies of it drift.
     """
     from app.db.system_relations import (
         SystemRelationExtraRow,
@@ -128,7 +124,6 @@ def _always() -> list[Table]:
         LabelDescriptionRow,
         LabelReferenceRow,
     )
-    from app.db.label_embeddings import LabelEmbeddingRow
     from app.db.systems import (
         NotationPieceRow,
         NotationRulePieceRow,
@@ -147,7 +142,6 @@ def _always() -> list[Table]:
         NotationRulePinRow.__table__,
         NotationRulePieceRow.__table__,
         LabelDescriptionRow.__table__,
-        LabelEmbeddingRow.__table__,
         LabelAttributionRow.__table__,
         LabelReferenceRow.__table__,
         LabelAvoidanceRow.__table__,

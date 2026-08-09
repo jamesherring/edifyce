@@ -38,9 +38,8 @@ A substring match over words, ranked by where they landed. It has no stemming, n
 synonyms and no notion of a phrase: `Schröder` does not find `Schroeder`,
 `compactness` does not find `compact`, and a query that shares no *word* with the
 prose scores nothing however well it describes it. That is the real ceiling, and
-lifting it is :mod:`app.db.label_embeddings`, which searches this same prose by
-what it is *about* — Phase 4 of docs/search-and-embeddings-roadmap.md, over the
-two haystacks' documented half.
+it is the ceiling `theorems.embedding` was provisioned to lift — Phase 4 of
+docs/search-and-embeddings-roadmap.md, reached through ``?similar=`` beside this.
 
 Shipping the lexical one first is not a compromise. On a corpus that names things
 `cbvald` the *title* is the only thing a model can recognise, a title is prose,
@@ -141,6 +140,11 @@ class Hit:
     # served it would ship a corpus comment per row to render a list.
     excerpt: str | None
     matched: str
+    # Which of the caller's alternatives found this, as an index into
+    # `Hits.searched`. The feedback half of query expansion: a model proposing
+    # five phrasings learns which one the corpus actually uses, which is the
+    # thing worth carrying into the next lookup.
+    matched_query: int = 0
     proof_id: uuid.UUID | None = None
     proof_title: str | None = None
     discouraged_usage: bool = False
@@ -169,7 +173,8 @@ class Hits:
     hits: list[Hit]
     total: int
     documented: int
-    searched: list[str]
+    # One token list per alternative that ran, in the order given.
+    searched: list[list[str]]
 
 
 def tokens_of(query: str) -> list[str]:
@@ -210,17 +215,25 @@ def _branch(
     title: ColumnElement[str],
     body: ColumnElement[str],
     system_id: ColumnElement[uuid.UUID],
-    query: str,
-    tokens: Sequence[str],
+    queries: Sequence[str],
+    variants: Sequence[Sequence[str]],
     spine: Sequence[uuid.UUID],
     source: int,
 ) -> tuple[ColumnElement[bool], ColumnElement[int], ColumnElement[int], ColumnElement[int]]:
     """The match condition, rank, source and depth for one of the two haystacks.
 
-    Every token must appear *somewhere* — the label, the title or the body. `AND`
-    rather than `OR` because a two-word query is a name and an `OR` over it
+    Every token of *some* variant must appear — the label, the title or the body.
+    `AND` within a variant because a two-word query is a name and an `OR` over it
     returns everything containing the commoner half, which on a corpus is
-    everything.
+    everything; `OR` *between* variants because that is what alternatives are.
+
+    **Several variants is how query expansion is served** (§4.5). The caller is a
+    language model and the thing it is good at is proposing what a corpus might
+    have called this — "compact", "Bolzano-Weierstrass", "finite subcover" — so
+    the API ranks documents against terms and the consumer decides what the terms
+    are. One call rather than one per guess: the same page, the same total, and
+    the ranking sees all the alternatives at once rather than the caller having to
+    merge N pages itself.
 
     **The columns go in bare, never wrapped in `COALESCE`.** A null title yields
     a null comparison, which never matches, which is exactly right — and a
@@ -231,17 +244,32 @@ def _branch(
     *projection*, where a null becomes the empty string an excerpt needs, and a
     projection is not something an index has to serve.
     """
-    matches = and_(
-        *(
-            or_(_contains(label, token), _contains(title, token), _contains(body, token))
-            for token in tokens
+    def anywhere(tokens: Sequence[str]) -> ColumnElement[bool]:
+        return and_(
+            *(
+                or_(
+                    _contains(label, token),
+                    _contains(title, token),
+                    _contains(body, token),
+                )
+                for token in tokens
+            )
         )
-    )
+
+    matches = or_(*(anywhere(tokens) for tokens in variants))
+    # Ordered by **rank** rather than by variant, which is what makes this the
+    # best score across the alternatives rather than the first one that happened
+    # to hit. Written as one `CASE` per tier with an `OR` inside it because
+    # `LEAST` is not portable — Postgres has no scalar `min` and SQLite no
+    # `least` — and a tier-ordered chain needs neither.
     rank = case(
-        (func.lower(label) == query.strip().lower(), _EXACT),
-        (_all_in(label, tokens), _LABEL),
-        (_all_in(title, tokens), _TITLE),
-        (_all_in(body, tokens), _TEXT),
+        (
+            or_(*(func.lower(label) == query.strip().lower() for query in queries)),
+            _EXACT,
+        ),
+        (or_(*(_all_in(label, tokens) for tokens in variants)), _LABEL),
+        (or_(*(_all_in(title, tokens) for tokens in variants)), _TITLE),
+        (or_(*(_all_in(body, tokens) for tokens in variants)), _TEXT),
         else_=_SPREAD,
     )
     # A `CASE` over the spine rather than a join: it is a handful of ids, it is
@@ -295,13 +323,13 @@ def _excerpt(body: str, tokens: Sequence[str]) -> str | None:
 async def search_labels(
     session: AsyncSession,
     spine: Sequence[uuid.UUID],
-    query: str,
+    queries: Sequence[str],
     *,
     viewer: User | None,
     limit: int,
     offset: int,
 ) -> Hits:
-    """The labels in ``spine`` whose prose contains every word of ``query``.
+    """The labels in ``spine`` matching every word of *any* of ``queries``.
 
     ``spine`` is `app.db.lineage.spine_ids` of the system being searched, taken as
     an argument rather than walked here so a caller asking several questions about
@@ -320,8 +348,8 @@ async def search_labels(
     common case on a rank with four values, and without a total order two reads of
     page 2 are two different pages.
     """
-    words = tokens_of(query)
-    if not words:
+    variants = [words for words in (tokens_of(query) for query in queries) if words]
+    if not variants:
         # A caller who asked for nothing gets nothing, rather than the corpus: an
         # empty `AND` is vacuously true and would page the whole library.
         return Hits(
@@ -336,8 +364,8 @@ async def search_labels(
         title=LabelDescriptionRow.title,
         body=LabelDescriptionRow.text,
         system_id=LabelDescriptionRow.formal_system_id,
-        query=query,
-        tokens=words,
+        queries=queries,
+        variants=variants,
         spine=spine,
         source=_DESCRIPTION,
     )
@@ -356,8 +384,8 @@ async def search_labels(
         title=Proof.title,
         body=Proof.description,
         system_id=Proof.formal_system_id,
-        query=query,
-        tokens=words,
+        queries=queries,
+        variants=variants,
         spine=spine,
         source=_PROOF,
     )
@@ -415,7 +443,8 @@ async def search_labels(
                 label=row.label,
                 system_id=row.system_id,
                 title=row.title,
-                excerpt=_excerpt(row.body, words),
+                excerpt=_excerpt(row.body, [w for words in variants for w in words]),
+                matched_query=_which(row, variants),
                 matched=_MATCHED[row.rank],
                 proof_id=links.get((row.system_id, row.label), (None, None))[0],
                 proof_title=links.get((row.system_id, row.label), (None, None))[1],
@@ -428,7 +457,7 @@ async def search_labels(
         ],
         total=total,
         documented=await _documented(session, spine),
-        searched=list(words),
+        searched=[list(words) for words in variants],
     )
 
 
@@ -553,3 +582,26 @@ def nearest(
     ):
         collapsed.setdefault(name, found)
     return collapsed
+
+
+def _which(row: object, variants: Sequence[Sequence[str]]) -> int:
+    """Which alternative found this row — the first whose every word is in it.
+
+    Attributed here rather than in SQL, over the page's twenty rows, because the
+    query already did the expensive half: adding a per-variant column to the
+    ranking would make the scan wider to answer a question about the handful of
+    rows that survive it.
+
+    "First" rather than "best" when several match, since the caller ordered its
+    alternatives and the earliest is the one it thought most likely.
+    """
+    haystack = " ".join(
+        part for part in (row.label, row.title or "", row.body or "") if part
+    ).lower()
+    for index, words in enumerate(variants):
+        if all(word in haystack for word in words):
+            return index
+    # Every returned row matched *something*, so this is unreachable by
+    # construction; 0 rather than a raise because a mis-attributed hint is not
+    # worth failing a search over.
+    return 0
