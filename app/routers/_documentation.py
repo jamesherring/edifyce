@@ -18,12 +18,10 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import or_, select
-
 from app.db.avoidances_mapping import avoided_by
 from app.db.descriptions_mapping import mentions_of
+from app.db.label_search import nearest, proofs_named
 from app.db.lineage import spine_ids
-from app.db.models import Proof
 from app.schemas import Attribution, LabelDescription, LabelMention, LabelReference
 
 if TYPE_CHECKING:
@@ -49,10 +47,6 @@ async def _linkable(
 ) -> Mapping[str, tuple[uuid.UUID, str | None]]:
     """Which of ``names`` are proofs of this system the viewer may open.
 
-    One query for the whole set rather than one per reference: a single comment
-    can carry a dozen, and a corpus read that costs a round trip apiece would make
-    the documentation the expensive half of the page.
-
     ``spine`` is the whole chain, not just this system: a layered corpus
     files a proof against the layer its section falls in, so a ZF statement
     referencing `ax-mp` points at the propositional root and a root comment saying
@@ -66,29 +60,15 @@ async def _linkable(
     than handing out its id. The reference itself still shows; it is the *link*
     that is withheld, which is the truthful rendering: the corpus does say the
     word, and the reader cannot follow it.
+
+    The resolution itself is :func:`app.db.label_search.proofs_named`, which grew
+    out of this function and now serves the label search too. It answers per
+    layer; **a cross-reference names a label and no layer**, so the collapse is
+    :func:`~app.db.label_search.nearest` and a system's own proof wins, since
+    that is what its own prose meant. A search hit does not take this path — it
+    knows its layer and asks about that one.
     """
-    wanted = list(dict.fromkeys(names))
-    if not wanted:
-        return {}
-    readable = [Proof.published_at.is_not(None)]
-    if viewer is not None:
-        readable.append(Proof.owner_id == viewer.id)
-    rows = await session.execute(
-        select(Proof.formal_system_id, Proof.name, Proof.id, Proof.title).where(
-            Proof.formal_system_id.in_(spine),
-            Proof.name.in_(wanted),
-            or_(*readable),
-        )
-    )
-    # Nearest layer wins where two of them declare the label: a system's own proof
-    # is what its own prose meant. `Proof.name` is unique per system but not per
-    # spine, so the tie is real — and sorted here rather than left to the `IN`,
-    # which returns rows in no order the chain knows about.
-    depth = {found: index for index, found in enumerate(spine)}
-    resolved: dict[str, tuple[uuid.UUID, str | None]] = {}
-    for owner, name, found, title in sorted(rows, key=lambda row: depth[row[0]]):
-        resolved.setdefault(name, (found, title))
-    return resolved
+    return nearest(await proofs_named(session, spine, list(names), viewer), spine)
 
 
 async def documentation_out(

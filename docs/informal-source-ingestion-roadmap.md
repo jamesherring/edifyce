@@ -400,7 +400,7 @@ when this system's grammar is one the search policy over-reports on, since a
 caller that cannot tell which case it is in has to distrust the ranking
 everywhere.
 
-### 4.5 Alignment tools: prose search, and the notation direction
+### 4.5 Alignment tools: prose search, and the notation direction — *lexical half done*
 
 Two lookups an aligning model needs and cannot make.
 
@@ -417,6 +417,68 @@ Two endpoints: `GET /formal-systems/{id}/labels?q=` (lexical, immediately, over
 the prose already stored) and the same with `?similar=` once embeddings land. The
 lexical one is worth shipping first and alone — on a corpus that names things
 `cbvald` the *title* is what a model can recognise.
+
+The lexical one is built (`app/db/label_search.py`). Every word must appear
+somewhere in one label's record; hits are ranked by **the tightest single field
+holding all of them** — label, then title, then prose — and the response says
+which. A ranking a caller cannot account for is one it has to trust blindly or
+ignore, and this one has a knowable weakness (a common word deep in a long
+comment ranks like the same word in the title of the thing being looked for).
+
+There is a fourth answer, `record`, and it is a correction: the first cut had
+three and an `else_`, so a query whose words are split across two fields — `wi`
+the label, "wff" in the title — fell through and reported a *prose* match, which
+is a claim about a body containing neither word. It also paired `matched: "text"`
+with no excerpt, which the schema said could not happen. No single field holds
+those words, and that is its own category rather than the bottom of the list.
+
+Two more the same review found, both of the same kind — an answer true of the
+wrong thing. A hit **is** a row on a known layer, so resolving its proof link or
+its discouragement markers *nearest-first* answers about a different one: two
+systems in a chain may declare one name, and the ancestor's hit carried the
+descendant's proof id. The per-layer map is now the primitive, and the collapse
+to nearest-first lives at the one caller that has a name and no layer — a
+cross-reference target. And the `MAX_TOKENS` cap was silent, so a nine-word query
+was answered more broadly than it was asked with every extra row a false positive
+nobody could identify; `searched` now reports the words that ran.
+
+**Two haystacks, which the section did not say.** A corpus label's prose is a
+`label_descriptions` row; a proof authored through the API carries its own
+`title`/`description` and gets no such row. Searching only the first answers "what
+does this system have about compactness" with the *imported* half of the system
+and omits everything anyone wrote here — an absence a caller cannot distinguish
+from a real one. Both are searched, results are one list deduplicated by label,
+and the proof half is scoped by the published-or-yours predicate a proof read
+applies, so a draft's title does not become searchable prose.
+
+**Across the spine**, not the one system id, for the reason `app/db/lineage.py`
+gives: a layered corpus files each statement against the layer its section falls
+in, and the recognisable names are on the foundations. A hit names the layer it
+lives on, since that is where a follow-up read has to be addressed.
+
+**`documented` rides along** — how many labels carry any prose at all. It is what
+makes an empty answer readable: "the words are not in this corpus" and "this
+corpus is undocumented" are otherwise the same empty list, and only one of them
+means the search is finished. The same distinction `TheoremMatches.unindexed`
+draws.
+
+**It is indexed, and that was not optional.** An unanchored `%word%` is not a
+btree lookup, so without help this is a sequential scan of the largest text table
+in the schema on every call, by any anonymous caller — 419 ms on a 50,550-row
+corpus, where every other public listing here is bounded by an index. `pg_trgm`
+GIN indexes on the six searched columns bring it to 10 ms. Two things measured on
+the way, both recorded because neither is guessable: wrapping a nullable column in
+`COALESCE` makes the predicate an expression no index covers and costs the whole
+40× (a null comparison never matches, which is what the `COALESCE` was for, so it
+was doing nothing but blocking the index); and the indexes only bite once the
+table has statistics, so the first searches after a bulk import run at the
+unindexed cost until autovacuum analyses.
+
+What stays out is the search a *lexical* one cannot be: no stemming, no synonyms,
+no phrases. `Schröder` does not find `Schroeder` and a query sharing no word with
+the prose scores nothing however well it describes it. That is the ceiling
+`?similar=` is for, and it is the honest reason the embedding half is still ahead
+rather than a nicety.
 
 **The notation direction.** §3's option B — notation as a second input grammar —
 stays refused, for the reason §4 gives: a LaTeX-shaped input would shorten the
@@ -494,7 +556,7 @@ halfway. Three properties the current surface does not have and will need:
 | 1. **Assumptions + provenance closure + `GET /proofs/{id}/provenance`** (§4.1, §4.2) — *done* | the honesty machinery; everything after it produces artifacts that would otherwise misreport what they rest on |
 | 2. **Goal-first statements** (§4.4) | the first call any translation makes, and the single path from vocabulary to stored term |
 | 3. **Formalization record** (§4.3) | pure storage, no engine reach; makes fidelity reviewable rather than assumed |
-| 4. **Lexical prose search** (§4.5) | cheap, and it is what alignment actually runs on |
+| 4. **Lexical prose search** (§4.5) — *done* | cheap, and it is what alignment actually runs on |
 | 5. **Scopes in the structured path** (§4.6) | the first thing a real paper needs that a Metamath corpus never asked for |
 | 6. **Idempotency / batching** (§6) | when call volume proves it, not before |
 | 7. **Embeddings, then elaboration** | the two large ones, both behind interfaces that already exist |

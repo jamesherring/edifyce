@@ -138,6 +138,28 @@ def test_theorem_search_columns_and_indexes():
     assert unique.unique
 
 
+def test_the_prose_search_columns_are_trigram_indexed():
+    # Every column `app.db.label_search` puts a `%word%` against, on both
+    # haystacks. They are a *set*: the search's predicate is an `OR` across the
+    # three, Postgres answers that with a `BitmapOr` of three index scans, and one
+    # missing arm sends the planner back to scanning the whole table for the whole
+    # predicate — which is a 40× regression on a corpus and would be invisible.
+    for table, columns in (
+        ("label_descriptions", ("label", "title", "text")),
+        ("proofs", ("name", "title", "description")),
+    ):
+        indexes = {
+            index.name: index.dialect_options["postgresql"]
+            for index in Base.metadata.tables[table].indexes
+            if "postgresql" in index.dialect_options
+        }
+        for column in columns:
+            options = indexes.get(f"ix_{table}_{column}_trgm")
+            assert options is not None, f"{table}.{column} is not trigram indexed"
+            assert options.get("using") == "gin"
+            assert options.get("ops") == {column: "gin_trgm_ops"}
+
+
 def test_embedding_dimension_is_positive():
     assert EMBEDDING_DIMENSIONS > 0
 

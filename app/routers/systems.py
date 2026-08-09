@@ -49,6 +49,7 @@ from app.db.system_relations import SystemRelationRow
 from app.routers._documentation import documentation_out
 from app.routers._invalidation import invalidate_library_reach
 from app.routers._common import (
+    MAX_PAGE_SIZE,
     PageParams,
     lock_system,
     page_params,
@@ -57,6 +58,8 @@ from app.routers._common import (
 )
 from app.db.descriptions import LabelDescriptionRow
 from app.db.descriptions_mapping import load_description
+from app.db.label_search import search_labels
+from app.db.lineage import spine_ids
 from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
 from app.db.models import Proof, ProofFolder, User
 from app.db.notations_mapping import (
@@ -105,6 +108,8 @@ from app.schemas import (
     Folder,
     Justification,
     LabelDescription,
+    LabelHit,
+    LabelSearch,
     LibraryEntry,
     LinePart,
     LineType,
@@ -1143,6 +1148,82 @@ async def _nearest_description(
     )
     found = min(rows, key=lambda row: nearness[row.formal_system_id], default=None)
     return None if found is None else found.title
+
+
+@router.get("/{system_id}/labels", response_model=LabelSearch)
+async def search_label_descriptions(
+    system_id: uuid.UUID,
+    q: str = Query(
+        ...,
+        description=(
+            "Words to look for in a label, its title, or its prose. Every word "
+            "must appear somewhere in the same label's record."
+        ),
+    ),
+    limit: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> LabelSearch:
+    """Find a label from the words a paper used for it.
+
+    The lookup an aligning caller needs and has had no way to make
+    (docs/informal-source-ingestion-roadmap.md §4.5). Every search here is
+    structural — `GET /formal-systems/{id}/theorems/matching` narrows by a
+    conclusion's root production and needs a *term* to do it — and alignment
+    starts before there is a term, because the term is what alignment produces.
+    A model that has just read "by the Cantor–Schröder–Bernstein theorem" holds a
+    name, and prose is the only thing a name can be matched against.
+
+    Searches the corpus's own record (`set.mm` documents all 50,550 of its
+    assertions) **and** proofs' own titles and descriptions, since a proof
+    authored here has the latter and no former — and answers over the
+    **inheritance spine**, because a layered corpus files each statement against
+    the layer its section falls in and the recognisable names are on the
+    foundations.
+
+    **A filter, not a verdict**, in the same sense the theorem search is one: it
+    matches substrings of words, so it has no stemming, no synonyms and no notion
+    of a phrase. A query sharing no word with the prose scores nothing however
+    well it describes it, which is the ceiling `theorems.embedding` was
+    provisioned to lift. ``documented`` says how much prose there was to miss and
+    ``searched`` says which words actually ran, so neither an empty answer nor a
+    long query is answered with a silent approximation.
+
+    Not on the shared ``page_params``, which carries ``search``/``sort``/``desc``:
+    the query here is the route's subject rather than a filter on it, and the
+    order is relevance, so all three would be dead parameters on the surface a
+    caller reads to find out what it may ask.
+    """
+    # The cheap gate: this needs the id and nothing else, and the other one
+    # hydrates the whole grammar — symbols, lines, definitions, axioms, rules —
+    # to answer a question about prose.
+    readable = await readable_system_id_or_404(session, system_id, user)
+    spine = await spine_ids(session, readable)
+    found = await search_labels(
+        session, spine, q, viewer=user, limit=limit, offset=offset
+    )
+    return LabelSearch(
+        items=[
+            LabelHit(
+                label=hit.label,
+                formal_system_id=hit.system_id,
+                title=hit.title,
+                excerpt=hit.excerpt,
+                matched=hit.matched,
+                proof_id=hit.proof_id,
+                proof_title=hit.proof_title,
+                discouraged_usage=hit.discouraged_usage,
+                discouraged_modification=hit.discouraged_modification,
+            )
+            for hit in found.hits
+        ],
+        total=found.total,
+        limit=limit,
+        offset=offset,
+        documented=found.documented,
+        searched=found.searched,
+    )
 
 
 @router.get("/{system_id}/labels/{label}", response_model=LabelDescription)

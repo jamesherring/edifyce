@@ -75,6 +75,45 @@ event.listen(
     DDL("CREATE EXTENSION IF NOT EXISTS vector").execute_if(dialect="postgresql"),
 )
 
+# Trigram indexes, for the same reason and by the same mechanism. What they cover
+# is the prose search (`app/db/label_search.py`): a `%word%` pattern is unanchored,
+# so no btree can serve it and the planner reads every row of the largest text
+# table in the schema. Measured on a 50,550-row corpus, a selective query is
+# 419 ms unindexed and 10 ms indexed — and it is the *unbounded* half that
+# decides this rather than the ratio, since the route is one an anonymous caller
+# may hit and every other public listing here is bounded by an index.
+#
+# Postgres-only, like `vector` and for the same reason: a SQLite test database
+# has neither the extension nor the access method, and its `LIKE` reads every row
+# regardless. The indexes are declared with `postgresql_using`, which a non-PG
+# `create_all` skips.
+event.listen(
+    Base.metadata,
+    "before_create",
+    DDL("CREATE EXTENSION IF NOT EXISTS pg_trgm").execute_if(dialect="postgresql"),
+)
+
+
+def _trigram_index(table: str, column: str) -> Index:
+    """A GIN trigram index over one searchable text column.
+
+    One per column rather than one composite, because the search's predicate is
+    an `OR` across the three and Postgres answers that with a `BitmapOr` of three
+    index scans — a composite would serve none of the arms. All three have to
+    exist or the planner falls back to scanning for the whole predicate, so they
+    are a set rather than three independent decisions.
+
+    A pattern shorter than three characters has no trigram and falls back to a
+    scan whatever is indexed. That is a real hole and a narrow one: it is a query
+    of one or two letters, which on a corpus matches most of it anyway.
+    """
+    return Index(
+        f"ix_{table}_{column}_trgm",
+        column,
+        postgresql_using="gin",
+        postgresql_ops={column: "gin_trgm_ops"},
+    )
+
 
 class User(SQLAlchemyBaseUserTableUUID, TimestampMixin, Base):
     __tablename__ = "users"
@@ -313,6 +352,16 @@ class ProofReference(Base):
 
 class Proof(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "proofs"
+    __table_args__ = (
+        # The second haystack of the prose search: a proof authored here carries
+        # its own title and description and gets no `label_descriptions` row, so
+        # searching only those would answer with the imported half of a system.
+        # An imported corpus is 47,589 proofs, so this side needs the index for
+        # the same reason the first does.
+        _trigram_index("proofs", "name"),
+        _trigram_index("proofs", "title"),
+        _trigram_index("proofs", "description"),
+    )
 
     owner_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), index=True
