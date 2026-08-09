@@ -41,6 +41,7 @@ def test_expected_tables_present():
         # What a system says about the labels it names, who wrote them, and what
         # its prose points at.
         "label_descriptions",
+        "label_embeddings",
         "label_attributions",
         "label_references",
         # And what it declares a proof does *without*.
@@ -158,6 +159,28 @@ def test_the_prose_search_columns_are_trigram_indexed():
             assert options is not None, f"{table}.{column} is not trigram indexed"
             assert options.get("using") == "gin"
             assert options.get("ops") == {column: "gin_trgm_ops"}
+
+
+def test_label_embeddings_are_hnsw_indexed_and_unique_per_model():
+    embeddings = Base.metadata.tables["label_embeddings"]
+    # The column is the same width as `theorems.embedding`, because a vector of
+    # another size is another model's and the route says so.
+    assert "embedding" in embeddings.c
+    assert "model" in embeddings.c
+
+    indexes = {index.name: index for index in embeddings.indexes}
+    method = indexes["ix_label_embeddings_embedding"].dialect_options["postgresql"]
+    assert method.get("using") == "hnsw"
+    assert method.get("ops") == {"embedding": "vector_cosine_ops"}
+    # One vector per label per model: two models are two opinions worth keeping,
+    # one model saying two things about one label is a bug.
+    unique = indexes["uq_label_embeddings_system_label_model"]
+    assert unique.unique
+    assert [column.name for column in unique.columns] == [
+        "formal_system_id",
+        "label",
+        "model",
+    ]
 
 
 def test_embedding_dimension_is_positive():

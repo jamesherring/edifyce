@@ -50,6 +50,7 @@ from app.db.descriptions_mapping import (
     mentions_of,
     store_descriptions,
 )
+from app.db.label_embeddings import LabelEmbeddingRow
 from app.db.metamath_store import ImportReport, import_corpus
 from app.db.outline_mapping import StoredOutline, store_outline
 from app.db.slugs import slugify, unique_slug
@@ -203,6 +204,7 @@ __all__ = [
     "store_avoidances",
     "LabelReferenceRow",
     "LabelDescriptionRow",
+    "LabelEmbeddingRow",
     "contributions",
     "load_description",
     "load_descriptions",

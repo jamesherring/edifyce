@@ -58,8 +58,17 @@ from app.routers._common import (
 )
 from app.db.descriptions import LabelDescriptionRow
 from app.db.descriptions_mapping import load_description
+from app.db.label_embeddings import (
+    MAX_BATCH,
+    counts,
+    coverage,
+    embedding_of,
+    neighbours,
+    store_embeddings,
+)
 from app.db.label_search import search_labels
 from app.db.lineage import spine_ids
+from app.db.models import EMBEDDING_DIMENSIONS
 from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
 from app.db.models import Proof, ProofFolder, User
 from app.db.notations_mapping import (
@@ -112,10 +121,17 @@ from app.schemas import (
     FormalSystemUpdate,
     Folder,
     Justification,
+    EmbeddingCoverage,
+    EmbeddingUpload,
+    EmbeddingUploadOutcome,
     LabelDescription,
     LabelHit,
     LabelSearch,
     LibraryEntry,
+    PendingEmbedding,
+    SimilarityQuery,
+    SimilarLabel,
+    SimilarLabels,
     LinePart,
     LineType,
     Page,
@@ -1190,8 +1206,9 @@ async def search_label_descriptions(
     **A filter, not a verdict**, in the same sense the theorem search is one: it
     matches substrings of words, so it has no stemming, no synonyms and no notion
     of a phrase. A query sharing no word with the prose scores nothing however
-    well it describes it, which is the ceiling `theorems.embedding` was
-    provisioned to lift. ``documented`` says how much prose there was to miss and
+    well it describes it, which is the ceiling ``POST /labels/similar`` lifts by
+    searching the same prose by what it is *about*. ``documented`` says how much
+    prose there was to miss and
     ``searched`` says which words actually ran, so neither an empty answer nor a
     long query is answered with a silent approximation.
 
@@ -1228,6 +1245,194 @@ async def search_label_descriptions(
         offset=offset,
         documented=found.documented,
         searched=found.searched,
+    )
+
+
+@router.get("/{system_id}/embeddings", response_model=EmbeddingCoverage)
+async def get_embedding_coverage(
+    system_id: uuid.UUID,
+    model: str | None = Query(
+        None,
+        description=(
+            "Which embedding model to report on. Omitted, only the systemwide "
+            "counts and the list of models stored come back — there is no "
+            "model-free notion of how much is embedded."
+        ),
+    ),
+    pending: int = Query(
+        50, ge=0, le=MAX_BATCH, description="How many unembedded labels to list."
+    ),
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> EmbeddingCoverage:
+    """How much of this system is embedded, under what, and what is left.
+
+    The read a backfill runs on. ``pending`` carries each unembedded label
+    **together with the text to embed**, composed here rather than left to the
+    caller — so that every vector in the table is a vector of the same thing. A
+    caller free to choose would embed the title on Monday and the title plus the
+    prose on Tuesday, and the resulting neighbourhoods would be incomparable in a
+    way no column could record.
+
+    Readable by anyone who may read the system, since it says nothing the label
+    routes do not: which labels are documented, and what their prose is.
+    """
+    readable = await readable_system_id_or_404(session, system_id, user)
+    found = await coverage(session, readable, model, pending)
+    return EmbeddingCoverage(
+        documented=found.documented,
+        embedded=found.embedded,
+        stale=found.stale,
+        models=found.models,
+        pending=[
+            PendingEmbedding(
+                label=entry.label, formal_system_id=entry.system_id, text=entry.text
+            )
+            for entry in found.pending
+        ],
+    )
+
+
+@router.put("/{system_id}/embeddings", response_model=EmbeddingUploadOutcome)
+async def put_embeddings(
+    system_id: uuid.UUID,
+    payload: EmbeddingUpload,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_session),
+) -> EmbeddingUploadOutcome:
+    """Store a batch of vectors for this system's labels, under one model.
+
+    **Nothing here computes an embedding**, and that is a decision rather than an
+    omission: this installation configures no provider, choosing one is an
+    operational matter rather than a schema's, and calling a model is neither the
+    small nor the deterministic kind of work §2 of the ingestion roadmap gives to
+    the API. The consumer this is written for has an embedding model to hand
+    already. A server-side backfill lands behind this same table if anyone wants
+    one, without changing the read path.
+
+    What follows is the part that must be right: **a vector is only comparable to
+    vectors from the same model**, so the model is stated once per batch — a
+    property of the run rather than of any one vector, which is what makes it
+    impossible to mix two models into one upload by accident.
+
+    Owner-only, because it writes to the system.
+    """
+    system = await _get_owned_or_404(session, system_id, user.id)
+    if len(payload.entries) > MAX_BATCH:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Send at most {MAX_BATCH} vectors at a time.",
+        )
+    wrong = [
+        entry.label
+        for entry in payload.entries
+        if len(entry.embedding) != EMBEDDING_DIMENSIONS
+    ]
+    if wrong:
+        # Checked here rather than left to the column, which refuses a mismatch
+        # with an error naming neither the label nor the expected width — and a
+        # wrong length is not a typo, it is a different model's vector arriving
+        # under this one's name.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"This system stores {EMBEDDING_DIMENSIONS}-dimensional vectors; "
+                f"{wrong[0]!r} carries a different width. A vector of another "
+                "size is another model's."
+            ),
+        )
+    # Under the system's lock: two concurrent batches naming one label would
+    # otherwise both miss the existing row and both insert it.
+    await lock_system(session, system.id)
+    stored, skipped = await store_embeddings(
+        session,
+        system.id,
+        payload.model,
+        [(entry.label, entry.embedding, entry.tokens) for entry in payload.entries],
+    )
+    await session.commit()
+    return EmbeddingUploadOutcome(
+        model=payload.model, stored=stored, skipped=skipped
+    )
+
+
+@router.post("/{system_id}/labels/similar", response_model=SimilarLabels)
+async def find_similar_labels(
+    system_id: uuid.UUID,
+    payload: SimilarityQuery,
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> SimilarLabels:
+    """Find a label by what a paper's sentence is *about*.
+
+    The lift the lexical search cannot make (§4.5). `GET /labels?q=` matches
+    substrings of words, so `Schröder` does not find `Schroeder`, `compactness`
+    does not find `compact`, and a query sharing no *word* with the prose scores
+    nothing however well it describes it. A paper does not quote a theorem in a
+    library's vocabulary — that mismatch is the alignment problem — so the lexical
+    path answers the easy half and stops where the work starts.
+
+    **Scoped to one model.** A vector from another model is not a worse candidate,
+    it is not a candidate: cosine between two models' vectors is a number with no
+    meaning and neither vector hints that it is the wrong one. Ranking them
+    together would put noise among signal indistinguishably.
+
+    A POST rather than `?similar=`, which §4.5 sketched, for a plain reason:
+    1,536 floats do not go in a URL. Naming a `label` instead of an `embedding` is
+    the query-string-shaped half of that idea and is served here too — "what else
+    is about what this is about", with no embedding model needed at the call site.
+
+    Across the inheritance spine, as the lexical search is, and reporting
+    `embedded` beside the hits for the same reason it reports `documented`:
+    nearest-neighbour search always returns *something*, so the size of what it
+    ranked over is the only thing separating "the closest in a well-stocked
+    corpus" from "the only four vectors here".
+    """
+    readable = await readable_system_id_or_404(session, system_id, user)
+    spine = await spine_ids(session, readable)
+
+    query = payload.embedding
+    if query is None:
+        query = await embedding_of(session, spine, payload.model, payload.label)
+        if query is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    f"No vector is stored for {payload.label!r} under "
+                    f"{payload.model!r}, so there is nothing to search near."
+                ),
+            )
+    elif len(query) != EMBEDDING_DIMENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"This system stores {EMBEDDING_DIMENSIONS}-dimensional vectors; "
+                "the query carries a different width."
+            ),
+        )
+
+    found = await neighbours(
+        session, spine, payload.model, list(query), payload.limit
+    )
+    # `counts`, not `coverage`: the latter digests every description to work out
+    # what is stale and what is pending, which is a 50,550-row scan to report two
+    # integers behind every search.
+    documented, embedded = await counts(session, readable, payload.model)
+    return SimilarLabels(
+        formal_system_id=readable,
+        model=payload.model,
+        items=[
+            SimilarLabel(
+                label=hit.label,
+                formal_system_id=hit.system_id,
+                similarity=hit.similarity,
+                title=hit.title,
+                stale=hit.stale,
+            )
+            for hit in found
+        ],
+        embedded=embedded,
+        documented=documented,
     )
 
 

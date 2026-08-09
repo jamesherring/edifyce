@@ -1114,6 +1114,102 @@ export interface LabelSearch extends Page<LabelHit> {
 	searched: string[];
 }
 
+/** One label's vector, as the caller computed it. Mirrors `LabelVector`.
+ *
+ * **Nothing on the server computes an embedding.** This installation configures
+ * no provider; choosing one is an operational matter, and calling a model is
+ * neither the small nor the deterministic kind of work the API takes on. The
+ * consumer this is written for has an embedding model to hand already. */
+export interface LabelVector {
+	label: string;
+	embedding: number[];
+	/** What it cost, if you are counting. Recorded, never read. */
+	tokens?: number;
+}
+
+/** A batch of vectors for one system, under one model.
+ *
+ * The model is stated once for the batch because it is a property of the *run*,
+ * which is what makes it impossible to mix two models into one upload by
+ * accident — and mixing them is the one mistake this whole surface exists to
+ * prevent, since cosine between two models' vectors is a number with no meaning
+ * and neither vector hints that it is the wrong one. */
+export interface EmbeddingUpload {
+	model: string;
+	entries: LabelVector[];
+}
+
+export interface EmbeddingUploadOutcome {
+	model: string;
+	stored: number;
+	/** Labels the system documents nothing about, by name. Skipped rather than
+	 *  refused, so a backfill stays resumable when a re-import drops one. */
+	skipped: string[];
+}
+
+/** A label with no vector yet, and the text to make one from.
+ *
+ * The text is composed server-side so that every vector in the table is a vector
+ * of the same thing — embed exactly what you are given here. */
+export interface PendingEmbedding {
+	label: string;
+	formal_system_id: string;
+	text: string;
+}
+
+/** How much of a system is embedded, under what, and what is left.
+ *
+ * `documented` against `embedded` is what makes a thin result readable, and it
+ * draws a distinction the lexical search has no need of: a corpus may be
+ * perfectly well documented and simply not embedded yet. `models` is there
+ * because "embedded" is not a property a system has — it has one per model. */
+export interface EmbeddingCoverage {
+	documented: number;
+	embedded: number;
+	/** Vectors whose prose has changed since they were made. */
+	stale: number;
+	models: string[];
+	pending: PendingEmbedding[];
+}
+
+/** What to search near: a vector, or a label whose vector is already stored.
+ *
+ * Exactly one of the two. `label` is the cheap form — "what else is about what
+ * this is about" — and needs no embedding model at the call site; `embedding` is
+ * the one alignment runs on, since a model reading a paper holds a sentence
+ * rather than a label. A POST because 1,536 floats do not go in a URL. */
+export interface SimilarityQuery {
+	model: string;
+	embedding?: number[];
+	label?: string;
+	limit?: number;
+}
+
+export interface SimilarLabel {
+	label: string;
+	formal_system_id: string;
+	/** Cosine similarity in [-1, 1], not the distance the index ranks by. */
+	similarity: number;
+	title: string | null;
+	/** The prose has changed since this vector was made. Reported rather than
+	 *  filtered — the vector is still the best evidence about the label. */
+	stale: boolean;
+}
+
+/** Neighbours, and enough to know what the ranking was over.
+ *
+ * `embedded` is the count that makes a short list readable: nearest-neighbour
+ * search always returns *something*, so the number of rows it ranked over is the
+ * only thing separating "the closest in a well-stocked corpus" from "the only
+ * four vectors here". */
+export interface SimilarLabels {
+	formal_system_id: string;
+	model: string;
+	items: SimilarLabel[];
+	embedded: number;
+	documented: number;
+}
+
 /** One `~ target` the prose points at, and the span of `text` it occupies.
  *
  * `start`/`end` are why this needs no parser here: the markup rule is Metamath's,
@@ -1641,7 +1737,40 @@ export const api = {
 					{ limit: params?.limit, offset: params?.offset },
 					{ q }
 				)}`
-			)
+			),
+		/** How much of this system is embedded, under what, and what is left —
+		 *  the read a backfill runs on. `pending` carries each unembedded label
+		 *  together with the text to embed. Omit `model` for the systemwide
+		 *  counts and the list of models stored: there is no model-free notion of
+		 *  how much is embedded. */
+		embeddingCoverage: (
+			id: string,
+			params?: { model?: string; pending?: number }
+		) =>
+			request<EmbeddingCoverage>(
+				`/formal-systems/${id}/embeddings${listQuery(
+					{},
+					{
+						model: params?.model,
+						pending:
+							params?.pending == null ? undefined : String(params.pending)
+					}
+				)}`
+			),
+		/** Store a batch of vectors under one model. Owner-only. */
+		putEmbeddings: (id: string, payload: EmbeddingUpload) =>
+			request<EmbeddingUploadOutcome>(`/formal-systems/${id}/embeddings`, {
+				method: 'PUT',
+				body: JSON.stringify(payload)
+			}),
+		/** Find a label by what a paper's sentence is *about* — the lift the
+		 *  lexical search cannot make, since it matches substrings of words and a
+		 *  paper does not quote a theorem in a library's vocabulary. */
+		similarLabels: (id: string, payload: SimilarityQuery) =>
+			request<SimilarLabels>(`/formal-systems/${id}/labels/similar`, {
+				method: 'POST',
+				body: JSON.stringify(payload)
+			})
 	},
 
 	// --- Relations between systems ------------------------------------------

@@ -933,6 +933,152 @@ class LabelSearch(Page[LabelHit]):
     searched: list[str]
 
 
+# --- Semantic search over the same prose -----------------------------------
+#
+# `LabelSearch` matches substrings of words and says so; what it cannot do is
+# match a paper's phrasing against a library's, which is the alignment problem
+# itself. These carry the embedding half (§4.5). The vectors come from the
+# caller — see `app.db.label_embeddings` for why — which makes the *model* a
+# first-class part of every request here: a vector is only comparable to vectors
+# from the same model, and neither vector carries a hint that it is the wrong one.
+
+
+class LabelVector(BaseModel):
+    """One label's vector, as the caller computed it."""
+
+    label: _Name128
+    # The vector itself. Length is checked against the column's fixed dimension
+    # rather than trusted: a shorter one is a different model's, and pgvector
+    # would refuse it at the insert with an error naming neither.
+    embedding: list[float] = Field(min_length=1)
+    # What it cost, if the caller is counting. Recorded, never read here — a
+    # corpus embedded at a known token count is one somebody can decide whether
+    # to re-embed.
+    tokens: int | None = Field(default=None, ge=0)
+
+
+class EmbeddingUpload(BaseModel):
+    """A batch of vectors for one system, under one model.
+
+    A batch rather than a route per label because a corpus is 50,550 of them,
+    and because the model is a property of the *run* rather than of any one
+    vector — stating it once is what makes it impossible to mix two models into
+    one upload by accident.
+    """
+
+    model: _Name128
+    entries: list[LabelVector] = Field(min_length=1)
+
+
+class EmbeddingUploadOutcome(BaseModel):
+    """What a batch stored, and what it could not place."""
+
+    model: str
+    stored: int
+    # Labels this system documents nothing about, by name. Skipped rather than
+    # refused: a backfill works from `pending`, and failing a 256-label batch
+    # because a re-import dropped one of them would make the job unresumable.
+    skipped: list[str] = Field(default_factory=list)
+
+
+class PendingEmbedding(BaseModel):
+    """A label with no vector yet, and the text to make one from.
+
+    The text is composed server-side and handed out, rather than left to the
+    caller, so every vector in the table is a vector of the same thing — a caller
+    free to choose would embed the title on Monday and the title plus the prose
+    on Tuesday, and the resulting neighbourhoods would be incomparable in a way
+    no column could record.
+    """
+
+    label: str
+    formal_system_id: uuid.UUID
+    text: str
+
+
+class EmbeddingCoverage(BaseModel):
+    """How much of a system is embedded, under what, and what is left.
+
+    ``documented`` and ``embedded`` together are what make a thin search result
+    readable — and they draw a distinction the lexical search has no need of: a
+    corpus may be perfectly well documented and simply not embedded yet, which is
+    an empty result for a reason nobody should have to guess at.
+
+    ``models`` names every model with a vector stored here, because "embedded" is
+    not a property a system has. It has one per model, and a search under a name
+    nobody stored finds nothing for a reason worth being told.
+    """
+
+    documented: int
+    embedded: int
+    # Vectors whose prose has changed since they were made. Counted, not hidden:
+    # a re-import replaces a system's descriptions wholesale, which would
+    # otherwise leave every vector pointing at prose that no longer exists.
+    stale: int
+    models: list[str] = Field(default_factory=list)
+    pending: list[PendingEmbedding] = Field(default_factory=list)
+
+
+class SimilarityQuery(BaseModel):
+    """What to search near: a vector, or a label whose vector is already stored.
+
+    Exactly one of the two. ``label`` is the cheap form — "what else is about what
+    this is about" — and needs no embedding model at the call site; ``embedding``
+    is the one alignment actually runs on, since a model reading a paper holds a
+    sentence rather than a label.
+
+    A POST rather than a query parameter, which is a departure from §4.5's
+    ``?similar=`` sketch and for a plain reason: 1,536 floats do not go in a URL.
+    """
+
+    model: _Name128
+    embedding: list[float] | None = Field(default=None, min_length=1)
+    label: _Name128 | None = None
+    limit: int = Field(default=20, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def _exactly_one_query_point(self) -> "SimilarityQuery":
+        if (self.embedding is None) == (self.label is None):
+            raise ValueError(
+                "Name exactly one of `embedding` or `label` to search near."
+            )
+        return self
+
+
+class SimilarLabel(BaseModel):
+    """One label near the query, and how near."""
+
+    label: str
+    formal_system_id: uuid.UUID
+    # Cosine similarity in [-1, 1], not the distance the index ranks by: a caller
+    # thresholding on "close enough" thinks in similarity, and inverting it is a
+    # step at which to get a sign wrong.
+    similarity: float
+    title: str | None = None
+    # The prose has changed since this vector was made. Reported rather than
+    # filtered — the vector is still the best evidence available about the label,
+    # and dropping the hit would answer a question about the corpus with a fact
+    # about its bookkeeping.
+    stale: bool = False
+
+
+class SimilarLabels(BaseModel):
+    """Neighbours, and enough to know what the ranking was over.
+
+    ``embedded`` is the count that makes a short list readable, exactly as
+    ``documented`` does for the lexical search: nearest-neighbour search always
+    returns *something*, so the number of rows it ranked over is the only thing
+    separating "these are the closest in a well-stocked corpus" from "these are
+    the only four vectors here".
+    """
+
+    formal_system_id: uuid.UUID
+    model: str
+    items: list[SimilarLabel] = Field(default_factory=list)
+    embedded: int
+    documented: int
+
+
 class ProofSummary(BaseModel):
     id: uuid.UUID
     name: str

@@ -38,8 +38,9 @@ A substring match over words, ranked by where they landed. It has no stemming, n
 synonyms and no notion of a phrase: `Schröder` does not find `Schroeder`,
 `compactness` does not find `compact`, and a query that shares no *word* with the
 prose scores nothing however well it describes it. That is the real ceiling, and
-it is the ceiling `theorems.embedding` was provisioned to lift — Phase 4 of
-docs/search-and-embeddings-roadmap.md, reached through ``?similar=`` beside this.
+lifting it is :mod:`app.db.label_embeddings`, which searches this same prose by
+what it is *about* — Phase 4 of docs/search-and-embeddings-roadmap.md, over the
+two haystacks' documented half.
 
 Shipping the lexical one first is not a compromise. On a corpus that names things
 `cbvald` the *title* is the only thing a model can recognise, a title is prose,

@@ -400,7 +400,7 @@ when this system's grammar is one the search policy over-reports on, since a
 caller that cannot tell which case it is in has to distrust the ranking
 everywhere.
 
-### 4.5 Alignment tools: prose search, and the notation direction — *lexical half done*
+### 4.5 Alignment tools: prose search, and the notation direction — *done*
 
 Two lookups an aligning model needs and cannot make.
 
@@ -474,11 +474,76 @@ was doing nothing but blocking the index); and the indexes only bite once the
 table has statistics, so the first searches after a bulk import run at the
 unindexed cost until autovacuum analyses.
 
-What stays out is the search a *lexical* one cannot be: no stemming, no synonyms,
+What a *lexical* search cannot be is the search with no stemming, no synonyms and
 no phrases. `Schröder` does not find `Schroeder` and a query sharing no word with
-the prose scores nothing however well it describes it. That is the ceiling
-`?similar=` is for, and it is the honest reason the embedding half is still ahead
-rather than a nicety.
+the prose scores nothing however well it describes it. A paper does not quote a
+theorem in a library's vocabulary — that mismatch **is** the alignment problem —
+so the lexical path answers the easy half and stops where the work starts.
+
+#### The embedding half
+
+Built beside it (`app/db/label_embeddings.py`): `PUT /formal-systems/{id}/embeddings`
+stores a batch of vectors, `GET` the same path reports coverage, and
+`POST /formal-systems/{id}/labels/similar` searches.
+
+**The vectors come from the caller**, which is the decision the rest follows
+from. This installation configures no embedding provider; choosing one is an
+operational matter — a key, a vendor, a per-request cost, a network hop on a read
+path — and §2 above gives the API the "smaller and deterministic" work while the
+consumer takes the nuanced. Calling a model is neither small nor deterministic,
+and the consumer this roadmap is written for has an embedding model to hand
+already. A server-side backfill lands behind the same table if anyone wants one,
+without touching the read path.
+
+What follows is the part that has to be right: **a vector is only comparable to
+vectors from the same model.** Cosine between an OpenAI vector and a Voyage one
+is a number with no meaning, and nothing about either vector says so. So the
+model is stored beside every vector, stated once per batch (a property of the
+*run*, which is what makes mixing two into one upload impossible by accident), and
+a search is *against a named model* — a vector from another is not a worse
+candidate, it is not a candidate.
+
+**The text to embed is composed here and handed out**, by the coverage route's
+`pending` list, rather than left to the caller. A caller free to choose would
+embed the title on Monday and the title plus the prose on Tuesday, and the
+resulting neighbourhoods would be incomparable in a way no column could record.
+The digest of that text is stored beside the vector, so a vector left behind by an
+edit is **detectable** rather than merely old — a re-import replaces a system's
+descriptions wholesale, which would otherwise leave every vector pointing at prose
+that no longer exists. A stale hit is reported, not filtered: the vector is still
+the best evidence available about the label.
+
+**Two departures from what this section sketched**, both forced rather than
+chosen.
+
+*Not `theorems.embedding`.* The section says to wire description text into the
+column provisioned there, and that does not survive contact with the key. A
+`theorems` row is a proof and a statement term; a description is keyed by
+`(system, label)` and covers a production, a definition, a primitive theorem or a
+proof alike — `df-un` has no theorem row and never will, and it is exactly the
+kind of label whose prose is worth searching. So the vectors live beside the
+prose, keyed as the prose is. (`theorems.embedding` stays unused, and is still
+right for what it was provisioned for: Phase 3's deterministic fold of the *term*
+DAG, which is a different vector of a different thing.)
+
+*Not `?similar=`.* 1,536 floats do not go in a URL, so the search is a POST. The
+query-string-shaped half of the idea survives as `label` — "what else is about
+what this is about" — which needs no embedding model at the call site and is
+served by the same route.
+
+**Narrower than the lexical search, on purpose.** That one has two haystacks, the
+corpus's descriptions and proofs' own titles; this has only the first. A
+description belongs to the *system*, so a caller already through the system's gate
+may read every one; a proof is published-or-yours, so the same table would carry
+rows whose visibility differs per reader. Rather than make every vector carry an
+access question, the embedded corpus is the documented one — which is also the
+50,550 rows the problem is actually about.
+
+**`embedded` rides beside `documented`** for the reason `documented` exists at
+all, and covers a case the lexical search has no need of: nearest-neighbour search
+always returns *something*, so the size of what it ranked over is the only thing
+separating "the closest in a well-stocked corpus" from "the only four vectors
+here" — and a corpus can be perfectly well documented and simply not embedded yet.
 
 **The notation direction.** §3's option B — notation as a second input grammar —
 stays refused, for the reason §4 gives: a LaTeX-shaped input would shorten the
@@ -654,7 +719,7 @@ halfway. Three properties the current surface does not have and will need:
 | 4. **Lexical prose search** (§4.5) — *done* | cheap, and it is what alignment actually runs on |
 | 5. **Scopes in the structured path** (§4.6) — *done* | the first thing a real paper needs that a Metamath corpus never asked for |
 | 6. **Idempotency / batching** (§6) | when call volume proves it, not before |
-| 7. **Embeddings, then elaboration** | the two large ones, both behind interfaces that already exist |
+| 7. **Embeddings** (§4.5) — *done*, **then elaboration** | the two large ones, both behind interfaces that already exist. The embedding half turned out to be storage and a search rather than a model: the vectors come from the caller, so what shipped is the table, the discipline that a vector is only comparable within its own model, and the honesty about how much of a corpus is embedded |
 
 ### Foreclosure check
 
