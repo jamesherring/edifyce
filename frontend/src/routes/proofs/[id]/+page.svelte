@@ -329,7 +329,7 @@
 						<p class="whitespace-pre-line text-sm leading-relaxed">{ownDescription}</p>
 					{/if}
 					{#if documentation}
-						<Documentation {documentation} />
+						<Documentation {documentation} systemId={proof.formal_system_id} />
 					{/if}
 					{#if citations}
 						<Citations {citations} />

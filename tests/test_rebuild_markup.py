@@ -28,7 +28,7 @@ from app.db.descriptions import LabelDescriptionRow, LabelReferenceRow
 from app.db.metamath_store import import_corpus
 from scripts.rebuild_markup import rebuild
 from tests.database import async_url, database_url, enable_foreign_keys
-from tests.test_descriptions_store import MARKED
+from tests.test_descriptions_store import MARKED, SOURCE
 from website.logical.metamath import parse
 
 
@@ -75,6 +75,7 @@ def _unread(url: str) -> None:
                 row.discouraged_usage = False
                 row.discouraged_modification = False
                 row.references.clear()
+                row.citations.clear()
             session.commit()
     finally:
         engine.dispose()
@@ -104,6 +105,10 @@ def _state(url: str) -> dict[str, tuple]:
                     tuple(
                         (r.position, r.target, r.start_offset, r.end_offset)
                         for r in row.references
+                    ),
+                    tuple(
+                        (c.position, c.work, c.page, c.start_offset, c.end_offset)
+                        for c in row.citations
                     ),
                 )
                 for row in session.scalars(select(LabelDescriptionRow))
@@ -158,3 +163,28 @@ def test_an_already_current_database_is_left_alone(db):
 
     assert _state(db) == before
     assert tally["usage"] == 0 and tally["modification"] == 0
+
+
+def test_it_rebuilds_the_bibliography_citations_too(db):
+    """A corpus imported before citations were read keeps its prose and loses none.
+
+    `MARKED` cites nothing, so the tests above exercise only the reference half.
+    `SOURCE` carries `Axiom A1 of [Margaris] p. 49.`, which is the whole point of
+    the backfill existing: the key is in the stored prose already, and re-reading
+    it needs no `.mm` file.
+    """
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            import_corpus(session, parse(SOURCE), name="S")
+            session.commit()
+    finally:
+        engine.dispose()
+    fresh = _state(db)
+    _unread(db)
+    assert _state(db) != fresh, "the fixture must actually be un-read first"
+
+    tally = _run(db)
+
+    assert tally["citations"] == 1
+    assert _state(db) == fresh

@@ -297,3 +297,104 @@ def test_a_discouragement_of_something_else_stays_in_the_prose() -> None:
 
     assert not read.discouraged_usage and not read.discouraged_modification
     assert read.text == "A theorem. (Its use here is discouraged.) More prose."
+
+
+# ---------------------------------------------------------------------------
+# Bibliography citations
+#
+# `set.mm` states this form in its own `conventions` comment — a keyword, an
+# optional identifier, noisewords, `[key]`, then `p.` and a page — and then
+# departs from it in ways worth pinning, because each departure is a real
+# citation the obvious reading loses.
+# ---------------------------------------------------------------------------
+
+
+def test_a_citation_is_read_out_with_the_span_it_occupies() -> None:
+    read = read_comment("Simplification. Theorem 3.1 of [Monk1] p. 22.")
+
+    (citation,) = read.citations
+    assert (citation.work, citation.page) == ("Monk1", "22")
+    assert read.text[citation.start : citation.end] == "[Monk1] p. 22"
+
+
+def test_a_comma_before_the_page_is_admitted() -> None:
+    # set.mm's conventions forbid it — "there should be no comma between the
+    # author reference and the `p.`" — and 103 of its citations use one anyway,
+    # every one of `[Shapiro]`'s 66 among them. A reader reads the file.
+    (citation,) = read_comment("Lemma 6.1C.2 of [Shapiro], p. 199.").citations
+
+    assert (citation.work, citation.page) == ("Shapiro", "199")
+
+
+def test_a_roman_page_is_a_page() -> None:
+    # `[Lang] p. ix` — front matter is numbered differently from the body.
+    (citation,) = read_comment("See the definition in [Lang] p. ix.").citations
+
+    assert citation.page == "ix"
+
+
+def test_substitution_notation_is_not_a_citation() -> None:
+    # The reason a page is required and math spans are skipped. `[ y / x ] ph` is
+    # proper substitution, and 966 of set.mm's bracketed spans are that shape —
+    # far more than it has citations.
+    assert read_comment("Here ` [ y / x ] ph ` is substitution.").citations == ()
+
+
+def test_a_bracket_inside_a_math_span_cannot_start_one() -> None:
+    # Even where the text after the span would complete the shape.
+    assert read_comment("Consider ` [ A ] ` p. 3 of nothing.").citations == ()
+
+
+def test_a_doubled_bracket_is_a_literal_and_opens_no_citation() -> None:
+    # Metamath's escape, as `~~` is for a tilde: `"ex falso [[sequitur]] quodlibet"`.
+    assert read_comment('"ex falso [[sequitur]] p. 7" is prose.').citations == ()
+
+
+def test_a_bare_key_with_no_page_is_not_read() -> None:
+    # Allowed by the conventions in *heading* comments, as a reference to a whole
+    # work. On a statement the page is required, and requiring it is what keeps
+    # the recogniser off everything else in brackets.
+    assert read_comment("As in [Monk1], broadly.").citations == ()
+
+
+def test_citations_come_back_in_the_order_they_appear() -> None:
+    read = read_comment(
+        "Theorem 1 of [Alpha] p. 2, also Lemma 3 of [Beta] p. 4."
+    )
+
+    assert [c.work for c in read.citations] == ["Alpha", "Beta"]
+    assert [read.text[c.start : c.end] for c in read.citations] == [
+        "[Alpha] p. 2",
+        "[Beta] p. 4",
+    ]
+
+
+def test_citation_offsets_index_the_prose_as_stored() -> None:
+    # The attributions come out and the wrapping goes, so an offset into the raw
+    # comment would point at the wrong characters — the same contract references
+    # keep.
+    read = read_comment(
+        "A theorem.\n   (Contributed by NM, 5-Apr-1994.) Theorem 2 of\n   [Monk1] p. 8."
+    )
+
+    (citation,) = read.citations
+    assert read.text[citation.start : citation.end] == "[Monk1] p. 8"
+
+
+def test_a_comment_with_no_citation_has_none() -> None:
+    assert read_comment("Just prose, with no source.").citations == ()
+
+
+def test_an_over_long_page_is_refused_rather_than_truncated() -> None:
+    # The bound is a *refusal*, as the attribution bounds are: a locator that long
+    # is prose that happened to fit the shape. Truncating it would leave the span
+    # ending mid-token, so a renderer sliced half a page and spilled the rest into
+    # the prose beside it (found in review).
+    assert read_comment(f"Theorem 1 of [Monk1] p. {'x' * 40}.").citations == ()
+
+
+def test_a_page_ending_at_punctuation_is_still_read() -> None:
+    # The conventions say whitespace, comma, period or semicolon follows the page.
+    for tail in (".", ",", ";", " and more"):
+        (citation,) = read_comment(f"Theorem 1 of [Monk1] p. 22{tail}").citations
+        assert citation.page == "22"

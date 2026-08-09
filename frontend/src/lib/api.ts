@@ -1061,6 +1061,8 @@ export interface LabelDescription {
 	/** And what points back — capped; `mentioned_by_total` is the real number. */
 	mentioned_by: LabelMention[];
 	mentioned_by_total: number;
+	/** Where the prose points *outside* the corpus, with the span each occupies. */
+	citations: BibliographyCitation[];
 	/** `(New usage is discouraged.)` — the statement exists, do not build on it. */
 	discouraged_usage: boolean;
 	/** `(Proof modification is discouraged.)` — the proof is as it is on purpose. */
@@ -1129,6 +1131,31 @@ export interface LabelReference {
 	end: number;
 	proof_id: string | null;
 	title: string | null;
+}
+
+/** One `[Monk1] p. 22` in a label's prose — mirrors `BibliographyCitation`.
+ *
+ * `work` is the bibliography key as the corpus writes it, and is all there is:
+ * the bibliography it names lives outside the `.mm` file, so there is no title or
+ * author. `page` is a string — Roman-numbered front matter is cited too. */
+export interface BibliographyCitation {
+	work: string;
+	page: string;
+	start: number;
+	end: number;
+}
+
+/** One work a system's prose cites, and how often. */
+export interface WorkCited {
+	work: string;
+	citations: number;
+}
+
+/** Which of a system's statements cite one work — capped, with the true total. */
+export interface WorkCitations {
+	work: string;
+	cited_by: LabelMention[];
+	cited_by_total: number;
 }
 
 /** A label whose prose points at the one being read — a reference, backwards. */
@@ -1661,6 +1688,18 @@ export const api = {
 					{ limit: params?.limit, offset: params?.offset },
 					{ q }
 				)}`
+			),
+		/** The literature this system's prose cites, most-cited first.
+		 *
+		 * Keys only — the bibliography they index lives outside the `.mm` file, in
+		 * whatever page its `$t` block's `htmlbibliography` names, so there is no
+		 * title or author to serve. */
+		works: (id: string) => request<WorkCited[]>(`/formal-systems/${id}/works`),
+		/** Which of this system's statements came from one work. Capped, with the
+		 * true total beside it: set.mm cites `[Crawley]` from 520 statements. */
+		work: (id: string, work: string) =>
+			request<WorkCitations>(
+				`/formal-systems/${id}/works/${encodeURIComponent(work)}`
 			)
 	},
 

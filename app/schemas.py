@@ -844,6 +844,41 @@ class LabelMention(BaseModel):
     title: str | None = None
 
 
+class BibliographyCitation(BaseModel):
+    """One ``[Monk1] p. 22`` in a label's prose, with the span it occupies.
+
+    ``work`` is the key as the corpus writes it, and is all there is: the
+    bibliography it names lives outside the `.mm` file, so there is no title or
+    author to serve. ``page`` is a string — Roman-numbered front matter is cited
+    beside ordinary pages.
+    """
+
+    work: str
+    page: str
+    start: int
+    end: int
+
+
+class WorkCited(BaseModel):
+    """One work a system's prose cites, and how often."""
+
+    work: str
+    citations: int
+
+
+class WorkCitations(BaseModel):
+    """Which of a system's statements cite one work.
+
+    ``cited_by`` carries the same shape a back-reference does — a label, and the
+    page to open when there is one — because it is the same kind of answer.
+    Capped, with ``cited_by_total`` saying how many there really are.
+    """
+
+    work: str
+    cited_by: list[LabelMention] = Field(default_factory=list)
+    cited_by_total: int = 0
+
+
 class TheoremCitation(BaseModel):
     """One theorem a proof cites, or one proof that cites it.
 
@@ -896,6 +931,10 @@ class LabelDescription(BaseModel):
     # gets a badge rather than a sentence.
     discouraged_usage: bool = False
     discouraged_modification: bool = False
+    # Where the prose points *outside* the corpus — the literature a statement was
+    # taken from, with the span each citation occupies so a renderer slices rather
+    # than re-implements Metamath's markup rule.
+    citations: list[BibliographyCitation] = Field(default_factory=list)
     # What the corpus declares this statement's proof does *without* — `set.mm`'s
     # `$j usage … avoids …`, which is how it records that a theorem is derivable
     # from less. The file's claim, not a checked one: nothing here re-derives the

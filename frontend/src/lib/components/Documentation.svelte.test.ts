@@ -10,6 +10,7 @@ function documentation(over: Partial<LabelDescription> = {}): LabelDescription {
 		text: '',
 		attributions: [],
 		references: [],
+		citations: [],
 		mentioned_by: [],
 		mentioned_by_total: 0,
 		discouraged_usage: false,
@@ -129,5 +130,53 @@ describe('what a proof is declared to do without', () => {
 		render(Documentation, { documentation: documentation({ text: 'Prose.' }) });
 
 		expect(screen.queryByText('Proved without')).toBeNull();
+	});
+});
+
+describe('where the prose points outside the corpus', () => {
+	it('shows a citation as the key and page it was written as', () => {
+		render(Documentation, {
+			documentation: documentation({
+				text: 'Axiom A1 of [Margaris] p. 49.',
+				citations: [{ work: 'Margaris', page: '49', start: 12, end: 28 }]
+			})
+		});
+
+		expect(screen.getByText('[Margaris] p. 49')).toBeInTheDocument();
+		expect(screen.getByText(/Axiom A1 of/)).toBeInTheDocument();
+	});
+
+	it('links a citation to the rest of the library from the same work', () => {
+		// There is no work to open — the bibliography lives outside the `.mm` file —
+		// so what the link offers is the other statements that came from it.
+		render(Documentation, {
+			documentation: documentation({
+				text: 'Axiom A1 of [Margaris] p. 49.',
+				citations: [{ work: 'Margaris', page: '49', start: 12, end: 28 }]
+			}),
+			systemId: 's1'
+		});
+
+		expect(screen.getByRole('link', { name: '[Margaris] p. 49' })).toHaveAttribute(
+			'href',
+			'/systems/s1/works/Margaris'
+		);
+	});
+
+	it('shows a citation unlinked when there is no system to browse from', () => {
+		render(Documentation, {
+			documentation: documentation({
+				text: 'Axiom A1 of [Margaris] p. 49.',
+				citations: [{ work: 'Margaris', page: '49', start: 12, end: 28 }]
+			})
+		});
+
+		expect(screen.queryByRole('link', { name: '[Margaris] p. 49' })).toBeNull();
+	});
+
+	it('says nothing extra when the prose cites nothing', () => {
+		render(Documentation, { documentation: documentation({ text: 'Prose.' }) });
+
+		expect(screen.getByText('Prose.')).toBeInTheDocument();
 	});
 });

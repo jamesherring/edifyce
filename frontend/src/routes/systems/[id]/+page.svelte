@@ -17,6 +17,7 @@
 		api,
 		ApiError,
 		type Folder,
+		type WorkCited,
 		type FormalSystemDetail,
 		type SystemValidation
 	} from '$lib/api';
@@ -26,6 +27,7 @@
 	import SquareCheck from '@lucide/svelte/icons/square-check-big';
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import Layers from '@lucide/svelte/icons/layers';
+	import BookMarked from '@lucide/svelte/icons/book-marked';
 
 	let system = $state<FormalSystemDetail | null>(null);
 	let loading = $state(true);
@@ -38,6 +40,10 @@
 	// `.mm` file draws with section headers; a hand-authored system has none, and
 	// the card simply does not appear.
 	let outline = $state<Folder[]>([]);
+	// The literature this system's prose cites. Empty for a hand-authored system,
+	// and for an imported one whose comments name no sources — the button simply
+	// does not appear.
+	let works = $state<WorkCited[]>([]);
 	// Which section of it is being read, or null for none picked yet.
 	let selectedFolder = $state<Folder | null>(null);
 
@@ -51,6 +57,7 @@
 		error = null;
 		validation = null;
 		outline = [];
+		works = [];
 		selectedFolder = null;
 		let detail: FormalSystemDetail;
 		try {
@@ -72,6 +79,17 @@
 		loading = false;
 		runValidation(id, seq);
 		void loadOutline(id, seq);
+		void loadWorks(id, seq);
+	}
+
+	async function loadWorks(id: string, seq: number) {
+		try {
+			const cited = await api.systems.works(id);
+			if (seq === requestSeq) works = cited;
+		} catch {
+			// Best-effort, as the outline is: a system that cites nothing and one
+			// whose citations could not be read both show no button.
+		}
 	}
 
 	async function loadOutline(id: string, seq: number) {
@@ -147,6 +165,11 @@
 					{#if system?.definitions.length}
 						<Button href={`/systems/${system?.id}/definitions`} variant="outline" size="sm">
 							<Layers class="size-4" /> Definitions
+						</Button>
+					{/if}
+					{#if works.length}
+						<Button href={`/systems/${system?.id}/works`} variant="outline" size="sm">
+							<BookMarked class="size-4" /> Works cited
 						</Button>
 					{/if}
 					{#if isOwner}

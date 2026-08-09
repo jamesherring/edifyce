@@ -102,6 +102,11 @@ class LabelDescriptionRow(Base):
         cascade="all, delete-orphan",
         order_by="LabelReferenceRow.position",
     )
+    citations: Mapped[list["LabelCitationRow"]] = relationship(
+        back_populates="description",
+        cascade="all, delete-orphan",
+        order_by="LabelCitationRow.position",
+    )
 
 
 class LabelReferenceRow(Base):
@@ -150,6 +155,57 @@ class LabelReferenceRow(Base):
 
     description: Mapped["LabelDescriptionRow"] = relationship(
         back_populates="references"
+    )
+
+
+class LabelCitationRow(Base):
+    """One ``[Monk1] p. 22`` bibliography citation out of a label's prose.
+
+    Where a cross-reference points *inside* the corpus, this points outside it —
+    at the literature a statement was taken from. `set.mm` writes 5,271 of these
+    across 4,901 comments and they are the only record of provenance it has: which
+    of its theorems come from Takeuti–Zaring, what a formalisation is a
+    formalisation *of*. Left in the prose it is punctuation; as rows it answers
+    "what does this library rest on" and "what else came from this book".
+
+    **Only the key is stored, because only the key is in the file.** The
+    bibliography itself lives in whatever page the ``$t`` block's
+    ``htmlbibliography`` names — `mmset.html` for `set.mm` — which an import does
+    not have. So there is no title, author or year here, and inventing a lookup
+    table for one library's keys is exactly the presumption
+    `metamath_store`'s display overrides are careful not to make.
+
+    ``page`` is a string: `set.mm` cites Roman-numbered front matter (``p. ix``)
+    beside ordinary pages, and a page is a locator rather than a quantity.
+
+    The span is stored for the reason :class:`LabelReferenceRow`'s is — a renderer
+    slices the prose rather than re-implementing Metamath's markup rule.
+    """
+
+    __tablename__ = "label_citations"
+    __table_args__ = (
+        # "What else cites this work" — the direction that makes these rows rather
+        # than punctuation. `set.mm` cites `[Crawley]` from 520 statements.
+        Index("ix_label_citations_work", "work"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk_column()
+    description_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("label_descriptions.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    # Bounded, unlike a reference's target: a key is a named anchor in an HTML
+    # page, not a URL. These are the widths `comments.WORK_MAX`/`PAGE_MAX` restate,
+    # and the recogniser refuses an over-long capture rather than truncating it
+    # here — a bracket that long is prose that happened to fit the shape. set.mm's
+    # longest key is 22 characters and its longest page 4.
+    work: Mapped[str] = mapped_column(String(64))
+    page: Mapped[str] = mapped_column(String(32))
+    start_offset: Mapped[int] = mapped_column(Integer)
+    end_offset: Mapped[int] = mapped_column(Integer)
+
+    description: Mapped["LabelDescriptionRow"] = relationship(
+        back_populates="citations"
     )
 
 

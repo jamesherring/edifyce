@@ -42,6 +42,7 @@ def test_expected_tables_present():
         # its prose points at.
         "label_descriptions",
         "label_attributions",
+        "label_citations",
         "label_references",
         # And what it declares a proof does *without*.
         "label_avoidances",
