@@ -11,23 +11,20 @@ this is the resolution in front of it.
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 
 import pytest
 
 pytest.importorskip("fastapi")
-pytest.importorskip("aiosqlite")
 pytest.importorskip("sqlalchemy")
 
 from sqlalchemy import create_engine
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
 import scripts.import_metamath as script
 from app.db import Base
 from app.db.models import FormalSystem, User
-from tests.database import async_url, create_tables, database_url
+from tests.database import create_tables, database_url
 
 _TABLES = [User.__table__, FormalSystem.__table__]
 
@@ -39,16 +36,17 @@ def db(tmp_path) -> str:
     return url
 
 
-def _sessionmaker(url: str):
-    return async_sessionmaker(create_async_engine(async_url(url)), expire_on_commit=False)
-
-
 def _run(url: str, work):
-    async def go():
-        async with _sessionmaker(url)() as session:
-            return await work(session)
-
-    return asyncio.run(go())
+    # Synchronous, because the script is: `import_corpus` never awaits, and
+    # driving it through an async engine costs a greenlet hop and an event-loop
+    # iteration per statement (see the script's module docstring for the
+    # measurement). These two helpers run on whatever session the CLI opens.
+    engine = create_engine(url)
+    try:
+        with Session(engine) as session:
+            return work(session)
+    finally:
+        engine.dispose()
 
 
 def _register(url: str, email: str) -> uuid.UUID:

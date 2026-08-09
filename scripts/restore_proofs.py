@@ -79,7 +79,7 @@ from app.db import (  # noqa: E402
 )
 from app.db.metamath_store import import_corpus  # noqa: E402
 from app.db.models import Theorem, User  # noqa: E402
-from app.db.session import asyncpg_url  # noqa: E402
+from app.db.session import asyncpg_url, psycopg_url  # noqa: E402
 from app.db.terms import TERM_KIND_NODE  # noqa: E402
 from app.db.terms_mapping import StoredTerm, prefetch_terms, walk_subgraph  # noqa: E402
 from app.routers.proofs import (  # noqa: E402
@@ -1265,22 +1265,15 @@ async def drive(
 def _sync_url(url: str) -> str:
     """A URL an operator gave us, on a driver that is actually installed.
 
-    SQLAlchemy's default for a bare ``postgresql://`` is **psycopg2**, which this
-    project does not depend on; the dev group installs psycopg 3. And
-    ``postgres://`` — the scheme Neon, Vercel and Heroku hand out — has no dialect
-    at all. Either dies inside the very first `create_engine`, so the documented
-    Postgres path would not survive its own first line.
-
-    Query params are left exactly as they came: psycopg speaks libpq, so
-    ``sslmode`` and ``channel_binding`` mean there what they mean in the URL. That
-    is the whole difference from `_async_url` below.
+    SQLite passes through — it names its own driver and has no platform dialect
+    to correct. Everything else goes through `app.db.session.psycopg_url`, which
+    is where the two rules about platform URLs live (see `_async_url` below for
+    the other half).
     """
     parsed = make_url(url)
     if parsed.get_backend_name() == "sqlite":
         return url
-    return parsed.set(drivername="postgresql+psycopg").render_as_string(
-        hide_password=False
-    )
+    return psycopg_url(parsed).render_as_string(hide_password=False)
 
 
 def _async_url(url: str) -> str:

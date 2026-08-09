@@ -10,12 +10,19 @@ their formulas interned into the system's shared term graph.
 
 Needs `DATABASE_URL` (or `POSTGRES_URL`) pointing at a migrated database;
 `scripts/edifyce-dev db up && scripts/edifyce-dev migrate` provisions one.
+
+**Synchronous throughout**, unlike the rest of the codebase. `import_corpus` is
+sync already; the only question is what carries its statements, and an async
+engine answers that with a greenlet hop and an event-loop iteration per
+statement. Over the first 3,000 theorems of `set.mm` that transport costs
+46.9 ms/theorem against 24.5 ms for `get_sync_engine` — the same rows either way,
+verified table-by-table and by hashing the stored proof sources. A walk of a
+corpus never awaits anything, so it should not pay for a loop that lets it.
 """
 
 from __future__ import annotations
 
 import argparse
-import asyncio
 import sys
 import time
 import uuid
@@ -27,11 +34,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import func, select  # noqa: E402
-from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
+from sqlalchemy.orm import Session  # noqa: E402
 
 from app.db.metamath_store import ImportReport, import_corpus  # noqa: E402
 from app.db.models import FormalSystem, User  # noqa: E402
-from app.db.session import get_engine, get_sessionmaker  # noqa: E402
+from app.db.session import get_sync_engine  # noqa: E402
 from app.db.systems_mapping import system_slug  # noqa: E402
 from website.logical.metamath import CheckedTheorem, parse  # noqa: E402
 from website.logical.metamath.setmm import (  # noqa: E402
@@ -95,7 +102,7 @@ def _arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def _owner(session: AsyncSession, email: str | None) -> uuid.UUID | None:
+def _owner(session: Session, email: str | None) -> uuid.UUID | None:
     """Resolve ``--owner`` to a user id, before a single row is written.
 
     Looked up rather than created: handing a corpus to an address nobody has
@@ -108,10 +115,8 @@ async def _owner(session: AsyncSession, email: str | None) -> uuid.UUID | None:
         return None
     # The id alone, not the row: `User` eagerly joins its OAuth accounts, and an
     # ownership assignment wants neither them nor the password hash.
-    owner = (
-        await session.scalars(
-            select(User.id).where(func.lower(User.email) == email.strip().lower())
-        )
+    owner = session.scalars(
+        select(User.id).where(func.lower(User.email) == email.strip().lower())
     ).first()
     if owner is None:
         raise LookupError(
@@ -121,8 +126,8 @@ async def _owner(session: AsyncSession, email: str | None) -> uuid.UUID | None:
     return owner
 
 
-async def _refuse_a_slug_collision(
-    session: AsyncSession, owner: uuid.UUID | None, names: Sequence[str]
+def _refuse_a_slug_collision(
+    session: Session, owner: uuid.UUID | None, names: Sequence[str]
 ) -> None:
     """Stop an owned import that would collide with the owner's own systems.
 
@@ -137,11 +142,9 @@ async def _refuse_a_slug_collision(
         return
     wanted = {system_slug(name) for name in names}
     taken = set(
-        (
-            await session.scalars(
-                select(FormalSystem.slug).where(
-                    FormalSystem.owner_id == owner, FormalSystem.slug.in_(wanted)
-                )
+        session.scalars(
+            select(FormalSystem.slug).where(
+                FormalSystem.owner_id == owner, FormalSystem.slug.in_(wanted)
             )
         ).all()
     )
@@ -177,7 +180,7 @@ def _reporter(total: int | None) -> Callable[[ImportReport, CheckedTheorem], Non
     return report
 
 
-async def main() -> int:
+def main() -> int:
     arguments = _arguments()
 
     started = time.monotonic()
@@ -192,9 +195,10 @@ async def main() -> int:
 
     started = time.monotonic()
     progress = None if arguments.quiet else _reporter(arguments.limit)
-    async with get_sessionmaker()() as session:
+    engine = get_sync_engine()
+    with Session(engine) as session:
         try:
-            owner = await _owner(session, arguments.owner)
+            owner = _owner(session, arguments.owner)
             # The names the run *could* create. An unlayered import makes exactly
             # one system, called `--name`; a layered one makes the plan's — except
             # where the file opens none of the plan's sections, which
@@ -207,7 +211,7 @@ async def main() -> int:
             # Over-approximating is the settled policy here: refusing a collision
             # the import would not have reached is the safe direction for a check
             # whose whole job is to fail early.
-            await _refuse_a_slug_collision(
+            _refuse_a_slug_collision(
                 session,
                 owner,
                 [arguments.name, *(layer.name for layer in LAYERS)]
@@ -216,30 +220,28 @@ async def main() -> int:
             )
         except LookupError as refused:
             print(f"\n{refused}", file=sys.stderr)
-            await get_engine().dispose()
+            engine.dispose()
             return 2
-        report = await session.run_sync(
-            lambda sync: import_corpus(
-                sync,
-                database,
-                limit=arguments.limit,
-                name=arguments.name,
-                batch=arguments.batch,
-                progress=progress,
-                # Opt-in, because a Metamath label is local to its library: a
-                # foreign `cfv` matching set.mm's name and slots would still be
-                # rendered by set.mm's judgement about what `cfv` means.
-                # `display.applicable` stops the mess, not the presumption.
-                overrides=DISPLAY_OVERRIDES if arguments.setmm_overrides else None,
-                rules=DISPLAY_RULES if arguments.setmm_overrides else None,
-                plan=LAYERS if arguments.setmm_layers else (),
-                owner=owner,
-                # The file's name, which the parse does not carry: it is what
-                # names the library in the provenance every system records.
-                source=arguments.source.name,
-            )
+        report = import_corpus(
+            session,
+            database,
+            limit=arguments.limit,
+            name=arguments.name,
+            batch=arguments.batch,
+            progress=progress,
+            # Opt-in, because a Metamath label is local to its library: a
+            # foreign `cfv` matching set.mm's name and slots would still be
+            # rendered by set.mm's judgement about what `cfv` means.
+            # `display.applicable` stops the mess, not the presumption.
+            overrides=DISPLAY_OVERRIDES if arguments.setmm_overrides else None,
+            rules=DISPLAY_RULES if arguments.setmm_overrides else None,
+            plan=LAYERS if arguments.setmm_layers else (),
+            owner=owner,
+            # The file's name, which the parse does not carry: it is what
+            # names the library in the provenance every system records.
+            source=arguments.source.name,
         )
-    await get_engine().dispose()
+    engine.dispose()
 
     if progress is not None:
         print()
@@ -275,4 +277,4 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(asyncio.run(main()))
+    raise SystemExit(main())

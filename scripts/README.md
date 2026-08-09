@@ -121,7 +121,16 @@ DATABASE_URL="$(scripts/edifyce-dev env | sed -n 's/^DATABASE_URL=\([^ ]*\).*/\1
 `--limit` takes the first N theorems in file order; leave it off for the whole
 corpus (slow, and see the roadmap's note on the rebuild cost). `--batch` sets how
 often the run commits and empties the identity map, which is what keeps a long
-import's memory flat.
+import's memory flat — and is not a speed knob: 50 and 200 measure the same, and
+1000 is worse, because a larger identity map costs more to flush than the saved
+commits win back.
+
+The run is **synchronous end to end** (`app.db.session.get_sync_engine`), unlike
+the API. `import_corpus` never awaits, and driving it through the async engine
+adds a greenlet hop and an event-loop iteration to every statement — 78.3 ms per
+theorem against 38.2 ms for the same rows. That means it needs the dev group's
+**psycopg**, which a checkout gets from `uv sync`; a deployment does not have it
+and does not need it, since it serves requests and never runs a script.
 
 `--setmm-layers` stores the corpus as a **spine of systems** — propositional
 calculus, then first-order logic, then ZF set theory — rather than one, and the
