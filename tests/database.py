@@ -17,22 +17,24 @@ without a per-connection pragma), the advisory lock that serialises term
 interning (a no-op off Postgres), and the native ``uuid``/``jsonb`` types where
 SQLite stores text.
 
-Tables are dropped and recreated per test, so a Postgres run is serial by
-construction — it shares one database rather than one file per test, and
-``tests/conftest.py`` refuses to run one under xdist for that reason. A SQLite
-run has a file per test and parallelises freely, which is what CI does.
+Every test gets an empty schema. On Postgres that means dropping and recreating
+the tables, so a Postgres run is serial by construction — it shares one database
+rather than one file per test, and ``tests/conftest.py`` refuses to run one under
+xdist for that reason. On SQLite each test gets its own file, copied from a
+prebuilt empty one, and the suite parallelises freely — which is what CI does.
 """
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
+from shutil import copyfile
+from tempfile import mkdtemp
 from typing import TYPE_CHECKING, Protocol, TypeGuard
 
 from sqlalchemy import create_engine, event, make_url
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from sqlalchemy import Table
 
 # The URL a test run targets, or None for a per-test SQLite file.
@@ -70,13 +72,49 @@ def create_tables(url: str, tables: list[Table]) -> None:
     Deduped, because a suite naming one of the `_always` tables itself is not an
     error — it is a suite whose own list is honest about what it uses.
     """
+    wanted = list(dict.fromkeys([*tables, *_always()]))
+    if not ON_POSTGRES:
+        _copy_empty_schema(url, wanted)
+        return
+
     engine = create_engine(url)
     try:
         metadata = tables[0].metadata
         metadata.drop_all(engine)
-        metadata.create_all(engine, tables=list(dict.fromkeys([*tables, *_always()])))
+        metadata.create_all(engine, tables=wanted)
     finally:
         engine.dispose()
+
+
+# One built schema per distinct table set, keyed by the names in it. Process-local,
+# so an xdist worker builds its own and no two workers share a file.
+_SCHEMA_TEMPLATES: dict[frozenset[str], Path] = {}
+
+
+def _copy_empty_schema(url: str, wanted: list[Table]) -> None:
+    """The SQLite half of :func:`create_tables`, as a file copy.
+
+    Issuing ~47 ``CREATE TABLE``s takes ~0.1s, and several hundred tests each
+    want the same empty schema — the same seventeen table sets over and over. So
+    build each set once and copy the resulting file, which is the identical
+    result for about a millisecond.
+
+    Nothing is shared *between* tests by doing this: every test still gets its
+    own file, and the template is only ever read. It is the CREATE statements
+    that are cached, not any data — a template is empty and stays empty.
+    """
+    key = frozenset(table.name for table in wanted)
+    template = _SCHEMA_TEMPLATES.get(key)
+    if template is None:
+        template = Path(mkdtemp(prefix="edifyce-schema-")) / "template.db"
+        engine = create_engine(f"sqlite:///{template}")
+        try:
+            wanted[0].metadata.create_all(engine, tables=wanted)
+        finally:
+            engine.dispose()
+        _SCHEMA_TEMPLATES[key] = template
+
+    copyfile(template, make_url(url).database)
 
 
 def _always() -> list[Table]:
