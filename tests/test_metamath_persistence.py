@@ -994,3 +994,18 @@ def test_a_declaration_naming_a_label_the_file_lacks_is_ignored(session):
     report = import_corpus(session, parse(declaring), name="Stray")
 
     assert report.claims == 0
+
+
+def test_a_claim_about_a_typecode_rather_than_a_label_is_not_stored(session):
+    """`syntax 'wff';` and `bound 'setvar';` name sorts, and a subject is a label.
+
+    Five of set.mm's 3,364 claims are these, and nothing is lost by excluding
+    them: they restate what the built system already models structurally, and
+    `tests/test_setmm_against_its_markup.py` checks those declarations against
+    what the grammar derives. Pinned so the exclusion stays deliberate rather
+    than becoming an accident of the horizon filter (found in review).
+    """
+    declaring = PROPOSITIONAL + "$( $j syntax 'wff'; bound 'setvar'; $)\n"
+    report = import_corpus(session, parse(declaring), name="Sorts")
+
+    assert report.claims == 0

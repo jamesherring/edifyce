@@ -475,6 +475,16 @@ def _claims_of(database: Database, limit: int | None) -> list[Claim]:
     is true either way, and dropping it would silently narrow a `--limit` run's
     record of its own statements (the subject is what a read looks up).
 
+    A subject that is not an assertion is therefore excluded, and over `set.mm`
+    that is **five claims of 3,364**: `syntax 'wff'`, `syntax 'setvar'`,
+    `syntax 'class'`, `syntax '|-' as 'wff'` and `bound 'setvar'`. Their subjects
+    are typecodes and sorts rather than labels, and `label_claims.subject` is a
+    label — a read asks for one by name. Nothing is lost by it: those five are the
+    file restating what the built system already models structurally, and
+    `tests/test_setmm_against_its_markup.py` checks the declarations against what
+    the grammar derives (found in review, where the filter read as stray-label
+    handling rather than as this).
+
     A `.mm` with no ``$j`` yields nothing, which is most of them — the whole
     mechanism is optional, so an import of a file that declares none behaves as it
     did before this existed.
@@ -482,9 +492,11 @@ def _claims_of(database: Database, limit: int | None) -> list[Claim]:
     horizon = database.position(theorems(database, limit)[-1].label)
     found: list[Claim] = []
     for claim in claims_of(markup_of(database.comments)):
-        # A claim about a label this database does not declare says nothing about
-        # this import; one past the horizon is outside it. `position` would raise
-        # on the first, so membership is asked before the cut.
+        # A claim whose subject this database does not declare as an assertion is
+        # either about a stray label or about a *sort* — see the note above on the
+        # five of set.mm's that are. One past the horizon is outside this import.
+        # `position` would raise on a name it does not know, so membership is
+        # asked before the cut.
         if claim.subject not in database.assertions:
             continue
         if database.position(claim.subject) <= horizon:

@@ -6,7 +6,9 @@ in a ``$j`` block — machine-readable markup inside a comment — and `set.mm`
 writes **1,222 directives across 1,203 blocks**.
 
 Flattened to triples (:func:`website.logical.metamath.markup.claims_of`), those
-are **3,364 claims of 24 kinds over 1,329 labels**. The distribution is lopsided
+are **3,364 claims of 24 kinds over 1,329 labels**, of which 3,359 are stored —
+the five left out name sorts rather than labels, and
+:func:`app.db.metamath_store._claims_of` says why. The distribution is lopsided
 and the head is one kind:
 
 - ``usage_avoids`` (3,109) — this theorem's proof does without that axiom. Real

@@ -1974,9 +1974,17 @@ most one object — and the two forms a directive takes are what produce it:
   and there is no object (`primitive 'wn' 'wi'` → two claims).
 
 Over `set.mm` that is **3,364 claims of 24 kinds over 1,329 labels**, from 1,222
-directives. `usage_avoids` is 3,109 of them; the rest is the content §4.8 counted
-as dropped — `restatement_of` 29, the `natded_*` family 175, `condcongruence` 9,
-`primitive` 11, `equality_from` 6, `congruence` 6, and a tail.
+directives, of which **3,359 are stored**. `usage_avoids` is 3,109 of them; the
+rest is the content §4.8 counted as dropped — `restatement_of` 29, the `natded_*`
+family 175, `condcongruence` 9, `primitive` 11, `equality_from` 6, `congruence` 6,
+and a tail.
+
+The five not stored are `syntax 'wff'`, `syntax 'setvar'`, `syntax 'class'`,
+`syntax '|-' as 'wff'` and `bound 'setvar'`, whose subjects are **typecodes and
+sorts rather than labels** — and a claim's subject is a label, since that is what
+a read asks for by name. Nothing is lost by it: those five are the file restating
+what the built system already models structurally, and §4.9's table already checks
+them against what the grammar derives.
 
 **The kind keeps its preposition** (`equality_from`, `notfree_from`) because the
 preposition is part of the relation's identity: those two share a keyword-adjacent
