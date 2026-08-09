@@ -18,7 +18,7 @@ function description(over: Partial<LabelDescription> = {}): LabelDescription {
 		mentioned_by_total: 0,
 		discouraged_usage: false,
 		discouraged_modification: false,
-		avoids: [],
+		claims: [],
 		...over
 	};
 }

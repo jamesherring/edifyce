@@ -377,20 +377,27 @@ def test_a_proof_reports_what_the_corpus_says_it_avoids(client, db):
 
     doc = client.get(f"/api/proofs/{proof_id}").json()["documentation"]
 
-    assert doc["avoids"] == ["ax-2"]
+    assert doc["claims"] == [
+        {
+            "kind": "usage_avoids",
+            "object": "ax-2",
+            "object_proof_id": None,
+            "object_title": None,
+        }
+    ]
 
 
-def test_a_label_the_file_declares_nothing_about_avoids_nothing(client, db):
+def test_a_label_the_file_declares_nothing_about_claims_nothing(client, db):
     system_id, _ = seed_avoiding(db)
 
     body = client.get(f"/api/formal-systems/{system_id}/labels/ax-1").json()
 
-    assert body["avoids"] == []
+    assert body["claims"] == []
 
 
-def test_an_undocumented_label_still_reports_what_it_avoids(client, db):
-    # A `$j usage … avoids …` names a label whether or not the file also comments
-    # on it — that being why the avoidances are a separate table. Returning None
+def test_an_undocumented_label_still_reports_its_claims(client, db):
+    # A `$j` directive names a label whether or not the file also comments
+    # on it — that being why the claims are a separate table. Returning None
     # for a record with no prose would put the two facts back together, which is
     # what this branch's first cut did (found in review).
     system_id, _ = seed_avoiding(db)
@@ -408,7 +415,7 @@ def test_an_undocumented_label_still_reports_what_it_avoids(client, db):
     body = client.get(f"/api/formal-systems/{system_id}/labels/id")
 
     assert body.status_code == 200, body.text
-    assert body.json()["avoids"] == ["ax-2"]
+    assert [c["kind"] for c in body.json()["claims"]] == ["usage_avoids"]
     assert body.json()["text"] == ""
 
 
@@ -583,3 +590,96 @@ def test_a_system_citing_nothing_lists_nothing(client, db):
         engine.dispose()
 
     assert client.get(f"/api/formal-systems/{system_id}/works").json() == []
+
+
+def test_a_claim_object_that_is_a_readable_proof_carries_its_page(client, db):
+    """`restatement 'X' of 'Y'` points at a statement, and 29 of set.mm's do.
+
+    The object must resolve exactly as a cross-reference target does. The first
+    cut of this test used `ax-1` as the object — a `$a` with no proof — so it
+    passed while the objects reached the resolver on no path at all (found in
+    review). The object here is a *proof*, which is what makes the assertion bite.
+    """
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            report = import_corpus(
+                session,
+                parse(
+                    # Its own source rather than the shared fixture, which has one
+                    # proof: the object of the claim must itself be a proof for
+                    # this to test anything.
+                    AVOIDING
+                    + "$( Another theorem. $)\n"
+                    + "id2 $p |- ( ph -> ( ps -> ph ) ) $= ( ax-1 ) ABC $.\n"
+                    + "$( $j restatement 'id' of 'id2'; $)\n"
+                ),
+                name="r",
+            )
+            session.commit()
+            proofs = {}
+            for proof in session.scalars(select(Proof)):
+                proof.published_at = proof.created_at
+                proof.formal_system.published_at = proof.created_at
+                proofs[proof.name] = str(proof.id)
+            session.commit()
+            system_id = str(report.system_id)
+    finally:
+        engine.dispose()
+
+    body = client.get(f"/api/formal-systems/{system_id}/labels/id").json()
+    restatement = next(c for c in body["claims"] if c["kind"] == "restatement_of")
+
+    assert restatement["object"] == "id2"
+    assert restatement["object_proof_id"] == proofs["id2"]
+
+
+def test_a_claim_object_with_no_proof_still_shows_unlinked(client, db):
+    # Half a corpus's labels are `$a`s that were never proved. The claim is real
+    # either way; it is the link that is withheld.
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            report = import_corpus(
+                session,
+                parse(AVOIDING + "$( $j restatement 'id' of 'ax-1'; $)\n"),
+                name="a",
+            )
+            session.commit()
+            system_id = str(report.system_id)
+    finally:
+        engine.dispose()
+
+    body = client.get(f"/api/formal-systems/{system_id}/labels/id").json()
+    restatement = next(c for c in body["claims"] if c["kind"] == "restatement_of")
+
+    assert restatement["object"] == "ax-1"
+    assert restatement["object_proof_id"] is None
+
+
+def test_claims_of_several_kinds_come_back_together(client, db):
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            report = import_corpus(
+                session,
+                parse(
+                    AVOIDING
+                    + "$( $j restatement 'id' of 'ax-1'; primitive 'id'; $)\n"
+                ),
+                name="m",
+            )
+            session.commit()
+            system_id = str(report.system_id)
+    finally:
+        engine.dispose()
+
+    body = client.get(f"/api/formal-systems/{system_id}/labels/id").json()
+
+    assert {c["kind"] for c in body["claims"]} == {
+        "usage_avoids",
+        "restatement_of",
+        "primitive",
+    }
+    # A directive with no preposition claims about the subject alone.
+    assert next(c for c in body["claims"] if c["kind"] == "primitive")["object"] is None

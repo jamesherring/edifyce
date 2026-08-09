@@ -844,6 +844,28 @@ class LabelMention(BaseModel):
     title: str | None = None
 
 
+class LabelClaim(BaseModel):
+    """One ``$j`` assertion about a label: ``subject`` is *kind* ``object``.
+
+    ``kind`` is the file's own word, the directive's keyword joined to its
+    preposition (`usage_avoids`, `restatement_of`, `primitive`). Deliberately not
+    mapped to a vocabulary of ours — a closed set would have to be maintained
+    against a file free to add to it, which is the reasoning an attribution's
+    ``kind`` follows too. A client that recognises a kind can render it specially
+    and one that does not can still show it.
+
+    ``object`` is null for a directive with no preposition, where the claim is
+    about the subject alone: `primitive 'wn' 'wi';` is two claims and no object.
+    """
+
+    kind: str
+    object: str | None = None
+    # The object's page, when it names a proof of this system the viewer may open
+    # — resolved per read, like a cross-reference's.
+    object_proof_id: uuid.UUID | None = None
+    object_title: str | None = None
+
+
 class BibliographyCitation(BaseModel):
     """One ``[Monk1] p. 22`` in a label's prose, with the span it occupies.
 
@@ -935,11 +957,11 @@ class LabelDescription(BaseModel):
     # taken from, with the span each citation occupies so a renderer slices rather
     # than re-implements Metamath's markup rule.
     citations: list[BibliographyCitation] = Field(default_factory=list)
-    # What the corpus declares this statement's proof does *without* — `set.mm`'s
-    # `$j usage … avoids …`, which is how it records that a theorem is derivable
-    # from less. The file's claim, not a checked one: nothing here re-derives the
-    # proof's transitive dependencies (app/db/avoidances.py).
-    avoids: list[str] = Field(default_factory=list)
+    # What the corpus's `$j` markup asserts about this label — that its proof
+    # does without `ax-12`, that it restates `axsep`, that it is primitive. The
+    # file's claims, not checked ones: nothing here re-derives a proof's
+    # transitive dependencies (app/db/claims.py).
+    claims: list[LabelClaim] = Field(default_factory=list)
 
 
 class LabelHit(BaseModel):

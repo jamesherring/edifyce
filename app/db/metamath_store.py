@@ -60,7 +60,7 @@ from sqlalchemy import or_ as sa_or
 from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
-from app.db.avoidances_mapping import store_avoidances
+from app.db.claims_mapping import store_claims
 from app.db.descriptions_mapping import store_descriptions
 from app.db.models import FormalSystem, Proof
 from app.db.promoted_theorems_mapping import store_theorem, theorem_digest
@@ -76,7 +76,7 @@ from website.logical.metamath.corpus import (
     walk,
 )
 from website.logical.metamath.comments import read_comment
-from website.logical.metamath.markup import by_keyword, markup_of
+from website.logical.metamath.markup import Claim, claims_of, markup_of
 from website.logical.metamath.display import (
     applicable,
     applicable_rules,
@@ -177,10 +177,10 @@ class ImportReport:
     # Folders made from the file's section headers, or 0 for a `.mm` that draws
     # no outline — which is most of them outside a published corpus.
     sections: int = 0
-    # `$j usage … avoids …` edges: how many statements-a-proof-does-without this
-    # run recorded. 3,107 for the whole of `set.mm`, and 0 for a file carrying no
+    # `$j` claims about labels: how many assertions-about-a-statement this
+    # run recorded. 3,364 for the whole of `set.mm`, and 0 for a file carrying no
     # `$j` at all, which is most of them.
-    avoidances: int = 0
+    claims: int = 0
     # The citable library this run stored: every assertion the walk promoted,
     # and how many of those are primitives of the imported system.
     # ``theorems_failed`` is counted apart from ``failed`` because it is a
@@ -350,7 +350,7 @@ def import_corpus(
 
     _link_proofs_to_theorems(session, report.system_ids, library.ids)
     report.described = layers.describe(descriptions)
-    report.avoidances = layers.avoid(_avoidances_of(database, limit))
+    report.claims = layers.claim(_claims_of(database, limit))
     # On the **root**, not the leaf: a `$t` block is one declaration about the
     # whole file rather than something each layer has its own of, and a notation
     # is read root-first up the chain (`notations_mapping.notation_layers`), so
@@ -461,31 +461,46 @@ def _descriptions_of(
     return found
 
 
-def _avoidances_of(
-    database: Database, limit: int | None
-) -> dict[str, tuple[str, ...]]:
-    """Each label's ``$j usage … avoids …`` declaration, within the horizon.
+def _claims_of(database: Database, limit: int | None) -> list[Claim]:
+    """Every ``$j`` claim about a label this import contains, in file order.
 
     Bounded exactly as the descriptions are, and for the same reason: a `limit` is
     how a caller imports a *prefix* of a corpus, and a directive about a statement
     past that point is about something these rows do not contain.
+
+    Filtered on the **subject** only. An object past the horizon is kept, because
+    a claim's object is frequently not an assertion at all — `primitive 'wn'`
+    names a syntax constructor, and `usage 'X' avoids 'ax-12'` names an axiom that
+    may well be outside a truncated import. What the claim says about its subject
+    is true either way, and dropping it would silently narrow a `--limit` run's
+    record of its own statements (the subject is what a read looks up).
+
+    A subject that is not an assertion is therefore excluded, and over `set.mm`
+    that is **five claims of 3,364**: `syntax 'wff'`, `syntax 'setvar'`,
+    `syntax 'class'`, `syntax '|-' as 'wff'` and `bound 'setvar'`. Their subjects
+    are typecodes and sorts rather than labels, and `label_claims.subject` is a
+    label — a read asks for one by name. Nothing is lost by it: those five are the
+    file restating what the built system already models structurally, and
+    `tests/test_setmm_against_its_markup.py` checks the declarations against what
+    the grammar derives (found in review, where the filter read as stray-label
+    handling rather than as this).
 
     A `.mm` with no ``$j`` yields nothing, which is most of them — the whole
     mechanism is optional, so an import of a file that declares none behaves as it
     did before this existed.
     """
     horizon = database.position(theorems(database, limit)[-1].label)
-    found: dict[str, tuple[str, ...]] = {}
-    for directive in by_keyword(markup_of(database.comments), "usage"):
-        label = directive.subject
-        avoided = directive.clause("avoids")
-        # A directive naming a label this database does not declare says nothing
-        # about this import; one past the horizon is outside it. `position` would
-        # raise on the first, so membership is asked before the cut.
-        if label is None or not avoided or label not in database.assertions:
+    found: list[Claim] = []
+    for claim in claims_of(markup_of(database.comments)):
+        # A claim whose subject this database does not declare as an assertion is
+        # either about a stray label or about a *sort* — see the note above on the
+        # five of set.mm's that are. One past the horizon is outside this import.
+        # `position` would raise on a name it does not know, so membership is
+        # asked before the cut.
+        if claim.subject not in database.assertions:
             continue
-        if database.position(label) <= horizon:
-            found[label] = avoided
+        if database.position(claim.subject) <= horizon:
+            found.append(claim)
     return found
 
 
@@ -826,18 +841,18 @@ class _Layers:
             total += report.described
         return total
 
-    def avoid(self, avoidances: Mapping[str, Sequence[str]]) -> int:
-        """Store each `$j usage … avoids …` against the layer that declares it.
+    def claim(self, claims: Sequence[Claim]) -> int:
+        """Store each `$j` claim against the layer its subject falls in.
 
         Split by the same rule the prose is, and for the same reason: a read
         reaches these by system id, so a directive filed against the wrong layer
         is a directive nobody finds.
         """
-        split: list[dict[str, Sequence[str]]] = [{} for _ in self._ids]
-        for label, targets in avoidances.items():
-            split[self._of_label(label)][label] = targets
+        split: list[list[Claim]] = [[] for _ in self._ids]
+        for claim in claims:
+            split[self._of_label(claim.subject)].append(claim)
         return sum(
-            store_avoidances(self._session, system_id, share)
+            store_claims(self._session, system_id, share)
             for system_id, share in zip(self._ids, split)
         )
 

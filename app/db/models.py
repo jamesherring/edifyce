@@ -52,7 +52,7 @@ from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, uuid_pk_colum
 if TYPE_CHECKING:
     from app.db.promoted_theorems import PromotedTheoremRow
     from app.db.proof_lines import ProofLineRow
-    from app.db.avoidances import LabelAvoidanceRow
+    from app.db.claims import LabelClaimRow
     from app.db.descriptions import LabelDescriptionRow
     from app.db.systems import NotationPieceRow, NotationRuleRow
     from app.db.terms import TermRow
@@ -228,17 +228,16 @@ class FormalSystem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         back_populates="system", cascade="all, delete-orphan",
         order_by="LabelDescriptionRow.label",
     )
-    # What the file declares a statement's proof does *without* — its `$j usage
-    # … avoids …` directives (app/db/avoidances.py). Nothing should read it as a
-    # collection: an imported corpus has thousands, and `avoided_by` asks for one
-    # label's at a time.
+    # What the file's `$j` markup asserts about the labels it names
+    # (app/db/claims.py). Nothing should read it as a collection: an imported
+    # corpus has thousands, and `claims_about` asks for one label's at a time.
     #
     # `passive_deletes` because the FK already says `ON DELETE CASCADE`, so the
     # database removes them and the ORM never loads them to do it itself. Without
-    # it, deleting a system pulls 3,107 rows into memory to delete them one by one
+    # it, deleting a system pulls 3,364 rows into memory to delete them one by one
     # — and a `lazy="raise"` collection is *still* loaded by the cascade, so the
     # declaration alone does not prevent it.
-    label_avoidances: Mapped[list["LabelAvoidanceRow"]] = relationship(
+    label_claims: Mapped[list["LabelClaimRow"]] = relationship(
         back_populates="system",
         cascade="all, delete-orphan",
         lazy="raise",
