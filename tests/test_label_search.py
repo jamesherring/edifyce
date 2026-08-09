@@ -13,6 +13,7 @@ are exactly the ones that suite stores.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncIterator, Iterator
 
 import pytest
@@ -28,12 +29,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import Session
 
 import app.auth.backend as backend
+from app.db.descriptions import LabelDescriptionRow
 from app.db.metamath_store import import_corpus
 from app.db.models import Proof
 from app.db.session import get_session
 from app.main import app
 from tests.database import async_url, create_tables, database_url, enable_foreign_keys
-from app.db.label_search import EXCERPT_WIDTH, _excerpt
+from app.db.label_search import EXCERPT_WIDTH, MAX_ALTERNATIVES, _excerpt
 from tests.test_descriptions_api import LAYERED
 from tests.test_descriptions_store import SOURCE
 from tests.test_proofs_api import _TABLES
@@ -515,11 +517,11 @@ def test_the_words_actually_searched_come_back(client, db):
     system_id, _ = seed(db)
 
     body = search(client, system_id, "  Negation   DEFINE negation ")
-    # Lowercased and deduplicated, in the order given.
-    assert body["searched"] == ["negation", "define"]
+    # Lowercased and deduplicated, in the order given — one list per alternative.
+    assert body["searched"] == [["negation", "define"]]
 
     long_query = " ".join(f"w{n}" for n in range(12))
-    assert len(search(client, system_id, long_query)["searched"]) == 8
+    assert len(search(client, system_id, long_query)["searched"][0]) == 8
 
 
 def test_an_excerpt_always_contains_what_was_searched_for():
@@ -552,3 +554,185 @@ def test_the_single_label_route_still_resolves(client, db):
     one = client.get(f"/api/formal-systems/{system_id}/labels/df-neg")
     assert one.status_code == 200
     assert one.json()["label"] == "df-neg"
+
+
+# ---------------------------------------------------------------------------
+# Query expansion: several alternatives in one call
+# ---------------------------------------------------------------------------
+#
+# The lexical route's ceiling is that a query sharing no *word* with the prose
+# scores nothing however well it describes it, and no lexical method can lift
+# that — a paper saying "every infinite subset of a compact space has a limit
+# point" shares no stem with "Bolzano-Weierstrass theorem". What can lift it is
+# the caller, which is a language model and knows the name. So the API ranks
+# documents against terms and the consumer decides what the terms are; these
+# cover the API's half of that (§4.5).
+
+
+def search_many(client, system_id: str, queries: list[str], **params) -> dict:
+    response = client.get(
+        f"/api/formal-systems/{system_id}/labels",
+        params=[("q", q) for q in queries] + list(params.items()),
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_alternatives_are_searched_together_as_one_page(client, db):
+    # One call rather than one per guess: the same page, the same total, and the
+    # ranking sees every alternative at once rather than the caller merging N
+    # pages itself.
+    system_id, _ = seed(db)
+
+    body = search_many(client, system_id, ["negation", "implication"])
+
+    found = set(labels(body))
+    assert "df-neg" in found and "wi" in found
+    assert body["total"] == len(body["items"])
+    # One token list per alternative, in the order given.
+    assert body["searched"] == [["negation"], ["implication"]]
+
+
+def test_a_hit_says_which_alternative_found_it(client, db):
+    # The feedback half of expansion: a model that proposed five phrasings learns
+    # which one the corpus actually uses, which is what it carries into the next
+    # lookup.
+    system_id, _ = seed(db)
+
+    body = search_many(client, system_id, ["cohomology", "negation"])
+
+    assert body["searched"] == [["cohomology"], ["negation"]]
+    # Nothing matched the first guess; everything here came from the second.
+    assert {hit["matched_query"] for hit in body["items"]} == {1}
+
+
+def test_an_alternative_that_matches_nothing_costs_nothing(client, db):
+    # Expansion is guessing, so most guesses miss. A miss must not narrow the
+    # result — the alternatives are an `OR`, unlike the words within one.
+    system_id, _ = seed(db)
+
+    alone = labels(search(client, system_id, "negation"))
+    expanded = labels(search_many(client, system_id, ["negation", "cohomology"]))
+
+    assert expanded == alone
+
+
+def test_the_best_alternative_sets_the_rank_not_the_first(client, db):
+    # Ordered by rank rather than by variant, so a weak hit on the caller's first
+    # guess does not outrank a label hit on its second. `wn` is a label; the
+    # word "negation" only reaches it through its title.
+    system_id, _ = seed(db)
+
+    body = search_many(client, system_id, ["negation", "wn"])
+
+    (hit,) = [h for h in body["items"] if h["label"] == "wn"]
+    assert hit["matched"] == "label"
+
+
+def test_a_single_query_still_answers_exactly_as_before(client, db):
+    # The compatibility case: one `q` is one alternative, and nothing about the
+    # single-query surface moved except the shape of `searched`.
+    system_id, _ = seed(db)
+
+    one = search(client, system_id, "negation")
+    same = search_many(client, system_id, ["negation"])
+
+    assert labels(one) == labels(same)
+    assert one["searched"] == same["searched"] == [["negation"]]
+    assert {hit["matched_query"] for hit in one["items"]} == {0}
+
+
+def test_the_alternative_credited_is_the_one_that_earned_the_rank(client, db):
+    # The ranking takes the best tier across alternatives, so attributing by
+    # "first to match anywhere" let a broad guess steal credit from the specific
+    # one — inverting the very signal the field exists to give. `wff` reaches
+    # `wn` only through its title; `wn` is the label.
+    system_id, _ = seed(db)
+
+    body = search_many(client, system_id, ["wff", "wn"])
+
+    (hit,) = [h for h in body["items"] if h["label"] == "wn"]
+    assert hit["matched"] == "label"
+    # …so the credit goes to the alternative that reached the label tier.
+    assert hit["matched_query"] == 1
+
+
+def test_the_excerpt_comes_from_the_alternative_credited(client, db):
+    # Flattening every alternative's tokens let the excerpt come from one the hit
+    # is not attributed to — and gave prose to label matches that had none.
+    system_id, _ = seed(db)
+
+    alone = search(client, system_id, "df-neg")["items"][0]
+    with_other = [
+        h
+        for h in search_many(client, system_id, ["df-neg", "falsehood"])["items"]
+        if h["label"] == "df-neg"
+    ][0]
+
+    assert alone["excerpt"] is None
+    # Credited to `df-neg`, which is a label match, so still no excerpt.
+    assert with_other["matched_query"] == 0
+    assert with_other["excerpt"] is None
+
+
+def test_an_empty_alternative_keeps_the_others_indices(client, db):
+    # Dropping a blank alternative silently shifted every index after it, so
+    # `matched_query` stopped indexing what the caller sent.
+    system_id, _ = seed(db)
+
+    body = search_many(client, system_id, ["", "negation"])
+
+    assert [hit["matched_query"] for hit in body["items"]] == [1] * len(body["items"])
+    # And `searched` keeps the blank in place, so the two line up.
+    assert body["searched"] == [[], ["negation"]]
+
+
+def test_too_many_alternatives_are_refused(client, db):
+    # Words within an alternative were capped from the start and the alternatives
+    # themselves were not, leaving the expensive axis unbounded on a route an
+    # anonymous caller may hit: 500 of them cost 1.59 s in plan time alone.
+    system_id, _ = seed(db)
+
+    response = client.get(
+        f"/api/formal-systems/{system_id}/labels",
+        params=[("q", f"w{n}") for n in range(MAX_ALTERNATIVES + 1)],
+    )
+    assert response.status_code == 422, response.text
+
+    # And the cap itself is accepted.
+    ok = client.get(
+        f"/api/formal-systems/{system_id}/labels",
+        params=[("q", f"w{n}") for n in range(MAX_ALTERNATIVES)],
+    )
+    assert ok.status_code == 200, ok.text
+
+
+def test_the_credit_uses_the_database_case_rules_not_python_s(client, db):
+    # Attribution was recomputed in Python and the rank came from SQL, so the two
+    # agreed only where their case folding did. SQLite's `lower` is ASCII-only and
+    # Python's is Unicode: for a label `Ω`, the alternative `ω` was an *exact label
+    # match* in Python and no match at all in SQL, and the hit came back claiming
+    # the tier one alternative reached beside the index of another.
+    system_id, _ = seed(db)
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            session.add(
+                LabelDescriptionRow(
+                    formal_system_id=uuid.UUID(system_id),
+                    label="Ω",
+                    title="fallback",
+                    text="",
+                )
+            )
+            session.commit()
+    finally:
+        engine.dispose()
+
+    body = search_many(client, system_id, ["ω", "fallback"])
+
+    (hit,) = [h for h in body["items"] if h["label"] == "Ω"]
+    # SQL never folded `Ω` to `ω`, so the second alternative is the only one that
+    # matched, and it matched the title.
+    assert hit["matched"] == "title"
+    assert hit["matched_query"] == 1

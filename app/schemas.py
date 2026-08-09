@@ -991,6 +991,10 @@ class LabelHit(BaseModel):
     # deep in a long comment ranks exactly like the same word in the title of the
     # thing being looked for.
     matched: Literal["label", "title", "text", "record"]
+    # Which of the caller's alternatives found this, as an index into
+    # `LabelSearch.searched`. The feedback half of query expansion: a model that
+    # proposed five phrasings learns which one the corpus actually uses.
+    matched_query: int = 0
     # Set when the label names a proof the viewer may open. Null for the roughly
     # half of a corpus's labels that are `$a`s and have no proof at all — the
     # label is still citable, there is simply nothing to open.
@@ -1020,7 +1024,8 @@ class LabelSearch(Page[LabelHit]):
     """
 
     documented: int
-    searched: list[str]
+    # One token list per alternative that ran, in the order given.
+    searched: list[list[str]]
 
 
 class ProofSummary(BaseModel):

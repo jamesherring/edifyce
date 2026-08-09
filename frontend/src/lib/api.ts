@@ -1094,6 +1094,10 @@ export interface LabelHit {
 	 * field holds them all. Served because a ranking a caller cannot account for
 	 * is one it has to trust blindly or ignore. */
 	matched: 'label' | 'title' | 'text' | 'record';
+	/** Which of the caller's alternatives found this, as an index into
+	 *  `LabelSearch.searched`. The feedback half of query expansion: propose
+	 *  several phrasings and learn which one the corpus actually uses. */
+	matched_query: number;
 	/** Set when the label names a proof the viewer may open — null for the roughly
 	 * half of a corpus's labels that are `$a`s and have no proof at all. */
 	proof_id: string | null;
@@ -1113,7 +1117,8 @@ export interface LabelHit {
  * more broadly than it was asked; this is what keeps that visible. */
 export interface LabelSearch extends Page<LabelHit> {
 	documented: number;
-	searched: string[];
+	/** One token list per alternative that ran, in the order given. */
+	searched: string[][];
 }
 
 /** One `~ target` the prose points at, and the span of `text` it occupies.
@@ -1694,15 +1699,26 @@ export const api = {
 		 * looked through, so an empty answer is readable as one. */
 		searchLabels: (
 			id: string,
-			q: string,
+			q: string | string[],
 			params?: { limit?: number; offset?: number }
-		) =>
-			request<LabelSearch>(
-				`/formal-systems/${id}/labels${listQuery(
-					{ limit: params?.limit, offset: params?.offset },
-					{ q }
-				)}`
-			),
+		) => {
+			// Several alternatives search as one page. The lexical route cannot
+			// bridge a query that shares no *word* with the prose — no lexical
+			// method can — so the caller supplies the alternatives it thinks the
+			// corpus might use, and each hit says which one found it.
+			// An empty array would emit no `q` at all, and the parameter is
+			// required — so the caller would get a 422 instead of the backend's
+			// deliberate empty-query answer, which is an empty page plus
+			// `documented` (found in review).
+			const alternatives = (Array.isArray(q) ? q : [q]).length
+				? (Array.isArray(q) ? q : [q])
+				: [''];
+			const query = new URLSearchParams();
+			for (const one of alternatives) query.append('q', one);
+			if (params?.limit != null) query.set('limit', String(params.limit));
+			if (params?.offset != null) query.set('offset', String(params.offset));
+			return request<LabelSearch>(`/formal-systems/${id}/labels?${query}`);
+		},
 		/** The literature this system's prose cites, most-cited first.
 		 *
 		 * Keys only — the bibliography they index lives outside the `.mm` file, in

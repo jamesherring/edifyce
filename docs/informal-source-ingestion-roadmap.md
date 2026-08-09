@@ -400,23 +400,23 @@ when this system's grammar is one the search policy over-reports on, since a
 caller that cannot tell which case it is in has to distrust the ranking
 everywhere.
 
-### 4.5 Alignment tools: prose search, and the notation direction — *lexical half done*
+### 4.5 Alignment tools: prose search, and the notation direction — *done*
 
 Two lookups an aligning model needs and cannot make.
 
 **Prose search.** `label_descriptions` holds `set.mm`'s 50,550 documented
 assertions and is readable **one label at a time**. A model that has just read
-"by the Cantor–Schröder–Bernstein theorem" has a name and needs a label. The
-`theorems.embedding` column (pgvector, 1536, HNSW-indexed) has been provisioned
-and unused since it was added. Wiring description text into it is Phase 4 of
-[search-and-embeddings-roadmap.md](search-and-embeddings-roadmap.md) arriving
-early and cheaply, because the alignment problem needs "aboutness" and structural
-search cannot supply it.
+"by the Cantor–Schröder–Bernstein theorem" has a name and needs a label.
 
-Two endpoints: `GET /formal-systems/{id}/labels?q=` (lexical, immediately, over
-the prose already stored) and the same with `?similar=` once embeddings land. The
-lexical one is worth shipping first and alone — on a corpus that names things
-`cbvald` the *title* is what a model can recognise.
+`GET /formal-systems/{id}/labels?q=` is that lookup — on a corpus that names
+things `cbvald` the *title* is what a model can recognise, and a title is prose.
+
+This section originally called for a second endpoint beside it: `?similar=`, over
+embeddings in the provisioned-and-unused `theorems.embedding` column, "because the
+alignment problem needs aboutness and structural search cannot supply it". **That
+half is now refused, and the aboutness comes from the consumer instead.** The
+reasoning is under "why not embeddings" below, since it is the more interesting
+half of this section.
 
 The lexical one is built (`app/db/label_search.py`). Every word must appear
 somewhere in one label's record; hits are ranked by **the tightest single field
@@ -474,11 +474,73 @@ was doing nothing but blocking the index); and the indexes only bite once the
 table has statistics, so the first searches after a bulk import run at the
 unindexed cost until autovacuum analyses.
 
-What stays out is the search a *lexical* one cannot be: no stemming, no synonyms,
-no phrases. `Schröder` does not find `Schroeder` and a query sharing no word with
-the prose scores nothing however well it describes it. That is the ceiling
-`?similar=` is for, and it is the honest reason the embedding half is still ahead
-rather than a nicety.
+#### Why not embeddings
+
+The ceiling on a lexical search is real and worth stating exactly. Measured
+against Postgres full-text search on this corpus's own vocabulary:
+
+| | lexical (today) | stemming / BM25 |
+|---|---|---|
+| `compactness` finds `compact` | no | **yes** |
+| `Schröder` finds `Schroeder` | no | no |
+| a query sharing **no word** with the prose | no | **no** |
+
+That last row is the alignment problem, and nothing lexical touches it: *"every
+infinite subset of a compact space has a limit point"* shares no stem with
+*"Bolzano-Weierstrass theorem"*, and term-frequency weighting can only reweight
+terms that are present. Embeddings are the only thing in that table that crosses
+vocabulary mismatch.
+
+**And the consumer crosses it better.** The caller here is a language model, and
+what it is good at is proposing what a corpus might have called something — given
+"by compactness of X" it can offer "Bolzano-Weierstrass", "finite subcover",
+"Heine-Borel". It does that with knowledge an embedding of the corpus does not
+have, because it knows the theorem's *name*. So the API ranks documents against
+terms and the consumer decides what the terms are, which is §2's split applied
+honestly — where caller-supplied vectors arguably break it, by putting a model
+artifact into API storage.
+
+What refusing embeddings avoids is not small. A vector is only comparable to
+vectors from the same model, and nothing about two vectors says they disagree —
+so a stored-vector design has to carry model identity, model *versioning* (a
+vendor silently revising a model is undetectable by name alone), the query/document
+asymmetry that Voyage and Cohere embeddings have, a pinned model per system so a
+later reader knows which to ask for, a retirement path for superseded generations
+(~300 MB per model per corpus), and a pgvector floor of 0.8 for correct recall
+under a filter. Every one of those is a way to be quietly wrong, and none of them
+exists without stored vectors.
+
+The cost is honest and worth naming: recall now depends on the model guessing a
+name the corpus uses, with no fallback when it does not. That is a worse floor
+than embeddings and a better ceiling, and it is a trade taken deliberately rather
+than by omission.
+
+**What the API contributes** is the deterministic half. `q` repeats, so several
+alternatives search as one ranked page rather than N pages the caller merges;
+within an alternative every word must appear, between alternatives it is an `OR`,
+and the rank is the best any alternative achieved rather than the first that hit.
+Each result says **which** alternative found it, which is the feedback half — a
+model that proposed five phrasings learns which one the corpus actually uses, and
+carries that into the next lookup.
+
+Review found the attribution was the hard part, and in the same way three times:
+the *rank* is the best tier any alternative achieved, so crediting the first
+alternative that matched anywhere let a broad guess steal the specific one's
+credit — inverting the signal the field exists to give — and let the excerpt come
+from an alternative the hit is not attributed to. Dropping alternatives that
+tokenise to nothing shifted every index after them besides, so `matched_query`
+stopped indexing what the caller sent. The tier is now computed per alternative in
+Python beside the SQL `CASE` that decides the same thing, and the index is aligned
+with the caller's own list. The count of alternatives is capped too — words within
+one were bounded from the start and the alternatives were not, which left the
+expensive axis open on an anonymously-readable route (500 of them measured at
+1.59 s in plan time alone).
+
+Stemming and BM25-style ranking stay open as an *independent* improvement to this
+route, not as a strategy: true BM25 needs `pg_search`, which managed Postgres does
+not offer, and native `ts_rank` has no corpus-wide IDF — which is the valuable
+part. It would also need care, since `19.21t` tokenises to `19.21` under the
+`english` configuration and two Metamath labels would collide.
 
 **The notation direction.** §3's option B — notation as a second input grammar —
 stays refused, for the reason §4 gives: a LaTeX-shaped input would shorten the
@@ -654,7 +716,7 @@ halfway. Three properties the current surface does not have and will need:
 | 4. **Lexical prose search** (§4.5) — *done* | cheap, and it is what alignment actually runs on |
 | 5. **Scopes in the structured path** (§4.6) — *done* | the first thing a real paper needs that a Metamath corpus never asked for |
 | 6. **Idempotency / batching** (§6) | when call volume proves it, not before |
-| 7. **Embeddings, then elaboration** | the two large ones, both behind interfaces that already exist |
+| 7. ~~**Embeddings**~~, then **elaboration** | embeddings are **refused** (§4.5): a vector is only comparable within its own model, and carrying that identity, its versioning, the query/document asymmetry and a retirement path is a lot of ways to be quietly wrong — where the consumer, being a language model, supplies the aboutness better by proposing what the corpus might have called something. Elaboration remains, behind an interface that already exists |
 
 ### Foreclosure check
 

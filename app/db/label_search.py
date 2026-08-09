@@ -85,6 +85,18 @@ if TYPE_CHECKING:
 # nothing and each token is another `LIKE` over the whole haystack.
 MAX_TOKENS = 8
 
+# How many alternatives one search may carry. Words within an alternative were
+# capped from the start and the alternatives themselves were not, which left the
+# expensive axis unbounded on an anonymously-readable route: each one adds its
+# tokens to the match, to every rank tier and to the credit chain, twice over for
+# the two haystacks.
+# Measured on the fixture, in statement build and plan cost alone — 1 alternative
+# 27 ms, 200 alternatives 486 ms, 500 alternatives 1.59 s (found in review).
+#
+# Eight, matching `MAX_TOKENS`: expansion is a handful of guesses at what a corpus
+# calls something, and a caller with fifty is not expanding, it is enumerating.
+MAX_ALTERNATIVES = 8
+
 # How much prose an excerpt carries. Enough for the sentence the match sits in,
 # short enough that twenty of them are still a list.
 EXCERPT_WIDTH = 240
@@ -108,6 +120,10 @@ _MATCHED = {
     _TEXT: "text",
     _SPREAD: "record",
 }
+
+# Best first, and the order `_branch`'s `graded` returns one alternative's
+# predicates in — the two are indexed against each other.
+_TIERS = (_EXACT, _LABEL, _TITLE, _TEXT, _SPREAD)
 
 # Which haystack a label came out of, as the tie-break between two rows for one
 # label. The corpus's record wins over a proof's own fields: an import copies the
@@ -140,6 +156,11 @@ class Hit:
     # served it would ship a corpus comment per row to render a list.
     excerpt: str | None
     matched: str
+    # Which of the caller's alternatives found this, as an index into
+    # `Hits.searched`. The feedback half of query expansion: a model proposing
+    # five phrasings learns which one the corpus actually uses, which is the
+    # thing worth carrying into the next lookup.
+    matched_query: int = 0
     proof_id: uuid.UUID | None = None
     proof_title: str | None = None
     discouraged_usage: bool = False
@@ -168,7 +189,8 @@ class Hits:
     hits: list[Hit]
     total: int
     documented: int
-    searched: list[str]
+    # One token list per alternative that ran, in the order given.
+    searched: list[list[str]]
 
 
 def tokens_of(query: str) -> list[str]:
@@ -209,17 +231,33 @@ def _branch(
     title: ColumnElement[str],
     body: ColumnElement[str],
     system_id: ColumnElement[uuid.UUID],
-    query: str,
-    tokens: Sequence[str],
+    queries: Sequence[str],
+    variants: Sequence[Sequence[str]],
     spine: Sequence[uuid.UUID],
     source: int,
-) -> tuple[ColumnElement[bool], ColumnElement[int], ColumnElement[int], ColumnElement[int]]:
-    """The match condition, rank, source and depth for one of the two haystacks.
+) -> tuple[
+    ColumnElement[bool],
+    ColumnElement[int],
+    ColumnElement[int],
+    ColumnElement[int],
+    ColumnElement[int],
+]:
+    """The match condition, rank, credited alternative, source and depth.
 
-    Every token must appear *somewhere* — the label, the title or the body. `AND`
-    rather than `OR` because a two-word query is a name and an `OR` over it
+    For one of the two haystacks.
+
+    Every token of *some* variant must appear — the label, the title or the body.
+    `AND` within a variant because a two-word query is a name and an `OR` over it
     returns everything containing the commoner half, which on a corpus is
-    everything.
+    everything; `OR` *between* variants because that is what alternatives are.
+
+    **Several variants is how query expansion is served** (§4.5). The caller is a
+    language model and the thing it is good at is proposing what a corpus might
+    have called this — "compact", "Bolzano-Weierstrass", "finite subcover" — so
+    the API ranks documents against terms and the consumer decides what the terms
+    are. One call rather than one per guess: the same page, the same total, and
+    the ranking sees all the alternatives at once rather than the caller having to
+    merge N pages itself.
 
     **The columns go in bare, never wrapped in `COALESCE`.** A null title yields
     a null comparison, which never matches, which is exactly right — and a
@@ -230,18 +268,79 @@ def _branch(
     *projection*, where a null becomes the empty string an excerpt needs, and a
     projection is not something an index has to serve.
     """
-    matches = and_(
-        *(
-            or_(_contains(label, token), _contains(title, token), _contains(body, token))
-            for token in tokens
+    def anywhere(tokens: Sequence[str]) -> ColumnElement[bool]:
+        return and_(
+            *(
+                or_(
+                    _contains(label, token),
+                    _contains(title, token),
+                    _contains(body, token),
+                )
+                for token in tokens
+            )
         )
-    )
+
+    def graded(query: str, tokens: Sequence[str]) -> list[ColumnElement[bool]]:
+        """What one alternative achieves, one predicate per tier of `_TIERS`."""
+        return [
+            func.lower(label) == query.strip().lower(),
+            _all_in(label, tokens),
+            _all_in(title, tokens),
+            _all_in(body, tokens),
+            anywhere(tokens),
+        ]
+
+    # Blank alternatives are skipped but their *indices* are not: `earned` reports
+    # a position in the caller's own list, so what is dropped here must not shift
+    # what is left.
+    scored = [
+        (index, graded(queries[index], tokens))
+        for index, tokens in enumerate(variants)
+        if tokens
+    ]
+    matches = or_(*(predicates[-1] for _, predicates in scored))
+    # Ordered by **rank** rather than by variant, which is what makes this the
+    # best score across the alternatives rather than the first one that happened
+    # to hit. Written as one `CASE` per tier with an `OR` inside it because
+    # `LEAST` is not portable — Postgres has no scalar `min` and SQLite no
+    # `least` — and a tier-ordered chain needs neither. The last tier is the
+    # `else_`: `matches` is exactly its `OR`, so a row that reached the result set
+    # reached it.
     rank = case(
-        (func.lower(label) == query.strip().lower(), _EXACT),
-        (_all_in(label, tokens), _LABEL),
-        (_all_in(title, tokens), _TITLE),
-        (_all_in(body, tokens), _TEXT),
+        *(
+            (or_(*(predicates[at] for _, predicates in scored)), tier)
+            for at, tier in enumerate(_TIERS[:-1])
+        ),
         else_=_SPREAD,
+    )
+    # Which alternative earned that rank. The same chain read the other way —
+    # tier-major, so the best tier wins and the caller's earlier guess breaks a
+    # tie within it — over the *same predicate objects* `rank` is built from,
+    # which is the point (found in review).
+    #
+    # This used to be recomputed in Python over the page's twenty rows, on the
+    # argument that a column would widen the scan to answer a question about the
+    # handful of rows that survive it. The cost was real and the answer was wrong:
+    # `ilike` and `lower` are the *database's*, and Python's Unicode folding is not
+    # SQLite's ASCII-only one, so a label `Ω` against an alternative `ω` was an
+    # exact match in Python and no match at all in SQL — the row then reported the
+    # tier one alternative reached beside the index of another. Two engines
+    # deciding one question cannot be kept in step by care.
+    #
+    # What it costs is bounded by construction: `earned` evaluates the predicates
+    # `rank` already holds, at most once each, so it at worst doubles a `CASE` that
+    # is not where this query spends its time — the trigram scan and the dedup sort
+    # are. Statement build at the cap of eight alternatives went 3.9 ms to 6.2 ms.
+    #
+    # `else_` cannot be reached, since `matches` is the last tier's `OR`; it names
+    # an alternative that actually ran rather than index 0, which may be a blank.
+    earned = case(
+        *(
+            (predicates[at], literal(index))
+            for at in range(len(_TIERS))
+            for index, predicates in scored
+        ),
+        else_=literal(scored[0][0]),
     )
     # A `CASE` over the spine rather than a join: it is a handful of ids, it is
     # already ordered nearest-first, and the alternative is a temporary table to
@@ -252,7 +351,7 @@ def _branch(
         value=system_id,
         else_=len(spine),
     )
-    return matches, rank, literal(source), depth
+    return matches, rank, earned, literal(source), depth
 
 
 def _excerpt(body: str, tokens: Sequence[str]) -> str | None:
@@ -294,13 +393,13 @@ def _excerpt(body: str, tokens: Sequence[str]) -> str | None:
 async def search_labels(
     session: AsyncSession,
     spine: Sequence[uuid.UUID],
-    query: str,
+    queries: Sequence[str],
     *,
     viewer: User | None,
     limit: int,
     offset: int,
 ) -> Hits:
-    """The labels in ``spine`` whose prose contains every word of ``query``.
+    """The labels in ``spine`` matching every word of *any* of ``queries``.
 
     ``spine`` is `app.db.lineage.spine_ids` of the system being searched, taken as
     an argument rather than walked here so a caller asking several questions about
@@ -319,8 +418,12 @@ async def search_labels(
     common case on a rank with four values, and without a total order two reads of
     page 2 are two different pages.
     """
-    words = tokens_of(query)
-    if not words:
+    # Aligned with the caller's own list, empties included, so `matched_query`
+    # indexes what it *sent* rather than what survived tokenising — dropping a
+    # blank alternative silently shifted every index after it (found in review).
+    variants = [tokens_of(query) for query in queries]
+    usable = [words for words in variants if words]
+    if not usable:
         # A caller who asked for nothing gets nothing, rather than the corpus: an
         # empty `AND` is vacuously true and would page the whole library.
         return Hits(
@@ -330,13 +433,13 @@ async def search_labels(
             searched=[],
         )
 
-    described, rank, source, depth = _branch(
+    described, rank, earned, source, depth = _branch(
         label=LabelDescriptionRow.label,
         title=LabelDescriptionRow.title,
         body=LabelDescriptionRow.text,
         system_id=LabelDescriptionRow.formal_system_id,
-        query=query,
-        tokens=words,
+        queries=queries,
+        variants=variants,
         spine=spine,
         source=_DESCRIPTION,
     )
@@ -346,17 +449,18 @@ async def search_labels(
         LabelDescriptionRow.title.label("title"),
         func.coalesce(LabelDescriptionRow.text, "").label("body"),
         rank.label("rank"),
+        earned.label("earned"),
         source.label("source"),
         depth.label("depth"),
     ).where(LabelDescriptionRow.formal_system_id.in_(spine), described)
 
-    matched, rank, source, depth = _branch(
+    matched, rank, earned, source, depth = _branch(
         label=Proof.name,
         title=Proof.title,
         body=Proof.description,
         system_id=Proof.formal_system_id,
-        query=query,
-        tokens=words,
+        queries=queries,
+        variants=variants,
         spine=spine,
         source=_PROOF,
     )
@@ -369,6 +473,7 @@ async def search_labels(
         Proof.title.label("title"),
         func.coalesce(Proof.description, "").label("body"),
         rank.label("rank"),
+        earned.label("earned"),
         source.label("source"),
         depth.label("depth"),
     ).where(Proof.formal_system_id.in_(spine), or_(*readable), matched)
@@ -414,7 +519,8 @@ async def search_labels(
                 label=row.label,
                 system_id=row.system_id,
                 title=row.title,
-                excerpt=_excerpt(row.body, words),
+                excerpt=_excerpt(row.body, variants[row.earned]),
+                matched_query=row.earned,
                 matched=_MATCHED[row.rank],
                 proof_id=links.get((row.system_id, row.label), (None, None))[0],
                 proof_title=links.get((row.system_id, row.label), (None, None))[1],
@@ -427,7 +533,7 @@ async def search_labels(
         ],
         total=total,
         documented=await _documented(session, spine),
-        searched=list(words),
+        searched=[list(words) for words in variants],
     )
 
 

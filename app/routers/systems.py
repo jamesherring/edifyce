@@ -58,7 +58,7 @@ from app.routers._common import (
 )
 from app.db.descriptions import LabelDescriptionRow
 from app.db.descriptions_mapping import citing_labels, load_description, works_cited
-from app.db.label_search import search_labels
+from app.db.label_search import MAX_ALTERNATIVES, search_labels
 from app.db.lineage import spine_ids
 from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
 from app.db.models import Proof, ProofFolder, User
@@ -1161,11 +1161,15 @@ async def _nearest_description(
 @router.get("/{system_id}/labels", response_model=LabelSearch)
 async def search_label_descriptions(
     system_id: uuid.UUID,
-    q: str = Query(
+    q: list[str] = Query(
         ...,
+        max_length=MAX_ALTERNATIVES,
         description=(
             "Words to look for in a label, its title, or its prose. Every word "
-            "must appear somewhere in the same label's record."
+            "must appear somewhere in the same label's record. Repeat the "
+            "parameter to search several alternative phrasings at once — the "
+            "results are one ranked page, and each hit says which alternative "
+            "found it."
         ),
     ),
     limit: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
@@ -1219,6 +1223,7 @@ async def search_label_descriptions(
                 title=hit.title,
                 excerpt=hit.excerpt,
                 matched=hit.matched,
+                matched_query=hit.matched_query,
                 proof_id=hit.proof_id,
                 proof_title=hit.proof_title,
                 discouraged_usage=hit.discouraged_usage,
