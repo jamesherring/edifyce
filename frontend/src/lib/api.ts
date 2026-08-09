@@ -1138,6 +1138,26 @@ export interface LabelMention {
 	title: string | null;
 }
 
+/** One theorem a proof cites, or one proof that cites it — mirrors
+ * `TheoremCitation`. `proof_id` is null when the label has no proof of its own
+ * (half a corpus's labels are primitives) or belongs to a draft. */
+export interface TheoremCitation {
+	label: string;
+	proof_id: string | null;
+	title: string | null;
+}
+
+/** A proof's place in its corpus's citation graph. Distinct from
+ * `ProofDetail.references`/`referenced_by`, which are the alias-lemma edges a
+ * hand-authored proof declares: these are citations of *theorems*, resolved
+ * through the library by label, and are what an imported corpus is made of. */
+export interface ProofCitations {
+	cites: TheoremCitation[];
+	/** Capped — `cited_by_total` says how many there really are. */
+	cited_by: TheoremCitation[];
+	cited_by_total: number;
+}
+
 // The stored structure of a checked proof — mirrors the ProofStructure models in
 // app/schemas.py, which read the rows in app/db/proof_lines.py. Distinct from
 // `ProofDetail.result`: that is the display snapshot the editor renders, this is
@@ -1797,7 +1817,15 @@ export const api = {
 		/** What this proof rests on that nobody has proved — itself, and every
 		 * lemma proof and library entry it reaches. 409s if the proof has never
 		 * been verified, since nothing has resolved its citations. */
-		provenance: (id: string) => request<ProofProvenance>(`/proofs/${id}/provenance`)
+		provenance: (id: string) => request<ProofProvenance>(`/proofs/${id}/provenance`),
+		/** Which theorems this proof cites and which proofs cite it, computed from
+		 * the stored lines rather than from `proof_references` — an import writes
+		 * none of those, since a Metamath step cites a theorem rather than a
+		 * lemma's line. Its own request because the detail read does not carry it.
+		 *
+		 * Named for the graph rather than `citations`, which on this client is
+		 * already the *search* for a citation that would justify one line. */
+		citationGraph: (id: string) => request<ProofCitations>(`/proofs/${id}/citations`)
 	},
 
 	/**
