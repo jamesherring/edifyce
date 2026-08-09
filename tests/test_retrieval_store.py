@@ -481,3 +481,35 @@ def test_a_fingerprint_from_a_different_position_set_is_kept(
         session, chain_of(system_row), "implication", goal_fingerprint=goal
     )
     assert [c.label for c in found.candidates] == ["nested"]
+
+
+def test_a_mapped_layer_is_not_narrowed_by_the_fingerprint(
+    session, system_row, engine_context
+):
+    # A fingerprint keys on constructor signatures — a surface skeleton, a
+    # constant's token — which a mapped rename edge is allowed to change. So a
+    # stored fingerprint is in the source's spelling and the goal's is in ours, and
+    # comparing them would prune a theorem that unifies once rebuilt here — the
+    # silent false negative across a translated edge that the head filter (which
+    # crosses by name) exists to avoid. A non-identity layer therefore stays on the
+    # head filter alone.
+    add_theorem(
+        session, system_row, engine_context, "nested", "((a ∈ b → a ∈ c) → a ∈ b)"
+    )
+    goal = fingerprint(term_of(engine_context, "(a ∈ b → a ∈ c)"))
+
+    # On an identity chain this goal does prune `nested` (its antecedent is an
+    # implication, not a membership) — so the difference below is the mapped-layer
+    # fallback, not a vacuous goal.
+    identity = conclusion_candidates(
+        session, chain_of(system_row), "implication", goal_fingerprint=goal
+    )
+    assert [c.label for c in identity.candidates] == []
+
+    # A non-identity translation that still leaves `implication` spelled the same,
+    # so the head filter finds the row but the layer is marked mapped.
+    mapped = chain_of(system_row, Translation(sorts={"formula": "wff"}))
+    found = conclusion_candidates(
+        session, mapped, "implication", goal_fingerprint=goal
+    )
+    assert [c.label for c in found.candidates] == ["nested"]

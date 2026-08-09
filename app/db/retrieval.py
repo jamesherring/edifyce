@@ -144,11 +144,14 @@ def conclusion_candidates(
     the constructor bucket, dropping theorems whose conclusion cannot unify with
     the goal below the root. It is layered on top of the head filter and only ever
     removes candidates, so recall is unchanged — a caller still confirms each with
-    the kernel. Where the head filter keys on the constructor *name* (renamed per
-    layer), the fingerprint keys on the translation-invariant *signature*, so the
-    deep positions need no per-layer inversion. Absent, retrieval is exactly the
-    head-symbol prefilter it was. ``alpha_digest`` is the goal's, and is only ever
-    used to order — pass it and an α-identical conclusion sorts first.
+    the kernel. It applies only to **identity-translation layers**, though: the
+    fingerprint keys on constructor *signatures*, which a mapped rename edge may
+    change (the head filter crosses such an edge by inverting the constructor
+    *name*, which a signature has no analogue of here), so a mapped layer falls
+    back to the head filter alone rather than risk pruning a real match — see the
+    condition below. Absent, retrieval is exactly the head-symbol prefilter it was.
+    ``alpha_digest`` is the goal's, and is only ever used to order — pass it and an
+    α-identical conclusion sorts first.
 
     ``exclude`` drops labels the caller already has an answer for, which is what
     keeps a proposal search from re-offering what it has already tried.
@@ -207,13 +210,35 @@ def conclusion_candidates(
         # reads a JSON column position by position, which no index covers, so it
         # sits *after* the indexed head filter above — the constructor bucket is
         # chosen by the index, this narrows within it.
-        conditions.append(
-            fingerprint_filter(
+        #
+        # Restricted to identity-translation layers. A fingerprint keys on
+        # constructor *signatures* — a string production's surface skeleton, a
+        # constant's token — and a **mapped** rename edge is allowed to change both
+        # (`translation.py`: only an *unmapped* name is held to equal signatures).
+        # The head filter crosses such an edge by inverting the constructor name
+        # (`stored_name`), but a stored fingerprint is written in the source's
+        # spelling and there is no per-layer inverse for a skeleton here — so
+        # comparing it against the goal's spelling would prune a theorem that
+        # unifies once rebuilt in this system's constructors, the silent
+        # false-negative this filter must never produce. On the spine and any edge
+        # that agrees on spelling (`translation.identity`), the signatures match by
+        # construction; a mapped layer falls back to the head filter alone, exactly
+        # as it did before the fingerprint existed.
+        signature_stable = {
+            layer.system_id for layer in chain.layers if layer.translation.identity
+        } & set(asked)
+        if signature_stable:
+            deep = fingerprint_filter(
                 PromotedTheoremRow.conclusion_fingerprint,
                 goal_fingerprint,
                 session.get_bind().dialect.name,
             )
-        )
+            conditions.append(
+                or_(
+                    PromotedTheoremRow.system_id.notin_(list(signature_stable)),
+                    deep,
+                )
+            )
     if exclude:
         conditions.append(PromotedTheoremRow.label.notin_(list(exclude)))
 
