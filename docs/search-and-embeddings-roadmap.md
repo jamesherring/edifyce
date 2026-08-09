@@ -144,6 +144,18 @@ lemmas (commutativity, associativity, …). Terms are normalised to a canonical
 class representative before hashing, giving a `theory_digest` that extends the
 `digest → alpha_digest` ladder one step further.
 
+**The design note is [search-phase2-theory-digest.md](search-phase2-theory-digest.md),
+and it disagrees with this section in two places worth reading before starting.**
+The two halves above are not one phase: the *definitional* half has its input
+structured, its termination already proven by the conservativity check and its
+binder canonicalisation already solved, while the *equational* half has no input
+at all — a system cannot declare which of its productions means equality, and
+nothing structural distinguishes `↔` from `→`. And "oriented, terminating" is not
+enough: the definitional relation is acyclic but **not confluent**, since two
+definitions may share a defined form, so a term can have two normal forms and
+therefore two digests. The note's recommendation is to split the phase and build
+the definitional half first.
+
 **Unlocks**
 
 - Dedup and exact search **up to the known theory**: `a + b` and `b + a` merge
