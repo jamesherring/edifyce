@@ -13,6 +13,7 @@ are exactly the ones that suite stores.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncIterator, Iterator
 
 import pytest
@@ -28,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import Session
 
 import app.auth.backend as backend
+from app.db.descriptions import LabelDescriptionRow
 from app.db.metamath_store import import_corpus
 from app.db.models import Proof
 from app.db.session import get_session
@@ -703,3 +705,34 @@ def test_too_many_alternatives_are_refused(client, db):
         params=[("q", f"w{n}") for n in range(MAX_ALTERNATIVES)],
     )
     assert ok.status_code == 200, ok.text
+
+
+def test_the_credit_uses_the_database_case_rules_not_python_s(client, db):
+    # Attribution was recomputed in Python and the rank came from SQL, so the two
+    # agreed only where their case folding did. SQLite's `lower` is ASCII-only and
+    # Python's is Unicode: for a label `Ω`, the alternative `ω` was an *exact label
+    # match* in Python and no match at all in SQL, and the hit came back claiming
+    # the tier one alternative reached beside the index of another.
+    system_id, _ = seed(db)
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            session.add(
+                LabelDescriptionRow(
+                    formal_system_id=uuid.UUID(system_id),
+                    label="Ω",
+                    title="fallback",
+                    text="",
+                )
+            )
+            session.commit()
+    finally:
+        engine.dispose()
+
+    body = search_many(client, system_id, ["ω", "fallback"])
+
+    (hit,) = [h for h in body["items"] if h["label"] == "Ω"]
+    # SQL never folded `Ω` to `ω`, so the second alternative is the only one that
+    # matched, and it matched the title.
+    assert hit["matched"] == "title"
+    assert hit["matched_query"] == 1
