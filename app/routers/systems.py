@@ -1366,6 +1366,19 @@ async def put_embeddings(
     )
 
 
+@router.api_route(
+    "/{system_id}/labels/similar",
+    methods=["QUERY"],
+    response_model=SimilarLabels,
+    # Out of the OpenAPI document deliberately. A Path Item Object's operation
+    # keys are a *fixed* set in OpenAPI 3.1 — get, put, post, delete, options,
+    # head, patch, trace — so emitting a `query` operation makes the published
+    # schema invalid, and every generator and validator downstream of it is
+    # entitled to reject the lot. The POST twin below carries the documentation
+    # for both.
+    include_in_schema=False,
+    name="find_similar_labels_query",
+)
 @router.post("/{system_id}/labels/similar", response_model=SimilarLabels)
 async def find_similar_labels(
     system_id: uuid.UUID,
@@ -1387,10 +1400,25 @@ async def find_similar_labels(
     meaning and neither vector hints that it is the wrong one. Ranking them
     together would put noise among signal indistinguishably.
 
-    A POST rather than `?similar=`, which §4.5 sketched, for a plain reason:
-    1,536 floats do not go in a URL. Naming a `label` instead of an `embedding` is
-    the query-string-shaped half of that idea and is served here too — "what else
-    is about what this is about", with no embedding model needed at the call site.
+    **Answers to `QUERY` as well as `POST`, and `QUERY` is the accurate one.**
+    §4.5 sketched this as `?similar=`, which 1,536 floats cannot fit in; a POST
+    then says the wrong thing about it, since this creates nothing, changes
+    nothing, and may be repeated or cached freely. `QUERY`
+    (draft-ietf-httpbis-safe-method-w-body) is exactly the method for a search
+    whose parameters need a body — safe and idempotent, which POST is not.
+
+    POST stays because `QUERY` is a **draft**, and the gap between "the server
+    supports it" and "the request arrives" is other people's infrastructure: a
+    CDN, a proxy or a corporate egress filter that has never heard of the method
+    is entitled to answer 405 or 501, and this deployment sits behind an edge
+    whose behaviour is not verifiable from here. So the semantics are available
+    to a caller that wants them and nothing is staked on an untestable hop. Both
+    methods are the same handler; a caller free of intermediaries should prefer
+    `QUERY`.
+
+    Naming a `label` instead of an `embedding` is the query-string-shaped half of
+    §4.5's idea and is served here too — "what else is about what this is about",
+    with no embedding model needed at the call site.
 
     Across the inheritance spine, as the lexical search is, and reporting
     `embedded` beside the hits for the same reason it reports `documented`:

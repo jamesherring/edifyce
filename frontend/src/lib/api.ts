@@ -1765,7 +1765,15 @@ export const api = {
 			}),
 		/** Find a label by what a paper's sentence is *about* — the lift the
 		 *  lexical search cannot make, since it matches substrings of words and a
-		 *  paper does not quote a theorem in a library's vocabulary. */
+		 *  paper does not quote a theorem in a library's vocabulary.
+		 *
+		 *  The route also answers `QUERY`
+		 *  (draft-ietf-httpbis-safe-method-w-body), which is the accurate method
+		 *  for a search needing a body: safe and idempotent, which POST is not.
+		 *  This client sends POST because a browser's request crosses whatever
+		 *  CDN and proxy sit in front of the API, and one that has never heard of
+		 *  a draft method is entitled to answer 405 — a risk worth taking from a
+		 *  server-side caller that knows its own network, and not from a page. */
 		similarLabels: (id: string, payload: SimilarityQuery) =>
 			request<SimilarLabels>(`/formal-systems/${id}/labels/similar`, {
 				method: 'POST',

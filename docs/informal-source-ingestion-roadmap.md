@@ -526,8 +526,25 @@ prose, keyed as the prose is. (`theorems.embedding` stays unused, and is still
 right for what it was provisioned for: Phase 3's deterministic fold of the *term*
 DAG, which is a different vector of a different thing.)
 
-*Not `?similar=`.* 1,536 floats do not go in a URL, so the search is a POST. The
-query-string-shaped half of the idea survives as `label` — "what else is about
+*Not `?similar=`.* 1,536 floats do not go in a URL, so the search takes a body.
+It answers **`QUERY`** as well as `POST`, and `QUERY` is the accurate one:
+[draft-ietf-httpbis-safe-method-w-body](https://datatracker.ietf.org/doc/draft-ietf-httpbis-safe-method-w-body/)
+exists for exactly this shape — a search whose parameters need a body — and is
+*safe and idempotent*, which POST is not. This route creates nothing, changes
+nothing, and may be repeated or cached freely, so POST misdescribes it.
+
+POST stays because the method is a **draft**, and the gap between "the server
+supports it" and "the request arrives" is other people's infrastructure: a CDN, a
+proxy or an egress filter that has never heard of `QUERY` may answer 405 or 501,
+and this deployment sits behind an edge whose behaviour cannot be verified from
+here. Both are the same handler, so a caller free of intermediaries should prefer
+`QUERY`; the browser client sends POST, since a page's request crosses whatever
+sits in front of the API and that is not a risk to take on its behalf. `QUERY` is
+kept **out of the OpenAPI document** — a Path Item Object's operation keys are a
+fixed set in OpenAPI 3.1 and `query` is not among them, so emitting one would make
+the published schema invalid and every generator downstream entitled to reject it.
+
+The query-string-shaped half of the idea survives as `label` — "what else is about
 what this is about" — which needs no embedding model at the call site and is
 served by the same route.
 

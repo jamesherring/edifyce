@@ -141,8 +141,10 @@ def upload(client: TestClient, system_id: str, entries: list[dict], model: str =
     )
 
 
-def similar(client: TestClient, system_id: str, **body):
-    return client.post(f"/api/formal-systems/{system_id}/labels/similar", json=body)
+def similar(client: TestClient, system_id: str, method: str = "POST", **body):
+    return client.request(
+        method, f"/api/formal-systems/{system_id}/labels/similar", json=body
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +345,39 @@ def test_a_query_must_name_exactly_one_point(client, db):
     ):
         res = similar(client, system_id, **body)
         assert res.status_code == 422, res.text
+
+
+def test_the_search_answers_to_query_as_well_as_post(client, db):
+    # `QUERY` (draft-ietf-httpbis-safe-method-w-body) is the accurate method for
+    # a search whose parameters need a body: safe and idempotent, which POST is
+    # not — this creates nothing and may be repeated freely. POST stays because
+    # the method is a draft and an intermediary that has never heard of it is
+    # entitled to answer 405.
+    system_id = seed(client, db)
+    upload(client, system_id, [{"label": "wn", "embedding": vector(1.0)}])
+
+    posted = similar(client, system_id, model=MODEL, embedding=vector(1.0))
+    queried = similar(
+        client, system_id, method="QUERY", model=MODEL, embedding=vector(1.0)
+    )
+
+    assert queried.status_code == 200, queried.text
+    # The same handler, so the same answer — not merely both 200.
+    assert queried.json() == posted.json()
+
+
+def test_query_is_kept_out_of_the_openapi_document(client, db):
+    # A Path Item Object's operation keys are a fixed set in OpenAPI 3.1, and
+    # `query` is not among them — emitting one would make the published schema
+    # invalid and every generator downstream entitled to reject the lot.
+    schema = client.get("/openapi.json").json()
+    operations = schema["paths"]["/api/formal-systems/{system_id}/labels/similar"]
+
+    assert set(operations) <= {
+        "get", "put", "post", "delete", "options", "head", "patch", "trace",
+    }
+    # POST carries the documentation for both.
+    assert "post" in operations
 
 
 def test_a_hit_carries_its_title_and_layer(client, db):

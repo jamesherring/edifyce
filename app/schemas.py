@@ -1069,8 +1069,11 @@ class SimilarityQuery(BaseModel):
     is the one alignment actually runs on, since a model reading a paper holds a
     sentence rather than a label.
 
-    A POST rather than a query parameter, which is a departure from §4.5's
-    ``?similar=`` sketch and for a plain reason: 1,536 floats do not go in a URL.
+    Sent as ``QUERY`` or ``POST``, which is a departure from §4.5's ``?similar=``
+    sketch for a plain reason: 1,536 floats do not go in a URL. ``QUERY``
+    (draft-ietf-httpbis-safe-method-w-body) is the accurate method — this creates
+    nothing and may be repeated freely — and ``POST`` is kept because the method
+    is a draft and an intermediary that has never heard of it may refuse it.
     """
 
     model: _Name128
