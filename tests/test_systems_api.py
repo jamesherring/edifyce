@@ -1,9 +1,9 @@
 """Owner-scoped CRUD endpoints for formal systems.
 
-Runs the router end to end against a throwaway SQLite database (only the auth +
-system-decomposition tables are created — the pgvector `theorems` table isn't
-SQLite-creatable), with `get_session` pointed at it and the real fastapi-users
-auth flow (register/login) driving owner scoping.
+Runs the router end to end against a throwaway SQLite database (the auth +
+system-decomposition tables, plus whatever `tests.database._always` adds), with
+`get_session` pointed at it and the real fastapi-users auth flow
+(register/login) driving owner scoping.
 """
 
 import uuid
@@ -24,6 +24,8 @@ from sqlalchemy.orm import Session
 
 import app.auth.backend as backend
 from app.db import Base, FormalSystem, SideConditionRow, spec_to_system
+from app.db.formalizations import FormalizationRow, SourceDocumentRow
+from app.db.proof_lines import ProofLineRow
 from app.db.notations_mapping import store_notation
 from app.db.promoted_theorems import (
     PromotedTheoremBindingRow,
@@ -31,7 +33,7 @@ from app.db.promoted_theorems import (
     PromotedTheoremRow,
 )
 from app.db.terms import TermChildRow, TermRow
-from app.db.models import OAuthAccount, Proof, ProofFolder, User
+from app.db.models import OAuthAccount, Proof, ProofFolder, Theorem, User
 from app.db.session import get_session
 from app.db.systems import (
     AxiomBindingRow,
@@ -356,6 +358,86 @@ def test_delete_cascades_to_symbols_and_bindings(client, db):
         LineRow, LinePartRow, BracketRow,
     ):
         assert _count(db, model) == 0, model.__name__
+
+
+def _seed_term_graph(db_path, owner_id: str, system_id: str) -> None:
+    """A two-node term graph, and one row of each kind that cites a term.
+
+    The four foreign keys into ``terms`` that are NO ACTION, populated: an edge's
+    ``child_id``, a proof line, a formalization and a theorem.
+    """
+    engine = create_engine(db_path)
+    try:
+        with Session(engine) as session:
+            child = TermRow(
+                formal_system_id=uuid.UUID(system_id), kind="var",
+                var_name="x", sort="variable", digest="d-child",
+            )
+            parent = TermRow(
+                formal_system_id=uuid.UUID(system_id), kind="node",
+                constructor="membership", digest="d-parent",
+            )
+            session.add_all([child, parent])
+            session.flush()
+            session.add(
+                TermChildRow(parent_id=parent.id, slot="left", position=0, child_id=child.id)
+            )
+
+            proof = Proof(
+                name="p", slug="p", title="P", source="1. x ∈ x",
+                formal_system_id=uuid.UUID(system_id), owner_id=uuid.UUID(owner_id),
+            )
+            session.add(proof)
+            session.flush()
+            session.add(
+                ProofLineRow(proof_id=proof.id, position=0, number=1, term_id=parent.id)
+            )
+
+            document = SourceDocumentRow(
+                kind="arxiv", identifier="2401.01234", title="A paper"
+            )
+            session.add(document)
+            session.flush()
+            session.add(
+                FormalizationRow(
+                    document_id=document.id, claim="Theorem 1",
+                    informal_statement="x is in x", formal_system_id=uuid.UUID(system_id),
+                    statement_term_id=parent.id, reasoning="it says so",
+                )
+            )
+            session.add(
+                Theorem(
+                    formal_system_id=uuid.UUID(system_id), proof_id=proof.id,
+                    statement="x ∈ x", statement_term_id=parent.id,
+                )
+            )
+            session.commit()
+    finally:
+        engine.dispose()
+
+
+def test_delete_clears_the_term_graph_and_everything_citing_it(client, db):
+    # The FKs into `terms` are NO ACTION on purpose — a shared subterm must not
+    # be deletable out from under the rows that name it — so a system whose graph
+    # is actually cited cannot be deleted by cascade alone: Postgres checks each
+    # term row as the cascade reaches it, before the cascade that would have
+    # cleared the citation. The route tears the graph down itself, in order.
+    # (SQLite defers the check to the end of the outer statement and so passes
+    # either way; this is a regression test for a Postgres run.)
+    owner_id = _register_login(client, "ada@example.com")
+    system_id = _seed_zfc(db, owner_id)
+    _seed_term_graph(db, owner_id, system_id)
+
+    assert _count(db, TermRow) == 2 and _count(db, TermChildRow) == 1
+    assert _count(db, ProofLineRow) == 1 and _count(db, FormalizationRow) == 1
+    assert _count(db, Theorem) == 1
+
+    assert client.delete(f"/api/formal-systems/{system_id}").status_code == 204
+
+    for model in (TermRow, TermChildRow, ProofLineRow, FormalizationRow, Theorem, Proof):
+        assert _count(db, model) == 0, model.__name__
+    # The document outlives the claim: it belongs to no system.
+    assert _count(db, SourceDocumentRow) == 1
 
 
 # ---------------------------------------------------------------------------
