@@ -329,6 +329,14 @@ class LibraryLayer:
     digest: str
     translation: Translation = IDENTITY
     template: StatementTemplate = NO_TEMPLATE
+    # Whether this layer is reached by a **relation edge** rather than the
+    # inheritance spine. A spine layer shares its productions with the citing
+    # system by construction (they are inherited), so their signatures agree; a
+    # relation edge joins independently-built systems and — when its map is empty —
+    # is not even checked for template agreement (`translation_errors` short-circuits
+    # on the identity). Retrieval's fingerprint filter keys on signatures, so it
+    # trusts only spine layers (see `app.db.retrieval.conclusion_candidates`).
+    related: bool = False
 
 
 @dataclass(frozen=True)

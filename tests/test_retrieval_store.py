@@ -483,33 +483,35 @@ def test_a_fingerprint_from_a_different_position_set_is_kept(
     assert [c.label for c in found.candidates] == ["nested"]
 
 
-def test_a_mapped_layer_is_not_narrowed_by_the_fingerprint(
+def test_a_relation_layer_falls_back_to_the_head_filter(
     session, system_row, engine_context
 ):
     # A fingerprint keys on constructor signatures — a surface skeleton, a
-    # constant's token — which a mapped rename edge is allowed to change. So a
-    # stored fingerprint is in the source's spelling and the goal's is in ours, and
-    # comparing them would prune a theorem that unifies once rebuilt here — the
-    # silent false negative across a translated edge that the head filter (which
-    # crosses by name) exists to avoid. A non-identity layer therefore stays on the
-    # head filter alone.
+    # constant's token. A relation edge joins independently-built systems: a mapped
+    # one may spell a production differently, and an identity one (empty map) is not
+    # even checked for template agreement. So a relation layer's stored fingerprints
+    # may be in a spelling the goal's is not, and comparing them would prune a
+    # theorem that unifies once rebuilt here — the silent false negative across a
+    # translated edge that the head filter (which crosses by name) avoids. A
+    # relation layer therefore stays on the head filter alone, even when its
+    # translation is the identity.
     add_theorem(
         session, system_row, engine_context, "nested", "((a ∈ b → a ∈ c) → a ∈ b)"
     )
     goal = fingerprint(term_of(engine_context, "(a ∈ b → a ∈ c)"))
 
-    # On an identity chain this goal does prune `nested` (its antecedent is an
-    # implication, not a membership) — so the difference below is the mapped-layer
-    # fallback, not a vacuous goal.
-    identity = conclusion_candidates(
+    # On the spine this goal does prune `nested` (its antecedent is an implication,
+    # not a membership) — so the difference below is the relation-layer fallback,
+    # not a vacuous goal.
+    spine = conclusion_candidates(
         session, chain_of(system_row), "implication", goal_fingerprint=goal
     )
-    assert [c.label for c in identity.candidates] == []
+    assert [c.label for c in spine.candidates] == []
 
-    # A non-identity translation that still leaves `implication` spelled the same,
-    # so the head filter finds the row but the layer is marked mapped.
-    mapped = chain_of(system_row, Translation(sorts={"formula": "wff"}))
+    # The same system reached as a relation edge with an empty (identity) map: the
+    # head filter still finds the row, but the layer is untrusted for signatures.
+    related = LibraryChain((LibraryLayer(system_row.id, "digest", related=True),))
     found = conclusion_candidates(
-        session, mapped, "implication", goal_fingerprint=goal
+        session, related, "implication", goal_fingerprint=goal
     )
     assert [c.label for c in found.candidates] == ["nested"]

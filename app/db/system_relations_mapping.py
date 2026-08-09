@@ -135,7 +135,9 @@ def related_layers(
             if system_id in seen:
                 continue
             seen.add(system_id)
-            layers.append(LibraryLayer(system_id, digest, translation, template))
+            layers.append(
+                LibraryLayer(system_id, digest, translation, template, related=True)
+            )
     return layers
 
 
