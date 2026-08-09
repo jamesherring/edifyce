@@ -56,6 +56,13 @@ class Arena:
     key: list[int] = field(default_factory=list)
     #: Free variables in first-occurrence order, the other half of the key.
     free: list[tuple[str, ...]] = field(default_factory=list)
+    #: A structural key that keeps variable *names*. Terms are interned per
+    #: system, so a layered import stores one `ph` row per layer; this is what
+    #: lets the two be recognised as the same formula. Deliberately not the alpha
+    #: key, which identifies `ph` with `ps` — sound for a similarity feature,
+    #: catastrophic for anything that reasons, since `ph → ps` would become a
+    #: tautology.
+    exact: list[int] = field(default_factory=list)
 
     @staticmethod
     def of(corpus: Corpus) -> Arena:
@@ -86,6 +93,7 @@ class Arena:
         self.children.append(children)
         self.free.append(self._free_of(term))
         self.key.append(self._key_of(term))
+        self.exact.append(self._exact_of(term))
         return term
 
     def _free_of(self, term: int) -> tuple[str, ...]:
@@ -128,6 +136,22 @@ class Arena:
             payload += b"\x1e"
         return _hash(bytes(payload))
 
+    def _exact_of(self, term: int) -> int:
+        kind = self.kind[term]
+        if kind == KIND_VAR:
+            return _hash(b"var" + f"{self.sort[term]}\x1f{self.var_name[term]}".encode())
+        if kind == KIND_BOUND:
+            return _hash(
+                b"bound"
+                + struct.pack("<q", self.bound_index[term] or 0)
+                + (self.sort[term] or "").encode()
+            )
+        payload = bytearray(b"node")
+        payload += f"{self.constructor[term]}\x1f{self.literal[term]}\x1f{self.sort[term]}".encode()
+        for child in self.children[term]:
+            payload += struct.pack("<Q", self.exact[child])
+        return _hash(bytes(payload))
+
     def _key_every_term(self) -> None:
         """Key the whole stored DAG in one post-order pass.
 
@@ -138,6 +162,7 @@ class Arena:
         total = len(self.kind)
         self.free = [()] * total
         self.key = [0] * total
+        self.exact = [0] * total
         done = bytearray(total)
         for root in range(total):
             if done[root]:
@@ -150,6 +175,7 @@ class Arena:
                 if expanded:
                     self.free[term] = self._free_of(term)
                     self.key[term] = self._key_of(term)
+                    self.exact[term] = self._exact_of(term)
                     done[term] = 1
                     continue
                 stack.append((term, True))

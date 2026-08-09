@@ -1,0 +1,231 @@
+{
+  "corpus": {
+    "theorems": 10177,
+    "systems": [
+      "ZF set theory",
+      "Propositional calculus",
+      "First-order logic"
+    ]
+  },
+  "walk": {
+    "lemmas": 4653,
+    "goals_without_hypotheses": 5696
+  },
+  "certified": {
+    "total": 1059,
+    "rate": 0.18591994382022473,
+    "by_truth_table": 715,
+    "needing_the_library": 344,
+    "not_reached": 4637,
+    "not_reached_with_no_usable_lemma": 4257,
+    "mean_lemmas_when_needed": 1.4680232558139534
+  },
+  "controls": {
+    "negations_of_certified_goals": 0,
+    "refutable_compounds_certified": 0,
+    "refutable_compounds_tested": 1000,
+    "provable_compounds_certified": 760,
+    "provable_compounds_tested": 1000,
+    "negations_of_refutable_certified": 689
+  },
+  "certified_by_section": [
+    {
+      "section": "Abbreviated conjunction and disjunction of three wff's",
+      "goals": 184,
+      "certified": 184,
+      "rate": 1.0
+    },
+    {
+      "section": "Logical conjunction",
+      "goals": 119,
+      "certified": 119,
+      "rate": 1.0
+    },
+    {
+      "section": "Mixed connectives",
+      "goals": 79,
+      "certified": 79,
+      "rate": 1.0
+    },
+    {
+      "section": "Logical disjunction",
+      "goals": 72,
+      "certified": 72,
+      "rate": 1.0
+    },
+    {
+      "section": "Logical equivalence",
+      "goals": 49,
+      "certified": 49,
+      "rate": 1.0
+    },
+    {
+      "section": "Logical negation",
+      "goals": 34,
+      "certified": 34,
+      "rate": 1.0
+    },
+    {
+      "section": "Axiom scheme ax-13 (Quantified Equality)",
+      "goals": 76,
+      "certified": 31,
+      "rate": 0.40789473684210525
+    },
+    {
+      "section": "Axiom scheme ax-12 (Substitution)",
+      "goals": 75,
+      "certified": 23,
+      "rate": 0.30666666666666664
+    },
+    {
+      "section": "Derive the Tarski-Bernays-Wajsberg axioms from Meredith's First CO Axiom",
+      "goals": 23,
+      "certified": 19,
+      "rate": 0.8260869565217391
+    },
+    {
+      "section": "Logical implication",
+      "goals": 17,
+      "certified": 17,
+      "rate": 1.0
+    },
+    {
+      "section": "Derive the Lukasiewicz axioms from Meredith's sole axiom",
+      "goals": 17,
+      "certified": 17,
+      "rate": 1.0
+    },
+    {
+      "section": "Functions",
+      "goals": 528,
+      "certified": 16,
+      "rate": 0.030303030303030304
+    },
+    {
+      "section": "Unique existence: the unique existential quantifier",
+      "goals": 61,
+      "certified": 15,
+      "rate": 0.2459016393442623
+    },
+    {
+      "section": "Implicational Calculus",
+      "goals": 14,
+      "certified": 14,
+      "rate": 1.0
+    },
+    {
+      "section": "Finite sets",
+      "goals": 38,
+      "certified": 14,
+      "rate": 0.3684210526315789
+    }
+  ],
+  "examples_needing_the_library": [
+    {
+      "theorem": "dfifp5",
+      "lemmas": [
+        "df-ifp"
+      ],
+      "atoms": 4
+    },
+    {
+      "theorem": "dfifp2",
+      "lemmas": [
+        "df-ifp"
+      ],
+      "atoms": 4
+    },
+    {
+      "theorem": "dfifp4",
+      "lemmas": [
+        "df-ifp"
+      ],
+      "atoms": 4
+    },
+    {
+      "theorem": "dfifp6",
+      "lemmas": [
+        "df-ifp"
+      ],
+      "atoms": 4
+    },
+    {
+      "theorem": "cador",
+      "lemmas": [
+        "df-cad"
+      ],
+      "atoms": 4
+    },
+    {
+      "theorem": "cadan",
+      "lemmas": [
+        "df-cad"
+      ],
+      "atoms": 4
+    },
+    {
+      "theorem": "merco1lem5",
+      "lemmas": [
+        "merco1lem1"
+      ],
+      "atoms": 4
+    },
+    {
+      "theorem": "ifval",
+      "lemmas": [
+        "eqif"
+      ],
+      "atoms": 4
+    },
+    {
+      "theorem": "f1cofveqaeqALT",
+      "lemmas": [
+        "f1cofveqaeq"
+      ],
+      "atoms": 6
+    },
+    {
+      "theorem": "dfifp3",
+      "lemmas": [
+        "df-ifp"
+      ],
+      "atoms": 4
+    },
+    {
+      "theorem": "dfifp7",
+      "lemmas": [
+        "df-ifp"
+      ],
+      "atoms": 4
+    },
+    {
+      "theorem": "had0",
+      "lemmas": [
+        "df-had"
+      ],
+      "atoms": 4
+    },
+    {
+      "theorem": "cad0",
+      "lemmas": [
+        "df-cad"
+      ],
+      "atoms": 4
+    },
+    {
+      "theorem": "eximal",
+      "lemmas": [
+        "df-ex"
+      ],
+      "atoms": 3
+    },
+    {
+      "theorem": "axc15",
+      "lemmas": [
+        "ax12v"
+      ],
+      "atoms": 4
+    }
+  ],
+  "runtime_seconds": 5.66844916343689
+}
