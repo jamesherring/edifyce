@@ -951,8 +951,16 @@ class LabelSearch(Page[LabelHit]):
 MAX_EMBEDDING_BATCH = 256
 
 
+# A coordinate of an embedding. `allow_inf_nan=False` because JSON can carry
+# `1e400`, which parses to `inf` and which pgvector then refuses at the *insert* —
+# turning malformed input into a 500 rather than a 422, and on the SQLite path
+# storing happily and producing a similarity that will not serialise (found in
+# review).
+_Coordinate = Annotated[float, Field(allow_inf_nan=False)]
+
+
 class LabelVector(BaseModel):
-    """One label's vector, as the caller computed it."""
+    """One label's vector, as the caller computed it, and of what."""
 
     label: _Name128
     # The vector itself. Bounded here so an oversized one is refused while being
@@ -960,7 +968,19 @@ class LabelVector(BaseModel):
     # vector is not a malformed one, it is a different model's — and pgvector
     # would otherwise refuse it at the insert with an error naming neither the
     # label nor the width expected.
-    embedding: list[float] = Field(min_length=1, max_length=8192)
+    embedding: list[_Coordinate] = Field(min_length=1, max_length=8192)
+    # The digest of the text this vector was made from — echo back what
+    # `EmbeddingCoverage.pending` handed out.
+    #
+    # Required, and it is what makes the digest mean anything (found in review).
+    # Hashing the *current* database text at upload time instead loses the race
+    # this field exists to catch: a description edited between the caller reading
+    # its pending text and posting the vector would be hashed as though the
+    # vector were of the new prose, recording a stale vector as current and
+    # silently defeating the whole mechanism. Stored verbatim, so what is
+    # recorded is what the vector is actually of — and a vector that arrives
+    # already behind the prose reads as stale immediately, which is true.
+    digest: str = Field(min_length=64, max_length=64)
     # What it cost, if the caller is counting. Recorded, never read here — a
     # corpus embedded at a known token count is one somebody can decide whether
     # to re-embed.
@@ -992,18 +1012,30 @@ class EmbeddingUploadOutcome(BaseModel):
 
 
 class PendingEmbedding(BaseModel):
-    """A label with no vector yet, and the text to make one from.
+    """A label wanting a vector, and the text to make one from.
 
     The text is composed server-side and handed out, rather than left to the
     caller, so every vector in the table is a vector of the same thing — a caller
     free to choose would embed the title on Monday and the title plus the prose
     on Tuesday, and the resulting neighbourhoods would be incomparable in a way
     no column could record.
+
+    Covers labels with **no vector and labels whose vector has gone stale
+    alike**, since both are work a backfill has to do and this route is the only
+    place their text can be got (found in review, where a stale label appeared in
+    the count and nowhere else — leaving a re-imported system stuck at
+    ``stale > 0`` with no way to act on it). ``stale`` says which kind it is.
     """
 
     label: str
     formal_system_id: uuid.UUID
     text: str
+    # Echo this back as `LabelVector.digest`: it binds the vector to the text it
+    # was made from, so a description edited in between is caught rather than
+    # papered over.
+    digest: str
+    # True when a vector exists but is of prose that has since changed.
+    stale: bool = False
 
 
 class EmbeddingCoverage(BaseModel):
@@ -1042,7 +1074,9 @@ class SimilarityQuery(BaseModel):
     """
 
     model: _Name128
-    embedding: list[float] | None = Field(default=None, min_length=1, max_length=8192)
+    embedding: list[_Coordinate] | None = Field(
+        default=None, min_length=1, max_length=8192
+    )
     label: _Name128 | None = None
     limit: int = Field(default=20, ge=1, le=100)
 

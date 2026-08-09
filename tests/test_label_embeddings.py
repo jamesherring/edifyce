@@ -117,9 +117,27 @@ def coverage(client: TestClient, system_id: str, **params) -> dict:
 
 
 def upload(client: TestClient, system_id: str, entries: list[dict], model: str = MODEL):
+    """Upload, filling in each entry's digest from what `pending` currently says.
+
+    A caller must echo the digest of the text it embedded, which is the whole
+    point of the field — so the helper reads it rather than inventing one, and a
+    test that wants a *mismatched* digest passes one explicitly.
+    """
+    texts = {
+        entry["label"]: entry["digest"]
+        for entry in coverage(client, system_id, model=model, pending=MAX_EMBEDDING_BATCH)[
+            "pending"
+        ]
+    }
     return client.put(
         f"/api/formal-systems/{system_id}/embeddings",
-        json={"model": model, "entries": entries},
+        json={
+            "model": model,
+            "entries": [
+                {"digest": texts.get(entry["label"], "0" * 64), **entry}
+                for entry in entries
+            ],
+        },
     )
 
 
@@ -426,13 +444,20 @@ def test_a_label_the_system_documents_nothing_about_is_skipped_by_name(client, d
 def test_only_the_owner_may_store_vectors(client, db):
     system_id = seed(client, db)
     client.post("/api/auth/logout")
+    # Posted directly rather than through the helper, which reads `pending` to
+    # fill in the digest and is itself gated on being able to read the system.
+    body = {
+        "model": MODEL,
+        "entries": [
+            {"label": "wn", "embedding": vector(1.0), "digest": "0" * 64}
+        ],
+    }
+    path = f"/api/formal-systems/{system_id}/embeddings"
 
-    anonymous = upload(client, system_id, [{"label": "wn", "embedding": vector(1.0)}])
-    assert anonymous.status_code == 401
+    assert client.put(path, json=body).status_code == 401
 
     _register_login(client, "bob@example.com")
-    stranger = upload(client, system_id, [{"label": "wn", "embedding": vector(1.0)}])
-    assert stranger.status_code == 404
+    assert client.put(path, json=body).status_code == 404
 
 
 def test_reading_coverage_follows_the_system(client, db):
@@ -558,6 +583,117 @@ def test_an_oversized_batch_is_refused_while_it_is_parsed(client, db):
     )
 
     assert res.status_code == 422, res.text
+
+
+def test_a_vector_is_bound_to_the_text_it_was_made_from(client, db):
+    # Hashing the *current* database text at upload time loses the race the
+    # digest exists to catch: a description edited between the caller reading its
+    # pending text and posting the vector would be recorded as though the vector
+    # were of the new prose, marking a stale vector current and defeating the
+    # whole mechanism.
+    system_id = seed(client, db)
+    (pending,) = [
+        entry
+        for entry in coverage(client, system_id, model=MODEL)["pending"]
+        if entry["label"] == "wn"
+    ]
+
+    # The prose moves while the caller is off embedding the text it was handed.
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            row = session.scalars(
+                select(LabelDescriptionRow).where(LabelDescriptionRow.label == "wn")
+            ).one()
+            row.text = "Rewritten while the caller was busy."
+            session.commit()
+    finally:
+        engine.dispose()
+
+    res = client.put(
+        f"/api/formal-systems/{system_id}/embeddings",
+        json={
+            "model": MODEL,
+            "entries": [
+                {
+                    "label": "wn",
+                    "embedding": vector(1.0),
+                    # The digest of what was actually embedded.
+                    "digest": pending["digest"],
+                }
+            ],
+        },
+    )
+    assert res.status_code == 200, res.text
+
+    # Stale on arrival, which is exactly what it is — the vector is of prose the
+    # system no longer carries.
+    assert coverage(client, system_id, model=MODEL)["stale"] == 1
+    hit = similar(client, system_id, model=MODEL, embedding=vector(1.0)).json()["items"][0]
+    assert hit["stale"] is True
+
+
+def test_a_stale_label_comes_back_with_the_text_to_re_embed(client, db):
+    # Counted and nowhere else, a stale label left a re-imported system stuck at
+    # `stale > 0` with no way to act: this route is the only place its canonical
+    # text can be got.
+    system_id = seed(client, db)
+    upload(client, system_id, [{"label": "wn", "embedding": vector(1.0)}])
+    assert coverage(client, system_id, model=MODEL)["stale"] == 0
+
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            row = session.scalars(
+                select(LabelDescriptionRow).where(LabelDescriptionRow.label == "wn")
+            ).one()
+            row.text = "Something else entirely."
+            session.commit()
+    finally:
+        engine.dispose()
+
+    body = coverage(client, system_id, model=MODEL)
+    assert body["stale"] == 1
+    (entry,) = [e for e in body["pending"] if e["label"] == "wn"]
+    assert entry["stale"] is True
+    assert "Something else entirely." in entry["text"]
+
+    # And acting on it clears the debt, which is the point of listing it.
+    again = upload(client, system_id, [{"label": "wn", "embedding": vector(1.0)}])
+    assert again.status_code == 200, again.text
+    assert coverage(client, system_id, model=MODEL)["stale"] == 0
+
+
+def test_a_coordinate_that_is_not_a_number_is_refused(client, db):
+    # JSON can carry `1e400`, which parses to `inf` — which pgvector refuses at
+    # the *insert*, turning malformed input into a 500 rather than a 422, and
+    # which the SQLite path stores happily before producing a similarity that
+    # will not serialise.
+    system_id = seed(client, db)
+    path = f"/api/formal-systems/{system_id}/embeddings"
+
+    res = client.put(
+        path,
+        content=(
+            '{"model": "' + MODEL + '", "entries": [{"label": "wn", "digest": "'
+            + "0" * 64
+            + '", "embedding": [1e400' + ", 0.0" * (EMBEDDING_DIMENSIONS - 1) + "]}]}"
+        ),
+        headers={"content-type": "application/json"},
+    )
+    assert res.status_code == 422, res.text
+
+    # And on the query side too, where the same value would rank everything NaN.
+    query = client.post(
+        f"/api/formal-systems/{system_id}/labels/similar",
+        content=(
+            '{"model": "' + MODEL + '", "embedding": [1e400'
+            + ", 0.0" * (EMBEDDING_DIMENSIONS - 1)
+            + "]}"
+        ),
+        headers={"content-type": "application/json"},
+    )
+    assert query.status_code == 422, query.text
 
 
 def test_the_text_composed_is_the_text_digested():

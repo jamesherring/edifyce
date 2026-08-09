@@ -1,12 +1,16 @@
 import os
+from math import isfinite
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.exception_handlers import http_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
+    JSONResponse,
     RedirectResponse,
     Response,
 )
@@ -191,6 +195,35 @@ def oauth_providers() -> OAuthProvidersResponse:
     return OAuthProvidersResponse(
         providers=[name for name, _ in enabled_oauth_clients]
     )
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> Response:
+    """The default 422, with any non-finite number in it made serialisable.
+
+    FastAPI echoes the offending value back under ``input``, and JSON has no
+    literal for infinity or NaN — so a body carrying `1e400`, which is *valid*
+    JSON and parses to `inf`, fails while the error is being rendered and the
+    caller gets a 500 for input the API correctly refused (found in review of the
+    embedding routes, and confirmed to be what a real client receives).
+
+    Every float field in this API has the hole, not only the embedding ones, so
+    it is closed once here rather than per route. Only the echoed value is
+    touched: the location, the type and the message are the default handler's,
+    since the point is to *deliver* the 422 rather than to reword it.
+    """
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": jsonable_encoder(exc.errors(), custom_encoder={float: _finite})},
+    )
+
+
+def _finite(value: float) -> float | str:
+    # `repr` for the values JSON cannot spell, so the caller still sees which
+    # coordinate it sent rather than a hole where the input should be.
+    return value if isfinite(value) else repr(value)
 
 
 @app.exception_handler(StarletteHTTPException)

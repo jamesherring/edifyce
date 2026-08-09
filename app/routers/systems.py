@@ -1289,7 +1289,11 @@ async def get_embedding_coverage(
         models=found.models,
         pending=[
             PendingEmbedding(
-                label=entry.label, formal_system_id=entry.system_id, text=entry.text
+                label=entry.label,
+                formal_system_id=entry.system_id,
+                text=entry.text,
+                digest=entry.digest,
+                stale=entry.stale,
             )
             for entry in found.pending
         ],
@@ -1351,7 +1355,10 @@ async def put_embeddings(
         session,
         owned,
         payload.model,
-        [(entry.label, entry.embedding, entry.tokens) for entry in payload.entries],
+        [
+            (entry.label, entry.embedding, entry.digest, entry.tokens)
+            for entry in payload.entries
+        ],
     )
     await session.commit()
     return EmbeddingUploadOutcome(

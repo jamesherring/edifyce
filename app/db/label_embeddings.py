@@ -183,11 +183,18 @@ def digest_of(text: str) -> str:
 
 @dataclass(frozen=True)
 class Pending:
-    """A label with no vector under the model asked about, and its text."""
+    """A label wanting a vector under the model asked about, and its text.
+
+    Both kinds: never embedded, and embedded against prose that has since
+    changed. A backfill has to do both and this is the only place either one's
+    text can be got.
+    """
 
     label: str
     system_id: uuid.UUID
     text: str
+    digest: str
+    stale: bool = False
 
 
 @dataclass(frozen=True)
@@ -236,9 +243,17 @@ async def store_embeddings(
     session: AsyncSession,
     system_id: uuid.UUID,
     model: str,
-    vectors: Iterable[tuple[str, list[float], int | None]],
+    vectors: Iterable[tuple[str, list[float], str, int | None]],
 ) -> tuple[int, list[str]]:
-    """Upsert ``(label, embedding, tokens)`` triples, returning kept and skipped.
+    """Upsert ``(label, embedding, digest, tokens)`` rows, returning kept and skipped.
+
+    The **caller's** digest is stored, not one taken of the prose as it stands
+    now. Hashing the current text here would lose the race the digest exists to
+    catch: a description edited between the caller reading its pending text and
+    posting the vector would be recorded as though the vector were of the new
+    prose (found in review). Storing what the caller says it embedded makes a
+    vector that arrives already behind the prose read as stale at once, which is
+    what it is.
 
     A label this system documents nothing about is **skipped rather than
     refused**, and the skipped labels come back by name. A caller embedding a
@@ -247,23 +262,24 @@ async def store_embeddings(
     because one of them went away would make the whole job unresumable.
     """
     batch = list(vectors)
-    labels = list({label for label, _, _ in batch})
+    labels = list({label for label, _, _, _ in batch})
     # Both lookups scoped to the batch's own labels. Reading the system's whole
     # description table instead would be 50,550 rows of prose per 256 vectors —
     # which is the scale this route exists for, so it is the scale to get right.
-    described = {
-        row.label: row
-        for row in await session.execute(
-            select(
-                LabelDescriptionRow.label,
-                LabelDescriptionRow.title,
-                LabelDescriptionRow.text,
-            ).where(
-                LabelDescriptionRow.formal_system_id == system_id,
-                LabelDescriptionRow.label.in_(labels),
+    #
+    # Only the labels, not their prose: what a vector is *of* is the caller's
+    # digest now, so this is asking "does this system document that label" and
+    # nothing more.
+    described = set(
+        (
+            await session.scalars(
+                select(LabelDescriptionRow.label).where(
+                    LabelDescriptionRow.formal_system_id == system_id,
+                    LabelDescriptionRow.label.in_(labels),
+                )
             )
-        )
-    }
+        ).all()
+    )
     existing = {
         row.label: row
         for row in await session.scalars(
@@ -281,14 +297,10 @@ async def store_embeddings(
     # update of the same row — it is not skipped, it is simply not another row.
     written: set[str] = set()
     skipped: list[str] = []
-    for label, embedding, tokens in batch:
-        described_row = described.get(label)
-        if described_row is None:
+    for label, embedding, digest, tokens in batch:
+        if label not in described:
             skipped.append(label)
             continue
-        digest = digest_of(
-            embeddable_text(described_row.title, described_row.text)
-        )
         row = existing.get(label)
         if row is None:
             row = LabelEmbeddingRow(
@@ -407,16 +419,28 @@ async def coverage(
         .order_by(LabelDescriptionRow.label)
     ):
         text = embeddable_text(row.title, row.text)
+        wanted = digest_of(text)
         digest = stored.get(row.label)
-        if digest is None:
-            if len(pending) < pending_limit:
-                pending.append(
-                    Pending(label=row.label, system_id=system_id, text=text)
-                )
-            continue
-        if digest == digest_of(text):
-            # Matched: this vector is of the prose the system now carries.
+        if digest == wanted:
+            # Matched: this vector is of the prose the system now carries, and
+            # there is nothing to do about it.
             current.discard(row.label)
+            continue
+        # Never embedded, or embedded against prose that has since moved. Both
+        # are work, both need this text, and this route is the only place to get
+        # it — a stale label that appeared in the count and nowhere else left a
+        # re-imported system stuck at `stale > 0` with no way to act (found in
+        # review).
+        if len(pending) < pending_limit:
+            pending.append(
+                Pending(
+                    label=row.label,
+                    system_id=system_id,
+                    text=text,
+                    digest=wanted,
+                    stale=digest is not None,
+                )
+            )
     # What is left is every vector whose prose has moved *or* gone — the same
     # question `neighbours` answers per hit, asked of the whole system.
     stale = len(current)

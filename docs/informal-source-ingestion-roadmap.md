@@ -563,6 +563,23 @@ input; and the batch bound sat in the route rather than on the schema, so it was
 announced only after the whole body had been read and turned into floats, which is
 no bound at all on a body meant to be large.
 
+A second pass found three more, and the sharpest is about the digest. Hashing the
+*current* prose at upload time loses the very race the digest exists to catch: a
+description edited between the caller reading its pending text and posting the
+vector was hashed as though the vector were of the new prose, recording a stale
+vector as current. The caller now echoes the digest it was handed and **that** is
+what is stored, so what is recorded is what the vector is actually of — and one
+that arrives already behind the prose reads as stale at once, which is true.
+Beside it: a stale label appeared in the count and nowhere else, leaving a
+re-imported system stuck at `stale > 0` with no way to act, since this route is the
+only place its canonical text can be got — `pending` now lists what has changed
+along with what was never embedded. And a coordinate JSON *can* carry but a vector
+cannot — `1e400`, which parses to `inf` — reached pgvector and became a 500;
+refusing it turned out to need a validation-error handler as well, because FastAPI
+echoes the offending value back and JSON has no literal to echo it with, so the
+422 could not be rendered either. That hole belongs to every float field in the
+API, so it is closed once in `app/main.py`.
+
 **The notation direction.** §3's option B — notation as a second input grammar —
 stays refused, for the reason §4 gives: a LaTeX-shaped input would shorten the
 translation distance and would also make `+` ambiguous between a constant and a
