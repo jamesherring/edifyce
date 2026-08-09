@@ -8,13 +8,24 @@ descending order of how much they change the plan:
 1. The phase is really **two** phases with very different readiness, and the
    equational one has a **prerequisite nobody has designed** — a system cannot say
    which of its productions means equality.
-2. **Congruence is not free.** A congruence closure merges `f(a)` with `f(b)`
-   whenever `a = b`, by construction; in an arbitrary declared logic that step is a
-   *theorem schema*, not a given, and set.mm proves it one position at a time. An
-   e-graph would assume for free what a corpus spends its bulk establishing.
+2. **Congruence is not free — for the equational half.** A congruence closure merges
+   `f(a)` with `f(b)` whenever `a = b`, by construction; in an arbitrary declared
+   logic that step is a *theorem schema*, not a given, and set.mm proves it one
+   position at a time. An e-graph would assume for free what a corpus spends its
+   bulk establishing. Two things follow, and they cut in opposite directions: the
+   **definitional half already has congruence granted** — `_rewrites_once` descends
+   through arbitrary constructors today, licensed metatheoretically and guarded by
+   the conservativity checks — while the equational half must **derive** it, by
+   harvesting congruence lemmas from what the library has proved rather than asking
+   an author to declare it.
 3. The definitional half is nearly buildable but is blocked on a smaller thing the
    roadmap does not mention: the definitional rewrite relation is acyclic but
    **not confluent**.
+
+The first of those makes the definitional half's soundness argument *settled*
+rather than merely available, which is the single most useful thing in this note:
+a definitional merge is sound **iff** the checker would accept the corresponding
+chain of definitional steps, and that is discharged by reading code that exists.
 
 Phase 1 shipped ([search-phase1-fingerprint.md](search-phase1-fingerprint.md)).
 This is what comes next, and what has to be settled first.
@@ -191,32 +202,93 @@ and, worse, would assume it for operators nobody has proved it for. Terms would
 merge that the system cannot prove equal. That is an unsound digest feeding dedup,
 which is the consequence the next section argues is the expensive one.
 
-Three ways to supply congruence, and this is a decision:
+### For definitions it is already granted, and already guarded
 
-1. **Trust it.** One global declaration that the equality is a congruence, in the
-   `denotes_constant` idiom. Cheap, and wrong invisibly.
-2. **Discharge it per operator, as a proof obligation.** The repo already has this
-   machinery and this idiom: `SystemRelationObligationRow` records one obligation
-   per source primitive, discharged either by a target primitive or by *a theorem
-   the target has proved*, with a `status` saying whether it has been. Declaring
-   congruence for `f` would incur an obligation discharged by citing `f`'s
-   congruence lemma. Nothing new is invented; an existing pattern gains a second
-   caller.
-3. **Restrict propagation to operators that have one.** The closure pushes equality
-   through a constructor only where the library supplies the lemma, and declines
-   elsewhere.
+The definitional half is exempt, and for a better reason than "it happens not to
+need it". `_rewrites_once` does not only match at the root:
 
-**Prefer 3, mechanised by 2.** It fails closed, it needs no global act of trust,
-and it has a property worth stating plainly: the theory then **grows as the library
-proves congruence lemmas**. Retrieval merges exactly what the corpus has earned and
-never more. That is the "evolving" character the roadmap wants from Phase 3's
-embedding, arriving here instead — and arriving as a soundness argument rather than
-an aspiration.
+> **(2) The rewrite happens strictly inside:** source and target must share a
+> constructor and differ in exactly one child, where the rewrite recurses.
 
-Note what this does *not* touch. An unfold is licensed by the kernel's own
-definitional step at a specific position, not by congruence propagation, so the
-**definitional half needs none of this**. That is a third independent reason the
-split below is the right shape.
+So a definitional step **already rewrites at arbitrary depth, through arbitrary
+constructors, with no lemma required**. The checker grants itself full congruence
+for definitional replacement today, and has done since before any of this was
+contemplated.
+
+That is sound for a reason worth stating precisely, because it is the whole
+asymmetry between the two halves. A definition is *notational abbreviation*: the
+defined form and its expansion denote the same object by fiat, so replacing one
+with the other inside any context preserves meaning. The justification is
+**metatheoretic**, not a claim about some object-language predicate being a
+congruence — which is exactly why the conservativity work carries the weight it
+does. Non-circularity and freshness are what make "it is only notation" true, and
+therefore what license the unrestricted descent above.
+
+Two consequences. The first is that the definitional half needs nothing from this
+section — a third independent reason the split below is the right shape. The
+second is sharper, and it settles the gap the next section opens:
+
+> A definitional merge is sound **iff** the checker would accept the corresponding
+> chain of `_rewrites_once` steps.
+
+The canonicaliser is then an *optimisation of a decision the kernel already makes*,
+not a second and weaker authority — which is the soundness argument of the kind
+Phase 1 had and this note otherwise lacks. Nothing has to be built to earn it; it
+is discharged by reading code that exists.
+
+### For the declared equality: derive it, do not declare it
+
+The equational half has no such exemption, and the useful question is what supplies
+congruence with the least authoring burden. The answer is a **harvester**, and the
+infrastructure for it already exists.
+
+Scan the library for theorems of the congruence shape, per (operator, position):
+
+```
+x = y  ⊢  f(…, x, …) = f(…, y, …)
+```
+
+For set.mm that picks up `oveq1`, `oveq2`, `fveq2`, `eleq1`, `breq1` and the rest
+of the family automatically — **no authoring burden at all**, and the result is
+grounded in what the corpus has actually proved rather than in a tick-box. It is
+the same species of classifier as `metamath/definitions.py`, which already
+recognises a `$a` as a definition by its shape plus a declared equivalence.
+
+It can also run **from rows, without parsing**: premise terms are cached beside
+conclusions under `schema_digest` — `promoted_theorems.py` says the digest is what
+tells whether the conclusion "and every premise term below" still means anything —
+so the harvester is a structural query over stored terms. That is the
+verification-from-rows arc paying off again.
+
+**Why per-position, and not one universal rule.** The attractive alternative is to
+detect a Leibniz rule — `a = b, φ(a) ⊢ φ(b)` — and get congruence everywhere from a
+single check. It is not available here: `unify` is **first-order**, so a
+metavariable stands for a term rather than a function, and `φ(a)` is not
+expressible as a rule schema. Per-position congruence is therefore not a Metamath
+quirk being inherited; it is a structural consequence of first-order schemas, and
+it is why set.mm has the `oveq` family in the first place. Harvesting is not the
+easier mechanism, it is the only one.
+
+### The resulting order
+
+1. **Harvest.** Derive congruence per (operator, position) from proven theorems.
+   Free to the author, grounded in the corpus, and it is where any real library's
+   evidence already is.
+2. **Obligation, as the fallback.** Where harvesting finds nothing and someone wants
+   the merge anyway, `SystemRelationObligationRow` is the existing idiom: one
+   obligation, discharged by a theorem the system has proved, with a `status`
+   saying whether it has been. An existing pattern gains a second caller rather
+   than a new mechanism being invented.
+3. **Global trust, only if someone argues for it.** One declaration that the
+   equality is a congruence everywhere, in the `denotes_constant` idiom. Cheap, and
+   wrong invisibly; listed for completeness rather than recommended.
+
+Propagate only where evidence exists. That **fails closed** and degrades
+gracefully: an operator with no congruence lemma is simply not propagated through,
+and the digest is coarser rather than unsound. It also gives the phase a property
+the roadmap wanted from Phase 3 — the theory **grows as the library earns it** —
+except that here it arrives as a soundness argument rather than an aspiration, and
+without asking anyone to write a declaration.
 
 ## Not confluent: the definitional half's real blocker
 
@@ -316,17 +388,18 @@ statements are one. The roadmap's own criterion is right —
 — but it is stated as a *test plan* (generate equal pairs and near-miss unequal
 pairs, assert zero false merges on the negatives) where Phase 1 had a *proof*: a
 position-local argument that compatibility holds for every unifiable pair. A
-sampled test cannot establish an "only if". **This phase needs a soundness
+sampled test cannot establish an "only if". **The equational half needs a soundness
 argument of the same kind Phase 1 had, and none has been written.**
 
-The argument is available for the definitional half, and it is the reason to build
-that half first: each merge is witnessed by a chain of `unfold` steps, and `unfold`
-already refuses a step whose capture proviso or side-condition fails. A merge that
-is *derivable by the kernel's own definitional step* is sound by construction, and
-the canonicaliser is then an optimisation of something the checker could verify —
-not a second, weaker authority. That framing is what makes the definitional half
-defensible; nothing analogous exists yet for the equational half, where a merge
-rests on a declaration (above) that nothing checks.
+For the definitional half the argument is not merely available but **settled**, and
+it is the reason to build that half first. Each merge is witnessed by a chain of
+`unfold` steps; `unfold` already refuses a step whose capture proviso or
+side-condition fails; and `_rewrites_once` already licenses the descent through
+arbitrary constructors that makes such a chain reach a subterm at all (above). So a
+merge is sound exactly when the checker would accept the corresponding chain, and
+the canonicaliser is an optimisation of a decision the kernel already makes rather
+than a second, weaker authority. Nothing analogous exists yet for the equational
+half, where a merge rests on congruence that has to be evidenced first.
 
 Two known ways the definitional argument is not automatic, both already present in
 the engine:
@@ -419,14 +492,16 @@ the two must agree that the *only* interesting events are theory-changing ones.
 ## Decisions to take before any code
 
 1. **How a system declares equality, and how congruence is evidenced.** The blocking
-   one, and it is two halves rather than one. The declaration follows
-   `denotes_constant`: a declared property on a production, parameterised by the
-   sort it relates (set.mm needs `wb` *and* `wceq`), defaulted off, validated where
-   the grammar can contradict it. The congruence half is separate and should not be
-   folded into the same tick — prefer per-operator obligations over a global act of
-   trust, per that section. Settle both against the Metamath importer as first
-   caller: it already holds the equality knowledge in `EQUIVALENCES`, and set.mm
-   already contains the congruence lemmas an obligation would cite.
+   one, and it is two halves that want different mechanisms. The *declaration*
+   follows `denotes_constant`: a declared property on a production, parameterised by
+   the sort it relates (set.mm needs `wb` *and* `wceq`), defaulted off, validated
+   where the grammar can contradict it — there is no way to derive this one, since
+   nothing structural separates `↔` from `→`. *Congruence* should not be folded into
+   the same tick, because it can be **derived**: harvest it per (operator, position)
+   from proven theorems, and fall back to an obligation only where the harvest comes
+   up empty. Settle both against the Metamath importer as first caller: it already
+   holds the equality knowledge in `EQUIVALENCES`, and set.mm already contains the
+   congruence lemmas the harvester would find.
 2. **Fold, refuse, or e-graph** for the shared-defined-form case, per the
    non-confluence section. This decides whether the canonical key is a term or an
    e-class.
@@ -441,26 +516,57 @@ the two must agree that the *only* interesting events are theory-changing ones.
 6. **Whether `theory_digest` is stored at all**, and if so what invalidates it and
    what guards a stale one.
 
+## The option that makes congruence moot
+
+Worth naming before the recommendation, because it is not merely a smaller version
+of the phase and might be the right permanent answer.
+
+**Never merge on object-language equality at all.** `theory_digest` is the
+definitional normal form and nothing else; proven equations feed *ranking* — a
+candidate whose conclusion is an equational variant of the goal sorts higher —
+rather than identity. Under that design:
+
+- congruence never arises, because the only merges are definitional and those are
+  already licensed (above);
+- the equality declaration is not needed either, since a `Definition` carries its
+  own orientation;
+- the `⊆`/`∀` merge still lands, which is the roadmap's own motivating example and
+  the thing Phase 1's boundary section holds up as what syntactic search cannot do;
+- and dedup keeps a meaning that is defensible — "already proved, up to notation"
+  — rather than one resting on an unevidenced congruence.
+
+What is given up is `a + b` merging with `b + a` *as one statement*. Whether that
+is a loss depends entirely on how often a real corpus contains such pairs, which is
+the measurement the recommendation asks for. If the answer is "rarely", this is not
+a stepping stone toward the equational half — it is the finished feature, and the
+equational half is a Phase 3 idea that should be argued for on its own evidence.
+
 ## Recommendation
 
 **Split the phase, and build the definitional half first.**
 
-The two halves are presented as one and are not comparable. The definitional half
-has its input in structured form — a `Definition` **is** an oriented equation in
-the data, so it needs no equality declaration at all — its termination argument
-already proven by the conservativity check, its binder canonicalisation already
-solved by `Bound` and `alpha_digest`, no dependence on congruence (an unfold is
-licensed at a position by the kernel's own definitional step), a soundness argument
-available in those same terms, and it delivers the roadmap's own motivating example
-(`df-ss`, the `⊆`/`∀` merge that Phase 1's boundary section holds up as the thing
-syntactic search cannot do). Its blockers are decisions 2 and 4 — non-confluence
-and whether a match explains itself — neither of which needs a new engine concept.
+The two halves are presented as one and are not comparable. Everything the
+definitional half needs, it already has:
 
-The equational half needs two prerequisites the tree does not have: a way for a
-system to declare what equality is, and evidence that the equality is a congruence
-for the operators being merged through. It also has no termination without a
-saturation budget. It is a phase of its own and its first deliverable is decision 1,
-not code.
+| what it needs | where it already is |
+|---|---|
+| an oriented equation | a `Definition` **is** one in the data — no equality declaration |
+| termination | the conservativity check's acyclic "is defined using" relation |
+| binder canonicalisation | `Bound` is index-canonical; `alpha_digest` hashes it |
+| congruence | `_rewrites_once` already descends through arbitrary constructors, licensed metatheoretically and guarded by conservativity |
+| a soundness argument | sound **iff** the checker accepts the corresponding chain of definitional steps |
+
+And it delivers the roadmap's own motivating example — `df-ss`, the `⊆`/`∀` merge
+that Phase 1's boundary section holds up as the thing syntactic search cannot do.
+Its remaining blockers are decisions 2 and 4, non-confluence and whether a match
+explains itself, neither of which needs a new engine concept.
+
+The equational half needs one prerequisite the tree does not have and one it can
+derive: a way for a system to **declare** what equality is, which nothing
+structural can supply, and **evidence of congruence** for the operators being
+merged through, which a harvester can. It also has no termination without a
+saturation budget. It is a phase of its own, its first deliverable is decision 1
+rather than code, and the section above argues it may not be wanted at all.
 
 Doing them together means the definitional merge — the valuable, defensible,
 nearly-ready piece — waits on an unsolved representation question it does not need.

@@ -159,8 +159,13 @@ is acyclic but **not confluent**, since two definitions may share a defined form
 so a term can have two normal forms and therefore two digests. The note's
 recommendation is to split the phase and build the definitional half first — which
 needs no equality declaration, since a definition already *is* an oriented
-equation, and no congruence, since an unfold is licensed at a position by the
-kernel's own definitional step.
+equation, and needs nothing new for congruence either: `_rewrites_once` already
+descends through arbitrary constructors, licensed metatheoretically because
+notation is abbreviation and guarded by the conservativity checks. That makes the
+definitional half's soundness argument *settled* rather than merely available — it
+is sound iff the checker would accept the corresponding chain of definitional
+steps. For the equational half the note argues congruence should be **derived**, by
+harvesting congruence lemmas from proven theorems, rather than declared.
 
 **Unlocks**
 
