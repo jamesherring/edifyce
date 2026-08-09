@@ -61,6 +61,19 @@ class Hypothesis:
     # Declaration order across the whole file, so an assertion's mandatory
     # hypotheses can be ordered without tracking the scope stack afterwards.
     position: int
+    # How many assertions were declared before this hypothesis — the same space
+    # `Database.position` and `Commentary.at` use, and a different question from
+    # `position`, which counts hypotheses. It is what places a hypothesis among
+    # the *statements*: `position` cannot, so anything partitioning a file by
+    # where a statement sits (a layered import, a section) has nothing else to
+    # read. A file-scope `$f` declared before any assertion has ``at == 0``.
+    at: int = 0
+    # The `$( … $)` comment immediately preceding it, verbatim, or None — the same
+    # convention and the same field an assertion carries. A hypothesis is a
+    # labelled statement and `set.mm` documents 426 of them ("Minor premise for
+    # modus ponens.", "Let variable ` ph ` be a wff."), which is prose about a
+    # citable label with nowhere else to read it from.
+    comment: str | None = None
 
     @property
     def variable(self) -> str:
@@ -358,6 +371,8 @@ def parse(text: str) -> Database:
                 tokens=tuple(body[1:]),
                 floating=keyword == "$f",
                 position=position,
+                at=len(database.order),
+                comment=preceding.get(label_index),
             )
             position += 1
             if hypothesis.floating and len(hypothesis.tokens) != 1:

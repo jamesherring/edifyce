@@ -683,3 +683,33 @@ def test_claims_of_several_kinds_come_back_together(client, db):
     }
     # A directive with no preposition claims about the subject alone.
     assert next(c for c in body["claims"] if c["kind"] == "primitive")["object"] is None
+
+
+def test_a_hypothesis_description_is_served_like_any_other_label(client, db):
+    # No API change was needed: `label_descriptions` is keyed by label and the
+    # label route reads any of them, so a documented `$e` became readable the
+    # moment the parser stopped throwing its comment away.
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            report = import_corpus(
+                session,
+                parse(
+                    AVOIDING.replace(
+                        "$( Principle of identity. $)",
+                        "${\n$( The premise of id2. $)\nid2.1 $e |- ( ph -> ( ps -> ph ) ) $.\n"
+                        "id2 $p |- ( ph -> ( ps -> ph ) ) $= ( ax-1 ) ABC $.\n$}\n"
+                        "$( Principle of identity. $)",
+                    )
+                ),
+                name="h",
+            )
+            session.commit()
+            system_id = str(report.system_id)
+    finally:
+        engine.dispose()
+
+    body = client.get(f"/api/formal-systems/{system_id}/labels/id2.1")
+
+    assert body.status_code == 200, body.text
+    assert body.json()["text"] == "The premise of id2."
