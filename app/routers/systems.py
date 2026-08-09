@@ -58,7 +58,7 @@ from app.routers._common import (
 )
 from app.db.descriptions import LabelDescriptionRow
 from app.db.descriptions_mapping import citing_labels, load_description, works_cited
-from app.db.label_search import search_labels
+from app.db.label_search import MAX_ALTERNATIVES, search_labels
 from app.db.lineage import spine_ids
 from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
 from app.db.models import Proof, ProofFolder, User
@@ -1163,6 +1163,7 @@ async def search_label_descriptions(
     system_id: uuid.UUID,
     q: list[str] = Query(
         ...,
+        max_length=MAX_ALTERNATIVES,
         description=(
             "Words to look for in a label, its title, or its prose. Every word "
             "must appear somewhere in the same label's record. Repeat the "

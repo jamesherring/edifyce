@@ -33,7 +33,7 @@ from app.db.models import Proof
 from app.db.session import get_session
 from app.main import app
 from tests.database import async_url, create_tables, database_url, enable_foreign_keys
-from app.db.label_search import EXCERPT_WIDTH, _excerpt
+from app.db.label_search import EXCERPT_WIDTH, MAX_ALTERNATIVES, _excerpt
 from tests.test_descriptions_api import LAYERED
 from tests.test_descriptions_store import SOURCE
 from tests.test_proofs_api import _TABLES
@@ -638,3 +638,68 @@ def test_a_single_query_still_answers_exactly_as_before(client, db):
     assert labels(one) == labels(same)
     assert one["searched"] == same["searched"] == [["negation"]]
     assert {hit["matched_query"] for hit in one["items"]} == {0}
+
+
+def test_the_alternative_credited_is_the_one_that_earned_the_rank(client, db):
+    # The ranking takes the best tier across alternatives, so attributing by
+    # "first to match anywhere" let a broad guess steal credit from the specific
+    # one — inverting the very signal the field exists to give. `wff` reaches
+    # `wn` only through its title; `wn` is the label.
+    system_id, _ = seed(db)
+
+    body = search_many(client, system_id, ["wff", "wn"])
+
+    (hit,) = [h for h in body["items"] if h["label"] == "wn"]
+    assert hit["matched"] == "label"
+    # …so the credit goes to the alternative that reached the label tier.
+    assert hit["matched_query"] == 1
+
+
+def test_the_excerpt_comes_from_the_alternative_credited(client, db):
+    # Flattening every alternative's tokens let the excerpt come from one the hit
+    # is not attributed to — and gave prose to label matches that had none.
+    system_id, _ = seed(db)
+
+    alone = search(client, system_id, "df-neg")["items"][0]
+    with_other = [
+        h
+        for h in search_many(client, system_id, ["df-neg", "falsehood"])["items"]
+        if h["label"] == "df-neg"
+    ][0]
+
+    assert alone["excerpt"] is None
+    # Credited to `df-neg`, which is a label match, so still no excerpt.
+    assert with_other["matched_query"] == 0
+    assert with_other["excerpt"] is None
+
+
+def test_an_empty_alternative_keeps_the_others_indices(client, db):
+    # Dropping a blank alternative silently shifted every index after it, so
+    # `matched_query` stopped indexing what the caller sent.
+    system_id, _ = seed(db)
+
+    body = search_many(client, system_id, ["", "negation"])
+
+    assert [hit["matched_query"] for hit in body["items"]] == [1] * len(body["items"])
+    # And `searched` keeps the blank in place, so the two line up.
+    assert body["searched"] == [[], ["negation"]]
+
+
+def test_too_many_alternatives_are_refused(client, db):
+    # Words within an alternative were capped from the start and the alternatives
+    # themselves were not, leaving the expensive axis unbounded on a route an
+    # anonymous caller may hit: 500 of them cost 1.59 s in plan time alone.
+    system_id, _ = seed(db)
+
+    response = client.get(
+        f"/api/formal-systems/{system_id}/labels",
+        params=[("q", f"w{n}") for n in range(MAX_ALTERNATIVES + 1)],
+    )
+    assert response.status_code == 422, response.text
+
+    # And the cap itself is accepted.
+    ok = client.get(
+        f"/api/formal-systems/{system_id}/labels",
+        params=[("q", f"w{n}") for n in range(MAX_ALTERNATIVES)],
+    )
+    assert ok.status_code == 200, ok.text

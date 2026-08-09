@@ -523,6 +523,19 @@ Each result says **which** alternative found it, which is the feedback half — 
 model that proposed five phrasings learns which one the corpus actually uses, and
 carries that into the next lookup.
 
+Review found the attribution was the hard part, and in the same way three times:
+the *rank* is the best tier any alternative achieved, so crediting the first
+alternative that matched anywhere let a broad guess steal the specific one's
+credit — inverting the signal the field exists to give — and let the excerpt come
+from an alternative the hit is not attributed to. Dropping alternatives that
+tokenise to nothing shifted every index after them besides, so `matched_query`
+stopped indexing what the caller sent. The tier is now computed per alternative in
+Python beside the SQL `CASE` that decides the same thing, and the index is aligned
+with the caller's own list. The count of alternatives is capped too — words within
+one were bounded from the start and the alternatives were not, which left the
+expensive axis open on an anonymously-readable route (500 of them measured at
+1.59 s in plan time alone).
+
 Stemming and BM25-style ranking stay open as an *independent* improvement to this
 route, not as a strategy: true BM25 needs `pg_search`, which managed Postgres does
 not offer, and native `ts_rank` has no corpus-wide IDF — which is the valuable

@@ -1692,7 +1692,13 @@ export const api = {
 			// bridge a query that shares no *word* with the prose — no lexical
 			// method can — so the caller supplies the alternatives it thinks the
 			// corpus might use, and each hit says which one found it.
-			const alternatives = Array.isArray(q) ? q : [q];
+			// An empty array would emit no `q` at all, and the parameter is
+			// required — so the caller would get a 422 instead of the backend's
+			// deliberate empty-query answer, which is an empty page plus
+			// `documented` (found in review).
+			const alternatives = (Array.isArray(q) ? q : [q]).length
+				? (Array.isArray(q) ? q : [q])
+				: [''];
 			const query = new URLSearchParams();
 			for (const one of alternatives) query.append('q', one);
 			if (params?.limit != null) query.set('limit', String(params.limit));

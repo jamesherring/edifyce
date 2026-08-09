@@ -85,6 +85,17 @@ if TYPE_CHECKING:
 # nothing and each token is another `LIKE` over the whole haystack.
 MAX_TOKENS = 8
 
+# How many alternatives one search may carry. Words within an alternative were
+# capped from the start and the alternatives themselves were not, which left the
+# expensive axis unbounded on an anonymously-readable route: each one adds its
+# tokens to the match *and* to every rank tier, twice over for the two haystacks.
+# Measured on the fixture, in statement build and plan cost alone — 1 alternative
+# 27 ms, 200 alternatives 486 ms, 500 alternatives 1.59 s (found in review).
+#
+# Eight, matching `MAX_TOKENS`: expansion is a handful of guesses at what a corpus
+# calls something, and a caller with fifty is not expanding, it is enumerating.
+MAX_ALTERNATIVES = 8
+
 # How much prose an excerpt carries. Enough for the sentence the match sits in,
 # short enough that twenty of them are still a list.
 EXCERPT_WIDTH = 240
@@ -348,8 +359,12 @@ async def search_labels(
     common case on a rank with four values, and without a total order two reads of
     page 2 are two different pages.
     """
-    variants = [words for words in (tokens_of(query) for query in queries) if words]
-    if not variants:
+    # Aligned with the caller's own list, empties included, so `matched_query`
+    # indexes what it *sent* rather than what survived tokenising — dropping a
+    # blank alternative silently shifted every index after it (found in review).
+    variants = [tokens_of(query) for query in queries]
+    usable = [words for words in variants if words]
+    if not usable:
         # A caller who asked for nothing gets nothing, rather than the corpus: an
         # empty `AND` is vacuously true and would page the whole library.
         return Hits(
@@ -364,8 +379,8 @@ async def search_labels(
         title=LabelDescriptionRow.title,
         body=LabelDescriptionRow.text,
         system_id=LabelDescriptionRow.formal_system_id,
-        queries=queries,
-        variants=variants,
+        queries=[query for query in queries if query.strip()],
+        variants=usable,
         spine=spine,
         source=_DESCRIPTION,
     )
@@ -384,8 +399,8 @@ async def search_labels(
         title=Proof.title,
         body=Proof.description,
         system_id=Proof.formal_system_id,
-        queries=queries,
-        variants=variants,
+        queries=[query for query in queries if query.strip()],
+        variants=usable,
         spine=spine,
         source=_PROOF,
     )
@@ -443,8 +458,8 @@ async def search_labels(
                 label=row.label,
                 system_id=row.system_id,
                 title=row.title,
-                excerpt=_excerpt(row.body, [w for words in variants for w in words]),
-                matched_query=_which(row, variants),
+                excerpt=_excerpt(row.body, variants[_which(row, queries, variants)]),
+                matched_query=_which(row, queries, variants),
                 matched=_MATCHED[row.rank],
                 proof_id=links.get((row.system_id, row.label), (None, None))[0],
                 proof_title=links.get((row.system_id, row.label), (None, None))[1],
@@ -584,24 +599,55 @@ def nearest(
     return collapsed
 
 
-def _which(row: object, variants: Sequence[Sequence[str]]) -> int:
-    """Which alternative found this row — the first whose every word is in it.
+def _tier(row: object, query: str, tokens: Sequence[str]) -> int:
+    """The rank one alternative achieves on one row — `_branch`'s CASE, in Python.
+
+    Kept beside that expression deliberately: the two decide the same thing about
+    the same row, and a hit whose `matched` says "label" while `matched_query`
+    names an alternative that only reached the title is reporting two different
+    answers to one question (found in review).
+    """
+    label = (row.label or "").lower()
+    title = (row.title or "").lower()
+    body = (row.body or "").lower()
+    if label == query.strip().lower():
+        return _EXACT
+    if all(word in label for word in tokens):
+        return _LABEL
+    if all(word in title for word in tokens):
+        return _TITLE
+    if all(word in body for word in tokens):
+        return _TEXT
+    if all(word in f"{label} {title} {body}" for word in tokens):
+        return _SPREAD
+    # This alternative did not match at all; some other one put the row here.
+    return _SPREAD + 1
+
+
+def _which(
+    row: object, queries: Sequence[str], variants: Sequence[Sequence[str]]
+) -> int:
+    """Which alternative earned this row its rank, as an index into ``queries``.
+
+    **The one that reached the reported tier**, not merely the first that matched
+    somewhere. The ranking takes the best tier across alternatives, so attributing
+    by "first to match anywhere" let a broad guess steal the credit from the
+    specific one — `?q=wff&q=wn` reported `matched: "label"` against the
+    alternative that only reached the title, inverting the very signal the field
+    exists to give (found in review).
+
+    Ties within the winning tier go to the earliest, since the caller ordered its
+    alternatives and the earliest is the one it thought most likely.
 
     Attributed here rather than in SQL, over the page's twenty rows, because the
-    query already did the expensive half: adding a per-variant column to the
-    ranking would make the scan wider to answer a question about the handful of
-    rows that survive it.
-
-    "First" rather than "best" when several match, since the caller ordered its
-    alternatives and the earliest is the one it thought most likely.
+    query already did the expensive half: a per-alternative column would widen the
+    scan to answer a question about the handful of rows that survive it.
     """
-    haystack = " ".join(
-        part for part in (row.label, row.title or "", row.body or "") if part
-    ).lower()
-    for index, words in enumerate(variants):
-        if all(word in haystack for word in words):
-            return index
-    # Every returned row matched *something*, so this is unreachable by
-    # construction; 0 rather than a raise because a mis-attributed hint is not
-    # worth failing a search over.
-    return 0
+    best, found = _SPREAD + 1, 0
+    for index, tokens in enumerate(variants):
+        if not tokens:
+            continue
+        tier = _tier(row, queries[index], tokens)
+        if tier < best:
+            best, found = tier, index
+    return found
