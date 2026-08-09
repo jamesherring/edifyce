@@ -1053,6 +1053,32 @@ class TermProposalIn(BaseModel):
     sort: str | None = None
 
 
+class ScopePlacement(BaseModel):
+    """Where a new line sits relative to the subproof opened at ``opener``.
+
+    A paper's proof is full of case splits, inductions and "assume for
+    contradiction", and every one of them is a **subproof**
+    (docs/informal-source-ingestion-roadmap.md §4.6). A subproof is delimited by
+    *indentation* — a line indented past an opener is inside it, and one at or
+    left of the opener closes it — so placing a line in a subproof means choosing
+    its indent, and a caller should not have to know a proof's indent convention
+    to do that.
+
+    So the placement is named by the **opener's citation number**, which is what
+    a discharge cites anyway and what ``GET /proofs/{id}/structure`` reports:
+
+    * ``inside`` — within that subproof, at the indent its lines already use;
+    * ``outside`` — in the scope enclosing it, which is the position a
+      **discharge** is written at and the only way to get back out.
+
+    Omitted altogether, a line takes the scope of the line it is anchored to,
+    which is what every proposal did before subproofs were reachable.
+    """
+
+    opener: int = Field(ge=1)
+    placement: Literal["inside", "outside"]
+
+
 class LineProposal(BaseModel):
     """A new line, stated as structure and justified as structure.
 
@@ -1064,12 +1090,24 @@ class LineProposal(BaseModel):
     goal-directed caller wants, since a rule's antecedents must precede its
     conclusion. Omitted, the line is appended. ``rule`` defaults to the hole
     keyword, because stating a premise you have not proved *is* an open goal.
+
+    ``line_type`` and ``scope`` are the two halves of writing a **subproof**.
+    Which line type a line is written as decides whether it *opens* one — a
+    system declares that per line type, not per line — and where it is indented
+    decides which one it is in. Both default to the anchor line's, so a proposal
+    that names neither behaves exactly as it did before they existed.
     """
 
     statement: TermProposalIn
     rule: _Name128 = "?"
     antecedents: list[int] = Field(default_factory=list)
     before: int | None = Field(default=None, ge=1)
+    # Which of the system's line types to write this as. Naming one whose type
+    # declares a scope is how a subproof is *opened*; the anchor's own type is
+    # used when this is omitted. A type this proof has no line of yet is composed
+    # from its declared shape, so the first subproof of a proof is reachable.
+    line_type: _Name128 | None = None
+    scope: ScopePlacement | None = None
     apply: bool = False
 
 
@@ -1090,6 +1128,13 @@ class LineOutcome(BaseModel):
     valid: bool | None = None
     holes: list[int] = Field(default_factory=list)
     only_holes: bool = False
+    # Where the line actually landed: the opener of the subproof it is in (null
+    # at the proof root), and the kind of scope it opens if it opens one. Read
+    # back off the *checked* proof rather than echoed from the request, because
+    # indentation is what places a line and a line written at the wrong indent
+    # would otherwise report the scope it was meant to join.
+    scope: int | None = None
+    opens_scope: str | None = None
 
 
 class LineRemoval(BaseModel):

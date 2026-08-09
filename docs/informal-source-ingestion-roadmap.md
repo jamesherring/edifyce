@@ -489,7 +489,7 @@ direction — rendering a system's terms in a LaTeX-ish notation so a model
 recognises what it is looking at, which is already what `notation` does on the
 term-graph route.
 
-### 4.6 Scopes, which the corpus never exercised
+### 4.6 Scopes, which the corpus never exercised — *done*
 
 A paper's proof is full of case splits, inductions and "assume for contradiction"
 — all of which are **subproofs**. The structured write path cannot make one:
@@ -510,6 +510,65 @@ the structured path, not to discover the semantics:
 
 `dischargeable_openers` and the discharge half of the citation search already
 exist on the read side, which is the half that is usually harder.
+
+**It came to two fields, because a subproof is two facts.** `LineProposal` gains
+`line_type` and `scope`, and both default to the anchor line's, so a proposal
+written before subproofs were reachable is unaffected. Which line type a line is
+written as decides whether it *opens* a scope — the system declares that per type,
+not per line — and where it is indented decides which one it is *in*. The three
+things the section asks for fall out of those two: an opener is a proposal naming
+a scope-declaring type, a discharge is an ordinary line placed `outside` the
+opener it cites, and the guard is below.
+
+**A placement is named by the opener's citation number, never by a column.** That
+is the handle a caller already has — a discharge cites it and `/structure` reports
+it — and it means nothing has to learn a proof's indent convention. `outside` is
+not a special case: a line at the opener's *own* indent dedents past it, which is
+exactly what closes the subproof, so the discharge position is the opener's
+indent. `inside` is one step deeper, or whatever the subproof's existing lines
+already use, so a proof that indents by two stays indented by two.
+
+**Three things this turned up that the section did not anticipate.**
+
+*A line type's shape is composed from, once.* `restate` splices a new line out of
+an existing one and deliberately never reconstructs a type's syntax from its
+pattern. But a proof has no `assume` line to copy until it has an `assume` line,
+so under that rule no proof could ever open its first subproof. The type's
+declared shape is used when — and only when — there is nothing to copy, and the
+round trip already in place checks the result against the grammar exactly as it
+checks a spliced line. Only a shape whose sole placeholder is the formula is
+composed; anything else would be guessing at values (a `<reference>` cannot be
+filled before the line parses, and it does not parse with a placeholder in it),
+and the refusal says so rather than failing as if the statement were at fault.
+
+*The line type and the scope are round-tripped too, and neither follows from the
+term.* A digest says nothing about which type a line is — two types stating one
+formula produce the same term — so a proposal asking for `assume` could come back
+as an ordinary step, pass the existing check, and silently open no subproof at
+all. And since indentation is what places a line, *where it landed* is a fact
+about the checked proof rather than about the request: a caller told its discharge
+is at the root when it is still inside the block it meant to discharge has been
+told the opposite of what happened. Both are read back off the checked proof.
+
+*A subproof cannot be rejoined once it has closed.* Dedenting past an opener ends
+it and indenting does not reopen it, so `inside` is not a place a line can be
+appended to after the block has ended — it has to be written within it. This is
+the engine's mechanic rather than a limit of the route, it is the thing a caller
+will hit first, and it is caught by the scope round trip above with a message that
+says so.
+
+**The guard needed the other invariant, not a wider version of the same one.** The
+section asks for the renumbering guard extended over scope boundaries under *no
+line that was valid before may be invalid after* — but that invariant is exactly
+what does not catch this. A line's scope comes from the indents around it, so
+inserting a dedented line closes a subproof early and the lines below land in the
+parent, where they can go on checking perfectly well while meaning something else.
+The sharp case is a line whose citation reaches the *root*: dedenting it out of
+its subproof leaves the citation in scope and its verdict untouched, and all that
+moves is which block it is a step of — so a discharge would then consume a
+subproof that no longer contains it. `_rescoped_by_insert` is the companion to
+`_broken_by_insert`, comparing each surviving line's opener before and after, and
+it is pinned by a test checked to fail without it.
 
 ## 5. What stays out
 
@@ -554,10 +613,10 @@ halfway. Three properties the current surface does not have and will need:
 | | why here |
 |---|---|
 | 1. **Assumptions + provenance closure + `GET /proofs/{id}/provenance`** (§4.1, §4.2) — *done* | the honesty machinery; everything after it produces artifacts that would otherwise misreport what they rest on |
-| 2. **Goal-first statements** (§4.4) | the first call any translation makes, and the single path from vocabulary to stored term |
-| 3. **Formalization record** (§4.3) | pure storage, no engine reach; makes fidelity reviewable rather than assumed |
+| 2. **Goal-first statements** (§4.4) — *done* | the first call any translation makes, and the single path from vocabulary to stored term |
+| 3. **Formalization record** (§4.3) — *done* | pure storage, no engine reach; makes fidelity reviewable rather than assumed |
 | 4. **Lexical prose search** (§4.5) — *done* | cheap, and it is what alignment actually runs on |
-| 5. **Scopes in the structured path** (§4.6) | the first thing a real paper needs that a Metamath corpus never asked for |
+| 5. **Scopes in the structured path** (§4.6) — *done* | the first thing a real paper needs that a Metamath corpus never asked for |
 | 6. **Idempotency / batching** (§6) | when call volume proves it, not before |
 | 7. **Embeddings, then elaboration** | the two large ones, both behind interfaces that already exist |
 

@@ -142,7 +142,29 @@ export interface LineProposal {
 	rule?: string;
 	antecedents?: number[];
 	before?: number;
+	/** Which of the system's line types to write this as. Naming one whose type
+	 *  declares a scope is how a subproof is *opened*; the anchor line's own type
+	 *  is used when this is omitted. A type the proof has no line of yet is
+	 *  composed from its declared shape, so a first subproof is reachable. */
+	line_type?: string;
+	scope?: ScopePlacement;
 	apply?: boolean;
+}
+
+/** Where a new line sits relative to the subproof opened at `opener`.
+ *
+ *  A subproof is delimited by *indentation* — a line indented past an opener is
+ *  inside it, one at or left of the opener closes it — so placing a line in one
+ *  means choosing its indent, and a caller should not need to know a proof's
+ *  indent convention. Hence the opener's citation number, which is what a
+ *  discharge cites anyway and what `structure()` reports.
+ *
+ *  `outside` is the position a **discharge** is written at, and the only way back
+ *  out. Note a subproof cannot be rejoined once closed: indenting does not reopen
+ *  it, so `inside` needs a `before` that falls within the block. */
+export interface ScopePlacement {
+	opener: number;
+	placement: 'inside' | 'outside';
 }
 
 /** What a proposed line would do, or did. Mirrors `LineOutcome`. */
@@ -159,6 +181,12 @@ export interface LineOutcome {
 	valid: boolean | null;
 	holes: number[];
 	only_holes: boolean;
+	/** The opener of the subproof this line landed in, null at the proof root.
+	 *  Read off the *checked* proof rather than echoed from the request, because
+	 *  indentation is what places a line. */
+	scope: number | null;
+	/** The kind of scope this line opens, if it opens one. */
+	opens_scope: string | null;
 }
 
 /** Take a line back out, closing the gap its number leaves. Mirrors

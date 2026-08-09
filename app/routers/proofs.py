@@ -140,6 +140,7 @@ from app.schemas import (
     LineJustification,
     LineOutcome,
     LineProposal,
+    ScopePlacement,
     LineRemoval,
     LineRemovalOutcome,
     FailureOut,
@@ -2357,26 +2358,24 @@ async def propose_line(
             ),
         )
     if payload.before is None:
-        template = rows[-1]
+        anchor = rows[-1]
         number = len(rows) + 1
     else:
-        template = next((r for r in rows if r.number == payload.before), None)
-        if template is None:
+        anchor = next((r for r in rows if r.number == payload.before), None)
+        if anchor is None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"This proof has no line {payload.before}.",
             )
         number = payload.before
-    if template.opens_scope is not None or template.behaviour != "logical":
-        # The new line copies this one's shape, so it would inherit a line type
-        # that states nothing checkable.
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                f"Line {template.number} is not an ordinary logical line, so a "
-                "new statement cannot take its shape."
-            ),
-        )
+
+    # Three questions the anchor line used to answer at once, and a subproof
+    # needs apart (§4.6): *where* the line is inserted stays the anchor's, but
+    # its **indent** is what places it in a scope and its **shape** is what
+    # decides whether it opens one. Naming neither leaves both the anchor's,
+    # which is what every proposal written before subproofs were reachable does.
+    indent = _placement(rows, anchor, payload.scope)
+    shape = _shape_source(rows, anchor, payload.line_type)
 
     # Built once, under the lock, and reused by the verify — as `/cite` does, and
     # for the same reason: this route needs the grammar to resolve the proposal
@@ -2387,35 +2386,77 @@ async def propose_line(
     system = built.system
     compiled = built.compiled
 
+    opener_kind = _opens_scope(built, shape.line_type)
+    if opener_kind is not None and (payload.antecedents or "rule" in payload.model_fields_set):
+        # A scope opener is granted by fiat — it is a hypothesis, not a step —
+        # so it declares no reference field and there is nothing for a citation
+        # to go in. Refused rather than dropped: a caller that thinks it has
+        # justified an assumption has misunderstood what it just wrote.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Line type {shape.line_type!r} opens a subproof, which is "
+                "assumed rather than justified, so it takes no rule or "
+                "antecedents."
+            ),
+        )
+
     term, context = await resolve_proposal(
         session, payload.statement, system.id, compiled
     )
 
     # Rendered with no projection, which is `to_string` exactly — the source
     # spelling, because a production's render steps are its source template.
-    stated = compiled.restate(template.display, render(term))
+    formula = render(term)
+    if shape.display is not None:
+        stated = compiled.restate(shape.display, formula)
+    else:
+        # No line of this type to take a shape from, so it is composed from the
+        # type's declared shape instead. That is the one thing `restate` exists
+        # to avoid — but only because it is *unchecked* reconstruction that is
+        # unsafe, and the round trip below checks this one against the grammar
+        # exactly as it checks a spliced line. Without it a proof could never
+        # open its first subproof: there is no `assume` line to copy until there
+        # is an `assume` line.
+        stated = _stated_afresh(built, shape.line_type, formula)
+        if stated is None:
+            # Distinguished from the splice failing, because the two are acted on
+            # differently: this one is not about the statement at all, and the way
+            # out is to write a line of the type by hand once, after which the
+            # spliced path applies forever.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"This proof has no {shape.line_type!r} line to take a shape "
+                    "from, and that type's shape carries more than the formula, "
+                    "so one cannot be composed. Write one first."
+                ),
+            )
     if stated is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=(
-                f"Line {template.number} cannot carry this statement — it would "
-                "not read back as written."
+                f"A {shape.line_type!r} line cannot carry this statement — it "
+                "would not read back as written."
             ),
         )
-    stated = compiled.recite(stated, citation_text(payload.rule, payload.antecedents))
-    if stated is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Line {template.number} cannot carry that citation.",
+    if opener_kind is None:
+        stated = compiled.recite(
+            stated, citation_text(payload.rule, payload.antecedents)
         )
-    # `display` is stored *stripped* — the indent is its own column — so the
-    # template's has to be put back. Not cosmetic: indentation is what places a
-    # line in a subproof, and a line written at the root instead would silently
-    # escape the scope it was meant to join.
-    stated = " " * template.indent + stated
+        if stated is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"A {shape.line_type!r} line cannot carry that citation.",
+            )
+    # `display` is stored *stripped* — the indent is its own column — so it has
+    # to be put back. Not cosmetic: indentation is what places a line in a
+    # subproof, and a line written at the root instead would silently escape the
+    # scope it was meant to join.
+    stated = " " * indent + stated
 
     lines = proof.source.split("\n")
-    if not 0 <= template.position < len(lines):
+    if not 0 <= anchor.position < len(lines):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This proof's stored structure is stale. Verify it first.",
@@ -2436,7 +2477,7 @@ async def propose_line(
                 ),
             )
         lines = moved
-        lines.insert(template.position, stated)
+        lines.insert(anchor.position, stated)
         renumbered = [r.number + 1 for r in rows if r.number >= number]
     source = "\n".join(lines)
 
@@ -2473,6 +2514,42 @@ async def propose_line(
                 f"from {stated!r} is not the term proposed."
             ),
         )
+    # The *type* survives the same round trip, and it is its own question. A
+    # digest says nothing about it: two line types stating one formula produce
+    # the same term, so a proposal asking for `assume` and getting an ordinary
+    # step would pass the check above and silently open no subproof at all.
+    landed = added.line_type.name if added.line_type is not None else None
+    if landed != shape.line_type:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"That line reads back as {landed!r} rather than "
+                f"{shape.line_type!r}, so it would not do what was asked."
+            ),
+        )
+    # And so does the scope, for the reason the indent is spliced rather than
+    # assumed: a subproof is delimited by indentation, so *where* a line landed
+    # is a fact about the checked proof and not about the request. A caller told
+    # its discharge is in the root scope when it is still inside the subproof it
+    # meant to discharge has been told the opposite of what happened.
+    if payload.scope is not None:
+        wanted = (
+            payload.scope.opener
+            if payload.scope.placement == "inside"
+            else _scope_of_row(rows, payload.scope.opener)
+        )
+        if _scope_of(added) != wanted:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "That line did not land in the scope asked for: it reads as "
+                    f"{_scope_of(added)} rather than {wanted}. A subproof is "
+                    "closed by the first line that dedents past its opener and "
+                    "indenting cannot reopen it, so a line joins one only where "
+                    "it is written between the opener and that dedent — check "
+                    "`before`."
+                ),
+            )
 
     # And nothing that stood before may have been broken by the renumbering. A
     # citation that now names a different line still *resolves*, so this is the
@@ -2486,6 +2563,21 @@ async def propose_line(
                 "no line was added."
             ),
         )
+    # The same invariant over the other thing an insert can move. A line's scope
+    # is set by the *indent of the lines around it*, so inserting one at a
+    # different indent can close a subproof early or swallow the lines below it
+    # — and those lines can stay perfectly valid while meaning something else,
+    # which is precisely what validity cannot catch (§4.6). A discharge that now
+    # consumes a different subproof is the case that matters.
+    moved_scope = _rescoped_by_insert(rows, checked, number)
+    if moved_scope:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Adding this line would move line {moved_scope} into a different "
+                "subproof; no line was added."
+            ),
+        )
 
     outcome = LineOutcome(
         line=number,
@@ -2495,6 +2587,10 @@ async def propose_line(
             FailureOut(**added.failure.as_dict()) if added.failure is not None else None
         ),
         renumbered=renumbered,
+        scope=_scope_of(added),
+        opens_scope=(
+            added.opened_scope.kind if added.opened_scope is not None else None
+        ),
     )
     if not (payload.apply and owned):
         return outcome
@@ -2703,6 +2799,216 @@ def _broken_by_insert(
         moved = row.number + 1 if row.number >= at else row.number
         line = after.get(moved)
         if row.valid and (line is None or not line.valid):
+            return moved
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Subproofs, in the structured write path (§4.6)
+# ---------------------------------------------------------------------------
+#
+# A paper's proof is case splits, inductions and "assume for contradiction", and
+# every one of those is a subproof. Nothing in the measured corpus run touched
+# one — a Metamath corpus is flat, so no scope opener, discharge line or indent
+# was ever written by the structured path, and the gap went unnoticed because
+# nothing could notice it.
+#
+# The whole of a subproof, mechanically, is **indentation**: a line indented past
+# an opener is inside it, one at or left of the opener closes it
+# (`Proof.assign_scope`). So the write path needs exactly two things it did not
+# have — a choice of line type, since opening a scope is a property of the type,
+# and a choice of indent. Everything below is those two, plus checking that what
+# was asked for is what landed.
+
+# How far a subproof is indented past its opener when the proof has not yet said.
+# A convention, and only a default: an existing line of the subproof is preferred
+# wherever there is one, so a proof that indents by two stays indented by two.
+INDENT_STEP = 4
+
+# A `<name>` hole in a line type's declared shape (`assume <formula>`).
+_PLACEHOLDER = re.compile(r"<([^<>]+)>")
+
+
+@dataclass(frozen=True)
+class _Shape:
+    """Where a proposed line's *syntax* comes from.
+
+    ``display`` is an existing line to splice into — the safe path, and the one
+    `restate` was built for. It is None when the proof has no line of the type
+    yet, which is the ordinary state of a proof about to open its first subproof;
+    the line is then composed from the type's declared shape and checked by the
+    same round trip.
+    """
+
+    line_type: str
+    display: str | None
+
+
+def _placement(
+    rows: Sequence[ProofLineRow],
+    anchor: ProofLineRow,
+    scope: ScopePlacement | None,
+) -> int:
+    """The indent a proposed line is written at.
+
+    Named by the opener's citation number rather than by a column, because that
+    is the handle a caller already has — a discharge cites it, and `/structure`
+    reports it — and because an indent is a fact about a proof's typography that
+    no caller should have to learn.
+
+    ``outside`` is the interesting one and it is not a special case: a line at
+    the opener's *own* indent dedents past it, which is exactly what closes the
+    subproof, so the discharge position is the opener's indent. ``inside`` is one
+    step deeper, or whatever the subproof's existing lines already use.
+    """
+    if scope is None:
+        return anchor.indent
+    opener = next((r for r in rows if r.number == scope.opener), None)
+    if opener is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"This proof has no line {scope.opener}.",
+        )
+    if opener.opens_scope is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Line {scope.opener} opens no subproof, so there is nothing to "
+                "be inside or outside of."
+            ),
+        )
+    if scope.placement == "outside":
+        return opener.indent
+    # A line already in the subproof settles the indent; `scope_id` points at the
+    # opener from *within*, and never from the opener itself, which is filed in
+    # the enclosing scope (see `app.db.proofs_mapping.store_proof_lines`).
+    within = [r for r in rows if r.scope_id == opener.id]
+    return within[0].indent if within else opener.indent + INDENT_STEP
+
+
+def _shape_source(
+    rows: Sequence[ProofLineRow], anchor: ProofLineRow, line_type: str | None
+) -> _Shape:
+    """Which line type a proposed line is written as, and what to splice into."""
+    if line_type is None:
+        if anchor.opens_scope is not None or anchor.behaviour != "logical":
+            # The new line copies this one's shape, so it would inherit a line
+            # type that states nothing checkable. Naming a `line_type` is the way
+            # past this, and is how a scope opener is written on purpose.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Line {anchor.number} is not an ordinary logical line, so a "
+                    "new statement cannot take its shape; name a `line_type` to "
+                    "write a different kind of line."
+                ),
+            )
+        return _Shape(line_type=anchor.line_type, display=anchor.display)
+    # The *last* line of the type, so a proof that has drifted in how it writes
+    # one follows its own most recent practice rather than its oldest.
+    kin = [r for r in rows if r.line_type == line_type]
+    return _Shape(line_type=line_type, display=kin[-1].display if kin else None)
+
+
+def _opens_scope(built: BuiltSystem, line_type: str) -> str | None:
+    """The scope kind ``line_type`` opens, or None — the system's answer, not ours.
+
+    Raises when the system declares no such type, which is a 422 rather than a
+    silent fall back to the anchor's: a caller naming a type that does not exist
+    has asked for something specific and got something else.
+    """
+    # `built.compiled`, not `built.system`: the first is the engine's system and
+    # the second the database row it was built from.
+    found = next(
+        (t for t in built.compiled.line_types if t.name == line_type), None
+    )
+    if found is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"This system declares no line type named {line_type!r}.",
+        )
+    return found.scope
+
+
+def _stated_afresh(built: BuiltSystem, line_type: str, formula: str) -> str | None:
+    """A line of ``line_type`` stating ``formula``, composed from its shape.
+
+    The fallback for a type this proof has no line of — without which no proof
+    could open its first subproof, since there is no `assume` line to copy until
+    there is an `assume` line.
+
+    Only a shape whose **sole** placeholder is the formula is composed. Anything
+    else needs values this does not have (a `<reference>` cannot be filled before
+    the line parses, and the line does not parse with a placeholder still in it),
+    and guessing one would be reconstructing a line type's syntax rather than
+    reading it. A scope opener is the case that matters and it is this shape, for
+    the reason it takes no citation.
+
+    The spec is the whole inheritance chain's, so a type declared by an ancestor
+    is composable from a child's proof.
+    """
+    spec = built.effective.spec
+    declared = next((line for line in spec.lines if line.name == line_type), None)
+    if declared is None or declared.behaviour != "logical":
+        return None
+    holes = _PLACEHOLDER.findall(declared.shape)
+    if len(holes) != 1:
+        return None
+    return _PLACEHOLDER.sub(lambda _: formula, declared.shape)
+
+
+def _scope_of(line: object) -> int | None:
+    """The number of the line opening the subproof ``line`` sits in, or None.
+
+    An opener is filed in the scope it opens *from*, not the one it opens, which
+    is `store_proof_lines`' rule and the one that keeps the chain a tree. Read the
+    same way here so a stored row and a freshly checked line answer alike.
+    """
+    opened = line.opened_scope
+    scope = opened.parent if opened is not None else line.scope
+    opener = scope.assumption if scope is not None else None
+    return opener.number if opener is not None else None
+
+
+def _scope_of_row(rows: Sequence[ProofLineRow], number: int) -> int | None:
+    # The same question of a stored row: which subproof is line `number` in.
+    row = next((r for r in rows if r.number == number), None)
+    if row is None or row.scope_id is None:
+        return None
+    holder = next((r for r in rows if r.id == row.scope_id), None)
+    return holder.number if holder is not None else None
+
+
+def _rescoped_by_insert(
+    before: Sequence[ProofLineRow], checked: EngineProof | None, at: int
+) -> int | None:
+    """The first line the insert moved into a different subproof, by its new number.
+
+    The other half of `_broken_by_insert`, and it exists because validity does
+    not cover it. A line's scope comes from the indents around it, so inserting a
+    dedented line closes a subproof early and everything below lands in the
+    parent — where it can go on checking perfectly well while meaning something
+    else entirely. A discharge that now consumes a *different* subproof is the
+    sharp case: it still cites a real opener, still finds a real subproof, and
+    still passes.
+
+    Compared by opener number rather than by identity, since the two sides are a
+    stored row and a fresh parse with no object in common, and numbers are what
+    the insert shifted — so both sides are read after the shift.
+    """
+    if checked is None:
+        return None
+    after = {
+        line.number: line for line in checked.proof_lines if line.number is not None
+    }
+    for row in before:
+        moved = row.number + 1 if row.number >= at else row.number
+        line = after.get(moved)
+        if line is None:
+            continue
+        was = _scope_of_row(before, row.number)
+        now = _scope_of(line)
+        if (was + 1 if was is not None and was >= at else was) != now:
             return moved
     return None
 
