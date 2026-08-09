@@ -280,6 +280,38 @@ and reshaped, why an edge case is handled the way it is. See `app/main.py`'s not
 on the proof-checker raising for the tone to aim for. If a comment merely
 restates the line below it, delete it.
 
+## Writing a pull request
+
+`.github/pull_request_template.md` is the layout to fill in. GitHub only
+pre-fills it for PRs opened in the web UI, so a PR opened through the API or a
+CLI has to reproduce its headings deliberately — read the file before writing a
+body.
+
+It splits the body in two, and the split is the whole point. Above the `---` is
+a **summary a reviewer reads first**: plain-language motivation, where the change
+sits relative to the roadmaps and other PRs, the smallest example that shows it,
+and a table of what changed in which area. Below it, **`## Design decisions` and
+`## Implementation details` have no length budget** — rationale, rejected
+alternatives, measurements and edge cases belong there in as much depth as they
+deserve. Depth is not the problem; depth *ahead of the summary* is.
+
+Four rules the template can't enforce on its own:
+
+- **Aim for under ~400 words above `## Changes by area`.** Advisory, not a limit
+  to game. If the summary can't be short, that is usually a sign the PR is doing
+  two things.
+- **Write the opening paragraph in plain language.** Concrete over abstract: what
+  someone could not do before and can now. The strongest recent bodies (#206,
+  #207) opened with a worked before/after, and that instinct is what the
+  `## Simplest example` heading is preserving.
+- **Review rounds go in the collapsed block at the bottom**, or in a follow-up
+  comment. Findings-and-fixes narration is how the PR reached its current state,
+  not a description of the change, and it has been running to roughly half the
+  body.
+- **The Kernel row is never deleted.** Say `none` when `website/logical/kernel/`
+  is untouched. Whether the trusted core changed is a reviewer's first question,
+  and an omitted row answers it ambiguously.
+
 ## For Claude Code on the web
 
 **Do not set up scheduled check-ins, cron triggers, or self-scheduled wake-ups**
