@@ -1,0 +1,244 @@
+{
+  "corpus": {
+    "systems": [
+      "ZF set theory",
+      "Propositional calculus",
+      "First-order logic"
+    ],
+    "theorems": 10177,
+    "primitive": 177,
+    "with_hypotheses": 4480,
+    "without_stored_term": 76,
+    "generators": 5696,
+    "terms": 207311,
+    "citation_edges": 101790,
+    "sections": 186
+  },
+  "alpha_key_check": {
+    "statement_roots_compared": 8510,
+    "alpha_classes": 7969,
+    "disagreements_with_engine": 0
+  },
+  "families": {
+    "all": [
+      {
+        "name": "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - add the Axiom of Power Sets",
+        "generators": 1461
+      },
+      {
+        "name": "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - start with the Axiom of Extensionality",
+        "generators": 1155
+      },
+      {
+        "name": "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - add the Axiom of Union",
+        "generators": 1084
+      },
+      {
+        "name": "CLASSICAL FIRST-ORDER LOGIC WITH EQUALITY/Propositional calculus",
+        "generators": 663
+      },
+      {
+        "name": "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - add the Axiom of Infinity",
+        "generators": 466
+      },
+      {
+        "name": "",
+        "generators": 171
+      },
+      {
+        "name": "CLASSICAL FIRST-ORDER LOGIC WITH EQUALITY/Other axiomatizations related to classical propositional calculus",
+        "generators": 124
+      },
+      {
+        "name": "Predicate calculus with equality:  Auxiliary axiom schemes (4 schemes)/Axiom scheme ax-13 (Quantified Equality)",
+        "generators": 76
+      },
+      {
+        "name": "Predicate calculus with equality:  Auxiliary axiom schemes (4 schemes)/Axiom scheme ax-12 (Substitution)",
+        "generators": 75
+      },
+      {
+        "name": "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - add the Axiom of Replacement",
+        "generators": 63
+      },
+      {
+        "name": "Uniqueness and unique existence/Unique existence: the unique existential quantifier",
+        "generators": 61
+      },
+      {
+        "name": "Predicate calculus with equality:  Tarski's system S2 (1 rule, 6 schemes)/Axiom scheme ax-4 (Quantified Implication)",
+        "generators": 57
+      },
+      {
+        "name": "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - add the Axiom of Regularity",
+        "generators": 35
+      },
+      {
+        "name": "Predicate calculus with equality:  Tarski's system S2 (1 rule, 6 schemes)/Axiom scheme ax-7 (Equality)",
+        "generators": 33
+      },
+      {
+        "name": "Predicate calculus with equality:  Tarski's system S2 (1 rule, 6 schemes)/Define proper substitution",
+        "generators": 29
+      },
+      {
+        "name": "Predicate calculus with equality:  Tarski's system S2 (1 rule, 6 schemes)/Axiom scheme ax-5 (Distinctness) - first use of $d",
+        "generators": 28
+      },
+      {
+        "name": "Predicate calculus with equality:  Tarski's system S2 (1 rule, 6 schemes)/Axiom scheme ax-6 (Existence)",
+        "generators": 22
+      },
+      {
+        "name": "Other axiomatizations related to classical predicate calculus/Intuitionistic logic",
+        "generators": 15
+      },
+      {
+        "name": "Predicate calculus with equality:  Auxiliary axiom schemes (4 schemes)/Axiom scheme ax-11 (Quantifier Commutation)",
+        "generators": 14
+      },
+      {
+        "name": "Uniqueness and unique existence/Uniqueness: the at-most-one quantifier",
+        "generators": 13
+      },
+      {
+        "name": "Predicate calculus with equality:  Auxiliary axiom schemes (4 schemes)/Axiom scheme ax-10 (Quantified Negation)",
+        "generators": 12
+      },
+      {
+        "name": "Predicate calculus with equality:  Tarski's system S2 (1 rule, 6 schemes)/Axiom scheme ax-9 (Right Equality for Binary Predicate)",
+        "generators": 9
+      },
+      {
+        "name": "Predicate calculus with equality:  Tarski's system S2 (1 rule, 6 schemes)/Logical redundancy of ax-10 , ax-11 , ax-12 , ax-13",
+        "generators": 9
+      },
+      {
+        "name": "Predicate calculus with equality:  Tarski's system S2 (1 rule, 6 schemes)/Universal quantifier (continued); define \"exists\" and \"not free\"",
+        "generators": 8
+      },
+      {
+        "name": "Predicate calculus with equality:  Tarski's system S2 (1 rule, 6 schemes)/Axiom scheme ax-8 (Left Equality for Binary Predicate)",
+        "generators": 7
+      },
+      {
+        "name": "Predicate calculus with equality:  Tarski's system S2 (1 rule, 6 schemes)/Rule scheme ax-gen (Generalization)",
+        "generators": 4
+      },
+      {
+        "name": "Uniqueness and unique existence",
+        "generators": 2
+      }
+    ],
+    "train": [
+      "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - start with the Axiom of Extensionality",
+      "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - add the Axiom of Union",
+      "CLASSICAL FIRST-ORDER LOGIC WITH EQUALITY/Propositional calculus",
+      "CLASSICAL FIRST-ORDER LOGIC WITH EQUALITY/Other axiomatizations related to classical propositional calculus",
+      "Predicate calculus with equality:  Auxiliary axiom schemes (4 schemes)/Axiom scheme ax-13 (Quantified Equality)",
+      "Predicate calculus with equality:  Auxiliary axiom schemes (4 schemes)/Axiom scheme ax-12 (Substitution)",
+      "Uniqueness and unique existence/Unique existence: the unique existential quantifier",
+      "Predicate calculus with equality:  Tarski's system S2 (1 rule, 6 schemes)/Axiom scheme ax-4 (Quantified Implication)",
+      "Predicate calculus with equality:  Tarski's system S2 (1 rule, 6 schemes)/Axiom scheme ax-7 (Equality)",
+      "Predicate calculus with equality:  Tarski's system S2 (1 rule, 6 schemes)/Define proper substitution",
+      "Predicate calculus with equality:  Tarski's system S2 (1 rule, 6 schemes)/Axiom scheme ax-5 (Distinctness) - first use of $d",
+      "Predicate calculus with equality:  Tarski's system S2 (1 rule, 6 schemes)/Axiom scheme ax-6 (Existence)",
+      "Other axiomatizations related to classical predicate calculus/Intuitionistic logic",
+      "Predicate calculus with equality:  Auxiliary axiom schemes (4 schemes)/Axiom scheme ax-11 (Quantifier Commutation)",
+      "Uniqueness and unique existence/Uniqueness: the at-most-one quantifier",
+      "Predicate calculus with equality:  Auxiliary axiom schemes (4 schemes)/Axiom scheme ax-10 (Quantified Negation)",
+      "Predicate calculus with equality:  Tarski's system S2 (1 rule, 6 schemes)/Axiom scheme ax-9 (Right Equality for Binary Predicate)",
+      "Predicate calculus with equality:  Tarski's system S2 (1 rule, 6 schemes)/Logical redundancy of ax-10 , ax-11 , ax-12 , ax-13",
+      "Predicate calculus with equality:  Tarski's system S2 (1 rule, 6 schemes)/Universal quantifier (continued); define \"exists\" and \"not free\"",
+      "Predicate calculus with equality:  Tarski's system S2 (1 rule, 6 schemes)/Axiom scheme ax-8 (Left Equality for Binary Predicate)",
+      "Predicate calculus with equality:  Tarski's system S2 (1 rule, 6 schemes)/Rule scheme ax-gen (Generalization)",
+      "Uniqueness and unique existence"
+    ],
+    "held_out": [
+      "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - add the Axiom of Infinity",
+      "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - add the Axiom of Power Sets",
+      "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - add the Axiom of Regularity",
+      "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - add the Axiom of Replacement"
+    ],
+    "train_generators": 3500,
+    "held_out_generators": 2025
+  },
+  "fragment": {
+    "compounds": 24000,
+    "provable": 12000,
+    "seen_family_compounds": 16000,
+    "unseen_family_compounds": 8000,
+    "skeleton_shapes": 17989,
+    "mean_formula_nodes": 68.69620833333333
+  },
+  "experiment_1": {
+    "unseen_family": {
+      "linear": 0.55375,
+      "rbf_svm": 0.53675,
+      "nearest_neighbour": 0.508375
+    },
+    "random_split": {
+      "linear": 0.5425,
+      "rbf_svm": 0.5323333333333333,
+      "nearest_neighbour": 0.48783333333333334
+    },
+    "skeleton_only_control": 0.6906666666666667
+  },
+  "citation_graph": {
+    "pairs": 4096,
+    "spearman_rho": 0.029855025934388314,
+    "p_value": 0.056060592794019204,
+    "mean_path_length": 4.12451171875
+  },
+  "experiment_2": {
+    "coordinates": 1024,
+    "generators": 5696,
+    "exhaustive": false,
+    "distinguished_coordinate_accuracy": 1.0,
+    "algebraic_identity_max_error": {
+      "negation": 0.0,
+      "and": 0.0,
+      "or": 0.0,
+      "imp": 0.0,
+      "iff": 0.0,
+      "hamming_identity": 0.0
+    },
+    "random_projection": [
+      {
+        "dimension": 8,
+        "median_relative_error": 0.16197639446775103,
+        "p90_relative_error": 0.39626640197369634
+      },
+      {
+        "dimension": 32,
+        "median_relative_error": 0.0933761256252665,
+        "p90_relative_error": 0.19949855959029575
+      },
+      {
+        "dimension": 64,
+        "median_relative_error": 0.05343879927074295,
+        "p90_relative_error": 0.137462754613183
+      },
+      {
+        "dimension": 128,
+        "median_relative_error": 0.04142085527231179,
+        "p90_relative_error": 0.09270102061521374
+      },
+      {
+        "dimension": 256,
+        "median_relative_error": 0.03456871843716902,
+        "p90_relative_error": 0.07564461605657956
+      }
+    ],
+    "projection_pairs": 737,
+    "equivalent_pairs_excluded": 13
+  },
+  "structure_to_semantics": {
+    "spearman_rho_structural_vs_hamming": 0.00024990074958335237,
+    "p_value": 0.9945485768360297,
+    "coordinates_predicted": 32,
+    "mean_coordinate_accuracy": 0.5087708333333333,
+    "best_coordinate_accuracy": 0.5195
+  },
+  "runtime_seconds": 82.94193530082703
+}

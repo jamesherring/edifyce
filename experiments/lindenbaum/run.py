@@ -27,6 +27,7 @@ from sklearn.svm import SVC
 from experiments.lindenbaum import formulas, semantic, structural
 from experiments.lindenbaum.corpus import Corpus, Theorem, read_corpus
 from experiments.lindenbaum.dag import Arena
+from experiments.lindenbaum.transport import over_neon_https, over_psycopg
 
 #: How deep into the `.mm` outline a "family" is taken. A chapter is too coarse
 #: (three of them cover the corpus) and a leaf section too fine (a handful of
@@ -196,7 +197,24 @@ def main() -> None:
     parser.add_argument(
         "--database-url",
         default="postgresql://postgres@127.0.0.1:5439/edifyce",
-        help="the corpus to read",
+        help="the corpus to read, over psycopg",
+    )
+    parser.add_argument(
+        "--neon-https",
+        action="store_true",
+        help=(
+            "read the corpus over Neon's SQL-over-HTTP endpoint using "
+            "$POSTGRES_URL, for a database whose Postgres port is not reachable"
+        ),
+    )
+    parser.add_argument(
+        "--system",
+        action="append",
+        default=None,
+        help=(
+            "a system to read, repeatable; the default reads every system that "
+            "holds theorems, which is what a layered import wants"
+        ),
     )
     parser.add_argument("--cache", type=Path, default=None, help="corpus pickle")
     parser.add_argument("--out", type=Path, required=True, help="results directory")
@@ -208,11 +226,16 @@ def main() -> None:
     if arguments.cache is not None and arguments.cache.exists():
         corpus = Corpus.load(arguments.cache)
     else:
-        corpus = read_corpus(arguments.database_url)
+        query = (
+            over_neon_https()
+            if arguments.neon_https
+            else over_psycopg(arguments.database_url)
+        )
+        corpus = read_corpus(query, arguments.system)
         if arguments.cache is not None:
             arguments.cache.parent.mkdir(parents=True, exist_ok=True)
             corpus.save(arguments.cache)
-    print(f"corpus {corpus.system}: {len(corpus.theorems)} theorems, "
+    print(f"corpus {', '.join(corpus.systems)}: {len(corpus.theorems)} theorems, "
           f"{len(corpus.kind)} terms, read in {time.time() - started:.1f}s")
 
     arena = Arena.of(corpus)
@@ -220,7 +243,7 @@ def main() -> None:
     rng = random.Random(arguments.seed)
     results: dict[str, object] = {
         "corpus": {
-            "system": corpus.system,
+            "systems": corpus.systems,
             "theorems": len(corpus.theorems),
             "primitive": sum(1 for t in corpus.theorems if t.primitive),
             "with_hypotheses": sum(1 for t in corpus.theorems if t.premises),
@@ -246,10 +269,16 @@ def main() -> None:
     seen = [name for name in named if name not in unseen]
     seen_pool = [t for t in generators if _family(t) in set(seen)]
     unseen_pool = [t for t in generators if _family(t) in unseen]
-    if len(unseen) != len(HELD_OUT_FAMILIES):
-        raise RuntimeError(
-            f"expected {len(HELD_OUT_FAMILIES)} held-out families, matched {sorted(unseen)}"
-        )
+    # Each keyword must land somewhere. A layered import re-roots the outline per
+    # layer, so one axiom family can arrive as several sections and matching on
+    # count would be wrong; matching on coverage is the invariant that matters.
+    unmatched = [
+        keyword
+        for keyword in HELD_OUT_FAMILIES
+        if not any(keyword in name for name in unseen)
+    ]
+    if unmatched:
+        raise RuntimeError(f"held-out families matched no section: {unmatched}")
     results["families"] = {
         "all": [{"name": n, "generators": c} for n, c in families],
         "train": seen,
