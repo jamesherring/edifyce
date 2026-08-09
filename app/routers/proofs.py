@@ -3035,11 +3035,6 @@ def _rescoped_by_insert(
     stored row and a fresh parse with no object in common, and numbers are what
     the insert shifted — so both sides are read after the shift.
     """
-    if checked is None:
-        return None
-    after = {
-        line.number: line for line in checked.proof_lines if line.number is not None
-    }
     return _rescoped(before, checked, at, by=1)
 
 
