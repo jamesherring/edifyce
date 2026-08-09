@@ -489,19 +489,88 @@ earlier phrasing here said the key "changes whenever anyone proves anything",
 which was both wrong and inconsistent with the invalidation scope directly above:
 the two must agree that the *only* interesting events are theory-changing ones.
 
+## Measured: what the corpus says
+
+The two measurements this note asks for below have now been taken, against the
+layered set.mm import in the deployment database — **10,101 indexed theorems**,
+207k terms. It reproduces the Phase 1 figures exactly (`wi` 63.7% of conclusions,
+141 `wss`-headed), so the numbers are comparable to that work. Read-only, by
+shape-matching over stored terms; no parsing and no engine involved.
+
+**Demand — what the equational half would buy:**
+
+| | count |
+|---|---|
+| equational-rooted conclusions (`wb` / `wceq`) | 2,605 |
+| … with the same operator on both sides | 716 |
+| **commutativity laws proven** (`ancom`, `orcom`, `uncom`, `incom`, …) | **13** |
+| **associativity laws proven** | **8** |
+| interned subterm pairs that are argument-swaps of each other | **2,217** |
+| **theorem-conclusion pairs that are root-level swaps** | **57** (0.56%) |
+
+The 57 are real near-duplicates the corpus keeps deliberately — `bitri`/`bitr2i`,
+`3bitri`/`3bitrri`: set.mm's `r`-suffix reversed-conclusion convention.
+
+**Supply — whether congruence can be derived rather than declared:**
+
+| | count |
+|---|---|
+| congruence lemmas harvested, closed form (`oveq1`, `fveq2`, `ineq1`) | **157** |
+| congruence lemmas harvested, inference form (`oveq1i`, `fveq2i`) | **91** |
+| operators covered | **99 / 110 (90%)** |
+| **coverage weighted by actual node usage** | **99.84%** |
+
+Every high-frequency operator is covered — `wi` (85,753 uses), `wb`, `wceq`, `wa`,
+`wcel`, `wss`, `wex`, `wn`, `wal`, `cfv`, `co`, `wo`. The uncovered tail is ten
+rare operators totalling ~250 uses (0.12%): `crio`, `cseqom`, `wcdeq`, `wif`,
+`cfrecs` and a few from hand-built test systems.
+
+**What this settles.**
+
+- **Congruence is harvestable, decisively.** Shape-matching alone recovers 99.84%
+  of what a real corpus needs, with no authoring burden. The obligation route is a
+  formality over a 0.12% tail rather than a mechanism anyone will lean on.
+- **The equality declaration is far cheaper than assumed** — *two* entries for the
+  whole import (`wb`, `wceq`), not one per operator. Most of the objection to
+  declaring it dissolves.
+- **The equational half's demand is thin.** 57 conclusion pairs is not much dedup
+  for a 10,101-theorem corpus. The retrieval value is plausibly larger — 2,217
+  subterm swap-pairs are places a goal written the other way round would miss —
+  but that is a *proxy*, not a measurement of retrieval, and the distinction is
+  worth keeping honest.
+
+One cheap idea considered and **rejected** on the way: AC-normalising the Phase 1
+*fingerprint* alone. It is recall-safe, since a filter only ever widens — but
+pointless, because the `unify` confirm is syntactic, so the extra candidates yield
+no extra matches. AC retrieval needs AC-unification, which is a far larger
+commitment than this phase.
+
 ## Decisions to take before any code
 
-1. **How a system declares equality, and how congruence is evidenced.** The blocking
-   one, and it is two halves that want different mechanisms. The *declaration*
-   follows `denotes_constant`: a declared property on a production, parameterised by
-   the sort it relates (set.mm needs `wb` *and* `wceq`), defaulted off, validated
-   where the grammar can contradict it — there is no way to derive this one, since
-   nothing structural separates `↔` from `→`. *Congruence* should not be folded into
-   the same tick, because it can be **derived**: harvest it per (operator, position)
-   from proven theorems, and fall back to an obligation only where the harvest comes
-   up empty. Settle both against the Metamath importer as first caller: it already
-   holds the equality knowledge in `EQUIVALENCES`, and set.mm already contains the
-   congruence lemmas the harvester would find.
+1. ~~**How a system declares equality, and how congruence is evidenced.**~~
+   **Settled by the measurements above.**
+
+   *The declaration:* a declared property on a production, `denotes_constant`
+   idiom, parameterised by the sort it relates, defaulted off. It cannot be derived
+   — nothing structural separates `↔` from `→`, and the measurement does not rescue
+   inference, since `wi` heads congruence lemmas too (as the implication of the
+   closed form). But it is **two entries** for the whole set.mm import, so the
+   burden is trivial. Validate what can be validated: binary, both slots the same
+   sort, and — newly available — **cross-check against the harvest**, since a
+   production declared an equivalence should head some congruence lemmas, and one
+   heading none is a mis-tick worth warning about. The Metamath importer is the
+   first caller and stops needing its hardcoded `EQUIVALENCES`.
+
+   *Congruence:* **harvest it**, per (operator, position), from proven theorems in
+   both the closed and inference shapes — 99.84% coverage by node usage, zero
+   authoring burden. Keep the obligation route as the documented fallback for the
+   0.12% tail, and drop global trust entirely; the data makes it unnecessary.
+
+   Both are cheap and independently useful — the harvester in particular is a
+   standalone classifier answering "which operators does this system have
+   congruence for", which proof search will want and an importer can validate
+   against. Neither commits to building the equational half, which the demand
+   figures argue against doing yet.
 2. **Fold, refuse, or e-graph** for the shared-defined-form case, per the
    non-confluence section. This decides whether the canonical key is a term or an
    e-class.
@@ -571,23 +640,18 @@ rather than code, and the section above argues it may not be wanted at all.
 Doing them together means the definitional merge — the valuable, defensible,
 nearly-ready piece — waits on an unsolved representation question it does not need.
 
-**What would change this recommendation:** a caller that wants `a + b` and `b + a`
-merged specifically. The set.mm corpus is the obvious one to check, and the check
-is cheap — two counts over theorems whose root is a declared equivalence (`wb`,
-`wceq`, which the importer already knows):
+**Both measurements have now been taken** (see above), and they sharpen this rather
+than overturning it. The equational half's demand is thin — 57 conclusion pairs in
+a 10,101-theorem corpus — so it does not earn priority over the definitional half.
+The congruence half of its prerequisite turned out to be cheap rather than
+blocking, at 99.84% harvestable coverage, which is a good reason to build the
+*harvester* early but not a reason to build the e-graph that would consume it.
 
-- how many have two sides differing only by argument order, which sizes the *demand*
-  for the equational half;
-- how many are **congruence lemmas** — one side an application whose arguments are
-  related by the equality (`oveq1`, `fveq2`, `eleq1` and their kin) — which sizes
-  the *evidence available* to discharge decision 1's second half, and says whether
-  obligation-based congruence would be mostly auto-dischargeable on a real corpus or
-  mostly undischarged.
-
-If the first number is large the equational half earns its own priority; if it is
-small, the definitional half is Phase 2 and the rest is Phase 2b. Take both
-measurements **before** decision 1: together they say how much the declaration has
-to support and whether the obligation route is viable rather than merely principled.
+**What would still change the recommendation:** a direct measurement of *retrieval*
+rather than dedup. The 2,217 subterm swap-pairs say a goal written the other way
+round can miss, but nobody has measured how often that actually happens to an
+author. If it is common, the equational half is a usability fix rather than a dedup
+feature, and should be argued on that ground.
 
 ## What I could not settle
 
